@@ -1,41 +1,12 @@
 {
-  "name": "scheduler",
-  "version": "0.1.0",
+  "name": "relevis-monorepo",
   "private": true,
-  "engines": {
-    "node": ">=20"
-  },
-  "dependencies": {
-    "@aws-sdk/client-dynamodb": "^3.922.0",
-    "@aws-sdk/lib-dynamodb": "^3.922.0",
-    "@material/web": "^2.4.1",
-    "next": "^15.0.0",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "react-icons": "^4.8.0"
-  },
-  "devDependencies": {
-    "@eslint/eslintrc": "^3.3.4",
-    "@testing-library/jest-dom": "^5.16.5",
-    "@testing-library/react": "^13.4.0",
-    "@testing-library/user-event": "^13.5.0",
-    "eslint": "^9.39.3",
-    "eslint-config-next": "^16.1.6",
-    "eslint-config-prettier": "^10.1.8",
-    "jest": "^29.0.0",
-    "jest-environment-jsdom": "^29.0.0",
-    "prettier": "^3.8.1"
-  },
+  "workspaces": ["frontend", "backend"],
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "test": "jest",
-    "test:watch": "jest --watch",
-    "lint": "eslint .",
-    "lint:fix": "eslint . --fix",
-    "migrate:sqlite-to-dynamodb": "node scripts/migrate-sqlite-to-dynamodb.js",
-    "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "dev": "npm --workspace=backend run dev & npm --workspace=frontend run dev",
+    "dev:backend": "npm --workspace=backend run dev",
+    "dev:frontend": "npm --workspace=frontend run dev",
+    "test": "npm --workspace=backend run test && npm --workspace=frontend run test",
+    "quality-gate": "bash scripts/quality-gate.sh"
   }
 }

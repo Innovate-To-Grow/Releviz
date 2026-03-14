@@ -1,0 +1,8 @@
+aws_region                 = "us-west-2"
+app_name                   = "scheduler"
+environment                = "staging"
+ecr_backend_repository     = "scheduler-staging-backend"
+ecr_frontend_repository    = "scheduler-staging-frontend"
+events_table_name          = "scheduler-staging-events"
+participants_table_name    = "scheduler-staging-participants"
+weights_table_name         = "scheduler-staging-weights"

@@ -69,6 +69,21 @@ variable "weights_table_name" {
   default = "scheduler-prod-weights"
 }
 
+variable "users_table_name" {
+  type    = string
+  default = "scheduler-prod-users"
+}
+
+variable "user_events_table_name" {
+  type    = string
+  default = "scheduler-prod-user-events"
+}
+
+variable "jwt_secret" {
+  type      = string
+  sensitive = true
+}
+
 variable "health_check_path" {
   type    = string
   default = "/api/health"

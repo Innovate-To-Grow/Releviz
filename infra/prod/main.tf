@@ -198,6 +198,57 @@ resource "aws_dynamodb_table" "weights" {
   tags = local.common_tags
 }
 
+resource "aws_dynamodb_table" "users" {
+  name         = var.users_table_name
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "userId"
+
+  attribute {
+    name = "userId"
+    type = "S"
+  }
+  attribute {
+    name = "email"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "email-index"
+    hash_key        = "email"
+    projection_type = "ALL"
+  }
+
+  point_in_time_recovery { enabled = true }
+  server_side_encryption { enabled = true }
+  tags = local.common_tags
+}
+
+resource "aws_dynamodb_table" "user_events" {
+  name         = var.user_events_table_name
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "userId"
+  range_key    = "eventCode"
+
+  attribute {
+    name = "userId"
+    type = "S"
+  }
+  attribute {
+    name = "eventCode"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "eventCode-index"
+    hash_key        = "eventCode"
+    projection_type = "ALL"
+  }
+
+  point_in_time_recovery { enabled = true }
+  server_side_encryption { enabled = true }
+  tags = local.common_tags
+}
+
 resource "aws_ecs_cluster" "app" {
   name = "${local.prefix}-cluster"
   tags = local.common_tags
@@ -267,7 +318,11 @@ resource "aws_iam_role_policy" "ecs_task_dynamodb" {
         Resource = [
           aws_dynamodb_table.events.arn,
           aws_dynamodb_table.participants.arn,
-          aws_dynamodb_table.weights.arn
+          aws_dynamodb_table.weights.arn,
+          aws_dynamodb_table.users.arn,
+          "${aws_dynamodb_table.users.arn}/index/*",
+          aws_dynamodb_table.user_events.arn,
+          "${aws_dynamodb_table.user_events.arn}/index/*"
         ]
       }
     ]
@@ -448,7 +503,10 @@ resource "aws_ecs_task_definition" "app" {
         { name = "AWS_REGION", value = var.aws_region },
         { name = "DDB_EVENTS_TABLE", value = aws_dynamodb_table.events.name },
         { name = "DDB_PARTICIPANTS_TABLE", value = aws_dynamodb_table.participants.name },
-        { name = "DDB_WEIGHTS_TABLE", value = aws_dynamodb_table.weights.name }
+        { name = "DDB_WEIGHTS_TABLE", value = aws_dynamodb_table.weights.name },
+        { name = "DDB_USERS_TABLE", value = aws_dynamodb_table.users.name },
+        { name = "DDB_USER_EVENTS_TABLE", value = aws_dynamodb_table.user_events.name },
+        { name = "JWT_SECRET", value = var.jwt_secret }
       ]
       logConfiguration = {
         logDriver = "awslogs"

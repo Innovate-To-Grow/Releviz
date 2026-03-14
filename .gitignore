@@ -1,19 +1,17 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
 # dependencies
-/node_modules
+node_modules
 /.pnp
 .pnp.js
 
 # testing
-/coverage
+coverage
 
 # Next.js
-/.next/
-/out/
+.next/
+out/
 
 # production
-/build
+build
 
 # database
 /data/*.db
@@ -21,11 +19,6 @@
 /data/*.sqlite
 /data/*.sqlite3
 /data/*.sqlite-*
-/server/data/*.db
-/server/data/*.db-*
-/server/data/*.sqlite
-/server/data/*.sqlite3
-/server/data/*.sqlite-*
 
 # misc
 .DS_Store

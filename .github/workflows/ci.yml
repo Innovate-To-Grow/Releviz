@@ -7,73 +7,55 @@ on:
     branches: [main]
 
 jobs:
-  lint:
-    name: Lint & Format
+  backend-lint-test:
+    name: Backend - Lint & Test
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: "npm"
+          cache-dependency-path: package-lock.json
+      - run: npm ci --workspace=backend
+      - run: npm --workspace=backend run format:check
+      - run: npm --workspace=backend run lint
+      - run: npm --workspace=backend run test -- --ci
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Check formatting
-        run: npm run format:check
-
-      - name: Lint
-        run: npm run lint
-
-  test:
-    name: Test & Build
-    needs: lint
+  frontend-lint-test-build:
+    name: Frontend - Lint, Test & Build
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: "npm"
+          cache-dependency-path: package-lock.json
+      - run: npm ci --workspace=frontend
+      - run: npm --workspace=frontend run format:check
+      - run: npm --workspace=frontend run lint
+      - run: npm --workspace=frontend run test -- --ci
+      - run: npm --workspace=frontend run build
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run tests
-        run: npm test -- --ci
-
-      - name: Build
-        run: npm run build
-
-  docker_build_check:
-    name: Docker Build Check
-    needs: test
+  docker-build-check:
+    name: Docker Build - ${{ matrix.service }}
+    needs: [backend-lint-test, frontend-lint-test-build]
     runs-on: ubuntu-latest
     timeout-minutes: 20
-
+    strategy:
+      matrix:
+        service: [frontend, backend]
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build Docker image (no push)
-        uses: docker/build-push-action@v6
+      - uses: actions/checkout@v4
+      - run: cp package-lock.json ${{ matrix.service }}/
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
         with:
-          context: .
-          file: ./Dockerfile
+          context: ./${{ matrix.service }}
+          file: ./${{ matrix.service }}/Dockerfile
           push: false
           load: false
-          tags: scheduler:ci-${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: scheduler-${{ matrix.service }}:ci-${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
