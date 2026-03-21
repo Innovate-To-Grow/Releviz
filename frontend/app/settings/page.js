@@ -1,7 +1,14 @@
-import SettingsPageClient from "@/components/auth/SettingsPageClient";
+import { UserProfile } from "@clerk/nextjs";
 
 export const metadata = { title: "Settings - Relevis" };
 
 export default function Settings() {
-  return <SettingsPageClient />;
+  return (
+    <div
+      className="page-pad"
+      style={{ minHeight: "100vh", display: "flex", justifyContent: "center", paddingTop: "32px" }}
+    >
+      <UserProfile />
+    </div>
+  );
 }

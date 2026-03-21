@@ -8,7 +8,6 @@ export function toApiEvent(event) {
     mode: ["inperson", "virtual", "mixed"].includes(event.mode) ? event.mode : "inperson",
     location: event.location || "",
     organizerUserId: event.organizerUserId || null,
-    participantVerification: event.participantVerification || "none",
     participantViewPermission: event.participantViewPermission || "own_only",
     daySelectionType: event.daySelectionType || "days_of_week",
     createdAt: event.createdAt,
@@ -22,6 +21,7 @@ export function toApiEvent(event) {
 export function toApiParticipant(participant) {
   return {
     id: participant.participantId,
+    user_id: participant.userId,
     event_id: participant.eventId,
     name: participant.participantName,
     schedule_inperson: participant.scheduleInperson,
@@ -40,11 +40,13 @@ export function toApiUser(user) {
     email: user.email,
     displayName: user.displayName,
     createdAt: user.createdAt,
+    imageUrl: user.imageUrl || null,
   };
 }
 
 export function toApiWeight(weight) {
   return {
+    participant_id: weight.participantId,
     participant_name: weight.participantName,
     weight: Number(weight.weight),
     included: weight.included ? 1 : 0,

@@ -1,10 +1,11 @@
 import { Router } from "express";
-import { generateEventCode, hashPassword } from "../lib/crypto.js";
-import { optionalAuth } from "../middleware/auth.js";
+import { generateEventCode } from "../lib/crypto.js";
+import { requireAuth } from "../middleware/auth.js";
 import { schedulerStore } from "../lib/store/index.js";
 import { toApiEvent } from "../lib/store/types.js";
 
 export const eventsRouter = Router();
+eventsRouter.use(requireAuth);
 
 eventsRouter.get("/", async (req, res) => {
   try {
@@ -20,17 +21,15 @@ eventsRouter.get("/", async (req, res) => {
   }
 });
 
-eventsRouter.post("/", optionalAuth, async (req, res) => {
+eventsRouter.post("/", async (req, res) => {
   try {
     const {
       name,
-      password,
       startHour,
       endHour,
       days,
       mode,
       location,
-      participantVerification,
       participantViewPermission,
       daySelectionType,
       specificDates,
@@ -42,16 +41,6 @@ eventsRouter.post("/", optionalAuth, async (req, res) => {
     }
     if (trimmedName.length > 200) {
       return res.status(400).json({ error: "Event name too long (max 200)" });
-    }
-
-    // Password required only for anonymous event creation
-    if (!req.userId) {
-      if (!password || typeof password !== "string" || password.length === 0) {
-        return res.status(400).json({ error: "Password is required" });
-      }
-    }
-    if (password && password.length > 200) {
-      return res.status(400).json({ error: "Password too long (max 200)" });
     }
 
     if (mode && !["virtual", "inperson", "mixed"].includes(mode)) {
@@ -97,16 +86,10 @@ eventsRouter.post("/", optionalAuth, async (req, res) => {
       }
     }
 
-    const validVerificationModes = ["none", "login", "email_link", "phone"];
-    if (participantVerification && !validVerificationModes.includes(participantVerification)) {
-      return res.status(400).json({ error: "Invalid participantVerification value" });
-    }
     const validViewPermissions = ["own_only", "all", "realtime"];
     if (participantViewPermission && !validViewPermissions.includes(participantViewPermission)) {
       return res.status(400).json({ error: "Invalid participantViewPermission value" });
     }
-
-    const passwordHash = password ? await hashPassword(password) : null;
 
     let created = false;
     let code = "";
@@ -115,14 +98,12 @@ eventsRouter.post("/", optionalAuth, async (req, res) => {
       created = await schedulerStore.createEvent({
         eventCode: code,
         name: trimmedName,
-        passwordHash,
         startHour: start,
         endHour: end,
         days: selectedDays,
         mode: eventMode,
         location: eventLocation,
-        organizerUserId: req.userId || null,
-        participantVerification: participantVerification || "none",
+        organizerUserId: req.userId,
         participantViewPermission: participantViewPermission || "own_only",
         daySelectionType: selectionType,
         specificDates: selectionType === "specific_dates" ? specificDates : undefined,
@@ -134,14 +115,11 @@ eventsRouter.post("/", optionalAuth, async (req, res) => {
       return res.status(500).json({ error: "Failed to generate unique code" });
     }
 
-    // Link event to authenticated user
-    if (req.userId) {
-      await schedulerStore.createUserEvent({
-        userId: req.userId,
-        eventCode: code,
-        role: "organizer",
-      });
-    }
+    await schedulerStore.createUserEvent({
+      userId: req.userId,
+      eventCode: code,
+      role: "organizer",
+    });
 
     return res.status(201).json({
       event: {
@@ -153,7 +131,6 @@ eventsRouter.post("/", optionalAuth, async (req, res) => {
         mode: eventMode,
         location: eventLocation,
       },
-      password,
     });
   } catch (err) {
     const status = err instanceof SyntaxError ? 400 : 500;

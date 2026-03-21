@@ -8,20 +8,20 @@ export async function fetchParticipants(code) {
   return res.json();
 }
 
-export async function joinEvent(code, name) {
+export async function joinEvent(code) {
   const res = await fetch(`${API_BASE}/api/events/participants?code=${encodeURIComponent(code)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({}),
   });
   if (!res.ok) throw new Error(await extractError(res));
   return res.json();
 }
 
-export async function updateParticipant(code, name, data) {
+export async function updateParticipant(code, participantId, data) {
   const res = await fetch(
-    `${API_BASE}/api/events/participants/update?code=${encodeURIComponent(code)}&name=${encodeURIComponent(name)}`,
+    `${API_BASE}/api/events/participants/update?code=${encodeURIComponent(code)}&participantId=${encodeURIComponent(participantId)}`,
     {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -42,18 +42,18 @@ export async function fetchParticipantsIncludeHidden(code) {
   return res.json();
 }
 
-export async function unhideParticipant(code, name) {
+export async function unhideParticipant(code, participantId) {
   const res = await fetch(
-    `${API_BASE}/api/events/participants/update/unhide?code=${encodeURIComponent(code)}&name=${encodeURIComponent(name)}`,
+    `${API_BASE}/api/events/participants/update/unhide?code=${encodeURIComponent(code)}&participantId=${encodeURIComponent(participantId)}`,
     { method: "PUT", credentials: "include" }
   );
   if (!res.ok) throw new Error(await extractError(res));
   return res.json();
 }
 
-export async function deleteParticipant(code, name) {
+export async function deleteParticipant(code, participantId) {
   const res = await fetch(
-    `${API_BASE}/api/events/participants/update?code=${encodeURIComponent(code)}&name=${encodeURIComponent(name)}`,
+    `${API_BASE}/api/events/participants/update?code=${encodeURIComponent(code)}&participantId=${encodeURIComponent(participantId)}`,
     { method: "DELETE", credentials: "include" }
   );
   if (!res.ok) throw new Error(await extractError(res));

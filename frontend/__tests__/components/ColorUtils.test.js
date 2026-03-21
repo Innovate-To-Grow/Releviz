@@ -1,4 +1,4 @@
-import { lerpColor, color0, color1, color2 } from "@/components/ui/ColorUtils";
+import { lerpColor, color0, color1, color2 } from "../../components/ui/ColorUtils";
 
 describe("color constants", () => {
   test("color0 is the busy/red color", () => {

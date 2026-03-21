@@ -2,30 +2,28 @@
 
 import { useState, useContext, useEffect, useRef } from "react";
 import { MdLogin, MdRefresh, MdSend } from "react-icons/md";
-import Link from "next/link";
 import AppButton from "@/components/ui/AppButton";
 import EventContext from "@/components/event/EventContext";
 import ScheduleGrid from "@/components/schedule/ScheduleGrid";
 import { useAuth } from "@/components/auth/AuthContext";
 import { fetchParticipants, joinEvent, updateParticipant } from "@/lib/api/participants";
 import "@material/web/slider/slider.js";
-import "@material/web/textfield/outlined-text-field.js";
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
 
 function ParticipantView() {
   const { event, numSlots } = useContext(EventContext);
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const mode = event?.mode || "inperson";
-  const verification = event?.participantVerification || "none";
   const viewPermission = event?.participantViewPermission || "own_only";
-  const [name, setName] = useState("");
+
+  const [participantId, setParticipantId] = useState(null);
+  const [participantName, setParticipantName] = useState("");
   const [joined, setJoined] = useState(false);
   const [scheduleInperson, setScheduleInperson] = useState([]);
   const [scheduleVirtual, setScheduleVirtual] = useState([]);
   const [sliderValue, setSliderValue] = useState(1);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
-  const [existingNames, setExistingNames] = useState([]);
   const [preJoinParticipants, setPreJoinParticipants] = useState([]);
   const [participants, setParticipants] = useState([]);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -35,75 +33,72 @@ function ParticipantView() {
   const paintModeRef = useRef(null);
 
   useEffect(() => {
-    if (!joined && event?.code) {
-      fetchParticipants(event.code)
-        .then((data) => {
-          setExistingNames(data.participants.map((p) => p.name));
-          setPreJoinParticipants(
-            data.participants.map((p) => ({ name: p.name, submitted: !!p.submitted }))
-          );
-        })
-        .catch(() => {});
-    }
-  }, [joined, event?.code]);
+    if (!event?.code || !user?.id) return;
 
-  useEffect(() => {
-    if (joined && event?.code) {
-      fetchParticipants(event.code)
-        .then((data) => {
-          const parsed = data.participants.map((p) => ({
-            ...p,
-            inpersonArray: JSON.parse(p.schedule_inperson).map(Number),
-            virtualArray: JSON.parse(p.schedule_virtual).map(Number),
-          }));
-          setParticipants(parsed);
-        })
-        .catch(() => {});
-    }
-  }, [joined, event?.code, refreshKey]);
+    fetchParticipants(event.code)
+      .then((data) => {
+        const parsed = data.participants.map((participant) => ({
+          ...participant,
+          inpersonArray: JSON.parse(participant.schedule_inperson).map(Number),
+          virtualArray: JSON.parse(participant.schedule_virtual).map(Number),
+        }));
+
+        setParticipants(parsed);
+        setPreJoinParticipants(parsed.map((participant) => ({
+          id: participant.id,
+          name: participant.name,
+          submitted: !!participant.submitted,
+        })));
+
+        const mine = parsed.find((participant) => participant.user_id === user.id);
+        if (mine) {
+          setParticipantId(mine.id);
+          setParticipantName(mine.name);
+          setScheduleInperson(mine.inpersonArray);
+          setScheduleVirtual(mine.virtualArray);
+          setSubmitted(!!mine.submitted);
+          setJoined(true);
+        }
+      })
+      .catch(() => {});
+  }, [event?.code, user?.id, refreshKey]);
 
   const calculateAverage = (scheduleKey) => {
     if (!participants.length) return Array(numSlots).fill(0);
+
     const total = Array(numSlots).fill(0);
     let validCount = 0;
-    participants.forEach((p) => {
-      const schedule = p[scheduleKey];
+
+    participants.forEach((participant) => {
+      const schedule = participant[scheduleKey];
       if (schedule.length !== numSlots) return;
       validCount++;
-      schedule.forEach((val, idx) => {
-        total[idx] += val;
+      schedule.forEach((value, index) => {
+        total[index] += value;
       });
     });
+
     if (validCount === 0) return Array(numSlots).fill(0);
-    return total.map((v) => parseFloat((v / validCount).toFixed(2)));
+    return total.map((value) => parseFloat((value / validCount).toFixed(2)));
   };
 
   const avgInperson = calculateAverage("inpersonArray");
   const avgVirtual = calculateAverage("virtualArray");
 
-  const suggestions =
-    name.trim().length > 0
-      ? existingNames.filter((n) => n.toLowerCase().startsWith(name.toLowerCase().trim()))
-      : [];
-
-  const handleJoin = async (joinName) => {
-    const n = (joinName ?? name).trim();
-    if (!n) {
-      setJoinError("Name is required");
-      return;
-    }
+  const handleJoin = async () => {
     setJoinError("");
+
     try {
-      const { participant } = await joinEvent(event.code, n);
-      setName(n);
-      const ip = JSON.parse(participant.schedule_inperson).map(Number);
-      const vt = JSON.parse(participant.schedule_virtual).map(Number);
-      setScheduleInperson(ip);
-      setScheduleVirtual(vt);
+      const { participant } = await joinEvent(event.code);
+      setParticipantId(participant.id);
+      setParticipantName(participant.name);
+      setScheduleInperson(JSON.parse(participant.schedule_inperson).map(Number));
+      setScheduleVirtual(JSON.parse(participant.schedule_virtual).map(Number));
       setSubmitted(!!participant.submitted);
       setJoined(true);
+      setRefreshKey((key) => key + 1);
     } catch (err) {
-      setJoinError("Failed to join: " + err.message);
+      setJoinError(`Failed to join: ${err.message}`);
     }
   };
 
@@ -111,6 +106,7 @@ function ParticipantView() {
     if (e.type === "mousedown") {
       paintModeRef.current = schedule[idx] > 0 ? "erase" : "paint";
     }
+
     setter((prev) => {
       const next = [...prev];
       next[idx] = paintModeRef.current === "erase" ? 0 : sliderValue;
@@ -122,24 +118,42 @@ function ParticipantView() {
   const handleVirtualPaint = makeCellPaintHandler(setScheduleVirtual, scheduleVirtual);
 
   const handleSubmit = async () => {
+    if (!participantId) return;
+
     setIsSubmitting(true);
     setSubmitError("");
+
     try {
-      await updateParticipant(event.code, name, {
+      await updateParticipant(event.code, participantId, {
         scheduleInperson: JSON.stringify(scheduleInperson),
         scheduleVirtual: JSON.stringify(scheduleVirtual),
         submitted: 1,
       });
       setSubmitted(true);
-      setRefreshKey((k) => k + 1);
+      setRefreshKey((key) => key + 1);
     } catch (err) {
-      setSubmitError("Failed to submit: " + err.message);
+      setSubmitError(`Failed to submit: ${err.message}`);
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  // Name entry screen
+  if (authLoading || !user) {
+    return (
+      <div
+        className="page-pad"
+        style={{
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "center",
+          minHeight: "calc(100vh - 76px)",
+        }}
+      >
+        <p style={{ color: "var(--md-sys-color-on-surface-variant)" }}>Loading...</p>
+      </div>
+    );
+  }
+
   if (!joined) {
     return (
       <div
@@ -164,38 +178,11 @@ function ParticipantView() {
           <div style={{ textAlign: "center" }}>
             <h2 style={{ color: "var(--md-sys-color-primary)", margin: 0 }}>Join Event</h2>
             <p style={{ color: "var(--md-sys-color-on-surface-variant)", margin: "8px 0 0 0" }}>
-              {verification === "login"
-                ? "Login required to mark availability."
-                : "Enter your name to mark availability."}
+              Your Clerk account will be used as your participant identity.
             </p>
           </div>
 
           <EventDetailsGrid event={event} />
-
-          {verification === "login" && !user && (
-            <div
-              className="md-card"
-              style={{ textAlign: "center", background: "var(--md-sys-color-surface-variant)" }}
-            >
-              <p style={{ margin: "0 0 12px 0" }}>
-                This event requires you to log in before joining.
-              </p>
-              <Link href="/login">
-                <AppButton icon={<MdLogin />}>Login</AppButton>
-              </Link>
-            </div>
-          )}
-
-          {(verification === "email_link" || verification === "phone") && (
-            <div
-              className="md-card"
-              style={{ textAlign: "center", background: "var(--md-sys-color-surface-variant)" }}
-            >
-              <p style={{ margin: 0, color: "var(--md-sys-color-on-surface-variant)" }}>
-                {verification === "email_link" ? "Email link" : "Phone"} verification coming soon.
-              </p>
-            </div>
-          )}
 
           <div
             style={{
@@ -210,9 +197,9 @@ function ParticipantView() {
             </p>
             {preJoinParticipants.length > 0 ? (
               <div style={{ marginTop: "10px", display: "flex", flexWrap: "wrap", gap: "8px" }}>
-                {preJoinParticipants.map((p) => (
+                {preJoinParticipants.map((participant) => (
                   <span
-                    key={p.name}
+                    key={participant.id}
                     style={{
                       display: "inline-flex",
                       alignItems: "center",
@@ -225,14 +212,14 @@ function ParticipantView() {
                   >
                     <span
                       style={{
-                        color: p.submitted
+                        color: participant.submitted
                           ? "var(--md-sys-color-primary)"
                           : "var(--md-sys-color-outline)",
                       }}
                     >
-                      {p.submitted ? "●" : "○"}
+                      {participant.submitted ? "●" : "○"}
                     </span>
-                    {p.name}
+                    {participant.name}
                   </span>
                 ))}
               </div>
@@ -249,62 +236,22 @@ function ParticipantView() {
             )}
           </div>
 
-          {(verification === "none" || (verification === "login" && user)) && (
-            <>
-              {verification !== "login" && (
-                <md-outlined-text-field
-                  label="Your Name"
-                  value={name}
-                  onInput={(e) => setName(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleJoin()}
-                  maxLength="100"
-                  style={{ width: "100%" }}
-                ></md-outlined-text-field>
-              )}
-              {joinError && (
-                <p style={{ color: "var(--md-sys-color-error)", margin: 0, fontSize: "0.9rem" }}>
-                  {joinError}
-                </p>
-              )}
-              {verification !== "login" && suggestions.length > 0 && (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
-                  {suggestions.map((n) => (
-                    <button
-                      key={n}
-                      onClick={() => handleJoin(n)}
-                      style={{
-                        padding: "4px 12px",
-                        borderRadius: "16px",
-                        border: "1px solid var(--md-sys-color-outline)",
-                        background: "var(--md-sys-color-surface-variant)",
-                        color: "var(--md-sys-color-on-surface-variant)",
-                        cursor: "pointer",
-                        fontSize: "0.875rem",
-                      }}
-                    >
-                      {n}
-                    </button>
-                  ))}
-                </div>
-              )}
-              <AppButton
-                onClick={() => handleJoin(verification === "login" ? user.displayName : undefined)}
-                fullWidth={true}
-                icon={<MdLogin />}
-              >
-                {verification === "login" ? `Join as ${user.displayName}` : "Join"}
-              </AppButton>
-            </>
+          {joinError && (
+            <p style={{ color: "var(--md-sys-color-error)", margin: 0, fontSize: "0.9rem" }}>
+              {joinError}
+            </p>
           )}
+
+          <AppButton onClick={handleJoin} fullWidth icon={<MdLogin />}>
+            Join as {user.displayName}
+          </AppButton>
         </div>
       </div>
     );
   }
 
-  // Schedule editing screen
   return (
     <div className="page-pad" style={{ maxWidth: "1400px", margin: "0 auto" }}>
-      {/* Header */}
       <div
         style={{
           marginBottom: "32px",
@@ -323,7 +270,7 @@ function ParticipantView() {
               fontSize: "1.8rem",
             }}
           >
-            Welcome, {name}
+            Welcome, {participantName}
             {submitted && (
               <span
                 style={{
@@ -341,7 +288,7 @@ function ParticipantView() {
           </p>
         </div>
         <AppButton
-          onClick={() => setRefreshKey((k) => k + 1)}
+          onClick={() => setRefreshKey((key) => key + 1)}
           variant="outlined"
           icon={<MdRefresh />}
         >
@@ -350,7 +297,6 @@ function ParticipantView() {
       </div>
 
       <div className="two-pane">
-        {/* Left pane: schedule editor */}
         <div style={{ flex: "1 1 350px", display: "flex", flexDirection: "column", gap: "24px" }}>
           <div
             className="md-card"
@@ -386,6 +332,8 @@ function ParticipantView() {
                 startHour={event.startHour}
                 endHour={event.endHour}
                 selectedDays={event.days}
+                daySelectionType={event.daySelectionType}
+                specificDates={event.specificDates}
                 readOnly={false}
                 showValues={false}
                 onCellPaint={handleInpersonPaint}
@@ -398,6 +346,8 @@ function ParticipantView() {
                 startHour={event.startHour}
                 endHour={event.endHour}
                 selectedDays={event.days}
+                daySelectionType={event.daySelectionType}
+                specificDates={event.specificDates}
                 readOnly={false}
                 showValues={false}
                 onCellPaint={handleVirtualPaint}
@@ -418,7 +368,6 @@ function ParticipantView() {
           </div>
         </div>
 
-        {/* Right pane: Group Availability + Individual Schedules */}
         <div style={{ flex: "2 1 700px", display: "flex", flexDirection: "column", gap: "24px" }}>
           <div className="md-card" style={{ overflowX: "auto" }}>
             <h3 style={{ margin: "0 0 16px 0", color: "var(--md-sys-color-on-surface)" }}>
@@ -464,14 +413,16 @@ function ParticipantView() {
                 Individual Schedules
               </h3>
               <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
-                {participants.map((p) => (
-                  <div className="md-card" key={p.name} style={{ overflowX: "auto" }}>
-                    <h4 style={{ margin: "0 0 16px 0", fontSize: "1.2rem" }}>{p.name}</h4>
+                {participants.map((participant) => (
+                  <div className="md-card" key={participant.id} style={{ overflowX: "auto" }}>
+                    <h4 style={{ margin: "0 0 16px 0", fontSize: "1.2rem" }}>
+                      {participant.name}
+                    </h4>
                     <div style={{ display: "flex", gap: "24px", flexWrap: "wrap" }}>
                       {mode !== "virtual" && (
                         <div style={{ flex: "1 1 300px", minWidth: 0 }}>
                           <ScheduleGrid
-                            schedule={p.inpersonArray}
+                            schedule={participant.inpersonArray}
                             startHour={event.startHour}
                             endHour={event.endHour}
                             selectedDays={event.days}
@@ -486,7 +437,7 @@ function ParticipantView() {
                       {mode !== "inperson" && (
                         <div style={{ flex: "1 1 300px", minWidth: 0 }}>
                           <ScheduleGrid
-                            schedule={p.virtualArray}
+                            schedule={participant.virtualArray}
                             startHour={event.startHour}
                             endHour={event.endHour}
                             selectedDays={event.days}

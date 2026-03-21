@@ -56,7 +56,7 @@ function LabelRow({ children }) {
 
 function CreateEvent() {
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [name, setName] = useState("");
   const [mode, setMode] = useState("inperson"); // "inperson" | "virtual"
   const [location, setLocation] = useState("");
@@ -66,8 +66,6 @@ function CreateEvent() {
   const [daySelectionType, setDaySelectionType] = useState("days_of_week");
   const [specificDates, setSpecificDates] = useState([]);
   const [dateInput, setDateInput] = useState("");
-  const [password, setPassword] = useState("");
-  const [participantVerification, setParticipantVerification] = useState("none");
   const [participantViewPermission, setParticipantViewPermission] = useState("own_only");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -89,7 +87,6 @@ function CreateEvent() {
     setError("");
     const errors = [];
     if (!name.trim()) errors.push("Event name is required");
-    if (!user && !password) errors.push("Password is required");
     // Location is optional — backend defaults to "TBD" for non-virtual events
     if (startHour >= endHour) errors.push("End time must be after start time");
     if (daySelectionType === "days_of_week" && selectedDays.length === 0) {
@@ -112,26 +109,35 @@ function CreateEvent() {
         days: daySelectionType === "days_of_week" ? selectedDays : [0, 1, 2, 3, 4, 5, 6],
         mode,
         location: location.trim(),
-        participantVerification,
         participantViewPermission,
         daySelectionType,
         ...(daySelectionType === "specific_dates"
           ? { specificDates: [...specificDates].sort() }
           : {}),
       };
-      if (!user) payload.password = password;
-      const { event, password: pw } = await createEvent(payload);
-      if (pw) {
-        router.replace(`/event?code=${event.code}&manage=${encodeURIComponent(pw)}`);
-      } else {
-        router.replace(`/event?code=${event.code}`);
-      }
+      const { event } = await createEvent(payload);
+      router.replace(`/event?code=${event.code}`);
     } catch (err) {
       setError(err.message || "Failed to create event");
     } finally {
       setLoading(false);
     }
   };
+
+  if (authLoading || !user) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "center",
+        }}
+      >
+        <p style={{ color: "var(--md-sys-color-on-surface-variant)" }}>Loading...</p>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -169,18 +175,6 @@ function CreateEvent() {
           maxLength="200"
           style={{ width: "100%" }}
         ></md-outlined-text-field>
-
-        {/* Organizer password (only for anonymous users) */}
-        {!user && (
-          <md-outlined-text-field
-            label="Organizer Password"
-            type="password"
-            value={password}
-            onInput={(e) => setPassword(e.target.value)}
-            maxLength="200"
-            style={{ width: "100%" }}
-          ></md-outlined-text-field>
-        )}
 
         {/* Mode */}
         <div>
@@ -339,29 +333,6 @@ function CreateEvent() {
               ))}
             </md-outlined-select>
           </div>
-        </div>
-
-        {/* Participant verification */}
-        <div>
-          <LabelRow>Participant Verification</LabelRow>
-          <md-outlined-select
-            value={participantVerification}
-            onInput={(e) => setParticipantVerification(e.target.value)}
-            style={{ width: "100%" }}
-          >
-            <md-select-option value="none">
-              <div slot="headline">None (enter name only)</div>
-            </md-select-option>
-            <md-select-option value="login">
-              <div slot="headline">Require login</div>
-            </md-select-option>
-            <md-select-option value="email_link">
-              <div slot="headline">Email link (coming soon)</div>
-            </md-select-option>
-            <md-select-option value="phone">
-              <div slot="headline">Phone (coming soon)</div>
-            </md-select-option>
-          </md-outlined-select>
         </div>
 
         {/* Participant view permission */}

@@ -1,7 +1,7 @@
-import SignupPageClient from "@/components/auth/SignupPageClient";
+import { RedirectToSignUp } from "@clerk/nextjs";
 
 export const metadata = { title: "Sign Up - Relevis" };
 
 export default function Signup() {
-  return <SignupPageClient />;
+  return <RedirectToSignUp />;
 }

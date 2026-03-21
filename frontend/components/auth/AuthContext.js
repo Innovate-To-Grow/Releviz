@@ -1,56 +1,60 @@
 "use client";
 
-import { createContext, useContext, useState, useEffect, useCallback } from "react";
-import {
-  fetchMe,
-  login as apiLogin,
-  logout as apiLogout,
-  signup as apiSignup,
-} from "@/lib/api/auth";
+import { createContext, useContext, useMemo, useCallback } from "react";
+import { useClerk, useUser } from "@clerk/nextjs";
 
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const { isLoaded, user: clerkUser } = useUser();
+  const { signOut } = useClerk();
 
-  useEffect(() => {
-    fetchMe()
-      .then((u) => setUser(u))
-      .catch(() => setUser(null))
-      .finally(() => setLoading(false));
-  }, []);
+  const user = useMemo(() => {
+    if (!clerkUser) return null;
 
-  const login = useCallback(async ({ email, password }) => {
-    const { user: u } = await apiLogin({ email, password });
-    setUser(u);
-    return u;
-  }, []);
+    const email = clerkUser.primaryEmailAddress?.emailAddress || "";
+    const displayName =
+      clerkUser.fullName || clerkUser.username || email.split("@")[0] || "User";
 
-  const signup = useCallback(async ({ email, password, displayName }) => {
-    const { user: u } = await apiSignup({ email, password, displayName });
-    setUser(u);
-    return u;
-  }, []);
+    return {
+      id: clerkUser.id,
+      email,
+      displayName,
+      createdAt: clerkUser.createdAt ? new Date(clerkUser.createdAt).toISOString() : null,
+      imageUrl: clerkUser.imageUrl || null,
+    };
+  }, [clerkUser]);
 
   const logout = useCallback(async () => {
-    await apiLogout();
-    setUser(null);
+    await signOut({ redirectUrl: "/login" });
+  }, [signOut]);
+
+  const login = useCallback(async () => {
+    window.location.assign("/login");
+  }, []);
+
+  const signup = useCallback(async () => {
+    window.location.assign("/signup");
   }, []);
 
   const refreshUser = useCallback(async () => {
-    try {
-      const u = await fetchMe();
-      setUser(u);
-    } catch {
-      setUser(null);
-    }
-  }, []);
+    return user;
+  }, [user]);
+
+  const value = useMemo(
+    () => ({
+      user,
+      loading: !isLoaded,
+      login,
+      signup,
+      logout,
+      refreshUser,
+    }),
+    [user, isLoaded, login, signup, logout, refreshUser]
+  );
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, signup, logout, refreshUser }}>
-      {children}
-    </AuthContext.Provider>
+    <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
   );
 }
 

@@ -79,9 +79,23 @@ variable "user_events_table_name" {
   default = "scheduler-prod-user-events"
 }
 
-variable "jwt_secret" {
+variable "clerk_publishable_key" {
+  type = string
+}
+
+variable "clerk_secret_key" {
   type      = string
   sensitive = true
+}
+
+variable "clerk_jwt_key" {
+  type      = string
+  sensitive = true
+}
+
+variable "clerk_authorized_parties" {
+  type    = string
+  default = ""
 }
 
 variable "health_check_path" {

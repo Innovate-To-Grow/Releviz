@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { MdAdd, MdSearch } from "react-icons/md";
 import AppButton from "@/components/ui/AppButton";
@@ -45,7 +44,6 @@ function EventCard({ event }) {
 }
 
 function DashboardPage() {
-  const router = useRouter();
   const { user, loading: authLoading } = useAuth();
   const [organized, setOrganized] = useState([]);
   const [participating, setParticipating] = useState([]);
@@ -53,11 +51,7 @@ function DashboardPage() {
   const [eventCode, setEventCode] = useState("");
 
   useEffect(() => {
-    if (authLoading) return;
-    if (!user) {
-      router.push("/login");
-      return;
-    }
+    if (authLoading || !user) return;
     fetchDashboardEvents()
       .then((data) => {
         setOrganized(data.organized || []);
@@ -65,7 +59,7 @@ function DashboardPage() {
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [user, authLoading, router]);
+  }, [user, authLoading]);
 
   if (authLoading || loading) {
     return (
@@ -84,7 +78,7 @@ function DashboardPage() {
 
   const handleGoToEvent = () => {
     const code = eventCode.trim();
-    if (code) router.push(`/event?code=${code}`);
+    if (code) window.location.assign(`/event?code=${code}`);
   };
 
   return (

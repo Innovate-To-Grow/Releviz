@@ -11,7 +11,6 @@ describe("DynamoSchedulerStore", () => {
     const created = await store.createEvent({
       eventCode: "ABCD1234",
       name: "Event",
-      passwordHash: "hash",
       startHour: 9,
       endHour: 17,
       days: [1, 2, 3, 4, 5],
@@ -26,8 +25,9 @@ describe("DynamoSchedulerStore", () => {
     const existing = {
       eventCode: "EVENT123",
       eventId: "evt-1",
+      userId: "user-1",
       participantName: "Alice",
-      participantId: "p-1",
+      participantId: "user-1",
       scheduleInperson: "[0,0]",
       scheduleVirtual: "[0,0]",
       submitted: 0,
@@ -45,6 +45,8 @@ describe("DynamoSchedulerStore", () => {
     const result = await store.createParticipantIfAbsent({
       eventCode: "EVENT123",
       eventId: "evt-1",
+      participantId: "user-1",
+      userId: "user-1",
       participantName: "Alice",
       scheduleInperson: "[0,0]",
       scheduleVirtual: "[0,0]",
@@ -57,7 +59,15 @@ describe("DynamoSchedulerStore", () => {
   test("listWeights normalizes numeric values", async () => {
     const doc = {
       send: jest.fn().mockResolvedValue({
-        Items: [{ eventCode: "EVENT123", participantName: "Alice", weight: "0.8", included: "1" }],
+        Items: [
+          {
+            eventCode: "EVENT123",
+            participantId: "user-1",
+            participantName: "Alice",
+            weight: "0.8",
+            included: "1",
+          },
+        ],
       }),
     };
     const store = new DynamoSchedulerStore({ docClient: doc, tables: mockTables() });
@@ -66,6 +76,7 @@ describe("DynamoSchedulerStore", () => {
     expect(weights).toEqual([
       {
         eventCode: "EVENT123",
+        participantId: "user-1",
         participantName: "Alice",
         weight: 0.8,
         included: 1,
