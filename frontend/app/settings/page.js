@@ -1,6 +1,6 @@
 import { UserProfile } from "@clerk/nextjs";
 
-export const metadata = { title: "Settings - Relevis" };
+export const metadata = { title: "Settings - Releviz" };
 
 export default function Settings() {
   return (

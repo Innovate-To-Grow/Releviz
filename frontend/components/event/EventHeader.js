@@ -143,7 +143,7 @@ function EventHeader({ eventName, eventCode }) {
             marginRight: "4px",
           }}
         >
-          Relevis
+          Releviz
         </span>
         <h1
           style={{

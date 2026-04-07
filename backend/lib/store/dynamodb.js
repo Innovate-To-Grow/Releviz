@@ -76,6 +76,16 @@ export class DynamoSchedulerStore {
       this.doc = docClient;
     } else {
       const client = new DynamoDBClient({ region });
+      // const client = new DynamoDBClient({
+      //   region,
+      //   ...(process.env.DYNAMODB_LOCAL === "true" && {
+      //     endpoint: "http://localhost:8000",
+      //     credentials: {
+      //       accessKeyId: "local",
+      //       secretAccessKey: "local",
+      //     },
+      //   }),
+      // });
       this.doc = DynamoDBDocumentClient.from(client, {
         marshallOptions: { removeUndefinedValues: true },
       });

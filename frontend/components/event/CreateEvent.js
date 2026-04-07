@@ -163,7 +163,7 @@ function CreateEvent() {
         {/* Header */}
         <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
           <h1 style={{ color: "var(--md-sys-color-primary)", margin: 0, fontSize: "1.8rem" }}>
-            Relevis
+            Releviz
           </h1>
         </div>
 

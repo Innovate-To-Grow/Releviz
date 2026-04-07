@@ -1,5 +1,5 @@
 {
-  "name": "relevis-monorepo",
+  "name": "releviz-monorepo",
   "private": true,
   "workspaces": ["frontend", "backend"],
   "scripts": {
