@@ -124,7 +124,7 @@ function CreateEvent() {
     }
   };
 
-  if (authLoading || !user) {
+  if (authLoading) {
     return (
       <div
         style={{
