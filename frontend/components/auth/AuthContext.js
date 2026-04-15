@@ -7,7 +7,8 @@ const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
   const { isLoaded, user: clerkUser } = useUser();
-  const { signOut } = useClerk();
+  // const { signOut } = useClerk();
+  const { signOut, session } = useClerk();
 
   const user = useMemo(() => {
     if (!clerkUser) return null;
@@ -24,6 +25,11 @@ export function AuthProvider({ children }) {
       imageUrl: clerkUser.imageUrl || null,
     };
   }, [clerkUser]);
+
+  const getToken = useCallback(async () => {
+    if (!session) return null;
+    return session.getToken();
+  }, [session]);
 
   const logout = useCallback(async () => {
     await signOut({ redirectUrl: "/login" });
@@ -49,6 +55,7 @@ export function AuthProvider({ children }) {
       signup,
       logout,
       refreshUser,
+      getToken,
     }),
     [user, isLoaded, login, signup, logout, refreshUser]
   );
