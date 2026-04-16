@@ -16,8 +16,6 @@
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.4",
-    "@next/swc-darwin-arm64": "^15.5.12",
-    "@next/swc-wasm-nodejs": "^15.5.12",
     "@testing-library/jest-dom": "^5.16.5",
     "@testing-library/react": "^13.4.0",
     "@testing-library/user-event": "^13.5.0",

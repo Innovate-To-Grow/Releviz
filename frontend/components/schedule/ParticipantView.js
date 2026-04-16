@@ -44,11 +44,13 @@ function ParticipantView() {
         }));
 
         setParticipants(parsed);
-        setPreJoinParticipants(parsed.map((participant) => ({
-          id: participant.id,
-          name: participant.name,
-          submitted: !!participant.submitted,
-        })));
+        setPreJoinParticipants(
+          parsed.map((participant) => ({
+            id: participant.id,
+            name: participant.name,
+            submitted: !!participant.submitted,
+          }))
+        );
 
         const mine = parsed.find((participant) => participant.user_id === user.id);
         if (mine) {
@@ -415,9 +417,7 @@ function ParticipantView() {
               <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
                 {participants.map((participant) => (
                   <div className="md-card" key={participant.id} style={{ overflowX: "auto" }}>
-                    <h4 style={{ margin: "0 0 16px 0", fontSize: "1.2rem" }}>
-                      {participant.name}
-                    </h4>
+                    <h4 style={{ margin: "0 0 16px 0", fontSize: "1.2rem" }}>{participant.name}</h4>
                     <div style={{ display: "flex", gap: "24px", flexWrap: "wrap" }}>
                       {mode !== "virtual" && (
                         <div style={{ flex: "1 1 300px", minWidth: 0 }}>

@@ -49,7 +49,10 @@ describe("GET /api/events/weights", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     primeAuth();
-    schedulerStore.getEvent.mockResolvedValue({ eventCode: "EVENT123", organizerUserId: "organizer-1" });
+    schedulerStore.getEvent.mockResolvedValue({
+      eventCode: "EVENT123",
+      organizerUserId: "organizer-1",
+    });
   });
 
   test("requires organizer authentication", async () => {
@@ -77,7 +80,10 @@ describe("GET /api/events/weights", () => {
 
   test("rejects non-organizers", async () => {
     primeAuth("user-1", "Alice");
-    schedulerStore.getEvent.mockResolvedValue({ eventCode: "EVENT123", organizerUserId: "organizer-1" });
+    schedulerStore.getEvent.mockResolvedValue({
+      eventCode: "EVENT123",
+      organizerUserId: "organizer-1",
+    });
 
     const res = await invokeApp(app, {
       url: "/api/events/weights?code=EVENT123",
@@ -92,7 +98,10 @@ describe("PUT /api/events/weights", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     primeAuth();
-    schedulerStore.getEvent.mockResolvedValue({ eventCode: "EVENT123", organizerUserId: "organizer-1" });
+    schedulerStore.getEvent.mockResolvedValue({
+      eventCode: "EVENT123",
+      organizerUserId: "organizer-1",
+    });
     schedulerStore.listParticipants.mockResolvedValue([
       { participantId: "user-1", participantName: "Alice" },
       { participantId: "user-2", participantName: "Bob" },

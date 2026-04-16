@@ -56,7 +56,7 @@ function LabelRow({ children }) {
 
 function CreateEvent() {
   const router = useRouter();
-  const { user, loading: authLoading } = useAuth();
+  const { loading: authLoading } = useAuth();
   const [name, setName] = useState("");
   const [mode, setMode] = useState("inperson"); // "inperson" | "virtual"
   const [location, setLocation] = useState("");

@@ -411,7 +411,8 @@ function OrganizerView() {
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
                 <p style={{ margin: 0, color: "var(--md-sys-color-on-surface-variant)" }}>
-                  Editing as <strong>{myParticipantName}</strong>. Click cells to toggle availability.
+                  Editing as <strong>{myParticipantName}</strong>. Click cells to toggle
+                  availability.
                 </p>
                 {mode !== "virtual" && (
                   <ScheduleGrid

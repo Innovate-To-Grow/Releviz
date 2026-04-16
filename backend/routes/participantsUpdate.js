@@ -60,7 +60,9 @@ participantsUpdateRouter.put("/", async (req, res) => {
     const isSelf = existing.userId === req.userId;
 
     if (!isOrganizer && !isSelf) {
-      return res.status(403).json({ error: "You do not have permission to update this participant" });
+      return res
+        .status(403)
+        .json({ error: "You do not have permission to update this participant" });
     }
 
     const updates = {};

@@ -1,1 +1,5 @@
-npm run dev:frontend
+import { SignIn } from "@clerk/nextjs";
+
+export default function Page() {
+  return <SignIn />;
+}

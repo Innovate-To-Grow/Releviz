@@ -194,7 +194,9 @@ export class DynamoSchedulerStore {
     const next = {
       ...existing,
       ...(updates.userId !== undefined ? { userId: updates.userId } : {}),
-      ...(updates.participantName !== undefined ? { participantName: updates.participantName } : {}),
+      ...(updates.participantName !== undefined
+        ? { participantName: updates.participantName }
+        : {}),
       ...(updates.scheduleInperson !== undefined
         ? { scheduleInperson: updates.scheduleInperson }
         : {}),

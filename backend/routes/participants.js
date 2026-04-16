@@ -16,7 +16,8 @@ participantsRouter.get("/", async (req, res) => {
     if (!event) return res.status(404).json({ error: "Event not found" });
 
     const allParticipants = await schedulerStore.listParticipants(code);
-    const includeHidden = req.query.includeHidden === "true" && event.organizerUserId === req.userId;
+    const includeHidden =
+      req.query.includeHidden === "true" && event.organizerUserId === req.userId;
     const participants = includeHidden ? allParticipants : allParticipants.filter((p) => !p.hidden);
 
     return res.json({ participants: participants.map(toApiParticipant) });

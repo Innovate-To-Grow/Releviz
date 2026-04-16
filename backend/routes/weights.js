@@ -43,7 +43,9 @@ weightsRouter.put("/", async (req, res) => {
     }
 
     const participants = await schedulerStore.listParticipants(code);
-    const participantMap = new Map(participants.map((participant) => [participant.participantId, participant]));
+    const participantMap = new Map(
+      participants.map((participant) => [participant.participantId, participant])
+    );
 
     const normalizedWeights = [];
     for (const item of weights) {

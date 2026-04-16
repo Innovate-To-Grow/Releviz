@@ -86,9 +86,7 @@ describe("Clerk requireAuth middleware", () => {
   test("handles concurrent user creation race condition", async () => {
     getRequestAuthToken.mockReturnValue("valid-token");
     verifyClerkSessionToken.mockResolvedValue({ sub: "clerk-user-1" });
-    schedulerStore.getUserById
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce(MOCK_USER);
+    schedulerStore.getUserById.mockResolvedValueOnce(null).mockResolvedValueOnce(MOCK_USER);
     fetchClerkUser.mockResolvedValue({ id: "clerk-user-1" });
     normalizeClerkUser.mockReturnValue(MOCK_USER);
     const raceError = new Error("Conditional check failed");

@@ -14,8 +14,7 @@ export function AuthProvider({ children }) {
     if (!clerkUser) return null;
 
     const email = clerkUser.primaryEmailAddress?.emailAddress || "";
-    const displayName =
-      clerkUser.fullName || clerkUser.username || email.split("@")[0] || "User";
+    const displayName = clerkUser.fullName || clerkUser.username || email.split("@")[0] || "User";
 
     return {
       id: clerkUser.id,
@@ -57,12 +56,10 @@ export function AuthProvider({ children }) {
       refreshUser,
       getToken,
     }),
-    [user, isLoaded, login, signup, logout, refreshUser]
+    [user, isLoaded, login, signup, logout, refreshUser, getToken]
   );
 
-  return (
-    <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
-  );
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {
