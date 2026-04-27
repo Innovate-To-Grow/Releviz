@@ -15,7 +15,6 @@ import { DAYS_PER_WEEK } from "@/lib/constants";
 function EventPage() {
   const searchParams = useSearchParams();
   const eventCode = searchParams.get("code");
-  // const { user } = useAuth();
   const { user, getToken } = useAuth();
 
   const [event, setEvent] = useState(null);
@@ -31,7 +30,6 @@ function EventPage() {
     }
     async function load() {
       try {
-        //const { event: ev } = await fetchEvent(eventCode);
         const token = await getToken();
         const { event: ev } = await fetchEvent(eventCode, token);
         setEvent(ev);
@@ -44,7 +42,6 @@ function EventPage() {
       }
     }
     load();
-    // }, [eventCode, user]);
   }, [eventCode, user, getToken]);
 
   if (loading) {

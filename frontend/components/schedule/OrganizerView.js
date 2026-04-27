@@ -31,7 +31,6 @@ import EventDetailsGrid from "@/components/event/EventDetailsGrid";
 function OrganizerView() {
   const { event, numSlots } = useContext(EventContext);
   const { user, loading: authLoading, getToken } = useAuth();
-  // const { user, loading: authLoading } = useAuth();
   const mode = event?.mode || "inperson";
 
   const [participants, setParticipants] = useState([]);
@@ -68,7 +67,6 @@ function OrganizerView() {
       try {
         const [participantsRes, weightsRes] = await Promise.all([
           fetchParticipantsIncludeHidden(event.code),
-          // fetchWeights(event.code),
           getToken().then((token) => fetchWeights(event.code, token)),
         ]);
 
@@ -100,7 +98,6 @@ function OrganizerView() {
     if (user?.id) {
       load();
     }
-    // }, [event.code, refreshKey, user?.id]);
   }, [event.code, refreshKey, user?.id, getToken]);
 
   const saveWeights = useCallback(
@@ -111,7 +108,6 @@ function OrganizerView() {
           weight: w.weight,
           included: w.included,
         }));
-        // await updateWeights(event.code, arr);
         const token = await getToken();
         await updateWeights(event.code, arr, token);
       } catch (err) {

@@ -12,7 +12,6 @@ import EventDetailsGrid from "@/components/event/EventDetailsGrid";
 
 function ParticipantView() {
   const { event, numSlots } = useContext(EventContext);
-  // const { user, loading: authLoading } = useAuth();
   const { user, loading: authLoading, getToken } = useAuth();
   const mode = event?.mode || "inperson";
   const viewPermission = event?.participantViewPermission || "own_only";
@@ -36,7 +35,6 @@ function ParticipantView() {
   useEffect(() => {
     if (!event?.code || !user?.id) return;
 
-    // fetchParticipants(event.code)
     getToken()
       .then((token) => fetchParticipants(event.code, token))
       .then((data) => {
@@ -66,7 +64,6 @@ function ParticipantView() {
         }
       })
       .catch(() => {});
-    // }, [event?.code, user?.id, refreshKey]);
   }, [event?.code, user?.id, refreshKey, getToken]);
 
   const calculateAverage = (scheduleKey) => {
@@ -95,7 +92,6 @@ function ParticipantView() {
     setJoinError("");
 
     try {
-      // const { participant } = await joinEvent(event.code);
       const token = await getToken();
       const { participant } = await joinEvent(event.code, token);
       setParticipantId(participant.id);
@@ -132,7 +128,6 @@ function ParticipantView() {
     setSubmitError("");
 
     try {
-      // await updateParticipant(event.code, participantId, {
       const token = await getToken();
       await updateParticipant(
         event.code,
@@ -141,7 +136,6 @@ function ParticipantView() {
           scheduleInperson: JSON.stringify(scheduleInperson),
           scheduleVirtual: JSON.stringify(scheduleVirtual),
           submitted: 1,
-          // });
         },
         token
       );
