@@ -53,14 +53,15 @@ function DashboardPage() {
   useEffect(() => {
     if (authLoading || !user) return;
     // fetchDashboardEvents()
-    getToken().then(token => fetchDashboardEvents(token))
+    getToken()
+      .then((token) => fetchDashboardEvents(token))
       .then((data) => {
         setOrganized(data.organized || []);
         setParticipating(data.participating || []);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-  // }, [user, authLoading]);
+    // }, [user, authLoading]);
   }, [user, authLoading, getToken]);
 
   if (authLoading || loading) {

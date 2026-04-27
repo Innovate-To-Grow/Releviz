@@ -28,68 +28,80 @@ function HomePage() {
 
   if (loading) {
     return (
-      <div style={{
-        minHeight: "100vh",
-        display: "flex",
-        justifyContent: "center",
-        alignItems: "center",
-      }}>
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "center",
+        }}
+      >
         <p style={{ color: "var(--md-sys-color-on-surface-variant)" }}>Loading...</p>
       </div>
     );
   }
 
   return (
-    <div style={{
-      minHeight: "100vh",
-      display: "flex",
-      flexDirection: "column",
-      justifyContent: "center",
-      alignItems: "center",
-      padding: "24px",
-      boxSizing: "border-box",
-      gap: "32px",
-    }}>
+    <div
+      style={{
+        minHeight: "100vh",
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: "center",
+        alignItems: "center",
+        padding: "24px",
+        boxSizing: "border-box",
+        gap: "32px",
+      }}
+    >
       {/* Logo + brand */}
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "16px" }}>
         <Image src="/img/i2glogo.png" alt="i2G Logo" width={64} height={64} />
-        <h1 style={{
-          color: "var(--md-sys-color-primary)",
-          margin: 0,
-          fontSize: "2.5rem",
-          fontWeight: 700,
-        }}>
+        <h1
+          style={{
+            color: "var(--md-sys-color-primary)",
+            margin: 0,
+            fontSize: "2.5rem",
+            fontWeight: 700,
+          }}
+        >
           Releviz
         </h1>
-        <p style={{
-          color: "var(--md-sys-color-on-surface-variant)",
-          margin: 0,
-          fontSize: "1rem",
-          textAlign: "center",
-          maxWidth: "400px",
-        }}>
+        <p
+          style={{
+            color: "var(--md-sys-color-on-surface-variant)",
+            margin: 0,
+            fontSize: "1rem",
+            textAlign: "center",
+            maxWidth: "400px",
+          }}
+        >
           Intelligent group scheduling — find the best time for everyone.
         </p>
       </div>
 
       {/* CTAs */}
-      <div style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: "16px",
-        width: "100%",
-        maxWidth: "360px",
-        alignItems: "center",
-      }}>
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: "16px",
+          width: "100%",
+          maxWidth: "360px",
+          alignItems: "center",
+        }}
+      >
         <AppButton onClick={handleOrganize} fullWidth icon={<MdAdd />}>
           Organize an Event
         </AppButton>
 
-        <p style={{
-          color: "var(--md-sys-color-on-surface-variant)",
-          margin: 0,
-          fontSize: "0.9rem",
-        }}>
+        <p
+          style={{
+            color: "var(--md-sys-color-on-surface-variant)",
+            margin: 0,
+            fontSize: "0.9rem",
+          }}
+        >
           or
         </p>
 
@@ -107,12 +119,14 @@ function HomePage() {
         </div>
 
         {user && (
-          <p style={{
-            textAlign: "center",
-            fontSize: "0.85rem",
-            color: "var(--md-sys-color-on-surface-variant)",
-            margin: 0,
-          }}>
+          <p
+            style={{
+              textAlign: "center",
+              fontSize: "0.85rem",
+              color: "var(--md-sys-color-on-surface-variant)",
+              margin: 0,
+            }}
+          >
             <a href="/dashboard" style={{ color: "var(--md-sys-color-primary)" }}>
               View my dashboard →
             </a>

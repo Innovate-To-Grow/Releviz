@@ -69,7 +69,7 @@ function OrganizerView() {
         const [participantsRes, weightsRes] = await Promise.all([
           fetchParticipantsIncludeHidden(event.code),
           // fetchWeights(event.code),
-          getToken().then(token => fetchWeights(event.code, token)),
+          getToken().then((token) => fetchWeights(event.code, token)),
         ]);
 
         const parsed = participantsRes.participants.map((p) => ({
@@ -100,7 +100,7 @@ function OrganizerView() {
     if (user?.id) {
       load();
     }
-  // }, [event.code, refreshKey, user?.id]);
+    // }, [event.code, refreshKey, user?.id]);
   }, [event.code, refreshKey, user?.id, getToken]);
 
   const saveWeights = useCallback(

@@ -37,7 +37,8 @@ function ParticipantView() {
     if (!event?.code || !user?.id) return;
 
     // fetchParticipants(event.code)
-    getToken().then(token => fetchParticipants(event.code, token))
+    getToken()
+      .then((token) => fetchParticipants(event.code, token))
       .then((data) => {
         const parsed = data.participants.map((participant) => ({
           ...participant,
@@ -65,9 +66,8 @@ function ParticipantView() {
         }
       })
       .catch(() => {});
-  // }, [event?.code, user?.id, refreshKey]);
+    // }, [event?.code, user?.id, refreshKey]);
   }, [event?.code, user?.id, refreshKey, getToken]);
-
 
   const calculateAverage = (scheduleKey) => {
     if (!participants.length) return Array(numSlots).fill(0);
@@ -134,12 +134,17 @@ function ParticipantView() {
     try {
       // await updateParticipant(event.code, participantId, {
       const token = await getToken();
-      await updateParticipant(event.code, participantId, {
-        scheduleInperson: JSON.stringify(scheduleInperson),
-        scheduleVirtual: JSON.stringify(scheduleVirtual),
-        submitted: 1,
-      // });
-      }, token);
+      await updateParticipant(
+        event.code,
+        participantId,
+        {
+          scheduleInperson: JSON.stringify(scheduleInperson),
+          scheduleVirtual: JSON.stringify(scheduleVirtual),
+          submitted: 1,
+          // });
+        },
+        token
+      );
       setSubmitted(true);
       setRefreshKey((key) => key + 1);
     } catch (err) {

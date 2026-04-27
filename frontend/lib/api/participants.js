@@ -2,7 +2,9 @@ import { API_BASE, apiFetch, extractError } from "./config";
 
 export async function fetchParticipants(code, token) {
   const res = await apiFetch(
-    `${API_BASE}/api/events/participants?code=${encodeURIComponent(code)}`, {}, token
+    `${API_BASE}/api/events/participants?code=${encodeURIComponent(code)}`,
+    {},
+    token
   );
   if (!res.ok) throw new Error(await extractError(res));
   return res.json();
@@ -31,7 +33,8 @@ export async function updateParticipant(code, participantId, data, token) {
 export async function fetchParticipantsIncludeHidden(code, token) {
   const res = await apiFetch(
     `${API_BASE}/api/events/participants?code=${encodeURIComponent(code)}&includeHidden=true`,
-    {}, token
+    {},
+    token
   );
   if (!res.ok) throw new Error(await extractError(res));
   return res.json();
@@ -40,7 +43,8 @@ export async function fetchParticipantsIncludeHidden(code, token) {
 export async function unhideParticipant(code, participantId, token) {
   const res = await apiFetch(
     `${API_BASE}/api/events/participants/update/unhide?code=${encodeURIComponent(code)}&participantId=${encodeURIComponent(participantId)}`,
-    { method: "PUT" }, token
+    { method: "PUT" },
+    token
   );
   if (!res.ok) throw new Error(await extractError(res));
   return res.json();
@@ -49,7 +53,8 @@ export async function unhideParticipant(code, participantId, token) {
 export async function deleteParticipant(code, participantId, token) {
   const res = await apiFetch(
     `${API_BASE}/api/events/participants/update?code=${encodeURIComponent(code)}&participantId=${encodeURIComponent(participantId)}`,
-    { method: "DELETE" }, token
+    { method: "DELETE" },
+    token
   );
   if (!res.ok) throw new Error(await extractError(res));
   return res.json();

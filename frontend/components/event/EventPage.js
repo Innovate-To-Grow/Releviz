@@ -18,7 +18,6 @@ function EventPage() {
   // const { user } = useAuth();
   const { user, getToken } = useAuth();
 
-
   const [event, setEvent] = useState(null);
   const [isOrganizer, setIsOrganizer] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -45,7 +44,7 @@ function EventPage() {
       }
     }
     load();
-  // }, [eventCode, user]);
+    // }, [eventCode, user]);
   }, [eventCode, user, getToken]);
 
   if (loading) {
