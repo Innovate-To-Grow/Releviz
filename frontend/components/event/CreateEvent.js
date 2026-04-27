@@ -56,7 +56,8 @@ function LabelRow({ children }) {
 
 function CreateEvent() {
   const router = useRouter();
-  const { loading: authLoading } = useAuth();
+  // const { loading: authLoading } = useAuth();
+  const { loading: authLoading, getToken } = useAuth();
   const [name, setName] = useState("");
   const [mode, setMode] = useState("inperson"); // "inperson" | "virtual"
   const [location, setLocation] = useState("");
@@ -115,7 +116,10 @@ function CreateEvent() {
           ? { specificDates: [...specificDates].sort() }
           : {}),
       };
-      const { event } = await createEvent(payload);
+      const token = await getToken();
+      const { event } = await createEvent(payload, token);
+
+      // const { event } = await createEvent(payload);
       router.replace(`/event?code=${event.code}`);
     } catch (err) {
       setError(err.message || "Failed to create event");

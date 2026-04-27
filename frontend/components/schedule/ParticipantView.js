@@ -12,7 +12,8 @@ import EventDetailsGrid from "@/components/event/EventDetailsGrid";
 
 function ParticipantView() {
   const { event, numSlots } = useContext(EventContext);
-  const { user, loading: authLoading } = useAuth();
+  // const { user, loading: authLoading } = useAuth();
+  const { user, loading: authLoading, getToken } = useAuth();
   const mode = event?.mode || "inperson";
   const viewPermission = event?.participantViewPermission || "own_only";
 
@@ -35,7 +36,8 @@ function ParticipantView() {
   useEffect(() => {
     if (!event?.code || !user?.id) return;
 
-    fetchParticipants(event.code)
+    // fetchParticipants(event.code)
+    getToken().then(token => fetchParticipants(event.code, token))
       .then((data) => {
         const parsed = data.participants.map((participant) => ({
           ...participant,
@@ -63,7 +65,9 @@ function ParticipantView() {
         }
       })
       .catch(() => {});
-  }, [event?.code, user?.id, refreshKey]);
+  // }, [event?.code, user?.id, refreshKey]);
+  }, [event?.code, user?.id, refreshKey, getToken]);
+
 
   const calculateAverage = (scheduleKey) => {
     if (!participants.length) return Array(numSlots).fill(0);
@@ -91,7 +95,9 @@ function ParticipantView() {
     setJoinError("");
 
     try {
-      const { participant } = await joinEvent(event.code);
+      // const { participant } = await joinEvent(event.code);
+      const token = await getToken();
+      const { participant } = await joinEvent(event.code, token);
       setParticipantId(participant.id);
       setParticipantName(participant.name);
       setScheduleInperson(JSON.parse(participant.schedule_inperson).map(Number));
@@ -126,11 +132,14 @@ function ParticipantView() {
     setSubmitError("");
 
     try {
+      // await updateParticipant(event.code, participantId, {
+      const token = await getToken();
       await updateParticipant(event.code, participantId, {
         scheduleInperson: JSON.stringify(scheduleInperson),
         scheduleVirtual: JSON.stringify(scheduleVirtual),
         submitted: 1,
-      });
+      // });
+      }, token);
       setSubmitted(true);
       setRefreshKey((key) => key + 1);
     } catch (err) {

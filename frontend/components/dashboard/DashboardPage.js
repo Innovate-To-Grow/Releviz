@@ -44,7 +44,7 @@ function EventCard({ event }) {
 }
 
 function DashboardPage() {
-  const { user, loading: authLoading } = useAuth();
+  const { user, loading: authLoading, getToken } = useAuth();
   const [organized, setOrganized] = useState([]);
   const [participating, setParticipating] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -52,14 +52,16 @@ function DashboardPage() {
 
   useEffect(() => {
     if (authLoading || !user) return;
-    fetchDashboardEvents()
+    // fetchDashboardEvents()
+    getToken().then(token => fetchDashboardEvents(token))
       .then((data) => {
         setOrganized(data.organized || []);
         setParticipating(data.participating || []);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [user, authLoading]);
+  // }, [user, authLoading]);
+  }, [user, authLoading, getToken]);
 
   if (authLoading || loading) {
     return (
