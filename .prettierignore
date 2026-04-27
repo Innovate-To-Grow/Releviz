@@ -4,3 +4,4 @@ data
 public
 package-lock.json
 infra
+frontend/.next
