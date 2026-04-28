@@ -13,7 +13,7 @@ jest.mock("next/navigation", () => ({
 // Mock next/image
 jest.mock("next/image", () => ({
   __esModule: true,
-// eslint-disable-next-line @next/next/no-img-element
+  // eslint-disable-next-line @next/next/no-img-element
   default: ({ alt, ...props }) => <img alt={alt || ""} {...props} />,
 }));
 
