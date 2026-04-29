@@ -66,9 +66,9 @@ describe("Clerk-backed auth middleware", () => {
     expect(schedulerStore.createUser).toHaveBeenCalledWith(clerkUser());
   });
 
-  test("updates the local cached user when Clerk profile data changes", async () => {
-    schedulerStore.getUserById.mockResolvedValue(clerkUser({ displayName: "Old Name" }));
-    schedulerStore.updateUser.mockResolvedValue(clerkUser({ displayName: "Test User" }));
+  test("returns cached user without calling Clerk when user already exists locally", async () => {
+    schedulerStore.getUserById.mockResolvedValue(clerkUser());
+    schedulerStore.listUserEvents.mockResolvedValue([]);
 
     const res = await invokeApp(app, {
       url: "/api/dashboard/events",
@@ -76,9 +76,7 @@ describe("Clerk-backed auth middleware", () => {
     });
 
     expect(res.status).toBe(200);
-    expect(schedulerStore.updateUser).toHaveBeenCalledWith("user-1", {
-      displayName: "Test User",
-      updatedAt: "2026-01-01T00:00:00.000Z",
-    });
+    expect(fetchClerkUser).not.toHaveBeenCalled();
+    expect(schedulerStore.updateUser).not.toHaveBeenCalled();
   });
 });

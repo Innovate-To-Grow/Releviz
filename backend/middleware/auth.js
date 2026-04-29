@@ -7,20 +7,22 @@ import {
 import { schedulerStore } from "../lib/store/index.js";
 
 async function syncUser(userId) {
+  // Check local cache first; avoids Clerk dependency on every request
+  const existing = await schedulerStore.getUserById(userId);
+  if (existing) return existing;
+
+  // Only call Clerk if user doesn't exist locally yet
   const clerkUser = await fetchClerkUser(userId);
   const normalized = normalizeClerkUser(clerkUser);
-  const existing = await schedulerStore.getUserById(userId);
 
-  if (!existing) {
-    try {
-      await schedulerStore.createUser(normalized);
-      return normalized;
-    } catch (err) {
-      if (err?.name === "ConditionalCheckFailedException") {
-        return schedulerStore.getUserById(userId);
-      }
-      throw err;
+  try {
+    await schedulerStore.createUser(normalized);
+    return normalized;
+  } catch (err) {
+    if (err?.name === "ConditionalCheckFailedException") {
+      return schedulerStore.getUserById(userId);
     }
+    throw err;
   }
 
   const updates = {};
