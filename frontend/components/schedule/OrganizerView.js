@@ -9,6 +9,7 @@ import {
   MdSave,
   MdArrowUpward,
   MdArrowDownward,
+  MdLightbulb,
 } from "react-icons/md";
 import EventContext from "@/components/event/EventContext";
 import AppButton from "@/components/ui/AppButton";
@@ -60,14 +61,18 @@ function OrganizerView() {
   const [hideError, setHideError] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [showHidden, setShowHidden] = useState(false);
+  const [solverResults, setSolverResults] = useState(null);
+  const [solverLoading, setSolverLoading] = useState(false);
+  const [solverError, setSolverError] = useState("");
 
   // Load participants and weights in parallel
   useEffect(() => {
     async function load() {
       try {
+        const token = await getToken();
         const [participantsRes, weightsRes] = await Promise.all([
-          fetchParticipantsIncludeHidden(event.code),
-          getToken().then((token) => fetchWeights(event.code, token)),
+          fetchParticipantsIncludeHidden(event.code, token),
+          fetchWeights(event.code, token),
         ]);
 
         const parsed = participantsRes.participants.map((p) => ({
@@ -137,7 +142,8 @@ function OrganizerView() {
 
   const handleMyJoin = async () => {
     try {
-      const { participant } = await joinEvent(event.code);
+      const token = await getToken();
+      const { participant } = await joinEvent(event.code, token);
       setMyParticipantId(participant.id);
       setMyParticipantName(participant.name);
       setMyInperson(JSON.parse(participant.schedule_inperson).map(Number));
@@ -169,11 +175,17 @@ function OrganizerView() {
     if (!myParticipantId) return;
     setMySaving(true);
     try {
-      await updateParticipant(event.code, myParticipantId, {
-        scheduleInperson: JSON.stringify(myInperson),
-        scheduleVirtual: JSON.stringify(myVirtual),
-        submitted: 1,
-      });
+      const token = await getToken();
+      await updateParticipant(
+        event.code,
+        myParticipantId,
+        {
+          scheduleInperson: JSON.stringify(myInperson),
+          scheduleVirtual: JSON.stringify(myVirtual),
+          submitted: 1,
+        },
+        token
+      );
       setRefreshKey((k) => k + 1);
     } catch (err) {
       console.error("Failed to save:", err);
@@ -187,7 +199,8 @@ function OrganizerView() {
     setHideError("");
     setHidingParticipantId(participant.id);
     try {
-      await deleteParticipant(event.code, participant.id);
+      const token = await getToken();
+      await deleteParticipant(event.code, participant.id, token);
       setParticipants((prev) =>
         prev.map((p) => (p.id === participant.id ? { ...p, hidden: 1 } : p))
       );
@@ -203,7 +216,8 @@ function OrganizerView() {
     setHideError("");
     setHidingParticipantId(participant.id);
     try {
-      await unhideParticipant(event.code, participant.id);
+      const token = await getToken();
+      await unhideParticipant(event.code, participant.id, token);
       setParticipants((prev) =>
         prev.map((p) => (p.id === participant.id ? { ...p, hidden: 0 } : p))
       );
@@ -216,7 +230,8 @@ function OrganizerView() {
 
   const handleGroupChange = async (participantId, groupName) => {
     try {
-      await updateParticipant(event.code, participantId, { groupName });
+      const token = await getToken();
+      await updateParticipant(event.code, participantId, { groupName }, token);
       setParticipants((prev) =>
         prev.map((p) => (p.id === participantId ? { ...p, group_name: groupName } : p))
       );
@@ -236,9 +251,10 @@ function OrganizerView() {
     const myOrder = sorted[idx].sort_order ?? idx;
     const theirOrder = sorted[swapIdx].sort_order ?? swapIdx;
     try {
+      const token = await getToken();
       await Promise.all([
-        updateParticipant(event.code, sorted[idx].id, { sortOrder: theirOrder }),
-        updateParticipant(event.code, sorted[swapIdx].id, { sortOrder: myOrder }),
+        updateParticipant(event.code, sorted[idx].id, { sortOrder: theirOrder }, token),
+        updateParticipant(event.code, sorted[swapIdx].id, { sortOrder: myOrder }, token),
       ]);
       setParticipants((prev) =>
         prev.map((p) => {
@@ -261,6 +277,30 @@ function OrganizerView() {
     weightsRef.current = next;
     setWeights(next);
     saveWeights(next);
+  };
+
+  const handleSolve = async () => {
+    setSolverLoading(true);
+    setSolverError("");
+    setSolverResults(null);
+    try {
+      const token = await getToken();
+      const res = await fetch(`/api/solve`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ eventCode: event.code }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Solver failed");
+      setSolverResults(data);
+    } catch (err) {
+      setSolverError(err.message);
+    } finally {
+      setSolverLoading(false);
+    }
   };
 
   const activeParticipants = participants
@@ -375,6 +415,14 @@ function OrganizerView() {
           icon={<MdRefresh />}
         >
           Refresh
+        </AppButton>
+        <AppButton
+          onClick={handleSolve}
+          disabled={solverLoading}
+          variant="outlined"
+          icon={<MdLightbulb />}
+        >
+          {solverLoading ? "Solving..." : "Find Optimal Time"}
         </AppButton>
       </div>
 
@@ -858,6 +906,55 @@ function OrganizerView() {
         >
           {hideError}
         </p>
+      )}
+
+      {solverError && (
+        <p style={{ color: "var(--md-sys-color-error)", margin: "16px 0 0 0", fontSize: "0.9rem" }}>
+          {solverError}
+        </p>
+      )}
+
+      {solverResults && (
+        <div className="md-card" style={{ marginTop: "24px" }}>
+          <h3 style={{ margin: "0 0 16px 0", color: "var(--md-sys-color-primary)" }}>
+            🎯 Optimal Meeting Times
+          </h3>
+          {solverResults.optimal ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+              {solverResults.ranked.map((slot, i) => (
+                <div
+                  key={slot.slotIndex}
+                  style={{
+                    padding: "12px 16px",
+                    borderRadius: "10px",
+                    background:
+                      i === 0
+                        ? "var(--md-sys-color-primary-container)"
+                        : "var(--md-sys-color-surface-container-low)",
+                    border: `1px solid ${i === 0 ? "var(--md-sys-color-primary)" : "var(--md-sys-color-surface-variant)"}`,
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                  }}
+                >
+                  <span style={{ fontWeight: i === 0 ? 700 : 400 }}>
+                    {i === 0 ? "🥇 " : `${i + 1}. `}
+                    {slot.day} {slot.time}
+                  </span>
+                  <span
+                    style={{ fontSize: "0.85rem", color: "var(--md-sys-color-on-surface-variant)" }}
+                  >
+                    Score: {slot.score}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p style={{ color: "var(--md-sys-color-outline)", fontStyle: "italic" }}>
+              {solverResults.message || "No suitable time slots found."}
+            </p>
+          )}
+        </div>
       )}
     </div>
   );
