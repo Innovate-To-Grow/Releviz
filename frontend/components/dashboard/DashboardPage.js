@@ -49,6 +49,7 @@ function DashboardPage() {
   const [participating, setParticipating] = useState([]);
   const [loading, setLoading] = useState(true);
   const [eventCode, setEventCode] = useState("");
+  const [error, setError] = useState("");
 
   useEffect(() => {
     if (authLoading || !user) return;
@@ -58,7 +59,7 @@ function DashboardPage() {
         setOrganized(data.organized || []);
         setParticipating(data.participating || []);
       })
-      .catch(() => {})
+      .catch(() => setError("Failed to load your events. Please refresh and try again."))
       .finally(() => setLoading(false));
   }, [user, authLoading, getToken]);
 
@@ -84,6 +85,21 @@ function DashboardPage() {
 
   return (
     <div className="page-pad" style={{ maxWidth: "800px", margin: "0 auto" }}>
+      {error && (
+        <div
+          style={{
+            padding: "12px 16px",
+            borderRadius: "12px",
+            background: "color-mix(in srgb, var(--md-sys-color-error) 10%, transparent)",
+            border: "1px solid var(--md-sys-color-error)",
+            color: "var(--md-sys-color-error)",
+            fontSize: "0.9rem",
+            marginBottom: "24px",
+          }}
+        >
+          {error}
+        </div>
+      )}
       <div
         style={{
           display: "flex",
@@ -97,7 +113,7 @@ function DashboardPage() {
         <h1 style={{ color: "var(--md-sys-color-primary)", margin: 0, fontSize: "1.8rem" }}>
           My Dashboard
         </h1>
-        <Link href="/">
+        <Link href="/create">
           <AppButton icon={<MdAdd />}>Create New Event</AppButton>
         </Link>
       </div>

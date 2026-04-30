@@ -115,12 +115,27 @@ eventsRouter.post("/", async (req, res) => {
       return res.status(500).json({ error: "Failed to generate unique code" });
     }
 
-    await schedulerStore.createUserEvent({
-      userId: req.userId,
-      eventCode: code,
-      role: "organizer",
-    });
-
+    try {
+      await schedulerStore.createUserEvent({
+        userId: req.userId,
+        eventCode: code,
+        role: "organizer",
+      });
+    } catch (linkErr) {
+      console.error("[events/POST] failed to link event to user, retrying:", linkErr);
+      try {
+        await schedulerStore.createUserEvent({
+          userId: req.userId,
+          eventCode: code,
+          role: "organizer",
+        });
+      } catch (retryErr) {
+        console.error("[events/POST] retry failed, event created but not linked:", retryErr);
+        return res.status(500).json({
+          error: "Event created but could not be linked to your dashboard. Please contact support.",
+        });
+      }
+    }
     return res.status(201).json({
       event: {
         code,

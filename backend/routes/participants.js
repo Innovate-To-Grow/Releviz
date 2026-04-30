@@ -65,15 +65,11 @@ participantsRouter.post("/", async (req, res) => {
           });
 
     if (created && event.organizerUserId !== req.userId) {
-      try {
-        await schedulerStore.createUserEvent({
-          userId: req.userId,
-          eventCode: code,
-          role: "participant",
-        });
-      } catch {
-        // Non-critical — continue even if linking fails
-      }
+      await schedulerStore.createUserEvent({
+        userId: req.userId,
+        eventCode: code,
+        role: "participant",
+      });
     }
 
     return res
