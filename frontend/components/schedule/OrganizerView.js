@@ -9,7 +9,6 @@ import {
   MdSave,
   MdArrowUpward,
   MdArrowDownward,
-  MdLightbulb,
 } from "react-icons/md";
 import EventContext from "@/components/event/EventContext";
 import AppButton from "@/components/ui/AppButton";
@@ -61,9 +60,6 @@ function OrganizerView() {
   const [hideError, setHideError] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [showHidden, setShowHidden] = useState(false);
-  const [solverResults, setSolverResults] = useState(null);
-  const [solverLoading, setSolverLoading] = useState(false);
-  const [solverError, setSolverError] = useState("");
 
   // Load participants and weights in parallel
   useEffect(() => {
@@ -279,30 +275,6 @@ function OrganizerView() {
     saveWeights(next);
   };
 
-  const handleSolve = async () => {
-    setSolverLoading(true);
-    setSolverError("");
-    setSolverResults(null);
-    try {
-      const token = await getToken();
-      const res = await fetch(`/api/solve`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ eventCode: event.code }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Solver failed");
-      setSolverResults(data);
-    } catch (err) {
-      setSolverError(err.message);
-    } finally {
-      setSolverLoading(false);
-    }
-  };
-
   const activeParticipants = participants
     .filter((p) => !p.hidden)
     .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
@@ -415,14 +387,6 @@ function OrganizerView() {
           icon={<MdRefresh />}
         >
           Refresh
-        </AppButton>
-        <AppButton
-          onClick={handleSolve}
-          disabled={solverLoading}
-          variant="outlined"
-          icon={<MdLightbulb />}
-        >
-          {solverLoading ? "Solving..." : "Find Optimal Time"}
         </AppButton>
       </div>
 
@@ -906,55 +870,6 @@ function OrganizerView() {
         >
           {hideError}
         </p>
-      )}
-
-      {solverError && (
-        <p style={{ color: "var(--md-sys-color-error)", margin: "16px 0 0 0", fontSize: "0.9rem" }}>
-          {solverError}
-        </p>
-      )}
-
-      {solverResults && (
-        <div className="md-card" style={{ marginTop: "24px" }}>
-          <h3 style={{ margin: "0 0 16px 0", color: "var(--md-sys-color-primary)" }}>
-            🎯 Optimal Meeting Times
-          </h3>
-          {solverResults.optimal ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-              {solverResults.ranked.map((slot, i) => (
-                <div
-                  key={slot.slotIndex}
-                  style={{
-                    padding: "12px 16px",
-                    borderRadius: "10px",
-                    background:
-                      i === 0
-                        ? "var(--md-sys-color-primary-container)"
-                        : "var(--md-sys-color-surface-container-low)",
-                    border: `1px solid ${i === 0 ? "var(--md-sys-color-primary)" : "var(--md-sys-color-surface-variant)"}`,
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                  }}
-                >
-                  <span style={{ fontWeight: i === 0 ? 700 : 400 }}>
-                    {i === 0 ? "🥇 " : `${i + 1}. `}
-                    {slot.day} {slot.time}
-                  </span>
-                  <span
-                    style={{ fontSize: "0.85rem", color: "var(--md-sys-color-on-surface-variant)" }}
-                  >
-                    Score: {slot.score}
-                  </span>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p style={{ color: "var(--md-sys-color-outline)", fontStyle: "italic" }}>
-              {solverResults.message || "No suitable time slots found."}
-            </p>
-          )}
-        </div>
       )}
     </div>
   );
