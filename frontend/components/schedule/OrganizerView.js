@@ -21,6 +21,7 @@ import {
   updateParticipant,
 } from "@/lib/api/participants";
 import { fetchWeights, updateWeights } from "@/lib/api/weights";
+import { useAuth } from "@/components/auth/AuthContext";
 import "@material/web/checkbox/checkbox.js";
 import "@material/web/slider/slider.js";
 import "@material/web/dialog/dialog.js";
@@ -29,10 +30,11 @@ import EventDetailsGrid from "@/components/event/EventDetailsGrid";
 
 function OrganizerView() {
   const { event, numSlots } = useContext(EventContext);
+  const { user, loading: authLoading, getToken } = useAuth();
   const mode = event?.mode || "inperson";
 
   const [participants, setParticipants] = useState([]);
-  const [weights, setWeights] = useState({}); // { name: { weight, included } }
+  const [weights, setWeights] = useState({}); // { participantId: { weight, included } }
   const [refreshKey, setRefreshKey] = useState(0);
 
   // Ref tracks latest weights synchronously to avoid stale closures in debounce
@@ -48,12 +50,13 @@ function OrganizerView() {
   }, []);
 
   // Organizer self-schedule state
-  const [myName, setMyName] = useState("");
+  const [myParticipantId, setMyParticipantId] = useState("");
+  const [myParticipantName, setMyParticipantName] = useState("");
   const [myJoined, setMyJoined] = useState(false);
   const [myInperson, setMyInperson] = useState([]);
   const [myVirtual, setMyVirtual] = useState([]);
   const [mySaving, setMySaving] = useState(false);
-  const [hidingName, setHidingName] = useState("");
+  const [hidingParticipantId, setHidingParticipantId] = useState("");
   const [hideError, setHideError] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [showHidden, setShowHidden] = useState(false);
@@ -62,9 +65,10 @@ function OrganizerView() {
   useEffect(() => {
     async function load() {
       try {
+        const token = await getToken();
         const [participantsRes, weightsRes] = await Promise.all([
-          fetchParticipantsIncludeHidden(event.code),
-          fetchWeights(event.code),
+          fetchParticipantsIncludeHidden(event.code, token),
+          fetchWeights(event.code, token),
         ]);
 
         const parsed = participantsRes.participants.map((p) => ({
@@ -76,35 +80,47 @@ function OrganizerView() {
 
         const map = {};
         weightsRes.weights.forEach((w) => {
-          map[w.participant_name] = { weight: w.weight, included: w.included };
+          map[w.participant_id] = { weight: w.weight, included: w.included };
         });
         setWeights(map);
+
+        const mine = parsed.find((participant) => participant.user_id === user?.id);
+        if (mine) {
+          setMyParticipantId(mine.id);
+          setMyParticipantName(mine.name);
+          setMyInperson(mine.inpersonArray);
+          setMyVirtual(mine.virtualArray);
+          setMyJoined(true);
+        }
       } catch (err) {
         console.error("Failed to load data", err);
       }
     }
-    load();
-  }, [event.code, refreshKey]);
+    if (user?.id) {
+      load();
+    }
+  }, [event.code, refreshKey, user?.id, getToken]);
 
   const saveWeights = useCallback(
     async (newWeights) => {
       try {
-        const arr = Object.entries(newWeights).map(([name, w]) => ({
-          name,
+        const arr = Object.entries(newWeights).map(([participantId, w]) => ({
+          participantId,
           weight: w.weight,
           included: w.included,
         }));
-        await updateWeights(event.code, arr);
+        const token = await getToken();
+        await updateWeights(event.code, arr, token);
       } catch (err) {
         console.error("Failed to save weights", err);
       }
     },
-    [event.code]
+    [event.code, getToken]
   );
 
-  const handleWeightChange = (name, val) => {
-    const current = weightsRef.current[name] ?? { weight: 1.0, included: 1 };
-    const next = { ...weightsRef.current, [name]: { ...current, weight: val } };
+  const handleWeightChange = (participantId, val) => {
+    const current = weightsRef.current[participantId] ?? { weight: 1.0, included: 1 };
+    const next = { ...weightsRef.current, [participantId]: { ...current, weight: val } };
     weightsRef.current = next;
     setWeights(next);
     // Debounce: only send API call 500ms after user stops dragging
@@ -112,21 +128,24 @@ function OrganizerView() {
     saveTimer.current = setTimeout(() => saveWeights(weightsRef.current), 500);
   };
 
-  const handleIncludedChange = (name, val) => {
-    const current = weightsRef.current[name] ?? { weight: 1.0, included: 1 };
-    const next = { ...weightsRef.current, [name]: { ...current, included: val ? 1 : 0 } };
+  const handleIncludedChange = (participantId, val) => {
+    const current = weightsRef.current[participantId] ?? { weight: 1.0, included: 1 };
+    const next = { ...weightsRef.current, [participantId]: { ...current, included: val ? 1 : 0 } };
     weightsRef.current = next;
     setWeights(next);
     saveWeights(next); // checkbox fires once, save immediately
   };
 
   const handleMyJoin = async () => {
-    if (!myName.trim()) return;
     try {
-      const { participant } = await joinEvent(event.code, myName.trim());
+      const token = await getToken();
+      const { participant } = await joinEvent(event.code, token);
+      setMyParticipantId(participant.id);
+      setMyParticipantName(participant.name);
       setMyInperson(JSON.parse(participant.schedule_inperson).map(Number));
       setMyVirtual(JSON.parse(participant.schedule_virtual).map(Number));
       setMyJoined(true);
+      setRefreshKey((k) => k + 1);
     } catch (err) {
       console.error("Failed to join:", err);
     }
@@ -149,13 +168,20 @@ function OrganizerView() {
   };
 
   const handleMySave = async () => {
+    if (!myParticipantId) return;
     setMySaving(true);
     try {
-      await updateParticipant(event.code, myName, {
-        scheduleInperson: JSON.stringify(myInperson),
-        scheduleVirtual: JSON.stringify(myVirtual),
-        submitted: 1,
-      });
+      const token = await getToken();
+      await updateParticipant(
+        event.code,
+        myParticipantId,
+        {
+          scheduleInperson: JSON.stringify(myInperson),
+          scheduleVirtual: JSON.stringify(myVirtual),
+          submitted: 1,
+        },
+        token
+      );
       setRefreshKey((k) => k + 1);
     } catch (err) {
       console.error("Failed to save:", err);
@@ -164,68 +190,72 @@ function OrganizerView() {
     }
   };
 
-  const handleHideParticipant = async (participantName) => {
-    if (!participantName) return;
+  const handleHideParticipant = async (participant) => {
+    if (!participant?.id) return;
     setHideError("");
-    setHidingName(participantName);
+    setHidingParticipantId(participant.id);
     try {
-      await deleteParticipant(event.code, participantName);
+      const token = await getToken();
+      await deleteParticipant(event.code, participant.id, token);
       setParticipants((prev) =>
-        prev.map((p) => (p.name === participantName ? { ...p, hidden: 1 } : p))
+        prev.map((p) => (p.id === participant.id ? { ...p, hidden: 1 } : p))
       );
     } catch (err) {
       setHideError(`Failed to hide participant: ${err.message}`);
     } finally {
-      setHidingName("");
+      setHidingParticipantId("");
     }
   };
 
-  const handleUnhideParticipant = async (participantName) => {
-    if (!participantName) return;
+  const handleUnhideParticipant = async (participant) => {
+    if (!participant?.id) return;
     setHideError("");
-    setHidingName(participantName);
+    setHidingParticipantId(participant.id);
     try {
-      await unhideParticipant(event.code, participantName);
+      const token = await getToken();
+      await unhideParticipant(event.code, participant.id, token);
       setParticipants((prev) =>
-        prev.map((p) => (p.name === participantName ? { ...p, hidden: 0 } : p))
+        prev.map((p) => (p.id === participant.id ? { ...p, hidden: 0 } : p))
       );
     } catch (err) {
       setHideError(`Failed to unhide participant: ${err.message}`);
     } finally {
-      setHidingName("");
+      setHidingParticipantId("");
     }
   };
 
-  const handleGroupChange = async (participantName, groupName) => {
+  const handleGroupChange = async (participantId, groupName) => {
     try {
-      await updateParticipant(event.code, participantName, { groupName });
+      const token = await getToken();
+      await updateParticipant(event.code, participantId, { groupName }, token);
       setParticipants((prev) =>
-        prev.map((p) => (p.name === participantName ? { ...p, group_name: groupName } : p))
+        prev.map((p) => (p.id === participantId ? { ...p, group_name: groupName } : p))
       );
     } catch (err) {
       console.error("Failed to update group:", err);
     }
   };
 
-  const handleMoveParticipant = async (participantName, direction) => {
+  const handleMoveParticipant = async (participantId, direction) => {
     const sorted = [...activeParticipants].sort(
       (a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0)
     );
-    const idx = sorted.findIndex((p) => p.name === participantName);
+    const idx = sorted.findIndex((p) => p.id === participantId);
     if ((direction === "up" && idx <= 0) || (direction === "down" && idx >= sorted.length - 1))
       return;
     const swapIdx = direction === "up" ? idx - 1 : idx + 1;
     const myOrder = sorted[idx].sort_order ?? idx;
     const theirOrder = sorted[swapIdx].sort_order ?? swapIdx;
     try {
+      const token = await getToken();
       await Promise.all([
-        updateParticipant(event.code, sorted[idx].name, { sortOrder: theirOrder }),
-        updateParticipant(event.code, sorted[swapIdx].name, { sortOrder: myOrder }),
+        updateParticipant(event.code, sorted[idx].id, { sortOrder: theirOrder }, token),
+        updateParticipant(event.code, sorted[swapIdx].id, { sortOrder: myOrder }, token),
       ]);
       setParticipants((prev) =>
         prev.map((p) => {
-          if (p.name === sorted[idx].name) return { ...p, sort_order: theirOrder };
-          if (p.name === sorted[swapIdx].name) return { ...p, sort_order: myOrder };
+          if (p.id === sorted[idx].id) return { ...p, sort_order: theirOrder };
+          if (p.id === sorted[swapIdx].id) return { ...p, sort_order: myOrder };
           return p;
         })
       );
@@ -237,8 +267,8 @@ function OrganizerView() {
   const handleCheckAll = (included) => {
     const next = { ...weightsRef.current };
     activeParticipants.forEach((p) => {
-      const current = next[p.name] ?? { weight: 1.0, included: 1 };
-      next[p.name] = { ...current, included: included ? 1 : 0 };
+      const current = next[p.id] ?? { weight: 1.0, included: 1 };
+      next[p.id] = { ...current, included: included ? 1 : 0 };
     });
     weightsRef.current = next;
     setWeights(next);
@@ -274,7 +304,7 @@ function OrganizerView() {
 
     activeParticipants.forEach((p) => {
       // Use defaults for participants not yet in the weights map
-      const w = weights[p.name] ?? { weight: 1.0, included: 1 };
+      const w = weights[p.id] ?? { weight: 1.0, included: 1 };
       if (!w.included) return;
       const weight = w.weight;
       if (weight <= 0) return;
@@ -296,17 +326,33 @@ function OrganizerView() {
 
   const inpersonDetails = activeParticipants
     .filter((p) => {
-      const w = weights[p.name] ?? { weight: 1.0, included: 1 };
+      const w = weights[p.id] ?? { weight: 1.0, included: 1 };
       return w.included && p.inpersonArray.length === numSlots;
     })
     .map((p) => ({ name: p.name, schedule: p.inpersonArray }));
 
   const virtualDetails = activeParticipants
     .filter((p) => {
-      const w = weights[p.name] ?? { weight: 1.0, included: 1 };
+      const w = weights[p.id] ?? { weight: 1.0, included: 1 };
       return w.included && p.virtualArray.length === numSlots;
     })
     .map((p) => ({ name: p.name, schedule: p.virtualArray }));
+
+  if (authLoading || !user) {
+    return (
+      <div
+        className="page-pad"
+        style={{
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "center",
+          minHeight: "calc(100vh - 76px)",
+        }}
+      >
+        <p style={{ color: "var(--md-sys-color-on-surface-variant)" }}>Loading...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="page-pad" style={{ maxWidth: "1400px", margin: "0 auto" }}>
@@ -367,24 +413,19 @@ function OrganizerView() {
               My Schedule
             </h3>
             {!myJoined ? (
-              <div
-                style={{ display: "flex", gap: "12px", alignItems: "flex-end", flexWrap: "wrap" }}
-              >
-                <md-outlined-text-field
-                  label="Your Name"
-                  value={myName}
-                  onInput={(e) => setMyName(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleMyJoin()}
-                  style={{ flex: 1 }}
-                ></md-outlined-text-field>
+              <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                <p style={{ margin: 0, color: "var(--md-sys-color-on-surface-variant)" }}>
+                  Join this event with your Clerk account to submit the organizer schedule.
+                </p>
                 <AppButton onClick={handleMyJoin} icon={<MdLogin />}>
-                  Join
+                  Join as {user.displayName}
                 </AppButton>
               </div>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
                 <p style={{ margin: 0, color: "var(--md-sys-color-on-surface-variant)" }}>
-                  Editing as <strong>{myName}</strong>. Click cells to toggle availability.
+                  Editing as <strong>{myParticipantName}</strong>. Click cells to toggle
+                  availability.
                 </p>
                 {mode !== "virtual" && (
                   <ScheduleGrid
@@ -473,10 +514,10 @@ function OrganizerView() {
                     </h4>
                   )}
                   {groups[gn].map((p) => {
-                    const w = weights[p.name] || { weight: 1, included: 1 };
+                    const w = weights[p.id] || { weight: 1, included: 1 };
                     return (
                       <div
-                        key={p.name}
+                        key={p.id}
                         style={{
                           display: "flex",
                           flexDirection: "column",
@@ -501,7 +542,7 @@ function OrganizerView() {
                           <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
                             <md-checkbox
                               checked={w.included ? true : undefined}
-                              onInput={(e) => handleIncludedChange(p.name, e.target.checked)}
+                              onInput={(e) => handleIncludedChange(p.id, e.target.checked)}
                             ></md-checkbox>
                             <span style={{ fontWeight: "600", fontSize: "1.1rem" }}>{p.name}</span>
                           </div>
@@ -517,7 +558,7 @@ function OrganizerView() {
                               {p.submitted ? <GoVerified size={20} /> : <GoUnverified size={20} />}
                             </span>
                             <button
-                              onClick={() => handleMoveParticipant(p.name, "up")}
+                              onClick={() => handleMoveParticipant(p.id, "up")}
                               title="Move up"
                               style={{
                                 background: "none",
@@ -530,7 +571,7 @@ function OrganizerView() {
                               <MdArrowUpward size={18} />
                             </button>
                             <button
-                              onClick={() => handleMoveParticipant(p.name, "down")}
+                              onClick={() => handleMoveParticipant(p.id, "down")}
                               title="Move down"
                               style={{
                                 background: "none",
@@ -545,11 +586,11 @@ function OrganizerView() {
                             <AppButton
                               variant="outlined"
                               icon={<MdDeleteOutline />}
-                              onClick={() => handleHideParticipant(p.name)}
-                              disabled={hidingName === p.name}
+                              onClick={() => handleHideParticipant(p)}
+                              disabled={hidingParticipantId === p.id}
                               className="app-btn-danger"
                             >
-                              {hidingName === p.name ? "Hiding..." : "Hide"}
+                              {hidingParticipantId === p.id ? "Hiding..." : "Hide"}
                             </AppButton>
                           </div>
                         </div>
@@ -574,7 +615,7 @@ function OrganizerView() {
                             max="1"
                             step="0.01"
                             value={w.weight}
-                            onInput={(e) => handleWeightChange(p.name, Number(e.target.value))}
+                            onInput={(e) => handleWeightChange(p.id, Number(e.target.value))}
                             style={{ flex: 1 }}
                           ></md-slider>
                           <span
@@ -607,7 +648,7 @@ function OrganizerView() {
                           <input
                             type="text"
                             value={p.group_name || ""}
-                            onChange={(e) => handleGroupChange(p.name, e.target.value)}
+                            onChange={(e) => handleGroupChange(p.id, e.target.value)}
                             placeholder="(none)"
                             style={{
                               flex: 1,
@@ -665,7 +706,7 @@ function OrganizerView() {
                   >
                     {hiddenParticipants.map((p) => (
                       <div
-                        key={p.name}
+                        key={p.id}
                         style={{
                           display: "flex",
                           justifyContent: "space-between",
@@ -679,10 +720,10 @@ function OrganizerView() {
                         <span>{p.name}</span>
                         <AppButton
                           variant="outlined"
-                          onClick={() => handleUnhideParticipant(p.name)}
-                          disabled={hidingName === p.name}
+                          onClick={() => handleUnhideParticipant(p)}
+                          disabled={hidingParticipantId === p.id}
                         >
-                          {hidingName === p.name ? "..." : "Unhide"}
+                          {hidingParticipantId === p.id ? "..." : "Unhide"}
                         </AppButton>
                       </div>
                     ))}
@@ -754,9 +795,9 @@ function OrganizerView() {
               </h3>
               <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
                 {activeParticipants.map((p) => {
-                  const w = weights[p.name] || { weight: 1, included: 1 };
+                  const w = weights[p.id] || { weight: 1, included: 1 };
                   return (
-                    <div className="md-card" key={p.name} style={{ overflowX: "auto" }}>
+                    <div className="md-card" key={p.id} style={{ overflowX: "auto" }}>
                       <div
                         style={{
                           display: "flex",

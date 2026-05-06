@@ -27,14 +27,12 @@ function mapEvent(item) {
     eventCode: item.eventCode,
     eventId: item.eventId,
     name: item.name,
-    passwordHash: item.passwordHash,
     startHour: Number(item.startHour),
     endHour: Number(item.endHour),
     days: Array.isArray(item.days) ? item.days.map(Number) : [1, 2, 3, 4, 5],
     mode: item.mode || "inperson",
     location: item.location || "",
     organizerUserId: item.organizerUserId || null,
-    participantVerification: item.participantVerification || "none",
     participantViewPermission: item.participantViewPermission || "own_only",
     daySelectionType: item.daySelectionType || "days_of_week",
     specificDates: item.specificDates || null,
@@ -47,6 +45,7 @@ function mapParticipant(item) {
   return {
     eventCode: item.eventCode,
     eventId: item.eventId,
+    userId: item.userId || item.participantId,
     participantName: item.participantName,
     participantId: item.participantId,
     scheduleInperson: item.scheduleInperson,
@@ -63,6 +62,7 @@ function mapWeight(item) {
   if (!item) return null;
   return {
     eventCode: item.eventCode,
+    participantId: item.participantId,
     participantName: item.participantName,
     weight: Number(item.weight),
     included: Number(item.included) ? 1 : 0,
@@ -98,14 +98,12 @@ export class DynamoSchedulerStore {
       eventCode: event.eventCode,
       eventId: event.eventId || crypto.randomUUID(),
       name: event.name,
-      passwordHash: event.passwordHash,
       startHour: event.startHour,
       endHour: event.endHour,
       days: event.days,
       mode: event.mode,
       location: event.location || "",
       organizerUserId: event.organizerUserId || undefined,
-      participantVerification: event.participantVerification || undefined,
       participantViewPermission: event.participantViewPermission || undefined,
       daySelectionType: event.daySelectionType || undefined,
       specificDates: event.specificDates || undefined,
@@ -140,25 +138,11 @@ export class DynamoSchedulerStore {
     return (res.Items || []).map(mapParticipant);
   }
 
-  async listParticipantNames(eventCode) {
-    const res = await this.doc.send(
-      new QueryCommand({
-        TableName: this.tables.participants,
-        KeyConditionExpression: "eventCode = :eventCode",
-        ProjectionExpression: "participantName",
-        ExpressionAttributeValues: {
-          ":eventCode": eventCode,
-        },
-      })
-    );
-    return (res.Items || []).map((item) => item.participantName);
-  }
-
-  async getParticipant(eventCode, participantName) {
+  async getParticipant(eventCode, participantId) {
     const res = await this.doc.send(
       new GetCommand({
         TableName: this.tables.participants,
-        Key: { eventCode, participantName },
+        Key: { eventCode, participantId },
       })
     );
     return mapParticipant(res.Item);
@@ -167,6 +151,8 @@ export class DynamoSchedulerStore {
   async createParticipantIfAbsent({
     eventCode,
     eventId,
+    participantId,
+    userId,
     participantName,
     scheduleInperson,
     scheduleVirtual,
@@ -174,11 +160,13 @@ export class DynamoSchedulerStore {
     const item = {
       eventCode,
       eventId,
+      participantId,
+      userId,
       participantName,
-      participantId: crypto.randomUUID(),
       scheduleInperson,
       scheduleVirtual,
       submitted: 0,
+      hidden: 0,
       createdAt: new Date().toISOString(),
     };
 
@@ -188,23 +176,27 @@ export class DynamoSchedulerStore {
           TableName: this.tables.participants,
           Item: item,
           ConditionExpression:
-            "attribute_not_exists(eventCode) AND attribute_not_exists(participantName)",
+            "attribute_not_exists(eventCode) AND attribute_not_exists(participantId)",
         })
       );
       return { participant: mapParticipant(item), created: true };
     } catch (err) {
       if (!isConditionalCheckFailed(err)) throw err;
-      const existing = await this.getParticipant(eventCode, participantName);
+      const existing = await this.getParticipant(eventCode, participantId);
       return { participant: existing, created: false };
     }
   }
 
-  async updateParticipant(eventCode, participantName, updates) {
-    const existing = await this.getParticipant(eventCode, participantName);
+  async updateParticipant(eventCode, participantId, updates) {
+    const existing = await this.getParticipant(eventCode, participantId);
     if (!existing) return null;
 
     const next = {
       ...existing,
+      ...(updates.userId !== undefined ? { userId: updates.userId } : {}),
+      ...(updates.participantName !== undefined
+        ? { participantName: updates.participantName }
+        : {}),
       ...(updates.scheduleInperson !== undefined
         ? { scheduleInperson: updates.scheduleInperson }
         : {}),
@@ -227,20 +219,20 @@ export class DynamoSchedulerStore {
     return mapParticipant(next);
   }
 
-  async deleteParticipantAndWeight(eventCode, participantName) {
+  async deleteParticipantAndWeight(eventCode, participantId) {
     await this.doc.send(
       new TransactWriteCommand({
         TransactItems: [
           {
             Delete: {
               TableName: this.tables.participants,
-              Key: { eventCode, participantName },
+              Key: { eventCode, participantId },
             },
           },
           {
             Delete: {
               TableName: this.tables.weights,
-              Key: { eventCode, participantName },
+              Key: { eventCode, participantId },
             },
           },
         ],
@@ -296,7 +288,7 @@ export class DynamoSchedulerStore {
   }
 
   async updateUser(userId, updates) {
-    const allowedKeys = ["displayName", "passwordHash", "updatedAt"];
+    const allowedKeys = ["email", "displayName", "imageUrl", "updatedAt"];
     const filtered = Object.entries(updates).filter(([k]) => allowedKeys.includes(k));
     if (filtered.length === 0) return this.getUserById(userId);
 
@@ -370,6 +362,7 @@ export class DynamoSchedulerStore {
             TableName: this.tables.weights,
             Item: {
               eventCode,
+              participantId: item.participantId,
               participantName: item.participantName,
               weight: item.weight,
               included: item.included,

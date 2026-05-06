@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { MdAdd, MdSearch } from "react-icons/md";
 import AppButton from "@/components/ui/AppButton";
@@ -45,27 +44,24 @@ function EventCard({ event }) {
 }
 
 function DashboardPage() {
-  const router = useRouter();
-  const { user, loading: authLoading } = useAuth();
+  const { user, loading: authLoading, getToken } = useAuth();
   const [organized, setOrganized] = useState([]);
   const [participating, setParticipating] = useState([]);
   const [loading, setLoading] = useState(true);
   const [eventCode, setEventCode] = useState("");
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    if (authLoading) return;
-    if (!user) {
-      router.push("/login");
-      return;
-    }
-    fetchDashboardEvents()
+    if (authLoading || !user) return;
+    getToken()
+      .then((token) => fetchDashboardEvents(token))
       .then((data) => {
         setOrganized(data.organized || []);
         setParticipating(data.participating || []);
       })
-      .catch(() => {})
+      .catch(() => setError("Failed to load your events. Please refresh and try again."))
       .finally(() => setLoading(false));
-  }, [user, authLoading, router]);
+  }, [user, authLoading, getToken]);
 
   if (authLoading || loading) {
     return (
@@ -84,11 +80,26 @@ function DashboardPage() {
 
   const handleGoToEvent = () => {
     const code = eventCode.trim();
-    if (code) router.push(`/event?code=${code}`);
+    if (code) window.location.assign(`/event?code=${code}`);
   };
 
   return (
     <div className="page-pad" style={{ maxWidth: "800px", margin: "0 auto" }}>
+      {error && (
+        <div
+          style={{
+            padding: "12px 16px",
+            borderRadius: "12px",
+            background: "color-mix(in srgb, var(--md-sys-color-error) 10%, transparent)",
+            border: "1px solid var(--md-sys-color-error)",
+            color: "var(--md-sys-color-error)",
+            fontSize: "0.9rem",
+            marginBottom: "24px",
+          }}
+        >
+          {error}
+        </div>
+      )}
       <div
         style={{
           display: "flex",
@@ -102,7 +113,7 @@ function DashboardPage() {
         <h1 style={{ color: "var(--md-sys-color-primary)", margin: 0, fontSize: "1.8rem" }}>
           My Dashboard
         </h1>
-        <Link href="/">
+        <Link href="/create">
           <AppButton icon={<MdAdd />}>Create New Event</AppButton>
         </Link>
       </div>

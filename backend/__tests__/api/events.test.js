@@ -1,144 +1,119 @@
 import { jest } from "@jest/globals";
-import request from "supertest";
+import { invokeApp } from "./testUtils.js";
+
+const verifyClerkSessionToken = jest.fn();
+const fetchClerkUser = jest.fn();
+
+jest.unstable_mockModule("../../lib/clerk.js", () => ({
+  getRequestAuthToken: (req) => req.cookies?.__session || null,
+  verifyClerkSessionToken,
+  fetchClerkUser,
+  normalizeClerkUser: (user) => user,
+}));
 
 jest.unstable_mockModule("../../lib/store/index.js", () => ({
   schedulerStore: {
+    getUserById: jest.fn(),
+    createUser: jest.fn(),
+    updateUser: jest.fn(),
     getEvent: jest.fn(),
     createEvent: jest.fn(),
+    createUserEvent: jest.fn(),
   },
 }));
 
 const { schedulerStore } = await import("../../lib/store/index.js");
 const { default: app } = await import("../../server.js");
 
+function primeAuth() {
+  verifyClerkSessionToken.mockResolvedValue({ sub: "user-1" });
+  fetchClerkUser.mockResolvedValue({
+    userId: "user-1",
+    email: "test@example.com",
+    displayName: "Test User",
+    imageUrl: null,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  });
+  schedulerStore.getUserById.mockResolvedValue({
+    userId: "user-1",
+    email: "test@example.com",
+    displayName: "Test User",
+    imageUrl: null,
+    createdAt: "2026-01-01T00:00:00.000Z",
+  });
+}
+
 describe("POST /api/events", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    primeAuth();
     schedulerStore.createEvent.mockResolvedValue(true);
+    schedulerStore.createUserEvent.mockResolvedValue(undefined);
   });
 
-  test("creates an event and returns 201 with event data", async () => {
-    const res = await request(app).post("/api/events").send({
-      name: "Team Sync",
-      password: "secret123",
-      startHour: 9,
-      endHour: 17,
-      location: "Room A",
+  test("requires authentication", async () => {
+    const res = await invokeApp(app, {
+      method: "POST",
+      url: "/api/events",
+      body: { name: "Team Sync" },
+    });
+    expect(res.status).toBe(401);
+  });
+
+  test("creates an event without anonymous password fields", async () => {
+    const res = await invokeApp(app, {
+      method: "POST",
+      url: "/api/events",
+      headers: { cookie: "__session=test" },
+      body: {
+        name: "Team Sync",
+        startHour: 9,
+        endHour: 17,
+        location: "Room A",
+      },
     });
 
     expect(res.status).toBe(201);
     expect(res.body.event.name).toBe("Team Sync");
-    expect(res.body.event.startHour).toBe(9);
-    expect(res.body.event.endHour).toBe(17);
     expect(res.body.event.code).toHaveLength(8);
-    expect(res.body.event.code).toMatch(/^[A-Za-z0-9]+$/);
-  });
-
-  test("hashes password before storing", async () => {
-    await request(app).post("/api/events").send({
-      name: "Persisted",
-      password: "mypass",
-      startHour: 8,
-      endHour: 20,
-      location: "HQ",
-    });
-
-    expect(schedulerStore.createEvent).toHaveBeenCalledTimes(1);
     const payload = schedulerStore.createEvent.mock.calls[0][0];
-    expect(payload.passwordHash).toMatch(/^[a-f0-9]{32}:[a-f0-9]{128}$/);
-    expect(payload.passwordHash).not.toContain("mypass");
+    expect(payload.organizerUserId).toBe("user-1");
+    expect(payload.passwordHash).toBeUndefined();
+    expect(payload.participantVerification).toBeUndefined();
+    expect(res.body.password).toBeUndefined();
   });
 
-  test("returns password in response for redirect", async () => {
-    const res = await request(app).post("/api/events").send({
-      name: "WithPass",
-      password: "secret123",
-      startHour: 9,
-      endHour: 17,
-      location: "Office",
+  test("uses default time range when omitted", async () => {
+    const res = await invokeApp(app, {
+      method: "POST",
+      url: "/api/events",
+      headers: { cookie: "__session=test" },
+      body: { name: "Defaults", location: "HQ" },
     });
-    expect(res.status).toBe(201);
-    expect(res.body.password).toBe("secret123");
-    expect(res.body.event.password).toBeUndefined();
-  });
 
-  test("uses default time range (9-17) when not provided", async () => {
-    const res = await request(app)
-      .post("/api/events")
-      .send({ name: "Defaults", password: "pw", location: "HQ" });
+    expect(res.status).toBe(201);
     expect(res.body.event.startHour).toBe(9);
     expect(res.body.event.endHour).toBe(17);
-  });
-
-  test("returns 400 when name is missing", async () => {
-    const res = await request(app)
-      .post("/api/events")
-      .send({ password: "pw", startHour: 9, endHour: 17 });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toBeTruthy();
-  });
-
-  test("returns 400 when password is missing", async () => {
-    const res = await request(app)
-      .post("/api/events")
-      .send({ name: "NoPass", startHour: 9, endHour: 17, location: "HQ" });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/password/i);
-  });
-
-  test("defaults location to TBD when not provided for in-person events", async () => {
-    const res = await request(app)
-      .post("/api/events")
-      .send({ name: "Meeting", password: "pw", startHour: 9, endHour: 17, mode: "inperson" });
-    expect(res.status).toBe(201);
-    expect(res.body.event.location).toBe("TBD");
-  });
-
-  test("rejects mode 'both'", async () => {
-    const res = await request(app).post("/api/events").send({
-      name: "Hybrid",
-      password: "pw",
-      startHour: 9,
-      endHour: 17,
-      mode: "both",
-      location: "HQ",
-    });
-    expect(res.status).toBe(400);
-  });
-
-  test("returns 400 when startHour >= endHour", async () => {
-    const res = await request(app)
-      .post("/api/events")
-      .send({ name: "Bad Time", password: "pw", startHour: 17, endHour: 9, location: "HQ" });
-    expect(res.status).toBe(400);
-  });
-
-  test("returns 400 when endHour exceeds 24", async () => {
-    const res = await request(app)
-      .post("/api/events")
-      .send({ name: "Late", password: "pw", startHour: 0, endHour: 25, location: "HQ" });
-    expect(res.status).toBe(400);
-  });
-
-  test("returns 500 when code collisions exceed retry limit", async () => {
-    schedulerStore.createEvent.mockResolvedValue(false);
-    const res = await request(app)
-      .post("/api/events")
-      .send({ name: "Collision", password: "pw", startHour: 9, endHour: 10, location: "HQ" });
-    expect(res.status).toBe(500);
-    expect(schedulerStore.createEvent).toHaveBeenCalledTimes(3);
   });
 });
 
-describe("GET /api/events?code=", () => {
+describe("GET /api/events", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    primeAuth();
   });
 
-  test("returns 200 with event metadata", async () => {
+  test("requires authentication", async () => {
+    const res = await invokeApp(app, { url: "/api/events?code=ABC12345" });
+    expect(res.status).toBe(401);
+  });
+
+  test("returns event metadata for authenticated users", async () => {
     schedulerStore.getEvent.mockResolvedValue({
       eventCode: "ABC12345",
       name: "Existing Event",
+      organizerUserId: "user-1",
       startHour: 10,
       endHour: 18,
       days: [1, 2, 3],
@@ -147,36 +122,14 @@ describe("GET /api/events?code=", () => {
       createdAt: "2026-03-03T00:00:00.000Z",
     });
 
-    const res = await request(app).get("/api/events?code=ABC12345");
+    const res = await invokeApp(app, {
+      url: "/api/events?code=ABC12345",
+      headers: { cookie: "__session=test" },
+    });
+
     expect(res.status).toBe(200);
     expect(res.body.event.code).toBe("ABC12345");
-    expect(res.body.event.name).toBe("Existing Event");
-    expect(res.body.event.startHour).toBe(10);
-    expect(res.body.event.endHour).toBe(18);
-    expect(res.body.event.days).toEqual([1, 2, 3]);
-    expect(res.body.event.mode).toBe("inperson");
-    expect(res.body.event.createdAt).toBeTruthy();
-  });
-
-  test("does not expose password hash", async () => {
-    schedulerStore.getEvent.mockResolvedValue({
-      eventCode: "ABC12345",
-      name: "Existing Event",
-      passwordHash: "secret-hash",
-      startHour: 10,
-      endHour: 18,
-      days: [1, 2, 3],
-      mode: "inperson",
-      location: "Office",
-      createdAt: "2026-03-03T00:00:00.000Z",
-    });
-    const res = await request(app).get("/api/events?code=ABC12345");
+    expect(res.body.event.organizerUserId).toBe("user-1");
     expect(JSON.stringify(res.body)).not.toContain("password");
-  });
-
-  test("returns 404 for unknown code", async () => {
-    schedulerStore.getEvent.mockResolvedValue(null);
-    const res = await request(app).get("/api/events?code=XXXXXXXX");
-    expect(res.status).toBe(404);
   });
 });

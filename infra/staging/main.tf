@@ -138,14 +138,14 @@ resource "aws_dynamodb_table" "participants" {
   name         = var.participants_table_name
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "eventCode"
-  range_key    = "participantName"
+  range_key    = "participantId"
 
   attribute {
     name = "eventCode"
     type = "S"
   }
   attribute {
-    name = "participantName"
+    name = "participantId"
     type = "S"
   }
 
@@ -158,14 +158,14 @@ resource "aws_dynamodb_table" "weights" {
   name         = var.weights_table_name
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "eventCode"
-  range_key    = "participantName"
+  range_key    = "participantId"
 
   attribute {
     name = "eventCode"
     type = "S"
   }
   attribute {
-    name = "participantName"
+    name = "participantId"
     type = "S"
   }
 
@@ -416,7 +416,10 @@ resource "aws_ecs_task_definition" "backend" {
       { name = "DDB_WEIGHTS_TABLE", value = aws_dynamodb_table.weights.name },
       { name = "DDB_USERS_TABLE", value = aws_dynamodb_table.users.name },
       { name = "DDB_USER_EVENTS_TABLE", value = aws_dynamodb_table.user_events.name },
-      { name = "JWT_SECRET", value = var.jwt_secret }
+      { name = "CLERK_PUBLISHABLE_KEY", value = var.clerk_publishable_key },
+      { name = "CLERK_SECRET_KEY", value = var.clerk_secret_key },
+      { name = "CLERK_JWT_KEY", value = var.clerk_jwt_key },
+      { name = "CLERK_AUTHORIZED_PARTIES", value = var.clerk_authorized_parties }
     ]
     logConfiguration = {
       logDriver = "awslogs"
@@ -450,7 +453,8 @@ resource "aws_ecs_task_definition" "frontend" {
     }]
     environment = [
       { name = "NODE_ENV", value = "production" },
-      { name = "PORT", value = tostring(var.frontend_port) }
+      { name = "PORT", value = tostring(var.frontend_port) },
+      { name = "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", value = var.clerk_publishable_key }
     ]
     logConfiguration = {
       logDriver = "awslogs"

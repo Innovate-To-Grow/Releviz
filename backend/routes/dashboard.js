@@ -4,8 +4,9 @@ import { schedulerStore } from "../lib/store/index.js";
 import { toApiEvent } from "../lib/store/types.js";
 
 export const dashboardRouter = Router();
+dashboardRouter.use(requireAuth);
 
-dashboardRouter.get("/events", requireAuth, async (req, res) => {
+dashboardRouter.get("/events", async (req, res) => {
   try {
     const userEvents = await schedulerStore.listUserEvents(req.userId);
 

@@ -7,3 +7,12 @@ export async function extractError(res) {
     return `HTTP ${res.status}`;
   }
 }
+
+export async function apiFetch(url, options = {}, token = null) {
+  const headers = {
+    ...(options.headers || {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+  const res = await fetch(url, { ...options, headers, credentials: "include" });
+  return res;
+}

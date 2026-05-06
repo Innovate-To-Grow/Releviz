@@ -11,12 +11,11 @@ A group meeting scheduler with weighted availability and real-time aggregation. 
 Go to the home page and fill out the event form:
 
 - **Event Name** — give your meeting a title
-- **Organizer Password** — secures access to the organizer dashboard
 - **Meeting Type** — In-Person (requires a location) or Virtual
 - **Time Range** — set the start and end hours to consider
 - **Days** — pick which days of the week are options (defaults to Mon-Fri)
 
-After creating, you'll be redirected to the organizer dashboard.
+You must sign in with your Clerk account before creating an event. After creating, you'll be redirected to the organizer dashboard.
 
 ### 2. Share the Link
 
@@ -26,13 +25,14 @@ Click **Copy Share Link** in the top-right corner to get a link like:
 https://yoursite.com/event?code=j9eaFNJH
 ```
 
-Send this to everyone who should participate. No account or sign-up needed.
+Send this to everyone who should participate.
+Everyone who opens the link must sign in before they can view the event or submit availability.
 
 ### 3. Participants Fill In Availability
 
 Each participant:
 
-1. Enters their name and clicks **Join**
+1. Signs in and clicks **Join**
 2. Uses the **Availability Slider** to pick a level (0 = Busy, 1 = Free, with 0.25 steps)
 3. Clicks and drags on the **schedule grid** to paint time slots with that availability level
 4. Clicks **Submit Schedule** when done
@@ -43,7 +43,7 @@ After submitting, participants can see the **Group Availability** table showing 
 
 ### 4. Organizer Dashboard
 
-Access the organizer view by appending `&manage=<password>` to the event URL. The organizer can:
+Access the organizer view by signing in with the Clerk account that created the event. The organizer can:
 
 - **Set their own availability** on the same grid
 - **Adjust participant weights** (0.0-1.0) — higher weight means more influence on the group average
@@ -112,11 +112,17 @@ npm run quality-gate               # all of the above
 - `DDB_EVENTS_TABLE` (default: `scheduler-prod-events`)
 - `DDB_PARTICIPANTS_TABLE` (default: `scheduler-prod-participants`)
 - `DDB_WEIGHTS_TABLE` (default: `scheduler-prod-weights`)
+- `DDB_USERS_TABLE` (default: `scheduler-prod-users`)
+- `DDB_USER_EVENTS_TABLE` (default: `scheduler-prod-user-events`)
+- `CLERK_SECRET_KEY`
+- `CLERK_JWT_KEY`
+- `CLERK_AUTHORIZED_PARTIES` — comma-separated allowed origins for Clerk session tokens
 
 ### Frontend
 
 - `NEXT_PUBLIC_API_BASE_URL` — API base URL (empty = relative paths via proxy)
 - `BACKEND_URL` — dev proxy target (default: `http://localhost:4000`)
+- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`
 
 ## Docker
 

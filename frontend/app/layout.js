@@ -1,4 +1,5 @@
 import "./globals.css";
+import { ClerkProvider } from "@clerk/nextjs";
 import { AuthProvider } from "@/components/auth/AuthContext";
 
 export const metadata = {
@@ -15,7 +16,9 @@ export default function RootLayout({ children }) {
   return (
     <html lang="en">
       <body>
-        <AuthProvider>{children}</AuthProvider>
+        <ClerkProvider>
+          <AuthProvider>{children}</AuthProvider>
+        </ClerkProvider>
       </body>
     </html>
   );

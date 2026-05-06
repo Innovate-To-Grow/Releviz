@@ -1,5 +1,5 @@
-import CreateEventClient from "@/components/event/CreateEventClient";
+import HomePageClient from "@/components/HomePageClient";
 
 export default function Home() {
-  return <CreateEventClient />;
+  return <HomePageClient />;
 }

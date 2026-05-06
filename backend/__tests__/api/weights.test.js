@@ -1,12 +1,24 @@
 import { jest } from "@jest/globals";
-import request from "supertest";
-import { hashPassword } from "../../lib/crypto.js";
+import { invokeApp } from "./testUtils.js";
+
+const verifyClerkSessionToken = jest.fn();
+const fetchClerkUser = jest.fn();
+
+jest.unstable_mockModule("../../lib/clerk.js", () => ({
+  getRequestAuthToken: (req) => req.cookies?.__session || null,
+  verifyClerkSessionToken,
+  fetchClerkUser,
+  normalizeClerkUser: (user) => user,
+}));
 
 jest.unstable_mockModule("../../lib/store/index.js", () => ({
   schedulerStore: {
+    getUserById: jest.fn(),
+    createUser: jest.fn(),
+    updateUser: jest.fn(),
     getEvent: jest.fn(),
+    listParticipants: jest.fn(),
     listWeights: jest.fn(),
-    listParticipantNames: jest.fn(),
     upsertWeights: jest.fn(),
   },
 }));
@@ -14,147 +26,102 @@ jest.unstable_mockModule("../../lib/store/index.js", () => ({
 const { schedulerStore } = await import("../../lib/store/index.js");
 const { default: app } = await import("../../server.js");
 
-const EVENT = {
-  eventCode: "EVENT123",
-  passwordHash: await hashPassword("eventpass"),
-};
+function primeAuth(userId = "organizer-1", displayName = "Organizer") {
+  verifyClerkSessionToken.mockResolvedValue({ sub: userId });
+  fetchClerkUser.mockResolvedValue({
+    userId,
+    email: `${displayName.toLowerCase()}@example.com`,
+    displayName,
+    imageUrl: null,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  });
+  schedulerStore.getUserById.mockResolvedValue({
+    userId,
+    email: `${displayName.toLowerCase()}@example.com`,
+    displayName,
+    imageUrl: null,
+    createdAt: "2026-01-01T00:00:00.000Z",
+  });
+}
 
-describe("POST /api/events/verify", () => {
+describe("GET /api/events/weights", () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    schedulerStore.getEvent.mockResolvedValue(EVENT);
+    primeAuth();
+    schedulerStore.getEvent.mockResolvedValue({
+      eventCode: "EVENT123",
+      organizerUserId: "organizer-1",
+    });
   });
 
-  test("returns valid: true for correct password", async () => {
-    const res = await request(app)
-      .post("/api/events/verify")
-      .send({ code: "EVENT123", password: "eventpass" });
+  test("requires organizer authentication", async () => {
+    const res = await invokeApp(app, { url: "/api/events/weights?code=EVENT123" });
+    expect(res.status).toBe(401);
+  });
+
+  test("returns weights for organizers", async () => {
+    schedulerStore.listWeights.mockResolvedValue([
+      { participantId: "user-1", participantName: "Alice", weight: 0.8, included: 1 },
+    ]);
+
+    const res = await invokeApp(app, {
+      url: "/api/events/weights?code=EVENT123",
+      headers: { cookie: "__session=test" },
+    });
+
     expect(res.status).toBe(200);
-    expect(res.body.valid).toBe(true);
+    expect(res.body.weights[0]).toMatchObject({
+      participant_id: "user-1",
+      participant_name: "Alice",
+      weight: 0.8,
+    });
   });
 
-  test("returns valid: false for wrong password", async () => {
-    const res = await request(app)
-      .post("/api/events/verify")
-      .send({ code: "EVENT123", password: "wrongpass" });
-    expect(res.status).toBe(200);
-    expect(res.body.valid).toBe(false);
-  });
+  test("rejects non-organizers", async () => {
+    primeAuth("user-1", "Alice");
+    schedulerStore.getEvent.mockResolvedValue({
+      eventCode: "EVENT123",
+      organizerUserId: "organizer-1",
+    });
 
-  test("returns 404 for unknown event code", async () => {
-    schedulerStore.getEvent.mockResolvedValue(null);
-    const res = await request(app)
-      .post("/api/events/verify")
-      .send({ code: "XXXXXXXX", password: "eventpass" });
-    expect(res.status).toBe(404);
-  });
+    const res = await invokeApp(app, {
+      url: "/api/events/weights?code=EVENT123",
+      headers: { cookie: "__session=test" },
+    });
 
-  test("returns 400 when fields are missing", async () => {
-    const res1 = await request(app).post("/api/events/verify").send({ code: "EVENT123" });
-    expect(res1.status).toBe(400);
-
-    const res2 = await request(app).post("/api/events/verify").send({ password: "eventpass" });
-    expect(res2.status).toBe(400);
+    expect(res.status).toBe(403);
   });
 });
 
-describe("GET /api/events/weights?code=", () => {
+describe("PUT /api/events/weights", () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    schedulerStore.getEvent.mockResolvedValue({ eventCode: "EVENT123" });
-  });
-
-  test("returns weights array", async () => {
-    schedulerStore.listWeights.mockResolvedValue([
-      { participantName: "Alice", weight: 0.8, included: 1 },
-      { participantName: "Bob", weight: 0.4, included: 0 },
+    primeAuth();
+    schedulerStore.getEvent.mockResolvedValue({
+      eventCode: "EVENT123",
+      organizerUserId: "organizer-1",
+    });
+    schedulerStore.listParticipants.mockResolvedValue([
+      { participantId: "user-1", participantName: "Alice" },
+      { participantId: "user-2", participantName: "Bob" },
     ]);
-
-    const res = await request(app).get("/api/events/weights?code=EVENT123");
-    expect(res.status).toBe(200);
-    expect(res.body.weights).toHaveLength(2);
-    expect(res.body.weights[0].participant_name).toBe("Alice");
-  });
-
-  test("returns 404 for unknown event code", async () => {
-    schedulerStore.getEvent.mockResolvedValue(null);
-    const res = await request(app).get("/api/events/weights?code=XXXXXXXX");
-    expect(res.status).toBe(404);
-  });
-});
-
-describe("PUT /api/events/weights?code=", () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-    schedulerStore.getEvent.mockResolvedValue({ eventCode: "EVENT123" });
-    schedulerStore.listParticipantNames.mockResolvedValue(["Alice", "Bob"]);
-    schedulerStore.upsertWeights.mockResolvedValue(undefined);
     schedulerStore.listWeights.mockResolvedValue([
-      { participantName: "Alice", weight: 0.8, included: 1 },
+      { participantId: "user-1", participantName: "Alice", weight: 0.8, included: 1 },
     ]);
   });
 
-  test("upserts weights and returns updated list", async () => {
-    const res = await request(app)
-      .put("/api/events/weights?code=EVENT123")
-      .send({ weights: [{ name: "Alice", weight: 0.8, included: 1 }] });
-    expect(res.status).toBe(200);
-    expect(res.body.weights).toHaveLength(1);
-    expect(res.body.weights[0].participant_name).toBe("Alice");
-    expect(res.body.weights[0].weight).toBe(0.8);
-    expect(res.body.weights[0].included).toBe(1);
-  });
+  test("upserts weights by participantId", async () => {
+    const res = await invokeApp(app, {
+      method: "PUT",
+      url: "/api/events/weights?code=EVENT123",
+      headers: { cookie: "__session=test" },
+      body: { weights: [{ participantId: "user-1", weight: 0.8, included: 1 }] },
+    });
 
-  test("accepts participantName key as well as name", async () => {
-    const res = await request(app)
-      .put("/api/events/weights?code=EVENT123")
-      .send({ weights: [{ participantName: "Alice", weight: 0.7, included: 1 }] });
     expect(res.status).toBe(200);
     expect(schedulerStore.upsertWeights).toHaveBeenCalledWith("EVENT123", [
-      { participantName: "Alice", weight: 0.7, included: 1 },
+      { participantId: "user-1", participantName: "Alice", weight: 0.8, included: 1 },
     ]);
-  });
-
-  test("defaults weight to 1.0 and included to 1 when not provided", async () => {
-    await request(app)
-      .put("/api/events/weights?code=EVENT123")
-      .send({ weights: [{ name: "Bob" }] });
-    expect(schedulerStore.upsertWeights).toHaveBeenCalledWith("EVENT123", [
-      { participantName: "Bob", weight: 1, included: 1 },
-    ]);
-  });
-
-  test("bulk-upserts multiple participants in one request", async () => {
-    const res = await request(app)
-      .put("/api/events/weights?code=EVENT123")
-      .send({
-        weights: [
-          { name: "Alice", weight: 0.6, included: 1 },
-          { name: "Bob", weight: 0.4, included: 0 },
-        ],
-      });
-    expect(res.status).toBe(200);
-    expect(schedulerStore.upsertWeights).toHaveBeenCalledTimes(1);
-  });
-
-  test("returns 400 when weights is not an array", async () => {
-    const res = await request(app)
-      .put("/api/events/weights?code=EVENT123")
-      .send({ weights: "bad" });
-    expect(res.status).toBe(400);
-  });
-
-  test("returns 400 when a weight is out of range", async () => {
-    const res = await request(app)
-      .put("/api/events/weights?code=EVENT123")
-      .send({ weights: [{ name: "Alice", weight: 1.5 }] });
-    expect(res.status).toBe(400);
-  });
-
-  test("returns 400 when participant does not exist", async () => {
-    const res = await request(app)
-      .put("/api/events/weights?code=EVENT123")
-      .send({ weights: [{ name: "Ghost", weight: 0.5 }] });
-    expect(res.status).toBe(400);
   });
 });

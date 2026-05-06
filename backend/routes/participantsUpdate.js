@@ -1,15 +1,19 @@
 import { Router } from "express";
 import { DAYS_PER_WEEK } from "../lib/constants.js";
+import { requireAuth } from "../middleware/auth.js";
 import { schedulerStore } from "../lib/store/index.js";
 import { toApiParticipant } from "../lib/store/types.js";
 
 export const participantsUpdateRouter = Router();
+participantsUpdateRouter.use(requireAuth);
 
 participantsUpdateRouter.put("/", async (req, res) => {
   try {
     const code = req.query.code;
-    const name = req.query.name;
-    if (!code || !name) return res.status(400).json({ error: "code and name are required" });
+    const participantId = req.query.participantId;
+    if (!code || !participantId) {
+      return res.status(400).json({ error: "code and participantId are required" });
+    }
 
     const event = await schedulerStore.getEvent(code);
     if (!event) return res.status(404).json({ error: "Event not found" });
@@ -47,29 +51,53 @@ participantsUpdateRouter.put("/", async (req, res) => {
       if (err) return res.status(400).json({ error: err });
     }
 
-    const existing = await schedulerStore.getParticipant(code, name);
+    const existing = await schedulerStore.getParticipant(code, participantId);
     if (!existing) {
       return res.status(404).json({ error: "Participant not found" });
     }
 
+    const isOrganizer = event.organizerUserId === req.userId;
+    const isSelf = existing.userId === req.userId;
+
+    if (!isOrganizer && !isSelf) {
+      return res
+        .status(403)
+        .json({ error: "You do not have permission to update this participant" });
+    }
+
     const updates = {};
     if (scheduleInperson !== undefined) {
+      if (!isOrganizer && !isSelf) {
+        return res.status(403).json({ error: "You can only update your own schedule" });
+      }
       updates.scheduleInperson = Array.isArray(scheduleInperson)
         ? JSON.stringify(scheduleInperson)
         : scheduleInperson;
     }
     if (scheduleVirtual !== undefined) {
+      if (!isOrganizer && !isSelf) {
+        return res.status(403).json({ error: "You can only update your own schedule" });
+      }
       updates.scheduleVirtual = Array.isArray(scheduleVirtual)
         ? JSON.stringify(scheduleVirtual)
         : scheduleVirtual;
     }
     if (submitted !== undefined) {
+      if (!isOrganizer && !isSelf) {
+        return res.status(403).json({ error: "You can only update your own schedule" });
+      }
       updates.submitted = submitted ? 1 : 0;
     }
     if (groupName !== undefined) {
+      if (!isOrganizer) {
+        return res.status(403).json({ error: "Only the organizer can update participant groups" });
+      }
       updates.groupName = groupName;
     }
     if (sortOrder !== undefined) {
+      if (!isOrganizer) {
+        return res.status(403).json({ error: "Only the organizer can reorder participants" });
+      }
       updates.sortOrder = Number(sortOrder);
     }
 
@@ -77,7 +105,7 @@ participantsUpdateRouter.put("/", async (req, res) => {
       return res.json({ participant: toApiParticipant(existing) });
     }
 
-    const updated = await schedulerStore.updateParticipant(code, name, updates);
+    const updated = await schedulerStore.updateParticipant(code, participantId, updates);
     return res.json({ participant: toApiParticipant(updated) });
   } catch (err) {
     const status = err instanceof SyntaxError ? 400 : 500;
@@ -90,18 +118,23 @@ participantsUpdateRouter.put("/", async (req, res) => {
 participantsUpdateRouter.delete("/", async (req, res) => {
   try {
     const code = req.query.code;
-    const name = req.query.name;
-    if (!code || !name) return res.status(400).json({ error: "code and name are required" });
+    const participantId = req.query.participantId;
+    if (!code || !participantId) {
+      return res.status(400).json({ error: "code and participantId are required" });
+    }
 
     const event = await schedulerStore.getEvent(code);
     if (!event) return res.status(404).json({ error: "Event not found" });
+    if (event.organizerUserId !== req.userId) {
+      return res.status(403).json({ error: "Only the organizer can hide participants" });
+    }
 
-    const existing = await schedulerStore.getParticipant(code, name);
+    const existing = await schedulerStore.getParticipant(code, participantId);
     if (!existing) {
       return res.status(404).json({ error: "Participant not found" });
     }
 
-    await schedulerStore.updateParticipant(code, name, { hidden: 1 });
+    await schedulerStore.updateParticipant(code, participantId, { hidden: 1 });
     return res.json({ success: true });
   } catch (err) {
     const status = err instanceof SyntaxError ? 400 : 500;
@@ -114,18 +147,23 @@ participantsUpdateRouter.delete("/", async (req, res) => {
 participantsUpdateRouter.put("/unhide", async (req, res) => {
   try {
     const code = req.query.code;
-    const name = req.query.name;
-    if (!code || !name) return res.status(400).json({ error: "code and name are required" });
+    const participantId = req.query.participantId;
+    if (!code || !participantId) {
+      return res.status(400).json({ error: "code and participantId are required" });
+    }
 
     const event = await schedulerStore.getEvent(code);
     if (!event) return res.status(404).json({ error: "Event not found" });
+    if (event.organizerUserId !== req.userId) {
+      return res.status(403).json({ error: "Only the organizer can unhide participants" });
+    }
 
-    const existing = await schedulerStore.getParticipant(code, name);
+    const existing = await schedulerStore.getParticipant(code, participantId);
     if (!existing) {
       return res.status(404).json({ error: "Participant not found" });
     }
 
-    const updated = await schedulerStore.updateParticipant(code, name, { hidden: 0 });
+    const updated = await schedulerStore.updateParticipant(code, participantId, { hidden: 0 });
     return res.json({ participant: toApiParticipant(updated) });
   } catch (err) {
     const status = err instanceof SyntaxError ? 400 : 500;

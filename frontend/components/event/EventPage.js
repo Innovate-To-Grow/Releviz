@@ -9,14 +9,13 @@ import ParticipantView from "@/components/schedule/ParticipantView";
 import OrganizerView from "@/components/schedule/OrganizerView";
 import AppButton from "@/components/ui/AppButton";
 import { useAuth } from "@/components/auth/AuthContext";
-import { fetchEvent, verifyEvent } from "@/lib/api/events";
+import { fetchEvent } from "@/lib/api/events";
 import { DAYS_PER_WEEK } from "@/lib/constants";
 
 function EventPage() {
   const searchParams = useSearchParams();
   const eventCode = searchParams.get("code");
-  const managePassword = searchParams.get("manage");
-  const { user } = useAuth();
+  const { user, getToken } = useAuth();
 
   const [event, setEvent] = useState(null);
   const [isOrganizer, setIsOrganizer] = useState(false);
@@ -31,23 +30,11 @@ function EventPage() {
     }
     async function load() {
       try {
-        const { event: ev } = await fetchEvent(eventCode);
+        const token = await getToken();
+        const { event: ev } = await fetchEvent(eventCode, token);
         setEvent(ev);
 
-        // Check organizer access: userId match or password verification
-        let isOrg = false;
-        if (user && ev.organizerUserId && ev.organizerUserId === user.id) {
-          isOrg = true;
-        }
-        if (!isOrg && managePassword) {
-          try {
-            const { valid } = await verifyEvent(eventCode, managePassword);
-            if (valid) isOrg = true;
-          } catch {
-            // verification failed — remain as participant
-          }
-        }
-        setIsOrganizer(isOrg);
+        setIsOrganizer(Boolean(user && ev.organizerUserId && ev.organizerUserId === user.id));
       } catch (err) {
         setError(err.message || "Event not found");
       } finally {
@@ -55,7 +42,7 @@ function EventPage() {
       }
     }
     load();
-  }, [eventCode, managePassword, user]);
+  }, [eventCode, user, getToken]);
 
   if (loading) {
     return (
@@ -104,7 +91,7 @@ function EventPage() {
   const numSlots = (event.endHour - event.startHour) * numDays;
 
   return (
-    <EventContext.Provider value={{ event, isOrganizer, password: managePassword, numSlots }}>
+    <EventContext.Provider value={{ event, isOrganizer, numSlots }}>
       <EventHeader eventName={event.name} eventCode={event.code} />
       {isOrganizer ? <OrganizerView /> : <ParticipantView />}
     </EventContext.Provider>
