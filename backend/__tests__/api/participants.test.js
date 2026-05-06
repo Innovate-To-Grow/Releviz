@@ -165,6 +165,38 @@ describe("POST /api/events/participants", () => {
     expect(res.status).toBe(201);
     expect(schedulerStore.createUserEvent).not.toHaveBeenCalled();
   });
+
+  test("links participant to dashboard even when participant already existed (retry scenario)", async () => {
+    schedulerStore.createParticipantIfAbsent.mockResolvedValue({
+      created: false, // participant already exists — simulates a retry
+      participant: {
+        participantId: "user-1",
+        userId: "user-1",
+        eventId: EVENT.eventId,
+        participantName: "Alice",
+        scheduleInperson: JSON.stringify(Array(56).fill(0)),
+        scheduleVirtual: JSON.stringify(Array(56).fill(0)),
+        submitted: 0,
+        hidden: 0,
+        createdAt: "2026-03-03T00:00:00.000Z",
+      },
+    });
+
+    const res = await invokeApp(app, {
+      method: "POST",
+      url: "/api/events/participants?code=EVENT123",
+      headers: { cookie: "__session=test" },
+      body: {},
+    });
+
+    expect(res.status).toBe(200);
+    // createUserEvent must still be called even when created === false
+    expect(schedulerStore.createUserEvent).toHaveBeenCalledWith({
+      userId: "user-1",
+      eventCode: "EVENT123",
+      role: "participant",
+    });
+  });
 });
 
 describe("PUT /api/events/participants/update", () => {

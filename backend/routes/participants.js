@@ -64,12 +64,19 @@ participantsRouter.post("/", async (req, res) => {
             participantName: trimmedName,
           });
 
-    if (created && event.organizerUserId !== req.userId) {
-      await schedulerStore.createUserEvent({
-        userId: req.userId,
-        eventCode: code,
-        role: "participant",
-      });
+    if (event.organizerUserId !== req.userId) {
+      try {
+        await schedulerStore.createUserEvent({
+          userId: req.userId,
+          eventCode: code,
+          role: "participant",
+        });
+      } catch (linkErr) {
+        // Ignore duplicate key errors — link already exists
+        if (linkErr?.name !== "ConditionalCheckFailedException") {
+          console.error("[participants/POST] failed to link participant to dashboard:", linkErr);
+        }
+      }
     }
 
     return res
