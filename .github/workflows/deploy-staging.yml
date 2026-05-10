@@ -151,7 +151,11 @@ jobs:
            -var="backend_image_tag=${DEPLOY_SHA}" \
            -var="frontend_image_tag=${DEPLOY_SHA}" \
            -var="ecr_backend_repository=${ECR_BACKEND}" \
-           -var="ecr_frontend_repository=${ECR_FRONTEND}"
+           -var="ecr_frontend_repository=${ECR_FRONTEND}" \
+           -var="clerk_publishable_key=${{ secrets.CLERK_PUBLISHABLE_KEY }}" \
+           -var="clerk_secret_key=${{ secrets.CLERK_SECRET_KEY }}" \
+           -var="clerk_jwt_key=${{ secrets.CLERK_JWT_KEY }}" \
+           -var="clerk_authorized_parties=${{ secrets.CLERK_AUTHORIZED_PARTIES }}"
 
          echo "alb_dns=$(terraform -chdir=infra/staging output -raw alb_dns_name)" >> "$GITHUB_OUTPUT"
          echo "cluster_name=$(terraform -chdir=infra/staging output -raw ecs_cluster_name)" >> "$GITHUB_OUTPUT"
