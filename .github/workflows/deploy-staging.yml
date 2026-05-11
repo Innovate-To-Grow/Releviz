@@ -139,7 +139,10 @@ jobs:
          cp package-lock.json frontend/
          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
          IMAGE_URI="$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_FRONTEND}"
-         docker build -t "$IMAGE_URI:${DEPLOY_SHA}" -t "$IMAGE_URI:staging-latest" ./frontend
+         docker build \
+           --build-arg NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="${{ secrets.CLERK_PUBLISHABLE_KEY }}" \
+           --build-arg NEXT_PUBLIC_API_BASE_URL="http://scheduler-staging-alb-545908554.us-west-2.elb.amazonaws.com" \
+           -t "$IMAGE_URI:${DEPLOY_SHA}" -t "$IMAGE_URI:staging-latest" ./frontend
          docker push "$IMAGE_URI:${DEPLOY_SHA}"
          docker push "$IMAGE_URI:staging-latest"
 

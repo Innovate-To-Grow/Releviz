@@ -3,7 +3,7 @@ import { ClerkProvider } from "@clerk/nextjs";
 import { AuthProvider } from "@/components/auth/AuthContext";
 
 export const metadata = {
-  title: "Relevis",
+  title: "Releviz",
   icons: { icon: "/img/i2glogo.png" },
 };
 
