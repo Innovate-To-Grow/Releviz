@@ -135,7 +135,7 @@ test.describe("Scheduler account and scheduling flow", () => {
 
     await registerAccount(page, organizerEmail, "Olivia", "Organizer");
     await page.goto("/create");
-    await expect(page.getByText("Releviz")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Releviz" })).toBeVisible();
     await fillTextbox(page, "Event Name", `E2E Planning ${runId}`);
     await fillTextbox(page, "Location / Address", "E2E Room");
     await page.getByRole("button", { name: "Create Event" }).click();
