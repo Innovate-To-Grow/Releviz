@@ -64,6 +64,7 @@ async function registerAccount(page, email, firstName, lastName) {
       })
     )
     .toBe(true);
+  await expect(page.getByRole("heading", { name: "My Dashboard" })).toBeVisible();
 }
 
 async function fillTextbox(page, name, value) {
@@ -146,7 +147,8 @@ test.describe("Scheduler account and scheduling flow", () => {
     const participantEmail = `participant-${runId}@example.com`;
 
     await registerAccount(page, organizerEmail, "Olivia", "Organizer");
-    await page.goto("/create");
+    await page.getByRole("link", { name: "Create New Event" }).click();
+    await expect(page).toHaveURL(/\/create$/);
     await expect(page.getByRole("heading", { name: "Releviz" })).toBeVisible();
     await fillTextbox(page, "Event Name", `E2E Planning ${runId}`);
     await fillTextbox(page, "Location / Address", "E2E Room");
