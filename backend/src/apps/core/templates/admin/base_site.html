@@ -1,0 +1,83 @@
+{% extends "admin/base.html" %}
+{% load i18n static %}
+
+{% block title %}{% if subtitle %}{{ subtitle }} | {% endif %}{{ title }} | Scheduler Admin{% endblock %}
+{% block branding %}{{ site_header|default:_("Scheduler") }}{% endblock %}
+
+{% block extrahead %}
+    {{ block.super }}
+    <script src="{% static 'admin/js/i2g-admin-theme-runtime.js' %}?v=20260608-admin-theme-global"></script>
+    <link rel="stylesheet" href="{% static 'admin/css/google-material-admin-overrides.css' %}?v=20260622-admin-no-root-cloak">
+    <script src="{% static 'admin/js/material-web-text-field.js' %}" defer></script>
+    <script>
+        (function () {
+            var STORAGE_KEY = 'i2g_admin_sidebar_scroll_top';
+            var RESTORE_ATTEMPTS = 20;
+
+            function getScrollEl() {
+                return (
+                    document.querySelector('#nav-sidebar-apps .simplebar-content-wrapper') ||
+                    document.querySelector('#nav-sidebar .simplebar-content-wrapper') ||
+                    document.querySelector('#nav-sidebar-apps') ||
+                    document.querySelector('#nav-sidebar-inner')
+                );
+            }
+
+            function saveScroll() {
+                try {
+                    var el = getScrollEl();
+                    if (!el) return;
+                    sessionStorage.setItem(STORAGE_KEY, String(el.scrollTop || 0));
+                } catch (e) {
+                    // ignore
+                }
+            }
+
+            function restoreScroll() {
+                try {
+                    var el = getScrollEl();
+                    if (!el) return;
+                    var raw = sessionStorage.getItem(STORAGE_KEY);
+                    if (raw == null) return;
+                    var val = parseInt(raw, 10);
+                    if (Number.isNaN(val)) return;
+                    el.scrollTop = val;
+                } catch (e) {
+                    // ignore
+                }
+            }
+
+            function restoreScrollWhenReady(attempt) {
+                restoreScroll();
+                if (attempt >= RESTORE_ATTEMPTS) return;
+
+                var el = getScrollEl();
+                var raw = sessionStorage.getItem(STORAGE_KEY);
+                var val = raw == null ? null : parseInt(raw, 10);
+                if (!el || val == null || Number.isNaN(val) || Math.abs((el.scrollTop || 0) - val) < 2) {
+                    return;
+                }
+
+                window.requestAnimationFrame(function () {
+                    restoreScrollWhenReady(attempt + 1);
+                });
+            }
+
+            window.addEventListener('pagehide', saveScroll);
+            window.addEventListener('beforeunload', saveScroll);
+            document.addEventListener('click', function (e) {
+                var target = e.target;
+                if (!target || !target.closest) return;
+                var link = target.closest('a');
+                if (link && link.closest('#nav-sidebar')) saveScroll();
+            });
+
+            document.addEventListener('DOMContentLoaded', function () {
+                // Allow SimpleBar to initialize, then keep retrying briefly.
+                setTimeout(function () {
+                    restoreScrollWhenReady(0);
+                }, 0);
+            });
+        })();
+    </script>
+{% endblock %}

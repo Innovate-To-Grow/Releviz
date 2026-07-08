@@ -1,0 +1,53 @@
+{% load i18n %}
+
+{% if not theme %}
+    <div class="relative"
+         x-data="{ openTheme: false, adminTheme: window.adminTheme || 'auto', switchAdminTheme(themeName) { window.switchTheme(themeName); this.adminTheme = themeName; this.openTheme = false } }"
+         x-on:i2g-admin-theme-change.window="adminTheme = $event.detail.theme">
+        <button type="button"
+                class="block cursor-pointer h-[18px] leading-none border-0 bg-transparent p-0 text-inherit hover:text-base-700 dark:hover:text-base-200"
+                aria-label="{% trans 'Switch admin theme' %}"
+                aria-haspopup="menu"
+                x-on:click="openTheme = !openTheme"
+                x-bind:aria-expanded="openTheme.toString()">
+            <span class="material-symbols-outlined">
+                <span x-text="adminTheme == 'dark' && 'dark_mode' || adminTheme == 'light' && 'light_mode' || 'computer'">computer</span>
+            </span>
+        </button>
+
+        <nav class="absolute bg-white border border-base-200 flex flex-col leading-none py-1 -right-2 rounded-default shadow-lg top-7 w-40 z-50 dark:bg-base-800 dark:border-base-700"
+             aria-label="{% trans 'Admin theme options' %}"
+             x-cloak
+             x-show="openTheme"
+             x-transition
+             x-on:click.outside="openTheme = false"
+             x-on:keydown.escape.window="openTheme = false">
+            <button type="button"
+                    class="cursor-pointer flex flex-row mx-1 px-3 py-1.5 rounded-default border-0 bg-transparent text-left hover:bg-base-100 hover:text-base-700 dark:hover:bg-base-700 dark:hover:text-base-200"
+                    data-admin-theme-choice="light"
+                    x-on:click="switchAdminTheme('light')"
+                    x-bind:class="adminTheme == 'light'  && 'text-primary-600 dark:text-primary-500 dark:hover:text-primary-500! hover:text-primary-600!'">
+                <span class="material-symbols-outlined mr-2">light_mode</span>
+                <span class="leading-none self-center">{% trans "Light" %}</span>
+            </button>
+
+            <button type="button"
+                    class="cursor-pointer flex flex-row leading-none mx-1 px-3 py-1.5 rounded-default border-0 bg-transparent text-left hover:bg-base-100 hover:text-base-700 dark:hover:bg-base-700 dark:hover:text-base-200"
+                    data-admin-theme-choice="dark"
+                    x-on:click="switchAdminTheme('dark')"
+                    x-bind:class="adminTheme == 'dark' && 'text-primary-600 dark:text-primary-500 dark:hover:text-primary-500! hover:text-primary-600!'">
+                <span class="material-symbols-outlined mr-2">dark_mode</span>
+                <span class="leading-none self-center">{% trans "Dark" %}</span>
+            </button>
+
+            <button type="button"
+                    class="cursor-pointer flex flex-row mx-1 px-3 py-1.5 rounded-default border-0 bg-transparent text-left hover:bg-base-100 hover:text-base-700 dark:hover:bg-base-700 dark:hover:text-base-200"
+                    data-admin-theme-choice="auto"
+                    x-on:click="switchAdminTheme('auto')"
+                    x-bind:class="adminTheme == 'auto' && 'text-primary-600 dark:text-primary-500 dark:hover:text-primary-500! hover:text-primary-600!'">
+                <span class="material-symbols-outlined mr-2">computer</span>
+                <span class="leading-none self-center">{% trans "System" %}</span>
+            </button>
+        </nav>
+    </div>
+{% endif %}

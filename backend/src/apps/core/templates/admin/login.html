@@ -1,24 +1,81 @@
-{% extends "admin/base_site.html" %}
-{% load i18n static %}
+{% extends 'unfold/layouts/unauthenticated.html' %}
+
+{% load i18n static unfold %}
+
+{% block extrastyle %}
+    {{ block.super }}
+    {% include "admin/includes/itg_login_styles.html" %}
+{% endblock %}
+
+{% block extrahead %}
+    {{ block.super }}
+    <script src="{% static 'admin/js/i2g-admin-theme-runtime.js' %}?v=20260608-admin-theme-global"></script>
+{% endblock %}
+
+{% block title %}
+    {{ title|default:_("Log in") }} | {{ site_title|default:_("Scheduler Admin") }}
+{% endblock %}
 
 {% block content %}
-<div id="content-main">
-  <form action="{{ app_path }}" method="post" id="login-form">{% csrf_token %}
-    <div class="form-row">
-      {{ form.email.errors }}
-      {{ form.email.label_tag }} {{ form.email }}
+    <div class="login-box">
+        <div class="login-header">
+            <div class="login-title-wrap">
+                <span class="login-subtitle">{% translate "Sign in with password" %}</span>
+                <span class="login-title">{{ site_title|default:_('Scheduler Admin') }}</span>
+            </div>
+            <img src="{% static 'images/scheduler-logo.svg' %}" alt="Scheduler" class="login-logo">
+        </div>
+
+        {% include "unfold/helpers/messages.html" %}
+
+        {% if form.errors or form.non_field_errors %}
+            <div class="flex flex-col gap-4 mb-4 *:mb-0">
+                {% for field in form %}
+                    {% for err in field.errors %}
+                        <div class="login-message login-message--error">{{ err }}</div>
+                    {% endfor %}
+                {% endfor %}
+                {% for err in form.non_field_errors %}
+                    <div class="login-message login-message--error">{{ err }}</div>
+                {% endfor %}
+            </div>
+        {% endif %}
+
+        <form action="{{ request.get_full_path }}" method="post" id="login-form">
+            {% csrf_token %}
+
+            <div class="mb-4">
+                <label for="id_email" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    {% translate "Email" %}
+                </label>
+                <input type="email"
+                       name="email"
+                       id="id_email"
+                       placeholder="{% translate 'Email' %}"
+                       autofocus
+                       required
+                       autocomplete="email"
+                       {% if form.email.value %}value="{{ form.email.value }}"{% endif %}>
+            </div>
+
+            <div class="mb-4">
+                <label for="id_password" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    {% translate "Password" %}
+                </label>
+                <input type="password"
+                       name="password"
+                       id="id_password"
+                       placeholder="{% translate 'Password' %}"
+                       required
+                       autocomplete="current-password">
+                <input type="hidden" name="next" value="{{ next }}">
+            </div>
+
+            <div class="flex flex-col gap-3">
+                {% component "unfold/components/button.html" with submit=1 variant="primary" class="submit-row w-full" %}
+                    {% translate 'Sign In' %}
+                {% endcomponent %}
+            </div>
+        </form>
     </div>
-    <div class="form-row">
-      {{ form.password.errors }}
-      {{ form.password.label_tag }} {{ form.password }}
-      <input type="hidden" name="next" value="{{ next }}">
-    </div>
-    {% if form.non_field_errors %}
-      <div class="form-row">{{ form.non_field_errors }}</div>
-    {% endif %}
-    <div class="submit-row">
-      <input type="submit" value="{% translate 'Log in' %}">
-    </div>
-  </form>
-</div>
 {% endblock %}

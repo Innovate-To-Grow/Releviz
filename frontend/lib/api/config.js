@@ -2,6 +2,7 @@ export const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "";
 export const AUTH_SESSION_KEY = "releviz.auth";
 
 export function readAuthSession() {
+  /* istanbul ignore next -- server-side render guard */
   if (typeof window === "undefined") return null;
   try {
     const raw = window.localStorage.getItem(AUTH_SESSION_KEY);
@@ -12,12 +13,14 @@ export function readAuthSession() {
 }
 
 export function writeAuthSession(session) {
+  /* istanbul ignore next -- server-side render guard */
   if (typeof window === "undefined") return;
   window.localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(session));
   window.dispatchEvent(new Event("releviz-auth"));
 }
 
 export function clearAuthSession() {
+  /* istanbul ignore next -- server-side render guard */
   if (typeof window === "undefined") return;
   window.localStorage.removeItem(AUTH_SESSION_KEY);
   window.dispatchEvent(new Event("releviz-auth"));

@@ -20,7 +20,34 @@ const nextConfig = {
   },
   async rewrites() {
     const backendUrl = process.env.BACKEND_URL || "http://localhost:4000";
+    const authnRoutes = [
+      "public-key",
+      "register",
+      "register/verify-code",
+      "register/resend-code",
+      "login",
+      "login/request-code",
+      "login/verify-code",
+      "email-auth/request-code",
+      "email-auth/verify-code",
+      "phone-auth/request-code",
+      "phone-auth/verify-code",
+      "logout",
+      "refresh",
+      "profile",
+      "account-emails",
+      "contact-phones",
+      "password-reset/request-code",
+      "password-reset/verify-code",
+      "password-reset/confirm",
+      "change-password",
+      "delete-account",
+    ];
     return [
+      ...authnRoutes.flatMap((route) => [
+        { source: `/authn/${route}`, destination: `${backendUrl}/authn/${route}/` },
+        { source: `/authn/${route}/`, destination: `${backendUrl}/authn/${route}/` },
+      ]),
       { source: "/api/:path*", destination: `${backendUrl}/api/:path*` },
       { source: "/authn/:path*", destination: `${backendUrl}/authn/:path*` },
     ];

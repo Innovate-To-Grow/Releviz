@@ -3,6 +3,10 @@
 from datetime import timedelta
 from pathlib import Path
 
+from django.templatetags.static import static
+
+from apps.core.access import user_can_access_app
+
 BASE_DIR = Path(__file__).resolve().parents[2]
 
 SECRET_KEY = "django-insecure-releviz-local-change-me"
@@ -114,41 +118,129 @@ BACKEND_URL = ""
 CORS_ALLOW_CREDENTIALS = True
 DATA_UPLOAD_MAX_NUMBER_FIELDS = 100000
 
+
+def _can(app_label):
+    """Sidebar visibility callback mirroring the reference admin."""
+    return lambda request: user_can_access_app(request.user, app_label)
+
+
+def _can_any(*app_labels):
+    """Show a sidebar section when any listed Django app is available."""
+    return lambda request: any(user_can_access_app(request.user, label) for label in app_labels)
+
+
 UNFOLD = {
-    "SITE_TITLE": "Releviz Admin",
-    "SITE_HEADER": "Releviz",
+    "SITE_TITLE": "Scheduler Admin",
+    "SITE_HEADER": "Scheduler",
+    "SITE_ICON": lambda request: static("images/scheduler-logo.svg"),
+    "SITE_LOGO": lambda request: static("images/scheduler-logo.svg"),
     "COLORS": {
         "primary": {
-            "50": "#f5f8ff",
-            "100": "#e8f0ff",
-            "200": "#cfe0ff",
-            "300": "#9dbfff",
-            "400": "#679ee8",
-            "500": "#347fc5",
-            "600": "#16669f",
-            "700": "#07517f",
-            "800": "#063d61",
-            "900": "#042842",
-            "950": "#02172a",
+            "50": "#f9f9ff",
+            "100": "#ebf1ff",
+            "200": "#d5e3ff",
+            "300": "#a7c8ff",
+            "400": "#82adf0",
+            "500": "#6792d4",
+            "600": "#305f9d",
+            "700": "#0f4784",
+            "800": "#003061",
+            "900": "#001b3c",
+            "950": "#001026",
         },
     },
+    "STYLES": [
+        lambda request: static("admin/css/google-material-admin.css"),
+        lambda request: static("admin/css/tabs.css"),
+        lambda request: static("admin/css/file-input.css"),
+    ],
+    "TABS": [
+        {
+            "models": [
+                "scheduling.event",
+                "scheduling.participant",
+                "scheduling.weight",
+                "scheduling.userevent",
+            ],
+            "items": [
+                {"title": "Events", "link": "/admin/scheduling/event/"},
+                {"title": "Participants", "link": "/admin/scheduling/participant/"},
+                {"title": "Weights", "link": "/admin/scheduling/weight/"},
+                {"title": "User Events", "link": "/admin/scheduling/userevent/"},
+            ],
+        },
+        {
+            "models": ["authn.member", "authn.contactemail", "authn.contactphone"],
+            "items": [
+                {"title": "Members", "link": "/admin/authn/member/"},
+                {"title": "Emails", "link": "/admin/authn/contactemail/"},
+                {"title": "Phones", "link": "/admin/authn/contactphone/"},
+            ],
+        },
+        {
+            "models": ["authn.emailauthchallenge", "authn.rsakeypair", "auth.group"],
+            "items": [
+                {"title": "Email Challenges", "link": "/admin/authn/emailauthchallenge/"},
+                {"title": "RSA Keypairs", "link": "/admin/authn/rsakeypair/"},
+                {"title": "Groups", "link": "/admin/auth/group/"},
+            ],
+        },
+    ],
     "SIDEBAR": {
         "show_search": True,
         "navigation": [
             {
-                "title": "Accounts",
+                "title": "Scheduling",
+                "permission": _can("scheduling"),
                 "items": [
-                    {"title": "Members", "link": "/admin/authn/member/"},
-                    {"title": "Emails", "link": "/admin/authn/contactemail/"},
-                    {"title": "Phones", "link": "/admin/authn/contactphone/"},
+                    {
+                        "title": "Events",
+                        "link": "/admin/scheduling/event/",
+                        "permission": _can("scheduling"),
+                    },
+                    {
+                        "title": "Participants",
+                        "link": "/admin/scheduling/participant/",
+                        "permission": _can("scheduling"),
+                    },
+                    {
+                        "title": "Weights",
+                        "link": "/admin/scheduling/weight/",
+                        "permission": _can("scheduling"),
+                    },
                 ],
             },
             {
-                "title": "Scheduling",
+                "title": "Members & Authentication",
+                "permission": _can("authn"),
                 "items": [
-                    {"title": "Events", "link": "/admin/scheduling/event/"},
-                    {"title": "Participants", "link": "/admin/scheduling/participant/"},
-                    {"title": "Weights", "link": "/admin/scheduling/weight/"},
+                    {
+                        "title": "Members",
+                        "link": "/admin/authn/member/",
+                        "permission": _can("authn"),
+                    },
+                    {
+                        "title": "Emails & Phones",
+                        "link": "/admin/authn/contactemail/",
+                        "permission": _can("authn"),
+                    },
+                    {
+                        "title": "Login Challenges",
+                        "link": "/admin/authn/emailauthchallenge/",
+                        "permission": _can("authn"),
+                    },
+                ],
+            },
+            {
+                "title": "Site Settings",
+                "permission": _can_any("auth", "admin"),
+                "items": [
+                    {"title": "Groups", "link": "/admin/auth/group/", "permission": _can("auth")},
+                    {
+                        "title": "RSA Keypairs",
+                        "link": "/admin/authn/rsakeypair/",
+                        "permission": _can("authn"),
+                    },
                 ],
             },
         ],

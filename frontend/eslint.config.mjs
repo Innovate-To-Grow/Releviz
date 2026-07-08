@@ -2,6 +2,9 @@ import nextConfig from "eslint-config-next";
 import prettierConfig from "eslint-config-prettier";
 
 const config = [
+  {
+    ignores: [".next/**", "coverage/**", "node_modules/**"],
+  },
   ...nextConfig,
   prettierConfig,
   {
@@ -16,6 +19,7 @@ const config = [
     rules: {
       "no-unused-vars": "off",
       "no-console": "off",
+      "@next/next/no-img-element": "off",
     },
   },
 ];

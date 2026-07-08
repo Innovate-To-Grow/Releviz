@@ -5,9 +5,9 @@ from unfold.admin import ModelAdmin
 
 from apps.authn.models import ContactEmail, ContactPhone, EmailAuthChallenge, Member, RSAKeypair
 
-try:
+try:  # pragma: no branch
     admin.site.unregister(Group)
-except admin.sites.NotRegistered:
+except admin.sites.NotRegistered:  # pragma: no cover
     pass
 admin.site.register(Group, GroupAdmin)
 

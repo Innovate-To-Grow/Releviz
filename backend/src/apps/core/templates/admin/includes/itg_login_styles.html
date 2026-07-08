@@ -1,0 +1,42 @@
+<style>
+    html[x-cloak] { display: block !important; }
+    .login-box { background-color: var(--md-sys-color-surface-container-lowest, #ffffff); padding: 1.5rem; border-radius: 24px; border: 1px solid var(--md-sys-color-outline-variant, #c4c7ca); box-shadow: var(--md-sys-elevation-1, 0 1px 3px rgba(60, 64, 67, 0.18)); }
+    .dark .login-box { background-color: var(--md-sys-color-surface-container, #202124); border-color: var(--md-sys-color-outline-variant, #444746); }
+    .login-logo { width: 56px; height: auto; display: block; }
+    .login-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
+    .login-title-wrap .login-subtitle { display: block; color: var(--md-sys-color-on-surface, #202124); font-size: 1.125rem; line-height: 1.2; margin-bottom: 0.15rem; }
+    .login-title-wrap .login-title { display: block; color: var(--md-sys-color-primary, #305f9d); font-size: 1.75rem; font-weight: 700; line-height: 1.2; }
+    .dark .login-title-wrap .login-subtitle { color: var(--md-sys-color-on-surface, #e8eaed); }
+    .dark .login-title-wrap .login-title { color: var(--md-sys-color-primary, #a8c7fa); }
+    .login-last-admin { margin: 0 0 1rem; padding: 0.75rem 0; border-top: 1px solid var(--md-sys-color-outline-variant, #c4c7ca); border-bottom: 1px solid var(--md-sys-color-outline-variant, #c4c7ca); }
+    .login-last-admin__label { color: var(--md-sys-color-on-surface-variant, #5f6368); font-size: 0.75rem; font-weight: 600; line-height: 1rem; margin-bottom: 0.25rem; }
+    .login-last-admin__name { color: var(--md-sys-color-on-surface, #202124); font-size: 0.9375rem; font-weight: 700; line-height: 1.25rem; overflow-wrap: anywhere; }
+    .login-last-admin__meta { color: var(--md-sys-color-on-surface-variant, #5f6368); display: flex; flex-wrap: wrap; gap: 0.25rem 0.375rem; font-size: 0.8125rem; line-height: 1.125rem; margin-top: 0.125rem; overflow-wrap: anywhere; }
+    .dark .login-last-admin { border-color: var(--md-sys-color-outline-variant, #444746); }
+    .dark .login-last-admin__label, .dark .login-last-admin__meta { color: var(--md-sys-color-on-surface-variant, #c4c7c5); }
+    .dark .login-last-admin__name { color: var(--md-sys-color-on-surface, #e8eaed); }
+    .login-box #login-form input[type="text"], .login-box #login-form input[type="email"], .login-box #login-form input[type="password"] { display: block; width: 100%; min-height: 44px; padding: 0.625rem 0.875rem; font-size: 0.875rem; line-height: 1.25rem; color: var(--md-sys-color-on-surface, #202124); background-color: var(--md-sys-color-surface-container-lowest, #ffffff); border: 1px solid var(--md-sys-color-outline-variant, #c4c7ca); border-radius: 12px; box-shadow: none; }
+    .login-box #login-form input[type="text"]:focus, .login-box #login-form input[type="email"]:focus, .login-box #login-form input[type="password"]:focus { outline: none; border-color: var(--md-sys-color-primary, #305f9d); box-shadow: 0 0 0 2px color-mix(in srgb, var(--md-sys-color-primary, #305f9d) 22%, transparent); }
+    .login-box #login-form input::placeholder { color: var(--md-sys-color-on-surface-variant, #5f6368); }
+    .dark .login-box #login-form input[type="text"], .dark .login-box #login-form input[type="email"], .dark .login-box #login-form input[type="password"] { color: var(--md-sys-color-on-surface, #e8eaed); background-color: var(--md-sys-color-surface-container-high, #2b2b2f); border-color: var(--md-sys-color-outline-variant, #444746); }
+    .dark .login-box #login-form input::placeholder { color: var(--md-sys-color-on-surface-variant, #c4c7c5); }
+    .dark .login-box #login-form input:focus { border-color: var(--md-sys-color-primary, #a8c7fa); }
+    .code-input { font-size: 1.5rem !important; letter-spacing: 0.35em; text-align: center; font-weight: 600; }
+    .login-message { padding: 0.75rem 0.875rem; border-radius: 16px; font-size: 0.8125rem; line-height: 1.4; margin-bottom: 1rem; }
+    .login-message--info { background-color: var(--md-sys-color-primary-container, #d5e3ff); color: var(--md-sys-color-on-primary-container, #001b3c); border: 1px solid color-mix(in srgb, var(--md-sys-color-primary, #305f9d) 28%, transparent); }
+    .dark .login-message--info { background-color: var(--md-sys-color-primary-container, #003061); color: var(--md-sys-color-on-primary-container, #d5e3ff); border-color: color-mix(in srgb, var(--md-sys-color-primary, #a8c7fa) 28%, transparent); }
+    .login-message--error { background-color: var(--md-sys-color-error-container, #ffdad6); color: var(--md-sys-color-error, #ba1a1a); border: 1px solid color-mix(in srgb, var(--md-sys-color-error, #ba1a1a) 28%, transparent); }
+    .dark .login-message--error { background-color: var(--md-sys-color-error-container, #690005); color: var(--md-sys-color-error, #ffb4ab); border-color: color-mix(in srgb, var(--md-sys-color-error, #ffb4ab) 28%, transparent); }
+    .login-links { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; margin-top: 0.75rem; font-size: 0.8125rem; line-height: 1.25rem; }
+    .login-links__form { display: flex; margin: 0; }
+    .login-links a, .login-links button { display: inline-flex; align-items: center; justify-content: center; min-height: 2rem; margin: 0; border: 0; border-radius: 999px; padding: 0 0.5rem; color: var(--md-sys-color-primary, #305f9d); font: inherit; font-weight: 600; line-height: 1.25rem; text-decoration: none; white-space: nowrap; cursor: pointer; background: transparent; -webkit-appearance: none; appearance: none; }
+    .login-links a:hover, .login-links button:hover { background-color: color-mix(in srgb, var(--md-sys-color-primary, #305f9d) 10%, transparent); text-decoration: none; }
+    .login-links a:focus-visible, .login-links button:focus-visible { outline: 2px solid var(--md-sys-color-primary, #305f9d); outline-offset: 2px; }
+    .dark .login-links a, .dark .login-links button { color: var(--md-sys-color-primary, #a8c7fa); }
+    .dark .login-links a:hover, .dark .login-links button:hover { background-color: color-mix(in srgb, var(--md-sys-color-primary, #a8c7fa) 12%, transparent); }
+    .login-remembered-code-form { margin-top: 0.75rem; }
+    .login-email-hint { font-size: 0.8125rem; color: var(--md-sys-color-on-surface-variant, #5f6368); margin-bottom: 1rem; }
+    .login-email-hint strong { color: var(--md-sys-color-on-surface, #202124); }
+    .dark .login-email-hint { color: var(--md-sys-color-on-surface-variant, #c4c7c5); }
+    .dark .login-email-hint strong { color: var(--md-sys-color-on-surface, #e8eaed); }
+</style>

@@ -1,0 +1,6 @@
+{% load i18n %}
+<div id="site-name" class="min-w-0">
+    <a href="{% url 'admin:index' %}" class="truncate">
+        {{ site_header|default:_('Scheduler') }}
+    </a>
+</div>

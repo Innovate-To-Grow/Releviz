@@ -13,6 +13,7 @@
     "react-icons": "^4.8.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.57.0",
     "@eslint/eslintrc": "^3.3.4",
     "@testing-library/jest-dom": "^5.16.5",
     "@testing-library/react": "^13.4.0",
@@ -29,6 +30,7 @@
     "build": "next build",
     "start": "next start",
     "test": "jest --forceExit",
+    "test:coverage": "jest --coverage --ci --forceExit --silent",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
