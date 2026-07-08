@@ -52,6 +52,18 @@ async function registerAccount(page, email, firstName, lastName) {
   await page.getByLabel("Verification code").fill(code);
   await page.getByRole("button", { name: "Verify and continue" }).click();
   await expect(page).toHaveURL(/\/dashboard$/);
+  await expect
+    .poll(async () =>
+      page.evaluate(() => {
+        try {
+          const session = JSON.parse(window.localStorage.getItem("releviz.auth") || "null");
+          return Boolean(session?.access && session?.user?.id);
+        } catch {
+          return false;
+        }
+      })
+    )
+    .toBe(true);
 }
 
 async function fillTextbox(page, name, value) {
@@ -149,7 +161,7 @@ test.describe("Scheduler account and scheduling flow", () => {
     const participantPage = await participantContext.newPage();
     await registerAccount(participantPage, participantEmail, "Pat", "Participant");
     await participantPage.goto(`/event?code=${eventCode}`);
-    await expect(participantPage.getByText("Join Event")).toBeVisible();
+    await expect(participantPage.getByRole("heading", { name: "Join Event" })).toBeVisible();
     await participantPage.getByRole("button", { name: /Join as Pat Participant/ }).click();
     await expect(participantPage.getByText(/Welcome, Pat Participant/)).toBeVisible();
     const participantSession = await readSession(participantPage);
