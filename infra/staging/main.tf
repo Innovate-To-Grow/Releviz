@@ -477,6 +477,7 @@ resource "aws_ecs_task_definition" "frontend" {
     environment = [
       { name = "NODE_ENV", value = "production" },
       { name = "PORT", value = tostring(var.frontend_port) },
+      { name = "HOSTNAME", value = "0.0.0.0" },
       { name = "BACKEND_URL", value = "http://${aws_lb.app.dns_name}" }
     ]
     logConfiguration = {
