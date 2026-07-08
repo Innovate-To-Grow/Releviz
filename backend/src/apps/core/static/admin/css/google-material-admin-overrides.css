@@ -1,0 +1,183 @@
+/*
+   Loaded from admin/base_site.html after Unfold's compiled stylesheet.
+   Keep override-only rules here when UNFOLD["STYLES"] loses cascade order.
+*/
+
+html[x-cloak] {
+    display: block !important;
+}
+
+#changelist input.action-select,
+#changelist input.action-toggle {
+    appearance: none !important;
+    -webkit-appearance: none !important;
+    background-color: var(--md-sys-color-surface-container-lowest) !important;
+    background-image: none !important;
+    background-position: center !important;
+    background-repeat: no-repeat !important;
+    background-size: 0.75rem 0.75rem !important;
+    border: 1px solid var(--md-sys-color-outline-variant) !important;
+    border-radius: 4px !important;
+    box-shadow: none !important;
+    cursor: pointer;
+    display: inline-block !important;
+    height: 1rem !important;
+    margin: 0 !important;
+    min-width: 1rem !important;
+    position: relative !important;
+    vertical-align: middle;
+    width: 1rem !important;
+}
+
+#changelist input.action-select::after,
+#changelist input.action-toggle::after {
+    content: "" !important;
+    display: none !important;
+}
+
+#changelist input.action-select:checked,
+#changelist input.action-toggle:checked {
+    background-color: var(--md-sys-color-primary) !important;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='3' stroke-linecap='round' stroke-linejoin='round' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M5 12l4 4L19 6'/%3E%3C/svg%3E") !important;
+    border-color: var(--md-sys-color-primary) !important;
+}
+
+#changelist input.action-select:focus,
+#changelist input.action-toggle:focus {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--md-sys-color-primary) 24%, transparent) !important;
+    outline: none !important;
+}
+
+#changelist input.action-select:disabled,
+#changelist input.action-toggle:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+#content-main form fieldset.module {
+    background-color: var(--md-sys-color-surface-container-lowest) !important;
+    border: 1px solid var(--md-sys-color-outline-variant) !important;
+    border-radius: var(--md-sys-shape-corner-large) !important;
+    box-shadow: 0 1px 2px rgba(60, 64, 67, 0.12) !important;
+    padding: 1rem !important;
+}
+
+.dark #content-main form fieldset.module {
+    background-color: var(--md-sys-color-surface-container) !important;
+}
+
+#changelist.module {
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+}
+
+#changelist > .result-list-wrapper {
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+}
+
+.i2g-admin-theme-toggle {
+    position: relative;
+}
+
+.i2g-admin-theme-toggle__button {
+    align-items: center;
+    background-color: var(--md-sys-color-surface-container-lowest);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: 999px !important;
+    color: var(--md-sys-color-on-surface);
+    cursor: pointer;
+    display: inline-flex;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    gap: 0.375rem;
+    height: 2.25rem;
+    line-height: 1;
+    padding: 0 0.75rem;
+    transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
+    white-space: nowrap;
+}
+
+.i2g-admin-theme-toggle__button:hover,
+.i2g-admin-theme-toggle__button[aria-expanded="true"] {
+    background-color: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
+    border-color: var(--md-sys-color-primary);
+    color: var(--md-sys-color-primary);
+}
+
+.i2g-admin-theme-toggle__button:focus-visible,
+.i2g-admin-theme-toggle__option:focus-visible {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--md-sys-color-primary) 28%, transparent);
+    outline: none;
+}
+
+.i2g-admin-theme-toggle__icon,
+.i2g-admin-theme-toggle__option .material-symbols-outlined {
+    font-size: 18px !important;
+    line-height: 1 !important;
+    min-width: 18px;
+    text-align: center;
+}
+
+.i2g-admin-theme-toggle__text {
+    max-width: 5.5rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.i2g-admin-theme-toggle__menu {
+    background-color: var(--md-sys-color-surface-container-lowest);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: var(--md-sys-shape-corner-small);
+    box-shadow: var(--md-sys-elevation-2);
+    color: var(--md-sys-color-on-surface);
+    display: flex;
+    flex-direction: column;
+    min-width: 10rem;
+    padding: 0.25rem;
+    position: absolute;
+    right: 0;
+    top: calc(100% + 0.5rem);
+    z-index: 60;
+}
+
+.i2g-admin-theme-toggle__option {
+    align-items: center;
+    background: transparent;
+    border: 0;
+    border-radius: var(--md-sys-shape-corner-small) !important;
+    color: var(--md-sys-color-on-surface);
+    cursor: pointer;
+    display: inline-flex;
+    font-size: 0.875rem;
+    font-weight: 500;
+    gap: 0.5rem;
+    justify-content: flex-start;
+    min-height: 2rem;
+    padding: 0 0.625rem;
+    text-align: left;
+    width: 100%;
+}
+
+.i2g-admin-theme-toggle__option:hover {
+    background-color: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
+    color: var(--md-sys-color-primary);
+}
+
+.i2g-admin-theme-toggle__option.is-active {
+    background-color: var(--md-sys-color-primary-container);
+    color: var(--md-sys-color-on-primary-container);
+}
+
+.dark .i2g-admin-theme-toggle__button,
+.dark .i2g-admin-theme-toggle__menu {
+    background-color: var(--md-sys-color-surface-container);
+}
+
+.dark .i2g-admin-theme-toggle__button {
+    color: var(--md-sys-color-on-surface);
+}
+
+.dark .i2g-admin-theme-toggle__option:hover {
+    background-color: color-mix(in srgb, var(--md-sys-color-primary) 16%, transparent);
+}

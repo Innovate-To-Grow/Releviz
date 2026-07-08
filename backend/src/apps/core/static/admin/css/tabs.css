@@ -1,0 +1,54 @@
+/*
+ * Material tab styling for Unfold TABS navigation.
+ */
+
+/* Container: white background with subtle border */
+#tabs-items {
+    background-color: var(--md-sys-color-surface-container-lowest, #ffffff) !important;
+    border: 1px solid var(--md-sys-color-outline-variant, #c4c7ca) !important;
+    border-radius: 999px !important;
+    padding: 4px !important;
+}
+
+/* Tab links: slightly larger hit targets */
+#tabs-items > a {
+    padding: 0.5rem 1rem !important;       /* py-2 px-4 */
+    font-size: 0.875rem !important;        /* text-sm  */
+    transition: background-color 0.15s, color 0.15s;
+    border-radius: 999px !important;
+}
+
+/* Active tab: Material secondary container pill */
+#tabs-items > .active,
+#tabs-items > .active:hover {
+    background-color: var(--md-sys-color-primary-container, #d5e3ff) !important;
+    color: var(--md-sys-color-on-primary-container, #001b3c) !important;
+    box-shadow: none !important;
+}
+
+/* Inactive hover */
+#tabs-items > a:not(.active):hover {
+    background-color: color-mix(in srgb, var(--md-sys-color-primary, #305f9d) 8%, transparent) !important;
+}
+
+/* Dark mode */
+@media (prefers-color-scheme: dark) {
+    #tabs-items {
+        background-color: var(--md-sys-color-surface-container, #202124) !important;
+        border-color: var(--md-sys-color-outline-variant, #444746) !important;
+    }
+
+    #tabs-items > .active,
+    #tabs-items > .active:hover {
+        background-color: var(--md-sys-color-primary-container, #003061) !important;
+        color: var(--md-sys-color-on-primary-container, #d5e3ff) !important;
+    }
+
+    #tabs-items > a:not(.active) {
+        color: var(--md-sys-color-on-surface, #e8eaed) !important;
+    }
+
+    #tabs-items > a:not(.active):hover {
+        background-color: color-mix(in srgb, var(--md-sys-color-primary, #a8c7fa) 12%, transparent) !important;
+    }
+}

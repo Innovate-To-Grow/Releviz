@@ -23,7 +23,6 @@ htmlcov/
 out/
 
 # Django collected static
-backend/src/apps/core/static/admin/
 backend/src/apps/core/static/rest_framework/
 
 # production
