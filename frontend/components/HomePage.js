@@ -14,11 +14,7 @@ function HomePage() {
   const [eventCode, setEventCode] = useState("");
 
   const handleOrganize = () => {
-    if (user) {
-      router.push("/create");
-    } else {
-      router.push("/sign-in");
-    }
+    router.push("/create");
   };
 
   const handleJoin = () => {

@@ -117,7 +117,7 @@ resource "aws_security_group" "ecs" {
   tags = merge(local.common_tags, { Name = "${local.prefix}-ecs-sg" })
 }
 
-# --- DynamoDB ---
+# --- Legacy NoSQL tables retained for backup ---
 
 resource "aws_dynamodb_table" "events" {
   name         = var.events_table_name
@@ -225,6 +225,54 @@ resource "aws_dynamodb_table" "user_events" {
   tags = local.common_tags
 }
 
+# --- PostgreSQL ---
+
+resource "aws_security_group" "db" {
+  name        = "${local.prefix}-db-sg"
+  description = "Allow ECS tasks to reach PostgreSQL"
+  vpc_id      = aws_vpc.app.id
+
+  ingress {
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.ecs.id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = merge(local.common_tags, { Name = "${local.prefix}-db-sg" })
+}
+
+resource "aws_db_subnet_group" "app" {
+  name       = "${local.prefix}-db-subnets"
+  subnet_ids = [aws_subnet.public_a.id, aws_subnet.public_b.id]
+  tags       = local.common_tags
+}
+
+resource "aws_db_instance" "app" {
+  identifier             = "${local.prefix}-postgres"
+  engine                 = "postgres"
+  engine_version         = "16"
+  instance_class         = var.db_instance_class
+  allocated_storage      = var.db_allocated_storage
+  db_name                = var.db_name
+  username               = var.db_username
+  password               = var.db_password
+  db_subnet_group_name   = aws_db_subnet_group.app.name
+  vpc_security_group_ids = [aws_security_group.db.id]
+  storage_encrypted      = true
+  publicly_accessible    = false
+  skip_final_snapshot    = true
+  deletion_protection    = false
+  tags                   = local.common_tags
+}
+
 # --- CloudWatch ---
 
 resource "aws_cloudwatch_log_group" "backend" {
@@ -274,36 +322,6 @@ resource "aws_iam_role" "ecs_task" {
   })
 
   tags = local.common_tags
-}
-
-resource "aws_iam_role_policy" "ecs_task_dynamodb" {
-  name = "${local.prefix}-ecs-task-dynamodb"
-  role = aws_iam_role.ecs_task.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = [
-        "dynamodb:BatchWriteItem",
-        "dynamodb:DeleteItem",
-        "dynamodb:GetItem",
-        "dynamodb:PutItem",
-        "dynamodb:Query",
-        "dynamodb:TransactWriteItems",
-        "dynamodb:UpdateItem"
-      ]
-      Resource = [
-        aws_dynamodb_table.events.arn,
-        aws_dynamodb_table.participants.arn,
-        aws_dynamodb_table.weights.arn,
-        aws_dynamodb_table.users.arn,
-        "${aws_dynamodb_table.users.arn}/index/*",
-        aws_dynamodb_table.user_events.arn,
-        "${aws_dynamodb_table.user_events.arn}/index/*"
-      ]
-    }]
-  })
 }
 
 # --- ALB ---
@@ -377,7 +395,7 @@ resource "aws_lb_listener_rule" "api" {
 
   condition {
     path_pattern {
-      values = ["/api/*"]
+      values = ["/api/*", "/authn/*", "/admin/*", "/static/*"]
     }
   }
 }
@@ -408,18 +426,23 @@ resource "aws_ecs_task_definition" "backend" {
       protocol      = "tcp"
     }]
     environment = [
-      { name = "NODE_ENV", value = "production" },
+      { name = "DJANGO_SETTINGS_MODULE", value = "config.settings.production" },
       { name = "PORT", value = tostring(var.backend_port) },
-      { name = "AWS_REGION", value = var.aws_region },
-      { name = "DDB_EVENTS_TABLE", value = aws_dynamodb_table.events.name },
-      { name = "DDB_PARTICIPANTS_TABLE", value = aws_dynamodb_table.participants.name },
-      { name = "DDB_WEIGHTS_TABLE", value = aws_dynamodb_table.weights.name },
-      { name = "DDB_USERS_TABLE", value = aws_dynamodb_table.users.name },
-      { name = "DDB_USER_EVENTS_TABLE", value = aws_dynamodb_table.user_events.name },
-      { name = "CLERK_PUBLISHABLE_KEY", value = var.clerk_publishable_key },
-      { name = "CLERK_SECRET_KEY", value = var.clerk_secret_key },
-      { name = "CLERK_JWT_KEY", value = var.clerk_jwt_key },
-      { name = "CLERK_AUTHORIZED_PARTIES", value = var.clerk_authorized_parties }
+      { name = "DJANGO_ALLOWED_HOSTS", value = aws_lb.app.dns_name },
+      { name = "DJANGO_SECRET_KEY", value = var.django_secret_key },
+      { name = "FRONTEND_URL", value = "http://${aws_lb.app.dns_name}" },
+      { name = "BACKEND_URL", value = "http://${aws_lb.app.dns_name}" },
+      { name = "CORS_ALLOWED_ORIGINS", value = "http://${aws_lb.app.dns_name}" },
+      { name = "CSRF_TRUSTED_ORIGINS", value = "http://${aws_lb.app.dns_name}" },
+      { name = "DB_NAME", value = var.db_name },
+      { name = "DB_USER", value = var.db_username },
+      { name = "DB_PASSWORD", value = var.db_password },
+      { name = "DB_HOST", value = aws_db_instance.app.address },
+      { name = "DB_PORT", value = tostring(aws_db_instance.app.port) },
+      { name = "DJANGO_CREATE_DEFAULT_ADMIN", value = var.django_create_default_admin ? "1" : "0" },
+      { name = "DJANGO_SUPERUSER_EMAIL", value = var.django_superuser_email },
+      { name = "DJANGO_SUPERUSER_PASSWORD", value = var.django_superuser_password },
+      { name = "DEFAULT_FROM_EMAIL", value = "noreply@releviz.local" }
     ]
     logConfiguration = {
       logDriver = "awslogs"
@@ -455,8 +478,6 @@ resource "aws_ecs_task_definition" "frontend" {
       { name = "NODE_ENV", value = "production" },
       { name = "PORT", value = tostring(var.frontend_port) },
       { name = "HOSTNAME", value = "0.0.0.0" },
-      { name = "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", value = var.clerk_publishable_key },
-      { name = "CLERK_SECRET_KEY", value = var.clerk_secret_key },
       { name = "BACKEND_URL", value = "http://${aws_lb.app.dns_name}" }
     ]
     logConfiguration = {
