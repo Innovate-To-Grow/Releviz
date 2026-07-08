@@ -15,7 +15,7 @@ import { DAYS_PER_WEEK } from "@/lib/constants";
 function EventPage() {
   const searchParams = useSearchParams();
   const eventCode = searchParams.get("code");
-  const { user, getToken } = useAuth();
+  const { user, loading: authLoading, getToken } = useAuth();
 
   const [event, setEvent] = useState(null);
   const [isOrganizer, setIsOrganizer] = useState(false);
@@ -23,6 +23,12 @@ function EventPage() {
   const [error, setError] = useState("");
 
   useEffect(() => {
+    if (authLoading) return;
+    if (!user) {
+      const next = eventCode ? `/event?code=${encodeURIComponent(eventCode)}` : "/event";
+      window.location.assign(`/login?next=${encodeURIComponent(next)}`);
+      return;
+    }
     if (!eventCode) {
       setError("No event code in URL");
       setLoading(false);
@@ -42,9 +48,9 @@ function EventPage() {
       }
     }
     load();
-  }, [eventCode, user, getToken]);
+  }, [eventCode, user, authLoading, getToken]);
 
-  if (loading) {
+  if (authLoading || loading) {
     return (
       <div
         style={{

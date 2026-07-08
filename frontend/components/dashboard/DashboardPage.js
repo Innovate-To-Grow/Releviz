@@ -52,6 +52,10 @@ function DashboardPage() {
   const [error, setError] = useState("");
 
   useEffect(() => {
+    if (!authLoading && !user) {
+      window.location.assign("/login?next=/dashboard");
+      return;
+    }
     if (authLoading || !user) return;
     getToken()
       .then((token) => fetchDashboardEvents(token))

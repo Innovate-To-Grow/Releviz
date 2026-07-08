@@ -415,7 +415,7 @@ function OrganizerView() {
             {!myJoined ? (
               <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
                 <p style={{ margin: 0, color: "var(--md-sys-color-on-surface-variant)" }}>
-                  Join this event with your Clerk account to submit the organizer schedule.
+                  Join this event with your account to submit the organizer schedule.
                 </p>
                 <AppButton onClick={handleMyJoin} icon={<MdLogin />}>
                   Join as {user.displayName}

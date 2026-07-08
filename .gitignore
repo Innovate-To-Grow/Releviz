@@ -6,6 +6,10 @@ node_modules
 # testing
 coverage
 
+# Python
+__pycache__/
+*.py[cod]
+
 # Next.js
 .next/
 out/
@@ -19,6 +23,7 @@ build
 /data/*.sqlite
 /data/*.sqlite3
 /data/*.sqlite-*
+backend/src/*.sqlite3
 
 # misc
 .DS_Store

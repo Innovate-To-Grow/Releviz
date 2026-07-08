@@ -188,7 +188,7 @@ function ParticipantView() {
           <div style={{ textAlign: "center" }}>
             <h2 style={{ color: "var(--md-sys-color-primary)", margin: 0 }}>Join Event</h2>
             <p style={{ color: "var(--md-sys-color-on-surface-variant)", margin: "8px 0 0 0" }}>
-              Your Clerk account will be used as your participant identity.
+              Your account will be used as your participant identity.
             </p>
           </div>
 

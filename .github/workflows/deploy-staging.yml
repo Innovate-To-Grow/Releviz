@@ -127,7 +127,6 @@ jobs:
 
      - name: Build and push backend image
        run: |
-         cp package-lock.json backend/
          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
          IMAGE_URI="$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_BACKEND}"
          docker build -t "$IMAGE_URI:${DEPLOY_SHA}" -t "$IMAGE_URI:staging-latest" ./backend
@@ -140,7 +139,6 @@ jobs:
          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
          IMAGE_URI="$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_FRONTEND}"
          docker build \
-           --build-arg NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="${{ secrets.CLERK_PUBLISHABLE_KEY }}" \
            --build-arg NEXT_PUBLIC_API_BASE_URL="http://scheduler-staging-alb-545908554.us-west-2.elb.amazonaws.com" \
            -t "$IMAGE_URI:${DEPLOY_SHA}" -t "$IMAGE_URI:staging-latest" ./frontend
          docker push "$IMAGE_URI:${DEPLOY_SHA}"
@@ -155,10 +153,11 @@ jobs:
            -var="frontend_image_tag=${DEPLOY_SHA}" \
            -var="ecr_backend_repository=${ECR_BACKEND}" \
            -var="ecr_frontend_repository=${ECR_FRONTEND}" \
-           -var="clerk_publishable_key=${{ secrets.CLERK_PUBLISHABLE_KEY }}" \
-           -var="clerk_secret_key=${{ secrets.CLERK_SECRET_KEY }}" \
-           -var="clerk_jwt_key=${{ secrets.CLERK_JWT_KEY }}" \
-           -var="clerk_authorized_parties=${{ secrets.CLERK_AUTHORIZED_PARTIES }}"
+           -var="db_password=${{ secrets.STAGING_DB_PASSWORD }}" \
+           -var="django_secret_key=${{ secrets.STAGING_DJANGO_SECRET_KEY }}" \
+           -var="django_superuser_email=${{ vars.STAGING_DJANGO_SUPERUSER_EMAIL || '' }}" \
+           -var="django_superuser_password=${{ secrets.STAGING_DJANGO_SUPERUSER_PASSWORD }}" \
+           -var="django_create_default_admin=${{ vars.STAGING_CREATE_DEFAULT_ADMIN || 'false' }}"
 
          echo "alb_dns=$(terraform -chdir=infra/staging output -raw alb_dns_name)" >> "$GITHUB_OUTPUT"
          echo "cluster_name=$(terraform -chdir=infra/staging output -raw ecs_cluster_name)" >> "$GITHUB_OUTPUT"

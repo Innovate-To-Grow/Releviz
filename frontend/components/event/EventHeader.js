@@ -86,7 +86,7 @@ function UserMenu() {
               textAlign: "left",
             }}
           >
-            <MdLogout /> Logout
+            <MdLogout /> Log out
           </button>
         </div>
       )}

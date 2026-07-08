@@ -92,7 +92,7 @@ jobs:
           fi
 
           if [ "$BACKEND_MODE" = "local" ]; then
-            echo "Using local Terraform backend fallback (S3/DynamoDB backend unavailable)."
+            echo "Using local Terraform backend fallback (remote state backend unavailable)."
           fi
 
           echo "backend_mode=$BACKEND_MODE" >> "$GITHUB_OUTPUT"

@@ -1,0 +1,23 @@
+from django.contrib.auth.backends import ModelBackend
+
+from apps.authn.models import ContactEmail
+
+
+class EmailAuthBackend(ModelBackend):
+    def authenticate(self, request, username=None, password=None, **kwargs):
+        identifier = username or kwargs.get("email")
+        if not identifier or password is None:
+            return None
+
+        contact = (
+            ContactEmail.objects.select_related("member")
+            .filter(email_address__iexact=identifier, verified=True)
+            .first()
+        )
+        if contact is None:
+            return None
+
+        user = contact.member
+        if user.check_password(password) and self.user_can_authenticate(user):
+            return user
+        return None

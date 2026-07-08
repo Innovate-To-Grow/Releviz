@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { MdAdd, MdHourglassEmpty } from "react-icons/md";
 import AppButton from "@/components/ui/AppButton";
@@ -56,7 +56,7 @@ function LabelRow({ children }) {
 
 function CreateEvent() {
   const router = useRouter();
-  const { loading: authLoading, getToken } = useAuth();
+  const { user, loading: authLoading, getToken } = useAuth();
   const [name, setName] = useState("");
   const [mode, setMode] = useState("inperson"); // "inperson" | "virtual"
   const [location, setLocation] = useState("");
@@ -69,6 +69,12 @@ function CreateEvent() {
   const [participantViewPermission, setParticipantViewPermission] = useState("own_only");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!authLoading && !user) {
+      router.replace("/login?next=/create");
+    }
+  }, [authLoading, user, router]);
 
   const hours = [];
   for (let i = 0; i <= 23; i++) {
@@ -126,7 +132,7 @@ function CreateEvent() {
     }
   };
 
-  if (authLoading) {
+  if (authLoading || !user) {
     return (
       <div
         style={{

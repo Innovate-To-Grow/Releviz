@@ -17,12 +17,6 @@ jest.mock("next/image", () => ({
   default: ({ alt, ...props }) => <img alt={alt || ""} {...props} />,
 }));
 
-// Mock Clerk
-jest.mock("@clerk/nextjs", () => ({
-  useUser: () => ({ isLoaded: true, user: null }),
-  useClerk: () => ({ signOut: jest.fn(), session: null }),
-}));
-
 // Mock AuthContext
 jest.mock("@/components/auth/AuthContext", () => ({
   useAuth: jest.fn(),
@@ -52,14 +46,14 @@ describe("HomePage", () => {
     expect(screen.getByText(/Intelligent group scheduling/i)).toBeInTheDocument();
   });
 
-  test("shows Organize and Join CTAs when not logged in", () => {
+  test("shows Organize and Join CTAs", () => {
     useAuth.mockReturnValue({ user: null, loading: false });
     render(<HomePage />);
     expect(screen.getByText("Organize an Event")).toBeInTheDocument();
     expect(screen.getByText("or")).toBeInTheDocument();
   });
 
-  test("shows dashboard link when logged in", () => {
+  test("shows dashboard link for an authenticated account", () => {
     useAuth.mockReturnValue({
       user: { id: "user-1", displayName: "Prachi", email: "prachi@test.com" },
       loading: false,
@@ -68,13 +62,13 @@ describe("HomePage", () => {
     expect(screen.getByText(/View my dashboard/i)).toBeInTheDocument();
   });
 
-  test("redirects to sign-in when unauthenticated user clicks Organize", () => {
+  test("redirects to /create when user clicks Organize", () => {
     const push = jest.fn();
     jest.spyOn(require("next/navigation"), "useRouter").mockReturnValue({ push });
     useAuth.mockReturnValue({ user: null, loading: false });
     render(<HomePage />);
     fireEvent.click(screen.getByText("Organize an Event"));
-    expect(push).toHaveBeenCalledWith("/sign-in");
+    expect(push).toHaveBeenCalledWith("/create");
   });
 
   test("redirects to /create when authenticated user clicks Organize", () => {

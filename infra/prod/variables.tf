@@ -20,7 +20,7 @@ variable "image_tag" {
 
 variable "container_port" {
   type    = number
-  default = 3000
+  default = 4000
 }
 
 variable "task_cpu" {
@@ -79,23 +79,50 @@ variable "user_events_table_name" {
   default = "scheduler-prod-user-events"
 }
 
-variable "clerk_publishable_key" {
-  type = string
+variable "db_name" {
+  type    = string
+  default = "releviz"
 }
 
-variable "clerk_secret_key" {
+variable "db_username" {
+  type    = string
+  default = "releviz"
+}
+
+variable "db_password" {
   type      = string
   sensitive = true
 }
 
-variable "clerk_jwt_key" {
+variable "db_instance_class" {
+  type    = string
+  default = "db.t4g.micro"
+}
+
+variable "db_allocated_storage" {
+  type    = number
+  default = 20
+}
+
+variable "django_secret_key" {
   type      = string
   sensitive = true
 }
 
-variable "clerk_authorized_parties" {
+variable "django_superuser_email" {
   type    = string
   default = ""
+}
+
+variable "django_superuser_password" {
+  type      = string
+  default   = ""
+  sensitive = true
+}
+
+variable "django_create_default_admin" {
+  type    = bool
+  default = false
 }
 
 variable "health_check_path" {
