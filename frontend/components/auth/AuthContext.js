@@ -14,6 +14,7 @@ import { clearAuthSession, readAuthSession, writeAuthSession } from "@/lib/api/c
 const AuthContext = createContext(null);
 
 function subscribeAuth(callback) {
+  /* istanbul ignore next -- server-side render guard */
   if (typeof window === "undefined") return () => {};
   window.addEventListener("storage", callback);
   window.addEventListener("releviz-auth", callback);

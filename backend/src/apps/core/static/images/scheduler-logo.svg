@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-labelledby="title desc">
+  <title id="title">Scheduler</title>
+  <desc id="desc">Scheduler calendar logo</desc>
+  <rect width="96" height="96" rx="22" fill="#305f9d"/>
+  <rect x="18" y="24" width="60" height="52" rx="10" fill="#ffffff"/>
+  <rect x="18" y="24" width="60" height="16" rx="10" fill="#d5e3ff"/>
+  <path d="M31 18v12M65 18v12" stroke="#ffffff" stroke-width="7" stroke-linecap="round"/>
+  <path d="M30 51h36M30 64h24" stroke="#305f9d" stroke-width="7" stroke-linecap="round"/>
+  <circle cx="65" cy="64" r="5" fill="#305f9d"/>
+</svg>

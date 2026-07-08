@@ -1,0 +1,48 @@
+/*
+ * Native <input type="file"> styling for Unfold admin.
+ * Tailwind's file: variants target ::file-selector-button but Safari/WebKit
+ * often needs explicit -webkit-file-upload-button rules; without them the
+ * control looks like plain text.
+ */
+
+.i2g-admin-file-input {
+    min-height: 2.75rem;
+    padding: 0.25rem 0;
+    line-height: 1.5;
+}
+
+.i2g-admin-file-input::file-selector-button,
+.i2g-admin-file-input::-webkit-file-upload-button {
+    -webkit-appearance: none;
+    appearance: none;
+    margin-right: 1rem;
+    padding: 0.5rem 1rem;
+    border-radius: 999px;
+    border: 1px solid var(--md-sys-color-outline-variant, #c4c7ca);
+    background-color: var(--md-sys-color-surface-container, #f6f3f3);
+    color: var(--md-sys-color-on-surface, #202124);
+    font: inherit;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.i2g-admin-file-input::file-selector-button:hover,
+.i2g-admin-file-input::-webkit-file-upload-button:hover {
+    background-color: color-mix(in srgb, var(--md-sys-color-primary, #305f9d) 8%, var(--md-sys-color-surface-container, #f6f3f3));
+    border-color: var(--md-sys-color-primary, #305f9d);
+}
+
+.dark .i2g-admin-file-input::file-selector-button,
+.dark .i2g-admin-file-input::-webkit-file-upload-button {
+    border-color: var(--md-sys-color-outline-variant, #444746);
+    background-color: var(--md-sys-color-surface-container-high, #2b2b2f);
+    color: var(--md-sys-color-on-surface, #e8eaed);
+}
+
+.dark .i2g-admin-file-input::file-selector-button:hover,
+.dark .i2g-admin-file-input::-webkit-file-upload-button:hover {
+    background-color: color-mix(in srgb, var(--md-sys-color-primary, #a8c7fa) 12%, var(--md-sys-color-surface-container-high, #2b2b2f));
+    border-color: var(--md-sys-color-primary, #a8c7fa);
+}

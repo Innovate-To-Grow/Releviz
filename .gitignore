@@ -5,14 +5,25 @@ node_modules
 
 # testing
 coverage
+coverage.xml
+**/coverage.xml
+playwright-report/
+test-results/
+**/playwright-report/
+**/test-results/
 
 # Python
 __pycache__/
 *.py[cod]
+.coverage
+htmlcov/
 
 # Next.js
 .next/
 out/
+
+# Django collected static
+backend/src/apps/core/static/rest_framework/
 
 # production
 build

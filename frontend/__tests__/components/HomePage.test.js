@@ -13,7 +13,6 @@ jest.mock("next/navigation", () => ({
 // Mock next/image
 jest.mock("next/image", () => ({
   __esModule: true,
-  // eslint-disable-next-line @next/next/no-img-element
   default: ({ alt, ...props }) => <img alt={alt || ""} {...props} />,
 }));
 
@@ -81,5 +80,19 @@ describe("HomePage", () => {
     render(<HomePage />);
     fireEvent.click(screen.getByText("Organize an Event"));
     expect(push).toHaveBeenCalledWith("/create");
+  });
+
+  test("joins by trimmed event code and ignores empty codes", () => {
+    const push = jest.fn();
+    jest.spyOn(require("next/navigation"), "useRouter").mockReturnValue({ push });
+    useAuth.mockReturnValue({ user: null, loading: false });
+    render(<HomePage />);
+    fireEvent.click(screen.getByText("Go"));
+    expect(push).not.toHaveBeenCalled();
+    const input = document.querySelector("md-outlined-text-field");
+    input.value = " ABC123 ";
+    fireEvent.input(input);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(push).toHaveBeenCalledWith("/event?code=ABC123");
   });
 });

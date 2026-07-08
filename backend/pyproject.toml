@@ -12,3 +12,27 @@ ignore = ["DJ001"]
 
 [tool.ruff.format]
 quote-style = "double"
+
+[tool.coverage.run]
+branch = true
+source = ["src/apps", "src/config"]
+omit = [
+    "src/apps/**/migrations/*",
+    "src/apps/**/tests/*",
+]
+
+[tool.coverage.report]
+fail_under = 100
+show_missing = true
+skip_covered = true
+exclude_also = [
+    "if __name__ == .__main__.:",
+    "raise AssertionError",
+    "raise NotImplementedError",
+]
+
+[tool.coverage.html]
+directory = "htmlcov"
+
+[tool.coverage.xml]
+output = "coverage.xml"

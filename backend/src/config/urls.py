@@ -5,9 +5,9 @@ from django.urls import include, path
 
 from apps.authn.views_admin_login import AdminLoginView
 
-admin.site.site_title = "Releviz Admin"
-admin.site.site_header = "Releviz Admin"
-admin.site.index_title = "Operations"
+admin.site.site_title = "Scheduler Admin"
+admin.site.site_header = "Scheduler"
+admin.site.index_title = "Welcome to Scheduler Admin"
 
 urlpatterns = [
     path("admin/login/", AdminLoginView.as_view(), name="admin-login"),

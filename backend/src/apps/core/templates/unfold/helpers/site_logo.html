@@ -1,0 +1,15 @@
+{% load i18n static %}
+
+<div class="shrink-0">
+    <a href="{% url "admin:index" %}">
+        <img src="{% if site_logo %}{{ site_logo }}{% else %}{% static 'images/scheduler-logo.svg' %}{% endif %}"
+             class="h-[38px] w-auto"
+             alt="{% trans 'Scheduler Home' %}"/>
+    </a>
+</div>
+
+<div class="flex flex-col grow justify-center min-w-0">
+    <div class="text-important tracking-tight *:truncate xl:text-base">
+        {{ branding }}
+    </div>
+</div>

@@ -1,3 +1,4 @@
+from django.contrib import admin
 from django.contrib.auth import login
 from django.shortcuts import redirect, render
 from django.utils.decorators import method_decorator
@@ -17,17 +18,31 @@ def safe_admin_next(request):
 
 @method_decorator(never_cache, name="dispatch")
 class AdminLoginView(View):
+    def get_context(self, request, form, *, status_next):
+        context = admin.site.each_context(request)
+        context.update(
+            {
+                "app_path": request.path,
+                "form": form,
+                "next": status_next,
+                "site_header": admin.site.site_header,
+                "site_title": admin.site.site_title,
+                "title": "Log in",
+            }
+        )
+        return context
+
     def get(self, request):
         if request.user.is_authenticated and request.user.is_staff:
             return redirect(safe_admin_next(request))
         return render(
             request,
             "admin/login.html",
-            {
-                "form": AdminPasswordForm(request),
-                "app_path": request.path,
-                "next": request.GET.get("next", ""),
-            },
+            self.get_context(
+                request,
+                AdminPasswordForm(request),
+                status_next=request.GET.get("next", ""),
+            ),
         )
 
     def post(self, request):
@@ -40,6 +55,6 @@ class AdminLoginView(View):
         return render(
             request,
             "admin/login.html",
-            {"form": form, "app_path": request.path, "next": request.POST.get("next", "")},
+            self.get_context(request, form, status_next=request.POST.get("next", "")),
             status=400,
         )

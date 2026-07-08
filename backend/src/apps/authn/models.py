@@ -46,6 +46,9 @@ class Member(AbstractUser):
     def display_name(self) -> str:
         return self.get_full_name() or self.get_primary_contact_email() or str(self.pk)
 
+    def get_username(self) -> str:
+        return self.get_primary_contact_email() or str(self.pk)
+
     def can_access_app(self, app_label: str) -> bool:
         if self.is_superuser:
             return True
