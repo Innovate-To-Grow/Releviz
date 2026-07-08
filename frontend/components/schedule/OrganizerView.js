@@ -4,7 +4,9 @@ import { useState, useEffect, useContext, useCallback, useRef } from "react";
 import { GoVerified, GoUnverified } from "react-icons/go";
 import {
   MdDeleteOutline,
+  MdEmail,
   MdLogin,
+  MdNotificationsActive,
   MdRefresh,
   MdSave,
   MdArrowUpward,
@@ -27,6 +29,7 @@ import "@material/web/slider/slider.js";
 import "@material/web/dialog/dialog.js";
 import "@material/web/textfield/outlined-text-field.js";
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
+import { fetchInvitations, sendInvitations, sendReminders } from "@/lib/api/events";
 
 function OrganizerView() {
   const { event, numSlots } = useContext(EventContext);
@@ -60,15 +63,23 @@ function OrganizerView() {
   const [hideError, setHideError] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [showHidden, setShowHidden] = useState(false);
+  const [invitations, setInvitations] = useState([]);
+  const [inviteEmails, setInviteEmails] = useState("");
+  const [inviteMessage, setInviteMessage] = useState("");
+  const [inviteError, setInviteError] = useState("");
+  const [inviteStatus, setInviteStatus] = useState("");
+  const [sendingInvites, setSendingInvites] = useState(false);
+  const [sendingReminders, setSendingReminders] = useState(false);
 
   // Load participants and weights in parallel
   useEffect(() => {
     async function load() {
       try {
         const token = await getToken();
-        const [participantsRes, weightsRes] = await Promise.all([
+        const [participantsRes, weightsRes, invitationsRes] = await Promise.all([
           fetchParticipantsIncludeHidden(event.code, token),
           fetchWeights(event.code, token),
+          fetchInvitations(event.code, token),
         ]);
 
         const parsed = participantsRes.participants.map((p) => ({
@@ -83,6 +94,7 @@ function OrganizerView() {
           map[w.participant_id] = { weight: w.weight, included: w.included };
         });
         setWeights(map);
+        setInvitations(invitationsRes.invitations || []);
 
         const mine = parsed.find((participant) => participant.user_id === user?.id);
         if (mine) {
@@ -275,6 +287,48 @@ function OrganizerView() {
     saveWeights(next);
   };
 
+  const handleSendInvitations = async () => {
+    setInviteError("");
+    setInviteStatus("");
+    setSendingInvites(true);
+    try {
+      const emails = inviteEmails
+        .split(/[\s,;]+/)
+        .map((email) => email.trim())
+        .filter(Boolean);
+      const token = await getToken();
+      const data = await sendInvitations(
+        event.code,
+        { emails, message: inviteMessage.trim() },
+        token
+      );
+      setInvitations(data.invitations || []);
+      setInviteEmails("");
+      setInviteStatus(`Sent ${data.invitations?.length || 0} invitation(s).`);
+    } catch (err) {
+      setInviteError(`Failed to send invitations: ${err.message}`);
+    } finally {
+      setSendingInvites(false);
+    }
+  };
+
+  const handleSendReminders = async () => {
+    setInviteError("");
+    setInviteStatus("");
+    setSendingReminders(true);
+    try {
+      const token = await getToken();
+      const data = await sendReminders(event.code, token);
+      const refreshed = await fetchInvitations(event.code, token);
+      setInvitations(refreshed.invitations || []);
+      setInviteStatus(`Sent ${data.sent || 0} reminder(s).`);
+    } catch (err) {
+      setInviteError(`Failed to send reminders: ${err.message}`);
+    } finally {
+      setSendingReminders(false);
+    }
+  };
+
   const activeParticipants = participants
     .filter((p) => !p.hidden)
     .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
@@ -402,6 +456,99 @@ function OrganizerView() {
             { label: "Submitted", value: `${submittedCount} / ${activeParticipants.length}` },
           ]}
         />
+      </div>
+
+      <div
+        className="md-card"
+        style={{ marginBottom: "24px", display: "flex", flexDirection: "column", gap: "16px" }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            flexWrap: "wrap",
+            gap: "12px",
+          }}
+        >
+          <div>
+            <h3 style={{ margin: 0, color: "var(--md-sys-color-on-surface)" }}>
+              Email Invitations
+            </h3>
+            <p style={{ margin: "4px 0 0 0", color: "var(--md-sys-color-on-surface-variant)" }}>
+              Send the schedule link and calendar reminder to participants.
+            </p>
+          </div>
+          <AppButton
+            variant="outlined"
+            icon={<MdNotificationsActive />}
+            onClick={handleSendReminders}
+            disabled={sendingReminders}
+          >
+            {sendingReminders ? "Sending..." : "Send Reminders"}
+          </AppButton>
+        </div>
+
+        <md-outlined-text-field
+          label="Invite emails"
+          value={inviteEmails}
+          onInput={(e) => setInviteEmails(e.target.value)}
+          placeholder="name@example.com, teammate@example.com"
+          style={{ width: "100%" }}
+        ></md-outlined-text-field>
+        <textarea
+          value={inviteMessage}
+          onChange={(e) => setInviteMessage(e.target.value)}
+          maxLength={1000}
+          placeholder="Optional message"
+          style={{
+            minHeight: "80px",
+            resize: "vertical",
+            padding: "12px",
+            borderRadius: "8px",
+            border: "1px solid var(--md-sys-color-outline)",
+            background: "var(--md-sys-color-surface)",
+            color: "var(--md-sys-color-on-surface)",
+            font: "inherit",
+          }}
+        />
+        <AppButton
+          onClick={handleSendInvitations}
+          disabled={sendingInvites || !inviteEmails.trim()}
+          icon={<MdEmail />}
+        >
+          {sendingInvites ? "Sending..." : "Send Invitations"}
+        </AppButton>
+        {inviteStatus && (
+          <p style={{ color: "var(--md-sys-color-primary)", margin: 0 }}>{inviteStatus}</p>
+        )}
+        {inviteError && (
+          <p style={{ color: "var(--md-sys-color-error)", margin: 0 }}>{inviteError}</p>
+        )}
+        {invitations.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            {invitations.map((invitation) => (
+              <div
+                key={invitation.id || invitation.email}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: "12px",
+                  padding: "10px 12px",
+                  borderRadius: "8px",
+                  border: "1px solid var(--md-sys-color-surface-variant)",
+                  background: "var(--md-sys-color-surface-container-low)",
+                  flexWrap: "wrap",
+                }}
+              >
+                <span>{invitation.email}</span>
+                <span style={{ color: "var(--md-sys-color-on-surface-variant)" }}>
+                  {invitation.status}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="two-pane">

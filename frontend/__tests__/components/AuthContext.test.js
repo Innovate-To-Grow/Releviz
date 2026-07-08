@@ -12,8 +12,10 @@ import {
   fetchProfile,
   loginWithPassword,
   logoutApi,
+  requestLoginCode,
   startRegistration,
   updateProfileApi,
+  verifyLoginCode,
   verifyRegistration,
 } from "@/lib/api/auth";
 
@@ -21,8 +23,10 @@ jest.mock("@/lib/api/auth", () => ({
   fetchProfile: jest.fn(),
   loginWithPassword: jest.fn(),
   logoutApi: jest.fn(),
+  requestLoginCode: jest.fn(),
   startRegistration: jest.fn(),
   updateProfileApi: jest.fn(),
+  verifyLoginCode: jest.fn(),
   verifyRegistration: jest.fn(),
 }));
 
@@ -33,6 +37,10 @@ function Probe() {
       <span data-testid="loading">{String(auth.loading)}</span>
       <span data-testid="user">{auth.user?.displayName || "none"}</span>
       <button onClick={() => auth.login({ email: "a", password: "p" })}>login</button>
+      <button onClick={() => auth.requestEmailLoginCode({ email: "a" })}>request-code</button>
+      <button onClick={() => auth.verifyEmailLoginCode({ email: "a", code: "1" })}>
+        verify-login
+      </button>
       <button onClick={() => auth.signup({ email: "a" })}>signup</button>
       <button onClick={() => auth.verifySignup({ email: "a", code: "1" })}>verify</button>
       <button onClick={() => auth.updateProfile({ first_name: "Ada" })}>update</button>
@@ -79,6 +87,11 @@ describe("AuthContext", () => {
       writeAuthSession({ access: "login-token", user: { displayName: "Login User" } });
       return { ok: true };
     });
+    requestLoginCode.mockResolvedValue({ message: "sent" });
+    verifyLoginCode.mockImplementation(async () => {
+      writeAuthSession({ access: "code-token", user: { displayName: "Code User" } });
+      return { ok: true };
+    });
     startRegistration.mockResolvedValue({ message: "started" });
     verifyRegistration.mockImplementation(async () => {
       writeAuthSession({ access: "verify-token", user: { displayName: "Verified User" } });
@@ -97,6 +110,10 @@ describe("AuthContext", () => {
 
     await userEvent.click(screen.getByText("login"));
     expect(screen.getByTestId("user")).toHaveTextContent("Login User");
+    await userEvent.click(screen.getByText("request-code"));
+    expect(requestLoginCode).toHaveBeenCalledWith({ email: "a" });
+    await userEvent.click(screen.getByText("verify-login"));
+    expect(screen.getByTestId("user")).toHaveTextContent("Code User");
     await userEvent.click(screen.getByText("signup"));
     expect(startRegistration).toHaveBeenCalledWith({ email: "a" });
     await userEvent.click(screen.getByText("verify"));

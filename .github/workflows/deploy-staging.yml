@@ -155,6 +155,7 @@ jobs:
            -var="ecr_frontend_repository=${ECR_FRONTEND}" \
            -var="db_password=${{ secrets.STAGING_DB_PASSWORD }}" \
            -var="django_secret_key=${{ secrets.STAGING_DJANGO_SECRET_KEY }}" \
+           -var="django_field_encryption_key=${{ secrets.STAGING_DJANGO_FIELD_ENCRYPTION_KEY }}" \
            -var="django_superuser_email=${{ vars.STAGING_DJANGO_SUPERUSER_EMAIL || '' }}" \
            -var="django_superuser_password=${{ secrets.STAGING_DJANGO_SUPERUSER_PASSWORD }}" \
            -var="django_create_default_admin=${{ vars.STAGING_CREATE_DEFAULT_ADMIN || 'false' }}"

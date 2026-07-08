@@ -324,6 +324,45 @@ resource "aws_iam_role" "ecs_task" {
   tags = local.common_tags
 }
 
+resource "aws_iam_role" "eventbridge_reminders" {
+  name = "${local.prefix}-eventbridge-reminders-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "events.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+
+  tags = local.common_tags
+}
+
+resource "aws_iam_role_policy" "eventbridge_reminders" {
+  name = "${local.prefix}-eventbridge-reminders-policy"
+  role = aws_iam_role.eventbridge_reminders.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["ecs:RunTask"]
+        Resource = aws_ecs_task_definition.backend.arn
+      },
+      {
+        Effect = "Allow"
+        Action = ["iam:PassRole"]
+        Resource = [
+          aws_iam_role.ecs_execution.arn,
+          aws_iam_role.ecs_task.arn
+        ]
+      }
+    ]
+  })
+}
+
 # --- ALB ---
 
 resource "aws_lb" "app" {
@@ -430,6 +469,8 @@ resource "aws_ecs_task_definition" "backend" {
       { name = "PORT", value = tostring(var.backend_port) },
       { name = "DJANGO_ALLOWED_HOSTS", value = aws_lb.app.dns_name },
       { name = "DJANGO_SECRET_KEY", value = var.django_secret_key },
+      { name = "DJANGO_FIELD_ENCRYPTION_KEY", value = var.django_field_encryption_key },
+      { name = "USE_SES_EMAIL_PROVIDER", value = "1" },
       { name = "FRONTEND_URL", value = "http://${aws_lb.app.dns_name}" },
       { name = "BACKEND_URL", value = "http://${aws_lb.app.dns_name}" },
       { name = "CORS_ALLOWED_ORIGINS", value = "http://${aws_lb.app.dns_name}" },
@@ -543,6 +584,43 @@ resource "aws_ecs_service" "frontend" {
 
   depends_on = [aws_lb_listener.http]
   tags       = local.common_tags
+}
+
+resource "aws_cloudwatch_event_rule" "event_reminders" {
+  name                = "${local.prefix}-event-reminders"
+  description         = "Send due Releviz event reminder emails"
+  schedule_expression = "rate(15 minutes)"
+  tags                = local.common_tags
+}
+
+resource "aws_cloudwatch_event_target" "event_reminders" {
+  rule     = aws_cloudwatch_event_rule.event_reminders.name
+  arn      = aws_ecs_cluster.app.arn
+  role_arn = aws_iam_role.eventbridge_reminders.arn
+
+  ecs_target {
+    launch_type         = "FARGATE"
+    task_count          = 1
+    task_definition_arn = aws_ecs_task_definition.backend.arn
+
+    network_configuration {
+      assign_public_ip = true
+      subnets          = [aws_subnet.public_a.id, aws_subnet.public_b.id]
+      security_groups  = [aws_security_group.ecs.id]
+    }
+  }
+
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "${local.prefix}-backend"
+        command = ["python", "src/manage.py", "send_due_event_reminders", "--window-minutes=20"]
+        environment = [
+          { name = "DJANGO_SKIP_STARTUP_TASKS", value = "1" }
+        ]
+      }
+    ]
+  })
 }
 
 # --- CloudWatch Alarms ---

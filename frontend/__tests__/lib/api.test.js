@@ -14,12 +14,20 @@ import {
   fetchProfile,
   loginWithPassword,
   logoutApi,
+  requestLoginCode,
   startRegistration,
   updateProfileApi,
+  verifyLoginCode,
   verifyRegistration,
 } from "@/lib/api/auth";
 import { fetchDashboardEvents } from "@/lib/api/dashboard";
-import { createEvent, fetchEvent } from "@/lib/api/events";
+import {
+  createEvent,
+  fetchEvent,
+  fetchInvitations,
+  sendInvitations,
+  sendReminders,
+} from "@/lib/api/events";
 import {
   deleteParticipant,
   fetchParticipants,
@@ -146,6 +154,8 @@ describe("auth API helpers", () => {
     const authBody = { access: "a", refresh: "r", user: { id: "u" } };
     global.fetch
       .mockResolvedValueOnce(jsonResponse(authBody))
+      .mockResolvedValueOnce(jsonResponse({ message: "code sent" }, { status: 202 }))
+      .mockResolvedValueOnce(jsonResponse(authBody))
       .mockResolvedValueOnce(jsonResponse({ message: "started" }, { status: 202 }))
       .mockResolvedValueOnce(jsonResponse(authBody));
 
@@ -153,6 +163,10 @@ describe("auth API helpers", () => {
       authBody
     );
     expect(readAuthSession().access).toBe("a");
+    await expect(requestLoginCode({ email: "a@b.com" })).resolves.toEqual({
+      message: "code sent",
+    });
+    await expect(verifyLoginCode({ email: "a@b.com", code: "123456" })).resolves.toEqual(authBody);
     await expect(startRegistration({ email: "a@b.com" })).resolves.toEqual({
       message: "started",
     });
@@ -170,6 +184,8 @@ describe("auth API helpers", () => {
     writeAuthSession({ access: "a", refresh: "r", user: { id: "old" } });
     global.fetch
       .mockResolvedValueOnce(jsonResponse({ detail: "bad" }, { status: 400 }))
+      .mockResolvedValueOnce(jsonResponse({ error: "code bad" }, { status: 400 }))
+      .mockResolvedValueOnce(jsonResponse({ detail: "verify bad" }, { status: 400 }))
       .mockResolvedValueOnce(jsonResponse({ error: "no" }, { status: 400 }))
       .mockResolvedValueOnce(jsonResponse({ user: { id: "new" } }))
       .mockResolvedValueOnce(jsonResponse({ detail: "profile bad" }, { status: 400 }))
@@ -177,6 +193,8 @@ describe("auth API helpers", () => {
       .mockResolvedValueOnce(jsonResponse({ detail: "update bad" }, { status: 400 }));
 
     await expect(loginWithPassword({ email: "x", password: "bad" })).rejects.toThrow("bad");
+    await expect(requestLoginCode({ email: "x" })).rejects.toThrow("code bad");
+    await expect(verifyLoginCode({ email: "x", code: "000000" })).rejects.toThrow("verify bad");
     await expect(startRegistration({})).rejects.toThrow("no");
     await expect(fetchProfile()).resolves.toEqual({ id: "new" });
     await expect(fetchProfile()).rejects.toThrow("profile bad");
@@ -222,10 +240,16 @@ describe("business API helpers", () => {
         participantViewPermission: "all",
         daySelectionType: "specific_dates",
         specificDates: ["2026-07-08"],
+        responseDeadline: "2026-07-08T12:00:00.000Z",
+        remindersEnabled: false,
+        reminderHoursBefore: 12,
       },
       "tok"
     );
     await fetchEvent("ABC 123", "tok");
+    await fetchInvitations("ABC 123", "tok");
+    await sendInvitations("ABC 123", { emails: ["a@example.com"], message: "Join" }, "tok");
+    await sendReminders("ABC 123", "tok");
     await fetchParticipants("ABC 123", "tok");
     await joinEvent("ABC 123", "tok");
     await updateParticipant("ABC 123", "user 1", { submitted: 1 }, "tok");
@@ -238,6 +262,8 @@ describe("business API helpers", () => {
     const urls = global.fetch.mock.calls.map(([url]) => url);
     expect(urls).toContain("/api/dashboard/events");
     expect(urls).toContain("/api/events?code=ABC%20123");
+    expect(urls).toContain("/api/events/invitations?code=ABC%20123");
+    expect(urls).toContain("/api/events/reminders?code=ABC%20123");
     expect(urls).toContain("/api/events/participants?code=ABC%20123&includeHidden=true");
     expect(urls).toContain(
       "/api/events/participants/update/unhide?code=ABC%20123&participantId=user%201"
@@ -249,6 +275,9 @@ describe("business API helpers", () => {
     await expect(createEvent({ name: "Bad" })).rejects.toThrow("nope");
     await expect(fetchDashboardEvents()).rejects.toThrow("nope");
     await expect(fetchEvent("BAD")).rejects.toThrow("nope");
+    await expect(fetchInvitations("BAD")).rejects.toThrow("nope");
+    await expect(sendInvitations("BAD", { emails: [] })).rejects.toThrow("nope");
+    await expect(sendReminders("BAD")).rejects.toThrow("nope");
     await expect(fetchParticipants("BAD")).rejects.toThrow("nope");
     await expect(joinEvent("BAD")).rejects.toThrow("nope");
     await expect(updateParticipant("BAD", "p", {})).rejects.toThrow("nope");

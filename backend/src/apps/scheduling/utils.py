@@ -22,6 +22,11 @@ def api_event(event) -> dict:
         "organizerUserId": str(event.organizer_id),
         "participantViewPermission": event.participant_view_permission,
         "daySelectionType": event.day_selection_type,
+        "responseDeadline": (
+            event.response_deadline.isoformat() if event.response_deadline else None
+        ),
+        "remindersEnabled": event.reminders_enabled,
+        "reminderHoursBefore": event.reminder_hours_before,
         "createdAt": event.created_at.isoformat(),
     }
     if event.specific_dates:

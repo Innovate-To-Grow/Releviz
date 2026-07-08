@@ -15,14 +15,19 @@ from apps.authn.services import (
     issue_email_challenge,
     login_with_password,
     normalize_email,
+    send_login_alert,
+    send_registration_welcome,
     start_registration,
     user_payload,
     validate_password_pair,
     verify_email_challenge,
 )
+from apps.messaging.services import EmailDeliveryError
 
 
 def validation_error_response(exc):
+    if isinstance(exc, EmailDeliveryError):
+        return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
     detail = getattr(exc, "detail", None)
     if detail is None:
         detail = {"detail": str(exc)}
@@ -72,6 +77,7 @@ class RegisterVerifyCodeView(APIView):
             )
         except Exception as exc:  # noqa: BLE001
             return validation_error_response(exc)
+        send_registration_welcome(user)
         return Response(auth_payload(user, "Registration complete."))
 
 
@@ -88,11 +94,14 @@ class RegisterResendCodeView(APIView):
         )
         if contact is None or contact.member.is_active:
             return Response({"detail": "Unable to resend registration code."}, status=400)
-        issued = issue_email_challenge(
-            member=contact.member,
-            purpose=EmailAuthChallenge.Purpose.REGISTER,
-            target_email=email,
-        )
+        try:
+            issued = issue_email_challenge(
+                member=contact.member,
+                purpose=EmailAuthChallenge.Purpose.REGISTER,
+                target_email=email,
+            )
+        except EmailDeliveryError as exc:
+            return validation_error_response(exc)
         data = {"message": "Verification code sent."}
         return Response(maybe_debug_code(data, issued), status=202)
 
@@ -110,6 +119,7 @@ class LoginView(APIView):
             )
         except Exception as exc:  # noqa: BLE001
             return validation_error_response(exc)
+        send_login_alert(user, request=request, method="password")
         return Response(auth_payload(user, "Login successful."))
 
 
@@ -126,11 +136,14 @@ class LoginRequestCodeView(APIView):
         )
         if contact is None:
             return Response({"detail": "If the account exists, a code has been sent."}, status=202)
-        issued = issue_email_challenge(
-            member=contact.member,
-            purpose=EmailAuthChallenge.Purpose.LOGIN,
-            target_email=email,
-        )
+        try:
+            issued = issue_email_challenge(
+                member=contact.member,
+                purpose=EmailAuthChallenge.Purpose.LOGIN,
+                target_email=email,
+            )
+        except EmailDeliveryError as exc:
+            return validation_error_response(exc)
         data = {"message": "Verification code sent."}
         return Response(maybe_debug_code(data, issued), status=202)
 
@@ -150,6 +163,7 @@ class LoginVerifyCodeView(APIView):
             return validation_error_response(exc)
         if not challenge.member.is_active:
             return Response({"detail": "Account is inactive."}, status=400)
+        send_login_alert(challenge.member, request=request, method="email verification code")
         return Response(auth_payload(challenge.member, "Login successful."))
 
 
@@ -227,11 +241,14 @@ class AccountEmailsView(APIView):
         )
         if not created and contact.member_id != request.user.pk:
             return Response({"email": "This email address is already in use."}, status=400)
-        issued = issue_email_challenge(
-            member=request.user,
-            purpose=EmailAuthChallenge.Purpose.CONTACT_EMAIL_VERIFY,
-            target_email=email,
-        )
+        try:
+            issued = issue_email_challenge(
+                member=request.user,
+                purpose=EmailAuthChallenge.Purpose.CONTACT_EMAIL_VERIFY,
+                target_email=email,
+            )
+        except EmailDeliveryError as exc:
+            return validation_error_response(exc)
         data = {
             "email": {
                 "id": str(contact.pk),
@@ -254,11 +271,14 @@ class PasswordResetRequestView(APIView):
             .first()
         )
         if contact is not None:
-            issued = issue_email_challenge(
-                member=contact.member,
-                purpose=EmailAuthChallenge.Purpose.PASSWORD_RESET,
-                target_email=email,
-            )
+            try:
+                issued = issue_email_challenge(
+                    member=contact.member,
+                    purpose=EmailAuthChallenge.Purpose.PASSWORD_RESET,
+                    target_email=email,
+                )
+            except EmailDeliveryError as exc:
+                return validation_error_response(exc)
             data = {"message": "If the account exists, a reset code has been sent."}
             return Response(maybe_debug_code(data, issued), status=202)
         return Response(

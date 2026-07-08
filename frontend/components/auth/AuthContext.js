@@ -5,8 +5,10 @@ import {
   fetchProfile,
   loginWithPassword,
   logoutApi,
+  requestLoginCode,
   startRegistration,
   updateProfileApi,
+  verifyLoginCode,
   verifyRegistration,
 } from "@/lib/api/auth";
 import { clearAuthSession, readAuthSession, writeAuthSession } from "@/lib/api/config";
@@ -72,6 +74,16 @@ export function AuthProvider({ children }) {
     return data;
   }, []);
 
+  const requestEmailLoginCode = useCallback(async (payload) => {
+    return requestLoginCode(payload);
+  }, []);
+
+  const verifyEmailLoginCode = useCallback(async (payload) => {
+    const data = await verifyLoginCode(payload);
+    setSession(readAuthSession());
+    return data;
+  }, []);
+
   const signup = useCallback(async (payload) => {
     return startRegistration(payload);
   }, []);
@@ -107,6 +119,8 @@ export function AuthProvider({ children }) {
       user: session?.user || null,
       loading,
       login,
+      requestEmailLoginCode,
+      verifyEmailLoginCode,
       signup,
       verifySignup,
       logout,
@@ -114,7 +128,19 @@ export function AuthProvider({ children }) {
       refreshUser,
       getToken,
     }),
-    [session, loading, login, signup, verifySignup, logout, updateProfile, refreshUser, getToken]
+    [
+      session,
+      loading,
+      login,
+      requestEmailLoginCode,
+      verifyEmailLoginCode,
+      signup,
+      verifySignup,
+      logout,
+      updateProfile,
+      refreshUser,
+      getToken,
+    ]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

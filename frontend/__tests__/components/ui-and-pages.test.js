@@ -255,7 +255,11 @@ describe("app pages", () => {
 
   test("Login submits, sanitizes next, and shows errors", async () => {
     const login = jest.fn().mockResolvedValue({});
-    useAuth.mockReturnValue({ login });
+    useAuth.mockReturnValue({
+      login,
+      requestEmailLoginCode: jest.fn(),
+      verifyEmailLoginCode: jest.fn(),
+    });
     searchParams = new URLSearchParams("next=//evil.example");
     const firstLogin = render(<LoginPage />);
     await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
@@ -286,6 +290,57 @@ describe("app pages", () => {
     await userEvent.type(screen.getAllByLabelText("Password").at(-1), "password123");
     await userEvent.click(screen.getAllByRole("button", { name: "Log in" }).at(-1));
     await waitFor(() => expect(window.location.assign).toHaveBeenCalledWith("/dashboard"));
+  });
+
+  test("Login supports email code flow and mode switching", async () => {
+    const login = jest.fn();
+    const requestEmailLoginCode = jest.fn().mockResolvedValue({});
+    const verifyEmailLoginCode = jest.fn().mockResolvedValue({});
+    useAuth.mockReturnValue({ login, requestEmailLoginCode, verifyEmailLoginCode });
+    searchParams = new URLSearchParams("next=/event?code=ABC123");
+    const firstLogin = render(<LoginPage />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Email code" }));
+    await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
+    await userEvent.click(screen.getByRole("button", { name: "Send login code" }));
+    await waitFor(() =>
+      expect(requestEmailLoginCode).toHaveBeenCalledWith({ email: "ada@example.com" })
+    );
+    expect(
+      await screen.findByText("Verification code sent. Check your email.")
+    ).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Verification code"), "123456");
+    await userEvent.click(screen.getByRole("button", { name: "Log in" }));
+    await waitFor(() =>
+      expect(verifyEmailLoginCode).toHaveBeenCalledWith({
+        email: "ada@example.com",
+        code: "123456",
+      })
+    );
+    expect(window.location.assign).toHaveBeenCalledWith("/event?code=ABC123");
+
+    await userEvent.click(screen.getByRole("button", { name: "Password" }));
+    expect(screen.queryByLabelText("Verification code")).not.toBeInTheDocument();
+    firstLogin.unmount();
+
+    requestEmailLoginCode.mockRejectedValueOnce(new Error("No code"));
+    const secondLogin = render(<LoginPage />);
+    await userEvent.click(screen.getByRole("button", { name: "Email code" }));
+    await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
+    await userEvent.click(screen.getByRole("button", { name: "Send login code" }));
+    expect(await screen.findByText("No code")).toBeInTheDocument();
+    secondLogin.unmount();
+
+    requestEmailLoginCode.mockResolvedValueOnce({});
+    verifyEmailLoginCode.mockRejectedValueOnce(new Error());
+    render(<LoginPage />);
+    await userEvent.click(screen.getAllByRole("button", { name: "Email code" }).at(-1));
+    await userEvent.type(screen.getAllByLabelText("Email").at(-1), "ada@example.com");
+    await userEvent.click(screen.getAllByRole("button", { name: "Send login code" }).at(-1));
+    await screen.findByText("Verification code sent. Check your email.");
+    await userEvent.type(screen.getAllByLabelText("Verification code").at(-1), "000000");
+    await userEvent.click(screen.getAllByRole("button", { name: "Log in" }).at(-1));
+    expect(await screen.findByText("Unable to verify code.")).toBeInTheDocument();
   });
 
   test("Signup validates passwords, starts registration, verifies, and shows errors", async () => {
