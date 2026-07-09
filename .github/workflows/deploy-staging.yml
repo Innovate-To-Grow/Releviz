@@ -168,7 +168,7 @@ jobs:
          echo "backend_service=$(terraform -chdir=infra/staging output -raw backend_service_name)" >> "$GITHUB_OUTPUT"
          echo "frontend_service=$(terraform -chdir=infra/staging output -raw frontend_service_name)" >> "$GITHUB_OUTPUT"
 
-     - name: Fallback backend ECS deploy
+     - name: Fallback backend ECS image refresh
        if: ${{ steps.tf.outcome == 'failure' }}
        run: |
          set -euo pipefail
@@ -179,37 +179,24 @@ jobs:
          BACKEND_CONTAINER="scheduler-staging-backend"
          BACKEND_IMAGE="$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_BACKEND}:${DEPLOY_SHA}"
 
-         aws ecs describe-task-definition \
+         CURRENT_BACKEND_IMAGE=$(aws ecs describe-task-definition \
            --task-definition "$BACKEND_FAMILY" \
-           --query taskDefinition > /tmp/backend-task-definition.json
-
-         jq \
-           --arg image "$BACKEND_IMAGE" \
-           --arg container "$BACKEND_CONTAINER" \
-           '
-             .containerDefinitions |= map(
-               if .name == $container then .image = $image else . end
-             )
-             | del(
-               .taskDefinitionArn,
-               .revision,
-               .status,
-               .requiresAttributes,
-               .compatibilities,
-               .registeredAt,
-               .registeredBy
-             )
-           ' /tmp/backend-task-definition.json > /tmp/backend-task-definition-next.json
-
-         NEW_TASK_DEFINITION=$(aws ecs register-task-definition \
-           --cli-input-json file:///tmp/backend-task-definition-next.json \
-           --query taskDefinition.taskDefinitionArn \
+           --query "taskDefinition.containerDefinitions[?name=='${BACKEND_CONTAINER}'].image | [0]" \
            --output text)
+
+         if [ -z "$CURRENT_BACKEND_IMAGE" ] || [ "$CURRENT_BACKEND_IMAGE" = "None" ]; then
+           echo "Could not resolve current backend image for $BACKEND_CONTAINER" >&2
+           exit 1
+         fi
+
+         docker pull "$BACKEND_IMAGE"
+         docker tag "$BACKEND_IMAGE" "$CURRENT_BACKEND_IMAGE"
+         docker push "$CURRENT_BACKEND_IMAGE"
 
          aws ecs update-service \
            --cluster "$CLUSTER_NAME" \
            --service "$BACKEND_SERVICE" \
-           --task-definition "$NEW_TASK_DEFINITION" >/dev/null
+           --force-new-deployment >/dev/null
 
      - name: Wait for ECS stability
        if: ${{ steps.tf.outcome == 'success' }}
