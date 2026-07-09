@@ -101,6 +101,11 @@ class SettingsImportTests(SimpleTestCase):
         with patch.dict(os.environ, env, clear=True):
             module = importlib.import_module("config.settings.production")
         self.assertEqual(module.ALLOWED_HOSTS, ["example.com", "api.example.com"])
+        self.assertIn("whitenoise.middleware.WhiteNoiseMiddleware", module.MIDDLEWARE)
+        self.assertEqual(
+            module.STORAGES["staticfiles"]["BACKEND"],
+            "whitenoise.storage.CompressedManifestStaticFilesStorage",
+        )
         self.assertFalse(module.REQUIRE_ENCRYPTED_PASSWORDS)
         self.assertEqual(module.DATABASES["default"]["OPTIONS"]["sslmode"], "verify-full")
         self.assertFalse(module.SECURE_SSL_REDIRECT)
