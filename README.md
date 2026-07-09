@@ -45,6 +45,7 @@ After submitting, participants can see the **Group Availability** table showing 
 Access the organizer view from the account that created the event. The organizer can:
 
 - **Set their own availability** on the same grid
+- **Send email invitations and deadline reminders** with calendar attachments
 - **Adjust participant weights** (0.0-1.0) — higher weight means more influence on the group average
 - **Include/exclude participants** from the aggregate calculation
 - **Remove participants** from the event
@@ -111,6 +112,7 @@ npm run quality-gate               # all of the above
 - `PORT` (default: `4000`)
 - `DJANGO_SETTINGS_MODULE` (local default: `config.settings.local`, deployed default: `config.settings.production`)
 - `DJANGO_SECRET_KEY`
+- `DJANGO_FIELD_ENCRYPTION_KEY` — encrypts AWS SES IAM secrets stored from admin
 - `DJANGO_ALLOWED_HOSTS`
 - `FRONTEND_URL`
 - `BACKEND_URL`
@@ -124,6 +126,7 @@ npm run quality-gate               # all of the above
 - `DJANGO_CREATE_DEFAULT_ADMIN` (`1` to run default admin bootstrap at container start)
 - `DJANGO_SUPERUSER_EMAIL`
 - `DJANGO_SUPERUSER_PASSWORD`
+- `USE_SES_EMAIL_PROVIDER` (`1` in deployed environments; local/test email backends bypass SES)
 
 ### Frontend
 
@@ -131,6 +134,8 @@ npm run quality-gate               # all of the above
 - `BACKEND_URL` — dev proxy target (default: `http://localhost:4000`)
 
 Authentication is handled by the Django backend using email/password accounts, email verification codes, JWT access/refresh tokens, and a Django/Unfold admin at `/admin/`.
+
+Email delivery is configured in Django admin under **Email Delivery**. Add an active AWS SES provider with region, sender email, IAM access key id, and IAM secret access key. The secret is encrypted in the database and is not stored in Terraform or GitHub secrets. SES identities/domains and IAM permissions must already be configured in AWS.
 
 ## Docker
 
@@ -155,6 +160,7 @@ Staging deploys automatically via `deploy-staging.yml` after CI passes on `main`
 - **ALB** routes `/api/*`, `/authn/*`, `/admin/*`, and `/static/*` to backend ECS service, everything else to frontend
 - **2 ECS Fargate services** (backend on port 4000, frontend on port 3000)
 - **PostgreSQL RDS** for accounts, admin data, events, participants, weights, and dashboard links
+- **EventBridge** runs the reminder command every 15 minutes
 - Legacy NoSQL tables remain in Terraform for backup only; the app no longer receives their names or permissions.
 
 ### Production
@@ -174,4 +180,5 @@ Production workflows are disabled (`.yml.disabled` suffix). Cutover from the mon
 
 - `STAGING_DB_PASSWORD`
 - `STAGING_DJANGO_SECRET_KEY`
+- `STAGING_DJANGO_FIELD_ENCRYPTION_KEY`
 - `STAGING_DJANGO_SUPERUSER_PASSWORD` — required only when `STAGING_CREATE_DEFAULT_ADMIN=true`

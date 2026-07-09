@@ -46,6 +46,9 @@ class Event(TimestampedModel):
         default="days_of_week",
     )
     specific_dates = models.JSONField(null=True, blank=True)
+    response_deadline = models.DateTimeField(null=True, blank=True)
+    reminders_enabled = models.BooleanField(default=True)
+    reminder_hours_before = models.PositiveSmallIntegerField(default=24)
 
     class Meta:
         ordering = ["-created_at"]
@@ -79,6 +82,57 @@ class Participant(TimestampedModel):
 
     def __str__(self) -> str:
         return f"{self.participant_name} - {self.event.code}"
+
+
+class EventInvitation(TimestampedModel):
+    class Status(models.TextChoices):
+        INVITED = "invited", "Invited"
+        ACCEPTED = "accepted", "Accepted"
+        SUBMITTED = "submitted", "Submitted"
+
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name="invitations")
+    email = models.EmailField()
+    member = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="event_invitations",
+    )
+    invited_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="sent_event_invitations",
+    )
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.INVITED)
+    last_sent_at = models.DateTimeField(null=True, blank=True)
+    reminder_sent_at = models.DateTimeField(null=True, blank=True)
+    accepted_at = models.DateTimeField(null=True, blank=True)
+    custom_message = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ["email"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["event", "email"],
+                name="one_invitation_per_event_email",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["email"]),
+            models.Index(fields=["status"]),
+            models.Index(fields=["last_sent_at"]),
+            models.Index(fields=["reminder_sent_at"]),
+        ]
+
+    def save(self, *args, **kwargs):
+        self.email = self.email.strip().lower()
+        super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return f"{self.email} invited to {self.event.code} [{self.status}]"
 
 
 class Weight(TimestampedModel):

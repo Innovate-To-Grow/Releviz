@@ -96,6 +96,7 @@ class SettingsImportTests(SimpleTestCase):
             "EMAIL_BACKEND": "django.core.mail.backends.locmem.EmailBackend",
             "DEFAULT_FROM_EMAIL": "scheduler@example.com",
             "REQUIRE_ENCRYPTED_PASSWORDS": "0",
+            "DJANGO_FIELD_ENCRYPTION_KEY": "test encryption key",
         }
         with patch.dict(os.environ, env, clear=True):
             module = importlib.import_module("config.settings.production")
@@ -103,6 +104,7 @@ class SettingsImportTests(SimpleTestCase):
         self.assertFalse(module.REQUIRE_ENCRYPTED_PASSWORDS)
         self.assertEqual(module.DATABASES["default"]["OPTIONS"]["sslmode"], "verify-full")
         self.assertFalse(module.SECURE_SSL_REDIRECT)
+        self.assertTrue(module.USE_SES_EMAIL_PROVIDER)
 
     def test_asgi_and_wsgi_imports(self):
         asgi = importlib.import_module("config.asgi")

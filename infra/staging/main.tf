@@ -4,8 +4,14 @@ provider "aws" {
 
 data "aws_caller_identity" "current" {}
 
+data "aws_route53_zone" "app" {
+  name         = var.route53_zone_name
+  private_zone = false
+}
+
 locals {
-  prefix = "${var.app_name}-${var.environment}"
+  prefix  = "${var.app_name}-${var.environment}"
+  app_url = "https://${var.domain_name}"
   common_tags = {
     Project     = var.app_name
     Environment = var.environment
@@ -74,6 +80,13 @@ resource "aws_security_group" "alb" {
   ingress {
     from_port   = 80
     to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port   = 443
+    to_port     = 443
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
@@ -324,6 +337,45 @@ resource "aws_iam_role" "ecs_task" {
   tags = local.common_tags
 }
 
+resource "aws_iam_role" "eventbridge_reminders" {
+  name = "${local.prefix}-eventbridge-reminders-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "events.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+
+  tags = local.common_tags
+}
+
+resource "aws_iam_role_policy" "eventbridge_reminders" {
+  name = "${local.prefix}-eventbridge-reminders-policy"
+  role = aws_iam_role.eventbridge_reminders.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["ecs:RunTask"]
+        Resource = aws_ecs_task_definition.backend.arn
+      },
+      {
+        Effect = "Allow"
+        Action = ["iam:PassRole"]
+        Resource = [
+          aws_iam_role.ecs_execution.arn,
+          aws_iam_role.ecs_task.arn
+        ]
+      }
+    ]
+  })
+}
+
 # --- ALB ---
 
 resource "aws_lb" "app" {
@@ -333,6 +385,51 @@ resource "aws_lb" "app" {
   security_groups    = [aws_security_group.alb.id]
   subnets            = [aws_subnet.public_a.id, aws_subnet.public_b.id]
   tags               = local.common_tags
+}
+
+resource "aws_acm_certificate" "app" {
+  domain_name       = var.domain_name
+  validation_method = "DNS"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  tags = local.common_tags
+}
+
+resource "aws_route53_record" "cert_validation" {
+  for_each = {
+    for option in aws_acm_certificate.app.domain_validation_options : option.domain_name => {
+      name   = option.resource_record_name
+      record = option.resource_record_value
+      type   = option.resource_record_type
+    }
+  }
+
+  allow_overwrite = true
+  name            = each.value.name
+  records         = [each.value.record]
+  ttl             = 60
+  type            = each.value.type
+  zone_id         = data.aws_route53_zone.app.zone_id
+}
+
+resource "aws_acm_certificate_validation" "app" {
+  certificate_arn         = aws_acm_certificate.app.arn
+  validation_record_fqdns = [for record in aws_route53_record.cert_validation : record.fqdn]
+}
+
+resource "aws_route53_record" "app" {
+  name    = var.domain_name
+  type    = "A"
+  zone_id = data.aws_route53_zone.app.zone_id
+
+  alias {
+    evaluate_target_health = true
+    name                   = aws_lb.app.dns_name
+    zone_id                = aws_lb.app.zone_id
+  }
 }
 
 resource "aws_lb_target_group" "backend" {
@@ -379,13 +476,34 @@ resource "aws_lb_listener" "http" {
   protocol          = "HTTP"
 
   default_action {
+    type = "redirect"
+
+    redirect {
+      host        = "#{host}"
+      path        = "/#{path}"
+      port        = "443"
+      protocol    = "HTTPS"
+      query       = "#{query}"
+      status_code = "HTTP_301"
+    }
+  }
+}
+
+resource "aws_lb_listener" "https" {
+  load_balancer_arn = aws_lb.app.arn
+  port              = 443
+  protocol          = "HTTPS"
+  certificate_arn   = aws_acm_certificate_validation.app.certificate_arn
+  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+
+  default_action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.frontend.arn
   }
 }
 
 resource "aws_lb_listener_rule" "api" {
-  listener_arn = aws_lb_listener.http.arn
+  listener_arn = aws_lb_listener.https.arn
   priority     = 100
 
   action {
@@ -428,12 +546,15 @@ resource "aws_ecs_task_definition" "backend" {
     environment = [
       { name = "DJANGO_SETTINGS_MODULE", value = "config.settings.production" },
       { name = "PORT", value = tostring(var.backend_port) },
-      { name = "DJANGO_ALLOWED_HOSTS", value = aws_lb.app.dns_name },
+      { name = "DJANGO_ALLOWED_HOSTS", value = "${var.domain_name},${aws_lb.app.dns_name}" },
       { name = "DJANGO_SECRET_KEY", value = var.django_secret_key },
-      { name = "FRONTEND_URL", value = "http://${aws_lb.app.dns_name}" },
-      { name = "BACKEND_URL", value = "http://${aws_lb.app.dns_name}" },
-      { name = "CORS_ALLOWED_ORIGINS", value = "http://${aws_lb.app.dns_name}" },
-      { name = "CSRF_TRUSTED_ORIGINS", value = "http://${aws_lb.app.dns_name}" },
+      { name = "DJANGO_FIELD_ENCRYPTION_KEY", value = var.django_field_encryption_key },
+      { name = "USE_SES_EMAIL_PROVIDER", value = "1" },
+      { name = "REQUIRE_ENCRYPTED_PASSWORDS", value = "0" },
+      { name = "FRONTEND_URL", value = local.app_url },
+      { name = "BACKEND_URL", value = local.app_url },
+      { name = "CORS_ALLOWED_ORIGINS", value = local.app_url },
+      { name = "CSRF_TRUSTED_ORIGINS", value = local.app_url },
       { name = "DB_NAME", value = var.db_name },
       { name = "DB_USER", value = var.db_username },
       { name = "DB_PASSWORD", value = var.db_password },
@@ -478,7 +599,7 @@ resource "aws_ecs_task_definition" "frontend" {
       { name = "NODE_ENV", value = "production" },
       { name = "PORT", value = tostring(var.frontend_port) },
       { name = "HOSTNAME", value = "0.0.0.0" },
-      { name = "BACKEND_URL", value = "http://${aws_lb.app.dns_name}" }
+      { name = "BACKEND_URL", value = local.app_url }
     ]
     logConfiguration = {
       logDriver = "awslogs"
@@ -515,7 +636,7 @@ resource "aws_ecs_service" "backend" {
     container_port   = var.backend_port
   }
 
-  depends_on = [aws_lb_listener.http]
+  depends_on = [aws_lb_listener.https]
   tags       = local.common_tags
 }
 
@@ -541,8 +662,45 @@ resource "aws_ecs_service" "frontend" {
     container_port   = var.frontend_port
   }
 
-  depends_on = [aws_lb_listener.http]
+  depends_on = [aws_lb_listener.https]
   tags       = local.common_tags
+}
+
+resource "aws_cloudwatch_event_rule" "event_reminders" {
+  name                = "${local.prefix}-event-reminders"
+  description         = "Send due Releviz event reminder emails"
+  schedule_expression = "rate(15 minutes)"
+  tags                = local.common_tags
+}
+
+resource "aws_cloudwatch_event_target" "event_reminders" {
+  rule     = aws_cloudwatch_event_rule.event_reminders.name
+  arn      = aws_ecs_cluster.app.arn
+  role_arn = aws_iam_role.eventbridge_reminders.arn
+
+  ecs_target {
+    launch_type         = "FARGATE"
+    task_count          = 1
+    task_definition_arn = aws_ecs_task_definition.backend.arn
+
+    network_configuration {
+      assign_public_ip = true
+      subnets          = [aws_subnet.public_a.id, aws_subnet.public_b.id]
+      security_groups  = [aws_security_group.ecs.id]
+    }
+  }
+
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "${local.prefix}-backend"
+        command = ["python", "src/manage.py", "send_due_event_reminders", "--window-minutes=20"]
+        environment = [
+          { name = "DJANGO_SKIP_STARTUP_TASKS", value = "1" }
+        ]
+      }
+    ]
+  })
 }
 
 # --- CloudWatch Alarms ---

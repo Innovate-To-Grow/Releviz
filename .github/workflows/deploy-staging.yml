@@ -1,6 +1,7 @@
 name: Deploy Staging
 
 on:
+ workflow_dispatch:
  workflow_run:
    workflows: ["CI"]
    types: [completed]
@@ -18,20 +19,20 @@ jobs:
  deploy:
    name: Deploy to Staging
    runs-on: ubuntu-latest
-   if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
+   if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main') }}
 
    env:
      AWS_REGION: ${{ vars.AWS_REGION || 'us-west-2' }}
      AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
      ECR_BACKEND: ${{ vars.ECR_STAGING_BACKEND || 'scheduler-staging-backend' }}
      ECR_FRONTEND: ${{ vars.ECR_STAGING_FRONTEND || 'scheduler-staging-frontend' }}
-     DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
+     DEPLOY_SHA: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.workflow_run.head_sha }}
 
    steps:
      - name: Checkout code at tested commit
        uses: actions/checkout@v4
        with:
-         ref: ${{ github.event.workflow_run.head_sha }}
+         ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.workflow_run.head_sha }}
 
      - name: Configure AWS credentials (OIDC)
        if: ${{ vars.AWS_ROLE_ARN != '' }}
@@ -139,7 +140,7 @@ jobs:
          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
          IMAGE_URI="$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_FRONTEND}"
          docker build \
-           --build-arg NEXT_PUBLIC_API_BASE_URL="http://scheduler-staging-alb-545908554.us-west-2.elb.amazonaws.com" \
+           --build-arg NEXT_PUBLIC_API_BASE_URL="" \
            -t "$IMAGE_URI:${DEPLOY_SHA}" -t "$IMAGE_URI:staging-latest" ./frontend
          docker push "$IMAGE_URI:${DEPLOY_SHA}"
          docker push "$IMAGE_URI:staging-latest"
@@ -149,12 +150,14 @@ jobs:
        run: |
          terraform -chdir=infra/staging apply -auto-approve -input=false \
            -var="aws_region=${AWS_REGION}" \
+           -var="domain_name=releviz.com" \
            -var="backend_image_tag=${DEPLOY_SHA}" \
            -var="frontend_image_tag=${DEPLOY_SHA}" \
            -var="ecr_backend_repository=${ECR_BACKEND}" \
            -var="ecr_frontend_repository=${ECR_FRONTEND}" \
            -var="db_password=${{ secrets.STAGING_DB_PASSWORD }}" \
            -var="django_secret_key=${{ secrets.STAGING_DJANGO_SECRET_KEY }}" \
+           -var="django_field_encryption_key=${{ secrets.STAGING_DJANGO_FIELD_ENCRYPTION_KEY }}" \
            -var="django_superuser_email=${{ vars.STAGING_DJANGO_SUPERUSER_EMAIL || '' }}" \
            -var="django_superuser_password=${{ secrets.STAGING_DJANGO_SUPERUSER_PASSWORD }}" \
            -var="django_create_default_admin=${{ vars.STAGING_CREATE_DEFAULT_ADMIN || 'false' }}"
@@ -172,5 +175,5 @@ jobs:
 
      - name: Smoke tests
        run: |
-         curl --fail --show-error --retry 10 --retry-delay 5 "http://${{ steps.tf.outputs.alb_dns }}/api/health"
-         curl --fail --show-error --retry 10 --retry-delay 5 "http://${{ steps.tf.outputs.alb_dns }}/"
+         curl --fail --show-error --retry 10 --retry-delay 5 "https://releviz.com/api/health"
+         curl --fail --show-error --retry 10 --retry-delay 5 "https://releviz.com/"

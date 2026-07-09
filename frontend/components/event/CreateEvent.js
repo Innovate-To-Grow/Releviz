@@ -67,6 +67,9 @@ function CreateEvent() {
   const [specificDates, setSpecificDates] = useState([]);
   const [dateInput, setDateInput] = useState("");
   const [participantViewPermission, setParticipantViewPermission] = useState("own_only");
+  const [responseDeadline, setResponseDeadline] = useState("");
+  const [remindersEnabled, setRemindersEnabled] = useState(true);
+  const [reminderHoursBefore, setReminderHoursBefore] = useState(24);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -117,6 +120,9 @@ function CreateEvent() {
         location: location.trim(),
         participantViewPermission,
         daySelectionType,
+        responseDeadline: responseDeadline ? new Date(responseDeadline).toISOString() : null,
+        remindersEnabled,
+        reminderHoursBefore,
         ...(daySelectionType === "specific_dates"
           ? { specificDates: [...specificDates].sort() }
           : {}),
@@ -358,6 +364,55 @@ function CreateEvent() {
               <div slot="headline">All individual schedules</div>
             </md-select-option>
           </md-outlined-select>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+          <LabelRow>Response Deadline</LabelRow>
+          <input
+            type="datetime-local"
+            value={responseDeadline}
+            onChange={(e) => setResponseDeadline(e.target.value)}
+            style={{
+              padding: "10px",
+              borderRadius: "8px",
+              border: "1px solid var(--md-sys-color-outline)",
+              fontSize: "0.9rem",
+            }}
+          />
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              color: "var(--md-sys-color-on-surface-variant)",
+              fontSize: "0.9rem",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={remindersEnabled}
+              onChange={(e) => setRemindersEnabled(e.target.checked)}
+            />
+            Send reminder emails before the deadline
+          </label>
+          <div>
+            <LabelRow>Reminder Hours Before Deadline</LabelRow>
+            <input
+              type="number"
+              min="0"
+              max="720"
+              value={reminderHoursBefore}
+              onChange={(e) => setReminderHoursBefore(Number(e.target.value))}
+              style={{
+                width: "100%",
+                padding: "10px",
+                borderRadius: "8px",
+                border: "1px solid var(--md-sys-color-outline)",
+                fontSize: "0.9rem",
+                boxSizing: "border-box",
+              }}
+            />
+          </div>
         </div>
 
         {error && (

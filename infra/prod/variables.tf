@@ -109,6 +109,11 @@ variable "django_secret_key" {
   sensitive = true
 }
 
+variable "django_field_encryption_key" {
+  type      = string
+  sensitive = true
+}
+
 variable "django_superuser_email" {
   type    = string
   default = ""

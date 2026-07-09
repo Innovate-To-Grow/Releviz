@@ -5,7 +5,7 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from apps.authn.tests.helpers import create_member, token_for
-from apps.scheduling.models import Event, Participant, UserEvent, Weight
+from apps.scheduling.models import Event, EventInvitation, Participant, UserEvent, Weight
 from apps.scheduling.utils import (
     api_event,
     default_schedule,
@@ -198,6 +198,9 @@ class SchedulerApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data["event"]["location"], "")
+        self.assertIsNone(response.data["event"]["responseDeadline"])
+        self.assertTrue(response.data["event"]["remindersEnabled"])
+        self.assertEqual(response.data["event"]["reminderHoursBefore"], 24)
 
         response = self.client.post(
             "/api/events",
@@ -391,6 +394,12 @@ class SchedulerApiTests(TestCase):
         self.assertIn(code, str(UserEvent.objects.get(member=self.participant, event=event)))
         weight = Weight.objects.create(event=event, participant=participant, weight=0.25)
         self.assertIn("0.25", str(weight))
+        invitation = EventInvitation.objects.create(
+            event=event,
+            email="model-string@example.com",
+            invited_by=self.organizer,
+        )
+        self.assertIn("model-string@example.com", str(invitation))
         self.assertEqual(default_schedule(event), "[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]")
         self.assertEqual(schedule_to_storage([0, 1]), "[0, 1]")
         self.assertEqual(schedule_to_storage("[0, 1]"), "[0, 1]")

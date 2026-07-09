@@ -2,6 +2,10 @@ output "alb_dns_name" {
   value = aws_lb.app.dns_name
 }
 
+output "domain_name" {
+  value = var.domain_name
+}
+
 output "ecs_cluster_name" {
   value = aws_ecs_cluster.app.name
 }

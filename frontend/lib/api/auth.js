@@ -29,6 +29,25 @@ export async function loginWithPassword({ email, password }) {
   return parseAuthResponse(res);
 }
 
+export async function requestLoginCode({ email }) {
+  const res = await fetch(`${API_BASE}/authn/login/request-code/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  if (!res.ok) throw new Error(await extractError(res));
+  return res.json();
+}
+
+export async function verifyLoginCode({ email, code }) {
+  const res = await fetch(`${API_BASE}/authn/login/verify-code/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, code }),
+  });
+  return parseAuthResponse(res);
+}
+
 export async function startRegistration(payload) {
   const res = await fetch(`${API_BASE}/authn/register/`, {
     method: "POST",

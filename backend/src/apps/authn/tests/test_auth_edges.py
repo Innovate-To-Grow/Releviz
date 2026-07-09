@@ -10,7 +10,7 @@ from django.contrib.auth import get_user_model
 from django.core import mail
 from django.core.exceptions import ValidationError
 from django.core.management import CommandError, call_command
-from django.test import TestCase, override_settings
+from django.test import RequestFactory, TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -26,6 +26,8 @@ from apps.authn.services import (
     issue_email_challenge,
     login_with_password,
     normalize_email,
+    send_login_alert,
+    send_registration_welcome,
     start_registration,
     user_payload,
     validate_password_pair,
@@ -33,6 +35,8 @@ from apps.authn.services import (
 )
 from apps.authn.tests.helpers import create_member, token_for
 from apps.authn.views import maybe_debug_code, validation_error_response
+from apps.messaging.models import EmailMessageLog
+from apps.messaging.services import EmailDeliveryError
 
 
 def latest_code() -> str:
@@ -189,6 +193,9 @@ class AuthServiceAndModelTests(TestCase):
         response = validation_error_response(RuntimeError("boom"))
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.data, {"detail": "boom"})
+        response = validation_error_response(EmailDeliveryError("mail down"))
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.data, {"detail": "mail down"})
         issued = issue_email_challenge(
             member=self.member,
             purpose=EmailAuthChallenge.Purpose.LOGIN,
@@ -196,6 +203,39 @@ class AuthServiceAndModelTests(TestCase):
         )
         with override_settings(DEBUG=True):
             self.assertEqual(maybe_debug_code({}, issued), {"debug_code": issued.code})
+
+    def test_best_effort_account_notifications(self):
+        self.assertTrue(send_registration_welcome(self.member))
+        welcome = EmailMessageLog.objects.get(message_type=EmailMessageLog.MessageType.WELCOME)
+        self.assertEqual(welcome.recipient, "member@example.com")
+        self.assertIn("Welcome to Releviz", mail.outbox[-1].subject)
+
+        request = RequestFactory().post(
+            "/authn/login/",
+            HTTP_X_FORWARDED_FOR="203.0.113.10, 10.0.0.1",
+            HTTP_USER_AGENT="Browser/1.0",
+        )
+        self.assertTrue(send_login_alert(self.member, request=request, method="password"))
+        alert_body = mail.outbox[-1].body
+        self.assertIn("Method: password", alert_body)
+        self.assertIn("IP address: 203.0.113.10", alert_body)
+        self.assertIn("User agent: Browser/1.0", alert_body)
+
+        request = RequestFactory().post("/authn/login/", HTTP_USER_AGENT="A" * 200)
+        self.assertTrue(send_login_alert(self.member, request=request, method="email code"))
+        self.assertIn("...", mail.outbox[-1].body)
+
+        self.assertTrue(send_login_alert(self.member, request=None, method="unknown"))
+        self.assertIn("IP address: Unknown", mail.outbox[-1].body)
+
+        no_email = get_user_model().objects.create_user(password="password123", is_active=True)
+        self.assertFalse(send_registration_welcome(no_email))
+
+        with patch(
+            "apps.authn.services.send_email_message",
+            side_effect=EmailDeliveryError("notification failed"),
+        ):
+            self.assertFalse(send_login_alert(self.member, request=None))
 
     def test_registration_service_branches_and_backend(self):
         with self.assertRaisesMessage(Exception, "Email is required"):
@@ -283,6 +323,23 @@ class AuthViewTests(TestCase):
 
     def test_public_key_register_resend_login_and_refresh_flow(self):
         self.assertIn("public_key", self.client.get("/authn/public-key/").data)
+        with patch(
+            "apps.authn.views.start_registration",
+            side_effect=EmailDeliveryError("registration mail failed"),
+        ):
+            failed_register = self.client.post(
+                "/authn/register/",
+                {
+                    "email": "mailfail@example.com",
+                    "password": "password123",
+                    "password_confirm": "password123",
+                    "first_name": "Mail",
+                    "last_name": "Fail",
+                },
+                format="json",
+            )
+        self.assertEqual(failed_register.status_code, 503)
+
         invalid_register = self.client.post(
             "/authn/register/",
             {"email": "bad@example.com", "password": "short", "first_name": "Bad"},
@@ -309,6 +366,16 @@ class AuthViewTests(TestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 202)
+        with patch(
+            "apps.authn.views.issue_email_challenge",
+            side_effect=EmailDeliveryError("resend mail failed"),
+        ):
+            failed_resend = self.client.post(
+                "/authn/register/resend-code/",
+                {"email": "grace@example.com"},
+                format="json",
+            )
+        self.assertEqual(failed_resend.status_code, 503)
 
         response = self.client.post(
             "/authn/register/verify-code/",
@@ -317,6 +384,12 @@ class AuthViewTests(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertIn("refresh", response.data)
+        self.assertTrue(
+            EmailMessageLog.objects.filter(
+                recipient="grace@example.com",
+                message_type=EmailMessageLog.MessageType.WELCOME,
+            ).exists()
+        )
         invalid_verify = self.client.post(
             "/authn/register/verify-code/",
             {"email": "grace@example.com", "code": "000000"},
@@ -342,6 +415,22 @@ class AuthViewTests(TestCase):
             format="json",
         )
         self.assertEqual(login.status_code, 200)
+        self.assertTrue(
+            EmailMessageLog.objects.filter(
+                recipient="grace@example.com",
+                message_type=EmailMessageLog.MessageType.LOGIN_ALERT,
+            ).exists()
+        )
+        with patch(
+            "apps.authn.services.send_email_message",
+            side_effect=EmailDeliveryError("login notification failed"),
+        ):
+            login = self.client.post(
+                "/authn/login/",
+                {"email": "grace@example.com", "password": "password123"},
+                format="json",
+            )
+        self.assertEqual(login.status_code, 200)
         refresh = self.client.post(
             "/authn/refresh/", {"refresh": login.data["refresh"]}, format="json"
         )
@@ -363,6 +452,14 @@ class AuthViewTests(TestCase):
         )
         self.assertEqual(request_code.status_code, 202)
         ada_login_code = latest_code()
+        with patch(
+            "apps.authn.views.issue_email_challenge",
+            side_effect=EmailDeliveryError("login code failed"),
+        ):
+            failed_login_code = self.client.post(
+                "/authn/login/request-code/", {"email": "ada@example.com"}, format="json"
+            )
+        self.assertEqual(failed_login_code.status_code, 503)
         inactive = create_member("inactive@example.com", is_active=False)
         issued = issue_email_challenge(
             member=inactive,
@@ -386,6 +483,27 @@ class AuthViewTests(TestCase):
             {"email": "ada@example.com", "code": ada_login_code},
             format="json",
         )
+        self.assertEqual(login.status_code, 200)
+        self.assertTrue(
+            EmailMessageLog.objects.filter(
+                recipient="ada@example.com",
+                message_type=EmailMessageLog.MessageType.LOGIN_ALERT,
+            ).exists()
+        )
+        issued = issue_email_challenge(
+            member=self.member,
+            purpose=EmailAuthChallenge.Purpose.LOGIN,
+            target_email="ada@example.com",
+        )
+        with patch(
+            "apps.authn.services.send_email_message",
+            side_effect=EmailDeliveryError("login code notification failed"),
+        ):
+            login = self.client.post(
+                "/authn/login/verify-code/",
+                {"email": "ada@example.com", "code": issued.code},
+                format="json",
+            )
         self.assertEqual(login.status_code, 200)
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
 
@@ -411,6 +529,14 @@ class AuthViewTests(TestCase):
             "/authn/account-emails/", {"email": "second@example.com"}, format="json"
         )
         self.assertEqual(second.status_code, 201)
+        with patch(
+            "apps.authn.views.issue_email_challenge",
+            side_effect=EmailDeliveryError("contact email failed"),
+        ):
+            failed_email = self.client.post(
+                "/authn/account-emails/", {"email": "third@example.com"}, format="json"
+            )
+        self.assertEqual(failed_email.status_code, 503)
         repeat = self.client.post(
             "/authn/account-emails/", {"email": "second@example.com"}, format="json"
         )
@@ -457,6 +583,16 @@ class AuthViewTests(TestCase):
             "/authn/password-reset/request-code/", {"email": "ada@example.com"}, format="json"
         )
         self.assertEqual(reset.status_code, 202)
+        with patch(
+            "apps.authn.views.issue_email_challenge",
+            side_effect=EmailDeliveryError("reset mail failed"),
+        ):
+            failed_reset = self.client.post(
+                "/authn/password-reset/request-code/",
+                {"email": "ada@example.com"},
+                format="json",
+            )
+        self.assertEqual(failed_reset.status_code, 503)
         bad_reset = self.client.post(
             "/authn/password-reset/confirm/",
             {"email": "ada@example.com", "code": "000000", "password": "password456"},

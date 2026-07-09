@@ -7,13 +7,14 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.hashers import check_password, make_password
-from django.core.mail import send_mail
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.authn.models import ContactEmail, EmailAuthChallenge, RSAKeypair
+from apps.messaging.models import EmailMessageLog
+from apps.messaging.services import EmailDeliveryError, send_email_message
 
 
 def normalize_email(email: str) -> str:
@@ -125,14 +126,80 @@ def issue_email_challenge(
         last_sent_at=now,
     )
     if channel == EmailAuthChallenge.Channel.EMAIL:
-        send_mail(
+        send_email_message(
             subject="Your Releviz verification code",
-            message=f"Your Releviz verification code is {code}. It expires in 10 minutes.",
-            from_email=getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@releviz.local"),
-            recipient_list=[target_email],
-            fail_silently=True,
+            body=f"Your Releviz verification code is {code}. It expires in 10 minutes.",
+            recipients=[target_email],
+            message_type=EmailMessageLog.MessageType.VERIFICATION,
         )
     return IssuedChallenge(challenge=challenge, code=code)
+
+
+def _request_context(request) -> tuple[str, str]:
+    if request is None:
+        return "Unknown", "Unknown"
+    forwarded_for = str(request.META.get("HTTP_X_FORWARDED_FOR", "")).split(",")[0].strip()
+    ip_address = forwarded_for or str(request.META.get("REMOTE_ADDR", "") or "Unknown")
+    user_agent = str(request.META.get("HTTP_USER_AGENT", "") or "Unknown").strip() or "Unknown"
+    if len(user_agent) > 160:
+        user_agent = f"{user_agent[:157]}..."
+    return ip_address, user_agent
+
+
+def _send_best_effort_account_email(
+    *,
+    user,
+    subject: str,
+    body: str,
+    message_type: str,
+) -> bool:
+    recipient = normalize_email(user.get_primary_contact_email())
+    if not recipient:
+        return False
+    try:
+        send_email_message(
+            subject=subject,
+            body=body,
+            recipients=[recipient],
+            message_type=message_type,
+        )
+    except EmailDeliveryError:
+        return False
+    return True
+
+
+def send_registration_welcome(user) -> bool:
+    body = (
+        f"Welcome to Releviz, {user.display_name()}.\n\n"
+        "Your account is ready. You can now create events, invite participants, "
+        "and manage your scheduling dashboard."
+    )
+    return _send_best_effort_account_email(
+        user=user,
+        subject="Welcome to Releviz",
+        body=body,
+        message_type=EmailMessageLog.MessageType.WELCOME,
+    )
+
+
+def send_login_alert(user, *, request=None, method: str = "password") -> bool:
+    ip_address, user_agent = _request_context(request)
+    login_time = timezone.now().isoformat()
+    body = (
+        "A new login was completed for your Releviz account.\n\n"
+        f"Account: {user.get_primary_contact_email()}\n"
+        f"Time: {login_time}\n"
+        f"Method: {method}\n"
+        f"IP address: {ip_address}\n"
+        f"User agent: {user_agent}\n\n"
+        "If this was not you, change your password and contact support."
+    )
+    return _send_best_effort_account_email(
+        user=user,
+        subject="New login to your Releviz account",
+        body=body,
+        message_type=EmailMessageLog.MessageType.LOGIN_ALERT,
+    )
 
 
 def verify_email_challenge(*, email: str, code: str, purpose: str, consume: bool = True):

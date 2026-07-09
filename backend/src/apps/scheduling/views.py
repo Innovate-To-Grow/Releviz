@@ -1,12 +1,22 @@
 import re
 
 from django.db import transaction
+from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.messaging.services import EmailDeliveryError
 from apps.scheduling.models import Event, Participant, UserEvent, Weight
+from apps.scheduling.services import (
+    api_invitation,
+    mark_invitation_for_member,
+    send_event_reminders,
+    split_invitation_emails,
+    upsert_and_send_invitations,
+)
 from apps.scheduling.utils import (
     api_event,
     api_participant,
@@ -90,6 +100,26 @@ class EventsView(APIView):
         if view_permission not in {"own_only", "all", "realtime"}:
             return Response({"error": "Invalid participantViewPermission value"}, status=400)
 
+        response_deadline = None
+        raw_deadline = data.get("responseDeadline")
+        if raw_deadline:
+            response_deadline = parse_datetime(str(raw_deadline))
+            if response_deadline is None:
+                return Response({"error": "responseDeadline must be an ISO datetime"}, status=400)
+            if timezone.is_naive(response_deadline):
+                response_deadline = timezone.make_aware(response_deadline)
+
+        reminders_enabled = data.get("remindersEnabled", True)
+        reminder_hours_before = data.get("reminderHoursBefore", 24)
+        if not isinstance(reminders_enabled, bool):
+            return Response({"error": "remindersEnabled must be a boolean"}, status=400)
+        try:
+            reminder_hours_before = int(reminder_hours_before)
+        except (TypeError, ValueError):
+            return Response({"error": "reminderHoursBefore must be an integer"}, status=400)
+        if reminder_hours_before < 0 or reminder_hours_before > 720:
+            return Response({"error": "reminderHoursBefore must be between 0 and 720"}, status=400)
+
         event = None
         for _ in range(3):
             code = generate_event_code()
@@ -106,26 +136,16 @@ class EventsView(APIView):
                     participant_view_permission=view_permission,
                     day_selection_type=day_selection_type,
                     specific_dates=specific_dates,
+                    response_deadline=response_deadline,
+                    reminders_enabled=reminders_enabled,
+                    reminder_hours_before=reminder_hours_before,
                 )
                 break
         if event is None:
             return Response({"error": "Failed to generate unique code"}, status=500)
 
         UserEvent.objects.get_or_create(member=request.user, event=event, role="organizer")
-        return Response(
-            {
-                "event": {
-                    "code": event.code,
-                    "name": name,
-                    "startHour": start,
-                    "endHour": end,
-                    "days": selected_days,
-                    "mode": mode,
-                    "location": location,
-                }
-            },
-            status=201,
-        )
+        return Response({"event": api_event(event)}, status=201)
 
 
 class ParticipantsView(APIView):
@@ -179,6 +199,7 @@ class ParticipantsView(APIView):
 
         if event.organizer_id != request.user.pk:
             UserEvent.objects.get_or_create(member=request.user, event=event, role="participant")
+        mark_invitation_for_member(event=event, member=request.user)
 
         return Response(
             {"participant": api_participant(participant)},
@@ -259,6 +280,8 @@ class ParticipantUpdateView(APIView):
         for key, value in updates.items():
             setattr(participant, key, value)
         participant.save(update_fields=[*updates.keys(), "updated_at"])
+        if updates.get("submitted"):
+            mark_invitation_for_member(event=event, member=participant.member, submitted=True)
         return Response({"participant": api_participant(participant)})
 
     def delete(self, request):
@@ -365,3 +388,73 @@ class DashboardEventsView(APIView):
             else:
                 participating.append(api_event(link.event))
         return Response({"organized": organized, "participating": participating})
+
+
+class EventInvitationsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def _event_for_organizer(self, request):
+        code = request.query_params.get("code", "")
+        if not code:
+            return None, Response({"error": "code is required"}, status=400)
+        event = Event.objects.filter(code=code).first()
+        if event is None:
+            return None, Response({"error": "Event not found"}, status=404)
+        if event.organizer_id != request.user.pk:
+            return None, Response(
+                {"error": "Only the organizer can manage invitations"},
+                status=403,
+            )
+        return event, None
+
+    def get(self, request):
+        event, error = self._event_for_organizer(request)
+        if error:
+            return error
+        invitations = event.invitations.select_related("member").all()
+        return Response({"invitations": [api_invitation(invitation) for invitation in invitations]})
+
+    def post(self, request):
+        event, error = self._event_for_organizer(request)
+        if error:
+            return error
+        emails, invalid = split_invitation_emails(request.data.get("emails", []))
+        if invalid:
+            return Response({"error": f"Invalid email address: {invalid[0]}"}, status=400)
+        if not emails:
+            return Response({"error": "At least one email address is required"}, status=400)
+        message = str(request.data.get("message", "") or "").strip()
+        if len(message) > 1000:
+            return Response({"error": "message is too long (max 1000)"}, status=400)
+        try:
+            invitations = upsert_and_send_invitations(
+                event=event,
+                emails=emails,
+                invited_by=request.user,
+                message=message,
+            )
+        except EmailDeliveryError as exc:
+            return Response({"detail": str(exc)}, status=503)
+        return Response(
+            {"invitations": [api_invitation(invitation) for invitation in invitations]},
+            status=201,
+        )
+
+
+class EventRemindersView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        code = request.query_params.get("code", "")
+        if not code:
+            return Response({"error": "code is required"}, status=400)
+        event = Event.objects.filter(code=code).first()
+        if event is None:
+            return Response({"error": "Event not found"}, status=404)
+        if event.organizer_id != request.user.pk:
+            return Response({"error": "Only the organizer can send reminders"}, status=403)
+        try:
+            sent_count = send_event_reminders(event, force=True)
+        except EmailDeliveryError as exc:
+            return Response({"detail": str(exc)}, status=503)
+        return Response({"sent": sent_count})

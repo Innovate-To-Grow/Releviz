@@ -2,7 +2,7 @@ from django.test.runner import DiscoverRunner
 
 
 class AppTestRunner(DiscoverRunner):
-    default_labels = ["apps.authn", "apps.core", "apps.scheduling"]
+    default_labels = ["apps.authn", "apps.core", "apps.messaging", "apps.scheduling"]
 
     def run_tests(self, test_labels, **kwargs):
         return super().run_tests(test_labels or self.default_labels, **kwargs)

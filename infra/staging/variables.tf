@@ -48,6 +48,16 @@ variable "desired_count" {
   default = 1
 }
 
+variable "domain_name" {
+  type    = string
+  default = "releviz.com"
+}
+
+variable "route53_zone_name" {
+  type    = string
+  default = "releviz.com."
+}
+
 variable "ecr_backend_repository" {
   type    = string
   default = "scheduler-staging-backend"
@@ -109,6 +119,11 @@ variable "db_allocated_storage" {
 }
 
 variable "django_secret_key" {
+  type      = string
+  sensitive = true
+}
+
+variable "django_field_encryption_key" {
   type      = string
   sensitive = true
 }

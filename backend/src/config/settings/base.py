@@ -1,5 +1,6 @@
 """Shared Django settings."""
 
+import os
 from datetime import timedelta
 from pathlib import Path
 
@@ -26,6 +27,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "apps.core.apps.CoreConfig",
     "apps.scheduling.apps.SchedulingConfig",
+    "apps.messaging.apps.MessagingConfig",
     "corsheaders",
     "rest_framework",
     "rest_framework_simplejwt",
@@ -117,6 +119,9 @@ FRONTEND_URL = ""
 BACKEND_URL = ""
 CORS_ALLOW_CREDENTIALS = True
 DATA_UPLOAD_MAX_NUMBER_FIELDS = 100000
+FIELD_ENCRYPTION_KEY = os.environ.get("DJANGO_FIELD_ENCRYPTION_KEY", "")
+USE_SES_EMAIL_PROVIDER = False
+DEFAULT_FROM_EMAIL = "noreply@releviz.local"
 
 
 def _can(app_label):
@@ -161,12 +166,14 @@ UNFOLD = {
                 "scheduling.participant",
                 "scheduling.weight",
                 "scheduling.userevent",
+                "scheduling.eventinvitation",
             ],
             "items": [
                 {"title": "Events", "link": "/admin/scheduling/event/"},
                 {"title": "Participants", "link": "/admin/scheduling/participant/"},
                 {"title": "Weights", "link": "/admin/scheduling/weight/"},
                 {"title": "User Events", "link": "/admin/scheduling/userevent/"},
+                {"title": "Invitations", "link": "/admin/scheduling/eventinvitation/"},
             ],
         },
         {
@@ -183,6 +190,13 @@ UNFOLD = {
                 {"title": "Email Challenges", "link": "/admin/authn/emailauthchallenge/"},
                 {"title": "RSA Keypairs", "link": "/admin/authn/rsakeypair/"},
                 {"title": "Groups", "link": "/admin/auth/group/"},
+            ],
+        },
+        {
+            "models": ["messaging.emailproviderconfig", "messaging.emailmessagelog"],
+            "items": [
+                {"title": "Email Providers", "link": "/admin/messaging/emailproviderconfig/"},
+                {"title": "Email Logs", "link": "/admin/messaging/emailmessagelog/"},
             ],
         },
     ],
@@ -207,6 +221,27 @@ UNFOLD = {
                         "title": "Weights",
                         "link": "/admin/scheduling/weight/",
                         "permission": _can("scheduling"),
+                    },
+                    {
+                        "title": "Invitations",
+                        "link": "/admin/scheduling/eventinvitation/",
+                        "permission": _can("scheduling"),
+                    },
+                ],
+            },
+            {
+                "title": "Email Delivery",
+                "permission": _can("messaging"),
+                "items": [
+                    {
+                        "title": "AWS SES Providers",
+                        "link": "/admin/messaging/emailproviderconfig/",
+                        "permission": _can("messaging"),
+                    },
+                    {
+                        "title": "Email Logs",
+                        "link": "/admin/messaging/emailmessagelog/",
+                        "permission": _can("messaging"),
                     },
                 ],
             },

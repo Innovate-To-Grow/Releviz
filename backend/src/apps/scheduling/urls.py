@@ -16,6 +16,8 @@ urlpatterns = [
         name="api-participant-update",
     ),
     path("events/participants", views.ParticipantsView.as_view(), name="api-participants"),
+    path("events/invitations", views.EventInvitationsView.as_view(), name="api-event-invitations"),
+    path("events/reminders", views.EventRemindersView.as_view(), name="api-event-reminders"),
     path("events/weights", views.WeightsView.as_view(), name="api-weights"),
     path("events", views.EventsView.as_view(), name="api-events"),
 ]
