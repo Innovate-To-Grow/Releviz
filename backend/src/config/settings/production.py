@@ -29,6 +29,10 @@ BACKEND_URL = required_env("BACKEND_URL")
 REQUIRE_ENCRYPTED_PASSWORDS = os.environ.get("REQUIRE_ENCRYPTED_PASSWORDS", "1") != "0"
 FIELD_ENCRYPTION_KEY = required_env("DJANGO_FIELD_ENCRYPTION_KEY")
 USE_SES_EMAIL_PROVIDER = os.environ.get("USE_SES_EMAIL_PROVIDER", "1") != "0"
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
+}
 
 DATABASES = {
     "default": {
