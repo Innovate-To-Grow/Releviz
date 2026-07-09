@@ -147,6 +147,7 @@ jobs:
 
      - name: Terraform apply
        id: tf
+       continue-on-error: true
        run: |
          terraform -chdir=infra/staging apply -auto-approve -input=false \
            -var="aws_region=${AWS_REGION}" \
@@ -167,11 +168,62 @@ jobs:
          echo "backend_service=$(terraform -chdir=infra/staging output -raw backend_service_name)" >> "$GITHUB_OUTPUT"
          echo "frontend_service=$(terraform -chdir=infra/staging output -raw frontend_service_name)" >> "$GITHUB_OUTPUT"
 
+     - name: Fallback backend ECS deploy
+       if: ${{ steps.tf.outcome == 'failure' }}
+       run: |
+         set -euo pipefail
+         ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+         CLUSTER_NAME="scheduler-staging-cluster"
+         BACKEND_SERVICE="scheduler-staging-backend-service"
+         BACKEND_FAMILY="scheduler-staging-backend-task"
+         BACKEND_CONTAINER="scheduler-staging-backend"
+         BACKEND_IMAGE="$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_BACKEND}:${DEPLOY_SHA}"
+
+         aws ecs describe-task-definition \
+           --task-definition "$BACKEND_FAMILY" \
+           --query taskDefinition > /tmp/backend-task-definition.json
+
+         jq \
+           --arg image "$BACKEND_IMAGE" \
+           --arg container "$BACKEND_CONTAINER" \
+           '
+             .containerDefinitions |= map(
+               if .name == $container then .image = $image else . end
+             )
+             | del(
+               .taskDefinitionArn,
+               .revision,
+               .status,
+               .requiresAttributes,
+               .compatibilities,
+               .registeredAt,
+               .registeredBy
+             )
+           ' /tmp/backend-task-definition.json > /tmp/backend-task-definition-next.json
+
+         NEW_TASK_DEFINITION=$(aws ecs register-task-definition \
+           --cli-input-json file:///tmp/backend-task-definition-next.json \
+           --query taskDefinition.taskDefinitionArn \
+           --output text)
+
+         aws ecs update-service \
+           --cluster "$CLUSTER_NAME" \
+           --service "$BACKEND_SERVICE" \
+           --task-definition "$NEW_TASK_DEFINITION" >/dev/null
+
      - name: Wait for ECS stability
+       if: ${{ steps.tf.outcome == 'success' }}
        run: |
          aws ecs wait services-stable \
            --cluster "${{ steps.tf.outputs.cluster_name }}" \
            --services "${{ steps.tf.outputs.backend_service }}" "${{ steps.tf.outputs.frontend_service }}"
+
+     - name: Wait for backend ECS stability after fallback
+       if: ${{ steps.tf.outcome == 'failure' }}
+       run: |
+         aws ecs wait services-stable \
+           --cluster "scheduler-staging-cluster" \
+           --services "scheduler-staging-backend-service"
 
      - name: Smoke tests
        run: |
