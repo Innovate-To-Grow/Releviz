@@ -453,3 +453,52 @@ describe("app pages", () => {
     expect(await screen.findByText("Unable to save profile.")).toBeInTheDocument();
   });
 });
+
+describe("EventHeader", () => {
+  beforeEach(() => {
+    useAuth.mockReturnValue({
+      user: { displayName: "Prachi", email: "prachi@test.com" },
+      loading: false,
+      logout: jest.fn(),
+    });
+  });
+
+  test("displays event code next to event name", async () => {
+    const { default: EventHeader } = await import("@/components/event/EventHeader");
+    render(<EventHeader eventName="Team Sync" eventCode="ABC12345" />);
+    expect(screen.getByText("Team Sync")).toBeInTheDocument();
+    expect(screen.getByText("#ABC12345")).toBeInTheDocument();
+  });
+
+  test("does not show event code when not provided", async () => {
+    const { default: EventHeader } = await import("@/components/event/EventHeader");
+    render(<EventHeader eventName="Team Sync" eventCode="" />);
+    expect(screen.queryByText(/#/)).not.toBeInTheDocument();
+  });
+
+  test("shows My Dashboard link in user menu when logged in", async () => {
+    const { default: EventHeader } = await import("@/components/event/EventHeader");
+    render(<EventHeader eventName="Team Sync" eventCode="ABC12345" />);
+    fireEvent.click(screen.getByText("Prachi"));
+    expect(screen.getByText("My Dashboard")).toBeInTheDocument();
+  });
+});
+
+describe("CreateEvent", () => {
+  beforeEach(() => {
+    useAuth.mockReturnValue({
+      user: { id: "user-1", displayName: "Prachi", email: "prachi@test.com" },
+      loading: false,
+      getToken: jest.fn().mockResolvedValue("mock-token"),
+    });
+  });
+
+  test("allows submitting without an event name", async () => {
+    const { default: CreateEvent } = await import("@/components/event/CreateEvent");
+    render(<CreateEvent />);
+    // Should NOT show "Event name is required" error when name is empty
+    const button = screen.getByText("Create Event");
+    fireEvent.click(button);
+    expect(screen.queryByText(/event name is required/i)).not.toBeInTheDocument();
+  });
+});

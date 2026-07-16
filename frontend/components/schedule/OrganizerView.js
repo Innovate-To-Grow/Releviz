@@ -600,10 +600,11 @@ function OrganizerView() {
                     showValues={false}
                     onCellPaint={handleMyVirtualPaint}
                     label={mode === "mixed" ? "Virtual" : undefined}
+                    virtual={true}
                   />
                 )}
                 <AppButton onClick={handleMySave} disabled={mySaving} icon={<MdSave />}>
-                  {mySaving ? "Saving..." : "Save My Schedule"}
+                  {mySaving ? "Saving..." : "Confirm"}
                 </AppButton>
               </div>
             )}
@@ -928,6 +929,7 @@ function OrganizerView() {
                     showValues={true}
                     label={mode === "mixed" ? "Virtual Availability" : "Availability"}
                     participantDetails={virtualDetails}
+                    virtual={true}
                   />
                 </div>
               )}
@@ -994,6 +996,7 @@ function OrganizerView() {
                               readOnly={true}
                               showValues={true}
                               label={mode === "mixed" ? "Virtual" : "Availability"}
+                              virtual={true}
                             />
                           </div>
                         )}

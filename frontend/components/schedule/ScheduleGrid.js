@@ -1,6 +1,6 @@
 "use client";
 
-import { lerpColor } from "@/components/ui/ColorUtils";
+import { lerpColor, lerpVirtualColor } from "@/components/ui/ColorUtils";
 import { DAY_LABELS, DAYS_PER_WEEK } from "@/lib/constants";
 import { formatHour } from "@/lib/format";
 
@@ -25,6 +25,7 @@ function ScheduleGrid({
   showValues,
   onCellPaint,
   label,
+  virtual = false,
   participantDetails,
   daySelectionType,
   specificDates,
@@ -162,7 +163,7 @@ function ScheduleGrid({
                         }}
                         style={{
                           height: "32px",
-                          backgroundColor: lerpColor(val),
+                          backgroundColor: virtual ? lerpVirtualColor(val) : lerpColor(val),
                           borderTop:
                             hourIndex !== 0
                               ? "1px solid var(--md-sys-color-surface-variant)"

@@ -1,7 +1,13 @@
 // Material 3 tone colors for availability gradient
+// In-person: red → yellow → green
 export const color0 = "#ffb4ab"; // busy (red)
 export const color1 = "#ffdea3"; // partial (yellow)
 export const color2 = "#82d3a2"; // free (green)
+
+// Virtual: red → fuchsia → blue
+export const virtualColor0 = "#ffb4ab"; // busy (red)
+export const virtualColor1 = "#f4b8ff"; // partial (fuchsia)
+export const virtualColor2 = "#a8c7fa"; // free (blue)
 
 function lerpRGB(a, b, amount) {
   const ar = parseInt(a.substring(1, 3), 16);
@@ -21,5 +27,13 @@ export function lerpColor(amount) {
     return lerpRGB(color0, color1, amount * 2);
   } else {
     return lerpRGB(color1, color2, (amount - 0.5) * 2);
+  }
+}
+
+export function lerpVirtualColor(amount) {
+  if (amount < 0.5) {
+    return lerpRGB(virtualColor0, virtualColor1, amount * 2);
+  } else {
+    return lerpRGB(virtualColor1, virtualColor2, (amount - 0.5) * 2);
   }
 }

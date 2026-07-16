@@ -3,7 +3,15 @@
 import Image from "next/image";
 import Link from "next/link";
 import React, { useState, useRef, useEffect } from "react";
-import { MdCheck, MdLink, MdPerson, MdLogout, MdSettings, MdLogin } from "react-icons/md";
+import {
+  MdCheck,
+  MdLink,
+  MdPerson,
+  MdLogout,
+  MdSettings,
+  MdLogin,
+  MdDashboard,
+} from "react-icons/md";
 import AppButton from "@/components/ui/AppButton";
 import { useAuth } from "@/components/auth/AuthContext";
 
@@ -52,6 +60,21 @@ function UserMenu() {
             overflow: "hidden",
           }}
         >
+          <Link
+            href="/dashboard"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              padding: "12px 16px",
+              textDecoration: "none",
+              color: "var(--md-sys-color-on-surface)",
+              fontSize: "0.9rem",
+            }}
+            onClick={() => setOpen(false)}
+          >
+            <MdDashboard /> My Dashboard
+          </Link>
           <Link
             href="/settings"
             style={{
@@ -104,7 +127,6 @@ function EventHeader({ eventName, eventCode }) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Fallback
       const input = document.createElement("input");
       input.value = shareUrl;
       document.body.appendChild(input);
@@ -158,6 +180,18 @@ function EventHeader({ eventName, eventCode }) {
         >
           {eventName}
         </h1>
+        {eventCode && (
+          <span
+            style={{
+              fontSize: "0.85rem",
+              color: "var(--md-sys-color-on-surface-variant)",
+              fontWeight: "400",
+              whiteSpace: "nowrap",
+            }}
+          >
+            #{eventCode}
+          </span>
+        )}
       </Link>
       <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
         <AppButton onClick={handleCopy} variant="outlined" icon={copied ? <MdCheck /> : <MdLink />}>

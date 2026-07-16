@@ -96,6 +96,7 @@ export function AuthProvider({ children }) {
 
   const logout = useCallback(async () => {
     await logoutApi();
+    clearAuthSession();
     setSession(null);
     window.location.assign("/");
   }, []);

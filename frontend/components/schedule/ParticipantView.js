@@ -362,6 +362,7 @@ function ParticipantView() {
                 showValues={false}
                 onCellPaint={handleVirtualPaint}
                 label={mode === "mixed" ? "Virtual" : undefined}
+                virtual={true}
               />
             )}
 
@@ -411,6 +412,7 @@ function ParticipantView() {
                     readOnly={true}
                     showValues={true}
                     label={mode === "mixed" ? "Virtual Availability" : "Availability"}
+                    virtual={true}
                   />
                 </div>
               )}

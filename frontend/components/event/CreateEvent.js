@@ -95,7 +95,7 @@ function CreateEvent() {
   const handleSubmit = async () => {
     setError("");
     const errors = [];
-    if (!name.trim()) errors.push("Event name is required");
+    // if (!name.trim()) errors.push("Event name is required");
     // Location is optional — backend defaults to "TBD" for non-virtual events
     if (startHour >= endHour) errors.push("End time must be after start time");
     if (daySelectionType === "days_of_week" && selectedDays.length === 0) {
@@ -112,7 +112,7 @@ function CreateEvent() {
     setLoading(true);
     try {
       const payload = {
-        name: name.trim(),
+        name: name.trim() || undefined,
         startHour,
         endHour,
         days: daySelectionType === "days_of_week" ? selectedDays : [0, 1, 2, 3, 4, 5, 6],
