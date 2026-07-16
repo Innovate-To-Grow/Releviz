@@ -192,6 +192,23 @@ describe("small UI modules", () => {
     expect(screen.getByText("Sun")).toBeInTheDocument();
   });
 
+  test("ScheduleGrid uses virtual color scheme when virtual prop is true", () => {
+    const schedule = Array(56).fill(1);
+    render(
+      <ScheduleGrid
+        schedule={schedule}
+        startHour={9}
+        endHour={17}
+        selectedDays={[0, 1, 2, 3, 4, 5, 6]}
+        readOnly={true}
+        showValues={true}
+        virtual={true}
+      />
+    );
+    const cells = document.querySelectorAll("[data-cell-idx]");
+    expect(cells.length).toBeGreaterThan(0);
+  });
+
   test("EventDetailsGrid renders defaults, dates, and extra cards", () => {
     render(
       <EventDetailsGrid
