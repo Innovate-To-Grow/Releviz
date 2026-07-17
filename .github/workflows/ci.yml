@@ -14,7 +14,7 @@ concurrency:
 
 env:
   PYTHON_VERSION: "3.11"
-  NODE_VERSION: "20"
+  NODE_VERSION: "24"
   TERRAFORM_VERSION: "1.15.8"
   COVERAGE_VERSION: "7.15.2"
   BACKEND_COVERAGE_FAIL_UNDER: "100"
@@ -1024,6 +1024,7 @@ jobs:
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: backend
+          pull: true
           load: true
           tags: releviz-backend-ci:${{ github.sha }}
           cache-from: type=gha,scope=backend
@@ -1090,6 +1091,7 @@ jobs:
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: frontend
+          pull: true
           load: true
           tags: releviz-frontend-ci:${{ github.sha }}
           cache-from: type=gha,scope=frontend
