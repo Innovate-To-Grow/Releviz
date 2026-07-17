@@ -24,7 +24,7 @@ REQUIRED_FRAGMENTS = (
     "actions/cache@v6",
     "actions/upload-artifact@v7",
     "actions/download-artifact@v8",
-    "hashicorp/setup-terraform@v3",
+    "hashicorp/setup-terraform@v4",
 )
 
 
