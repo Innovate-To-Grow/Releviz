@@ -2,30 +2,34 @@ output "alb_dns_name" {
   value = aws_lb.app.dns_name
 }
 
-output "ecr_repository_url" {
-  value = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.aws_region}.amazonaws.com/${var.ecr_repository_name}"
+output "custom_domain" {
+  value = var.custom_domain
+}
+
+output "https_url" {
+  value = "https://${var.custom_domain}"
 }
 
 output "ecs_cluster_name" {
   value = aws_ecs_cluster.app.name
 }
 
-output "ecs_service_name" {
-  value = aws_ecs_service.app.name
+output "backend_service_name" {
+  value = aws_ecs_service.backend.name
 }
 
-output "custom_domain" {
-  value = var.custom_domain
+output "frontend_service_name" {
+  value = aws_ecs_service.frontend.name
 }
 
-output "https_url" {
-  value = var.enable_https ? "https://${var.custom_domain}" : ""
+output "backend_task_definition_arn" {
+  value = aws_ecs_task_definition.backend.arn
 }
 
-output "acm_certificate_arn" {
-  value = var.enable_https ? local.https_certificate_arn : ""
+output "frontend_task_definition_arn" {
+  value = aws_ecs_task_definition.frontend.arn
 }
 
-output "github_actions_role_arn" {
-  value = var.create_github_oidc_resources ? aws_iam_role.github_actions_deploy[0].arn : ""
+output "database_master_secret_arn" {
+  value = aws_db_instance.app.master_user_secret[0].secret_arn
 }

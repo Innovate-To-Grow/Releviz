@@ -1,223 +1,245 @@
 name: Deploy Staging
 
 on:
- workflow_dispatch:
- workflow_run:
-   workflows: ["CI"]
-   types: [completed]
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
 
 permissions:
- id-token: write
- contents: read
- actions: read
+  actions: read
+  contents: read
+  deployments: write
+  id-token: write
 
 concurrency:
- group: deploy-staging
- cancel-in-progress: false
+  group: deploy-staging
+  cancel-in-progress: false
 
 jobs:
- deploy:
-   name: Deploy to Staging
-   runs-on: ubuntu-latest
-   if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main') }}
+  deploy:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main')
+    environment:
+      name: Staging
+      url: https://releviz.com
 
-   env:
-     AWS_REGION: ${{ vars.AWS_REGION || 'us-west-2' }}
-     AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
-     ECR_BACKEND: ${{ vars.ECR_STAGING_BACKEND || 'scheduler-staging-backend' }}
-     ECR_FRONTEND: ${{ vars.ECR_STAGING_FRONTEND || 'scheduler-staging-frontend' }}
-     ECS_CLUSTER: ${{ vars.ECS_STAGING_CLUSTER || 'Releviz-Staging' }}
-     DEPLOY_SHA: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.workflow_run.head_sha }}
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-west-2' }}
+      AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+      ECR_BACKEND: ${{ vars.ECR_STAGING_BACKEND || 'scheduler-staging-backend' }}
+      ECR_FRONTEND: ${{ vars.ECR_STAGING_FRONTEND || 'scheduler-staging-frontend' }}
+      ECS_CLUSTER: ${{ vars.ECS_STAGING_CLUSTER || 'Releviz-Staging' }}
+      DEPLOY_SHA: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.workflow_run.head_sha }}
 
-   steps:
-     - name: Checkout code at tested commit
-       uses: actions/checkout@v4
-       with:
-         ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.workflow_run.head_sha }}
+    steps:
+      - name: Checkout tested commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
 
-     - name: Configure AWS credentials (OIDC)
-       if: ${{ vars.AWS_ROLE_ARN != '' }}
-       uses: aws-actions/configure-aws-credentials@v4
-       with:
-         role-to-assume: ${{ env.AWS_ROLE_ARN }}
-         aws-region: ${{ env.AWS_REGION }}
+      - name: Validate staging configuration
+        env:
+          DB_PASSWORD: ${{ secrets.STAGING_DB_PASSWORD }}
+          DJANGO_SECRET_KEY: ${{ secrets.STAGING_DJANGO_SECRET_KEY }}
+          FIELD_ENCRYPTION_KEY: ${{ secrets.STAGING_DJANGO_FIELD_ENCRYPTION_KEY }}
+          METRICS_BEARER_TOKEN: ${{ secrets.STAGING_METRICS_BEARER_TOKEN }}
+          CREATE_DEFAULT_ADMIN: ${{ vars.STAGING_CREATE_DEFAULT_ADMIN || 'false' }}
+          SUPERUSER_PASSWORD: ${{ secrets.STAGING_DJANGO_SUPERUSER_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$DB_PASSWORD"
+          test -n "$DJANGO_SECRET_KEY"
+          test -n "$FIELD_ENCRYPTION_KEY"
+          if [ "${#METRICS_BEARER_TOKEN}" -lt 32 ]; then
+            echo "::error::STAGING_METRICS_BEARER_TOKEN must contain at least 32 characters."
+            exit 1
+          fi
+          if [ "$CREATE_DEFAULT_ADMIN" = "true" ] && [ -z "$SUPERUSER_PASSWORD" ]; then
+            echo "::error::STAGING_DJANGO_SUPERUSER_PASSWORD is required when creating an admin."
+            exit 1
+          fi
 
-     - name: Configure AWS credentials (static secrets)
-       if: ${{ vars.AWS_ROLE_ARN == '' }}
-       uses: aws-actions/configure-aws-credentials@v4
-       with:
-         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-         aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-         aws-region: ${{ env.AWS_REGION }}
+      - name: Configure AWS credentials with OIDC
+        if: ${{ vars.AWS_ROLE_ARN != '' }}
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
 
-     - name: Prepare Terraform backend
-       id: backend
-       run: |
-         set +e
-         ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-         STATE_BUCKET="scheduler-staging-tfstate-${ACCOUNT_ID}"
-         LOCK_TABLE="scheduler-staging-terraform-locks"
-         BACKEND_MODE="remote"
+      - name: Configure AWS credentials from legacy secrets
+        if: ${{ vars.AWS_ROLE_ARN == '' }}
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
 
-         if ! aws s3api head-bucket --bucket "$STATE_BUCKET" 2>/dev/null; then
-           if [ "${AWS_REGION}" = "us-east-1" ]; then
-             aws s3api create-bucket --bucket "$STATE_BUCKET" --region "${AWS_REGION}" || BACKEND_MODE="local"
-           else
-             aws s3api create-bucket --bucket "$STATE_BUCKET" --region "${AWS_REGION}" \
-               --create-bucket-configuration LocationConstraint="${AWS_REGION}" || BACKEND_MODE="local"
-           fi
-         fi
+      - name: Verify deployment identity and Terraform read permissions
+        run: |
+          set -euo pipefail
+          aws sts get-caller-identity
+          for role in \
+            scheduler-staging-ecs-execution-role \
+            scheduler-staging-ecs-task-role \
+            scheduler-staging-eventbridge-reminders-role; do
+            if ! aws iam get-role --role-name "$role" >/dev/null; then
+              echo "::error::The staging deploy identity requires iam:GetRole for $role."
+              exit 1
+            fi
+          done
 
-         if [ "$BACKEND_MODE" = "remote" ]; then
-           aws s3api put-bucket-versioning --bucket "$STATE_BUCKET" \
-             --versioning-configuration Status=Enabled || BACKEND_MODE="local"
-           aws s3api put-bucket-encryption --bucket "$STATE_BUCKET" \
-             --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}' || BACKEND_MODE="local"
-           aws s3api put-public-access-block --bucket "$STATE_BUCKET" \
-             --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true || BACKEND_MODE="local"
-         fi
+      - name: Prepare encrypted Terraform state bucket
+        id: backend
+        run: |
+          set -euo pipefail
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          state_bucket="scheduler-staging-tfstate-${account_id}"
 
-         if [ "$BACKEND_MODE" = "remote" ]; then
-           if ! aws dynamodb describe-table --table-name "$LOCK_TABLE" >/dev/null 2>&1; then
-             aws dynamodb create-table \
-               --table-name "$LOCK_TABLE" \
-               --attribute-definitions AttributeName=LockID,AttributeType=S \
-               --key-schema AttributeName=LockID,KeyType=HASH \
-               --billing-mode PAY_PER_REQUEST || BACKEND_MODE="local"
-             if [ "$BACKEND_MODE" = "remote" ]; then
-               aws dynamodb wait table-exists --table-name "$LOCK_TABLE" || BACKEND_MODE="local"
-             fi
-           fi
-         fi
+          if ! aws s3api head-bucket --bucket "$state_bucket" 2>/dev/null; then
+            if [ "$AWS_REGION" = "us-east-1" ]; then
+              aws s3api create-bucket --bucket "$state_bucket" --region "$AWS_REGION"
+            else
+              aws s3api create-bucket \
+                --bucket "$state_bucket" \
+                --region "$AWS_REGION" \
+                --create-bucket-configuration "LocationConstraint=${AWS_REGION}"
+            fi
+          fi
 
-         {
-           echo "backend_mode=$BACKEND_MODE"
-           echo "state_bucket=$STATE_BUCKET"
-           echo "lock_table=$LOCK_TABLE"
-         } >> "$GITHUB_OUTPUT"
-         set -e
+          aws s3api put-bucket-versioning \
+            --bucket "$state_bucket" \
+            --versioning-configuration Status=Enabled
+          aws s3api put-bucket-encryption \
+            --bucket "$state_bucket" \
+            --server-side-encryption-configuration \
+              '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+          aws s3api put-public-access-block \
+            --bucket "$state_bucket" \
+            --public-access-block-configuration \
+              BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
 
-     - name: Set up Terraform
-       uses: hashicorp/setup-terraform@v3
+          echo "state_bucket=$state_bucket" >> "$GITHUB_OUTPUT"
 
-     - name: Terraform init (remote backend)
-       if: ${{ steps.backend.outputs.backend_mode == 'remote' }}
-       run: |
-         terraform -chdir=infra/staging init -reconfigure -input=false \
-           -backend-config="bucket=${{ steps.backend.outputs.state_bucket }}" \
-           -backend-config="dynamodb_table=${{ steps.backend.outputs.lock_table }}" \
-           -backend-config="key=staging/terraform.tfstate" \
-           -backend-config="region=${AWS_REGION}"
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.15.8
 
-     - name: Terraform init (local backend fallback)
-       if: ${{ steps.backend.outputs.backend_mode == 'local' }}
-       run: |
-         perl -0777 -i -pe 's/\n\s*backend \"s3\" \{\}\n/\n/s' infra/staging/versions.tf
-         terraform -chdir=infra/staging init -reconfigure -input=false
+      - name: Initialize Terraform with remote state
+        run: |
+          terraform -chdir=infra/staging init -reconfigure -input=false \
+            -backend-config="bucket=${{ steps.backend.outputs.state_bucket }}" \
+            -backend-config="key=staging/terraform.tfstate" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="use_lockfile=true"
 
-     - name: Ensure ECR repositories exist
-       run: |
-         for repo in "$ECR_BACKEND" "$ECR_FRONTEND"; do
-           if ! aws ecr describe-repositories --repository-names "$repo" >/dev/null 2>&1; then
-             aws ecr create-repository \
-               --repository-name "$repo" \
-               --image-scanning-configuration scanOnPush=true
-           fi
-         done
+      - name: Ensure immutable ECR repositories exist
+        run: |
+          set -euo pipefail
+          for repository in "$ECR_BACKEND" "$ECR_FRONTEND"; do
+            if ! aws ecr describe-repositories --repository-names "$repository" >/dev/null 2>&1; then
+              aws ecr create-repository \
+                --repository-name "$repository" \
+                --image-tag-mutability IMMUTABLE \
+                --image-scanning-configuration scanOnPush=true >/dev/null
+            else
+              aws ecr put-image-tag-mutability \
+                --repository-name "$repository" \
+                --image-tag-mutability IMMUTABLE >/dev/null
+              aws ecr put-image-scanning-configuration \
+                --repository-name "$repository" \
+                --image-scanning-configuration scanOnPush=true >/dev/null
+            fi
+          done
 
-     - name: Login to ECR
-       uses: aws-actions/amazon-ecr-login@v2
+      - name: Check whether immutable images already exist
+        id: images
+        run: |
+          set -euo pipefail
+          for component in backend frontend; do
+            repository_variable="ECR_${component^^}"
+            repository="${!repository_variable}"
+            if aws ecr describe-images \
+              --repository-name "$repository" \
+              --image-ids "imageTag=${DEPLOY_SHA}" >/dev/null 2>&1; then
+              echo "${component}_exists=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "${component}_exists=false" >> "$GITHUB_OUTPUT"
+            fi
+          done
 
-     - name: Build and push backend image
-       run: |
-         ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-         IMAGE_URI="$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_BACKEND}"
-         docker build -t "$IMAGE_URI:${DEPLOY_SHA}" -t "$IMAGE_URI:staging-latest" ./backend
-         docker push "$IMAGE_URI:${DEPLOY_SHA}"
-         docker push "$IMAGE_URI:staging-latest"
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
 
-     - name: Build and push frontend image
-       run: |
-         cp package-lock.json frontend/
-         ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-         IMAGE_URI="$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_FRONTEND}"
-         docker build \
-           --build-arg NEXT_PUBLIC_API_BASE_URL="" \
-           -t "$IMAGE_URI:${DEPLOY_SHA}" -t "$IMAGE_URI:staging-latest" ./frontend
-         docker push "$IMAGE_URI:${DEPLOY_SHA}"
-         docker push "$IMAGE_URI:staging-latest"
+      - name: Build and push immutable backend image
+        if: ${{ steps.images.outputs.backend_exists != 'true' }}
+        run: |
+          set -euo pipefail
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          image_uri="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_BACKEND}:${DEPLOY_SHA}"
+          docker build --pull --tag "$image_uri" ./backend
+          docker push "$image_uri"
 
-     - name: Terraform apply
-       id: tf
-       continue-on-error: true
-       run: |
-         terraform -chdir=infra/staging apply -auto-approve -input=false \
-           -var="aws_region=${AWS_REGION}" \
-           -var="domain_name=releviz.com" \
-           -var="ecs_cluster_name=${ECS_CLUSTER}" \
-           -var="backend_image_tag=${DEPLOY_SHA}" \
-           -var="frontend_image_tag=${DEPLOY_SHA}" \
-           -var="ecr_backend_repository=${ECR_BACKEND}" \
-           -var="ecr_frontend_repository=${ECR_FRONTEND}" \
-           -var="db_password=${{ secrets.STAGING_DB_PASSWORD }}" \
-           -var="django_secret_key=${{ secrets.STAGING_DJANGO_SECRET_KEY }}" \
-           -var="django_field_encryption_key=${{ secrets.STAGING_DJANGO_FIELD_ENCRYPTION_KEY }}" \
-           -var="django_superuser_email=${{ vars.STAGING_DJANGO_SUPERUSER_EMAIL || '' }}" \
-           -var="django_superuser_password=${{ secrets.STAGING_DJANGO_SUPERUSER_PASSWORD }}" \
-           -var="django_create_default_admin=${{ vars.STAGING_CREATE_DEFAULT_ADMIN || 'false' }}"
+      - name: Build and push immutable frontend image
+        if: ${{ steps.images.outputs.frontend_exists != 'true' }}
+        run: |
+          set -euo pipefail
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          image_uri="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_FRONTEND}:${DEPLOY_SHA}"
+          docker build \
+            --pull \
+            --build-arg NEXT_PUBLIC_API_BASE_URL="" \
+            --tag "$image_uri" \
+            ./frontend
+          docker push "$image_uri"
 
-         {
-           echo "alb_dns=$(terraform -chdir=infra/staging output -raw alb_dns_name)"
-           echo "cluster_name=$(terraform -chdir=infra/staging output -raw ecs_cluster_name)"
-           echo "backend_service=$(terraform -chdir=infra/staging output -raw backend_service_name)"
-           echo "frontend_service=$(terraform -chdir=infra/staging output -raw frontend_service_name)"
-         } >> "$GITHUB_OUTPUT"
+      - name: Plan staging infrastructure and release
+        env:
+          TF_VAR_aws_region: ${{ env.AWS_REGION }}
+          TF_VAR_backend_image_tag: ${{ env.DEPLOY_SHA }}
+          TF_VAR_frontend_image_tag: ${{ env.DEPLOY_SHA }}
+          TF_VAR_ecr_backend_repository: ${{ env.ECR_BACKEND }}
+          TF_VAR_ecr_frontend_repository: ${{ env.ECR_FRONTEND }}
+          TF_VAR_ecs_cluster_name: ${{ env.ECS_CLUSTER }}
+          TF_VAR_domain_name: releviz.com
+          TF_VAR_db_password: ${{ secrets.STAGING_DB_PASSWORD }}
+          TF_VAR_django_secret_key: ${{ secrets.STAGING_DJANGO_SECRET_KEY }}
+          TF_VAR_django_field_encryption_key: ${{ secrets.STAGING_DJANGO_FIELD_ENCRYPTION_KEY }}
+          TF_VAR_metrics_bearer_token: ${{ secrets.STAGING_METRICS_BEARER_TOKEN }}
+          TF_VAR_django_superuser_email: ${{ vars.STAGING_DJANGO_SUPERUSER_EMAIL || '' }}
+          TF_VAR_django_superuser_password: ${{ secrets.STAGING_DJANGO_SUPERUSER_PASSWORD }}
+          TF_VAR_django_create_default_admin: ${{ vars.STAGING_CREATE_DEFAULT_ADMIN || 'false' }}
+        run: terraform -chdir=infra/staging plan -input=false -out=staging.tfplan
 
-     - name: Fallback backend ECS image refresh
-       if: ${{ steps.tf.outcome == 'failure' }}
-       run: |
-         set -euo pipefail
-         ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-         BACKEND_SERVICE="scheduler-staging-backend-service"
-         BACKEND_FAMILY="scheduler-staging-backend-task"
-         BACKEND_CONTAINER="scheduler-staging-backend"
-         BACKEND_IMAGE="$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_BACKEND}:${DEPLOY_SHA}"
+      - name: Apply reviewed staging plan
+        run: terraform -chdir=infra/staging apply -input=false -auto-approve staging.tfplan
 
-         CURRENT_BACKEND_IMAGE=$(aws ecs describe-task-definition \
-           --task-definition "$BACKEND_FAMILY" \
-           --query "taskDefinition.containerDefinitions[?name=='${BACKEND_CONTAINER}'].image | [0]" \
-           --output text)
+      - name: Capture deployed ECS resources
+        id: terraform
+        run: |
+          {
+            echo "cluster_name=$(terraform -chdir=infra/staging output -raw ecs_cluster_name)"
+            echo "backend_service=$(terraform -chdir=infra/staging output -raw backend_service_name)"
+            echo "frontend_service=$(terraform -chdir=infra/staging output -raw frontend_service_name)"
+          } >> "$GITHUB_OUTPUT"
 
-         if [ -z "$CURRENT_BACKEND_IMAGE" ] || [ "$CURRENT_BACKEND_IMAGE" = "None" ]; then
-           echo "Could not resolve current backend image for $BACKEND_CONTAINER" >&2
-           exit 1
-         fi
+      - name: Wait for both ECS services to stabilize
+        run: |
+          aws ecs wait services-stable \
+            --cluster "${{ steps.terraform.outputs.cluster_name }}" \
+            --services \
+              "${{ steps.terraform.outputs.backend_service }}" \
+              "${{ steps.terraform.outputs.frontend_service }}"
 
-         docker pull "$BACKEND_IMAGE"
-         docker tag "$BACKEND_IMAGE" "$CURRENT_BACKEND_IMAGE"
-         docker push "$CURRENT_BACKEND_IMAGE"
-
-         aws ecs update-service \
-           --cluster "$ECS_CLUSTER" \
-           --service "$BACKEND_SERVICE" \
-           --force-new-deployment >/dev/null
-
-     - name: Wait for ECS stability
-       if: ${{ steps.tf.outcome == 'success' }}
-       run: |
-         aws ecs wait services-stable \
-           --cluster "${{ steps.tf.outputs.cluster_name }}" \
-           --services "${{ steps.tf.outputs.backend_service }}" "${{ steps.tf.outputs.frontend_service }}"
-
-     - name: Wait for backend ECS stability after fallback
-       if: ${{ steps.tf.outcome == 'failure' }}
-       run: |
-         aws ecs wait services-stable \
-           --cluster "$ECS_CLUSTER" \
-           --services "scheduler-staging-backend-service"
-
-     - name: Smoke tests
-       run: |
-         curl --fail --show-error --retry 10 --retry-delay 5 "https://releviz.com/api/health"
-         curl --fail --show-error --retry 10 --retry-delay 5 "https://releviz.com/"
+      - name: Run staging smoke tests
+        run: |
+          curl --fail --show-error --retry 10 --retry-delay 5 https://releviz.com/api/health/live
+          curl --fail --show-error --retry 10 --retry-delay 5 https://releviz.com/api/health
+          curl --fail --show-error --retry 10 --retry-delay 5 https://releviz.com/

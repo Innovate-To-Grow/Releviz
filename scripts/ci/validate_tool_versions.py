@@ -12,7 +12,7 @@ WORKFLOW = ROOT / ".github/workflows/ci.yml"
 
 REQUIRED_FRAGMENTS = (
     'PYTHON_VERSION: "3.11"',
-    'NODE_VERSION: "20"',
+    'NODE_VERSION: "24"',
     'TERRAFORM_VERSION: "1.15.8"',
     'PIP_AUDIT_VERSION: "2.10.1"',
     'SEMGREP_VERSION: "1.107.0"',
@@ -24,7 +24,7 @@ REQUIRED_FRAGMENTS = (
     "actions/cache@v6",
     "actions/upload-artifact@v7",
     "actions/download-artifact@v8",
-    "hashicorp/setup-terraform@v3",
+    "hashicorp/setup-terraform@v4",
 )
 
 

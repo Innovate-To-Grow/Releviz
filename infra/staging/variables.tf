@@ -133,6 +133,17 @@ variable "django_field_encryption_key" {
   sensitive = true
 }
 
+variable "metrics_bearer_token" {
+  type        = string
+  description = "Dedicated bearer credential for the private product-metrics endpoint"
+  sensitive   = true
+
+  validation {
+    condition     = length(trimspace(var.metrics_bearer_token)) >= 32
+    error_message = "metrics_bearer_token must contain at least 32 non-whitespace characters."
+  }
+}
+
 variable "django_superuser_email" {
   type    = string
   default = ""

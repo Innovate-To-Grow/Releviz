@@ -549,8 +549,9 @@ resource "aws_ecs_task_definition" "backend" {
       { name = "DJANGO_ALLOWED_HOSTS", value = "${var.domain_name},${aws_lb.app.dns_name}" },
       { name = "DJANGO_SECRET_KEY", value = var.django_secret_key },
       { name = "DJANGO_FIELD_ENCRYPTION_KEY", value = var.django_field_encryption_key },
+      { name = "METRICS_BEARER_TOKEN", value = var.metrics_bearer_token },
       { name = "USE_SES_EMAIL_PROVIDER", value = "1" },
-      { name = "REQUIRE_ENCRYPTED_PASSWORDS", value = "0" },
+      { name = "REQUIRE_ENCRYPTED_PASSWORDS", value = "1" },
       { name = "FRONTEND_URL", value = local.app_url },
       { name = "BACKEND_URL", value = local.app_url },
       { name = "CORS_ALLOWED_ORIGINS", value = local.app_url },
@@ -621,8 +622,14 @@ resource "aws_ecs_service" "backend" {
   desired_count   = var.desired_count
   launch_type     = "FARGATE"
 
-  deployment_minimum_healthy_percent = 0
+  deployment_minimum_healthy_percent = 100
   deployment_maximum_percent         = 200
+  health_check_grace_period_seconds  = 120
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
 
   network_configuration {
     assign_public_ip = true
@@ -647,8 +654,14 @@ resource "aws_ecs_service" "frontend" {
   desired_count   = var.desired_count
   launch_type     = "FARGATE"
 
-  deployment_minimum_healthy_percent = 0
+  deployment_minimum_healthy_percent = 100
   deployment_maximum_percent         = 200
+  health_check_grace_period_seconds  = 120
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
 
   network_configuration {
     assign_public_ip = true
