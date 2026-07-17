@@ -469,8 +469,8 @@ jobs:
             --omit="*/migrations/*,*/tests/*" \
             src/manage.py test "apps.${APP_UNDER_TEST}" \
             --settings=config.settings.test_postgres
-          coverage xml -o "coverage-${APP_UNDER_TEST}.xml"
-          coverage json --pretty-print -o "coverage-${APP_UNDER_TEST}.json"
+          coverage xml --fail-under=0 -o "coverage-${APP_UNDER_TEST}.xml"
+          coverage json --fail-under=0 --pretty-print -o "coverage-${APP_UNDER_TEST}.json"
           coverage report -m --fail-under="${APP_COVERAGE_FAIL_UNDER}"
 
       - name: Summarize app coverage
@@ -639,6 +639,7 @@ jobs:
             frontend/.next
             !frontend/.next/cache
             !frontend/.next/standalone
+          include-hidden-files: true
           if-no-files-found: warn
 
   frontend-bundle-size:
