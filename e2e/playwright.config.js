@@ -1,4 +1,4 @@
-const { defineConfig } = require("@playwright/test");
+const { defineConfig, devices } = require("@playwright/test");
 const path = require("node:path");
 
 const rootDir = path.resolve(__dirname, "..");
@@ -54,5 +54,9 @@ module.exports = defineConfig({
       timeout: 60_000,
     },
   ],
-  projects: [{ name: "chromium", use: { browserName: "chromium" } }],
+  projects: [
+    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
+    { name: "firefox", use: { ...devices["Desktop Firefox"] } },
+    { name: "webkit", use: { ...devices["Desktop Safari"] } },
+  ],
 });

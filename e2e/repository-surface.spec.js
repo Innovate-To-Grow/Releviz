@@ -5,9 +5,11 @@ const { expect, test } = require("@playwright/test");
 const ROOT = path.resolve(__dirname, "..");
 
 const RESOURCE_AUDIT_MANIFEST = [
+  ".github/dependabot.yml",
   ".github/workflows/ci.yml",
   ".github/workflows/deploy-staging.yml",
   ".gitignore",
+  ".pre-commit-config.yaml",
   ".prettierignore",
   ".prettierrc",
   "README.md",
@@ -76,6 +78,13 @@ const RESOURCE_AUDIT_MANIFEST = [
   "package-lock.json",
   "package.json",
   "scripts/quality-gate.sh",
+  "scripts/ci/check_bundle_size.py",
+  "scripts/ci/check_npm_licenses.py",
+  "scripts/ci/plan_django_tests.py",
+  "scripts/ci/plan_e2e_tests.py",
+  "scripts/ci/summarize_workflow_jobs.py",
+  "scripts/ci/validate_dependabot_labels.py",
+  "scripts/ci/validate_tool_versions.py",
   "scripts/docker-build-frontend.sh",
   "scripts/run-db-tests.sh",
   "scripts/run-e2e.sh",

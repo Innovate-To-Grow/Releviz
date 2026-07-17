@@ -19,6 +19,7 @@ AUDITED_SUFFIXES = {
     ".svg",
     ".tf",
     ".txt",
+    ".yaml",
     ".yml",
 }
 AUDITED_NAMES = {
@@ -26,6 +27,7 @@ AUDITED_NAMES = {
     ".gitignore",
     ".prettierignore",
     ".prettierrc",
+    ".pre-commit-config.yaml",
     "Dockerfile",
     "docker-entrypoint.sh",
     "eslint.config.mjs",

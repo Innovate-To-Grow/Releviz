@@ -106,6 +106,13 @@ npm --workspace=frontend run build
 npm run quality-gate               # all of the above
 ```
 
+Pull requests use diff-scoped GitHub Actions jobs for the backend, frontend, E2E, and Terraform
+areas. Every push to `main` runs the full suite so the staging deployment is gated by one stable
+`CI Result` check. The pipeline includes workflow/configuration preflight checks, strict aggregate
+backend coverage, PostgreSQL migration and app tests, frontend coverage and bundle budgets,
+dependency/secret/SAST scans, SBOM and license reports, Terraform tests, and Docker image scans.
+Chromium, Firefox, and WebKit E2E runs publish diagnostics but remain informational.
+
 ## Runtime Environment Variables
 
 ### Backend

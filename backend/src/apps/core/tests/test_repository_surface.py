@@ -6,9 +6,11 @@ from django.test import SimpleTestCase
 ROOT = Path(__file__).resolve().parents[5]
 
 RESOURCE_AUDIT_MANIFEST = [
+    ".github/dependabot.yml",
     ".github/workflows/ci.yml",
     ".github/workflows/deploy-staging.yml",
     ".gitignore",
+    ".pre-commit-config.yaml",
     ".prettierignore",
     ".prettierrc",
     "README.md",
@@ -83,6 +85,13 @@ RESOURCE_AUDIT_MANIFEST = [
     "package.json",
     "scripts/quality-gate.sh",
     "scripts/backup-restore-drill.sh",
+    "scripts/ci/check_bundle_size.py",
+    "scripts/ci/check_npm_licenses.py",
+    "scripts/ci/plan_django_tests.py",
+    "scripts/ci/plan_e2e_tests.py",
+    "scripts/ci/summarize_workflow_jobs.py",
+    "scripts/ci/validate_dependabot_labels.py",
+    "scripts/ci/validate_tool_versions.py",
     "scripts/docker-build-frontend.sh",
     "scripts/ecs-service-rollout.sh",
     "scripts/postgres-backup.sh",
@@ -122,7 +131,11 @@ class RepositorySurfaceTests(SimpleTestCase):
         self.assertIn("jest --coverage --ci", frontend_package)
         self.assertIn("fail_under = 100", pyproject)
         self.assertIn("Backend - Lint & Test", ci)
-        self.assertIn("Frontend - Lint, Core-Inclusive Coverage & Build", ci)
+        self.assertIn("Frontend Unit Test Coverage", ci)
+        self.assertIn("Frontend CI Build Artifact", ci)
+        self.assertIn("Security Required Result", ci)
+        self.assertIn("Supply Chain Result", ci)
+        self.assertIn("CI Result", ci)
         self.assertIn("Playwright E2E", ci)
         self.assertNotIn("cp package-lock.json frontend/", ci)
         self.assertIn("COPY package.json package-lock.docker.json ./", frontend_dockerfile)
