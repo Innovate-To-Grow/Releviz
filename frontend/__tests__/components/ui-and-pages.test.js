@@ -499,6 +499,25 @@ describe("EventHeader", () => {
     fireEvent.click(screen.getByText("Prachi"));
     expect(screen.getByText("My Dashboard")).toBeInTheDocument();
   });
+
+  test("shows Organizer badge when isOrganizer is true", async () => {
+    const { default: EventHeader } = await import("@/components/event/EventHeader");
+    render(<EventHeader eventName="Team Sync" eventCode="ABC12345" isOrganizer={true} />);
+    expect(screen.getByText("Organizer")).toBeInTheDocument();
+  });
+
+  test("shows Participant badge when isOrganizer is false", async () => {
+    const { default: EventHeader } = await import("@/components/event/EventHeader");
+    render(<EventHeader eventName="Team Sync" eventCode="ABC12345" isOrganizer={false} />);
+    expect(screen.getByText("Participant")).toBeInTheDocument();
+  });
+
+  test("shows no role badge when isOrganizer is undefined", async () => {
+    const { default: EventHeader } = await import("@/components/event/EventHeader");
+    render(<EventHeader eventName="Team Sync" eventCode="ABC12345" />);
+    expect(screen.queryByText("Organizer")).not.toBeInTheDocument();
+    expect(screen.queryByText("Participant")).not.toBeInTheDocument();
+  });
 });
 
 describe("CreateEvent", () => {
@@ -517,5 +536,109 @@ describe("CreateEvent", () => {
     const button = screen.getByText("Create Event");
     fireEvent.click(button);
     expect(screen.queryByText(/event name is required/i)).not.toBeInTheDocument();
+  });
+});
+
+describe("AppHeader", () => {
+  test("shows page title and user name", async () => {
+    useAuth.mockReturnValue({
+      user: { displayName: "Prachi", email: "prachi@test.com" },
+      loading: false,
+      logout: jest.fn(),
+    });
+    const { AppHeader } = await import("@/components/ui/AppHeader");
+    render(<AppHeader pageTitle="My Dashboard" />);
+    expect(screen.getByText("Releviz")).toBeInTheDocument();
+    expect(screen.getByText("/ My Dashboard")).toBeInTheDocument();
+    expect(screen.getByText("Prachi")).toBeInTheDocument();
+  });
+
+  test("shows login button when not logged in", async () => {
+    useAuth.mockReturnValue({
+      user: null,
+      loading: false,
+      logout: jest.fn(),
+    });
+    const { AppHeader } = await import("@/components/ui/AppHeader");
+    render(<AppHeader pageTitle="My Dashboard" />);
+    expect(screen.getByText("Login")).toBeInTheDocument();
+  });
+
+  test("shows context label when provided", async () => {
+    useAuth.mockReturnValue({
+      user: { displayName: "Prachi", email: "prachi@test.com" },
+      loading: false,
+      logout: jest.fn(),
+    });
+    const { AppHeader } = await import("@/components/ui/AppHeader");
+    render(<AppHeader pageTitle="My Dashboard" contextLabel="Organizer" />);
+    expect(screen.getByText("Organizer")).toBeInTheDocument();
+  });
+
+  test("shows dropdown menu when user clicks their name", async () => {
+    useAuth.mockReturnValue({
+      user: { displayName: "Prachi", email: "prachi@test.com" },
+      loading: false,
+      logout: jest.fn(),
+    });
+    const { AppHeader } = await import("@/components/ui/AppHeader");
+    render(<AppHeader pageTitle="My Dashboard" />);
+    fireEvent.click(screen.getByText("Prachi"));
+    expect(screen.getByText("My Dashboard")).toBeInTheDocument();
+    expect(screen.getByText("Settings")).toBeInTheDocument();
+    expect(screen.getByText("Log out")).toBeInTheDocument();
+  });
+
+  test("calls logout when Log out is clicked", async () => {
+    const mockLogout = jest.fn().mockResolvedValue(undefined);
+    useAuth.mockReturnValue({
+      user: { displayName: "Prachi", email: "prachi@test.com" },
+      loading: false,
+      logout: mockLogout,
+    });
+    const { AppHeader } = await import("@/components/ui/AppHeader");
+    render(<AppHeader pageTitle="My Dashboard" />);
+    fireEvent.click(screen.getByText("Prachi"));
+    fireEvent.click(screen.getByText("Log out"));
+    expect(mockLogout).toHaveBeenCalled();
+  });
+
+  test("closes dropdown when Settings link is clicked", async () => {
+    useAuth.mockReturnValue({
+      user: { displayName: "Prachi", email: "prachi@test.com" },
+      loading: false,
+      logout: jest.fn(),
+    });
+    const { AppHeader } = await import("@/components/ui/AppHeader");
+    render(<AppHeader pageTitle="My Dashboard" />);
+    fireEvent.click(screen.getByText("Prachi"));
+    expect(screen.getByText("Settings")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Settings"));
+    expect(screen.queryByText("Log out")).not.toBeInTheDocument();
+  });
+  test("closes dropdown when My Dashboard link is clicked", async () => {
+    useAuth.mockReturnValue({
+      user: { displayName: "Prachi", email: "prachi@test.com" },
+      loading: false,
+      logout: jest.fn(),
+    });
+    const { AppHeader } = await import("@/components/ui/AppHeader");
+    render(<AppHeader pageTitle="My Dashboard" />);
+    fireEvent.click(screen.getByText("Prachi"));
+    // getAllByText because "My Dashboard" appears in both page title and dropdown
+    const dashboardLinks = screen.getAllByText(/My Dashboard/);
+    fireEvent.click(dashboardLinks[dashboardLinks.length - 1]);
+    expect(screen.queryByText("Log out")).not.toBeInTheDocument();
+  });
+  test("shows nothing when auth is loading", async () => {
+    useAuth.mockReturnValue({
+      user: null,
+      loading: true,
+      logout: jest.fn(),
+    });
+    const { AppHeader } = await import("@/components/ui/AppHeader");
+    render(<AppHeader pageTitle="My Dashboard" />);
+    expect(screen.queryByText("Login")).not.toBeInTheDocument();
+    expect(screen.queryByText("Prachi")).not.toBeInTheDocument();
   });
 });

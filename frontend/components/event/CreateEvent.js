@@ -10,6 +10,8 @@ import "@material/web/textfield/outlined-text-field.js";
 import "@material/web/select/outlined-select.js";
 import "@material/web/select/select-option.js";
 import { DAY_LABELS } from "@/lib/constants";
+import AppHeader from "@/components/ui/AppHeader";
+
 const MODES = [
   { value: "inperson", label: "In-Person" },
   { value: "virtual", label: "Virtual" },
@@ -154,283 +156,287 @@ function CreateEvent() {
   }
 
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        display: "flex",
-        justifyContent: "center",
-        alignItems: "center",
-        padding: "24px",
-        boxSizing: "border-box",
-      }}
-    >
+    <>
+      <AppHeader pageTitle="Create Event" />
       <div
-        className="md-card"
         style={{
-          maxWidth: "640px",
-          width: "100%",
+          minHeight: "100vh",
           display: "flex",
-          flexDirection: "column",
-          gap: "24px",
+          justifyContent: "center",
+          alignItems: "center",
+          padding: "24px",
+
+          boxSizing: "border-box",
         }}
       >
-        {/* Header */}
-        <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
-          <h1 style={{ color: "var(--md-sys-color-primary)", margin: 0, fontSize: "1.8rem" }}>
-            Releviz
-          </h1>
-        </div>
-
-        {/* Event name */}
-        <md-outlined-text-field
-          label="Event Name"
-          value={name}
-          onInput={(e) => setName(e.target.value)}
-          maxLength="200"
-          style={{ width: "100%" }}
-        ></md-outlined-text-field>
-
-        {/* Mode */}
-        <div>
-          <LabelRow>Meeting Type</LabelRow>
-          <div className="chip-row" style={{ display: "flex", gap: "8px" }}>
-            {MODES.map((m) => (
-              <ToggleChip
-                key={m.value}
-                label={m.label}
-                active={mode === m.value}
-                onClick={() => setMode(m.value)}
-              />
-            ))}
+        <div
+          className="md-card"
+          style={{
+            maxWidth: "640px",
+            width: "100%",
+            display: "flex",
+            flexDirection: "column",
+            gap: "24px",
+          }}
+        >
+          {/* Header */}
+          <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
+            <h1 style={{ color: "var(--md-sys-color-primary)", margin: 0, fontSize: "1.8rem" }}>
+              Releviz
+            </h1>
           </div>
-        </div>
 
-        {/* Location (shown for inperson and mixed) */}
-        {mode !== "virtual" && (
+          {/* Event name */}
           <md-outlined-text-field
-            label="Location / Address"
-            value={location}
-            onInput={(e) => setLocation(e.target.value)}
-            placeholder="TBD"
+            label="Event Name"
+            value={name}
+            onInput={(e) => setName(e.target.value)}
+            maxLength="200"
             style={{ width: "100%" }}
           ></md-outlined-text-field>
-        )}
 
-        {/* Day selection type */}
-        <div>
-          <LabelRow>Day Selection</LabelRow>
-          <div className="chip-row" style={{ display: "flex", gap: "8px", marginBottom: "12px" }}>
-            <ToggleChip
-              label="Days of Week"
-              active={daySelectionType === "days_of_week"}
-              onClick={() => setDaySelectionType("days_of_week")}
-            />
-            <ToggleChip
-              label="Specific Dates"
-              active={daySelectionType === "specific_dates"}
-              onClick={() => setDaySelectionType("specific_dates")}
-            />
-          </div>
-          {daySelectionType === "days_of_week" ? (
-            <div className="chip-row" style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-              {DAY_LABELS.map((label, idx) => (
+          {/* Mode */}
+          <div>
+            <LabelRow>Meeting Type</LabelRow>
+            <div className="chip-row" style={{ display: "flex", gap: "8px" }}>
+              {MODES.map((m) => (
                 <ToggleChip
-                  key={idx}
-                  label={label}
-                  active={selectedDays.includes(idx)}
-                  onClick={() => toggleDay(idx)}
+                  key={m.value}
+                  label={m.label}
+                  active={mode === m.value}
+                  onClick={() => setMode(m.value)}
                 />
               ))}
             </div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-              <div style={{ display: "flex", gap: "8px", alignItems: "flex-end" }}>
-                <input
-                  type="date"
-                  value={dateInput}
-                  onChange={(e) => setDateInput(e.target.value)}
-                  style={{
-                    flex: 1,
-                    padding: "10px",
-                    borderRadius: "8px",
-                    border: "1px solid var(--md-sys-color-outline)",
-                    fontSize: "0.9rem",
-                  }}
-                />
-                <button
-                  onClick={() => {
-                    if (dateInput && !specificDates.includes(dateInput)) {
-                      setSpecificDates((prev) => [...prev, dateInput].sort());
-                      setDateInput("");
-                    }
-                  }}
-                  style={{
-                    padding: "10px 16px",
-                    borderRadius: "8px",
-                    border: "1px solid var(--md-sys-color-primary)",
-                    background: "var(--md-sys-color-primary)",
-                    color: "var(--md-sys-color-on-primary)",
-                    cursor: "pointer",
-                    fontWeight: "500",
-                  }}
-                >
-                  Add
-                </button>
+          </div>
+
+          {/* Location (shown for inperson and mixed) */}
+          {mode !== "virtual" && (
+            <md-outlined-text-field
+              label="Location / Address"
+              value={location}
+              onInput={(e) => setLocation(e.target.value)}
+              placeholder="TBD"
+              style={{ width: "100%" }}
+            ></md-outlined-text-field>
+          )}
+
+          {/* Day selection type */}
+          <div>
+            <LabelRow>Day Selection</LabelRow>
+            <div className="chip-row" style={{ display: "flex", gap: "8px", marginBottom: "12px" }}>
+              <ToggleChip
+                label="Days of Week"
+                active={daySelectionType === "days_of_week"}
+                onClick={() => setDaySelectionType("days_of_week")}
+              />
+              <ToggleChip
+                label="Specific Dates"
+                active={daySelectionType === "specific_dates"}
+                onClick={() => setDaySelectionType("specific_dates")}
+              />
+            </div>
+            {daySelectionType === "days_of_week" ? (
+              <div className="chip-row" style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                {DAY_LABELS.map((label, idx) => (
+                  <ToggleChip
+                    key={idx}
+                    label={label}
+                    active={selectedDays.includes(idx)}
+                    onClick={() => toggleDay(idx)}
+                  />
+                ))}
               </div>
-              {specificDates.length > 0 && (
-                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-                  {specificDates.map((d) => (
-                    <span
-                      key={d}
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: "4px",
-                        padding: "4px 12px",
-                        borderRadius: "16px",
-                        border: "1px solid var(--md-sys-color-primary)",
-                        background: "var(--md-sys-color-primary)",
-                        color: "var(--md-sys-color-on-primary)",
-                        fontSize: "0.85rem",
-                      }}
-                    >
-                      {d}
-                      <button
-                        onClick={() => setSpecificDates((prev) => prev.filter((x) => x !== d))}
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                <div style={{ display: "flex", gap: "8px", alignItems: "flex-end" }}>
+                  <input
+                    type="date"
+                    value={dateInput}
+                    onChange={(e) => setDateInput(e.target.value)}
+                    style={{
+                      flex: 1,
+                      padding: "10px",
+                      borderRadius: "8px",
+                      border: "1px solid var(--md-sys-color-outline)",
+                      fontSize: "0.9rem",
+                    }}
+                  />
+                  <button
+                    onClick={() => {
+                      if (dateInput && !specificDates.includes(dateInput)) {
+                        setSpecificDates((prev) => [...prev, dateInput].sort());
+                        setDateInput("");
+                      }
+                    }}
+                    style={{
+                      padding: "10px 16px",
+                      borderRadius: "8px",
+                      border: "1px solid var(--md-sys-color-primary)",
+                      background: "var(--md-sys-color-primary)",
+                      color: "var(--md-sys-color-on-primary)",
+                      cursor: "pointer",
+                      fontWeight: "500",
+                    }}
+                  >
+                    Add
+                  </button>
+                </div>
+                {specificDates.length > 0 && (
+                  <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                    {specificDates.map((d) => (
+                      <span
+                        key={d}
                         style={{
-                          background: "none",
-                          border: "none",
-                          color: "inherit",
-                          cursor: "pointer",
-                          fontSize: "1rem",
-                          padding: "0 0 0 4px",
-                          lineHeight: 1,
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "4px",
+                          padding: "4px 12px",
+                          borderRadius: "16px",
+                          border: "1px solid var(--md-sys-color-primary)",
+                          background: "var(--md-sys-color-primary)",
+                          color: "var(--md-sys-color-on-primary)",
+                          fontSize: "0.85rem",
                         }}
                       >
-                        ×
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
+                        {d}
+                        <button
+                          onClick={() => setSpecificDates((prev) => prev.filter((x) => x !== d))}
+                          style={{
+                            background: "none",
+                            border: "none",
+                            color: "inherit",
+                            cursor: "pointer",
+                            fontSize: "1rem",
+                            padding: "0 0 0 4px",
+                            lineHeight: 1,
+                          }}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Time range */}
+          <div className="time-row" style={{ display: "flex", gap: "16px" }}>
+            <div style={{ flex: 1 }}>
+              <LabelRow>Start Time</LabelRow>
+              <md-outlined-select
+                value={String(startHour)}
+                onInput={(e) => setStartHour(Number(e.target.value))}
+                style={{ width: "100%" }}
+              >
+                {hours.map((h) => (
+                  <md-select-option key={h.value} value={String(h.value)}>
+                    <div slot="headline">{h.label}</div>
+                  </md-select-option>
+                ))}
+              </md-outlined-select>
             </div>
-          )}
-        </div>
-
-        {/* Time range */}
-        <div className="time-row" style={{ display: "flex", gap: "16px" }}>
-          <div style={{ flex: 1 }}>
-            <LabelRow>Start Time</LabelRow>
-            <md-outlined-select
-              value={String(startHour)}
-              onInput={(e) => setStartHour(Number(e.target.value))}
-              style={{ width: "100%" }}
-            >
-              {hours.map((h) => (
-                <md-select-option key={h.value} value={String(h.value)}>
-                  <div slot="headline">{h.label}</div>
-                </md-select-option>
-              ))}
-            </md-outlined-select>
+            <div style={{ flex: 1 }}>
+              <LabelRow>End Time</LabelRow>
+              <md-outlined-select
+                value={String(endHour)}
+                onInput={(e) => setEndHour(Number(e.target.value))}
+                style={{ width: "100%" }}
+              >
+                {hours.map((h) => (
+                  <md-select-option key={h.value} value={String(h.value)}>
+                    <div slot="headline">{h.label}</div>
+                  </md-select-option>
+                ))}
+              </md-outlined-select>
+            </div>
           </div>
-          <div style={{ flex: 1 }}>
-            <LabelRow>End Time</LabelRow>
-            <md-outlined-select
-              value={String(endHour)}
-              onInput={(e) => setEndHour(Number(e.target.value))}
-              style={{ width: "100%" }}
-            >
-              {hours.map((h) => (
-                <md-select-option key={h.value} value={String(h.value)}>
-                  <div slot="headline">{h.label}</div>
-                </md-select-option>
-              ))}
-            </md-outlined-select>
-          </div>
-        </div>
 
-        {/* Participant view permission */}
-        <div>
-          <LabelRow>Participant View</LabelRow>
-          <md-outlined-select
-            value={participantViewPermission}
-            onInput={(e) => setParticipantViewPermission(e.target.value)}
-            style={{ width: "100%" }}
-          >
-            <md-select-option value="own_only">
-              <div slot="headline">Own schedule only</div>
-            </md-select-option>
-            <md-select-option value="all">
-              <div slot="headline">All individual schedules</div>
-            </md-select-option>
-          </md-outlined-select>
-        </div>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-          <LabelRow>Response Deadline</LabelRow>
-          <input
-            type="datetime-local"
-            value={responseDeadline}
-            onChange={(e) => setResponseDeadline(e.target.value)}
-            style={{
-              padding: "10px",
-              borderRadius: "8px",
-              border: "1px solid var(--md-sys-color-outline)",
-              fontSize: "0.9rem",
-            }}
-          />
-          <label
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "8px",
-              color: "var(--md-sys-color-on-surface-variant)",
-              fontSize: "0.9rem",
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={remindersEnabled}
-              onChange={(e) => setRemindersEnabled(e.target.checked)}
-            />
-            Send reminder emails before the deadline
-          </label>
+          {/* Participant view permission */}
           <div>
-            <LabelRow>Reminder Hours Before Deadline</LabelRow>
+            <LabelRow>Participant View</LabelRow>
+            <md-outlined-select
+              value={participantViewPermission}
+              onInput={(e) => setParticipantViewPermission(e.target.value)}
+              style={{ width: "100%" }}
+            >
+              <md-select-option value="own_only">
+                <div slot="headline">Own schedule only</div>
+              </md-select-option>
+              <md-select-option value="all">
+                <div slot="headline">All individual schedules</div>
+              </md-select-option>
+            </md-outlined-select>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+            <LabelRow>Response Deadline</LabelRow>
             <input
-              type="number"
-              min="0"
-              max="720"
-              value={reminderHoursBefore}
-              onChange={(e) => setReminderHoursBefore(Number(e.target.value))}
+              type="datetime-local"
+              value={responseDeadline}
+              onChange={(e) => setResponseDeadline(e.target.value)}
               style={{
-                width: "100%",
                 padding: "10px",
                 borderRadius: "8px",
                 border: "1px solid var(--md-sys-color-outline)",
                 fontSize: "0.9rem",
-                boxSizing: "border-box",
               }}
             />
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                color: "var(--md-sys-color-on-surface-variant)",
+                fontSize: "0.9rem",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={remindersEnabled}
+                onChange={(e) => setRemindersEnabled(e.target.checked)}
+              />
+              Send reminder emails before the deadline
+            </label>
+            <div>
+              <LabelRow>Reminder Hours Before Deadline</LabelRow>
+              <input
+                type="number"
+                min="0"
+                max="720"
+                value={reminderHoursBefore}
+                onChange={(e) => setReminderHoursBefore(Number(e.target.value))}
+                style={{
+                  width: "100%",
+                  padding: "10px",
+                  borderRadius: "8px",
+                  border: "1px solid var(--md-sys-color-outline)",
+                  fontSize: "0.9rem",
+                  boxSizing: "border-box",
+                }}
+              />
+            </div>
           </div>
+
+          {error && (
+            <p style={{ color: "var(--md-sys-color-error)", margin: 0, fontSize: "0.9rem" }}>
+              {error}
+            </p>
+          )}
+
+          <AppButton
+            onClick={handleSubmit}
+            disabled={loading}
+            fullWidth={true}
+            icon={loading ? <MdHourglassEmpty /> : <MdAdd />}
+          >
+            {loading ? "Creating..." : "Create Event"}
+          </AppButton>
         </div>
-
-        {error && (
-          <p style={{ color: "var(--md-sys-color-error)", margin: 0, fontSize: "0.9rem" }}>
-            {error}
-          </p>
-        )}
-
-        <AppButton
-          onClick={handleSubmit}
-          disabled={loading}
-          fullWidth={true}
-          icon={loading ? <MdHourglassEmpty /> : <MdAdd />}
-        >
-          {loading ? "Creating..." : "Create Event"}
-        </AppButton>
       </div>
-    </div>
+    </>
   );
 }
 

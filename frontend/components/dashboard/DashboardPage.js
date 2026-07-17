@@ -8,6 +8,7 @@ import { useAuth } from "@/components/auth/AuthContext";
 import { fetchDashboardEvents } from "@/lib/api/dashboard";
 import { formatMode } from "@/lib/format";
 import "@material/web/textfield/outlined-text-field.js";
+import AppHeader from "@/components/ui/AppHeader";
 
 function EventCard({ event }) {
   return (
@@ -88,90 +89,93 @@ function DashboardPage() {
   };
 
   return (
-    <div className="page-pad" style={{ maxWidth: "800px", margin: "0 auto" }}>
-      {error && (
+    <>
+      <AppHeader pageTitle="My Dashboard" />
+      <div className="page-pad" style={{ maxWidth: "800px", margin: "0 auto" }}>
+        {error && (
+          <div
+            style={{
+              padding: "12px 16px",
+              borderRadius: "12px",
+              background: "color-mix(in srgb, var(--md-sys-color-error) 10%, transparent)",
+              border: "1px solid var(--md-sys-color-error)",
+              color: "var(--md-sys-color-error)",
+              fontSize: "0.9rem",
+              marginBottom: "24px",
+            }}
+          >
+            {error}
+          </div>
+        )}
         <div
           style={{
-            padding: "12px 16px",
-            borderRadius: "12px",
-            background: "color-mix(in srgb, var(--md-sys-color-error) 10%, transparent)",
-            border: "1px solid var(--md-sys-color-error)",
-            color: "var(--md-sys-color-error)",
-            fontSize: "0.9rem",
-            marginBottom: "24px",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: "32px",
+            flexWrap: "wrap",
+            gap: "16px",
           }}
         >
-          {error}
+          <h1 style={{ color: "var(--md-sys-color-primary)", margin: 0, fontSize: "1.8rem" }}>
+            My Dashboard
+          </h1>
+          <Link href="/create">
+            <AppButton icon={<MdAdd />}>Create New Event</AppButton>
+          </Link>
         </div>
-      )}
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: "32px",
-          flexWrap: "wrap",
-          gap: "16px",
-        }}
-      >
-        <h1 style={{ color: "var(--md-sys-color-primary)", margin: 0, fontSize: "1.8rem" }}>
-          My Dashboard
-        </h1>
-        <Link href="/create">
-          <AppButton icon={<MdAdd />}>Create New Event</AppButton>
-        </Link>
-      </div>
 
-      <div
-        className="md-card"
-        style={{ marginBottom: "24px", display: "flex", gap: "12px", alignItems: "flex-end" }}
-      >
-        <md-outlined-text-field
-          label="Enter Event Code"
-          value={eventCode}
-          onInput={(e) => setEventCode(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleGoToEvent()}
-          style={{ flex: 1 }}
-        ></md-outlined-text-field>
-        <AppButton onClick={handleGoToEvent} variant="outlined" icon={<MdSearch />}>
-          Go
-        </AppButton>
-      </div>
+        <div
+          className="md-card"
+          style={{ marginBottom: "24px", display: "flex", gap: "12px", alignItems: "flex-end" }}
+        >
+          <md-outlined-text-field
+            label="Enter Event Code"
+            value={eventCode}
+            onInput={(e) => setEventCode(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleGoToEvent()}
+            style={{ flex: 1 }}
+          ></md-outlined-text-field>
+          <AppButton onClick={handleGoToEvent} variant="outlined" icon={<MdSearch />}>
+            Go
+          </AppButton>
+        </div>
 
-      <div className="md-card" style={{ marginBottom: "24px" }}>
-        <h3 style={{ margin: "0 0 16px 0", color: "var(--md-sys-color-on-surface)" }}>
-          My Events ({organized.length})
-        </h3>
-        {organized.length > 0 ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-            {organized.map((e) => (
-              <EventCard key={e.code} event={e} />
-            ))}
-          </div>
-        ) : (
-          <p style={{ color: "var(--md-sys-color-outline)", margin: 0, fontStyle: "italic" }}>
-            No events organized yet.
-          </p>
-        )}
-      </div>
+        <div className="md-card" style={{ marginBottom: "24px" }}>
+          <h3 style={{ margin: "0 0 16px 0", color: "var(--md-sys-color-on-surface)" }}>
+            My Events ({organized.length})
+          </h3>
+          {organized.length > 0 ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+              {organized.map((e) => (
+                <EventCard key={e.code} event={e} />
+              ))}
+            </div>
+          ) : (
+            <p style={{ color: "var(--md-sys-color-outline)", margin: 0, fontStyle: "italic" }}>
+              No events organized yet.
+            </p>
+          )}
+        </div>
 
-      <div className="md-card">
-        <h3 style={{ margin: "0 0 16px 0", color: "var(--md-sys-color-on-surface)" }}>
-          Events I Participate In ({participating.length})
-        </h3>
-        {participating.length > 0 ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-            {participating.map((e) => (
-              <EventCard key={e.code} event={e} />
-            ))}
-          </div>
-        ) : (
-          <p style={{ color: "var(--md-sys-color-outline)", margin: 0, fontStyle: "italic" }}>
-            Not participating in any events yet.
-          </p>
-        )}
+        <div className="md-card">
+          <h3 style={{ margin: "0 0 16px 0", color: "var(--md-sys-color-on-surface)" }}>
+            Events I Participate In ({participating.length})
+          </h3>
+          {participating.length > 0 ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+              {participating.map((e) => (
+                <EventCard key={e.code} event={e} />
+              ))}
+            </div>
+          ) : (
+            <p style={{ color: "var(--md-sys-color-outline)", margin: 0, fontStyle: "italic" }}>
+              Not participating in any events yet.
+            </p>
+          )}
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 

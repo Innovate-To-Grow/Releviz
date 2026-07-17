@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import AppButton from "@/components/ui/AppButton";
 import { useAuth } from "@/components/auth/AuthContext";
+import AppHeader from "@/components/ui/AppHeader";
 
 export default function SettingsPage() {
   const { user, loading, updateProfile } = useAuth();
@@ -53,75 +54,92 @@ export default function SettingsPage() {
   }
 
   return (
-    <div
-      className="page-pad"
-      style={{ minHeight: "100vh", display: "flex", justifyContent: "center", paddingTop: "32px" }}
-    >
+    <>
+      <AppHeader pageTitle="Settings" />
       <div
-        className="md-card"
+        className="page-pad"
         style={{
-          maxWidth: "560px",
-          width: "100%",
+          minHeight: "100vh",
           display: "flex",
-          flexDirection: "column",
-          gap: "18px",
+          justifyContent: "center",
+          paddingTop: "32px",
         }}
       >
-        <div>
-          <h1 style={{ color: "var(--md-sys-color-primary)", margin: "0 0 6px 0" }}>
-            Account Settings
-          </h1>
-          <p style={{ margin: 0, color: "var(--md-sys-color-on-surface-variant)" }}>{user.email}</p>
-        </div>
-        {error && <div className="auth-error">{error}</div>}
-        <div className="auth-grid">
-          <label className="field-label">
-            First name
-            <input
-              value={current.firstName}
-              onChange={(event) => setField("firstName", event.target.value)}
-            />
-          </label>
-          <label className="field-label">
-            Last name
-            <input
-              value={current.lastName}
-              onChange={(event) => setField("lastName", event.target.value)}
-            />
-          </label>
-        </div>
-        <label className="field-label">
-          Organization
-          <input
-            value={current.organization}
-            onChange={(event) => setField("organization", event.target.value)}
-          />
-        </label>
-        <label className="field-label">
-          Title
-          <input
-            value={current.title}
-            onChange={(event) => setField("title", event.target.value)}
-          />
-        </label>
-        <p
+        <div
+          className="md-card"
           style={{
-            margin: 0,
-            fontSize: "0.85rem",
-            color: "var(--md-sys-color-on-surface-variant)",
+            maxWidth: "560px",
+            width: "100%",
+            display: "flex",
+            flexDirection: "column",
+            gap: "18px",
           }}
         >
-          User ID: {user.id}
-        </p>
-        <div
-          style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: "12px" }}
-        >
-          {saved && (
-            <span style={{ color: "var(--md-sys-color-primary)", fontSize: "0.9rem" }}>Saved</span>
-          )}
-          <AppButton onClick={handleSave}>Save</AppButton>
+          <div>
+            <h1 style={{ color: "var(--md-sys-color-primary)", margin: "0 0 6px 0" }}>
+              Account Settings
+            </h1>
+            <p style={{ margin: 0, color: "var(--md-sys-color-on-surface-variant)" }}>
+              {user.email}
+            </p>
+          </div>
+          {error && <div className="auth-error">{error}</div>}
+          <div className="auth-grid">
+            <label className="field-label">
+              First name
+              <input
+                value={current.firstName}
+                onChange={(event) => setField("firstName", event.target.value)}
+              />
+            </label>
+            <label className="field-label">
+              Last name
+              <input
+                value={current.lastName}
+                onChange={(event) => setField("lastName", event.target.value)}
+              />
+            </label>
+          </div>
+          <label className="field-label">
+            Organization
+            <input
+              value={current.organization}
+              onChange={(event) => setField("organization", event.target.value)}
+            />
+          </label>
+          <label className="field-label">
+            Title
+            <input
+              value={current.title}
+              onChange={(event) => setField("title", event.target.value)}
+            />
+          </label>
+          <p
+            style={{
+              margin: 0,
+              fontSize: "0.85rem",
+              color: "var(--md-sys-color-on-surface-variant)",
+            }}
+          >
+            User ID: {user.id}
+          </p>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "flex-end",
+              alignItems: "center",
+              gap: "12px",
+            }}
+          >
+            {saved && (
+              <span style={{ color: "var(--md-sys-color-primary)", fontSize: "0.9rem" }}>
+                Saved
+              </span>
+            )}
+            <AppButton onClick={handleSave}>Save</AppButton>
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }

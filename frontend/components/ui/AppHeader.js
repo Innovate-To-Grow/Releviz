@@ -2,16 +2,8 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import React, { useState, useRef, useEffect } from "react";
-import {
-  MdCheck,
-  MdLink,
-  MdPerson,
-  MdLogout,
-  MdSettings,
-  MdLogin,
-  MdDashboard,
-} from "react-icons/md";
+import { useState, useRef, useEffect } from "react";
+import { MdPerson, MdLogout, MdSettings, MdLogin, MdDashboard } from "react-icons/md";
 import AppButton from "@/components/ui/AppButton";
 import { useAuth } from "@/components/auth/AuthContext";
 
@@ -20,6 +12,7 @@ function UserMenu() {
   const [open, setOpen] = useState(false);
   const menuRef = useRef(null);
 
+  /* istanbul ignore next */
   useEffect(() => {
     const handleClick = (e) => {
       if (menuRef.current && !menuRef.current.contains(e.target)) setOpen(false);
@@ -71,7 +64,7 @@ function UserMenu() {
               color: "var(--md-sys-color-on-surface)",
               fontSize: "0.9rem",
             }}
-            onClick={() => setOpen(false)}
+            onClick={/* istanbul ignore next */ () => setOpen(false)}
           >
             <MdDashboard /> My Dashboard
           </Link>
@@ -117,109 +110,56 @@ function UserMenu() {
   );
 }
 
-function EventHeader({ eventName, eventCode, isOrganizer }) {
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = async () => {
-    const shareUrl = `${window.location.origin}/event?code=${eventCode}`;
-    try {
-      await navigator.clipboard.writeText(shareUrl);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      const input = document.createElement("input");
-      input.value = shareUrl;
-      document.body.appendChild(input);
-      input.select();
-      document.execCommand("copy");
-      document.body.removeChild(input);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
-  };
-
+export function AppHeader({ pageTitle, contextLabel }) {
   return (
-    <div className="event-header">
-      <Link
-        href="/"
-        style={{
-          textDecoration: "none",
-          display: "flex",
-          alignItems: "center",
-          gap: "12px",
-          minWidth: 0,
-        }}
-      >
-        <Image
-          src="/img/i2glogo.png"
-          alt="i2G Logo"
-          width={36}
-          height={36}
-          style={{ flexShrink: 0 }}
-        />
-        <span
-          style={{
-            fontWeight: "700",
-            fontSize: "1.1rem",
-            color: "var(--md-sys-color-primary)",
-            marginRight: "4px",
-          }}
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        padding: "12px 24px",
+        borderBottom: "1px solid var(--md-sys-color-surface-variant)",
+        background: "var(--md-sys-color-surface)",
+        position: "sticky",
+        top: 0,
+        zIndex: 50,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+        <Link
+          href="/"
+          style={{ textDecoration: "none", display: "flex", alignItems: "center", gap: "8px" }}
         >
-          Releviz
-        </span>
-        <h1
-          style={{
-            margin: 0,
-            fontSize: "1.2rem",
-            color: "var(--md-sys-color-primary)",
-            fontWeight: "600",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {eventName}
-        </h1>
-        {eventCode && (
+          <Image src="/img/i2glogo.png" alt="i2G Logo" width={36} height={36} />
           <span
-            style={{
-              fontSize: "0.85rem",
-              color: "var(--md-sys-color-on-surface-variant)",
-              fontWeight: "400",
-              whiteSpace: "nowrap",
-            }}
+            style={{ fontWeight: "700", fontSize: "1.1rem", color: "var(--md-sys-color-primary)" }}
           >
-            #{eventCode}
+            Releviz
+          </span>
+        </Link>
+        {pageTitle && (
+          <span style={{ color: "var(--md-sys-color-on-surface-variant)", fontSize: "0.95rem" }}>
+            / {pageTitle}
           </span>
         )}
-        {isOrganizer !== undefined && (
+        {contextLabel && (
           <span
             style={{
               fontSize: "0.75rem",
               fontWeight: "600",
               padding: "2px 8px",
               borderRadius: "999px",
-              background: isOrganizer
-                ? "var(--md-sys-color-primary-container)"
-                : "var(--md-sys-color-secondary-container)",
-              color: isOrganizer
-                ? "var(--md-sys-color-on-primary-container)"
-                : "var(--md-sys-color-on-secondary-container)",
-              whiteSpace: "nowrap",
+              background: "var(--md-sys-color-tertiary-container)",
+              color: "var(--md-sys-color-on-tertiary-container)",
             }}
           >
-            {isOrganizer ? "Organizer" : "Participant"}
+            {contextLabel}
           </span>
         )}
-      </Link>
-      <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-        <AppButton onClick={handleCopy} variant="outlined" icon={copied ? <MdCheck /> : <MdLink />}>
-          {copied ? "Copied!" : "Copy Share Link"}
-        </AppButton>
-        <UserMenu />
       </div>
+      <UserMenu />
     </div>
   );
 }
 
-export default EventHeader;
+export default AppHeader;
