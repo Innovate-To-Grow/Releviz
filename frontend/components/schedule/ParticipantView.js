@@ -294,7 +294,7 @@ function ParticipantView() {
             )}
           </h2>
           <p style={{ color: "var(--md-sys-color-on-surface-variant)", margin: 0 }}>
-            Set your availability and see the group schedule.
+            Set your availability.
           </p>
         </div>
         <AppButton
@@ -307,7 +307,14 @@ function ParticipantView() {
       </div>
 
       <div className="two-pane">
-        <div style={{ flex: "1 1 350px", display: "flex", flexDirection: "column", gap: "24px" }}>
+        <div
+          style={{
+            flex: viewPermission === "own_only" ? "1 1 100%" : "1 1 350px",
+            display: "flex",
+            flexDirection: "column",
+            gap: "24px",
+          }}
+        >
           <div
             className="md-card"
             style={{ display: "flex", flexDirection: "column", gap: "24px" }}
@@ -380,45 +387,46 @@ function ParticipantView() {
         </div>
 
         <div style={{ flex: "2 1 700px", display: "flex", flexDirection: "column", gap: "24px" }}>
-          <div className="md-card" style={{ overflowX: "auto" }}>
-            <h3 style={{ margin: "0 0 16px 0", color: "var(--md-sys-color-on-surface)" }}>
-              Group Availability
-            </h3>
-            <div style={{ display: "flex", gap: "24px", flexWrap: "wrap" }}>
-              {mode !== "virtual" && (
-                <div style={{ flex: "1 1 300px", minWidth: 0 }}>
-                  <ScheduleGrid
-                    schedule={avgInperson}
-                    startHour={event.startHour}
-                    endHour={event.endHour}
-                    selectedDays={event.days}
-                    daySelectionType={event.daySelectionType}
-                    specificDates={event.specificDates}
-                    readOnly={true}
-                    showValues={true}
-                    label={mode === "mixed" ? "In-Person Availability" : "Availability"}
-                  />
-                </div>
-              )}
-              {mode !== "inperson" && (
-                <div style={{ flex: "1 1 300px", minWidth: 0 }}>
-                  <ScheduleGrid
-                    schedule={avgVirtual}
-                    startHour={event.startHour}
-                    endHour={event.endHour}
-                    selectedDays={event.days}
-                    daySelectionType={event.daySelectionType}
-                    specificDates={event.specificDates}
-                    readOnly={true}
-                    showValues={true}
-                    label={mode === "mixed" ? "Virtual Availability" : "Availability"}
-                    virtual={true}
-                  />
-                </div>
-              )}
+          {viewPermission !== "own_only" && (
+            <div className="md-card" style={{ overflowX: "auto" }}>
+              <h3 style={{ margin: "0 0 16px 0", color: "var(--md-sys-color-on-surface)" }}>
+                Group Availability
+              </h3>
+              <div style={{ display: "flex", gap: "24px", flexWrap: "wrap" }}>
+                {mode !== "virtual" && (
+                  <div style={{ flex: "1 1 300px", minWidth: 0 }}>
+                    <ScheduleGrid
+                      schedule={avgInperson}
+                      startHour={event.startHour}
+                      endHour={event.endHour}
+                      selectedDays={event.days}
+                      daySelectionType={event.daySelectionType}
+                      specificDates={event.specificDates}
+                      readOnly={true}
+                      showValues={true}
+                      label={mode === "mixed" ? "In-Person Availability" : "Availability"}
+                    />
+                  </div>
+                )}
+                {mode !== "inperson" && (
+                  <div style={{ flex: "1 1 300px", minWidth: 0 }}>
+                    <ScheduleGrid
+                      schedule={avgVirtual}
+                      startHour={event.startHour}
+                      endHour={event.endHour}
+                      selectedDays={event.days}
+                      daySelectionType={event.daySelectionType}
+                      specificDates={event.specificDates}
+                      readOnly={true}
+                      showValues={true}
+                      label={mode === "mixed" ? "Virtual Availability" : "Availability"}
+                      virtual={true}
+                    />
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-
+          )}
           {viewPermission !== "own_only" && participants.length > 0 && (
             <div>
               <h3 style={{ margin: "0 0 16px 0", color: "var(--md-sys-color-on-surface)" }}>

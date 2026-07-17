@@ -21,12 +21,15 @@ function InfoCard({ label, value }) {
 
 function EventDetailsGrid({ event, extraCards = [] }) {
   const mode = event?.mode || "inperson";
-  const dayText = Array.isArray(event?.days)
-    ? event.days
-        .map((d) => DAY_LABELS[d])
-        .filter(Boolean)
-        .join(", ")
-    : "";
+  const dayText =
+    event?.daySelectionType === "specific_dates" && Array.isArray(event?.specificDates)
+      ? event.specificDates.join(", ")
+      : Array.isArray(event?.days)
+        ? event.days
+            .map((d) => DAY_LABELS[d])
+            .filter(Boolean)
+            .join(", ")
+        : "";
 
   return (
     <div

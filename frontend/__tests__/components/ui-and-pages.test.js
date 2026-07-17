@@ -219,8 +219,7 @@ describe("small UI modules", () => {
           endHour: 11,
           days: [1, 2],
           location: "Room",
-          daySelectionType: "specific_dates",
-          specificDates: ["2026-07-08"],
+          daySelectionType: "days_of_week",
         }}
         extraCards={[{ label: "Participants", value: 3 }]}
       />
@@ -236,6 +235,22 @@ describe("small UI modules", () => {
     expect(screen.getByText("In-Person")).toBeInTheDocument();
     expect(screen.getByText("Not set")).toBeInTheDocument();
     expect(screen.getByText("N/A")).toBeInTheDocument();
+  });
+
+  test("EventDetailsGrid renders specific dates instead of days of week", () => {
+    render(
+      <EventDetailsGrid
+        event={{
+          mode: "inperson",
+          daySelectionType: "specific_dates",
+          specificDates: ["2026-07-17", "2026-07-21", "2026-07-24"],
+          startHour: 9,
+          endHour: 17,
+          location: "Room A",
+        }}
+      />
+    );
+    expect(screen.getByText("2026-07-17, 2026-07-21, 2026-07-24")).toBeInTheDocument();
   });
 });
 
