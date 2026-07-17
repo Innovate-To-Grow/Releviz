@@ -91,9 +91,11 @@ jobs:
            fi
          fi
 
-         echo "backend_mode=$BACKEND_MODE" >> "$GITHUB_OUTPUT"
-         echo "state_bucket=$STATE_BUCKET" >> "$GITHUB_OUTPUT"
-         echo "lock_table=$LOCK_TABLE" >> "$GITHUB_OUTPUT"
+         {
+           echo "backend_mode=$BACKEND_MODE"
+           echo "state_bucket=$STATE_BUCKET"
+           echo "lock_table=$LOCK_TABLE"
+         } >> "$GITHUB_OUTPUT"
          set -e
 
      - name: Set up Terraform
@@ -165,10 +167,12 @@ jobs:
            -var="django_superuser_password=${{ secrets.STAGING_DJANGO_SUPERUSER_PASSWORD }}" \
            -var="django_create_default_admin=${{ vars.STAGING_CREATE_DEFAULT_ADMIN || 'false' }}"
 
-         echo "alb_dns=$(terraform -chdir=infra/staging output -raw alb_dns_name)" >> "$GITHUB_OUTPUT"
-         echo "cluster_name=$(terraform -chdir=infra/staging output -raw ecs_cluster_name)" >> "$GITHUB_OUTPUT"
-         echo "backend_service=$(terraform -chdir=infra/staging output -raw backend_service_name)" >> "$GITHUB_OUTPUT"
-         echo "frontend_service=$(terraform -chdir=infra/staging output -raw frontend_service_name)" >> "$GITHUB_OUTPUT"
+         {
+           echo "alb_dns=$(terraform -chdir=infra/staging output -raw alb_dns_name)"
+           echo "cluster_name=$(terraform -chdir=infra/staging output -raw ecs_cluster_name)"
+           echo "backend_service=$(terraform -chdir=infra/staging output -raw backend_service_name)"
+           echo "frontend_service=$(terraform -chdir=infra/staging output -raw frontend_service_name)"
+         } >> "$GITHUB_OUTPUT"
 
      - name: Fallback backend ECS image refresh
        if: ${{ steps.tf.outcome == 'failure' }}
