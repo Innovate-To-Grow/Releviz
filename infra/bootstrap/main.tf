@@ -221,7 +221,7 @@ locals {
         Sid    = "TerraformStateBucket"
         Effect = "Allow"
         Action = [
-          "s3:GetBucketEncryption",
+          "s3:GetEncryptionConfiguration",
           "s3:GetBucketLocation",
           "s3:GetBucketPublicAccessBlock",
           "s3:GetBucketVersioning",

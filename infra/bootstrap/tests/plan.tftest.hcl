@@ -60,4 +60,12 @@ run "bootstrap_plan" {
     )
     error_message = "The production inline policy must fit AWS limits and remain narrower than administrator IAM access."
   }
+
+  assert {
+    condition = (
+      strcontains(local.production_deploy_policy, "s3:GetEncryptionConfiguration") &&
+      !strcontains(local.production_deploy_policy, "s3:GetBucketEncryption")
+    )
+    error_message = "The production role must use the IAM action required to inspect state-bucket encryption."
+  }
 }
