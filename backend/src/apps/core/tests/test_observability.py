@@ -61,6 +61,20 @@ class AlbHealthCheckHostMiddlewareTests(SimpleTestCase):
                 self.assertEqual(request.META["HTTP_HOST"], "untrusted.example")
                 self.assertNotIn("HTTP_X_FORWARDED_PROTO", request.META)
 
+    @patch("apps.core.middleware.settings.ALLOWED_HOSTS", ["", "*", ".example.com"])
+    def test_does_not_normalize_probe_without_a_strict_canonical_host(self):
+        request = self.factory.get(
+            "/api/health/ready",
+            HTTP_HOST="10.0.11.42:4000",
+            HTTP_USER_AGENT=ALB_HEALTH_CHECK_USER_AGENT,
+        )
+
+        response = AlbHealthCheckHostMiddleware(lambda current: HttpResponse())(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(request.META["HTTP_HOST"], "10.0.11.42:4000")
+        self.assertNotIn("HTTP_X_FORWARDED_PROTO", request.META)
+
     @override_settings(
         ALLOWED_HOSTS=["releviz.com"],
         SECURE_SSL_REDIRECT=True,
