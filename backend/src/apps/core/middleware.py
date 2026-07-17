@@ -4,9 +4,52 @@ import logging
 import time
 import uuid
 
+from django.conf import settings
+
 from apps.core.logging import request_id_context
 
 logger = logging.getLogger("releviz.requests")
+
+ALB_HEALTH_CHECK_USER_AGENT = "ELB-HealthChecker/2.0"
+ALB_HEALTH_CHECK_PATHS = frozenset(
+    {
+        "/api/health",
+        "/api/health/live",
+        "/api/health/ready",
+    }
+)
+
+
+class AlbHealthCheckHostMiddleware:
+    """Normalize only ALB health probes before Django validates the Host header.
+
+    Application Load Balancer probes IP targets with the target's private IP in
+    ``Host`` and over the target group's HTTP connection. Production must keep
+    a strict ``ALLOWED_HOSTS`` list and HTTPS redirects for normal requests, so
+    only the ALB's exact user agent on the public health endpoints is normalized.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        is_alb_probe = (
+            request.path in ALB_HEALTH_CHECK_PATHS
+            and request.META.get("HTTP_USER_AGENT") == ALB_HEALTH_CHECK_USER_AGENT
+        )
+        if is_alb_probe:
+            canonical_host = next(
+                (
+                    host
+                    for host in settings.ALLOWED_HOSTS
+                    if host and host != "*" and not host.startswith(".")
+                ),
+                "",
+            )
+            if canonical_host:
+                request.META["HTTP_HOST"] = canonical_host
+                request.META["HTTP_X_FORWARDED_PROTO"] = "https"
+        return self.get_response(request)
 
 
 def _request_id(request) -> str:
