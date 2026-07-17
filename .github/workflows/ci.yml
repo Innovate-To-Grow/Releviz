@@ -31,7 +31,7 @@ jobs:
           if-no-files-found: ignore
 
   frontend-lint-coverage-build:
-    name: Frontend - Lint, Test & Build (100% Coverage)
+    name: Frontend - Lint, Core-Inclusive Coverage & Build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -51,6 +51,36 @@ jobs:
           name: frontend-coverage
           path: frontend/coverage
           if-no-files-found: ignore
+
+  dependency-security:
+    name: Dependency Security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: backend/requirements/production.txt
+      - run: npm ci --workspace=frontend
+      - run: npm audit --audit-level=low
+      - run: python -m pip install pip-audit==2.10.1
+      - run: python -m pip_audit -r backend/requirements/production.txt
+
+  infrastructure-plan:
+    name: Terraform - Format, Validate & Mock Plan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.8"
+      - run: scripts/terraform-check.sh
 
   postgres-integration:
     name: Postgres Integration
@@ -160,6 +190,8 @@ jobs:
       - postgres-integration
       - playwright-e2e
       - resource-audit
+      - dependency-security
+      - infrastructure-plan
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -167,8 +199,6 @@ jobs:
         service: [frontend, backend]
     steps:
       - uses: actions/checkout@v4
-      - if: ${{ matrix.service == 'frontend' }}
-        run: cp package-lock.json frontend/
       - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with:

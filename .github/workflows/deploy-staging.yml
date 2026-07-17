@@ -26,6 +26,7 @@ jobs:
      AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
      ECR_BACKEND: ${{ vars.ECR_STAGING_BACKEND || 'scheduler-staging-backend' }}
      ECR_FRONTEND: ${{ vars.ECR_STAGING_FRONTEND || 'scheduler-staging-frontend' }}
+     ECS_CLUSTER: ${{ vars.ECS_STAGING_CLUSTER || 'Releviz-Staging' }}
      DEPLOY_SHA: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.workflow_run.head_sha }}
 
    steps:
@@ -152,6 +153,7 @@ jobs:
          terraform -chdir=infra/staging apply -auto-approve -input=false \
            -var="aws_region=${AWS_REGION}" \
            -var="domain_name=releviz.com" \
+           -var="ecs_cluster_name=${ECS_CLUSTER}" \
            -var="backend_image_tag=${DEPLOY_SHA}" \
            -var="frontend_image_tag=${DEPLOY_SHA}" \
            -var="ecr_backend_repository=${ECR_BACKEND}" \
@@ -173,7 +175,6 @@ jobs:
        run: |
          set -euo pipefail
          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-         CLUSTER_NAME="scheduler-staging-cluster"
          BACKEND_SERVICE="scheduler-staging-backend-service"
          BACKEND_FAMILY="scheduler-staging-backend-task"
          BACKEND_CONTAINER="scheduler-staging-backend"
@@ -194,7 +195,7 @@ jobs:
          docker push "$CURRENT_BACKEND_IMAGE"
 
          aws ecs update-service \
-           --cluster "$CLUSTER_NAME" \
+           --cluster "$ECS_CLUSTER" \
            --service "$BACKEND_SERVICE" \
            --force-new-deployment >/dev/null
 
@@ -209,7 +210,7 @@ jobs:
        if: ${{ steps.tf.outcome == 'failure' }}
        run: |
          aws ecs wait services-stable \
-           --cluster "scheduler-staging-cluster" \
+           --cluster "$ECS_CLUSTER" \
            --services "scheduler-staging-backend-service"
 
      - name: Smoke tests
