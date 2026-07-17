@@ -7,11 +7,79 @@ from unittest.mock import patch
 
 from django.core.exceptions import ImproperlyConfigured
 from django.http import HttpResponse
-from django.test import RequestFactory, SimpleTestCase
+from django.test import RequestFactory, SimpleTestCase, override_settings
 
 from apps.core.error_tracking import initialize_error_tracking, scrub_error_event
 from apps.core.logging import JsonFormatter, RequestContextFilter, request_id_context
-from apps.core.middleware import RequestObservabilityMiddleware, _request_id, _route
+from apps.core.middleware import (
+    ALB_HEALTH_CHECK_USER_AGENT,
+    AlbHealthCheckHostMiddleware,
+    RequestObservabilityMiddleware,
+    _request_id,
+    _route,
+)
+
+
+class AlbHealthCheckHostMiddlewareTests(SimpleTestCase):
+    def setUp(self):
+        self.factory = RequestFactory()
+
+    @patch("apps.core.middleware.settings.ALLOWED_HOSTS", ["releviz.com"])
+    def test_normalizes_exact_alb_probe_without_widening_allowed_hosts(self):
+        observed = {}
+
+        def respond(request):
+            observed["host"] = request.get_host()
+            observed["proto"] = request.META.get("HTTP_X_FORWARDED_PROTO")
+            return HttpResponse(status=200)
+
+        request = self.factory.get(
+            "/api/health",
+            HTTP_HOST="10.0.11.42:4000",
+            HTTP_USER_AGENT=ALB_HEALTH_CHECK_USER_AGENT,
+        )
+        response = AlbHealthCheckHostMiddleware(respond)(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(observed, {"host": "releviz.com", "proto": "https"})
+
+    @patch("apps.core.middleware.settings.ALLOWED_HOSTS", ["releviz.com"])
+    def test_does_not_normalize_other_paths_or_user_agents(self):
+        cases = [
+            ("/api/events", ALB_HEALTH_CHECK_USER_AGENT),
+            ("/api/health", "spoofed-health-checker"),
+        ]
+        for path, user_agent in cases:
+            with self.subTest(path=path, user_agent=user_agent):
+                request = self.factory.get(
+                    path,
+                    HTTP_HOST="untrusted.example",
+                    HTTP_USER_AGENT=user_agent,
+                )
+                response = AlbHealthCheckHostMiddleware(lambda current: HttpResponse())(request)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(request.META["HTTP_HOST"], "untrusted.example")
+                self.assertNotIn("HTTP_X_FORWARDED_PROTO", request.META)
+
+    @override_settings(
+        ALLOWED_HOSTS=["releviz.com"],
+        SECURE_SSL_REDIRECT=True,
+        SECURE_PROXY_SSL_HEADER=("HTTP_X_FORWARDED_PROTO", "https"),
+    )
+    def test_full_middleware_stack_accepts_alb_liveness_probe_only(self):
+        accepted = self.client.get(
+            "/api/health/live",
+            HTTP_HOST="10.0.11.42:4000",
+            HTTP_USER_AGENT=ALB_HEALTH_CHECK_USER_AGENT,
+        )
+        self.assertEqual(accepted.status_code, 200)
+
+        rejected = self.client.get(
+            "/api/health/live",
+            HTTP_HOST="10.0.11.42:4000",
+            HTTP_USER_AGENT="not-the-load-balancer",
+        )
+        self.assertEqual(rejected.status_code, 400)
 
 
 class StructuredLoggingTests(SimpleTestCase):
