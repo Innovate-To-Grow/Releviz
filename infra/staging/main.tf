@@ -445,7 +445,7 @@ resource "aws_lb_target_group" "backend" {
     unhealthy_threshold = 3
     timeout             = 5
     interval            = 30
-    matcher             = "200-399"
+    matcher             = "200-400"
   }
 
   tags = local.common_tags
@@ -521,7 +521,7 @@ resource "aws_lb_listener_rule" "api" {
 # --- ECS ---
 
 resource "aws_ecs_cluster" "app" {
-  name = "${local.prefix}-cluster"
+  name = var.ecs_cluster_name
   tags = local.common_tags
 }
 

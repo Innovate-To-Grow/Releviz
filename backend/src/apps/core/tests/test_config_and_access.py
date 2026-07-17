@@ -97,7 +97,23 @@ class SettingsImportTests(SimpleTestCase):
             "DEFAULT_FROM_EMAIL": "scheduler@example.com",
             "REQUIRE_ENCRYPTED_PASSWORDS": "0",
             "DJANGO_FIELD_ENCRYPTION_KEY": "test encryption key",
+            "METRICS_BEARER_TOKEN": "test-metrics-token",
+            "FEEDBACK_SUBMISSION_RETENTION_DAYS": "365",
         }
+        for invalid_retention in ["invalid", "0"]:
+            sys.modules.pop("config.settings.production", None)
+            with patch.dict(
+                os.environ,
+                {**env, "FEEDBACK_SUBMISSION_RETENTION_DAYS": invalid_retention},
+                clear=True,
+            ):
+                with self.assertRaisesMessage(
+                    ImproperlyConfigured,
+                    "FEEDBACK_SUBMISSION_RETENTION_DAYS must be a positive integer.",
+                ):
+                    importlib.import_module("config.settings.production")
+
+        sys.modules.pop("config.settings.production", None)
         with patch.dict(os.environ, env, clear=True):
             module = importlib.import_module("config.settings.production")
         self.assertEqual(module.ALLOWED_HOSTS, ["example.com", "api.example.com"])
@@ -109,7 +125,12 @@ class SettingsImportTests(SimpleTestCase):
         self.assertFalse(module.REQUIRE_ENCRYPTED_PASSWORDS)
         self.assertEqual(module.DATABASES["default"]["OPTIONS"]["sslmode"], "verify-full")
         self.assertFalse(module.SECURE_SSL_REDIRECT)
+        self.assertEqual(module.SECURE_HSTS_SECONDS, 31_536_000)
+        self.assertTrue(module.SECURE_HSTS_INCLUDE_SUBDOMAINS)
+        self.assertTrue(module.SECURE_HSTS_PRELOAD)
         self.assertTrue(module.USE_SES_EMAIL_PROVIDER)
+        self.assertEqual(module.METRICS_BEARER_TOKEN, "test-metrics-token")
+        self.assertEqual(module.FEEDBACK_SUBMISSION_RETENTION.days, 365)
 
     def test_asgi_and_wsgi_imports(self):
         asgi = importlib.import_module("config.asgi")

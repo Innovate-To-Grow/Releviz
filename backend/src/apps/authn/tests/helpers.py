@@ -1,7 +1,7 @@
 from django.contrib.auth import get_user_model
-from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.authn.models import ContactEmail
+from apps.authn.services import issue_auth_session
 
 
 def create_member(
@@ -31,4 +31,4 @@ def create_member(
 
 
 def token_for(member) -> str:
-    return str(RefreshToken.for_user(member).access_token)
+    return issue_auth_session(member).payload["access"]

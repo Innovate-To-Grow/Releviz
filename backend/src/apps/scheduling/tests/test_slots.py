@@ -1,0 +1,208 @@
+from datetime import UTC, datetime
+from types import SimpleNamespace
+from unittest.mock import patch
+from zoneinfo import ZoneInfo
+
+from django.test import SimpleTestCase
+
+from apps.scheduling.finalization import (
+    FinalizationError,
+    _matching_absolute_slot_indices,
+    _weekly_slot_indices,
+    normalize_final_time,
+)
+from apps.scheduling.slots import (
+    EventSlotGroup,
+    SlotConfigurationError,
+    build_event_slot_groups,
+    event_window_duration_minutes,
+    parse_time_value,
+    validate_minute_configuration,
+)
+
+
+def event(**changes):
+    values = {
+        "start_minutes": 9 * 60,
+        "end_minutes": 10 * 60,
+        "slot_minutes": 30,
+        "spans_next_day": False,
+        "days": [1],
+        "day_selection_type": "days_of_week",
+        "specific_dates": None,
+        "timezone": "UTC",
+        "mode": "inperson",
+        "location": "",
+    }
+    values.update(changes)
+    return SimpleNamespace(**values)
+
+
+class SlotDomainEdgeTests(SimpleTestCase):
+    def test_time_parsing_and_minute_configuration_errors(self):
+        self.assertEqual(parse_time_value("09:15", "startTime"), 9 * 60 + 15)
+        for value, message in [
+            ("9", "HH:MM"),
+            ("24:00", "valid time"),
+        ]:
+            with (
+                self.subTest(value=value),
+                self.assertRaisesMessage(SlotConfigurationError, message),
+            ):
+                parse_time_value(value, "startTime")
+
+        for candidate, message in [
+            (event(start_minutes=-1), "startTime"),
+            (event(end_minutes=24 * 60), "endTime"),
+            (
+                event(start_minutes=9 * 60, end_minutes=10 * 60, spans_next_day=True),
+                "overnight event",
+            ),
+            (
+                event(start_minutes=9 * 60, end_minutes=9 * 60),
+                "must be different",
+            ),
+        ]:
+            with (
+                self.subTest(message=message),
+                self.assertRaisesMessage(SlotConfigurationError, message),
+            ):
+                validate_minute_configuration(candidate)
+
+        with self.assertRaisesMessage(SlotConfigurationError, "direction is invalid"):
+            event_window_duration_minutes(event(start_minutes=9 * 60, end_minutes=9 * 60))
+
+    def test_invalid_day_and_date_configurations(self):
+        for candidate, message in [
+            (event(days=[]), "valid days"),
+            (event(days=[7]), "valid days"),
+            (
+                event(day_selection_type="specific_dates", specific_dates=[]),
+                "at least one date",
+            ),
+            (
+                event(
+                    day_selection_type="specific_dates",
+                    specific_dates=["not-a-date"],
+                ),
+                "valid ISO dates",
+            ),
+            (
+                event(
+                    start_minutes=0,
+                    end_minutes=23 * 60 + 45,
+                    slot_minutes=15,
+                    day_selection_type="specific_dates",
+                    specific_dates=[f"2026-07-{day:02d}" for day in range(1, 12)],
+                ),
+                "at most 1000 availability slots",
+            ),
+            (event(day_selection_type="other"), "Invalid daySelectionType"),
+        ]:
+            with (
+                self.subTest(message=message),
+                self.assertRaisesMessage(SlotConfigurationError, message),
+            ):
+                build_event_slot_groups(candidate)
+
+    def test_specific_date_overnight_and_nonexistent_boundaries(self):
+        overnight = event(
+            start_minutes=23 * 60,
+            end_minutes=60,
+            spans_next_day=True,
+            day_selection_type="specific_dates",
+            specific_dates=["2026-07-20"],
+        )
+        slots = build_event_slot_groups(overnight)[0].slots
+        self.assertEqual(len(slots), 4)
+        self.assertEqual(slots[-1].end_day_offset, 1)
+
+        nonexistent = event(
+            start_minutes=2 * 60,
+            end_minutes=4 * 60,
+            timezone="America/Los_Angeles",
+            day_selection_type="specific_dates",
+            specific_dates=["2026-03-08"],
+        )
+        with self.assertRaisesMessage(SlotConfigurationError, "nonexistent local time"):
+            build_event_slot_groups(nonexistent)
+
+    def test_defensive_elapsed_time_checks(self):
+        candidate = event(
+            day_selection_type="specific_dates",
+            specific_dates=["2026-07-20"],
+        )
+        with (
+            patch(
+                "apps.scheduling.slots._resolve_boundary",
+                side_effect=[
+                    datetime(2026, 7, 20, 10, tzinfo=UTC),
+                    datetime(2026, 7, 20, 9, tzinfo=UTC),
+                ],
+            ),
+            self.assertRaisesMessage(SlotConfigurationError, "real elapsed time"),
+        ):
+            build_event_slot_groups(candidate)
+
+        with (
+            patch(
+                "apps.scheduling.slots._resolve_boundary",
+                side_effect=[
+                    datetime(2026, 7, 20, 10, tzinfo=UTC),
+                    datetime(2026, 7, 20, 10, 20, tzinfo=UTC),
+                ],
+            ),
+            self.assertRaisesMessage(SlotConfigurationError, "cannot be divided"),
+        ):
+            build_event_slot_groups(candidate)
+
+    def test_finalization_defensive_slot_matching(self):
+        malformed = event(
+            day_selection_type="specific_dates",
+            specific_dates=None,
+        )
+        with self.assertRaisesMessage(FinalizationError, "at least one date"):
+            normalize_final_time(
+                malformed,
+                starts_at=datetime(2026, 7, 20, 9, tzinfo=UTC),
+                ends_at=datetime(2026, 7, 20, 10, tzinfo=UTC),
+                channel="inperson",
+                location="",
+            )
+
+        empty_group = EventSlotGroup(key="empty", label="Empty", slots=())
+        with (
+            patch(
+                "apps.scheduling.finalization.build_event_slot_groups",
+                return_value=(empty_group,),
+            ),
+            self.assertRaisesMessage(FinalizationError, "configured event date"),
+        ):
+            _matching_absolute_slot_indices(
+                event(slot_minutes=30),
+                datetime(2026, 7, 20, 9, tzinfo=UTC),
+                datetime(2026, 7, 20, 10, tzinfo=UTC),
+            )
+
+        weekly = event(start_minutes=9 * 60, end_minutes=11 * 60)
+        with self.assertRaisesMessage(FinalizationError, "align to 30-minute"):
+            _weekly_slot_indices(
+                weekly,
+                datetime(2026, 7, 20, 9, 15, tzinfo=UTC),
+                datetime(2026, 7, 20, 9, 45, tzinfo=UTC),
+                ZoneInfo("UTC"),
+            )
+
+        with (
+            patch(
+                "apps.scheduling.finalization.valid_localizations",
+                return_value=(datetime(2026, 7, 20, 8, tzinfo=UTC),),
+            ),
+            self.assertRaisesMessage(FinalizationError, "align to 30-minute"),
+        ):
+            _weekly_slot_indices(
+                weekly,
+                datetime(2026, 7, 20, 9, tzinfo=UTC),
+                datetime(2026, 7, 20, 10, tzinfo=UTC),
+                ZoneInfo("UTC"),
+            )

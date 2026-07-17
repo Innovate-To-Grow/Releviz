@@ -7,6 +7,7 @@ from pathlib import Path
 from django.templatetags.static import static
 
 from apps.core.access import user_can_access_app
+from apps.core.error_tracking import initialize_error_tracking
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 
@@ -35,6 +36,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    "apps.core.middleware.RequestObservabilityMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
@@ -90,22 +92,14 @@ AUTHENTICATION_BACKENDS = ["apps.authn.backends.EmailAuthBackend"]
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        "apps.authn.authentication.SessionJWTAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
-    "DEFAULT_THROTTLE_RATES": {
-        "anon": "60/minute",
-        "login": "10/minute",
-        "email_code_request": "30/minute",
-        "email_code_verify": "60/minute",
-    },
 }
 
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(hours=1),
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=10),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
-    "ROTATE_REFRESH_TOKENS": True,
-    "BLACKLIST_AFTER_ROTATION": True,
     "AUTH_HEADER_TYPES": ("Bearer",),
     "USER_ID_FIELD": "id",
     "USER_ID_CLAIM": "member_uuid",
@@ -113,7 +107,74 @@ SIMPLE_JWT = {
     "AUDIENCE": "releviz-api",
     "ISSUER": "releviz-backend",
     "JTI_CLAIM": "jti",
+    "CHECK_REVOKE_TOKEN": True,
 }
+
+AUTH_REFRESH_COOKIE_NAME = "releviz_refresh"
+AUTH_REFRESH_COOKIE_PATH = "/authn/"
+AUTH_REFRESH_COOKIE_SECURE = False
+AUTH_REFRESH_COOKIE_SAMESITE = "Lax"
+AUTH_REFRESH_RETRY_GRACE = timedelta(seconds=30)
+AUTH_SESSION_ABSOLUTE_LIFETIME = timedelta(days=30)
+AUTH_SESSION_RECORD_RETENTION = timedelta(days=30)
+AUTH_CHALLENGE_DELIVERY_LIFETIME = timedelta(hours=1)
+AUTH_CHALLENGE_VERIFICATION_LIFETIME = timedelta(minutes=10)
+AUTH_RATE_LIMIT_BUCKET_RETENTION = timedelta(days=7)
+AUTH_TRUSTED_PROXY_COUNT = 0
+AUTH_RATE_LIMITS = {
+    "register": {
+        "ip": {"limit": 10, "window": 3600, "block": 3600},
+        "identity": {"limit": 5, "window": 3600, "block": 3600},
+    },
+    "code_request": {
+        "ip": {"limit": 20, "window": 3600, "block": 3600},
+        "identity": {"limit": 5, "window": 3600, "block": 3600},
+    },
+    "code_verify": {
+        "ip": {"limit": 30, "window": 600, "block": 900},
+        "identity": {"limit": 10, "window": 600, "block": 900},
+    },
+    "password_login": {
+        "ip": {"limit": 30, "window": 300, "block": 900},
+        "identity": {"limit": 15, "window": 900, "block": 900},
+    },
+    "refresh": {
+        "ip": {"limit": 120, "window": 60, "block": 300},
+    },
+    "admin_login": {
+        "ip": {"limit": 20, "window": 300, "block": 900},
+        "identity": {"limit": 10, "window": 900, "block": 900},
+    },
+    "invitation_request": {
+        "ip": {"limit": 60, "window": 3600, "block": 3600},
+        "identity": {"limit": 20, "window": 3600, "block": 3600},
+    },
+    "invitation_recipient": {
+        "ip": {"limit": 1000, "window": 86400, "block": 3600},
+        "identity": {"limit": 500, "window": 86400, "block": 3600},
+    },
+    "reminder_request": {
+        "ip": {"limit": 30, "window": 3600, "block": 3600},
+        "identity": {"limit": 10, "window": 3600, "block": 3600},
+    },
+    "reminder_recipient": {
+        "ip": {"limit": 1000, "window": 86400, "block": 3600},
+        "identity": {"limit": 500, "window": 86400, "block": 3600},
+    },
+    "feedback": {
+        "ip": {"limit": 20, "window": 3600, "block": 3600},
+        "identity": {"limit": 20, "window": 3600, "block": 3600},
+    },
+}
+AUTH_FAILURE_LIMITS = {
+    "password_login": {
+        "pair": {"limit": 5, "window": 900, "block": 900},
+        "identity": {"limit": 20, "window": 3600, "block": 1800},
+    }
+}
+INVITATION_MAX_BATCH_SIZE = 100
+INVITATION_MAX_EVENT_RECIPIENTS = 500
+REMINDER_MAX_RECIPIENTS = 500
 
 REQUIRE_ENCRYPTED_PASSWORDS = False
 FRONTEND_URL = ""
@@ -123,6 +184,41 @@ DATA_UPLOAD_MAX_NUMBER_FIELDS = 100000
 FIELD_ENCRYPTION_KEY = os.environ.get("DJANGO_FIELD_ENCRYPTION_KEY", "")
 USE_SES_EMAIL_PROVIDER = False
 DEFAULT_FROM_EMAIL = "noreply@releviz.local"
+METRICS_BEARER_TOKEN = os.environ.get("METRICS_BEARER_TOKEN", "").strip()
+FEEDBACK_SUBMISSION_RETENTION = timedelta(days=730)
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "filters": {
+        "request_context": {
+            "()": "apps.core.logging.RequestContextFilter",
+        }
+    },
+    "formatters": {
+        "json": {
+            "()": "apps.core.logging.JsonFormatter",
+        }
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "filters": ["request_context"],
+            "formatter": "json",
+        }
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": os.environ.get("APP_LOG_LEVEL", "INFO"),
+    },
+}
+
+SENTRY_ENABLED = initialize_error_tracking(
+    dsn=os.environ.get("SENTRY_DSN", "").strip(),
+    environment=os.environ.get("SENTRY_ENVIRONMENT", "").strip(),
+    release=os.environ.get("SENTRY_RELEASE", "").strip(),
+    traces_sample_rate=os.environ.get("SENTRY_TRACES_SAMPLE_RATE", "0.05").strip(),
+)
 
 
 def _can(app_label):

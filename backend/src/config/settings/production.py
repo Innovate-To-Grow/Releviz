@@ -28,6 +28,16 @@ FRONTEND_URL = required_env("FRONTEND_URL")
 BACKEND_URL = required_env("BACKEND_URL")
 REQUIRE_ENCRYPTED_PASSWORDS = os.environ.get("REQUIRE_ENCRYPTED_PASSWORDS", "1") != "0"
 FIELD_ENCRYPTION_KEY = required_env("DJANGO_FIELD_ENCRYPTION_KEY")
+METRICS_BEARER_TOKEN = required_env("METRICS_BEARER_TOKEN")
+try:
+    feedback_retention_days = int(os.environ.get("FEEDBACK_SUBMISSION_RETENTION_DAYS", "730"))
+except ValueError as exc:
+    raise ImproperlyConfigured(
+        "FEEDBACK_SUBMISSION_RETENTION_DAYS must be a positive integer."
+    ) from exc
+if feedback_retention_days < 1:
+    raise ImproperlyConfigured("FEEDBACK_SUBMISSION_RETENTION_DAYS must be a positive integer.")
+FEEDBACK_SUBMISSION_RETENTION = timedelta(days=feedback_retention_days)  # noqa: F405
 USE_SES_EMAIL_PROVIDER = os.environ.get("USE_SES_EMAIL_PROVIDER", "1") != "0"
 STORAGES = {
     "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
@@ -51,9 +61,14 @@ DATABASES = {
 CORS_ALLOWED_ORIGINS = split_csv("CORS_ALLOWED_ORIGINS")
 CSRF_TRUSTED_ORIGINS = split_csv("CSRF_TRUSTED_ORIGINS")
 CORS_ALLOW_CREDENTIALS = True
+AUTH_REFRESH_COOKIE_SECURE = True
+AUTH_TRUSTED_PROXY_COUNT = int(os.environ.get("AUTH_TRUSTED_PROXY_COUNT", "1"))
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SECURE_SSL_REDIRECT = os.environ.get("DJANGO_SECURE_SSL_REDIRECT", "1") != "0"
+SECURE_HSTS_SECONDS = 31_536_000
+SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+SECURE_HSTS_PRELOAD = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True

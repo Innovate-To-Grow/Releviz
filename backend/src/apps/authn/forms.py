@@ -1,5 +1,6 @@
 from django import forms
-from django.contrib.auth import authenticate
+
+from apps.authn.services import login_with_password
 
 ADMIN_INPUT_CLASSES = (
     "bg-white border border-base-200 font-medium min-w-20 px-3 py-2 rounded-default "
@@ -41,9 +42,17 @@ class AdminPasswordForm(forms.Form):
         email = cleaned.get("email")
         password = cleaned.get("password")
         if email and password:
-            self.user_cache = authenticate(self.request, username=email, password=password)
-            if self.user_cache is None or not self.user_cache.is_staff:
-                raise forms.ValidationError("Please enter valid staff account credentials.")
+            try:
+                self.user_cache = login_with_password(
+                    email,
+                    password,
+                    request=self.request,
+                    require_staff=True,
+                )
+            except Exception as exc:  # noqa: BLE001
+                raise forms.ValidationError(
+                    "Please enter valid staff account credentials."
+                ) from exc
         return cleaned
 
     def get_user(self):

@@ -9,21 +9,43 @@ import ParticipantView from "@/components/schedule/ParticipantView";
 import OrganizerView from "@/components/schedule/OrganizerView";
 import AppButton from "@/components/ui/AppButton";
 import { useAuth } from "@/components/auth/AuthContext";
-import { fetchEvent } from "@/lib/api/events";
-import { DAYS_PER_WEEK } from "@/lib/constants";
+import { fetchEvent, markInvitationOpened } from "@/lib/api/events";
 
 function EventPage() {
   const searchParams = useSearchParams();
   const eventCode = searchParams.get("code");
+  const invitationToken = searchParams.get("invitation");
   const { user, loading: authLoading, getToken } = useAuth();
 
   const [event, setEvent] = useState(null);
   const [isOrganizer, setIsOrganizer] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [invitationReady, setInvitationReady] = useState(!invitationToken);
 
   useEffect(() => {
-    if (authLoading) return;
+    if (!invitationToken || !eventCode) {
+      setInvitationReady(true);
+      return;
+    }
+    let active = true;
+    setInvitationReady(false);
+    markInvitationOpened(eventCode, invitationToken)
+      .catch(() => {})
+      .finally(() => {
+        if (!active) return;
+        const url = new URL(window.location.href);
+        url.searchParams.delete("invitation");
+        window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+        setInvitationReady(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [eventCode, invitationToken]);
+
+  useEffect(() => {
+    if (authLoading || !invitationReady) return;
     if (!user) {
       const next = eventCode ? `/event?code=${encodeURIComponent(eventCode)}` : "/event";
       window.location.assign(`/login?next=${encodeURIComponent(next)}`);
@@ -48,9 +70,9 @@ function EventPage() {
       }
     }
     load();
-  }, [eventCode, user, authLoading, getToken]);
+  }, [eventCode, user, authLoading, getToken, invitationReady]);
 
-  if (authLoading || loading) {
+  if (authLoading || !invitationReady || loading) {
     return (
       <div
         style={{
@@ -90,14 +112,10 @@ function EventPage() {
     );
   }
 
-  const numDays =
-    event.daySelectionType === "specific_dates" && Array.isArray(event.specificDates)
-      ? event.specificDates.length
-      : DAYS_PER_WEEK;
-  const numSlots = (event.endHour - event.startHour) * numDays;
+  const numSlots = event.slotCount || 0;
 
   return (
-    <EventContext.Provider value={{ event, isOrganizer, numSlots }}>
+    <EventContext.Provider value={{ event, setEvent, isOrganizer, numSlots }}>
       <EventHeader eventName={event.name} eventCode={event.code} />
       {isOrganizer ? <OrganizerView /> : <ParticipantView />}
     </EventContext.Provider>

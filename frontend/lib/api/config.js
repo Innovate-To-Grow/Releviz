@@ -1,29 +1,44 @@
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "";
-export const AUTH_SESSION_KEY = "releviz.auth";
+export const LEGACY_AUTH_SESSION_KEY = "releviz.auth";
+
+let authSession = null;
+let refreshPromise = null;
+
+function notifyAuthChanged() {
+  /* istanbul ignore next -- server-side render guard */
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new Event("releviz-auth"));
+}
+
+function removeLegacyStoredCredentials() {
+  /* istanbul ignore next -- server-side render guard */
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(LEGACY_AUTH_SESSION_KEY);
+  window.sessionStorage.removeItem(LEGACY_AUTH_SESSION_KEY);
+}
 
 export function readAuthSession() {
-  /* istanbul ignore next -- server-side render guard */
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.localStorage.getItem(AUTH_SESSION_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
+  removeLegacyStoredCredentials();
+  return authSession;
 }
 
 export function writeAuthSession(session) {
-  /* istanbul ignore next -- server-side render guard */
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(session));
-  window.dispatchEvent(new Event("releviz-auth"));
+  removeLegacyStoredCredentials();
+  authSession = session
+    ? {
+        access: session.access || null,
+        accessExpiresAt: session.accessExpiresAt || null,
+        session: session.session || null,
+        user: session.user || null,
+      }
+    : null;
+  notifyAuthChanged();
 }
 
 export function clearAuthSession() {
-  /* istanbul ignore next -- server-side render guard */
-  if (typeof window === "undefined") return;
-  window.localStorage.removeItem(AUTH_SESSION_KEY);
-  window.dispatchEvent(new Event("releviz-auth"));
+  removeLegacyStoredCredentials();
+  authSession = null;
+  notifyAuthChanged();
 }
 
 export async function extractError(res) {
@@ -41,43 +56,58 @@ export async function extractError(res) {
   }
 }
 
-async function refreshSession() {
-  const session = readAuthSession();
-  if (!session?.refresh) return null;
+export async function refreshAuthSession() {
+  if (refreshPromise) return refreshPromise;
+  refreshPromise = (async () => {
+    const res = await fetch(`${API_BASE}/authn/refresh/`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+      credentials: "include",
+    });
 
-  const res = await fetch(`${API_BASE}/authn/refresh/`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ refresh: session.refresh }),
-  });
+    if (!res.ok) {
+      clearAuthSession();
+      return null;
+    }
 
-  if (!res.ok) {
-    clearAuthSession();
-    return null;
+    const data = await res.json();
+    writeAuthSession(data);
+    return readAuthSession();
+  })();
+  try {
+    return await refreshPromise;
+  } finally {
+    refreshPromise = null;
   }
+}
 
-  const data = await res.json();
-  const next = {
-    ...session,
-    access: data.access,
-    refresh: data.refresh || session.refresh,
-  };
-  writeAuthSession(next);
-  return next;
+function accessIsUsable(session) {
+  if (!session?.access) return false;
+  if (!session.accessExpiresAt) return true;
+  const expiresAt = Date.parse(session.accessExpiresAt);
+  return Number.isFinite(expiresAt) && expiresAt > Date.now() + 15_000;
+}
+
+export async function getAccessToken() {
+  const current = readAuthSession();
+  if (accessIsUsable(current)) return current.access;
+  const refreshed = await refreshAuthSession();
+  return refreshed?.access || null;
 }
 
 export async function apiFetch(url, options = {}, token = null) {
-  const session = readAuthSession();
-  const access = token || session?.access || null;
+  const access =
+    token || (options.skipAuthRefresh ? readAuthSession()?.access : await getAccessToken());
   const headers = {
     ...(options.headers || {}),
     ...(access ? { Authorization: `Bearer ${access}` } : {}),
   };
 
   let res = await fetch(url, { ...options, headers, credentials: "include" });
-  if (res.status !== 401 || options.skipAuthRefresh) return res;
+  if (res.status !== 401 || options.skipAuthRefresh || !access) return res;
 
-  const refreshed = await refreshSession();
+  const refreshed = await refreshAuthSession();
   if (!refreshed?.access) return res;
 
   res = await fetch(url, {

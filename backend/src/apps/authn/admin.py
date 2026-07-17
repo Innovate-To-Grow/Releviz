@@ -1,9 +1,18 @@
 from django.contrib import admin
 from django.contrib.auth.admin import GroupAdmin
 from django.contrib.auth.models import Group
+from django.utils import timezone
 from unfold.admin import ModelAdmin
 
-from apps.authn.models import ContactEmail, ContactPhone, EmailAuthChallenge, Member, RSAKeypair
+from apps.authn.models import (
+    AuthRateLimitBucket,
+    AuthSession,
+    ContactEmail,
+    ContactPhone,
+    EmailAuthChallenge,
+    Member,
+    RSAKeypair,
+)
 
 try:  # pragma: no branch
     admin.site.unregister(Group)
@@ -102,6 +111,72 @@ class EmailAuthChallengeAdmin(ModelAdmin):
     list_filter = ("purpose", "channel", "status")
     search_fields = ("target_email", "target_phone", "member__first_name", "member__last_name")
     readonly_fields = ("code_hash", "verification_token_hash")
+
+
+@admin.action(description="Revoke selected active sessions")
+def revoke_selected_sessions(modeladmin, request, queryset):
+    queryset.filter(revoked_at__isnull=True).update(
+        revoked_at=timezone.now(),
+        revoked_reason=AuthSession.RevocationReason.ADMIN,
+        updated_at=timezone.now(),
+    )
+
+
+@admin.register(AuthSession)
+class AuthSessionAdmin(ModelAdmin):
+    list_display = (
+        "member",
+        "created_at",
+        "last_seen_at",
+        "expires_at",
+        "revoked_at",
+        "ip_address",
+    )
+    list_filter = ("revoked_reason", "revoked_at")
+    search_fields = (
+        "member__email",
+        "member__contact_emails__email_address",
+        "refresh_jti",
+        "ip_address",
+    )
+    readonly_fields = (
+        "member",
+        "refresh_jti",
+        "previous_refresh_jti",
+        "refresh_recovery_expires_at",
+        "refresh_recovered_at",
+        "expires_at",
+        "last_seen_at",
+        "revoked_at",
+        "revoked_reason",
+        "ip_address",
+        "user_agent",
+        "created_at",
+        "updated_at",
+    )
+    actions = [revoke_selected_sessions]
+
+
+@admin.register(AuthRateLimitBucket)
+class AuthRateLimitBucketAdmin(ModelAdmin):
+    list_display = (
+        "scope",
+        "request_count",
+        "window_started_at",
+        "blocked_until",
+        "updated_at",
+    )
+    list_filter = ("scope",)
+    search_fields = ("scope", "key_hash")
+    readonly_fields = (
+        "scope",
+        "key_hash",
+        "request_count",
+        "window_started_at",
+        "blocked_until",
+        "created_at",
+        "updated_at",
+    )
 
 
 @admin.register(RSAKeypair)

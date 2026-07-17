@@ -13,5 +13,6 @@ urlpatterns = [
     path("admin/login/", AdminLoginView.as_view(), name="admin-login"),
     path("admin/", admin.site.urls),
     path("authn/", include("apps.authn.urls")),
+    path("api/", include("apps.core.urls")),
     path("api/", include("apps.scheduling.urls")),
 ]

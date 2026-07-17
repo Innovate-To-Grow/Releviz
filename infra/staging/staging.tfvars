@@ -1,6 +1,7 @@
 aws_region              = "us-west-2"
 app_name                = "scheduler"
 environment             = "staging"
+ecs_cluster_name        = "Releviz-Staging"
 ecr_backend_repository  = "scheduler-staging-backend"
 ecr_frontend_repository = "scheduler-staging-frontend"
 events_table_name       = "scheduler-staging-events"

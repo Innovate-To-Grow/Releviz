@@ -3,9 +3,9 @@
 import { createContext } from "react";
 
 const EventContext = createContext({
-  event: null, // { code, name, startHour, endHour }
+  event: null, // { code, name, startTime, endTime, slotMinutes, slotGroups }
   isOrganizer: false,
-  numSlots: 0, // (endHour - startHour) * 7
+  numSlots: 0,
 });
 
 export default EventContext;

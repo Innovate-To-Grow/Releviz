@@ -7,12 +7,16 @@ import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 
 import AuthContext, { AuthProvider, useAuth } from "@/components/auth/AuthContext";
-import { readAuthSession, writeAuthSession } from "@/lib/api/config";
+import { clearAuthSession, readAuthSession, writeAuthSession } from "@/lib/api/config";
 import {
+  changePasswordApi,
+  deleteAccountApi,
+  fetchAuthSessions,
   fetchProfile,
   loginWithPassword,
   logoutApi,
   requestLoginCode,
+  revokeAuthSessions,
   startRegistration,
   updateProfileApi,
   verifyLoginCode,
@@ -20,15 +24,27 @@ import {
 } from "@/lib/api/auth";
 
 jest.mock("@/lib/api/auth", () => ({
+  changePasswordApi: jest.fn(),
+  deleteAccountApi: jest.fn(),
+  fetchAuthSessions: jest.fn(),
   fetchProfile: jest.fn(),
   loginWithPassword: jest.fn(),
   logoutApi: jest.fn(),
   requestLoginCode: jest.fn(),
+  revokeAuthSessions: jest.fn(),
   startRegistration: jest.fn(),
   updateProfileApi: jest.fn(),
   verifyLoginCode: jest.fn(),
   verifyRegistration: jest.fn(),
 }));
+
+function jsonResponse(body, status = 200) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: jest.fn().mockResolvedValue(body),
+  };
+}
 
 function Probe() {
   const auth = useAuth();
@@ -45,6 +61,26 @@ function Probe() {
       <button onClick={() => auth.verifySignup({ email: "a", code: "1" })}>verify</button>
       <button onClick={() => auth.updateProfile({ first_name: "Ada" })}>update</button>
       <button onClick={() => auth.refreshUser()}>refresh</button>
+      <button onClick={async () => (window.__sessions = await auth.listSessions())}>
+        sessions
+      </button>
+      <button onClick={() => auth.revokeSession("other-session")}>revoke-session</button>
+      <button onClick={() => auth.revokeSession("current-session")}>revoke-current</button>
+      <button onClick={() => auth.logoutAll()}>logout-all</button>
+      <button
+        onClick={() =>
+          auth.changePassword({
+            currentPassword: "old",
+            newPassword: "new-password",
+            newPasswordConfirm: "new-password",
+          })
+        }
+      >
+        change-password
+      </button>
+      <button onClick={() => auth.deleteAccount({ password: "old", confirmation: "DELETE" })}>
+        delete-account
+      </button>
       <button onClick={() => auth.logout()}>logout</button>
       <button onClick={async () => (window.__token = await auth.getToken())}>token</button>
     </div>
@@ -55,7 +91,11 @@ describe("AuthContext", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     localStorage.clear();
+    sessionStorage.clear();
+    clearAuthSession();
+    global.fetch = jest.fn().mockResolvedValue(jsonResponse({}, 401));
     delete window.__token;
+    delete window.__sessions;
     delete window.location;
     window.location = { assign: jest.fn() };
   });
@@ -69,9 +109,28 @@ describe("AuthContext", () => {
     expect(() => render(<BadProbe />)).toThrow("useAuth must be used within AuthProvider");
   });
 
-  test("hydrates existing sessions and clears invalid sessions", async () => {
-    writeAuthSession({ access: "a", refresh: "r", user: { displayName: "Stored" } });
-    fetchProfile.mockRejectedValueOnce(new Error("expired"));
+  test("hydrates a session from the refresh cookie without Web Storage", async () => {
+    localStorage.setItem("releviz.auth", "legacy-secret");
+    global.fetch.mockResolvedValueOnce(
+      jsonResponse({
+        access: "cookie-access",
+        user: { displayName: "Cookie User" },
+      })
+    );
+    render(
+      <AuthProvider>
+        <Probe />
+      </AuthProvider>
+    );
+    await waitFor(() => expect(screen.getByTestId("loading")).toHaveTextContent("false"));
+    expect(screen.getByTestId("user")).toHaveTextContent("Cookie User");
+    expect(readAuthSession().access).toBe("cookie-access");
+    expect(localStorage.getItem("releviz.auth")).toBeNull();
+  });
+
+  test("clears in-memory auth when cookie hydration throws", async () => {
+    writeAuthSession({ access: "stale", user: { displayName: "Stale User" } });
+    global.fetch.mockRejectedValueOnce(new Error("network down"));
     render(
       <AuthProvider>
         <Probe />
@@ -100,6 +159,8 @@ describe("AuthContext", () => {
     updateProfileApi.mockResolvedValue({ displayName: "Updated User" });
     fetchProfile.mockResolvedValue({ displayName: "Refreshed User" });
     logoutApi.mockResolvedValue();
+    changePasswordApi.mockResolvedValue({ message: "changed" });
+    deleteAccountApi.mockResolvedValue({ message: "deleted" });
 
     render(
       <AuthProvider>
@@ -123,12 +184,12 @@ describe("AuthContext", () => {
     await userEvent.click(screen.getByText("refresh"));
     expect(fetchProfile).toHaveBeenCalled();
     await userEvent.click(screen.getByText("token"));
-    expect(window.__token).toBe("verify-token");
+    await waitFor(() => expect(window.__token).toBe("verify-token"));
     await userEvent.click(screen.getByText("logout"));
     expect(window.location.assign).toHaveBeenCalledWith("/");
   });
 
-  test("responds to storage events", async () => {
+  test("responds to in-memory auth events", async () => {
     render(
       <AuthProvider>
         <Probe />
@@ -136,8 +197,73 @@ describe("AuthContext", () => {
     );
     await waitFor(() => expect(screen.getByTestId("loading")).toHaveTextContent("false"));
     writeAuthSession({ access: "a", user: { displayName: "External" } });
-    window.dispatchEvent(new Event("storage"));
     await waitFor(() => expect(screen.getByTestId("user")).toHaveTextContent("External"));
+  });
+
+  test("lists and revokes individual or all sessions", async () => {
+    fetchAuthSessions.mockResolvedValue([{ id: "other-session" }]);
+    revokeAuthSessions.mockImplementation(async ({ sessionId, all }) => ({
+      currentRevoked: all || sessionId === "current-session",
+    }));
+
+    render(
+      <AuthProvider>
+        <Probe />
+      </AuthProvider>
+    );
+    await waitFor(() => expect(screen.getByTestId("loading")).toHaveTextContent("false"));
+    writeAuthSession({ access: "a", user: { displayName: "Session User" } });
+
+    await userEvent.click(screen.getByText("sessions"));
+    await waitFor(() => expect(window.__sessions).toEqual([{ id: "other-session" }]));
+    await userEvent.click(screen.getByText("revoke-session"));
+    expect(revokeAuthSessions).toHaveBeenCalledWith({ sessionId: "other-session" });
+    expect(screen.getByTestId("user")).toHaveTextContent("Session User");
+
+    await userEvent.click(screen.getByText("revoke-current"));
+    await waitFor(() => expect(screen.getByTestId("user")).toHaveTextContent("none"));
+
+    writeAuthSession({ access: "b", user: { displayName: "Again" } });
+    await userEvent.click(screen.getByText("logout-all"));
+    expect(revokeAuthSessions).toHaveBeenCalledWith({ all: true });
+    await waitFor(() =>
+      expect(window.location.assign).toHaveBeenCalledWith("/login?status=signed-out-all")
+    );
+  });
+
+  test("changes passwords and deletes accounts through security actions", async () => {
+    changePasswordApi.mockResolvedValue({ message: "changed" });
+    deleteAccountApi.mockResolvedValue({ message: "deleted" });
+
+    render(
+      <AuthProvider>
+        <Probe />
+      </AuthProvider>
+    );
+    await waitFor(() => expect(screen.getByTestId("loading")).toHaveTextContent("false"));
+    writeAuthSession({ access: "a", user: { displayName: "Account User" } });
+
+    await userEvent.click(screen.getByText("change-password"));
+    expect(changePasswordApi).toHaveBeenCalledWith({
+      currentPassword: "old",
+      newPassword: "new-password",
+      newPasswordConfirm: "new-password",
+    });
+    await waitFor(() =>
+      expect(window.location.assign).toHaveBeenCalledWith("/login?status=password-changed")
+    );
+    expect(screen.getByTestId("user")).toHaveTextContent("none");
+
+    writeAuthSession({ access: "b", user: { displayName: "Again" } });
+    await userEvent.click(screen.getByText("delete-account"));
+    expect(deleteAccountApi).toHaveBeenCalledWith({
+      password: "old",
+      confirmation: "DELETE",
+    });
+    await waitFor(() =>
+      expect(window.location.assign).toHaveBeenCalledWith("/login?status=account-deleted")
+    );
+    expect(screen.getByTestId("user")).toHaveTextContent("none");
   });
 
   test("getToken returns null without a session", async () => {
@@ -148,6 +274,6 @@ describe("AuthContext", () => {
     );
     await waitFor(() => expect(screen.getByTestId("loading")).toHaveTextContent("false"));
     await userEvent.click(screen.getByText("token"));
-    expect(window.__token).toBeNull();
+    await waitFor(() => expect(window.__token).toBeNull());
   });
 });

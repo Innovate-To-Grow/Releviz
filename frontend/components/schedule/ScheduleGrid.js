@@ -1,55 +1,43 @@
 "use client";
 
+import { useRef } from "react";
 import { lerpColor } from "@/components/ui/ColorUtils";
-import { DAY_LABELS, DAYS_PER_WEEK } from "@/lib/constants";
-import { formatHour } from "@/lib/format";
+import { formatTime } from "@/lib/format";
 
-/**
- * Reusable schedule grid component.
- *
- * Props:
- *   schedule    - Array of numeric values (0-1), length = (endHour - startHour) * 7
- *   startHour   - Start hour (e.g. 9)
- *   endHour     - End hour (e.g. 17)
- *   readOnly    - If true, disables mouse painting
- *   showValues  - If true, shows numeric values in cells
- *   onCellPaint - Callback (index, e) for mouse events (only used when !readOnly)
- *   label       - Optional label above the grid
- */
+function slotLabel(slot) {
+  const startDay = slot.startDayOffset ? ` +${slot.startDayOffset}d` : "";
+  const endDay = slot.endDayOffset ? ` +${slot.endDayOffset}d` : "";
+  const startOffset = slot.startOffset ? ` ${slot.startOffset}` : "";
+  const endOffset = slot.endOffset ? ` ${slot.endOffset}` : "";
+  return `${formatTime(slot.localStart)}${startDay}${startOffset} – ${formatTime(
+    slot.localEnd
+  )}${endDay}${endOffset}`;
+}
+
 function ScheduleGrid({
-  schedule,
-  startHour,
-  endHour,
-  selectedDays,
+  schedule = [],
+  slotGroups = [],
   readOnly,
   showValues,
   onCellPaint,
   label,
   participantDetails,
-  daySelectionType,
-  specificDates,
 }) {
-  const numHours = endHour - startHour;
-  const isSpecificDates = daySelectionType === "specific_dates" && Array.isArray(specificDates);
-  const days = isSpecificDates
-    ? specificDates
-    : selectedDays
-      ? DAY_LABELS.filter((_, i) => selectedDays.includes(i))
-      : DAY_LABELS;
-  const numColumns = days.length;
-  const dayIndices = isSpecificDates
-    ? specificDates.map((_, i) => i)
-    : (selectedDays ?? [0, 1, 2, 3, 4, 5, 6]);
+  const ignoreMouseUntilRef = useRef(0);
+  const groups = Array.isArray(slotGroups) ? slotGroups : [];
+  const maxRows = groups.reduce(
+    (largest, group) => Math.max(largest, group?.slots?.length || 0),
+    0
+  );
 
-  const times = [];
-  for (let i = 0; i < numHours; i++) {
-    times.push(formatHour(startHour + i));
-  }
-
-  const handleMouse = (idx, e) => {
+  const handlePaint = (index, event) => {
     if (readOnly || !onCellPaint) return;
-    if (e.type === "mousedown" || (e.type === "mousemove" && e.buttons === 1)) {
-      onCellPaint(idx, e);
+    if (
+      event.type === "mousedown" ||
+      event.type === "keydown" ||
+      (event.type === "mousemove" && event.buttons === 1)
+    ) {
+      onCellPaint(index, event);
     }
   };
 
@@ -75,122 +63,201 @@ function ScheduleGrid({
           border: "1px solid var(--md-sys-color-outline)",
         }}
       >
-        <div className="schedule-inner">
-          <div style={{ display: "flex", marginLeft: "80px", marginBottom: "8px" }}>
-            {days.map((d) => (
-              <div
-                key={d}
-                style={{
-                  flex: 1,
-                  textAlign: "center",
-                  fontWeight: "bold",
-                  fontSize: "0.9rem",
-                  color: "var(--md-sys-color-secondary)",
-                }}
-              >
-                {d}
-              </div>
-            ))}
-          </div>
-
-          <div style={{ display: "flex" }}>
+        {groups.length === 0 ? (
+          <p style={{ margin: 0, color: "var(--md-sys-color-on-surface-variant)" }}>
+            No schedule slots are configured.
+          </p>
+        ) : (
+          <div
+            role="grid"
+            aria-label={label || "Availability"}
+            style={{ minWidth: `${80 + groups.length * 96}px` }}
+          >
             <div
+              role="row"
               style={{
-                display: "flex",
-                flexDirection: "column",
-                width: "80px",
-                paddingRight: "8px",
+                display: "grid",
+                gridTemplateColumns: `80px repeat(${groups.length}, minmax(96px, 1fr))`,
+                marginBottom: "8px",
               }}
             >
-              {times.map((t) => (
+              <div
+                role="columnheader"
+                style={{
+                  paddingRight: "8px",
+                  textAlign: "right",
+                  fontSize: "0.8rem",
+                  color: "var(--md-sys-color-on-surface-variant)",
+                }}
+              >
+                Time
+              </div>
+              {groups.map((group) => (
                 <div
-                  key={t}
+                  role="columnheader"
+                  key={group.key}
                   style={{
-                    height: "32px",
-                    display: "flex",
-                    alignItems: "center",
-                    fontSize: "0.75rem",
-                    justifyContent: "flex-end",
-                    color: "var(--md-sys-color-on-surface-variant)",
+                    flex: 1,
+                    minWidth: "96px",
+                    textAlign: "center",
+                    fontWeight: "bold",
+                    fontSize: "0.9rem",
+                    color: "var(--md-sys-color-secondary)",
                   }}
                 >
-                  {t}
+                  {group.label}
                 </div>
               ))}
             </div>
 
             <div
+              role="rowgroup"
               style={{
-                display: "flex",
-                flex: 1,
                 border: "1px solid var(--md-sys-color-surface-variant)",
                 borderRadius: "8px",
                 overflow: "hidden",
               }}
             >
-              {dayIndices.map((dayIndex, colPos) => (
-                <div key={dayIndex} style={{ display: "flex", flexDirection: "column", flex: 1 }}>
-                  {times.map((t, hourIndex) => {
-                    const idx = isSpecificDates
-                      ? hourIndex * numColumns + colPos
-                      : hourIndex * DAYS_PER_WEEK + dayIndex;
-                    const val = parseFloat(schedule[idx] || 0);
-                    const tooltip = participantDetails
-                      ? participantDetails
-                          .filter((pd) => pd.schedule[idx] > 0)
-                          .map((pd) => `${pd.name}: ${pd.schedule[idx].toFixed(2)}`)
-                          .join("\n")
-                      : undefined;
-                    return (
-                      <div
-                        key={idx}
-                        data-cell-idx={idx}
-                        title={tooltip}
-                        onMouseDown={(e) => handleMouse(idx, e)}
-                        onMouseMove={(e) => handleMouse(idx, e)}
-                        onTouchStart={(e) => {
-                          e.preventDefault();
-                          handleMouse(idx, { type: "mousedown" });
-                        }}
-                        onTouchMove={(e) => {
-                          e.preventDefault();
-                          const t = e.touches[0];
-                          const el = document.elementFromPoint(t.clientX, t.clientY);
-                          const ci = el?.dataset?.cellIdx;
-                          if (ci !== undefined)
-                            handleMouse(parseInt(ci), { type: "mousemove", buttons: 1 });
-                        }}
-                        style={{
-                          height: "32px",
-                          backgroundColor: lerpColor(val),
-                          borderTop:
-                            hourIndex !== 0
-                              ? "1px solid var(--md-sys-color-surface-variant)"
-                              : "none",
-                          borderLeft:
-                            colPos !== 0 ? "1px solid var(--md-sys-color-surface-variant)" : "none",
-                          cursor: readOnly ? "default" : "pointer",
-                          touchAction: "none",
-                          userSelect: "none",
-                          WebkitUserSelect: "none",
-                          transition: "background-color 0.1s ease",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          fontSize: "0.7rem",
-                          color: "var(--md-sys-color-on-surface)",
-                          fontWeight: "500",
-                        }}
-                      >
-                        {showValues ? val.toFixed(2).replace(/\.00$/, "") : ""}
-                      </div>
-                    );
-                  })}
-                </div>
-              ))}
+              {Array.from({ length: maxRows }, (_, row) => {
+                const firstSlot = groups.find((group) => group.slots?.[row])?.slots?.[row];
+                return (
+                  <div
+                    key={row}
+                    role="row"
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: `80px repeat(${groups.length}, minmax(96px, 1fr))`,
+                    }}
+                  >
+                    <div
+                      role="rowheader"
+                      style={{
+                        alignItems: "center",
+                        background: "#fff",
+                        borderTop:
+                          row === 0 ? "none" : "1px solid var(--md-sys-color-surface-variant)",
+                        color: "var(--md-sys-color-on-surface-variant)",
+                        display: "flex",
+                        fontSize: "0.72rem",
+                        height: "36px",
+                        justifyContent: "flex-end",
+                        paddingRight: "8px",
+                      }}
+                    >
+                      {firstSlot ? formatTime(firstSlot.localStart) : ""}
+                    </div>
+                    {groups.map((group, column) => {
+                      const slot = group.slots?.[row];
+                      if (!slot) {
+                        return (
+                          <div
+                            key={`${group.key}:empty:${row}`}
+                            role="gridcell"
+                            aria-label={`${group.label}, no slot at this time`}
+                            aria-disabled="true"
+                            style={{
+                              height: "36px",
+                              background:
+                                "repeating-linear-gradient(135deg, transparent, transparent 5px, rgba(0,0,0,0.04) 5px, rgba(0,0,0,0.04) 10px)",
+                              borderTop:
+                                row === 0
+                                  ? "none"
+                                  : "1px solid var(--md-sys-color-surface-variant)",
+                              borderLeft:
+                                column === 0
+                                  ? "none"
+                                  : "1px solid var(--md-sys-color-surface-variant)",
+                            }}
+                          />
+                        );
+                      }
+
+                      const index = slot.index;
+                      const value = Number(schedule[index] || 0);
+                      const details = participantDetails
+                        ? participantDetails
+                            .filter((participant) => Number(participant.schedule[index] || 0) > 0)
+                            .map(
+                              (participant) =>
+                                `${participant.name}: ${Number(participant.schedule[index]).toFixed(
+                                  2
+                                )}`
+                            )
+                            .join("\n")
+                        : "";
+                      const title = details ? `${slotLabel(slot)}\n${details}` : slotLabel(slot);
+
+                      return (
+                        <div
+                          key={index}
+                          role="gridcell"
+                          tabIndex={readOnly ? undefined : 0}
+                          aria-label={`${group.label}, ${slotLabel(slot)}, availability ${value}`}
+                          aria-readonly={readOnly ? "true" : undefined}
+                          aria-selected={readOnly ? undefined : value > 0}
+                          data-cell-idx={index}
+                          title={title}
+                          onMouseDown={(event) => {
+                            if (Date.now() < ignoreMouseUntilRef.current) return;
+                            handlePaint(index, event);
+                          }}
+                          onMouseMove={(event) => handlePaint(index, event)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              handlePaint(index, { ...event, type: "keydown" });
+                            }
+                          }}
+                          onTouchStart={(event) => {
+                            event.preventDefault();
+                            ignoreMouseUntilRef.current = Date.now() + 750;
+                            handlePaint(index, { type: "mousedown" });
+                          }}
+                          onTouchMove={(event) => {
+                            event.preventDefault();
+                            const touch = event.touches[0];
+                            const element = document.elementFromPoint(touch.clientX, touch.clientY);
+                            const targetIndex = element?.dataset?.cellIdx;
+                            if (targetIndex !== undefined) {
+                              handlePaint(Number(targetIndex), {
+                                type: "mousemove",
+                                buttons: 1,
+                              });
+                            }
+                          }}
+                          style={{
+                            height: "36px",
+                            backgroundColor: lerpColor(value),
+                            borderTop:
+                              row === 0 ? "none" : "1px solid var(--md-sys-color-surface-variant)",
+                            borderLeft:
+                              column === 0
+                                ? "none"
+                                : "1px solid var(--md-sys-color-surface-variant)",
+                            cursor: readOnly ? "default" : "pointer",
+                            touchAction: "none",
+                            userSelect: "none",
+                            WebkitUserSelect: "none",
+                            transition: "background-color 0.1s ease",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            fontSize: "0.7rem",
+                            color: "var(--md-sys-color-on-surface)",
+                            fontWeight: "500",
+                            boxSizing: "border-box",
+                          }}
+                        >
+                          {showValues ? value.toFixed(2).replace(/\.00$/, "") : ""}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
             </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

@@ -1,6 +1,5 @@
 import re
 import uuid
-from datetime import timedelta
 
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
@@ -193,10 +192,17 @@ class EmailAuthChallenge(TimestampedModel):
             models.Index(fields=["member", "purpose", "status"]),
             models.Index(fields=["expires_at"]),
         ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["member", "purpose", "channel"],
+                condition=models.Q(status="pending"),
+                name="one_pending_auth_challenge",
+            )
+        ]
 
     @classmethod
     def default_expiry(cls):
-        return timezone.now() + timedelta(minutes=10)
+        return timezone.now() + settings.AUTH_CHALLENGE_DELIVERY_LIFETIME
 
     @property
     def is_expired(self) -> bool:
@@ -214,6 +220,84 @@ class EmailAuthChallenge(TimestampedModel):
     def __str__(self) -> str:
         target = self.target_phone if self.channel == self.Channel.SMS else self.target_email
         return f"{self.purpose} -> {target} [{self.status}]"
+
+
+class AuthSession(TimestampedModel):
+    class RevocationReason(models.TextChoices):
+        LOGOUT = "logout", "Logout"
+        PASSWORD_CHANGE = "password_change", "Password change"
+        PASSWORD_RESET = "password_reset", "Password reset"
+        ACCOUNT_DELETE = "account_delete", "Account delete"
+        SESSION_REVOKE = "session_revoke", "Session revoke"
+        ADMIN = "admin", "Administrator"
+
+    member = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="auth_sessions",
+    )
+    refresh_jti = models.CharField(max_length=255, unique=True)
+    previous_refresh_jti = models.CharField(max_length=255, blank=True, default="")
+    refresh_recovery_expires_at = models.DateTimeField(null=True, blank=True)
+    refresh_recovered_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField()
+    last_seen_at = models.DateTimeField(default=timezone.now)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revoked_reason = models.CharField(
+        max_length=32,
+        choices=RevocationReason.choices,
+        blank=True,
+        default="",
+    )
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.CharField(max_length=255, blank=True, default="")
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["member", "revoked_at", "expires_at"]),
+            models.Index(fields=["expires_at"]),
+        ]
+
+    @property
+    def active(self) -> bool:
+        return self.revoked_at is None and self.expires_at > timezone.now()
+
+    def revoke(self, reason: str) -> bool:
+        if self.revoked_at is not None:
+            return False
+        self.revoked_at = timezone.now()
+        self.revoked_reason = reason
+        self.save(update_fields=["revoked_at", "revoked_reason", "updated_at"])
+        return True
+
+    def __str__(self) -> str:
+        state = "active" if self.active else "revoked/expired"
+        return f"{self.member_id} [{state}]"
+
+
+class AuthRateLimitBucket(TimestampedModel):
+    scope = models.CharField(max_length=64)
+    key_hash = models.CharField(max_length=64)
+    request_count = models.PositiveIntegerField(default=0)
+    window_started_at = models.DateTimeField(default=timezone.now)
+    blocked_until = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["scope", "key_hash"],
+                name="unique_auth_rate_limit_bucket",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["scope", "blocked_until"]),
+            models.Index(fields=["updated_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.scope}:{self.key_hash[:12]} ({self.request_count})"
 
 
 class RSAKeypair(TimestampedModel):

@@ -43,6 +43,7 @@ urlpatterns = [
     path("logout/", views.LogoutView.as_view(), name="authn-logout"),
     path("refresh/", views.RefreshView.as_view(), name="authn-refresh"),
     path("profile/", views.ProfileView.as_view(), name="authn-profile"),
+    path("sessions/", views.AuthSessionsView.as_view(), name="authn-sessions"),
     path("account-emails/", views.AccountEmailsView.as_view(), name="authn-account-emails"),
     path("contact-phones/", views.ContactPhonesView.as_view(), name="authn-contact-phones"),
     path(

@@ -1,22 +1,30 @@
+import uuid
+
+from django.conf import settings
 from django.db import transaction
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
-from rest_framework_simplejwt.tokens import RefreshToken
-from rest_framework_simplejwt.views import TokenRefreshView
 
-from apps.authn.models import ContactEmail, ContactPhone, EmailAuthChallenge
+from apps.authn.models import AuthSession, ContactEmail, ContactPhone, EmailAuthChallenge
+from apps.authn.security import AuthRateThrottle, enforce_cookie_request_origin
 from apps.authn.services import (
     active_keypair,
-    auth_payload,
     complete_registration,
+    decrypt_password,
+    delete_member_account,
+    issue_auth_session,
     issue_email_challenge,
     login_with_password,
     normalize_email,
+    revoke_all_auth_sessions,
+    revoke_auth_session,
+    revoke_refresh_session,
+    rotate_auth_session,
     send_login_alert,
-    send_registration_welcome,
     start_registration,
     user_payload,
     validate_password_pair,
@@ -42,18 +50,67 @@ def maybe_debug_code(response_data: dict, issued):
     return response_data
 
 
-class PublicKeyView(APIView):
+def _harden_auth_response(response):
+    response["Cache-Control"] = "no-store"
+    response["Pragma"] = "no-cache"
+    return response
+
+
+def _set_refresh_cookie(response, refresh_token: str):
+    response.set_cookie(
+        settings.AUTH_REFRESH_COOKIE_NAME,
+        refresh_token,
+        max_age=int(settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"].total_seconds()),
+        httponly=True,
+        secure=settings.AUTH_REFRESH_COOKIE_SECURE,
+        samesite=settings.AUTH_REFRESH_COOKIE_SAMESITE,
+        path=settings.AUTH_REFRESH_COOKIE_PATH,
+    )
+    return _harden_auth_response(response)
+
+
+def _clear_refresh_cookie(response):
+    response.delete_cookie(
+        settings.AUTH_REFRESH_COOKIE_NAME,
+        path=settings.AUTH_REFRESH_COOKIE_PATH,
+        samesite=settings.AUTH_REFRESH_COOKIE_SAMESITE,
+    )
+    return _harden_auth_response(response)
+
+
+def authenticated_response(user, message: str, request, *, login_alert_method: str = ""):
+    with transaction.atomic():
+        issued = issue_auth_session(user, message, request=request)
+        if login_alert_method:
+            send_login_alert(
+                user,
+                request=request,
+                method=login_alert_method,
+                auth_session=issued.session,
+            )
+    return _set_refresh_cookie(Response(issued.payload), issued.refresh_token)
+
+
+class PublicAuthView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
+    throttle_classes = [AuthRateThrottle]
 
+
+class PublicKeyView(PublicAuthView):
     def get(self, request):
         key = active_keypair()
-        return Response({"key_id": str(key.key_id), "public_key": key.public_key_pem})
+        return Response(
+            {
+                "key_id": str(key.key_id),
+                "public_key": key.public_key_pem,
+                "password_encryption_required": bool(settings.REQUIRE_ENCRYPTED_PASSWORDS),
+            }
+        )
 
 
-class RegisterView(APIView):
-    authentication_classes = []
-    permission_classes = [AllowAny]
+class RegisterView(PublicAuthView):
+    auth_rate_scope = "register"
 
     def post(self, request):
         try:
@@ -66,9 +123,8 @@ class RegisterView(APIView):
         )
 
 
-class RegisterVerifyCodeView(APIView):
-    authentication_classes = []
-    permission_classes = [AllowAny]
+class RegisterVerifyCodeView(PublicAuthView):
+    auth_rate_scope = "code_verify"
 
     def post(self, request):
         try:
@@ -77,13 +133,11 @@ class RegisterVerifyCodeView(APIView):
             )
         except Exception as exc:  # noqa: BLE001
             return validation_error_response(exc)
-        send_registration_welcome(user)
-        return Response(auth_payload(user, "Registration complete."))
+        return authenticated_response(user, "Registration complete.", request)
 
 
-class RegisterResendCodeView(APIView):
-    authentication_classes = []
-    permission_classes = [AllowAny]
+class RegisterResendCodeView(PublicAuthView):
+    auth_rate_scope = "code_request"
 
     def post(self, request):
         email = normalize_email(request.data.get("email", ""))
@@ -93,64 +147,66 @@ class RegisterResendCodeView(APIView):
             .first()
         )
         if contact is None or contact.member.is_active:
-            return Response({"detail": "Unable to resend registration code."}, status=400)
-        try:
-            issued = issue_email_challenge(
-                member=contact.member,
-                purpose=EmailAuthChallenge.Purpose.REGISTER,
-                target_email=email,
+            return Response(
+                {"message": "If registration is pending, a verification code has been sent."},
+                status=202,
             )
-        except EmailDeliveryError as exc:
-            return validation_error_response(exc)
-        data = {"message": "Verification code sent."}
+        issued = issue_email_challenge(
+            member=contact.member,
+            purpose=EmailAuthChallenge.Purpose.REGISTER,
+            target_email=email,
+        )
+        data = {"message": "If registration is pending, a verification code has been sent."}
         return Response(maybe_debug_code(data, issued), status=202)
 
 
-class LoginView(APIView):
-    authentication_classes = []
-    permission_classes = [AllowAny]
+class LoginView(PublicAuthView):
+    auth_rate_scope = "password_login"
 
     def post(self, request):
         try:
+            password = decrypt_password(
+                request.data.get("password", ""),
+                request.data.get("key_id", ""),
+            )
             user = login_with_password(
                 request.data.get("email", ""),
-                request.data.get("password", ""),
+                password,
                 request=request,
             )
         except Exception as exc:  # noqa: BLE001
             return validation_error_response(exc)
-        send_login_alert(user, request=request, method="password")
-        return Response(auth_payload(user, "Login successful."))
+        return authenticated_response(
+            user,
+            "Login successful.",
+            request,
+            login_alert_method="password",
+        )
 
 
-class LoginRequestCodeView(APIView):
-    authentication_classes = []
-    permission_classes = [AllowAny]
+class LoginRequestCodeView(PublicAuthView):
+    auth_rate_scope = "code_request"
 
     def post(self, request):
         email = normalize_email(request.data.get("email", ""))
+        generic_data = {"message": "If the account exists, a code has been sent."}
         contact = (
             ContactEmail.objects.select_related("member")
             .filter(email_address__iexact=email, verified=True, member__is_active=True)
             .first()
         )
         if contact is None:
-            return Response({"detail": "If the account exists, a code has been sent."}, status=202)
-        try:
-            issued = issue_email_challenge(
-                member=contact.member,
-                purpose=EmailAuthChallenge.Purpose.LOGIN,
-                target_email=email,
-            )
-        except EmailDeliveryError as exc:
-            return validation_error_response(exc)
-        data = {"message": "Verification code sent."}
-        return Response(maybe_debug_code(data, issued), status=202)
+            return Response(generic_data, status=202)
+        issued = issue_email_challenge(
+            member=contact.member,
+            purpose=EmailAuthChallenge.Purpose.LOGIN,
+            target_email=email,
+        )
+        return Response(maybe_debug_code(generic_data, issued), status=202)
 
 
-class LoginVerifyCodeView(APIView):
-    authentication_classes = []
-    permission_classes = [AllowAny]
+class LoginVerifyCodeView(PublicAuthView):
+    auth_rate_scope = "code_verify"
 
     def post(self, request):
         try:
@@ -163,26 +219,40 @@ class LoginVerifyCodeView(APIView):
             return validation_error_response(exc)
         if not challenge.member.is_active:
             return Response({"detail": "Account is inactive."}, status=400)
-        send_login_alert(challenge.member, request=request, method="email verification code")
-        return Response(auth_payload(challenge.member, "Login successful."))
+        return authenticated_response(
+            challenge.member,
+            "Login successful.",
+            request,
+            login_alert_method="email verification code",
+        )
 
 
-class LogoutView(APIView):
-    permission_classes = [IsAuthenticated]
+class LogoutView(PublicAuthView):
+    auth_rate_scope = "refresh"
 
     def post(self, request):
-        refresh = request.data.get("refresh")
-        if refresh:
-            try:
-                RefreshToken(refresh).blacklist()
-            except TokenError:
-                pass
-        return Response({"message": "Logged out."})
+        enforce_cookie_request_origin(request)
+        refresh = request.COOKIES.get(settings.AUTH_REFRESH_COOKIE_NAME, "")
+        revoke_refresh_session(refresh, "logout")
+        return _clear_refresh_cookie(Response({"message": "Logged out."}))
 
 
-class RefreshView(TokenRefreshView):
-    permission_classes = [AllowAny]
-    authentication_classes = []
+class RefreshView(PublicAuthView):
+    auth_rate_scope = "refresh"
+
+    def post(self, request):
+        enforce_cookie_request_origin(request)
+        raw_refresh = request.COOKIES.get(settings.AUTH_REFRESH_COOKIE_NAME, "")
+        try:
+            issued = rotate_auth_session(raw_refresh, request=request)
+        except TokenError:
+            return _clear_refresh_cookie(
+                Response(
+                    {"detail": "Session is not available."},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+            )
+        return _set_refresh_cookie(Response(issued.payload), issued.refresh_token)
 
 
 class ProfileView(APIView):
@@ -210,8 +280,63 @@ class ProfileView(APIView):
         return Response({"user": user_payload(user)})
 
 
+class AuthSessionsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        current_id = str(request.auth.get("session_id", ""))
+        sessions = request.user.auth_sessions.filter(
+            revoked_at__isnull=True,
+            expires_at__gt=timezone.now(),
+        )
+        return Response(
+            {
+                "sessions": [
+                    {
+                        "id": str(session.pk),
+                        "createdAt": session.created_at.isoformat(),
+                        "lastSeenAt": session.last_seen_at.isoformat(),
+                        "expiresAt": session.expires_at.isoformat(),
+                        "ipAddress": session.ip_address,
+                        "userAgent": session.user_agent,
+                        "current": str(session.pk) == current_id,
+                    }
+                    for session in sessions
+                ]
+            }
+        )
+
+    def delete(self, request):
+        current_id = str(request.auth.get("session_id", ""))
+        if request.data.get("all"):
+            count = revoke_all_auth_sessions(
+                request.user,
+                AuthSession.RevocationReason.SESSION_REVOKE,
+            )
+            return _clear_refresh_cookie(Response({"revoked": count, "currentRevoked": True}))
+
+        raw_session_id = request.data.get("sessionId", "")
+        try:
+            session_id = uuid.UUID(str(raw_session_id))
+        except (TypeError, ValueError, AttributeError):
+            return Response({"sessionId": "A valid session ID is required."}, status=400)
+        session = revoke_auth_session(
+            request.user,
+            session_id,
+            AuthSession.RevocationReason.SESSION_REVOKE,
+        )
+        if session is None:
+            return Response({"detail": "Session not found."}, status=404)
+        current_revoked = str(session.pk) == current_id
+        response = Response({"revoked": 1, "currentRevoked": current_revoked})
+        return _clear_refresh_cookie(response) if current_revoked else response
+
+
 class AccountEmailsView(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_classes = [AuthRateThrottle]
+    auth_rate_scope = "code_request"
+    auth_rate_methods = {"POST"}
 
     def get(self, request):
         emails = [
@@ -241,14 +366,11 @@ class AccountEmailsView(APIView):
         )
         if not created and contact.member_id != request.user.pk:
             return Response({"email": "This email address is already in use."}, status=400)
-        try:
-            issued = issue_email_challenge(
-                member=request.user,
-                purpose=EmailAuthChallenge.Purpose.CONTACT_EMAIL_VERIFY,
-                target_email=email,
-            )
-        except EmailDeliveryError as exc:
-            return validation_error_response(exc)
+        issued = issue_email_challenge(
+            member=request.user,
+            purpose=EmailAuthChallenge.Purpose.CONTACT_EMAIL_VERIFY,
+            target_email=email,
+        )
         data = {
             "email": {
                 "id": str(contact.pk),
@@ -259,9 +381,8 @@ class AccountEmailsView(APIView):
         return Response(maybe_debug_code(data, issued), status=201 if created else 200)
 
 
-class PasswordResetRequestView(APIView):
-    authentication_classes = []
-    permission_classes = [AllowAny]
+class PasswordResetRequestView(PublicAuthView):
+    auth_rate_scope = "code_request"
 
     def post(self, request):
         email = normalize_email(request.data.get("email", ""))
@@ -271,14 +392,11 @@ class PasswordResetRequestView(APIView):
             .first()
         )
         if contact is not None:
-            try:
-                issued = issue_email_challenge(
-                    member=contact.member,
-                    purpose=EmailAuthChallenge.Purpose.PASSWORD_RESET,
-                    target_email=email,
-                )
-            except EmailDeliveryError as exc:
-                return validation_error_response(exc)
+            issued = issue_email_challenge(
+                member=contact.member,
+                purpose=EmailAuthChallenge.Purpose.PASSWORD_RESET,
+                target_email=email,
+            )
             data = {"message": "If the account exists, a reset code has been sent."}
             return Response(maybe_debug_code(data, issued), status=202)
         return Response(
@@ -286,9 +404,8 @@ class PasswordResetRequestView(APIView):
         )
 
 
-class PasswordResetConfirmView(APIView):
-    authentication_classes = []
-    permission_classes = [AllowAny]
+class PasswordResetConfirmView(PublicAuthView):
+    auth_rate_scope = "code_verify"
 
     def post(self, request):
         try:
@@ -304,6 +421,7 @@ class PasswordResetConfirmView(APIView):
         member = challenge.member
         member.set_password(password)
         member.save(update_fields=["password"])
+        revoke_all_auth_sessions(member, "password_reset")
         return Response({"message": "Password reset complete."})
 
 
@@ -311,7 +429,14 @@ class ChangePasswordView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        if not request.user.check_password(request.data.get("current_password", "")):
+        try:
+            current_password = decrypt_password(
+                request.data.get("current_password", ""),
+                request.data.get("key_id", ""),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return validation_error_response(exc)
+        if not request.user.check_password(current_password):
             return Response({"current_password": "Current password is incorrect."}, status=400)
         try:
             password = validate_password_pair(request.data, password_key="new_password")
@@ -319,32 +444,37 @@ class ChangePasswordView(APIView):
             return validation_error_response(exc)
         request.user.set_password(password)
         request.user.save(update_fields=["password"])
-        return Response({"message": "Password changed."})
+        revoke_all_auth_sessions(request.user, "password_change")
+        return _clear_refresh_cookie(
+            Response({"message": "Password changed. Please log in again."})
+        )
 
 
 class DeleteAccountView(APIView):
     permission_classes = [IsAuthenticated]
 
-    @transaction.atomic
     def post(self, request):
         user = request.user
-        refresh = request.data.get("refresh")
-        if refresh:
-            try:
-                RefreshToken(refresh).blacklist()
-            except TokenError:
-                pass
-        user.is_active = False
-        user.email = ""
-        user.set_unusable_password()
-        user.save(update_fields=["is_active", "email", "password"])
-        ContactEmail.objects.filter(member=user).update(verified=False, subscribe=False)
-        return Response({"message": "Account deleted."})
+        try:
+            password = decrypt_password(
+                request.data.get("password", ""),
+                request.data.get("key_id", ""),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return validation_error_response(exc)
+        if not user.check_password(password):
+            return Response({"password": "Current password is incorrect."}, status=400)
+        if request.data.get("confirmation") != "DELETE":
+            return Response(
+                {"confirmation": 'Type "DELETE" to confirm account deletion.'},
+                status=400,
+            )
+        delete_member_account(user)
+        return _clear_refresh_cookie(Response({"message": "Account deleted."}))
 
 
-class PhoneAuthRequestCodeView(APIView):
-    authentication_classes = []
-    permission_classes = [AllowAny]
+class PhoneAuthRequestCodeView(PublicAuthView):
+    auth_rate_scope = "code_request"
 
     def post(self, request):
         return Response(

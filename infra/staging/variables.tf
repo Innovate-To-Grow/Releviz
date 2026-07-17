@@ -13,6 +13,11 @@ variable "environment" {
   default = "staging"
 }
 
+variable "ecs_cluster_name" {
+  type    = string
+  default = "Releviz-Staging"
+}
+
 variable "backend_image_tag" {
   type        = string
   description = "Docker image tag for backend"

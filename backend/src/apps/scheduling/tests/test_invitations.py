@@ -1,3 +1,4 @@
+import uuid
 from datetime import timedelta
 from io import StringIO
 from unittest.mock import patch
@@ -8,15 +9,22 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from apps.authn.models import ContactEmail
+from apps.authn.models import AuthRateLimitBucket, ContactEmail
 from apps.authn.tests.helpers import create_member, token_for
-from apps.messaging.models import EmailMessageLog
-from apps.messaging.services import EmailDeliveryError
+from apps.messaging.models import (
+    EmailDeliveryJob,
+    EmailDeliveryRequest,
+    EmailMessageLog,
+)
+from apps.messaging.services import dispatch_due_email_jobs, dispatch_email_job
 from apps.scheduling.models import Event, EventInvitation, Participant
 from apps.scheduling.services import (
+    EventEmailRequestError,
     api_invitation,
+    enqueue_manual_reminders,
     invitation_body,
     mark_invitation_for_member,
+    mark_invitation_opened,
     resolve_invited_member,
     response_deadline_ics,
     send_due_event_reminders,
@@ -24,6 +32,14 @@ from apps.scheduling.services import (
     split_invitation_emails,
     upsert_and_send_invitations,
 )
+
+
+def request_payload(emails, *, key=None, message=""):
+    return {
+        "emails": emails,
+        "message": message,
+        "idempotencyKey": str(key or uuid.uuid4()),
+    }
 
 
 class InvitationServiceTests(TestCase):
@@ -35,8 +51,8 @@ class InvitationServiceTests(TestCase):
             name="Plan; Comma, Back\\slash\nNew",
             organizer=self.organizer,
             days=[1],
-            start_hour=9,
-            end_hour=10,
+            start_minutes=9 * 60,
+            end_minutes=10 * 60,
             response_deadline=timezone.now() + timedelta(hours=23),
             reminder_hours_before=24,
         )
@@ -61,27 +77,38 @@ class InvitationServiceTests(TestCase):
             custom_message="Bring notes",
         )
         invitation.last_sent_at = timezone.now()
-        invitation.reminder_sent_at = timezone.now()
         invitation.accepted_at = timezone.now()
+        invitation.opened_at = timezone.now()
+        invitation.joined_at = timezone.now()
+        invitation.draft_saved_at = timezone.now()
+        invitation.status = EventInvitation.Status.DRAFT_SAVED
         invitation.save()
         data = api_invitation(invitation)
         self.assertEqual(data["email"], "upper@example.com")
         self.assertEqual(data["memberId"], str(self.participant.pk))
+        self.assertEqual(data["statusLabel"], "Draft saved")
+        self.assertTrue(data["awaitingReminder"])
+        self.assertIsNotNone(data["openedAt"])
+        self.assertIsNotNone(data["joinedAt"])
+        self.assertIsNotNone(data["draftSavedAt"])
+        self.assertIsNone(data["submittedAt"])
         self.assertEqual(data["customMessage"], "Bring notes")
         self.assertIn("upper@example.com", str(invitation))
 
     @override_settings(FRONTEND_URL="https://app.example.com")
-    def test_invitation_email_reminders_and_ics(self):
-        invitations = upsert_and_send_invitations(
+    def test_invitation_jobs_are_durable_replay_safe_and_content_addressed(self):
+        key = uuid.uuid4()
+        result = upsert_and_send_invitations(
             event=self.event,
             emails=["participant@example.com", "manual@example.com"],
             invited_by=self.organizer,
+            idempotency_key=key,
             message="Please respond",
         )
-        self.assertEqual(len(invitations), 2)
-        self.assertEqual(mail.outbox[0].to, ["participant@example.com"])
-        self.assertIn("https://app.example.com/event?code=ABC123", mail.outbox[0].body)
-        self.assertEqual(mail.outbox[0].attachments[0][0], "releviz-ABC123-availability.ics")
+        self.assertFalse(result["idempotent"])
+        self.assertEqual(result["createdJobCount"], 2)
+        self.assertEqual(len(result["invitations"]), 2)
+        self.assertEqual(len(mail.outbox), 0)
         ics = response_deadline_ics(self.event)
         self.assertIn("BEGIN:VEVENT", ics.content)
         self.assertIn(
@@ -90,27 +117,199 @@ class InvitationServiceTests(TestCase):
         )
         self.assertIn("TRIGGER:-PT24H", ics.content)
         self.assertIsNone(response_deadline_ics(Event(code="NODATE", name="No date")))
-        self.assertIn("Message from organizer", invitation_body(invitations[0]))
+        self.assertEqual(
+            EmailDeliveryJob.objects.filter(status=EmailDeliveryJob.Status.PENDING).count(),
+            2,
+        )
+        request_record = result["request"]
+        self.assertIn(str(key), str(request_record))
+        self.assertEqual(request_record.jobs.count(), 2)
+
+        dispatch = dispatch_due_email_jobs(limit=10)
+        self.assertEqual(dispatch["sent"], 2)
+        self.assertEqual(
+            {message.to[0] for message in mail.outbox},
+            {"manual@example.com", "participant@example.com"},
+        )
+        participant_email = next(
+            message for message in mail.outbox if message.to == ["participant@example.com"]
+        )
+        self.assertIn("https://app.example.com/event?code=ABC123", participant_email.body)
+        participant_invitation = EventInvitation.objects.get(email="participant@example.com")
+        self.assertIn(
+            f"&invitation={participant_invitation.access_token}",
+            participant_email.body,
+        )
+        self.assertEqual(
+            participant_email.attachments[0][0],
+            "releviz-ABC123-availability.ics",
+        )
+        invitations = list(EventInvitation.objects.order_by("email"))
+        self.assertTrue(all(invitation.last_sent_at for invitation in invitations))
+        self.assertTrue(all(invitation.first_sent_at for invitation in invitations))
+        self.assertIn("Message from organizer", invitation_body(invitations[1]))
         self.assertTrue(EventInvitation.objects.filter(member=self.participant).exists())
         self.assertEqual(
             EmailMessageLog.objects.filter(
-                message_type=EmailMessageLog.MessageType.INVITATION
+                message_type=EmailMessageLog.MessageType.INVITATION,
+                status=EmailMessageLog.Status.SENT,
             ).count(),
             2,
         )
 
-        sent = send_event_reminders(self.event, force=False)
-        self.assertEqual(sent, 2)
+        replay = upsert_and_send_invitations(
+            event=self.event,
+            emails=["participant@example.com", "manual@example.com"],
+            invited_by=self.organizer,
+            idempotency_key=key,
+            message="Please respond",
+        )
+        self.assertTrue(replay["idempotent"])
+        self.assertEqual(replay["createdJobCount"], 2)
+        for job in replay["jobs"]:
+            self.assertFalse(dispatch_email_job(job.pk)["attempted"])
+        self.assertEqual(len(mail.outbox), 2)
+
+        deduplicated = upsert_and_send_invitations(
+            event=self.event,
+            emails=["manual@example.com", "participant@example.com"],
+            invited_by=self.organizer,
+            idempotency_key=uuid.uuid4(),
+            message="Please respond",
+        )
+        self.assertFalse(deduplicated["idempotent"])
+        self.assertEqual(deduplicated["createdJobCount"], 0)
+        self.assertEqual(EmailDeliveryJob.objects.count(), 2)
+
+        changed = upsert_and_send_invitations(
+            event=self.event,
+            emails=["participant@example.com"],
+            invited_by=self.organizer,
+            idempotency_key=uuid.uuid4(),
+            message="Updated details",
+        )
+        self.assertEqual(changed["createdJobCount"], 1)
+        self.assertEqual(EmailDeliveryJob.objects.count(), 3)
+
+        with self.assertRaisesMessage(EventEmailRequestError, "different invitation details"):
+            upsert_and_send_invitations(
+                event=self.event,
+                emails=["different@example.com"],
+                invited_by=self.organizer,
+                idempotency_key=key,
+                message="Changed",
+            )
+
+    def test_reminder_jobs_deduplicate_retries_and_new_deadline_cycles(self):
+        for email in ["participant@example.com", "manual@example.com"]:
+            EventInvitation.objects.create(
+                event=self.event,
+                email=email,
+                invited_by=self.organizer,
+            )
+
+        self.assertEqual(send_event_reminders(self.event, force=False), 2)
+        self.assertEqual(len(mail.outbox), 0)
+        self.assertEqual(send_event_reminders(self.event, force=True), 0)
+        dispatch_due_email_jobs(limit=10)
         self.assertEqual(
             mail.outbox[-1].subject,
             "Reminder: share your availability for Plan; Comma, Back\\slash New",
         )
+        self.assertTrue(
+            all(
+                invitation.reminder_sent_at
+                for invitation in EventInvitation.objects.filter(event=self.event)
+            )
+        )
         self.assertEqual(send_event_reminders(self.event, force=False), 0)
+        self.assertEqual(send_event_reminders(self.event, force=True), 0)
+
+        self.event.response_deadline += timedelta(days=1)
+        self.event.save(update_fields=["response_deadline", "updated_at"])
         self.assertEqual(send_event_reminders(self.event, force=True), 2)
 
         self.event.reminders_enabled = False
         self.event.save(update_fields=["reminders_enabled", "updated_at"])
         self.assertEqual(send_event_reminders(self.event, force=True), 0)
+
+        no_deadline = Event.objects.create(
+            code="NODEADLINE",
+            name="No deadline",
+            organizer=self.organizer,
+            response_deadline=None,
+        )
+        EventInvitation.objects.create(
+            event=no_deadline,
+            email="no-deadline@example.com",
+            invited_by=self.organizer,
+        )
+        result = enqueue_manual_reminders(
+            event=no_deadline,
+            requested_by=self.organizer,
+            idempotency_key=uuid.uuid4(),
+        )
+        self.assertEqual(result["createdJobCount"], 1)
+        self.assertEqual(result["jobs"][0].attachments, [])
+
+    def test_service_authorization_caps_and_lifecycle_are_enforced(self):
+        other = create_member("other@example.com")
+        with self.assertRaisesMessage(EventEmailRequestError, "Only the organizer"):
+            upsert_and_send_invitations(
+                event=self.event,
+                emails=["new@example.com"],
+                invited_by=other,
+                idempotency_key=uuid.uuid4(),
+            )
+        with self.assertRaisesMessage(EventEmailRequestError, "Only the organizer"):
+            enqueue_manual_reminders(
+                event=self.event,
+                requested_by=other,
+                idempotency_key=uuid.uuid4(),
+            )
+
+        EventInvitation.objects.create(
+            event=self.event,
+            email="existing@example.com",
+            invited_by=self.organizer,
+        )
+        with override_settings(INVITATION_MAX_EVENT_RECIPIENTS=1):
+            with self.assertRaisesMessage(EventEmailRequestError, "at most 1"):
+                upsert_and_send_invitations(
+                    event=self.event,
+                    emails=["new@example.com"],
+                    invited_by=self.organizer,
+                    idempotency_key=uuid.uuid4(),
+                )
+
+        EventInvitation.objects.create(
+            event=self.event,
+            email="second@example.com",
+            invited_by=self.organizer,
+        )
+        with override_settings(REMINDER_MAX_RECIPIENTS=1):
+            with self.assertRaisesMessage(EventEmailRequestError, "at most 1"):
+                enqueue_manual_reminders(
+                    event=self.event,
+                    requested_by=self.organizer,
+                    idempotency_key=uuid.uuid4(),
+                )
+
+        self.event.status = Event.Status.FINALIZED
+        self.event.save(update_fields=["status", "updated_at"])
+        with self.assertRaisesMessage(EventEmailRequestError, "cannot change"):
+            upsert_and_send_invitations(
+                event=self.event,
+                emails=["locked@example.com"],
+                invited_by=self.organizer,
+                idempotency_key=uuid.uuid4(),
+            )
+        with self.assertRaisesMessage(EventEmailRequestError, "cannot change"):
+            enqueue_manual_reminders(
+                event=self.event,
+                requested_by=self.organizer,
+                idempotency_key=uuid.uuid4(),
+            )
 
     def test_due_reminder_command_and_member_status_updates(self):
         invitation = EventInvitation.objects.create(
@@ -124,8 +323,8 @@ class InvitationServiceTests(TestCase):
             name="Later",
             organizer=self.organizer,
             days=[1],
-            start_hour=9,
-            end_hour=10,
+            start_minutes=9 * 60,
+            end_minutes=10 * 60,
             response_deadline=timezone.now() + timedelta(days=4),
             reminder_hours_before=1,
         )
@@ -137,15 +336,32 @@ class InvitationServiceTests(TestCase):
 
         self.assertEqual(send_due_event_reminders(window_minutes=20), 1)
         invitation.refresh_from_db()
+        self.assertIsNone(invitation.reminder_sent_at)
+        self.assertEqual(dispatch_due_email_jobs(limit=10)["sent"], 1)
+        invitation.refresh_from_db()
         self.assertIsNotNone(invitation.reminder_sent_at)
 
         mark_invitation_for_member(event=self.event, member=self.participant)
         invitation.refresh_from_db()
-        self.assertEqual(invitation.status, EventInvitation.Status.ACCEPTED)
+        self.assertEqual(invitation.status, EventInvitation.Status.JOINED)
         self.assertIsNotNone(invitation.accepted_at)
+        self.assertIsNotNone(invitation.joined_at)
+        mark_invitation_for_member(
+            event=self.event,
+            member=self.participant,
+            draft_saved=True,
+        )
+        invitation.refresh_from_db()
+        self.assertEqual(invitation.status, EventInvitation.Status.DRAFT_SAVED)
+        self.assertIsNotNone(invitation.draft_saved_at)
         mark_invitation_for_member(event=self.event, member=self.participant, submitted=True)
         invitation.refresh_from_db()
         self.assertEqual(invitation.status, EventInvitation.Status.SUBMITTED)
+        self.assertIsNotNone(invitation.submitted_at)
+        submitted_at = invitation.submitted_at
+        mark_invitation_for_member(event=self.event, member=self.participant, submitted=True)
+        invitation.refresh_from_db()
+        self.assertEqual(invitation.submitted_at, submitted_at)
 
         no_email = create_member("no-email@example.com")
         ContactEmail.objects.filter(member=no_email).delete()
@@ -154,9 +370,51 @@ class InvitationServiceTests(TestCase):
 
         output = StringIO()
         call_command("send_due_event_reminders", "--window-minutes=20", stdout=output)
-        self.assertIn("Sent 0 reminder email(s).", output.getvalue())
+        self.assertIn("Queued 0 new reminder email job(s).", output.getvalue())
         with self.assertRaises(CommandError):
             call_command("send_due_event_reminders", "--window-minutes=0")
+
+    def test_invitation_open_tracking_is_private_idempotent_and_does_not_downgrade(self):
+        invitation = EventInvitation.objects.create(
+            event=self.event,
+            email=self.participant.email,
+            invited_by=self.organizer,
+        )
+        self.assertFalse(
+            mark_invitation_opened(
+                event_code="WRONG",
+                access_token=invitation.access_token,
+            )
+        )
+        self.assertTrue(
+            mark_invitation_opened(
+                event_code=self.event.code,
+                access_token=invitation.access_token,
+            )
+        )
+        invitation.refresh_from_db()
+        opened_at = invitation.opened_at
+        self.assertEqual(invitation.status, EventInvitation.Status.OPENED)
+        self.assertIsNotNone(opened_at)
+
+        self.assertTrue(
+            mark_invitation_opened(
+                event_code=self.event.code,
+                access_token=invitation.access_token,
+            )
+        )
+        invitation.refresh_from_db()
+        self.assertEqual(invitation.opened_at, opened_at)
+
+        mark_invitation_for_member(event=self.event, member=self.participant)
+        invitation.refresh_from_db()
+        self.assertEqual(invitation.status, EventInvitation.Status.JOINED)
+        mark_invitation_opened(
+            event_code=self.event.code,
+            access_token=invitation.access_token,
+        )
+        invitation.refresh_from_db()
+        self.assertEqual(invitation.status, EventInvitation.Status.JOINED)
 
 
 class InvitationApiTests(TestCase):
@@ -169,21 +427,87 @@ class InvitationApiTests(TestCase):
             name="Planning",
             organizer=self.organizer,
             days=[1],
-            start_hour=9,
-            end_hour=10,
+            start_minutes=9 * 60,
+            end_minutes=10 * 60,
             response_deadline=timezone.now() + timedelta(hours=24),
         )
 
     def authenticate(self, member):
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token_for(member)}")
 
+    def invitation_url(self):
+        return f"/api/events/invitations?code={self.event.code}"
+
+    def reminder_url(self):
+        return f"/api/events/reminders?code={self.event.code}"
+
+    def test_public_open_tracking_is_non_enumerating_and_organizer_visible(self):
+        invitation = EventInvitation.objects.create(
+            event=self.event,
+            email="opened@example.com",
+            invited_by=self.organizer,
+            last_sent_at=timezone.now(),
+        )
+        for payload in [
+            {},
+            {"code": self.event.code, "token": "not-a-uuid"},
+            {"code": "WRONG", "token": str(invitation.access_token)},
+        ]:
+            response = self.client.post(
+                "/api/events/invitations/open",
+                payload,
+                format="json",
+            )
+            self.assertEqual(response.status_code, 204)
+            self.assertIn("no-store", response["Cache-Control"])
+        invitation.refresh_from_db()
+        self.assertIsNone(invitation.opened_at)
+
+        opened = self.client.post(
+            "/api/events/invitations/open",
+            {
+                "code": self.event.code,
+                "token": str(invitation.access_token),
+            },
+            format="json",
+        )
+        self.assertEqual(opened.status_code, 204)
+        invitation.refresh_from_db()
+        self.assertEqual(invitation.status, EventInvitation.Status.OPENED)
+        self.assertIsNotNone(invitation.opened_at)
+
+        self.authenticate(self.organizer)
+        listed = self.client.get(self.invitation_url())
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual(
+            listed.data["invitations"][0],
+            {
+                "id": invitation.pk,
+                "email": "opened@example.com",
+                "memberId": None,
+                "status": "opened",
+                "statusLabel": "Opened",
+                "firstSentAt": None,
+                "lastSentAt": invitation.last_sent_at.isoformat(),
+                "reminderSentAt": None,
+                "acceptedAt": None,
+                "openedAt": invitation.opened_at.isoformat(),
+                "joinedAt": None,
+                "draftSavedAt": None,
+                "submittedAt": None,
+                "awaitingReminder": True,
+                "customMessage": "",
+            },
+        )
+
     def test_event_creation_includes_deadline_and_validates_reminders(self):
         self.authenticate(self.organizer)
+        future_deadline = timezone.now() + timedelta(days=2)
         response = self.client.post(
             "/api/events",
             {
                 "name": "Timed",
-                "responseDeadline": "2026-07-08T12:00:00",
+                "responseDeadline": future_deadline.isoformat(),
                 "remindersEnabled": False,
                 "reminderHoursBefore": "12",
             },
@@ -216,9 +540,9 @@ class InvitationApiTests(TestCase):
                 self.assertEqual(response.status_code, 400)
                 self.assertIn(message, response.data["error"])
 
-    def test_invitation_api_permissions_validation_and_delivery_error(self):
+    def test_invitation_api_validation_replay_and_durable_provider_failure(self):
         self.authenticate(self.participant)
-        forbidden = self.client.get(f"/api/events/invitations?code={self.event.code}")
+        forbidden = self.client.get(self.invitation_url())
         self.assertEqual(forbidden.status_code, 403)
         self.assertEqual(self.client.get("/api/events/invitations").status_code, 400)
         self.assertEqual(self.client.get("/api/events/invitations?code=NOPE").status_code, 404)
@@ -227,56 +551,112 @@ class InvitationApiTests(TestCase):
         self.assertEqual(
             self.client.post(
                 "/api/events/invitations",
-                {"emails": ["a@example.com"]},
+                request_payload(["a@example.com"]),
                 format="json",
             ).status_code,
             400,
         )
+        missing_key = self.client.post(
+            self.invitation_url(),
+            {"emails": ["a@example.com"]},
+            format="json",
+        )
+        self.assertEqual(missing_key.status_code, 400)
+        self.assertIn("idempotencyKey", missing_key.data["error"])
         invalid = self.client.post(
-            f"/api/events/invitations?code={self.event.code}",
-            {"emails": ["bad"]},
+            self.invitation_url(),
+            request_payload(["bad"]),
             format="json",
         )
         self.assertEqual(invalid.status_code, 400)
         empty = self.client.post(
-            f"/api/events/invitations?code={self.event.code}",
-            {"emails": []},
+            self.invitation_url(),
+            request_payload([]),
             format="json",
         )
         self.assertEqual(empty.status_code, 400)
         too_long = self.client.post(
-            f"/api/events/invitations?code={self.event.code}",
-            {"emails": ["a@example.com"], "message": "x" * 1001},
+            self.invitation_url(),
+            request_payload(["a@example.com"], message="x" * 1001),
             format="json",
         )
         self.assertEqual(too_long.status_code, 400)
+        with override_settings(INVITATION_MAX_BATCH_SIZE=1):
+            too_many = self.client.post(
+                self.invitation_url(),
+                request_payload(["a@example.com", "b@example.com"]),
+                format="json",
+            )
+        self.assertEqual(too_many.status_code, 400)
+        self.assertIn("at most 1", too_many.data["error"])
 
-        sent = self.client.post(
-            f"/api/events/invitations?code={self.event.code}",
-            {"emails": ["participant@example.com", "manual@example.com"], "message": "Join"},
-            format="json",
+        key = uuid.uuid4()
+        payload = request_payload(
+            ["participant@example.com", "manual@example.com"],
+            key=key,
+            message="Join",
         )
+        sent = self.client.post(self.invitation_url(), payload, format="json")
         self.assertEqual(sent.status_code, 201)
+        self.assertFalse(sent.data["idempotent"])
+        self.assertEqual(sent.data["delivery"]["sent"], 2)
+        self.assertEqual(sent.data["enqueued"], 2)
+        self.assertEqual(sent.data["deduplicated"], 0)
         self.assertEqual(len(sent.data["invitations"]), 2)
         self.assertEqual(
             EventInvitation.objects.get(email="participant@example.com").member,
             self.participant,
         )
-        listed = self.client.get(f"/api/events/invitations?code={self.event.code}")
+        listed = self.client.get(self.invitation_url())
         self.assertEqual(len(listed.data["invitations"]), 2)
 
+        replay = self.client.post(self.invitation_url(), payload, format="json")
+        self.assertEqual(replay.status_code, 200)
+        self.assertTrue(replay.data["idempotent"])
+        self.assertEqual(EmailDeliveryJob.objects.count(), 2)
+        self.assertEqual(len(mail.outbox), 2)
+
+        conflict = self.client.post(
+            self.invitation_url(),
+            request_payload(["different@example.com"], key=key),
+            format="json",
+        )
+        self.assertEqual(conflict.status_code, 409)
+
+        deduplicated = self.client.post(
+            self.invitation_url(),
+            request_payload(
+                ["manual@example.com", "participant@example.com"],
+                message="Join",
+            ),
+            format="json",
+        )
+        self.assertEqual(deduplicated.status_code, 201)
+        self.assertEqual(deduplicated.data["enqueued"], 0)
+        self.assertEqual(deduplicated.data["deduplicated"], 2)
+        self.assertEqual(len(mail.outbox), 2)
+
         with patch(
-            "apps.scheduling.views.upsert_and_send_invitations",
-            side_effect=EmailDeliveryError("ses down"),
+            "apps.messaging.services.EmailMultiAlternatives.send",
+            side_effect=TimeoutError("provider timeout"),
         ):
             failed = self.client.post(
-                f"/api/events/invitations?code={self.event.code}",
-                {"emails": ["again@example.com"]},
+                self.invitation_url(),
+                request_payload(["again@example.com"]),
                 format="json",
             )
-        self.assertEqual(failed.status_code, 503)
+        self.assertEqual(failed.status_code, 201)
+        self.assertEqual(failed.data["delivery"]["retry"], 1)
+        retry_job = EmailDeliveryJob.objects.get(recipient="again@example.com")
+        self.assertEqual(retry_job.status, EmailDeliveryJob.Status.RETRY)
+        self.assertIsNone(EventInvitation.objects.get(email="again@example.com").last_sent_at)
 
-    def test_join_submit_and_reminder_api_update_invitation_status(self):
+        retry_job.next_attempt_at = timezone.now()
+        retry_job.save(update_fields=["next_attempt_at", "updated_at"])
+        self.assertEqual(dispatch_due_email_jobs(limit=10)["sent"], 1)
+        self.assertIsNotNone(EventInvitation.objects.get(email="again@example.com").last_sent_at)
+
+    def test_join_submit_and_reminder_api_replay_and_failure(self):
         EventInvitation.objects.create(
             event=self.event,
             email="participant@example.com",
@@ -291,11 +671,45 @@ class InvitationApiTests(TestCase):
         )
         self.assertEqual(join.status_code, 201)
         invitation = EventInvitation.objects.get(email="participant@example.com")
-        self.assertEqual(invitation.status, EventInvitation.Status.ACCEPTED)
+        self.assertEqual(invitation.status, EventInvitation.Status.JOINED)
+
+        draft = self.client.put(
+            f"/api/events/participants/update?code={self.event.code}"
+            f"&participantId={self.participant.pk}",
+            {
+                "availabilityInperson": [1, 0],
+                "submitted": 0,
+                "expectedVersion": join.data["participant"]["version"],
+            },
+            format="json",
+        )
+        self.assertEqual(draft.status_code, 200)
+        invitation.refresh_from_db()
+        self.assertEqual(invitation.status, EventInvitation.Status.DRAFT_SAVED)
+
+        repeated_draft = self.client.put(
+            f"/api/events/participants/update?code={self.event.code}"
+            f"&participantId={self.participant.pk}",
+            {
+                "availabilityInperson": [1, 0],
+                "submitted": 0,
+                "expectedVersion": draft.data["participant"]["version"],
+            },
+            format="json",
+        )
+        self.assertEqual(repeated_draft.status_code, 200)
+        self.assertEqual(
+            repeated_draft.data["participant"]["version"],
+            draft.data["participant"]["version"],
+        )
 
         update = self.client.put(
-            f"/api/events/participants/update?code={self.event.code}&participantId={self.participant.pk}",
-            {"submitted": 1},
+            f"/api/events/participants/update?code={self.event.code}"
+            f"&participantId={self.participant.pk}",
+            {
+                "submitted": 1,
+                "expectedVersion": draft.data["participant"]["version"],
+            },
             format="json",
         )
         self.assertEqual(update.status_code, 200)
@@ -304,30 +718,228 @@ class InvitationApiTests(TestCase):
         self.assertTrue(
             Participant.objects.get(member=self.participant, event=self.event).submitted
         )
-
-        self.authenticate(self.participant)
-        self.assertEqual(
-            self.client.post(f"/api/events/reminders?code={self.event.code}").status_code,
-            403,
+        unchanged_submitted_schedule = self.client.put(
+            f"/api/events/participants/update?code={self.event.code}"
+            f"&participantId={self.participant.pk}",
+            {
+                "availabilityInperson": [1, 0],
+                "expectedVersion": update.data["participant"]["version"],
+            },
+            format="json",
         )
-        self.assertEqual(self.client.post("/api/events/reminders").status_code, 400)
-        self.assertEqual(self.client.post("/api/events/reminders?code=NOPE").status_code, 404)
+        self.assertEqual(unchanged_submitted_schedule.status_code, 200)
 
         self.authenticate(self.organizer)
-        reminder = self.client.post(f"/api/events/reminders?code={self.event.code}")
+        unchanged_group = self.client.put(
+            f"/api/events/participants/update?code={self.event.code}"
+            f"&participantId={self.participant.pk}",
+            {"groupName": None},
+            format="json",
+        )
+        self.assertEqual(unchanged_group.status_code, 200)
+
+        key = uuid.uuid4()
+        self.authenticate(self.participant)
+        self.assertEqual(
+            self.client.post(
+                self.reminder_url(),
+                {"idempotencyKey": str(key)},
+                format="json",
+            ).status_code,
+            403,
+        )
+        self.assertEqual(
+            self.client.post(
+                "/api/events/reminders",
+                {"idempotencyKey": str(key)},
+                format="json",
+            ).status_code,
+            400,
+        )
+        self.assertEqual(
+            self.client.post(
+                "/api/events/reminders?code=NOPE",
+                {"idempotencyKey": str(key)},
+                format="json",
+            ).status_code,
+            404,
+        )
+
+        self.authenticate(self.organizer)
+        missing_key = self.client.post(self.reminder_url(), {}, format="json")
+        self.assertEqual(missing_key.status_code, 400)
+        reminder = self.client.post(
+            self.reminder_url(),
+            {"idempotencyKey": str(key)},
+            format="json",
+        )
         self.assertEqual(reminder.status_code, 200)
         self.assertEqual(reminder.data["sent"], 0)
-        EventInvitation.objects.create(
+        self.assertEqual(reminder.data["recipientCount"], 0)
+
+        pending = EventInvitation.objects.create(
             event=self.event,
             email="pending@example.com",
             invited_by=self.organizer,
         )
-        reminder = self.client.post(f"/api/events/reminders?code={self.event.code}")
+        second_key = uuid.uuid4()
+        reminder = self.client.post(
+            self.reminder_url(),
+            {"idempotencyKey": str(second_key)},
+            format="json",
+        )
         self.assertEqual(reminder.data["sent"], 1)
+        self.assertEqual(reminder.data["enqueued"], 1)
+        pending.refresh_from_db()
+        self.assertIsNotNone(pending.reminder_sent_at)
 
+        replay = self.client.post(
+            self.reminder_url(),
+            {"idempotencyKey": str(second_key)},
+            format="json",
+        )
+        self.assertTrue(replay.data["idempotent"])
+        self.assertEqual(len(mail.outbox), 1)
+
+        deduplicated = self.client.post(
+            self.reminder_url(),
+            {"idempotencyKey": str(uuid.uuid4())},
+            format="json",
+        )
+        self.assertEqual(deduplicated.data["enqueued"], 0)
+        self.assertEqual(deduplicated.data["deduplicated"], 1)
+        self.assertEqual(len(mail.outbox), 1)
+
+        failed_invitation = EventInvitation.objects.create(
+            event=self.event,
+            email="failed@example.com",
+            invited_by=self.organizer,
+        )
         with patch(
-            "apps.scheduling.views.send_event_reminders",
-            side_effect=EmailDeliveryError("ses down"),
+            "apps.messaging.services.EmailMultiAlternatives.send",
+            side_effect=TimeoutError("provider timeout"),
         ):
-            failed = self.client.post(f"/api/events/reminders?code={self.event.code}")
-        self.assertEqual(failed.status_code, 503)
+            failed = self.client.post(
+                self.reminder_url(),
+                {"idempotencyKey": str(uuid.uuid4())},
+                format="json",
+            )
+        self.assertEqual(failed.status_code, 200)
+        self.assertEqual(failed.data["delivery"]["retry"], 1)
+        self.assertEqual(failed.data["delivery"]["sent"], 1)
+        failed_invitation.refresh_from_db()
+        self.assertIsNone(failed_invitation.reminder_sent_at)
+
+        self.event.response_deadline += timedelta(days=1)
+        self.event.save(update_fields=["response_deadline", "updated_at"])
+        conflict = self.client.post(
+            self.reminder_url(),
+            {"idempotencyKey": str(second_key)},
+            format="json",
+        )
+        self.assertEqual(conflict.status_code, 409)
+
+    def test_invitation_and_reminder_bulk_and_rate_controls(self):
+        self.authenticate(self.organizer)
+
+        EventInvitation.objects.create(
+            event=self.event,
+            email="existing@example.com",
+            invited_by=self.organizer,
+        )
+        with override_settings(INVITATION_MAX_EVENT_RECIPIENTS=1):
+            capped = self.client.post(
+                self.invitation_url(),
+                request_payload(["new@example.com"]),
+                format="json",
+            )
+        self.assertEqual(capped.status_code, 400)
+
+        EventInvitation.objects.create(
+            event=self.event,
+            email="second@example.com",
+            invited_by=self.organizer,
+        )
+        with override_settings(REMINDER_MAX_RECIPIENTS=1):
+            capped = self.client.post(
+                self.reminder_url(),
+                {"idempotencyKey": str(uuid.uuid4())},
+                format="json",
+            )
+        self.assertEqual(capped.status_code, 400)
+
+        AuthRateLimitBucket.objects.all().delete()
+        recipient_limits = {
+            "invitation_request": {
+                "ip": {"limit": 100, "window": 60, "block": 30},
+                "identity": {"limit": 100, "window": 60, "block": 30},
+            },
+            "invitation_recipient": {
+                "ip": {"limit": 100, "window": 60, "block": 30},
+                "identity": {"limit": 1, "window": 60, "block": 30},
+            },
+            "reminder_request": {
+                "ip": {"limit": 100, "window": 60, "block": 30},
+                "identity": {"limit": 100, "window": 60, "block": 30},
+            },
+            "reminder_recipient": {
+                "ip": {"limit": 100, "window": 60, "block": 30},
+                "identity": {"limit": 1, "window": 60, "block": 30},
+            },
+        }
+        with override_settings(AUTH_RATE_LIMITS=recipient_limits):
+            limited = self.client.post(
+                self.invitation_url(),
+                request_payload(["one@example.com", "two@example.com"]),
+                format="json",
+            )
+        self.assertEqual(limited.status_code, 429)
+
+        AuthRateLimitBucket.objects.all().delete()
+        with override_settings(AUTH_RATE_LIMITS=recipient_limits):
+            limited = self.client.post(
+                self.reminder_url(),
+                {"idempotencyKey": str(uuid.uuid4())},
+                format="json",
+            )
+        self.assertEqual(limited.status_code, 429)
+
+        AuthRateLimitBucket.objects.all().delete()
+        request_limits = {
+            "invitation_request": {
+                "ip": {"limit": 1, "window": 60, "block": 30},
+                "identity": {"limit": 100, "window": 60, "block": 30},
+            },
+            "invitation_recipient": {
+                "ip": {"limit": 100, "window": 60, "block": 30},
+                "identity": {"limit": 100, "window": 60, "block": 30},
+            },
+        }
+        with override_settings(AUTH_RATE_LIMITS=request_limits):
+            first = self.client.post(
+                self.invitation_url(),
+                request_payload(["allowed@example.com"]),
+                format="json",
+            )
+            blocked = self.client.post(
+                self.invitation_url(),
+                request_payload(["blocked@example.com"]),
+                format="json",
+            )
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(blocked.status_code, 429)
+
+    def test_disabled_reminders_create_an_auditable_empty_request(self):
+        self.event.reminders_enabled = False
+        self.event.save(update_fields=["reminders_enabled", "updated_at"])
+        self.authenticate(self.organizer)
+        response = self.client.post(
+            self.reminder_url(),
+            {"idempotencyKey": str(uuid.uuid4())},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["recipientCount"], 0)
+        request_record = EmailDeliveryRequest.objects.get()
+        self.assertEqual(request_record.recipient_count, 0)
+        self.assertEqual(request_record.created_job_count, 0)

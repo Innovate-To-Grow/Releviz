@@ -1,6 +1,7 @@
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.db import DatabaseError
 from django.test import TestCase
 from rest_framework.test import APIClient
 
@@ -8,10 +9,9 @@ from apps.authn.tests.helpers import create_member, token_for
 from apps.scheduling.models import Event, EventInvitation, Participant, UserEvent, Weight
 from apps.scheduling.utils import (
     api_event,
-    default_schedule,
-    expected_schedule_length,
-    schedule_to_storage,
-    validate_schedule,
+    default_availability,
+    expected_availability_length,
+    validate_availability,
 )
 
 
@@ -30,8 +30,9 @@ class SchedulerApiTests(TestCase):
             "/api/events",
             {
                 "name": "Planning",
-                "startHour": 9,
-                "endHour": 11,
+                "startTime": "09:00",
+                "endTime": "11:00",
+                "slotMinutes": 30,
                 "days": [1, 2],
                 "mode": "mixed",
                 "location": "Room 1",
@@ -59,10 +60,14 @@ class SchedulerApiTests(TestCase):
         self.assertEqual(res.status_code, 201)
         self.assertEqual(res.data["participant"]["id"], str(self.participant.pk))
 
-        schedule = [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0]
+        schedule = [1, 0, 1, 0, 1, 0, 1, 0]
         res = self.client.put(
             f"/api/events/participants/update?code={code}&participantId={self.participant.pk}",
-            {"scheduleInperson": schedule, "submitted": 1},
+            {
+                "availabilityInperson": schedule,
+                "submitted": 1,
+                "expectedVersion": res.data["participant"]["version"],
+            },
             format="json",
         )
         self.assertEqual(res.status_code, 200)
@@ -130,7 +135,12 @@ class SchedulerApiTests(TestCase):
         self.assertEqual(res.data["participant"]["hidden"], 0)
 
     def test_health_and_missing_or_unknown_event_errors(self):
-        self.assertEqual(self.client.get("/api/health").data, {"ok": True})
+        self.assertEqual(self.client.get("/api/health/live").data, {"ok": True})
+        for path in ["/api/health", "/api/health/ready"]:
+            response = self.client.get(path)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.data, {"ok": True, "checks": {"database": "ok"}})
+            self.assertIn("no-store", response["Cache-Control"])
         self.authenticate(self.organizer)
         for path in [
             "/api/events",
@@ -157,14 +167,44 @@ class SchedulerApiTests(TestCase):
         )
         self.assertEqual(self.client.get("/api/events/weights?code=NOPE").status_code, 404)
 
+    @patch("apps.scheduling.views.connection.cursor")
+    def test_readiness_reports_database_failure_without_details(self, cursor):
+        cursor.side_effect = DatabaseError("database credentials must not leak")
+
+        for path in ["/api/health", "/api/health/ready"]:
+            with self.assertLogs("apps.scheduling.views", level="WARNING") as logs:
+                response = self.client.get(path)
+            self.assertEqual(response.status_code, 503)
+            self.assertEqual(
+                response.data,
+                {"ok": False, "checks": {"database": "unavailable"}},
+            )
+            self.assertNotContains(response, "credentials", status_code=503)
+            self.assertIn("readiness_check_failed", logs.output[0])
+
     def test_event_create_validation_and_defaults(self):
         self.authenticate(self.organizer)
         invalid_payloads = [
             ({}, "Name is required"),
             ({"name": "x" * 201}, "Event name too long"),
-            ({"name": "Planning", "startHour": "9"}, "Hours must be integers"),
-            ({"name": "Planning", "startHour": 12, "endHour": 12}, "Invalid time range"),
-            ({"name": "Planning", "days": [7]}, "Days must be integers"),
+            ({"name": "Planning", "startHour": 9}, "Use startTime"),
+            ({"name": "Planning", "startTime": 9}, "HH:MM"),
+            (
+                {"name": "Planning", "startTime": "12:00", "endTime": "12:00"},
+                "must be different",
+            ),
+            (
+                {
+                    "name": "Planning",
+                    "startTime": "09:10",
+                    "endTime": "10:10",
+                    "slotMinutes": 30,
+                },
+                "align to 30-minute",
+            ),
+            ({"name": "Planning", "slotMinutes": 20}, "slotMinutes must be 15 or 30"),
+            ({"name": "Planning", "slotMinutes": True}, "slotMinutes must be 15 or 30"),
+            ({"name": "Planning", "days": [7]}, "days must be a non-empty array"),
             ({"name": "Planning", "mode": "phone"}, "Invalid mode"),
             ({"name": "Planning", "location": "x" * 501}, "Location too long"),
             ({"name": "Planning", "daySelectionType": "calendar"}, "Invalid daySelectionType"),
@@ -179,6 +219,42 @@ class SchedulerApiTests(TestCase):
                     "specificDates": ["07/08/2026"],
                 },
                 "specificDates must be ISO date strings",
+            ),
+            (
+                {
+                    "name": "Planning",
+                    "daySelectionType": "specific_dates",
+                    "specificDates": ["20260708"],
+                },
+                "specificDates must be ISO date strings",
+            ),
+            (
+                {
+                    "name": "Planning",
+                    "daySelectionType": "specific_dates",
+                    "specificDates": ["2026-07-08", "2026-07-08"],
+                },
+                "must not contain duplicates",
+            ),
+            (
+                {
+                    "name": "Planning",
+                    "daySelectionType": "specific_dates",
+                    "specificDates": [f"2026-07-{day:02d}" for day in range(1, 32)]
+                    + ["2026-08-01"],
+                },
+                "at most",
+            ),
+            (
+                {
+                    "name": "Planning",
+                    "startTime": "00:00",
+                    "endTime": "23:45",
+                    "slotMinutes": 15,
+                    "daySelectionType": "specific_dates",
+                    "specificDates": [f"2026-07-{day:02d}" for day in range(1, 12)],
+                },
+                "at most 1000 availability slots",
             ),
             (
                 {"name": "Planning", "participantViewPermission": "everybody"},
@@ -206,8 +282,9 @@ class SchedulerApiTests(TestCase):
             "/api/events",
             {
                 "name": "Dates",
-                "startHour": 9,
-                "endHour": 10,
+                "startTime": "09:00",
+                "endTime": "10:00",
+                "slotMinutes": 30,
                 "daySelectionType": "specific_dates",
                 "specificDates": ["2026-07-08", "2026-07-09"],
                 "participantViewPermission": "all",
@@ -216,20 +293,63 @@ class SchedulerApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 201)
         event = Event.objects.get(code=response.data["event"]["code"])
-        self.assertEqual(expected_schedule_length(event), 2)
+        self.assertEqual(expected_availability_length(event), 4)
         data = api_event(event)
         self.assertEqual(data["specificDates"], ["2026-07-08", "2026-07-09"])
+        self.assertEqual(data["slotCount"], 4)
+        self.assertEqual([group["date"] for group in data["slotGroups"]], data["specificDates"])
+
+        cross_midnight = self.client.post(
+            "/api/events",
+            {
+                "name": "Overnight",
+                "startTime": "23:00",
+                "endTime": "01:00",
+                "slotMinutes": 30,
+                "days": [1, 3],
+            },
+            format="json",
+        )
+        self.assertEqual(cross_midnight.status_code, 201)
+        self.assertTrue(cross_midnight.data["event"]["crossesMidnight"])
+        self.assertEqual(cross_midnight.data["event"]["slotCount"], 8)
+
+        fifteen_minutes = self.client.post(
+            "/api/events",
+            {
+                "name": "Quarter hours",
+                "startTime": "09:15",
+                "endTime": "10:15",
+                "slotMinutes": 15,
+                "daySelectionType": "specific_dates",
+                "specificDates": ["2026-07-20", "2026-07-21"],
+            },
+            format="json",
+        )
+        self.assertEqual(fifteen_minutes.status_code, 201)
+        self.assertEqual(fifteen_minutes.data["event"]["slotCount"], 8)
+        self.assertEqual(
+            [
+                slot["index"]
+                for group in fifteen_minutes.data["event"]["slotGroups"]
+                for slot in group["slots"]
+            ],
+            list(range(8)),
+        )
 
     def test_event_code_generation_failure(self):
         self.authenticate(self.organizer)
-        with patch("apps.scheduling.views.generate_event_code", return_value="DUPLICAT"):
+        with patch(
+            "apps.scheduling.event_management.generate_event_code",
+            return_value="DUPLICAT",
+        ):
             Event.objects.create(
                 code="DUPLICAT",
                 name="Existing",
                 organizer=self.organizer,
                 days=[1],
-                start_hour=9,
-                end_hour=10,
+                start_minutes=9 * 60,
+                end_minutes=10 * 60,
             )
             response = self.client.post("/api/events", {"name": "New"}, format="json")
         self.assertEqual(response.status_code, 500)
@@ -280,13 +400,13 @@ class SchedulerApiTests(TestCase):
         self.client.post(f"/api/events/participants?code={code}", {}, format="json")
         base = f"/api/events/participants/update?code={code}&participantId={self.participant.pk}"
 
-        response = self.client.put(base, {"scheduleInperson": "[bad"}, format="json")
+        response = self.client.put(base, {"availabilityInperson": "[bad"}, format="json")
         self.assertEqual(response.status_code, 400)
-        response = self.client.put(base, {"scheduleInperson": "not-list"}, format="json")
+        response = self.client.put(base, {"availabilityInperson": "not-list"}, format="json")
         self.assertEqual(response.status_code, 400)
-        response = self.client.put(base, {"scheduleInperson": [1]}, format="json")
+        response = self.client.put(base, {"availabilityInperson": [1]}, format="json")
         self.assertEqual(response.status_code, 400)
-        response = self.client.put(base, {"scheduleInperson": [2] * 14}, format="json")
+        response = self.client.put(base, {"availabilityInperson": [2] * 8}, format="json")
         self.assertEqual(response.status_code, 400)
         response = self.client.put(base, {}, format="json")
         self.assertEqual(response.status_code, 200)
@@ -400,13 +520,14 @@ class SchedulerApiTests(TestCase):
             invited_by=self.organizer,
         )
         self.assertIn("model-string@example.com", str(invitation))
-        self.assertEqual(default_schedule(event), "[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]")
-        self.assertEqual(schedule_to_storage([0, 1]), "[0, 1]")
-        self.assertEqual(schedule_to_storage("[0, 1]"), "[0, 1]")
-        self.assertEqual(validate_schedule({"bad": 1}, event, "x"), "Invalid x: must be an array")
+        self.assertEqual(default_availability(event), [0] * 8)
+        self.assertEqual(
+            validate_availability({"bad": 1}, event, "x"),
+            "Invalid x: must be an array",
+        )
         self.assertIsNone(
-            validate_schedule(
-                participant_response.data["participant"]["schedule_inperson"],
+            validate_availability(
+                participant_response.data["participant"]["availabilityInperson"],
                 event,
                 "x",
             )

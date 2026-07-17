@@ -5,7 +5,7 @@ provider "aws" {
 data "aws_caller_identity" "current" {}
 
 locals {
-  prefix     = "${var.app_name}-${var.environment}"
+  prefix = "${var.app_name}-${var.environment}"
   common_tags = {
     Project     = var.app_name
     Environment = var.environment
@@ -278,21 +278,27 @@ resource "aws_db_subnet_group" "app" {
 }
 
 resource "aws_db_instance" "app" {
-  identifier             = "${local.prefix}-postgres"
-  engine                 = "postgres"
-  engine_version         = "16"
-  instance_class         = var.db_instance_class
-  allocated_storage      = var.db_allocated_storage
-  db_name                = var.db_name
-  username               = var.db_username
-  password               = var.db_password
-  db_subnet_group_name   = aws_db_subnet_group.app.name
-  vpc_security_group_ids = [aws_security_group.db.id]
-  storage_encrypted      = true
-  publicly_accessible    = false
-  skip_final_snapshot    = false
-  deletion_protection    = true
-  tags                   = local.common_tags
+  identifier                 = "${local.prefix}-postgres"
+  engine                     = "postgres"
+  engine_version             = "16"
+  instance_class             = var.db_instance_class
+  allocated_storage          = var.db_allocated_storage
+  db_name                    = var.db_name
+  username                   = var.db_username
+  password                   = var.db_password
+  db_subnet_group_name       = aws_db_subnet_group.app.name
+  vpc_security_group_ids     = [aws_security_group.db.id]
+  storage_encrypted          = true
+  publicly_accessible        = false
+  backup_retention_period    = var.db_backup_retention_days
+  backup_window              = "03:00-04:00"
+  maintenance_window         = "sun:04:30-sun:05:30"
+  copy_tags_to_snapshot      = true
+  delete_automated_backups   = false
+  auto_minor_version_upgrade = true
+  skip_final_snapshot        = false
+  deletion_protection        = true
+  tags                       = local.common_tags
 }
 
 resource "aws_ecs_cluster" "app" {
@@ -540,8 +546,8 @@ resource "aws_ecs_task_definition" "app" {
 
   container_definitions = jsonencode([
     {
-      name  = "${local.prefix}-container"
-      image = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.aws_region}.amazonaws.com/${var.ecr_repository_name}:${var.image_tag}"
+      name      = "${local.prefix}-container"
+      image     = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.aws_region}.amazonaws.com/${var.ecr_repository_name}:${var.image_tag}"
       essential = true
       portMappings = [
         {
@@ -556,11 +562,16 @@ resource "aws_ecs_task_definition" "app" {
         { name = "DJANGO_ALLOWED_HOSTS", value = var.custom_domain },
         { name = "DJANGO_SECRET_KEY", value = var.django_secret_key },
         { name = "DJANGO_FIELD_ENCRYPTION_KEY", value = var.django_field_encryption_key },
+        { name = "METRICS_BEARER_TOKEN", value = var.metrics_bearer_token },
         { name = "USE_SES_EMAIL_PROVIDER", value = "1" },
         { name = "FRONTEND_URL", value = "https://${var.custom_domain}" },
         { name = "BACKEND_URL", value = "https://${var.custom_domain}" },
         { name = "CORS_ALLOWED_ORIGINS", value = "https://${var.custom_domain}" },
         { name = "CSRF_TRUSTED_ORIGINS", value = "https://${var.custom_domain}" },
+        { name = "SENTRY_DSN", value = var.sentry_dsn },
+        { name = "SENTRY_ENVIRONMENT", value = var.environment },
+        { name = "SENTRY_RELEASE", value = var.sentry_release != "" ? var.sentry_release : var.image_tag },
+        { name = "SENTRY_TRACES_SAMPLE_RATE", value = tostring(var.sentry_traces_sample_rate) },
         { name = "DB_NAME", value = var.db_name },
         { name = "DB_USER", value = var.db_username },
         { name = "DB_PASSWORD", value = var.db_password },
@@ -592,8 +603,14 @@ resource "aws_ecs_service" "app" {
   desired_count   = var.desired_count
   launch_type     = "FARGATE"
 
-  deployment_minimum_healthy_percent = 0
+  deployment_minimum_healthy_percent = 100
   deployment_maximum_percent         = 200
+  health_check_grace_period_seconds  = 120
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
 
   network_configuration {
     assign_public_ip = true
@@ -665,6 +682,32 @@ resource "aws_cloudwatch_metric_alarm" "alb_5xx" {
     LoadBalancer = aws_lb.app.arn_suffix
   }
 
+  alarm_actions = var.alarm_action_arns
+  ok_actions    = var.alarm_action_arns
+
+  tags = local.common_tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "target_5xx" {
+  alarm_name          = "${local.prefix}-target-5xx"
+  alarm_description   = "Application targets returned 5xx responses"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "HTTPCode_Target_5XX_Count"
+  namespace           = "AWS/ApplicationELB"
+  period              = 60
+  statistic           = "Sum"
+  threshold           = 1
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    LoadBalancer = aws_lb.app.arn_suffix
+    TargetGroup  = aws_lb_target_group.app.arn_suffix
+  }
+
+  alarm_actions = var.alarm_action_arns
+  ok_actions    = var.alarm_action_arns
+
   tags = local.common_tags
 }
 
@@ -684,6 +727,71 @@ resource "aws_cloudwatch_metric_alarm" "ecs_running_tasks" {
     ClusterName = aws_ecs_cluster.app.name
     ServiceName = aws_ecs_service.app.name
   }
+
+  alarm_actions = var.alarm_action_arns
+  ok_actions    = var.alarm_action_arns
+
+  tags = local.common_tags
+}
+
+resource "aws_cloudwatch_log_metric_filter" "request_exceptions" {
+  name           = "${local.prefix}-request-exceptions"
+  pattern        = "{ $.event = \"request_exception\" }"
+  log_group_name = aws_cloudwatch_log_group.app.name
+
+  metric_transformation {
+    name          = "RequestExceptions"
+    namespace     = "Releviz/${var.environment}"
+    value         = "1"
+    default_value = "0"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "request_exceptions" {
+  alarm_name          = "${local.prefix}-request-exceptions"
+  alarm_description   = "Unhandled application request exceptions were logged"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "RequestExceptions"
+  namespace           = "Releviz/${var.environment}"
+  period              = 60
+  statistic           = "Sum"
+  threshold           = 1
+  treat_missing_data  = "notBreaching"
+
+  alarm_actions = var.alarm_action_arns
+  ok_actions    = var.alarm_action_arns
+
+  tags = local.common_tags
+}
+
+resource "aws_cloudwatch_log_metric_filter" "permanent_email_failures" {
+  name           = "${local.prefix}-permanent-email-failures"
+  pattern        = "{ $.event = \"email_delivery_failed\" && $.status = \"permanent_failure\" }"
+  log_group_name = aws_cloudwatch_log_group.app.name
+
+  metric_transformation {
+    name          = "PermanentEmailFailures"
+    namespace     = "Releviz/${var.environment}"
+    value         = "1"
+    default_value = "0"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "permanent_email_failures" {
+  alarm_name          = "${local.prefix}-permanent-email-failures"
+  alarm_description   = "Email delivery jobs exhausted their retry budget"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "PermanentEmailFailures"
+  namespace           = "Releviz/${var.environment}"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 1
+  treat_missing_data  = "notBreaching"
+
+  alarm_actions = var.alarm_action_arns
+  ok_actions    = var.alarm_action_arns
 
   tags = local.common_tags
 }

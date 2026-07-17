@@ -3,7 +3,12 @@ from django.contrib import admin, messages
 from django.utils import timezone
 from unfold.admin import ModelAdmin
 
-from apps.messaging.models import EmailMessageLog, EmailProviderConfig
+from apps.messaging.models import (
+    EmailDeliveryJob,
+    EmailDeliveryRequest,
+    EmailMessageLog,
+    EmailProviderConfig,
+)
 from apps.messaging.services import EmailDeliveryError, send_email_message
 
 
@@ -81,6 +86,93 @@ class EmailMessageLogAdmin(ModelAdmin):
         "error",
         "event",
         "invitation",
+        "delivery_job",
+        "created_at",
+        "updated_at",
+    )
+
+
+@admin.register(EmailDeliveryJob)
+class EmailDeliveryJobAdmin(ModelAdmin):
+    list_display = (
+        "message_type",
+        "recipient",
+        "status",
+        "attempt_count",
+        "max_attempts",
+        "next_attempt_at",
+        "event",
+        "member",
+    )
+    list_filter = ("message_type", "status")
+    search_fields = (
+        "recipient",
+        "subject",
+        "idempotency_key",
+        "message_id",
+        "provider_message_id",
+        "event__code",
+        "member__email",
+        "member__contact_emails__email_address",
+        "invitation__email",
+    )
+    readonly_fields = (
+        "idempotency_key",
+        "message_type",
+        "recipient",
+        "subject",
+        "body",
+        "html_body",
+        "content_encrypted",
+        "attachments",
+        "message_id",
+        "event",
+        "invitation",
+        "member",
+        "auth_challenge",
+        "auth_session",
+        "status",
+        "attempt_count",
+        "max_attempts",
+        "next_attempt_at",
+        "locked_at",
+        "lock_token",
+        "sent_at",
+        "provider_message_id",
+        "last_error",
+        "created_at",
+        "updated_at",
+    )
+
+
+@admin.register(EmailDeliveryRequest)
+class EmailDeliveryRequestAdmin(ModelAdmin):
+    list_display = (
+        "operation",
+        "event",
+        "requested_by",
+        "recipient_count",
+        "created_job_count",
+        "idempotency_key",
+        "created_at",
+    )
+    list_filter = ("operation",)
+    search_fields = (
+        "event__code",
+        "event__name",
+        "requested_by__email",
+        "idempotency_key",
+        "request_fingerprint",
+    )
+    readonly_fields = (
+        "event",
+        "requested_by",
+        "operation",
+        "idempotency_key",
+        "request_fingerprint",
+        "recipient_count",
+        "created_job_count",
+        "jobs",
         "created_at",
         "updated_at",
     )

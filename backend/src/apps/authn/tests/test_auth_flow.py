@@ -4,16 +4,23 @@ from io import StringIO
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
-from django.core import mail
 from django.core.management import call_command
 from django.test import TestCase
 from rest_framework.test import APIClient
 
 from apps.authn.models import ContactEmail
+from apps.messaging.crypto import decrypt_secret
+from apps.messaging.models import EmailDeliveryJob, EmailMessageLog
 
 
 def latest_code() -> str:
-    body = mail.outbox[-1].body
+    job = (
+        EmailDeliveryJob.objects.filter(message_type=EmailMessageLog.MessageType.VERIFICATION)
+        .order_by("-created_at")
+        .first()
+    )
+    assert job is not None
+    body = decrypt_secret(job.body) if job.content_encrypted else job.body
     match = re.search(r"\b(\d{6})\b", body)
     assert match is not None
     return match.group(1)
@@ -82,3 +89,9 @@ class AuthFlowTests(TestCase):
             {"email": "admin@example.com", "password": "password123"},
         )
         self.assertEqual(res.status_code, 302)
+        self.assertTrue(
+            EmailDeliveryJob.objects.filter(
+                member=member,
+                message_type=EmailMessageLog.MessageType.LOGIN_ALERT,
+            ).exists()
+        )

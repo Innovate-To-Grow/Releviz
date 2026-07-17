@@ -2,26 +2,34 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import {
+  changePasswordApi,
+  deleteAccountApi,
+  fetchAuthSessions,
   fetchProfile,
   loginWithPassword,
   logoutApi,
   requestLoginCode,
+  revokeAuthSessions,
   startRegistration,
   updateProfileApi,
   verifyLoginCode,
   verifyRegistration,
 } from "@/lib/api/auth";
-import { clearAuthSession, readAuthSession, writeAuthSession } from "@/lib/api/config";
+import {
+  clearAuthSession,
+  getAccessToken,
+  readAuthSession,
+  refreshAuthSession,
+  writeAuthSession,
+} from "@/lib/api/config";
 
 const AuthContext = createContext(null);
 
 function subscribeAuth(callback) {
   /* istanbul ignore next -- server-side render guard */
   if (typeof window === "undefined") return () => {};
-  window.addEventListener("storage", callback);
   window.addEventListener("releviz-auth", callback);
   return () => {
-    window.removeEventListener("storage", callback);
     window.removeEventListener("releviz-auth", callback);
   };
 }
@@ -42,13 +50,8 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     let cancelled = false;
     async function hydrate() {
-      const current = readAuthSession();
-      if (!current?.access) {
-        if (!cancelled) setLoading(false);
-        return;
-      }
       try {
-        await fetchProfile();
+        await refreshAuthSession();
       } catch {
         clearAuthSession();
       } finally {
@@ -65,7 +68,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   const getToken = useCallback(async () => {
-    return readAuthSession()?.access || null;
+    return getAccessToken();
   }, []);
 
   const login = useCallback(async (credentials) => {
@@ -114,6 +117,36 @@ export function AuthProvider({ children }) {
     return user;
   }, []);
 
+  const listSessions = useCallback(async () => {
+    return fetchAuthSessions();
+  }, []);
+
+  const revokeSession = useCallback(async (sessionId) => {
+    const result = await revokeAuthSessions({ sessionId });
+    if (result.currentRevoked) setSession(null);
+    return result;
+  }, []);
+
+  const logoutAll = useCallback(async () => {
+    await revokeAuthSessions({ all: true });
+    setSession(null);
+    window.location.assign("/login?status=signed-out-all");
+  }, []);
+
+  const changePassword = useCallback(async (payload) => {
+    const result = await changePasswordApi(payload);
+    setSession(null);
+    window.location.assign("/login?status=password-changed");
+    return result;
+  }, []);
+
+  const deleteAccount = useCallback(async (payload) => {
+    const result = await deleteAccountApi(payload);
+    setSession(null);
+    window.location.assign("/login?status=account-deleted");
+    return result;
+  }, []);
+
   const value = useMemo(
     () => ({
       user: session?.user || null,
@@ -126,6 +159,11 @@ export function AuthProvider({ children }) {
       logout,
       updateProfile,
       refreshUser,
+      listSessions,
+      revokeSession,
+      logoutAll,
+      changePassword,
+      deleteAccount,
       getToken,
     }),
     [
@@ -139,6 +177,11 @@ export function AuthProvider({ children }) {
       logout,
       updateProfile,
       refreshUser,
+      listSessions,
+      revokeSession,
+      logoutAll,
+      changePassword,
+      deleteAccount,
       getToken,
     ]
   );

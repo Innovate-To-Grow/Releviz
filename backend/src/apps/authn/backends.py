@@ -1,3 +1,4 @@
+from django.contrib.auth import get_user_model
 from django.contrib.auth.backends import ModelBackend
 
 from apps.authn.models import ContactEmail
@@ -15,6 +16,7 @@ class EmailAuthBackend(ModelBackend):
             .first()
         )
         if contact is None:
+            get_user_model()().set_password(password)
             return None
 
         user = contact.member

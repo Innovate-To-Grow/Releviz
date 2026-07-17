@@ -26,7 +26,20 @@ export async function updateParticipant(code, participantId, data, token) {
     { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) },
     token
   );
-  if (!res.ok) throw new Error(await extractError(res));
+  if (!res.ok) {
+    let payload = null;
+    try {
+      payload = await res.json();
+    } catch {
+      payload = null;
+    }
+    const error = new Error(
+      payload?.error || payload?.detail || (payload ? "Request failed" : `HTTP ${res.status}`)
+    );
+    error.status = res.status;
+    error.participant = payload?.participant || null;
+    throw error;
+  }
   return res.json();
 }
 

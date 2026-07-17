@@ -104,6 +104,17 @@ variable "db_allocated_storage" {
   default = 20
 }
 
+variable "db_backup_retention_days" {
+  type        = number
+  description = "Number of days to retain automated production PostgreSQL backups"
+  default     = 30
+
+  validation {
+    condition     = var.db_backup_retention_days >= 7 && var.db_backup_retention_days <= 35
+    error_message = "db_backup_retention_days must be between 7 and 35."
+  }
+}
+
 variable "django_secret_key" {
   type      = string
   sensitive = true
@@ -112,6 +123,47 @@ variable "django_secret_key" {
 variable "django_field_encryption_key" {
   type      = string
   sensitive = true
+}
+
+variable "metrics_bearer_token" {
+  type        = string
+  description = "Dedicated bearer credential for the private product-metrics endpoint"
+  sensitive   = true
+
+  validation {
+    condition     = length(trimspace(var.metrics_bearer_token)) >= 32
+    error_message = "metrics_bearer_token must contain at least 32 non-whitespace characters."
+  }
+}
+
+variable "sentry_dsn" {
+  type        = string
+  description = "Optional Sentry DSN; leave empty to disable external error tracking"
+  default     = ""
+  sensitive   = true
+}
+
+variable "sentry_release" {
+  type        = string
+  description = "Optional Sentry release identifier; defaults to image_tag"
+  default     = ""
+}
+
+variable "sentry_traces_sample_rate" {
+  type        = number
+  description = "Fraction of requests sampled for Sentry tracing when Sentry is enabled"
+  default     = 0.05
+
+  validation {
+    condition     = var.sentry_traces_sample_rate >= 0 && var.sentry_traces_sample_rate <= 1
+    error_message = "sentry_traces_sample_rate must be between 0 and 1."
+  }
+}
+
+variable "alarm_action_arns" {
+  type        = list(string)
+  description = "Optional SNS topic ARNs notified when production alarms change state"
+  default     = []
 }
 
 variable "django_superuser_email" {

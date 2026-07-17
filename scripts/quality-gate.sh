@@ -16,7 +16,7 @@ npm --workspace=frontend run lint
 echo "=== Frontend: format check ==="
 npm --workspace=frontend run format:check
 
-echo "=== Frontend: 100% coverage ==="
+echo "=== Frontend: core-inclusive coverage ==="
 npm --workspace=frontend run test:coverage
 
 echo "=== Frontend: build ==="

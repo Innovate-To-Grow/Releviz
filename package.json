@@ -2,6 +2,10 @@
   "name": "releviz-monorepo",
   "private": true,
   "workspaces": ["frontend", "backend"],
+  "overrides": {
+    "eslint-plugin-react-hooks": "7.0.1",
+    "postcss": "^8.5.10"
+  },
   "scripts": {
     "dev": "npm --workspace=backend run dev & npm --workspace=frontend run dev",
     "dev:backend": "npm --workspace=backend run dev",

@@ -10,21 +10,64 @@ import {
 async function parseAuthResponse(res) {
   if (!res.ok) throw new Error(await extractError(res));
   const data = await res.json();
-  if (data.access && data.refresh) {
-    writeAuthSession({
-      access: data.access,
-      refresh: data.refresh,
-      user: data.user,
-    });
-  }
+  if (data.access) writeAuthSession(data);
   return data;
 }
 
+function decodePublicKey(pem) {
+  const encoded = pem
+    .replace("-----BEGIN PUBLIC KEY-----", "")
+    .replace("-----END PUBLIC KEY-----", "")
+    .replace(/\s/g, "");
+  const binary = globalThis.atob(encoded);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+function encodeCiphertext(ciphertext) {
+  const bytes = new Uint8Array(ciphertext);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return globalThis.btoa(binary);
+}
+
+async function securePasswordPayload(payload, fields) {
+  const res = await fetch(`${API_BASE}/authn/public-key/`, {
+    credentials: "include",
+  });
+  if (!res.ok) throw new Error(await extractError(res));
+  const config = await res.json();
+  if (!config.password_encryption_required) return payload;
+
+  try {
+    const key = await globalThis.crypto.subtle.importKey(
+      "spki",
+      decodePublicKey(config.public_key),
+      { name: "RSA-OAEP", hash: "SHA-256" },
+      false,
+      ["encrypt"]
+    );
+    const secured = { ...payload, key_id: config.key_id };
+    for (const field of fields) {
+      const ciphertext = await globalThis.crypto.subtle.encrypt(
+        { name: "RSA-OAEP" },
+        key,
+        new TextEncoder().encode(String(secured[field]))
+      );
+      secured[field] = encodeCiphertext(ciphertext);
+    }
+    return secured;
+  } catch {
+    throw new Error("Unable to secure password for transmission.");
+  }
+}
+
 export async function loginWithPassword({ email, password }) {
+  const payload = await securePasswordPayload({ email, password }, ["password"]);
   const res = await fetch(`${API_BASE}/authn/login/`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify(payload),
+    credentials: "include",
   });
   return parseAuthResponse(res);
 }
@@ -34,6 +77,7 @@ export async function requestLoginCode({ email }) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email }),
+    credentials: "include",
   });
   if (!res.ok) throw new Error(await extractError(res));
   return res.json();
@@ -44,15 +88,18 @@ export async function verifyLoginCode({ email, code }) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, code }),
+    credentials: "include",
   });
   return parseAuthResponse(res);
 }
 
 export async function startRegistration(payload) {
+  const securedPayload = await securePasswordPayload(payload, ["password", "password_confirm"]);
   const res = await fetch(`${API_BASE}/authn/register/`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(securedPayload),
+    credentials: "include",
   });
   if (!res.ok) throw new Error(await extractError(res));
   return res.json();
@@ -63,8 +110,42 @@ export async function verifyRegistration({ email, code }) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, code }),
+    credentials: "include",
   });
   return parseAuthResponse(res);
+}
+
+export async function requestPasswordResetCode({ email }) {
+  const res = await fetch(`${API_BASE}/authn/password-reset/request-code/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+    credentials: "include",
+  });
+  if (!res.ok) throw new Error(await extractError(res));
+  return res.json();
+}
+
+export async function confirmPasswordReset({ email, code, password, passwordConfirm }) {
+  const payload = await securePasswordPayload(
+    {
+      email,
+      code,
+      password,
+      password_confirm: passwordConfirm,
+    },
+    ["password", "password_confirm"]
+  );
+  const res = await fetch(`${API_BASE}/authn/password-reset/confirm/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    credentials: "include",
+  });
+  if (!res.ok) throw new Error(await extractError(res));
+  const data = await res.json();
+  clearAuthSession();
+  return data;
 }
 
 export async function fetchProfile() {
@@ -89,19 +170,64 @@ export async function updateProfileApi(payload) {
   return data.user;
 }
 
+export async function fetchAuthSessions() {
+  const res = await apiFetch(`${API_BASE}/authn/sessions/`);
+  if (!res.ok) throw new Error(await extractError(res));
+  const data = await res.json();
+  return data.sessions || [];
+}
+
+export async function revokeAuthSessions({ sessionId = "", all = false }) {
+  const res = await apiFetch(`${API_BASE}/authn/sessions/`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(all ? { all: true } : { sessionId }),
+  });
+  if (!res.ok) throw new Error(await extractError(res));
+  const data = await res.json();
+  if (data.currentRevoked) clearAuthSession();
+  return data;
+}
+
+export async function changePasswordApi({ currentPassword, newPassword, newPasswordConfirm }) {
+  const payload = await securePasswordPayload(
+    {
+      current_password: currentPassword,
+      new_password: newPassword,
+      new_password_confirm: newPasswordConfirm,
+    },
+    ["current_password", "new_password", "new_password_confirm"]
+  );
+  const res = await apiFetch(`${API_BASE}/authn/change-password/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await extractError(res));
+  const data = await res.json();
+  clearAuthSession();
+  return data;
+}
+
+export async function deleteAccountApi({ password, confirmation }) {
+  const payload = await securePasswordPayload({ password, confirmation }, ["password"]);
+  const res = await apiFetch(`${API_BASE}/authn/delete-account/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await extractError(res));
+  const data = await res.json();
+  clearAuthSession();
+  return data;
+}
+
 export async function logoutApi() {
-  const session = readAuthSession();
-  if (session?.access) {
-    await apiFetch(
-      `${API_BASE}/authn/logout/`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refresh: session.refresh }),
-        skipAuthRefresh: true,
-      },
-      session.access
-    ).catch(() => {});
-  }
+  await fetch(`${API_BASE}/authn/logout/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+    credentials: "include",
+  }).catch(() => {});
   clearAuthSession();
 }

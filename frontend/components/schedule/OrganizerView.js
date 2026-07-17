@@ -1,20 +1,17 @@
 "use client";
 
 import { useState, useEffect, useContext, useCallback, useRef } from "react";
-import { GoVerified, GoUnverified } from "react-icons/go";
-import {
-  MdDeleteOutline,
-  MdEmail,
-  MdLogin,
-  MdNotificationsActive,
-  MdRefresh,
-  MdSave,
-  MdArrowUpward,
-  MdArrowDownward,
-} from "react-icons/md";
 import EventContext from "@/components/event/EventContext";
-import AppButton from "@/components/ui/AppButton";
-import ScheduleGrid from "@/components/schedule/ScheduleGrid";
+import {
+  FinalMeetingPanel,
+  InvitationsPanel,
+  LifecyclePanel,
+  OrganizerHeader,
+  OrganizerResultsPanel,
+  OrganizerSchedulePanel,
+  ParticipantManagerPanel,
+  RecommendationsPanel,
+} from "@/components/schedule/OrganizerPanels";
 import {
   deleteParticipant,
   fetchParticipantsIncludeHidden,
@@ -24,20 +21,26 @@ import {
 } from "@/lib/api/participants";
 import { fetchWeights, updateWeights } from "@/lib/api/weights";
 import { useAuth } from "@/components/auth/AuthContext";
-import "@material/web/checkbox/checkbox.js";
-import "@material/web/slider/slider.js";
-import "@material/web/dialog/dialog.js";
-import "@material/web/textfield/outlined-text-field.js";
-import EventDetailsGrid from "@/components/event/EventDetailsGrid";
-import { fetchInvitations, sendInvitations, sendReminders } from "@/lib/api/events";
+import {
+  fetchEventResults,
+  fetchFinalization,
+  fetchInvitations,
+  confirmFinalMeeting,
+  previewFinalMeeting,
+  sendInvitations,
+  sendReminders,
+  updateEventLifecycle,
+} from "@/lib/api/events";
+import { formatIsoForDateTimeLocal, zonedLocalDateTimeToIso } from "@/lib/time";
 
 function OrganizerView() {
-  const { event, numSlots } = useContext(EventContext);
+  const { event, setEvent, numSlots } = useContext(EventContext);
   const { user, loading: authLoading, getToken } = useAuth();
   const mode = event?.mode || "inperson";
 
   const [participants, setParticipants] = useState([]);
   const [weights, setWeights] = useState({}); // { participantId: { weight, included } }
+  const [results, setResults] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
   // Ref tracks latest weights synchronously to avoid stale closures in debounce
@@ -54,6 +57,7 @@ function OrganizerView() {
 
   // Organizer self-schedule state
   const [myParticipantId, setMyParticipantId] = useState("");
+  const [myParticipantVersion, setMyParticipantVersion] = useState(null);
   const [myParticipantName, setMyParticipantName] = useState("");
   const [myJoined, setMyJoined] = useState(false);
   const [myInperson, setMyInperson] = useState([]);
@@ -70,35 +74,113 @@ function OrganizerView() {
   const [inviteStatus, setInviteStatus] = useState("");
   const [sendingInvites, setSendingInvites] = useState(false);
   const [sendingReminders, setSendingReminders] = useState(false);
+  const inviteRequestRef = useRef({ fingerprint: "", idempotencyKey: "" });
+  const reminderRequestRef = useRef("");
+  const [lifecycleError, setLifecycleError] = useState("");
+  const [changingLifecycle, setChangingLifecycle] = useState(false);
+  const [lifecycleDeadline, setLifecycleDeadline] = useState("");
+  const [finalStart, setFinalStart] = useState("");
+  const [finalEnd, setFinalEnd] = useState("");
+  const [finalChannel, setFinalChannel] = useState(
+    event?.mode === "virtual" ? "virtual" : "inperson"
+  );
+  const [finalLocation, setFinalLocation] = useState(event?.location || "");
+  const [finalReview, setFinalReview] = useState(null);
+  const [finalDelivery, setFinalDelivery] = useState(null);
+  const [finalizationError, setFinalizationError] = useState("");
+  const [finalizationStatus, setFinalizationStatus] = useState("");
+  const [reviewingFinal, setReviewingFinal] = useState(false);
+  const [confirmingFinal, setConfirmingFinal] = useState(false);
+  const [finalRequestKey, setFinalRequestKey] = useState("");
+  const [reviewFingerprint, setReviewFingerprint] = useState("");
+
+  useEffect(() => {
+    if (!event.responseDeadline) {
+      setLifecycleDeadline("");
+      return;
+    }
+    setLifecycleDeadline(
+      formatIsoForDateTimeLocal(event.responseDeadline, event.timezone || "UTC")
+    );
+  }, [event.responseDeadline, event.timezone]);
+
+  useEffect(() => {
+    const meeting = event.finalMeeting;
+    if (meeting) {
+      setFinalStart(formatIsoForDateTimeLocal(meeting.startsAt, event.timezone || "UTC"));
+      setFinalEnd(formatIsoForDateTimeLocal(meeting.endsAt, event.timezone || "UTC"));
+      setFinalChannel(meeting.channel);
+      setFinalLocation(meeting.location || "");
+      return;
+    }
+    const firstSlot =
+      event.daySelectionType === "specific_dates" ? event.slotGroups?.[0]?.slots?.[0] : null;
+    if (firstSlot?.startsAt && firstSlot?.endsAt) {
+      setFinalStart(formatIsoForDateTimeLocal(firstSlot.startsAt, event.timezone || "UTC"));
+      setFinalEnd(formatIsoForDateTimeLocal(firstSlot.endsAt, event.timezone || "UTC"));
+    } else {
+      setFinalStart("");
+      setFinalEnd("");
+    }
+    setFinalChannel(event.mode === "virtual" ? "virtual" : "inperson");
+    setFinalLocation(event.location || "");
+    setFinalReview(null);
+    setFinalDelivery(null);
+    setFinalRequestKey("");
+    setReviewFingerprint("");
+  }, [
+    event.code,
+    event.daySelectionType,
+    event.finalMeeting,
+    event.location,
+    event.mode,
+    event.slotGroups,
+    event.timezone,
+  ]);
 
   // Load participants and weights in parallel
   useEffect(() => {
     async function load() {
       try {
         const token = await getToken();
-        const [participantsRes, weightsRes, invitationsRes] = await Promise.all([
-          fetchParticipantsIncludeHidden(event.code, token),
-          fetchWeights(event.code, token),
-          fetchInvitations(event.code, token),
-        ]);
+        const [participantsRes, weightsRes, invitationsRes, resultsRes, finalizationRes] =
+          await Promise.all([
+            fetchParticipantsIncludeHidden(event.code, token),
+            fetchWeights(event.code, token),
+            fetchInvitations(event.code, token),
+            fetchEventResults(event.code, token),
+            event.finalMeeting
+              ? fetchFinalization(event.code, token).catch(() => null)
+              : Promise.resolve(null),
+          ]);
 
         const parsed = participantsRes.participants.map((p) => ({
           ...p,
-          inpersonArray: JSON.parse(p.schedule_inperson).map(Number),
-          virtualArray: JSON.parse(p.schedule_virtual).map(Number),
+          inpersonArray: p.availabilityInperson.map(Number),
+          virtualArray: p.availabilityVirtual.map(Number),
         }));
         setParticipants(parsed);
 
         const map = {};
         weightsRes.weights.forEach((w) => {
-          map[w.participant_id] = { weight: w.weight, included: w.included };
+          map[w.participant_id] = {
+            weight: w.weight,
+            included: w.included,
+            required: w.required,
+          };
         });
         setWeights(map);
         setInvitations(invitationsRes.invitations || []);
+        setResults(resultsRes.results);
+        if (finalizationRes) {
+          setFinalReview(finalizationRes.finalMeeting?.attendance || null);
+          setFinalDelivery(finalizationRes.delivery || null);
+        }
 
         const mine = parsed.find((participant) => participant.user_id === user?.id);
         if (mine) {
           setMyParticipantId(mine.id);
+          setMyParticipantVersion(mine.version);
           setMyParticipantName(mine.name);
           setMyInperson(mine.inpersonArray);
           setMyVirtual(mine.virtualArray);
@@ -111,7 +193,7 @@ function OrganizerView() {
     if (user?.id) {
       load();
     }
-  }, [event.code, refreshKey, user?.id, getToken]);
+  }, [event.code, event.finalMeeting, refreshKey, user?.id, getToken]);
 
   const saveWeights = useCallback(
     async (newWeights) => {
@@ -120,9 +202,12 @@ function OrganizerView() {
           participantId,
           weight: w.weight,
           included: w.included,
+          required: w.required,
         }));
         const token = await getToken();
         await updateWeights(event.code, arr, token);
+        const resultData = await fetchEventResults(event.code, token);
+        setResults(resultData.results);
       } catch (err) {
         console.error("Failed to save weights", err);
       }
@@ -131,7 +216,11 @@ function OrganizerView() {
   );
 
   const handleWeightChange = (participantId, val) => {
-    const current = weightsRef.current[participantId] ?? { weight: 1.0, included: 1 };
+    const current = weightsRef.current[participantId] ?? {
+      weight: 1.0,
+      included: 1,
+      required: 0,
+    };
     const next = { ...weightsRef.current, [participantId]: { ...current, weight: val } };
     weightsRef.current = next;
     setWeights(next);
@@ -141,11 +230,30 @@ function OrganizerView() {
   };
 
   const handleIncludedChange = (participantId, val) => {
-    const current = weightsRef.current[participantId] ?? { weight: 1.0, included: 1 };
+    const current = weightsRef.current[participantId] ?? {
+      weight: 1.0,
+      included: 1,
+      required: 0,
+    };
     const next = { ...weightsRef.current, [participantId]: { ...current, included: val ? 1 : 0 } };
     weightsRef.current = next;
     setWeights(next);
     saveWeights(next); // checkbox fires once, save immediately
+  };
+
+  const handleRequiredChange = (participantId, val) => {
+    const current = weightsRef.current[participantId] ?? {
+      weight: 1.0,
+      included: 1,
+      required: 0,
+    };
+    const next = {
+      ...weightsRef.current,
+      [participantId]: { ...current, required: val ? 1 : 0 },
+    };
+    weightsRef.current = next;
+    setWeights(next);
+    saveWeights(next);
   };
 
   const handleMyJoin = async () => {
@@ -153,9 +261,10 @@ function OrganizerView() {
       const token = await getToken();
       const { participant } = await joinEvent(event.code, token);
       setMyParticipantId(participant.id);
+      setMyParticipantVersion(participant.version);
       setMyParticipantName(participant.name);
-      setMyInperson(JSON.parse(participant.schedule_inperson).map(Number));
-      setMyVirtual(JSON.parse(participant.schedule_virtual).map(Number));
+      setMyInperson(participant.availabilityInperson.map(Number));
+      setMyVirtual(participant.availabilityVirtual.map(Number));
       setMyJoined(true);
       setRefreshKey((k) => k + 1);
     } catch (err) {
@@ -184,16 +293,18 @@ function OrganizerView() {
     setMySaving(true);
     try {
       const token = await getToken();
-      await updateParticipant(
+      const { participant } = await updateParticipant(
         event.code,
         myParticipantId,
         {
-          scheduleInperson: JSON.stringify(myInperson),
-          scheduleVirtual: JSON.stringify(myVirtual),
+          availabilityInperson: myInperson,
+          availabilityVirtual: myVirtual,
           submitted: 1,
+          expectedVersion: myParticipantVersion,
         },
         token
       );
+      setMyParticipantVersion(participant.version);
       setRefreshKey((k) => k + 1);
     } catch (err) {
       console.error("Failed to save:", err);
@@ -212,6 +323,7 @@ function OrganizerView() {
       setParticipants((prev) =>
         prev.map((p) => (p.id === participant.id ? { ...p, hidden: 1 } : p))
       );
+      setRefreshKey((key) => key + 1);
     } catch (err) {
       setHideError(`Failed to hide participant: ${err.message}`);
     } finally {
@@ -229,6 +341,7 @@ function OrganizerView() {
       setParticipants((prev) =>
         prev.map((p) => (p.id === participant.id ? { ...p, hidden: 0 } : p))
       );
+      setRefreshKey((key) => key + 1);
     } catch (err) {
       setHideError(`Failed to unhide participant: ${err.message}`);
     } finally {
@@ -239,9 +352,18 @@ function OrganizerView() {
   const handleGroupChange = async (participantId, groupName) => {
     try {
       const token = await getToken();
-      await updateParticipant(event.code, participantId, { groupName }, token);
+      const { participant } = await updateParticipant(
+        event.code,
+        participantId,
+        { groupName },
+        token
+      );
       setParticipants((prev) =>
-        prev.map((p) => (p.id === participantId ? { ...p, group_name: groupName } : p))
+        prev.map((p) =>
+          p.id === participantId
+            ? { ...p, group_name: participant.group_name, version: participant.version }
+            : p
+        )
       );
     } catch (err) {
       console.error("Failed to update group:", err);
@@ -260,14 +382,14 @@ function OrganizerView() {
     const theirOrder = sorted[swapIdx].sort_order ?? swapIdx;
     try {
       const token = await getToken();
-      await Promise.all([
+      const [firstResult, secondResult] = await Promise.all([
         updateParticipant(event.code, sorted[idx].id, { sortOrder: theirOrder }, token),
         updateParticipant(event.code, sorted[swapIdx].id, { sortOrder: myOrder }, token),
       ]);
       setParticipants((prev) =>
         prev.map((p) => {
-          if (p.id === sorted[idx].id) return { ...p, sort_order: theirOrder };
-          if (p.id === sorted[swapIdx].id) return { ...p, sort_order: myOrder };
+          if (p.id === sorted[idx].id) return { ...p, ...firstResult.participant };
+          if (p.id === sorted[swapIdx].id) return { ...p, ...secondResult.participant };
           return p;
         })
       );
@@ -279,7 +401,7 @@ function OrganizerView() {
   const handleCheckAll = (included) => {
     const next = { ...weightsRef.current };
     activeParticipants.forEach((p) => {
-      const current = next[p.id] ?? { weight: 1.0, included: 1 };
+      const current = next[p.id] ?? { weight: 1.0, included: 1, required: 0 };
       next[p.id] = { ...current, included: included ? 1 : 0 };
     });
     weightsRef.current = next;
@@ -296,15 +418,39 @@ function OrganizerView() {
         .split(/[\s,;]+/)
         .map((email) => email.trim())
         .filter(Boolean);
+      const message = inviteMessage.trim();
+      const fingerprint = JSON.stringify({ emails, message });
+      if (inviteRequestRef.current.fingerprint !== fingerprint) {
+        inviteRequestRef.current = {
+          fingerprint,
+          idempotencyKey: crypto.randomUUID(),
+        };
+      }
       const token = await getToken();
       const data = await sendInvitations(
         event.code,
-        { emails, message: inviteMessage.trim() },
+        {
+          emails,
+          message,
+          idempotencyKey: inviteRequestRef.current.idempotencyKey,
+        },
         token
       );
       setInvitations(data.invitations || []);
       setInviteEmails("");
-      setInviteStatus(`Sent ${data.invitations?.length || 0} invitation(s).`);
+      inviteRequestRef.current = { fingerprint: "", idempotencyKey: "" };
+      const delivery = data.delivery || {};
+      const waiting = (delivery.pending || 0) + (delivery.processing || 0) + (delivery.retry || 0);
+      if (waiting || delivery.permanentFailure) {
+        setInviteStatus(
+          `Accepted ${data.recipientCount || 0} invitation(s): ${delivery.sent || 0} sent, ` +
+            `${waiting} awaiting delivery, ${delivery.permanentFailure || 0} failed permanently.`
+        );
+      } else if (data.deduplicated && !data.enqueued) {
+        setInviteStatus(`No duplicate invitations sent; ${delivery.sent || 0} already delivered.`);
+      } else {
+        setInviteStatus(`Sent ${delivery.sent || 0} invitation(s).`);
+      }
     } catch (err) {
       setInviteError(`Failed to send invitations: ${err.message}`);
     } finally {
@@ -317,15 +463,156 @@ function OrganizerView() {
     setInviteStatus("");
     setSendingReminders(true);
     try {
+      if (!reminderRequestRef.current) {
+        reminderRequestRef.current = crypto.randomUUID();
+      }
       const token = await getToken();
-      const data = await sendReminders(event.code, token);
+      const data = await sendReminders(
+        event.code,
+        { idempotencyKey: reminderRequestRef.current },
+        token
+      );
       const refreshed = await fetchInvitations(event.code, token);
       setInvitations(refreshed.invitations || []);
-      setInviteStatus(`Sent ${data.sent || 0} reminder(s).`);
+      reminderRequestRef.current = "";
+      const delivery = data.delivery || {};
+      const waiting = (delivery.pending || 0) + (delivery.processing || 0) + (delivery.retry || 0);
+      if (waiting || delivery.permanentFailure) {
+        setInviteStatus(
+          `Accepted ${data.recipientCount || 0} reminder(s): ${delivery.sent || 0} sent, ` +
+            `${waiting} awaiting delivery, ${delivery.permanentFailure || 0} failed permanently.`
+        );
+      } else if (data.deduplicated && !data.enqueued) {
+        setInviteStatus(`No duplicate reminders sent; ${delivery.sent || 0} already delivered.`);
+      } else {
+        setInviteStatus(`Sent ${delivery.sent || 0} reminder(s).`);
+      }
     } catch (err) {
       setInviteError(`Failed to send reminders: ${err.message}`);
     } finally {
       setSendingReminders(false);
+    }
+  };
+
+  const handleLifecycleChange = async (status, responseDeadline = undefined) => {
+    setLifecycleError("");
+    setChangingLifecycle(true);
+    try {
+      const token = await getToken();
+      const data = await updateEventLifecycle(
+        event.code,
+        {
+          status,
+          expectedVersion: event.version,
+          responseDeadline,
+        },
+        token
+      );
+      setEvent(data.event);
+      setRefreshKey((key) => key + 1);
+    } catch (err) {
+      setLifecycleError(`Failed to update event: ${err.message}`);
+    } finally {
+      setChangingLifecycle(false);
+    }
+  };
+
+  const finalFormFingerprint = JSON.stringify([
+    finalStart,
+    finalEnd,
+    finalChannel,
+    finalLocation.trim(),
+    event.timezone,
+  ]);
+
+  const clearFinalReview = () => {
+    setFinalReview(null);
+    setFinalDelivery(null);
+    setFinalRequestKey("");
+    setReviewFingerprint("");
+    setFinalizationStatus("");
+  };
+
+  const handleUseRecommendation = (recommendation) => {
+    clearFinalReview();
+    setFinalStart(
+      formatIsoForDateTimeLocal(recommendation.suggestedStartsAt, event.timezone || "UTC")
+    );
+    setFinalEnd(formatIsoForDateTimeLocal(recommendation.suggestedEndsAt, event.timezone || "UTC"));
+    setFinalChannel(recommendation.channel);
+    setFinalizationError("");
+    setFinalizationStatus(
+      `Recommendation #${recommendation.rank} loaded. Review attendance before confirming.`
+    );
+  };
+
+  const finalPayload = () => {
+    if (!finalStart || !finalEnd) {
+      throw new Error("Choose both a final start and end time.");
+    }
+    return {
+      startsAt: zonedLocalDateTimeToIso(finalStart, event.timezone || "UTC"),
+      endsAt: zonedLocalDateTimeToIso(finalEnd, event.timezone || "UTC"),
+      channel: finalChannel,
+      location: finalLocation.trim(),
+    };
+  };
+
+  const handleReviewFinal = async () => {
+    setFinalizationError("");
+    setFinalizationStatus("");
+    setReviewingFinal(true);
+    try {
+      const payload = finalPayload();
+      const token = await getToken();
+      const data = await previewFinalMeeting(event.code, payload, token);
+      setFinalReview(data.attendance);
+      setReviewFingerprint(finalFormFingerprint);
+      setFinalRequestKey(crypto.randomUUID());
+      setFinalizationStatus(
+        "Attendance review is current. Confirm when you are ready to lock responses."
+      );
+    } catch (err) {
+      setFinalizationError(`Unable to review this time: ${err.message}`);
+    } finally {
+      setReviewingFinal(false);
+    }
+  };
+
+  const handleConfirmFinal = async () => {
+    if (!finalReview || reviewFingerprint !== finalFormFingerprint) {
+      setFinalizationError("Review attendance again before confirming this time.");
+      return;
+    }
+    setFinalizationError("");
+    setFinalizationStatus("");
+    setConfirmingFinal(true);
+    try {
+      const payload = finalPayload();
+      const token = await getToken();
+      const data = await confirmFinalMeeting(
+        event.code,
+        {
+          ...payload,
+          expectedVersion: event.version,
+          idempotencyKey: finalRequestKey || crypto.randomUUID(),
+        },
+        token
+      );
+      setEvent(data.event);
+      setFinalReview(data.finalMeeting?.attendance || null);
+      setFinalDelivery(data.delivery || null);
+      const failed = (data.delivery?.retry || 0) + (data.delivery?.permanentFailure || 0);
+      setFinalizationStatus(
+        failed
+          ? "Final time is locked. Some confirmation emails are queued for retry."
+          : `Final time is locked. Sent ${data.delivery?.sent || 0} confirmation email(s).`
+      );
+      setRefreshKey((key) => key + 1);
+    } catch (err) {
+      setFinalizationError(`Unable to confirm this time: ${err.message}`);
+    } finally {
+      setConfirmingFinal(false);
     }
   };
 
@@ -350,45 +637,33 @@ function OrganizerView() {
     return a.localeCompare(b);
   });
 
-  // Calculate weighted average for a given schedule type (excludes hidden)
-  const calculateWeightedAverage = (scheduleKey) => {
-    if (!activeParticipants.length) return Array(numSlots).fill(0);
-    const total = Array(numSlots).fill(0);
-    let totalWeight = 0;
-
-    activeParticipants.forEach((p) => {
-      // Use defaults for participants not yet in the weights map
-      const w = weights[p.id] ?? { weight: 1.0, included: 1 };
-      if (!w.included) return;
-      const weight = w.weight;
-      if (weight <= 0) return;
-      const schedule = p[scheduleKey];
-      if (schedule.length !== numSlots) return;
-      totalWeight += weight;
-      schedule.forEach((val, idx) => {
-        total[idx] += val * weight;
-      });
-    });
-
-    if (totalWeight === 0) return Array(numSlots).fill(0);
-    return total.map((v) => parseFloat((v / totalWeight).toFixed(2)));
-  };
-
-  const weightedInperson = calculateWeightedAverage("inpersonArray");
-  const weightedVirtual = calculateWeightedAverage("virtualArray");
+  const weightedInperson = results?.channels?.inperson?.weighted ?? Array(numSlots).fill(0);
+  const weightedVirtual = results?.channels?.virtual?.weighted ?? Array(numSlots).fill(0);
+  const recommendations = results?.recommendations ?? [];
+  const recommendationBasis = results?.recommendationBasis ?? null;
   const submittedCount = activeParticipants.filter((p) => p.submitted).length;
+  const countedResponseTotal = results?.countedResponseTotal ?? 0;
+  const unansweredParticipantTotal = results?.unansweredParticipantTotal ?? 0;
+  const excludedParticipantTotal = results?.excludedParticipantTotal ?? 0;
+  const totalWeight = results?.calculationBasis?.weighted?.totalWeight ?? 0;
+  const requiredConflictTotal = Object.values(
+    results?.requiredParticipantConflicts?.channels || {}
+  ).reduce((total, conflicts) => total + conflicts.length, 0);
+  const responseDeadlinePassed =
+    event.responseDeadline && Date.now() >= new Date(event.responseDeadline).getTime();
+  const responsesOpen = event.status === "open" && !responseDeadlinePassed;
 
   const inpersonDetails = activeParticipants
     .filter((p) => {
-      const w = weights[p.id] ?? { weight: 1.0, included: 1 };
-      return w.included && p.inpersonArray.length === numSlots;
+      const w = weights[p.id] ?? { weight: 1.0, included: 1, required: 0 };
+      return p.submitted && w.included && p.inpersonArray.length === numSlots;
     })
     .map((p) => ({ name: p.name, schedule: p.inpersonArray }));
 
   const virtualDetails = activeParticipants
     .filter((p) => {
-      const w = weights[p.id] ?? { weight: 1.0, included: 1 };
-      return w.included && p.virtualArray.length === numSlots;
+      const w = weights[p.id] ?? { weight: 1.0, included: 1, required: 0 };
+      return p.submitted && w.included && p.virtualArray.length === numSlots;
     })
     .map((p) => ({ name: p.name, schedule: p.virtualArray }));
 
@@ -410,601 +685,121 @@ function OrganizerView() {
 
   return (
     <div className="page-pad" style={{ maxWidth: "1400px", margin: "0 auto" }}>
-      <div
-        style={{
-          marginBottom: "32px",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          flexWrap: "wrap",
-          gap: "16px",
-        }}
-      >
-        <div>
-          <h2
-            className="organizer-title"
-            style={{
-              color: "var(--md-sys-color-primary)",
-              margin: "0 0 4px 0",
-              fontSize: "1.8rem",
-            }}
-          >
-            Organizer Dashboard
-          </h2>
-          <p style={{ color: "var(--md-sys-color-on-surface-variant)", margin: 0 }}>
-            Manage participants and find the best meeting time.
-          </p>
-        </div>
-        <AppButton
-          onClick={() => setRefreshKey((k) => k + 1)}
-          variant="outlined"
-          icon={<MdRefresh />}
-        >
-          Refresh
-        </AppButton>
-      </div>
+      <OrganizerHeader onRefresh={() => setRefreshKey((key) => key + 1)} />
 
-      <div
-        className="md-card"
-        style={{ marginBottom: "24px", display: "flex", flexDirection: "column", gap: "12px" }}
-      >
-        <h3 style={{ margin: 0, color: "var(--md-sys-color-on-surface)" }}>Event Details</h3>
-        <EventDetailsGrid
-          event={event}
-          extraCards={[
-            { label: "Participants", value: activeParticipants.length },
-            { label: "Submitted", value: `${submittedCount} / ${activeParticipants.length}` },
-          ]}
-        />
-      </div>
+      <RecommendationsPanel
+        event={event}
+        recommendations={recommendations}
+        recommendationBasis={recommendationBasis}
+        onUseRecommendation={handleUseRecommendation}
+      />
 
-      <div
-        className="md-card"
-        style={{ marginBottom: "24px", display: "flex", flexDirection: "column", gap: "16px" }}
-      >
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            flexWrap: "wrap",
-            gap: "12px",
-          }}
-        >
-          <div>
-            <h3 style={{ margin: 0, color: "var(--md-sys-color-on-surface)" }}>
-              Email Invitations
-            </h3>
-            <p style={{ margin: "4px 0 0 0", color: "var(--md-sys-color-on-surface-variant)" }}>
-              Send the schedule link and calendar reminder to participants.
-            </p>
-          </div>
-          <AppButton
-            variant="outlined"
-            icon={<MdNotificationsActive />}
-            onClick={handleSendReminders}
-            disabled={sendingReminders}
-          >
-            {sendingReminders ? "Sending..." : "Send Reminders"}
-          </AppButton>
-        </div>
+      <FinalMeetingPanel
+        event={event}
+        finalStart={finalStart}
+        setFinalStart={setFinalStart}
+        finalEnd={finalEnd}
+        setFinalEnd={setFinalEnd}
+        finalChannel={finalChannel}
+        setFinalChannel={setFinalChannel}
+        finalLocation={finalLocation}
+        setFinalLocation={setFinalLocation}
+        clearFinalReview={clearFinalReview}
+        onReview={handleReviewFinal}
+        onConfirm={handleConfirmFinal}
+        reviewing={reviewingFinal}
+        confirming={confirmingFinal}
+        finalReview={finalReview}
+        reviewIsCurrent={reviewFingerprint === finalFormFingerprint}
+        finalDelivery={finalDelivery}
+        status={finalizationStatus}
+        error={finalizationError}
+      />
 
-        <md-outlined-text-field
-          label="Invite emails"
-          value={inviteEmails}
-          onInput={(e) => setInviteEmails(e.target.value)}
-          placeholder="name@example.com, teammate@example.com"
-          style={{ width: "100%" }}
-        ></md-outlined-text-field>
-        <textarea
-          value={inviteMessage}
-          onChange={(e) => setInviteMessage(e.target.value)}
-          maxLength={1000}
-          placeholder="Optional message"
-          style={{
-            minHeight: "80px",
-            resize: "vertical",
-            padding: "12px",
-            borderRadius: "8px",
-            border: "1px solid var(--md-sys-color-outline)",
-            background: "var(--md-sys-color-surface)",
-            color: "var(--md-sys-color-on-surface)",
-            font: "inherit",
-          }}
-        />
-        <AppButton
-          onClick={handleSendInvitations}
-          disabled={sendingInvites || !inviteEmails.trim()}
-          icon={<MdEmail />}
-        >
-          {sendingInvites ? "Sending..." : "Send Invitations"}
-        </AppButton>
-        {inviteStatus && (
-          <p style={{ color: "var(--md-sys-color-primary)", margin: 0 }}>{inviteStatus}</p>
-        )}
-        {inviteError && (
-          <p style={{ color: "var(--md-sys-color-error)", margin: 0 }}>{inviteError}</p>
-        )}
-        {invitations.length > 0 && (
-          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-            {invitations.map((invitation) => (
-              <div
-                key={invitation.id || invitation.email}
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  gap: "12px",
-                  padding: "10px 12px",
-                  borderRadius: "8px",
-                  border: "1px solid var(--md-sys-color-surface-variant)",
-                  background: "var(--md-sys-color-surface-container-low)",
-                  flexWrap: "wrap",
-                }}
-              >
-                <span>{invitation.email}</span>
-                <span style={{ color: "var(--md-sys-color-on-surface-variant)" }}>
-                  {invitation.status}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      <LifecyclePanel
+        event={event}
+        activeParticipantCount={activeParticipants.length}
+        submittedCount={submittedCount}
+        countedResponseTotal={countedResponseTotal}
+        unansweredParticipantTotal={unansweredParticipantTotal}
+        excludedParticipantTotal={excludedParticipantTotal}
+        deadline={lifecycleDeadline}
+        setDeadline={setLifecycleDeadline}
+        changing={changingLifecycle}
+        onChange={handleLifecycleChange}
+        error={lifecycleError}
+      />
+
+      <InvitationsPanel
+        invitations={invitations}
+        inviteEmails={inviteEmails}
+        setInviteEmails={setInviteEmails}
+        inviteMessage={inviteMessage}
+        setInviteMessage={setInviteMessage}
+        inviteStatus={inviteStatus}
+        inviteError={inviteError}
+        sendingInvites={sendingInvites}
+        sendingReminders={sendingReminders}
+        onSendInvitations={handleSendInvitations}
+        onSendReminders={handleSendReminders}
+      />
 
       <div className="two-pane">
-        {/* Left pane: Participants + My Schedule */}
         <div style={{ flex: "1 1 350px", display: "flex", flexDirection: "column", gap: "24px" }}>
-          {/* My Schedule */}
-          <div className="md-card">
-            <h3 style={{ margin: "0 0 16px 0", color: "var(--md-sys-color-on-surface)" }}>
-              My Schedule
-            </h3>
-            {!myJoined ? (
-              <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-                <p style={{ margin: 0, color: "var(--md-sys-color-on-surface-variant)" }}>
-                  Join this event with your account to submit the organizer schedule.
-                </p>
-                <AppButton onClick={handleMyJoin} icon={<MdLogin />}>
-                  Join as {user.displayName}
-                </AppButton>
-              </div>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-                <p style={{ margin: 0, color: "var(--md-sys-color-on-surface-variant)" }}>
-                  Editing as <strong>{myParticipantName}</strong>. Click cells to toggle
-                  availability.
-                </p>
-                {mode !== "virtual" && (
-                  <ScheduleGrid
-                    schedule={myInperson}
-                    startHour={event.startHour}
-                    endHour={event.endHour}
-                    selectedDays={event.days}
-                    daySelectionType={event.daySelectionType}
-                    specificDates={event.specificDates}
-                    readOnly={false}
-                    showValues={false}
-                    onCellPaint={handleMyInpersonPaint}
-                    label={mode === "mixed" ? "In-Person" : undefined}
-                  />
-                )}
-                {mode !== "inperson" && (
-                  <ScheduleGrid
-                    schedule={myVirtual}
-                    startHour={event.startHour}
-                    endHour={event.endHour}
-                    selectedDays={event.days}
-                    daySelectionType={event.daySelectionType}
-                    specificDates={event.specificDates}
-                    readOnly={false}
-                    showValues={false}
-                    onCellPaint={handleMyVirtualPaint}
-                    label={mode === "mixed" ? "Virtual" : undefined}
-                  />
-                )}
-                <AppButton onClick={handleMySave} disabled={mySaving} icon={<MdSave />}>
-                  {mySaving ? "Saving..." : "Save My Schedule"}
-                </AppButton>
-              </div>
-            )}
-          </div>
+          <OrganizerSchedulePanel
+            event={event}
+            mode={mode}
+            user={user}
+            joined={myJoined}
+            participantName={myParticipantName}
+            inperson={myInperson}
+            virtual={myVirtual}
+            responsesOpen={responsesOpen}
+            saving={mySaving}
+            onJoin={handleMyJoin}
+            onInpersonPaint={handleMyInpersonPaint}
+            onVirtualPaint={handleMyVirtualPaint}
+            onSave={handleMySave}
+          />
 
-          <div className="md-card">
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: "12px",
-                flexWrap: "wrap",
-                gap: "8px",
-              }}
-            >
-              <h3 style={{ margin: 0, color: "var(--md-sys-color-on-surface)" }}>Participants</h3>
-              <div style={{ display: "flex", gap: "8px" }}>
-                <AppButton
-                  variant="outlined"
-                  onClick={() => handleCheckAll(true)}
-                  style={{ fontSize: "0.8rem" }}
-                >
-                  Check All
-                </AppButton>
-                <AppButton
-                  variant="outlined"
-                  onClick={() => handleCheckAll(false)}
-                  style={{ fontSize: "0.8rem" }}
-                >
-                  Uncheck All
-                </AppButton>
-              </div>
-            </div>
-
-            <md-outlined-text-field
-              label="Search participants"
-              value={searchQuery}
-              onInput={(e) => setSearchQuery(e.target.value)}
-              style={{ width: "100%", marginBottom: "16px" }}
-            ></md-outlined-text-field>
-
-            <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-              {groupNames.map((gn) => (
-                <div key={gn || "__ungrouped"}>
-                  {gn && (
-                    <h4
-                      style={{
-                        margin: "8px 0",
-                        color: "var(--md-sys-color-secondary)",
-                        fontSize: "0.95rem",
-                      }}
-                    >
-                      {gn}
-                    </h4>
-                  )}
-                  {groups[gn].map((p) => {
-                    const w = weights[p.id] || { weight: 1, included: 1 };
-                    return (
-                      <div
-                        key={p.id}
-                        style={{
-                          display: "flex",
-                          flexDirection: "column",
-                          gap: "12px",
-                          padding: "16px",
-                          border: "1px solid var(--md-sys-color-surface-variant)",
-                          borderRadius: "12px",
-                          backgroundColor: w.included
-                            ? "var(--md-sys-color-surface-container-low)"
-                            : "var(--md-sys-color-surface)",
-                          opacity: w.included ? 1 : 0.5,
-                          marginBottom: "8px",
-                        }}
-                      >
-                        <div
-                          style={{
-                            display: "flex",
-                            justifyContent: "space-between",
-                            alignItems: "center",
-                          }}
-                        >
-                          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                            <md-checkbox
-                              checked={w.included ? true : undefined}
-                              onInput={(e) => handleIncludedChange(p.id, e.target.checked)}
-                            ></md-checkbox>
-                            <span style={{ fontWeight: "600", fontSize: "1.1rem" }}>{p.name}</span>
-                          </div>
-                          <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-                            <span
-                              style={{
-                                color: p.submitted
-                                  ? "var(--md-sys-color-primary)"
-                                  : "var(--md-sys-color-outline)",
-                              }}
-                              title={p.submitted ? "Submitted" : "Not submitted"}
-                            >
-                              {p.submitted ? <GoVerified size={20} /> : <GoUnverified size={20} />}
-                            </span>
-                            <button
-                              onClick={() => handleMoveParticipant(p.id, "up")}
-                              title="Move up"
-                              style={{
-                                background: "none",
-                                border: "none",
-                                cursor: "pointer",
-                                color: "var(--md-sys-color-on-surface-variant)",
-                                padding: "4px",
-                              }}
-                            >
-                              <MdArrowUpward size={18} />
-                            </button>
-                            <button
-                              onClick={() => handleMoveParticipant(p.id, "down")}
-                              title="Move down"
-                              style={{
-                                background: "none",
-                                border: "none",
-                                cursor: "pointer",
-                                color: "var(--md-sys-color-on-surface-variant)",
-                                padding: "4px",
-                              }}
-                            >
-                              <MdArrowDownward size={18} />
-                            </button>
-                            <AppButton
-                              variant="outlined"
-                              icon={<MdDeleteOutline />}
-                              onClick={() => handleHideParticipant(p)}
-                              disabled={hidingParticipantId === p.id}
-                              className="app-btn-danger"
-                            >
-                              {hidingParticipantId === p.id ? "Hiding..." : "Hide"}
-                            </AppButton>
-                          </div>
-                        </div>
-                        <div
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: "16px",
-                            paddingLeft: "40px",
-                          }}
-                        >
-                          <span
-                            style={{
-                              fontSize: "0.9rem",
-                              color: "var(--md-sys-color-on-surface-variant)",
-                            }}
-                          >
-                            Weight
-                          </span>
-                          <md-slider
-                            min="0"
-                            max="1"
-                            step="0.01"
-                            value={w.weight}
-                            onInput={(e) => handleWeightChange(p.id, Number(e.target.value))}
-                            style={{ flex: 1 }}
-                          ></md-slider>
-                          <span
-                            style={{
-                              minWidth: "36px",
-                              textAlign: "right",
-                              fontWeight: "500",
-                              color: "var(--md-sys-color-primary)",
-                            }}
-                          >
-                            {w.weight.toFixed(2)}
-                          </span>
-                        </div>
-                        <div
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: "8px",
-                            paddingLeft: "40px",
-                          }}
-                        >
-                          <span
-                            style={{
-                              fontSize: "0.85rem",
-                              color: "var(--md-sys-color-on-surface-variant)",
-                            }}
-                          >
-                            Group
-                          </span>
-                          <input
-                            type="text"
-                            value={p.group_name || ""}
-                            onChange={(e) => handleGroupChange(p.id, e.target.value)}
-                            placeholder="(none)"
-                            style={{
-                              flex: 1,
-                              padding: "4px 8px",
-                              borderRadius: "6px",
-                              border: "1px solid var(--md-sys-color-outline)",
-                              fontSize: "0.85rem",
-                              background: "var(--md-sys-color-surface)",
-                            }}
-                          />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              ))}
-              {activeParticipants.length === 0 && (
-                <p
-                  style={{
-                    color: "var(--md-sys-color-outline)",
-                    fontStyle: "italic",
-                    textAlign: "center",
-                  }}
-                >
-                  No participants yet. Share the event link!
-                </p>
-              )}
-            </div>
-
-            {/* Hidden participants section */}
-            {hiddenParticipants.length > 0 && (
-              <div style={{ marginTop: "24px" }}>
-                <button
-                  onClick={() => setShowHidden((v) => !v)}
-                  style={{
-                    background: "none",
-                    border: "none",
-                    cursor: "pointer",
-                    color: "var(--md-sys-color-on-surface-variant)",
-                    fontSize: "0.9rem",
-                    fontWeight: "500",
-                    padding: 0,
-                  }}
-                >
-                  {showHidden ? "▼" : "▶"} Hidden Participants ({hiddenParticipants.length})
-                </button>
-                {showHidden && (
-                  <div
-                    style={{
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: "8px",
-                      marginTop: "12px",
-                    }}
-                  >
-                    {hiddenParticipants.map((p) => (
-                      <div
-                        key={p.id}
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "center",
-                          padding: "8px 16px",
-                          border: "1px solid var(--md-sys-color-surface-variant)",
-                          borderRadius: "8px",
-                          opacity: 0.6,
-                        }}
-                      >
-                        <span>{p.name}</span>
-                        <AppButton
-                          variant="outlined"
-                          onClick={() => handleUnhideParticipant(p)}
-                          disabled={hidingParticipantId === p.id}
-                        >
-                          {hidingParticipantId === p.id ? "..." : "Unhide"}
-                        </AppButton>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+          <ParticipantManagerPanel
+            activeParticipants={activeParticipants}
+            hiddenParticipants={hiddenParticipants}
+            filteredParticipants={filteredParticipants}
+            groups={groups}
+            groupNames={groupNames}
+            weights={weights}
+            searchQuery={searchQuery}
+            setSearchQuery={setSearchQuery}
+            showHidden={showHidden}
+            setShowHidden={setShowHidden}
+            hidingParticipantId={hidingParticipantId}
+            onCheckAll={handleCheckAll}
+            onIncludedChange={handleIncludedChange}
+            onWeightChange={handleWeightChange}
+            onRequiredChange={handleRequiredChange}
+            onGroupChange={handleGroupChange}
+            onMoveParticipant={handleMoveParticipant}
+            onHideParticipant={handleHideParticipant}
+            onUnhideParticipant={handleUnhideParticipant}
+          />
         </div>
 
-        {/* Right pane: Aggregate grids side by side */}
-        <div style={{ flex: "2 1 700px", display: "flex", flexDirection: "column", gap: "24px" }}>
-          <div className="md-card" style={{ overflowX: "auto" }}>
-            <h3 style={{ margin: "0 0 4px 0", color: "var(--md-sys-color-on-surface)" }}>
-              Group Availability
-            </h3>
-            {event.location && (
-              <p
-                style={{
-                  margin: "0 0 16px 0",
-                  fontSize: "0.9rem",
-                  color: "var(--md-sys-color-on-surface-variant)",
-                }}
-              >
-                {event.location}
-              </p>
-            )}
-            <div style={{ display: "flex", gap: "24px", flexWrap: "wrap" }}>
-              {mode !== "virtual" && (
-                <div style={{ flex: "1 1 300px", minWidth: 0 }}>
-                  <ScheduleGrid
-                    schedule={weightedInperson}
-                    startHour={event.startHour}
-                    endHour={event.endHour}
-                    selectedDays={event.days}
-                    daySelectionType={event.daySelectionType}
-                    specificDates={event.specificDates}
-                    readOnly={true}
-                    showValues={true}
-                    label={mode === "mixed" ? "In-Person Availability" : "Availability"}
-                    participantDetails={inpersonDetails}
-                  />
-                </div>
-              )}
-              {mode !== "inperson" && (
-                <div style={{ flex: "1 1 300px", minWidth: 0 }}>
-                  <ScheduleGrid
-                    schedule={weightedVirtual}
-                    startHour={event.startHour}
-                    endHour={event.endHour}
-                    selectedDays={event.days}
-                    daySelectionType={event.daySelectionType}
-                    specificDates={event.specificDates}
-                    readOnly={true}
-                    showValues={true}
-                    label={mode === "mixed" ? "Virtual Availability" : "Availability"}
-                    participantDetails={virtualDetails}
-                  />
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Individual schedules */}
-          {activeParticipants.length > 0 && (
-            <div>
-              <h3 style={{ margin: "0 0 16px 0", color: "var(--md-sys-color-on-surface)" }}>
-                Individual Schedules
-              </h3>
-              <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
-                {activeParticipants.map((p) => {
-                  const w = weights[p.id] || { weight: 1, included: 1 };
-                  return (
-                    <div className="md-card" key={p.id} style={{ overflowX: "auto" }}>
-                      <div
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "center",
-                          marginBottom: "16px",
-                        }}
-                      >
-                        <h4 style={{ margin: 0, fontSize: "1.2rem" }}>{p.name}</h4>
-                        <div
-                          style={{
-                            fontSize: "0.9rem",
-                            color: "var(--md-sys-color-on-surface-variant)",
-                            backgroundColor: "var(--md-sys-color-surface-variant)",
-                            padding: "4px 8px",
-                            borderRadius: "16px",
-                          }}
-                        >
-                          Weight: <span style={{ fontWeight: "bold" }}>{w.weight.toFixed(2)}</span>
-                        </div>
-                      </div>
-                      <div style={{ display: "flex", gap: "24px", flexWrap: "wrap" }}>
-                        {mode !== "virtual" && (
-                          <div style={{ flex: "1 1 300px", minWidth: 0 }}>
-                            <ScheduleGrid
-                              schedule={p.inpersonArray}
-                              startHour={event.startHour}
-                              endHour={event.endHour}
-                              selectedDays={event.days}
-                              daySelectionType={event.daySelectionType}
-                              specificDates={event.specificDates}
-                              readOnly={true}
-                              showValues={true}
-                              label={mode === "mixed" ? "In-Person" : "Availability"}
-                            />
-                          </div>
-                        )}
-                        {mode !== "inperson" && (
-                          <div style={{ flex: "1 1 300px", minWidth: 0 }}>
-                            <ScheduleGrid
-                              schedule={p.virtualArray}
-                              startHour={event.startHour}
-                              endHour={event.endHour}
-                              selectedDays={event.days}
-                              daySelectionType={event.daySelectionType}
-                              specificDates={event.specificDates}
-                              readOnly={true}
-                              showValues={true}
-                              label={mode === "mixed" ? "Virtual" : "Availability"}
-                            />
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-        </div>
+        <OrganizerResultsPanel
+          event={event}
+          mode={mode}
+          activeParticipants={activeParticipants}
+          weights={weights}
+          weightedInperson={weightedInperson}
+          weightedVirtual={weightedVirtual}
+          inpersonDetails={inpersonDetails}
+          virtualDetails={virtualDetails}
+          countedResponseTotal={countedResponseTotal}
+          unansweredParticipantTotal={unansweredParticipantTotal}
+          excludedParticipantTotal={excludedParticipantTotal}
+          totalWeight={totalWeight}
+          requiredConflictTotal={requiredConflictTotal}
+        />
       </div>
 
       {hideError && (

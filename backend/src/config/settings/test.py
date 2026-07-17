@@ -19,4 +19,6 @@ CACHES = {
     }
 }
 
+LOGGING["root"]["level"] = "WARNING"  # noqa: F405
+
 TEST_RUNNER = "config.test_runner.AppTestRunner"

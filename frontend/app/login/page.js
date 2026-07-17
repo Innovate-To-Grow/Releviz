@@ -9,6 +9,14 @@ import { useAuth } from "@/components/auth/AuthContext";
 function LoginContent() {
   const searchParams = useSearchParams();
   const requestedNext = searchParams.get("next") || "/dashboard";
+  const statusCode = searchParams.get("status");
+  const initialStatus =
+    {
+      "password-reset": "Password reset complete. Log in with your new password.",
+      "password-changed": "Password changed. Log in again on this device.",
+      "signed-out-all": "All devices have been signed out.",
+      "account-deleted": "Your account has been deleted.",
+    }[statusCode] || "";
   const next =
     requestedNext.startsWith("/") && !requestedNext.startsWith("//") ? requestedNext : "/dashboard";
   const { login, requestEmailLoginCode, verifyEmailLoginCode } = useAuth();
@@ -17,7 +25,7 @@ function LoginContent() {
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [codeSent, setCodeSent] = useState(false);
-  const [status, setStatus] = useState("");
+  const [status, setStatus] = useState(initialStatus);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -64,6 +72,7 @@ function LoginContent() {
           <button
             type="button"
             className={mode === "password" ? "auth-mode-active" : ""}
+            aria-pressed={mode === "password"}
             onClick={() => switchMode("password")}
           >
             Password
@@ -71,19 +80,29 @@ function LoginContent() {
           <button
             type="button"
             className={mode === "code" ? "auth-mode-active" : ""}
+            aria-pressed={mode === "code"}
             onClick={() => switchMode("code")}
           >
             Email code
           </button>
         </div>
-        {error && <div className="auth-error">{error}</div>}
-        {status && <div className="auth-status">{status}</div>}
+        {error && (
+          <div className="auth-error" role="alert">
+            {error}
+          </div>
+        )}
+        {status && (
+          <div className="auth-status" role="status" aria-live="polite">
+            {status}
+          </div>
+        )}
         <label>
           Email
           <input
             value={email}
             onChange={(event) => setEmail(event.target.value)}
             type="email"
+            autoComplete="email"
             required
           />
         </label>
@@ -94,6 +113,7 @@ function LoginContent() {
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               type="password"
+              autoComplete="current-password"
               required
             />
           </label>
@@ -120,6 +140,11 @@ function LoginContent() {
               ? "Send login code"
               : "Log in"}
         </AppButton>
+        {mode === "password" && (
+          <p className="auth-switch">
+            <Link href="/recover">Forgot your password?</Link>
+          </p>
+        )}
         <p className="auth-switch">
           Need an account? <Link href="/signup">Sign up</Link>
         </p>

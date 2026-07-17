@@ -1,6 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: "standalone",
+  skipTrailingSlashRedirect: true,
   async headers() {
     return [
       {
@@ -35,6 +36,7 @@ const nextConfig = {
       "logout",
       "refresh",
       "profile",
+      "sessions",
       "account-emails",
       "contact-phones",
       "password-reset/request-code",

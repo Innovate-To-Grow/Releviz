@@ -1,11 +1,13 @@
 import base64
 import os
+import uuid
 from datetime import timedelta
 from io import StringIO
 from unittest.mock import patch
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core import mail
 from django.core.exceptions import ValidationError
@@ -35,12 +37,20 @@ from apps.authn.services import (
 )
 from apps.authn.tests.helpers import create_member, token_for
 from apps.authn.views import maybe_debug_code, validation_error_response
-from apps.messaging.models import EmailMessageLog
-from apps.messaging.services import EmailDeliveryError
+from apps.messaging.crypto import decrypt_secret
+from apps.messaging.models import EmailDeliveryJob, EmailDeliveryRequest, EmailMessageLog
+from apps.messaging.services import EmailDeliveryError, dispatch_email_job
+from apps.scheduling.models import Event, EventInvitation, FinalMeeting, Participant
 
 
 def latest_code() -> str:
-    body = mail.outbox[-1].body
+    job = (
+        EmailDeliveryJob.objects.filter(message_type=EmailMessageLog.MessageType.VERIFICATION)
+        .order_by("-created_at")
+        .first()
+    )
+    assert job is not None
+    body = decrypt_secret(job.body) if job.content_encrypted else job.body
     return body.split(" is ")[1].split(".")[0]
 
 
@@ -89,6 +99,20 @@ class AuthServiceAndModelTests(TestCase):
             purpose=EmailAuthChallenge.Purpose.LOGIN,
             target_email="member@example.com",
         )
+        self.assertIsNotNone(issued.delivery_job)
+        self.assertTrue(issued.delivery_job.content_encrypted)
+        self.assertNotIn(issued.code, issued.delivery_job.body)
+        sent_at = timezone.now()
+        self.assertEqual(
+            dispatch_email_job(issued.delivery_job.pk, now=sent_at)["status"],
+            EmailDeliveryJob.Status.SENT,
+        )
+        issued.challenge.refresh_from_db()
+        self.assertEqual(issued.challenge.last_sent_at, sent_at)
+        self.assertEqual(
+            issued.challenge.expires_at,
+            sent_at + settings.AUTH_CHALLENGE_VERIFICATION_LIFETIME,
+        )
         self.assertIn("Your Releviz verification code", mail.outbox[-1].body)
         self.assertIn("login -> member@example.com", str(issued.challenge))
 
@@ -130,6 +154,22 @@ class AuthServiceAndModelTests(TestCase):
                 code=expired.code,
                 purpose=EmailAuthChallenge.Purpose.LOGIN,
             )
+        expired.delivery_job.refresh_from_db()
+        self.assertEqual(expired.delivery_job.status, EmailDeliveryJob.Status.CANCELED)
+
+        superseded = issue_email_challenge(
+            member=self.member,
+            purpose=EmailAuthChallenge.Purpose.LOGIN,
+            target_email="member@example.com",
+        )
+        replacement = issue_email_challenge(
+            member=self.member,
+            purpose=EmailAuthChallenge.Purpose.LOGIN,
+            target_email="member@example.com",
+        )
+        superseded.delivery_job.refresh_from_db()
+        self.assertEqual(superseded.delivery_job.status, EmailDeliveryJob.Status.CANCELED)
+        self.assertEqual(replacement.delivery_job.status, EmailDeliveryJob.Status.PENDING)
 
         sms = issue_email_challenge(
             member=self.member,
@@ -139,6 +179,7 @@ class AuthServiceAndModelTests(TestCase):
             channel=EmailAuthChallenge.Channel.SMS,
         )
         self.assertIn("5551234567", str(sms.challenge))
+        self.assertIsNone(sms.delivery_job)
         verified = verify_email_challenge(
             email="",
             code=sms.code,
@@ -179,6 +220,7 @@ class AuthServiceAndModelTests(TestCase):
 
         with override_settings(REQUIRE_ENCRYPTED_PASSWORDS=False):
             self.assertEqual(decrypt_password("plain", ""), "plain")
+            self.assertEqual(decrypt_password(encrypted, str(key.key_id)), "password123")
             with self.assertRaisesMessage(Exception, "Passwords do not match"):
                 validate_password_pair({"password": "password123", "password_confirm": "other"})
             with self.assertRaisesMessage(Exception, "Password must be at least 8 characters"):
@@ -204,10 +246,14 @@ class AuthServiceAndModelTests(TestCase):
         with override_settings(DEBUG=True):
             self.assertEqual(maybe_debug_code({}, issued), {"debug_code": issued.code})
 
-    def test_best_effort_account_notifications(self):
+    def test_durable_account_notifications(self):
         self.assertTrue(send_registration_welcome(self.member))
+        welcome_job = EmailDeliveryJob.objects.get(message_type=EmailMessageLog.MessageType.WELCOME)
+        self.assertTrue(welcome_job.content_encrypted)
+        self.assertEqual(welcome_job.member, self.member)
+        dispatch_email_job(welcome_job.pk)
         welcome = EmailMessageLog.objects.get(message_type=EmailMessageLog.MessageType.WELCOME)
-        self.assertEqual(welcome.recipient, "member@example.com")
+        self.assertEqual(welcome.delivery_job, welcome_job)
         self.assertIn("Welcome to Releviz", mail.outbox[-1].subject)
 
         request = RequestFactory().post(
@@ -215,7 +261,12 @@ class AuthServiceAndModelTests(TestCase):
             HTTP_X_FORWARDED_FOR="203.0.113.10, 10.0.0.1",
             HTTP_USER_AGENT="Browser/1.0",
         )
-        self.assertTrue(send_login_alert(self.member, request=request, method="password"))
+        with override_settings(AUTH_TRUSTED_PROXY_COUNT=2):
+            self.assertTrue(send_login_alert(self.member, request=request, method="password"))
+        alert_job = EmailDeliveryJob.objects.filter(
+            message_type=EmailMessageLog.MessageType.LOGIN_ALERT
+        ).latest("created_at")
+        dispatch_email_job(alert_job.pk)
         alert_body = mail.outbox[-1].body
         self.assertIn("Method: password", alert_body)
         self.assertIn("IP address: 203.0.113.10", alert_body)
@@ -223,19 +274,32 @@ class AuthServiceAndModelTests(TestCase):
 
         request = RequestFactory().post("/authn/login/", HTTP_USER_AGENT="A" * 200)
         self.assertTrue(send_login_alert(self.member, request=request, method="email code"))
+        alert_job = EmailDeliveryJob.objects.filter(
+            message_type=EmailMessageLog.MessageType.LOGIN_ALERT
+        ).latest("created_at")
+        dispatch_email_job(alert_job.pk)
         self.assertIn("...", mail.outbox[-1].body)
 
         self.assertTrue(send_login_alert(self.member, request=None, method="unknown"))
+        alert_job = EmailDeliveryJob.objects.filter(
+            message_type=EmailMessageLog.MessageType.LOGIN_ALERT
+        ).latest("created_at")
+        dispatch_email_job(alert_job.pk)
         self.assertIn("IP address: Unknown", mail.outbox[-1].body)
 
         no_email = get_user_model().objects.create_user(password="password123", is_active=True)
         self.assertFalse(send_registration_welcome(no_email))
 
+        self.assertTrue(send_login_alert(self.member, request=None))
+        failed_job = EmailDeliveryJob.objects.filter(
+            message_type=EmailMessageLog.MessageType.LOGIN_ALERT
+        ).latest("created_at")
         with patch(
-            "apps.authn.services.send_email_message",
-            side_effect=EmailDeliveryError("notification failed"),
+            "apps.messaging.services.EmailMultiAlternatives.send",
+            side_effect=TimeoutError("notification failed"),
         ):
-            self.assertFalse(send_login_alert(self.member, request=None))
+            result = dispatch_email_job(failed_job.pk)
+        self.assertEqual(result["status"], EmailDeliveryJob.Status.RETRY)
 
     def test_registration_service_branches_and_backend(self):
         with self.assertRaisesMessage(Exception, "Email is required"):
@@ -322,10 +386,15 @@ class AuthViewTests(TestCase):
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token_for(self.member)}")
 
     def test_public_key_register_resend_login_and_refresh_flow(self):
-        self.assertIn("public_key", self.client.get("/authn/public-key/").data)
-        with patch(
-            "apps.authn.views.start_registration",
-            side_effect=EmailDeliveryError("registration mail failed"),
+        public_key = self.client.get("/authn/public-key/").data
+        self.assertIn("public_key", public_key)
+        self.assertFalse(public_key["password_encryption_required"])
+        with (
+            patch(
+                "apps.messaging.services.EmailMultiAlternatives.send",
+                side_effect=TimeoutError("registration mail failed"),
+            ),
+            self.captureOnCommitCallbacks(execute=True),
         ):
             failed_register = self.client.post(
                 "/authn/register/",
@@ -338,7 +407,11 @@ class AuthViewTests(TestCase):
                 },
                 format="json",
             )
-        self.assertEqual(failed_register.status_code, 503)
+        self.assertEqual(failed_register.status_code, 202)
+        self.assertEqual(
+            EmailDeliveryJob.objects.get(recipient="mailfail@example.com").status,
+            EmailDeliveryJob.Status.RETRY,
+        )
 
         invalid_register = self.client.post(
             "/authn/register/",
@@ -366,28 +439,36 @@ class AuthViewTests(TestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 202)
-        with patch(
-            "apps.authn.views.issue_email_challenge",
-            side_effect=EmailDeliveryError("resend mail failed"),
+        self.assertEqual(
+            EmailDeliveryJob.objects.filter(
+                message_type=EmailMessageLog.MessageType.VERIFICATION,
+                status=EmailDeliveryJob.Status.CANCELED,
+            ).count(),
+            1,
+        )
+
+        with (
+            patch(
+                "apps.messaging.services.EmailMultiAlternatives.send",
+                side_effect=TimeoutError("welcome mail failed"),
+            ),
+            self.captureOnCommitCallbacks(execute=True),
         ):
-            failed_resend = self.client.post(
-                "/authn/register/resend-code/",
-                {"email": "grace@example.com"},
+            response = self.client.post(
+                "/authn/register/verify-code/",
+                {"email": "grace@example.com", "code": latest_code()},
                 format="json",
             )
-        self.assertEqual(failed_resend.status_code, 503)
-
-        response = self.client.post(
-            "/authn/register/verify-code/",
-            {"email": "grace@example.com", "code": latest_code()},
-            format="json",
-        )
         self.assertEqual(response.status_code, 200)
-        self.assertIn("refresh", response.data)
+        self.assertNotIn("refresh", response.data)
+        refresh_cookie = self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME]
+        self.assertTrue(refresh_cookie["httponly"])
+        self.assertEqual(refresh_cookie["samesite"], "Lax")
         self.assertTrue(
-            EmailMessageLog.objects.filter(
+            EmailDeliveryJob.objects.filter(
                 recipient="grace@example.com",
                 message_type=EmailMessageLog.MessageType.WELCOME,
+                status=EmailDeliveryJob.Status.RETRY,
             ).exists()
         )
         invalid_verify = self.client.post(
@@ -402,7 +483,7 @@ class AuthViewTests(TestCase):
             {"email": "grace@example.com"},
             format="json",
         )
-        self.assertEqual(unable.status_code, 400)
+        self.assertEqual(unable.status_code, 202)
 
         bad_login = self.client.post(
             "/authn/login/", {"email": "grace@example.com", "password": "bad"}, format="json"
@@ -416,14 +497,17 @@ class AuthViewTests(TestCase):
         )
         self.assertEqual(login.status_code, 200)
         self.assertTrue(
-            EmailMessageLog.objects.filter(
+            EmailDeliveryJob.objects.filter(
                 recipient="grace@example.com",
                 message_type=EmailMessageLog.MessageType.LOGIN_ALERT,
             ).exists()
         )
-        with patch(
-            "apps.authn.services.send_email_message",
-            side_effect=EmailDeliveryError("login notification failed"),
+        with (
+            patch(
+                "apps.messaging.services.EmailMultiAlternatives.send",
+                side_effect=TimeoutError("login notification failed"),
+            ),
+            self.captureOnCommitCallbacks(execute=True),
         ):
             login = self.client.post(
                 "/authn/login/",
@@ -431,14 +515,28 @@ class AuthViewTests(TestCase):
                 format="json",
             )
         self.assertEqual(login.status_code, 200)
-        refresh = self.client.post(
-            "/authn/refresh/", {"refresh": login.data["refresh"]}, format="json"
+        self.assertEqual(
+            EmailDeliveryJob.objects.filter(
+                recipient="grace@example.com",
+                message_type=EmailMessageLog.MessageType.LOGIN_ALERT,
+            )
+            .latest("created_at")
+            .status,
+            EmailDeliveryJob.Status.RETRY,
         )
+        old_refresh = self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME].value
+        refresh = self.client.post("/authn/refresh/", {}, format="json")
         self.assertEqual(refresh.status_code, 200)
+        self.assertNotIn("refresh", refresh.data)
+        self.assertNotEqual(
+            self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME].value,
+            old_refresh,
+        )
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
         logout_without_refresh = self.client.post("/authn/logout/", {}, format="json")
         self.assertEqual(logout_without_refresh.status_code, 200)
-        logout = self.client.post("/authn/logout/", {"refresh": "not-a-token"}, format="json")
+        self.assertEqual(self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME].value, "")
+        logout = self.client.post("/authn/logout/", {}, format="json")
         self.assertEqual(logout.status_code, 200)
 
     def test_code_login_profile_contacts_password_and_delete_endpoints(self):
@@ -451,15 +549,29 @@ class AuthViewTests(TestCase):
             "/authn/login/request-code/", {"email": "ada@example.com"}, format="json"
         )
         self.assertEqual(request_code.status_code, 202)
-        ada_login_code = latest_code()
-        with patch(
-            "apps.authn.views.issue_email_challenge",
-            side_effect=EmailDeliveryError("login code failed"),
+        with (
+            override_settings(DEBUG=False),
+            patch(
+                "apps.messaging.services.EmailMultiAlternatives.send",
+                side_effect=TimeoutError("login code failed"),
+            ),
+            self.captureOnCommitCallbacks(execute=True),
         ):
-            failed_login_code = self.client.post(
+            retried_login_code = self.client.post(
                 "/authn/login/request-code/", {"email": "ada@example.com"}, format="json"
             )
-        self.assertEqual(failed_login_code.status_code, 503)
+        self.assertEqual(retried_login_code.status_code, 202)
+        self.assertEqual(retried_login_code.data, unknown.data)
+        self.assertEqual(
+            EmailDeliveryJob.objects.filter(
+                recipient="ada@example.com",
+                message_type=EmailMessageLog.MessageType.VERIFICATION,
+            )
+            .latest("created_at")
+            .status,
+            EmailDeliveryJob.Status.RETRY,
+        )
+        ada_login_code = latest_code()
         inactive = create_member("inactive@example.com", is_active=False)
         issued = issue_email_challenge(
             member=inactive,
@@ -485,7 +597,7 @@ class AuthViewTests(TestCase):
         )
         self.assertEqual(login.status_code, 200)
         self.assertTrue(
-            EmailMessageLog.objects.filter(
+            EmailDeliveryJob.objects.filter(
                 recipient="ada@example.com",
                 message_type=EmailMessageLog.MessageType.LOGIN_ALERT,
             ).exists()
@@ -495,9 +607,12 @@ class AuthViewTests(TestCase):
             purpose=EmailAuthChallenge.Purpose.LOGIN,
             target_email="ada@example.com",
         )
-        with patch(
-            "apps.authn.services.send_email_message",
-            side_effect=EmailDeliveryError("login code notification failed"),
+        with (
+            patch(
+                "apps.messaging.services.EmailMultiAlternatives.send",
+                side_effect=TimeoutError("login code notification failed"),
+            ),
+            self.captureOnCommitCallbacks(execute=True),
         ):
             login = self.client.post(
                 "/authn/login/verify-code/",
@@ -505,6 +620,15 @@ class AuthViewTests(TestCase):
                 format="json",
             )
         self.assertEqual(login.status_code, 200)
+        self.assertEqual(
+            EmailDeliveryJob.objects.filter(
+                recipient="ada@example.com",
+                message_type=EmailMessageLog.MessageType.LOGIN_ALERT,
+            )
+            .latest("created_at")
+            .status,
+            EmailDeliveryJob.Status.RETRY,
+        )
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
 
         profile = self.client.get("/authn/profile/")
@@ -525,18 +649,27 @@ class AuthViewTests(TestCase):
         self.assertEqual(self.client.get("/authn/account-emails/").status_code, 200)
         empty_email = self.client.post("/authn/account-emails/", {"email": ""}, format="json")
         self.assertEqual(empty_email.status_code, 400)
-        second = self.client.post(
-            "/authn/account-emails/", {"email": "second@example.com"}, format="json"
-        )
-        self.assertEqual(second.status_code, 201)
-        with patch(
-            "apps.authn.views.issue_email_challenge",
-            side_effect=EmailDeliveryError("contact email failed"),
+        with (
+            patch(
+                "apps.messaging.services.EmailMultiAlternatives.send",
+                side_effect=TimeoutError("contact email failed"),
+            ),
+            self.captureOnCommitCallbacks(execute=True),
         ):
-            failed_email = self.client.post(
-                "/authn/account-emails/", {"email": "third@example.com"}, format="json"
+            second = self.client.post(
+                "/authn/account-emails/", {"email": "second@example.com"}, format="json"
             )
-        self.assertEqual(failed_email.status_code, 503)
+        self.assertEqual(second.status_code, 201)
+        self.assertEqual(
+            EmailDeliveryJob.objects.filter(recipient="second@example.com")
+            .latest("created_at")
+            .status,
+            EmailDeliveryJob.Status.RETRY,
+        )
+        third = self.client.post(
+            "/authn/account-emails/", {"email": "third@example.com"}, format="json"
+        )
+        self.assertEqual(third.status_code, 201)
         repeat = self.client.post(
             "/authn/account-emails/", {"email": "second@example.com"}, format="json"
         )
@@ -579,20 +712,30 @@ class AuthViewTests(TestCase):
             format="json",
         )
         self.assertEqual(reset_unknown.status_code, 202)
-        reset = self.client.post(
-            "/authn/password-reset/request-code/", {"email": "ada@example.com"}, format="json"
-        )
-        self.assertEqual(reset.status_code, 202)
-        with patch(
-            "apps.authn.views.issue_email_challenge",
-            side_effect=EmailDeliveryError("reset mail failed"),
+        with (
+            override_settings(DEBUG=False),
+            patch(
+                "apps.messaging.services.EmailMultiAlternatives.send",
+                side_effect=TimeoutError("reset mail failed"),
+            ),
+            self.captureOnCommitCallbacks(execute=True),
         ):
-            failed_reset = self.client.post(
+            reset = self.client.post(
                 "/authn/password-reset/request-code/",
                 {"email": "ada@example.com"},
                 format="json",
             )
-        self.assertEqual(failed_reset.status_code, 503)
+        self.assertEqual(reset.status_code, 202)
+        self.assertEqual(reset.data, reset_unknown.data)
+        self.assertEqual(
+            EmailDeliveryJob.objects.filter(
+                recipient="ada@example.com",
+                auth_challenge__purpose=EmailAuthChallenge.Purpose.PASSWORD_RESET,
+            )
+            .latest("created_at")
+            .status,
+            EmailDeliveryJob.Status.RETRY,
+        )
         bad_reset = self.client.post(
             "/authn/password-reset/confirm/",
             {"email": "ada@example.com", "code": "000000", "password": "password456"},
@@ -610,7 +753,25 @@ class AuthViewTests(TestCase):
             format="json",
         )
         self.assertEqual(good_reset.status_code, 200)
+        self.client.credentials()
+        fresh_login = self.client.post(
+            "/authn/login/",
+            {"email": "ada@example.com", "password": "password456"},
+            format="json",
+        )
+        self.assertEqual(fresh_login.status_code, 200)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {fresh_login.data['access']}")
 
+        encrypted_change_error = self.client.post(
+            "/authn/change-password/",
+            {
+                "current_password": "not-base64",
+                "new_password": "password789",
+                "key_id": str(uuid.uuid4()),
+            },
+            format="json",
+        )
+        self.assertEqual(encrypted_change_error.status_code, 400)
         wrong_change = self.client.post(
             "/authn/change-password/",
             {"current_password": "wrong", "new_password": "password789"},
@@ -637,15 +798,146 @@ class AuthViewTests(TestCase):
             format="json",
         )
         self.assertEqual(change.status_code, 200)
+        self.client.credentials()
+        final_login = self.client.post(
+            "/authn/login/",
+            {"email": "ada@example.com", "password": "password789"},
+            format="json",
+        )
+        self.assertEqual(final_login.status_code, 200)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {final_login.data['access']}")
 
-        delete = self.client.post("/authn/delete-account/", {"refresh": "bad"}, format="json")
+        event = Event.objects.create(
+            code="DELETE1",
+            name="Deleted account event",
+            organizer=self.member,
+        )
+        participant = Participant.objects.create(
+            event=event,
+            member=self.member,
+            participant_name="Augusta King",
+        )
+        invitation = EventInvitation.objects.create(
+            event=event,
+            email="ada@example.com",
+            member=self.member,
+            invited_by=self.member,
+        )
+        meeting = FinalMeeting.objects.create(
+            event=event,
+            starts_at=timezone.now() + timedelta(days=1),
+            ends_at=timezone.now() + timedelta(days=1, hours=1),
+            timezone="UTC",
+            channel="virtual",
+            calendar_uid="delete-account@example.com",
+            confirmed_by=self.member,
+            confirmed_at=timezone.now(),
+        )
+        delivery_request = EmailDeliveryRequest.objects.create(
+            event=event,
+            requested_by=self.member,
+            operation=EmailDeliveryRequest.Operation.INVITATION,
+            idempotency_key=uuid.uuid4(),
+            request_fingerprint="delete-account",
+        )
+        event_job = EmailDeliveryJob.objects.create(
+            idempotency_key="delete-account-event-job",
+            message_type=EmailMessageLog.MessageType.INVITATION,
+            recipient="ada@example.com",
+            subject="Invitation",
+            body="Personal delivery content",
+            message_id="<delete-account-event-job@releviz.local>",
+            event=event,
+        )
+        event_log = EmailMessageLog.objects.create(
+            message_type=EmailMessageLog.MessageType.INVITATION,
+            recipient="ada@example.com",
+            subject="Invitation",
+            status=EmailMessageLog.Status.SENT,
+            event=event,
+            delivery_job=event_job,
+        )
+
+        encrypted_delete_error = self.client.post(
+            "/authn/delete-account/",
+            {
+                "password": "not-base64",
+                "confirmation": "DELETE",
+                "key_id": str(uuid.uuid4()),
+            },
+            format="json",
+        )
+        self.assertEqual(encrypted_delete_error.status_code, 400)
+        wrong_delete_password = self.client.post(
+            "/authn/delete-account/",
+            {"password": "wrong", "confirmation": "DELETE"},
+            format="json",
+        )
+        self.assertEqual(wrong_delete_password.status_code, 400)
+        wrong_delete_confirmation = self.client.post(
+            "/authn/delete-account/",
+            {"password": "password789", "confirmation": "delete"},
+            format="json",
+        )
+        self.assertEqual(wrong_delete_confirmation.status_code, 400)
+        delete = self.client.post(
+            "/authn/delete-account/",
+            {"password": "password789", "confirmation": "DELETE"},
+            format="json",
+        )
         self.assertEqual(delete.status_code, 200)
         self.member.refresh_from_db()
         self.assertFalse(self.member.is_active)
+        self.assertFalse(self.member.is_staff)
+        self.assertFalse(self.member.is_superuser)
+        self.assertEqual(self.member.email, "")
+        self.assertEqual(self.member.first_name, "")
+        self.assertEqual(self.member.last_name, "")
+        self.assertEqual(self.member.organization, "")
+        self.assertEqual(self.member.title, "")
+        self.assertFalse(self.member.has_usable_password())
+        self.assertFalse(self.member.contact_emails.exists())
+        self.assertFalse(self.member.contact_phones.exists())
+        self.assertFalse(self.member.email_auth_challenges.exists())
+        self.assertFalse(self.member.email_delivery_jobs.exists())
+        participant.refresh_from_db()
+        self.assertEqual(participant.participant_name, "Deleted participant")
+        invitation.refresh_from_db()
+        self.assertIsNone(invitation.member)
+        self.assertIsNone(invitation.invited_by)
+        self.assertTrue(invitation.email.startswith("deleted-"))
+        meeting.refresh_from_db()
+        self.assertIsNone(meeting.confirmed_by)
+        delivery_request.refresh_from_db()
+        self.assertIsNone(delivery_request.requested_by)
+        event_job.refresh_from_db()
+        self.assertEqual(event_job.status, EmailDeliveryJob.Status.CANCELED)
+        self.assertEqual(event_job.recipient, "deleted@invalid.example")
+        self.assertEqual(event_job.body, "")
+        event_log.refresh_from_db()
+        self.assertEqual(event_log.recipient, "deleted@invalid.example")
+
         no_refresh_member = create_member("delete-no-refresh@example.com")
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token_for(no_refresh_member)}")
         self.assertEqual(
-            self.client.post("/authn/delete-account/", {}, format="json").status_code,
+            self.client.post(
+                "/authn/delete-account/",
+                {"password": "password123", "confirmation": "DELETE"},
+                format="json",
+            ).status_code,
+            200,
+        )
+        no_contact_member = get_user_model().objects.create_user(
+            password="password123",
+            is_active=True,
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token_for(no_contact_member)}")
+        self.assertEqual(
+            self.client.post(
+                "/authn/delete-account/",
+                {"password": "password123", "confirmation": "DELETE"},
+                format="json",
+            ).status_code,
             200,
         )
 

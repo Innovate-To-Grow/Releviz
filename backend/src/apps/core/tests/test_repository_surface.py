@@ -38,8 +38,20 @@ RESOURCE_AUDIT_MANIFEST = [
     "backend/src/apps/core/templates/unfold/helpers/theme_switch_dropdown.html",
     "backend/src/apps/core/templates/unfold/helpers/userlinks.html",
     "docker-compose.e2e.yml",
+    "docs/auth-security.md",
+    "docs/backup-restore.md",
+    "docs/deployment-rollback.md",
+    "docs/email-delivery.md",
+    "docs/observability.md",
+    "docs/product-analytics.md",
+    "docs/real-user-validation-plan.md",
+    "docs/releviz-goal-progress.md",
+    "docs/scheduling-slots.md",
+    "e2e/accessibility.spec.js",
+    "e2e/helpers/accessibility.js",
     "e2e/playwright.config.js",
     "frontend/.prettierignore",
+    "frontend/.dockerignore",
     "frontend/@next/package.json",
     "frontend/Dockerfile",
     "frontend/app/globals.css",
@@ -47,6 +59,7 @@ RESOURCE_AUDIT_MANIFEST = [
     "frontend/jest.config.js",
     "frontend/jsconfig.json",
     "frontend/next.config.js",
+    "frontend/package-lock.docker.json",
     "frontend/package.json",
     "frontend/public/favicon.ico",
     "frontend/public/homepage.png",
@@ -58,17 +71,25 @@ RESOURCE_AUDIT_MANIFEST = [
     "infra/bootstrap/main.tf",
     "infra/prod/main.tf",
     "infra/prod/outputs.tf",
+    "infra/prod/tests/plan.tftest.hcl",
     "infra/prod/variables.tf",
     "infra/prod/versions.tf",
     "infra/staging/main.tf",
     "infra/staging/outputs.tf",
+    "infra/staging/tests/plan.tftest.hcl",
     "infra/staging/variables.tf",
     "infra/staging/versions.tf",
     "package-lock.json",
     "package.json",
     "scripts/quality-gate.sh",
+    "scripts/backup-restore-drill.sh",
+    "scripts/docker-build-frontend.sh",
+    "scripts/ecs-service-rollout.sh",
+    "scripts/postgres-backup.sh",
+    "scripts/postgres-restore.sh",
     "scripts/run-db-tests.sh",
     "scripts/run-e2e.sh",
+    "scripts/terraform-check.sh",
     "scripts/wait-for-postgres.sh",
 ]
 
@@ -93,6 +114,7 @@ class RepositorySurfaceTests(SimpleTestCase):
         frontend_package = (ROOT / "frontend/package.json").read_text(encoding="utf-8")
         pyproject = (ROOT / "backend/pyproject.toml").read_text(encoding="utf-8")
         ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        frontend_dockerfile = (ROOT / "frontend/Dockerfile").read_text(encoding="utf-8")
 
         self.assertIn('"test:coverage"', package_json)
         self.assertIn('"quality-gate"', package_json)
@@ -100,8 +122,26 @@ class RepositorySurfaceTests(SimpleTestCase):
         self.assertIn("jest --coverage --ci", frontend_package)
         self.assertIn("fail_under = 100", pyproject)
         self.assertIn("Backend - Lint & Test", ci)
-        self.assertIn("Frontend - Lint, Test & Build", ci)
+        self.assertIn("Frontend - Lint, Core-Inclusive Coverage & Build", ci)
         self.assertIn("Playwright E2E", ci)
+        self.assertNotIn("cp package-lock.json frontend/", ci)
+        self.assertIn("COPY package.json package-lock.docker.json ./", frontend_dockerfile)
+
+        restore = (ROOT / "scripts/postgres-restore.sh").read_text(encoding="utf-8")
+        drill = (ROOT / "scripts/backup-restore-drill.sh").read_text(encoding="utf-8")
+        rollout = (ROOT / "scripts/ecs-service-rollout.sh").read_text(encoding="utf-8")
+        frontend_build = (ROOT / "scripts/docker-build-frontend.sh").read_text(encoding="utf-8")
+        self.assertIn("ALLOW_DATABASE_RESTORE", restore)
+        self.assertIn("sha256sum --check", restore)
+        self.assertIn("database_manifest", drill)
+        self.assertIn("migrate", drill)
+        self.assertIn("ALLOW_ECS_DEPLOY", rollout)
+        self.assertIn("ALLOW_ECS_ROLLBACK", rollout)
+        self.assertIn("EXPECTED_CURRENT_TASK_DEFINITION", rollout)
+        self.assertIn("deploymentCircuitBreaker={enable=true,rollback=true}", rollout)
+        self.assertIn("aws ecs wait services-stable", rollout)
+        self.assertIn('"$root_dir/frontend"', frontend_build)
+        self.assertIn("docker build", frontend_build)
 
     def test_deploy_and_runtime_resources_are_clerk_free(self):
         for path in RESOURCE_AUDIT_MANIFEST:
