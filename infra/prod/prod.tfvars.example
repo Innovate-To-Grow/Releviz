@@ -1,0 +1,21 @@
+aws_region                  = "us-west-2"
+app_name                    = "scheduler"
+environment                 = "prod"
+ecr_backend_repository      = "scheduler-prod-backend"
+ecr_frontend_repository     = "scheduler-prod-frontend"
+# Deploy first to a non-conflicting hostname. Staging currently owns releviz.com;
+# move staging before a reviewed apex-domain cutover.
+custom_domain               = "production.releviz.com"
+route53_zone_id             = "replace-with-route53-zone-id"
+django_secret_key_arn       = "arn:aws:secretsmanager:us-west-2:123456789012:secret:releviz/prod/django-secret-key"
+django_field_encryption_key_arn = "arn:aws:secretsmanager:us-west-2:123456789012:secret:releviz/prod/field-encryption-key"
+metrics_bearer_token_arn    = "arn:aws:secretsmanager:us-west-2:123456789012:secret:releviz/prod/metrics-bearer-token"
+alarm_action_arns           = ["arn:aws:sns:us-west-2:123456789012:releviz-prod-alerts"]
+
+# Release-specific values are always supplied by the deployment workflow:
+# backend_image_tag  = "40-character-git-sha"
+# frontend_image_tag = "40-character-git-sha"
+
+# Optional operational integrations:
+# sentry_dsn_secret_arn = "arn:aws:secretsmanager:us-west-2:123456789012:secret:releviz/prod/sentry-dsn"
+# secret_kms_key_arn    = "arn:aws:kms:us-west-2:123456789012:key/00000000-0000-0000-0000-000000000000"

@@ -13,45 +13,97 @@ variable "environment" {
   default = "prod"
 }
 
-variable "image_tag" {
+variable "backend_image_tag" {
   type        = string
-  description = "Docker image tag to deploy"
+  description = "Immutable 40-character Git commit SHA for the backend image"
+
+  validation {
+    condition     = can(regex("^[0-9a-f]{40}$", var.backend_image_tag))
+    error_message = "backend_image_tag must be a lowercase 40-character Git SHA."
+  }
 }
 
-variable "container_port" {
+variable "frontend_image_tag" {
+  type        = string
+  description = "Immutable 40-character Git commit SHA for the frontend image"
+
+  validation {
+    condition     = can(regex("^[0-9a-f]{40}$", var.frontend_image_tag))
+    error_message = "frontend_image_tag must be a lowercase 40-character Git SHA."
+  }
+}
+
+variable "backend_port" {
   type    = number
   default = 4000
 }
 
-variable "task_cpu" {
+variable "frontend_port" {
+  type    = number
+  default = 3000
+}
+
+variable "backend_task_cpu" {
   type    = number
   default = 512
 }
 
-variable "task_memory" {
+variable "backend_task_memory" {
+  type    = number
+  default = 1024
+}
+
+variable "frontend_task_cpu" {
+  type    = number
+  default = 512
+}
+
+variable "frontend_task_memory" {
   type    = number
   default = 1024
 }
 
 variable "desired_count" {
-  type    = number
-  default = 1
-}
-
-variable "github_repository" {
-  type        = string
-  description = "GitHub repository in owner/repo form"
-  default     = ""
+  type        = number
+  default     = 2
+  description = "Steady-state task count for each production service"
 
   validation {
-    condition     = !var.create_github_oidc_resources || var.github_repository != ""
-    error_message = "github_repository is required when create_github_oidc_resources is true."
+    condition     = var.desired_count >= 2
+    error_message = "Production services require at least two tasks."
   }
 }
 
-variable "ecr_repository_name" {
+variable "autoscaling_max_count" {
+  type        = number
+  default     = 6
+  description = "Maximum task count for each production service"
+
+  validation {
+    condition     = var.autoscaling_max_count >= var.desired_count
+    error_message = "autoscaling_max_count must be at least desired_count."
+  }
+}
+
+variable "autoscaling_cpu_target" {
+  type        = number
+  default     = 60
+  description = "Target average ECS CPU utilization percentage"
+
+  validation {
+    condition     = var.autoscaling_cpu_target >= 20 && var.autoscaling_cpu_target <= 80
+    error_message = "autoscaling_cpu_target must be between 20 and 80."
+  }
+}
+
+variable "ecr_backend_repository" {
   type    = string
-  default = "scheduler-prod"
+  default = "scheduler-prod-backend"
+}
+
+variable "ecr_frontend_repository" {
+  type    = string
+  default = "scheduler-prod-frontend"
 }
 
 variable "events_table_name" {
@@ -89,25 +141,25 @@ variable "db_username" {
   default = "releviz"
 }
 
-variable "db_password" {
-  type      = string
-  sensitive = true
-}
-
 variable "db_instance_class" {
   type    = string
-  default = "db.t4g.micro"
+  default = "db.t4g.small"
 }
 
 variable "db_allocated_storage" {
   type    = number
-  default = 20
+  default = 50
+}
+
+variable "db_max_allocated_storage" {
+  type    = number
+  default = 200
 }
 
 variable "db_backup_retention_days" {
   type        = number
-  description = "Number of days to retain automated production PostgreSQL backups"
   default     = 30
+  description = "Number of days to retain automated production PostgreSQL backups"
 
   validation {
     condition     = var.db_backup_retention_days >= 7 && var.db_backup_retention_days <= 35
@@ -115,44 +167,65 @@ variable "db_backup_retention_days" {
   }
 }
 
-variable "django_secret_key" {
-  type      = string
-  sensitive = true
-}
-
-variable "django_field_encryption_key" {
-  type      = string
-  sensitive = true
-}
-
-variable "metrics_bearer_token" {
+variable "django_secret_key_arn" {
   type        = string
-  description = "Dedicated bearer credential for the private product-metrics endpoint"
-  sensitive   = true
+  description = "Secrets Manager ARN containing the Django secret key"
 
   validation {
-    condition     = length(trimspace(var.metrics_bearer_token)) >= 32
-    error_message = "metrics_bearer_token must contain at least 32 non-whitespace characters."
+    condition     = can(regex("^arn:aws[a-z-]*:secretsmanager:", var.django_secret_key_arn))
+    error_message = "django_secret_key_arn must be a Secrets Manager ARN."
   }
 }
 
-variable "sentry_dsn" {
+variable "django_field_encryption_key_arn" {
   type        = string
-  description = "Optional Sentry DSN; leave empty to disable external error tracking"
-  default     = ""
-  sensitive   = true
+  description = "Secrets Manager ARN containing the Django field-encryption key"
+
+  validation {
+    condition     = can(regex("^arn:aws[a-z-]*:secretsmanager:", var.django_field_encryption_key_arn))
+    error_message = "django_field_encryption_key_arn must be a Secrets Manager ARN."
+  }
 }
 
-variable "sentry_release" {
+variable "metrics_bearer_token_arn" {
   type        = string
-  description = "Optional Sentry release identifier; defaults to image_tag"
+  description = "Secrets Manager ARN containing the private metrics bearer token"
+
+  validation {
+    condition     = can(regex("^arn:aws[a-z-]*:secretsmanager:", var.metrics_bearer_token_arn))
+    error_message = "metrics_bearer_token_arn must be a Secrets Manager ARN."
+  }
+}
+
+variable "sentry_dsn_secret_arn" {
+  type        = string
   default     = ""
+  description = "Optional Secrets Manager ARN containing the Sentry DSN"
+
+  validation {
+    condition = (
+      var.sentry_dsn_secret_arn == "" ||
+      can(regex("^arn:aws[a-z-]*:secretsmanager:", var.sentry_dsn_secret_arn))
+    )
+    error_message = "sentry_dsn_secret_arn must be empty or a Secrets Manager ARN."
+  }
+}
+
+variable "secret_kms_key_arn" {
+  type        = string
+  default     = ""
+  description = "Optional customer-managed KMS key used by application secrets"
+
+  validation {
+    condition     = var.secret_kms_key_arn == "" || can(regex("^arn:aws[a-z-]*:kms:", var.secret_kms_key_arn))
+    error_message = "secret_kms_key_arn must be empty or a KMS key ARN."
+  }
 }
 
 variable "sentry_traces_sample_rate" {
   type        = number
-  description = "Fraction of requests sampled for Sentry tracing when Sentry is enabled"
   default     = 0.05
+  description = "Fraction of requests sampled for Sentry tracing"
 
   validation {
     condition     = var.sentry_traces_sample_rate >= 0 && var.sentry_traces_sample_rate <= 1
@@ -162,24 +235,23 @@ variable "sentry_traces_sample_rate" {
 
 variable "alarm_action_arns" {
   type        = list(string)
-  description = "Optional SNS topic ARNs notified when production alarms change state"
-  default     = []
+  description = "SNS topic ARNs notified when production alarms change state"
+
+  validation {
+    condition     = length(var.alarm_action_arns) > 0 && alltrue([for arn in var.alarm_action_arns : can(regex("^arn:aws[a-z-]*:sns:", arn))])
+    error_message = "Production requires at least one valid SNS alarm action ARN."
+  }
 }
 
-variable "django_superuser_email" {
-  type    = string
-  default = ""
-}
+variable "default_from_email" {
+  type        = string
+  default     = "noreply@releviz.com"
+  description = "Verified production sender address"
 
-variable "django_superuser_password" {
-  type      = string
-  default   = ""
-  sensitive = true
-}
-
-variable "django_create_default_admin" {
-  type    = bool
-  default = false
+  validation {
+    condition     = can(regex("^[^@]+@[^@]+\\.[^@]+$", var.default_from_email)) && !endswith(var.default_from_email, ".local")
+    error_message = "default_from_email must be a routable email address."
+  }
 }
 
 variable "health_check_path" {
@@ -188,47 +260,43 @@ variable "health_check_path" {
 }
 
 variable "custom_domain" {
-  type    = string
-  default = "scheduler.i2g.ucmerced.edu"
+  type        = string
+  description = "Production hostname; must be selected explicitly to prevent accidental staging DNS takeover"
+
+  validation {
+    condition     = can(regex("^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$", var.custom_domain))
+    error_message = "custom_domain must be a lowercase fully qualified hostname."
+  }
 }
 
 variable "route53_zone_id" {
-  type    = string
-  default = "Z05097751AKPBGN5RW5GR"
-}
-
-variable "enable_https" {
-  type    = bool
-  default = true
+  type        = string
+  description = "Route53 hosted-zone ID for custom_domain"
 
   validation {
-    condition = !var.enable_https || (
-      trimspace(var.custom_domain) != "" &&
-      trimspace(var.route53_zone_id) != ""
-    )
-    error_message = "custom_domain and route53_zone_id are required when enable_https is true."
+    condition     = length(trimspace(var.route53_zone_id)) > 0
+    error_message = "route53_zone_id is required."
   }
 }
 
 variable "existing_acm_certificate_arn" {
-  type    = string
-  default = ""
-}
+  type        = string
+  default     = ""
+  description = "Optional existing ACM certificate ARN for custom_domain"
 
-variable "github_oidc_provider_arn" {
-  type    = string
-  default = ""
-}
-
-variable "create_github_oidc_resources" {
-  type    = bool
-  default = false
+  validation {
+    condition     = var.existing_acm_certificate_arn == "" || can(regex("^arn:aws[a-z-]*:acm:", var.existing_acm_certificate_arn))
+    error_message = "existing_acm_certificate_arn must be empty or an ACM certificate ARN."
+  }
 }
 
 variable "availability_zones" {
-  type = list(string)
-  default = [
-    "us-west-2a",
-    "us-west-2b",
-  ]
+  type        = list(string)
+  default     = []
+  description = "Optional explicit AZ pair; defaults to the first two available AZs in aws_region"
+
+  validation {
+    condition     = length(var.availability_zones) == 0 || length(var.availability_zones) >= 2
+    error_message = "availability_zones must be empty or contain at least two zones."
+  }
 }

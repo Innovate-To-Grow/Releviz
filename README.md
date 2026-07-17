@@ -62,8 +62,8 @@ The weighted average formula: for each time slot, `sum(availability * weight) / 
 | Backend        | [Django 5](https://www.djangoproject.com/) + DRF + SimpleJWT                        |
 | Database       | PostgreSQL/RDS in deployed environments; SQLite for local development               |
 | Infrastructure | AWS ECS Fargate behind ALB (path-based routing)                                     |
-| IaC            | Terraform (S3 remote state + AWS lock table)                                        |
-| CI/CD          | GitHub Actions (lint, test, build, Docker build check, staging deploy)              |
+| IaC            | Terraform (versioned encrypted S3 state with native lock files)                     |
+| CI/CD          | GitHub Actions (required CI, automatic staging, approved production releases)       |
 
 ## Project Structure
 
@@ -72,14 +72,15 @@ scheduler-monorepo/
   frontend/         # Next.js 15 — UI only, no API routes
   backend/          # Django — API server, account auth, admin
   infra/
-    prod/           # Production Terraform (single ECS service, disabled)
+    prod/           # HA production Terraform (split frontend/backend services)
     staging/        # Staging Terraform (2 ECS services, ALB path routing)
-    bootstrap/      # Terraform state backend setup
+    bootstrap/      # Protected state backend and GitHub OIDC deploy role
   scripts/
     quality-gate.sh # Full lint + test + build for both workspaces
   .github/workflows/
     ci.yml          # Parallel CI for both workspaces
     deploy-staging.yml
+    deploy-prod.yml # Manual, Production-environment-gated release
 ```
 
 ## Local Development
@@ -111,7 +112,9 @@ areas. Every push to `main` runs the full suite so the staging deployment is gat
 `CI Result` check. The pipeline includes workflow/configuration preflight checks, strict aggregate
 backend coverage, PostgreSQL migration and app tests, frontend coverage and bundle budgets,
 dependency/secret/SAST scans, SBOM and license reports, Terraform tests, and Docker image scans.
-Chromium, Firefox, and WebKit E2E runs publish diagnostics but remain informational.
+Chromium, Firefox, and WebKit E2E runs and high/critical container findings block `CI Result`.
+The workflow runs for every pull request, including documentation-only changes, so branch
+protection always receives the same required check.
 
 ## Runtime Environment Variables
 
@@ -207,10 +210,17 @@ Staging deploys automatically via `deploy-staging.yml` after CI passes on `main`
 ### Production
 
 Production deployment remains manually controlled. Terraform provisions guarded ECS rolling
-deployments, database backup retention, alarms, and optional Sentry/metrics configuration. Use the
-reviewed deployment and rollback procedure in
-[`docs/deployment-rollback.md`](docs/deployment-rollback.md); there is no automatic production
-workflow in this repository.
+deployments for separate frontend and backend services in private subnets, two NAT gateways,
+Multi-AZ RDS with managed credentials and 30-day PITR, autoscaling, TLS/DNS, and monitored alarms.
+`deploy-prod.yml` can run only from `main`, requires the exact `DEPLOY` confirmation, assumes an AWS
+role through OIDC, builds immutable commit-SHA images, applies the exact saved Terraform plan, waits
+for both services, and runs live/readiness smoke tests. Bind the `Production` GitHub Environment to
+`main` and require an environment reviewer before the first live release. Use the reviewed
+procedure in [`docs/deployment-rollback.md`](docs/deployment-rollback.md).
+
+Run `infra/bootstrap` once with an administrator to create the versioned state bucket and the
+repository/environment-scoped OIDC role. Set its `production_deploy_role_arn` output as
+`AWS_PROD_ROLE_ARN`; do not store long-lived production AWS keys in GitHub.
 
 ### GitHub Actions Variables
 
@@ -220,10 +230,26 @@ workflow in this repository.
 - `ECR_STAGING_FRONTEND` — `scheduler-staging-frontend`
 - `STAGING_DJANGO_SUPERUSER_EMAIL` — optional bootstrap admin email
 - `STAGING_CREATE_DEFAULT_ADMIN` — `true` to create/update the bootstrap admin during deploy
+- `AWS_PROD_ROLE_ARN` — output of `infra/bootstrap`; trusted only for the `Production` Environment
+- `PROD_TF_STATE_BUCKET` — protected state bucket created by `infra/bootstrap`
+- `ECR_PROD_BACKEND` — `scheduler-prod-backend`
+- `ECR_PROD_FRONTEND` — `scheduler-prod-frontend`
+- `PROD_DOMAIN` and `PROD_ROUTE53_ZONE_ID` — start with a hostname not managed by staging; follow
+  the runbook for the eventual apex-domain cutover
+- `PROD_DJANGO_SECRET_KEY_ARN`, `PROD_DJANGO_FIELD_ENCRYPTION_KEY_ARN`, and
+  `PROD_METRICS_BEARER_TOKEN_ARN` — Secrets Manager ARNs, not secret values
+- `PROD_ALARM_ACTION_ARNS_JSON` — non-empty JSON array of monitored SNS topic ARNs
+- `PROD_SENTRY_DSN_SECRET_ARN`, `PROD_SECRET_KMS_KEY_ARN`, and
+  `PROD_ACM_CERTIFICATE_ARN` — optional
+- `PROD_DEFAULT_FROM_EMAIL` — verified production sender address
 
 ### GitHub Actions Secrets
 
 - `STAGING_DB_PASSWORD`
 - `STAGING_DJANGO_SECRET_KEY`
 - `STAGING_DJANGO_FIELD_ENCRYPTION_KEY`
+- `STAGING_METRICS_BEARER_TOKEN` — at least 32 characters
 - `STAGING_DJANGO_SUPERUSER_PASSWORD` — required only when `STAGING_CREATE_DEFAULT_ADMIN=true`
+
+Production application secret values live in AWS Secrets Manager. GitHub holds only their ARNs in
+the protected `Production` Environment.

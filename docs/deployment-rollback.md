@@ -11,6 +11,23 @@ Gunicorn.
 RDS retains 30 days of automated backups and a final snapshot. Take and validate a logical backup
 before a migration release with meaningful data-shape risk.
 
+## One-time Production Setup
+
+1. Create the Django secret key, field-encryption key, and metrics bearer token in AWS Secrets
+   Manager. Create a monitored SNS topic and verify a real subscriber receives a test notification.
+2. Run `infra/bootstrap` once with an administrator, supplying a globally unique
+   `state_bucket_name`, `production_route53_zone_id`, and the three `production_secret_arns`.
+   Configure its `production_deploy_role_arn` output as `AWS_PROD_ROLE_ARN` in the GitHub
+   `Production` Environment and its bucket output as `PROD_TF_STATE_BUCKET`.
+3. Configure every production variable listed in the README. Restrict the `Production` Environment
+   to `main` and require a reviewer. Production has no static AWS-key fallback.
+4. Deploy first to a non-conflicting hostname such as `production.releviz.com`. Staging currently
+   manages `releviz.com`; never let two Terraform states manage the same Route53 record. Move
+   staging to its permanent hostname, verify production, then perform the apex cutover in a
+   separately reviewed change.
+5. Confirm AWS account quotas cover two NAT gateways, the ALB, Multi-AZ RDS, and at least four
+   steady-state Fargate tasks. Record owners for DNS, SNS/on-call, RDS restore, and release approval.
+
 ## Migration Compatibility Window
 
 Every rolling deployment must follow expand/contract:
@@ -39,7 +56,13 @@ verified backup into a new database and perform a controlled cutover.
 
 ## Deploy
 
-Format, validate, test, and review production infrastructure:
+Start **Deploy Production** from the `main` branch, enter `DEPLOY`, and approve the protected
+`Production` Environment after confirming the selected commit passed `CI Result`. The workflow
+builds separate immutable backend/frontend images, saves a Terraform plan, applies that exact plan,
+waits for both ECS services, and runs smoke tests.
+
+For an operator-reviewed local plan, use the protected remote backend and the same environment
+variables as the workflow:
 
 ```bash
 terraform -chdir=infra/prod fmt -check
@@ -50,16 +73,19 @@ terraform -chdir=infra/prod plan -out=production.tfplan
 terraform -chdir=infra/prod apply production.tfplan
 ```
 
-Terraform updates the task definition and ECS service. For an already registered task definition,
-the guarded rollout helper can perform and record the service transition:
+Terraform updates separate task definitions and ECS services. For an already registered backend
+task definition, the guarded rollout helper can perform and record the service transition:
 
 ```bash
 ALLOW_ECS_DEPLOY=1 \
 AWS_REGION=us-west-2 \
 ECS_CLUSTER=scheduler-prod-cluster \
-ECS_SERVICE=scheduler-prod-service \
-scripts/ecs-service-rollout.sh deploy scheduler-prod-task:<revision>
+ECS_SERVICE=scheduler-prod-backend-service \
+scripts/ecs-service-rollout.sh deploy scheduler-prod-backend-task:<revision>
 ```
+
+Use `scheduler-prod-frontend-service` and `scheduler-prod-frontend-task:<revision>` for an
+independent frontend-only transition.
 
 The helper resolves an active task-definition ARN, enforces the circuit-breaker and healthy-capacity
 configuration, waits for service stability, verifies the primary rollout completed with the desired
@@ -69,11 +95,11 @@ running count, and writes before/update/after JSON plus privacy-safe evidence un
 ## Post-deployment Verification
 
 ```bash
-curl --fail https://scheduler.example/api/health/live
-curl --fail https://scheduler.example/api/health
+curl --fail https://releviz.com/api/health/live
+curl --fail https://releviz.com/api/health
 curl --fail \
   -H "Authorization: Bearer $METRICS_BEARER_TOKEN" \
-  https://scheduler.example/api/metrics
+  https://releviz.com/api/metrics
 ```
 
 Then complete one isolated organizer/participant smoke workflow, verify an email job reaches the
@@ -86,11 +112,11 @@ Use the exact current ARN as a race guard and an explicitly selected previous ac
 
 ```bash
 ALLOW_ECS_ROLLBACK=1 \
-EXPECTED_CURRENT_TASK_DEFINITION=arn:aws:ecs:us-west-2:<account>:task-definition/scheduler-prod-task:<bad> \
+EXPECTED_CURRENT_TASK_DEFINITION=arn:aws:ecs:us-west-2:<account>:task-definition/scheduler-prod-backend-task:<bad> \
 AWS_REGION=us-west-2 \
 ECS_CLUSTER=scheduler-prod-cluster \
-ECS_SERVICE=scheduler-prod-service \
-scripts/ecs-service-rollout.sh rollback scheduler-prod-task:<previous>
+ECS_SERVICE=scheduler-prod-backend-service \
+scripts/ecs-service-rollout.sh rollback scheduler-prod-backend-task:<previous>
 ```
 
 The script refuses rollback when the service changed after approval, the target is inactive, the
@@ -110,12 +136,16 @@ Never overwrite the production database merely to make an old task revision star
 
 ## Validation Status
 
-On 2026-07-16:
+On 2026-07-17:
 
-- Terraform 1.15.8 production format, validation, and mocked plan passed
-- mocked assertions verified 30-day backup retention, retained automated/final backups, 100/200
-  rollout capacity, circuit-breaker rollback, target-5xx monitoring, request-exception monitoring,
-  and permanent-email-failure monitoring
+- Terraform 1.15.8 bootstrap, staging, and production format/validation plus both mocked plans passed
+- mocked assertions verified Multi-AZ private RDS, managed credentials, 30-day backup retention,
+  retained automated/final backups, private redundant services, autoscaling, 100/200 rollout
+  capacity, circuit-breaker rollback, immutable split images, monitored SNS actions, target-5xx
+  monitoring, request-exception monitoring, and permanent-email-failure monitoring
+- the deployment contract test verified both environments supply every setting required by Django
+  production settings and that production remains main-only, manual, OIDC-authenticated, and
+  remote-state-only
 - the guarded ECS helper completed simulated deploy and rollback runs against a deterministic fake
   AWS CLI and produced passing evidence
 

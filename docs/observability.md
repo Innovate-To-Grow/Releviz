@@ -45,13 +45,14 @@ substitute for the private metrics bearer token.
 Production Terraform provides:
 
 - ALB-generated 5xx alarm
-- application-target 5xx alarm
-- ECS running-task alarm
+- separate backend/frontend target 5xx alarms
+- separate backend/frontend ECS running-task alarms
 - JSON-log metric and alarm for `request_exception`
 - JSON-log metric and alarm for `email_delivery_failed` with `status=permanent_failure`
 
-Set `alarm_action_arns` to one or more monitored SNS topics. An empty list creates alarm resources
-without paging anyone and is not sufficient for a live production launch.
+Production plans reject an empty `alarm_action_arns`; configure at least one monitored SNS topic
+and prove notification delivery before launch. Backend and frontend logs use separate CloudWatch log
+groups with 30-day retention.
 
 Product metrics are documented in [product-analytics.md](product-analytics.md). Access
 `GET /api/metrics` with the dedicated bearer token:
