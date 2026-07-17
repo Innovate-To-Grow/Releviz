@@ -228,6 +228,7 @@ repository/environment-scoped OIDC role. Set its `production_deploy_role_arn` ou
 - `AWS_ROLE_ARN` — OIDC deploy role ARN
 - `ECR_STAGING_BACKEND` — `scheduler-staging-backend`
 - `ECR_STAGING_FRONTEND` — `scheduler-staging-frontend`
+- `STAGING_DOMAIN` — `staging.releviz.com`; staging must never manage the production apex record
 - `STAGING_DJANGO_SUPERUSER_EMAIL` — optional bootstrap admin email
 - `STAGING_CREATE_DEFAULT_ADMIN` — `true` to create/update the bootstrap admin during deploy
 - `AWS_PROD_ROLE_ARN` — output of `infra/bootstrap`; trusted only for the `Production` Environment

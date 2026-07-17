@@ -21,8 +21,9 @@ before a migration release with meaningful data-shape risk.
    `Production` Environment and its bucket output as `PROD_TF_STATE_BUCKET`.
 3. Configure every production variable listed in the README. Restrict the `Production` Environment
    to `main` and require a reviewer. Production has no static AWS-key fallback.
-4. Deploy first to a non-conflicting hostname such as `production.releviz.com`. Staging currently
-   manages `releviz.com`; never let two Terraform states manage the same Route53 record. Move
+4. Keep staging on `staging.releviz.com`. The staging state deliberately relinquishes the legacy
+   apex certificate and DNS record without deleting them; never let two Terraform states manage
+   the same Route53 record. Move
    staging to its permanent hostname, verify production, then perform the apex cutover in a
    separately reviewed change.
 5. Confirm AWS account quotas cover two NAT gateways, the ALB, Multi-AZ RDS, and at least four
