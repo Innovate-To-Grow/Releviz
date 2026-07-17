@@ -387,7 +387,42 @@ resource "aws_lb" "app" {
   tags               = local.common_tags
 }
 
-resource "aws_acm_certificate" "app" {
+# The original staging state managed the apex certificate and DNS record. Keep
+# those resources alive for the production cutover, but release them from the
+# staging state so a later staging deploy can never delete or overwrite apex.
+removed {
+  from = aws_acm_certificate.app
+
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = aws_route53_record.cert_validation
+
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = aws_acm_certificate_validation.app
+
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = aws_route53_record.app
+
+  lifecycle {
+    destroy = false
+  }
+}
+
+resource "aws_acm_certificate" "staging" {
   domain_name       = var.domain_name
   validation_method = "DNS"
 
@@ -398,9 +433,9 @@ resource "aws_acm_certificate" "app" {
   tags = local.common_tags
 }
 
-resource "aws_route53_record" "cert_validation" {
+resource "aws_route53_record" "staging_cert_validation" {
   for_each = {
-    for option in aws_acm_certificate.app.domain_validation_options : option.domain_name => {
+    for option in aws_acm_certificate.staging.domain_validation_options : option.domain_name => {
       name   = option.resource_record_name
       record = option.resource_record_value
       type   = option.resource_record_type
@@ -415,12 +450,12 @@ resource "aws_route53_record" "cert_validation" {
   zone_id         = data.aws_route53_zone.app.zone_id
 }
 
-resource "aws_acm_certificate_validation" "app" {
-  certificate_arn         = aws_acm_certificate.app.arn
-  validation_record_fqdns = [for record in aws_route53_record.cert_validation : record.fqdn]
+resource "aws_acm_certificate_validation" "staging" {
+  certificate_arn         = aws_acm_certificate.staging.arn
+  validation_record_fqdns = [for record in aws_route53_record.staging_cert_validation : record.fqdn]
 }
 
-resource "aws_route53_record" "app" {
+resource "aws_route53_record" "staging" {
   name    = var.domain_name
   type    = "A"
   zone_id = data.aws_route53_zone.app.zone_id
@@ -493,7 +528,7 @@ resource "aws_lb_listener" "https" {
   load_balancer_arn = aws_lb.app.arn
   port              = 443
   protocol          = "HTTPS"
-  certificate_arn   = aws_acm_certificate_validation.app.certificate_arn
+  certificate_arn   = aws_acm_certificate_validation.staging.certificate_arn
   ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
 
   default_action {

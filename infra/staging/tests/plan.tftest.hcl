@@ -21,8 +21,8 @@ mock_provider "aws" {
       arn = "arn:aws:acm:us-west-2:123456789012:certificate/00000000-0000-0000-0000-000000000000"
       domain_validation_options = [
         {
-          domain_name           = "releviz.com"
-          resource_record_name  = "_test.releviz.com"
+          domain_name           = "staging.releviz.com"
+          resource_record_name  = "_test.staging.releviz.com"
           resource_record_type  = "CNAME"
           resource_record_value = "_test.acm-validations.aws"
         }
@@ -47,6 +47,12 @@ run "staging_plan" {
     django_secret_key           = "test-django-secret"
     django_field_encryption_key = "test-field-encryption-key"
     metrics_bearer_token        = "test-metrics-token-at-least-32-characters"
+    domain_name                 = "staging.releviz.com"
+  }
+
+  assert {
+    condition     = aws_route53_record.staging.name == "staging.releviz.com"
+    error_message = "Staging must not manage the production apex DNS record."
   }
 
   assert {
