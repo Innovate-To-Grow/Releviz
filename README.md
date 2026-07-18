@@ -63,7 +63,7 @@ The weighted average formula: for each time slot, `sum(availability * weight) / 
 | Database       | PostgreSQL/RDS in deployed environments; SQLite for local development               |
 | Infrastructure | AWS ECS Fargate behind ALB (path-based routing)                                     |
 | IaC            | Terraform (versioned encrypted S3 state with native lock files)                     |
-| CI/CD          | GitHub Actions (required CI, automatic staging, approved production releases)       |
+| CI/CD          | GitHub Actions (required CI, protected production releases)                          |
 
 ## Project Structure
 
@@ -73,13 +73,13 @@ scheduler-monorepo/
   backend/          # Django — API server, account auth, admin
   infra/
     prod/           # HA production Terraform (split frontend/backend services)
-    staging/        # Staging Terraform (2 ECS services, ALB path routing)
+    staging/        # One-time retirement source; removed after permanent teardown
     bootstrap/      # Protected state backend and GitHub OIDC deploy role
   scripts/
     quality-gate.sh # Full lint + test + build for both workspaces
   .github/workflows/
     ci.yml          # Parallel CI for both workspaces
-    deploy-staging.yml
+    retire-staging.yml # One-time, confirmation-gated permanent teardown
     deploy-prod.yml # Manual, Production-environment-gated release
 ```
 
@@ -108,8 +108,8 @@ npm run quality-gate               # all of the above
 ```
 
 Pull requests use diff-scoped GitHub Actions jobs for the backend, frontend, E2E, and Terraform
-areas. Every push to `main` runs the full suite so the staging deployment is gated by one stable
-`CI Result` check. The pipeline includes workflow/configuration preflight checks, strict aggregate
+areas. Every push to `main` runs the full suite and produces one stable `CI Result` check. The
+pipeline includes workflow/configuration preflight checks, strict aggregate
 backend coverage, PostgreSQL migration and app tests, frontend coverage and bundle budgets,
 dependency/secret/SAST scans, SBOM and license reports, Terraform tests, and Docker image scans.
 Chromium, Firefox, and WebKit E2E runs and high/critical container findings block `CI Result`.
@@ -197,46 +197,43 @@ docker run --rm -p 3000:3000 scheduler-frontend:local
 
 ## Deployment
 
-### Staging
+### One-time staging retirement
 
-Staging deploys automatically via `deploy-staging.yml` after CI passes on `main`. Architecture:
-
-- **ALB** routes `/api/*`, `/authn/*`, `/admin/*`, and `/static/*` to backend ECS service, everything else to frontend
-- **2 ECS Fargate services** (backend on port 4000, frontend on port 3000)
-- **PostgreSQL RDS** for accounts, admin data, events, participants, weights, and dashboard links
-- **EventBridge** runs the reminder command every 15 minutes
-- Legacy NoSQL tables remain in Terraform for backup only; the app no longer receives their names or permissions.
+Automatic staging deployment has been removed. `retire-staging.yml` is deliberately temporary and
+can run only from protected `main` with the exact `DESTROY_STAGING` confirmation. It destroys the
+isolated staging Terraform state, database, compute, DNS for `staging.releviz.com`, images, and
+state bucket without taking a data backup. The workflow refuses to proceed if staging state still
+owns the production apex. Delete this workflow and `infra/staging` only after it completes.
 
 ### Production
 
 Production deployment remains manually controlled. Terraform provisions guarded ECS rolling
 deployments for separate frontend and backend services in private subnets, two NAT gateways,
 Multi-AZ RDS with managed credentials and 30-day PITR, autoscaling, TLS/DNS, and monitored alarms.
-`deploy-prod.yml` can run only from `main`, requires the exact `DEPLOY` confirmation, assumes an AWS
-role through OIDC, builds immutable commit-SHA images, applies the exact saved Terraform plan, waits
-for both services, and runs live/readiness smoke tests. Bind the `Production` GitHub Environment to
-`main` and require an environment reviewer before the first live release. Use the reviewed
-procedure in [`docs/deployment-rollback.md`](docs/deployment-rollback.md).
+`deploy-prod.yml` can run only from `main`, requires the exact `DEPLOY` confirmation, and assumes
+an AWS role through OIDC. It builds immutable commit-SHA images, first applies infrastructure with
+DNS disabled, waits for both services, then checks the new ALB using the canonical hostname and TLS.
+Only after that passes does it apply the exact Route53 cutover plan for `releviz.com`, followed by
+canonical live/readiness smoke tests. Bind the `Production` GitHub Environment to `main` and require
+an environment reviewer before the first live release. Use the reviewed procedure in
+[`docs/deployment-rollback.md`](docs/deployment-rollback.md).
 
 Run `infra/bootstrap` once with an administrator to create the versioned state bucket and the
-repository/environment-scoped OIDC role. Set its `production_deploy_role_arn` output as
-`AWS_PROD_ROLE_ARN`; do not store long-lived production AWS keys in GitHub.
+repository/environment-scoped OIDC role. Supply the existing account-wide GitHub OIDC provider ARN;
+bootstrap never creates or deletes that shared provider. Initialize with `-backend=false` for the
+first apply, then migrate the local bootstrap state to `bootstrap/terraform.tfstate` in the new
+bucket. Set its `production_deploy_role_arn` output as `AWS_PROD_ROLE_ARN`; do not store long-lived
+production AWS keys in GitHub.
 
 ### GitHub Actions Variables
 
 - `AWS_REGION` — `us-west-2`
-- `AWS_ROLE_ARN` — OIDC deploy role ARN
-- `ECR_STAGING_BACKEND` — `scheduler-staging-backend`
-- `ECR_STAGING_FRONTEND` — `scheduler-staging-frontend`
-- `STAGING_DOMAIN` — `staging.releviz.com`; staging must never manage the production apex record
-- `STAGING_DJANGO_SUPERUSER_EMAIL` — optional bootstrap admin email
-- `STAGING_CREATE_DEFAULT_ADMIN` — `true` to create/update the bootstrap admin during deploy
 - `AWS_PROD_ROLE_ARN` — output of `infra/bootstrap`; trusted only for the `Production` Environment
 - `PROD_TF_STATE_BUCKET` — protected state bucket created by `infra/bootstrap`
 - `ECR_PROD_BACKEND` — `scheduler-prod-backend`
 - `ECR_PROD_FRONTEND` — `scheduler-prod-frontend`
-- `PROD_DOMAIN` and `PROD_ROUTE53_ZONE_ID` — start with a hostname not managed by staging; follow
-  the runbook for the eventual apex-domain cutover
+- `PROD_DOMAIN` — `releviz.com`
+- `PROD_ROUTE53_ZONE_ID` — hosted-zone ID for `releviz.com`
 - `PROD_DJANGO_SECRET_KEY_ARN`, `PROD_DJANGO_FIELD_ENCRYPTION_KEY_ARN`, and
   `PROD_METRICS_BEARER_TOKEN_ARN` — Secrets Manager ARNs, not secret values
 - `PROD_ALARM_ACTION_ARNS_JSON` — non-empty JSON array of monitored SNS topic ARNs
@@ -244,13 +241,19 @@ repository/environment-scoped OIDC role. Set its `production_deploy_role_arn` ou
   `PROD_ACM_CERTIFICATE_ARN` — optional
 - `PROD_DEFAULT_FROM_EMAIL` — verified production sender address
 
-### GitHub Actions Secrets
+### Temporary staging retirement variables and secrets
 
+- `AWS_ROLE_ARN` — optional Staging-environment OIDC role used only by `retire-staging.yml`
+- `ECR_STAGING_BACKEND` — `scheduler-staging-backend`
+- `ECR_STAGING_FRONTEND` — `scheduler-staging-frontend`
+- `STAGING_DOMAIN` — `staging.releviz.com`
+- `STAGING_DJANGO_SUPERUSER_EMAIL` and `STAGING_CREATE_DEFAULT_ADMIN`
 - `STAGING_DB_PASSWORD`
 - `STAGING_DJANGO_SECRET_KEY`
 - `STAGING_DJANGO_FIELD_ENCRYPTION_KEY`
 - `STAGING_METRICS_BEARER_TOKEN` — at least 32 characters
 - `STAGING_DJANGO_SUPERUSER_PASSWORD` — required only when `STAGING_CREATE_DEFAULT_ADMIN=true`
 
-Production application secret values live in AWS Secrets Manager. GitHub holds only their ARNs in
-the protected `Production` Environment.
+The temporary staging values, legacy credentials, Staging environment, and retirement workflow are
+deleted after the permanent teardown. Production application secret values live in AWS Secrets
+Manager; GitHub holds only their ARNs in the protected `Production` Environment.

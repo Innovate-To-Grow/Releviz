@@ -16,16 +16,18 @@ before a migration release with meaningful data-shape risk.
 1. Create the Django secret key, field-encryption key, and metrics bearer token in AWS Secrets
    Manager. Create a monitored SNS topic and verify a real subscriber receives a test notification.
 2. Run `infra/bootstrap` once with an administrator, supplying a globally unique
-   `state_bucket_name`, `production_route53_zone_id`, and the three `production_secret_arns`.
-   Configure its `production_deploy_role_arn` output as `AWS_PROD_ROLE_ARN` in the GitHub
-   `Production` Environment and its bucket output as `PROD_TF_STATE_BUCKET`.
+   `state_bucket_name`, `production_route53_zone_id`, the three `production_secret_arns`, and the
+   existing account-wide GitHub OIDC provider ARN. Run the first apply with `-backend=false`, then
+   migrate its local state to `bootstrap/terraform.tfstate` in the new bucket. Bootstrap never
+   creates or deletes the shared OIDC provider. Configure its `production_deploy_role_arn` output as
+   `AWS_PROD_ROLE_ARN` in the GitHub `Production` Environment and its bucket output as
+   `PROD_TF_STATE_BUCKET`.
 3. Configure every production variable listed in the README. Restrict the `Production` Environment
    to `main` and require a reviewer. Production has no static AWS-key fallback.
-4. Keep staging on `staging.releviz.com`. The staging state deliberately relinquishes the legacy
-   apex certificate and DNS record without deleting them; never let two Terraform states manage
-   the same Route53 record. Move
-   staging to its permanent hostname, verify production, then perform the apex cutover in a
-   separately reviewed change.
+4. Run **Retire Staging** from protected `main`, type `DESTROY_STAGING`, and allow it to permanently
+   destroy the staging database, compute, images, state bucket, and `staging.releviz.com` resources.
+   It takes no backup and refuses to destroy a state that still owns `releviz.com`. Do not recreate
+   staging after this one-time operation.
 5. Confirm AWS account quotas cover two NAT gateways, the ALB, Multi-AZ RDS, and at least four
    steady-state Fargate tasks. Record owners for DNS, SNS/on-call, RDS restore, and release approval.
 
@@ -59,8 +61,9 @@ verified backup into a new database and perform a controlled cutover.
 
 Start **Deploy Production** from the `main` branch, enter `DEPLOY`, and approve the protected
 `Production` Environment after confirming the selected commit passed `CI Result`. The workflow
-builds separate immutable backend/frontend images, saves a Terraform plan, applies that exact plan,
-waits for both ECS services, and runs smoke tests.
+builds separate immutable backend/frontend images, first applies the exact DNS-free plan, waits for
+both ECS services, and checks the fresh ALB with `releviz.com` as the TLS and Host name. It then
+applies a second exact plan that replaces the Route53 alias and runs canonical smoke tests.
 
 For an operator-reviewed local plan, use the protected remote backend and the same environment
 variables as the workflow:
@@ -139,14 +142,14 @@ Never overwrite the production database merely to make an old task revision star
 
 On 2026-07-17:
 
-- Terraform 1.15.8 bootstrap, staging, and production format/validation plus both mocked plans passed
+- Terraform 1.15.8 bootstrap and production format/validation plus mocked production plans passed
 - mocked assertions verified Multi-AZ private RDS, managed credentials, 30-day backup retention,
   retained automated/final backups, private redundant services, autoscaling, 100/200 rollout
   capacity, circuit-breaker rollback, immutable split images, monitored SNS actions, target-5xx
   monitoring, request-exception monitoring, and permanent-email-failure monitoring
-- the deployment contract test verified both environments supply every setting required by Django
-  production settings and that production remains main-only, manual, OIDC-authenticated, and
-  remote-state-only
+- the deployment contract test verified that production supplies every setting required by Django,
+  remains main-only, manual, OIDC-authenticated, and remote-state-only, and cannot cut DNS before
+  ALB health verification
 - the guarded ECS helper completed simulated deploy and rollback runs against a deterministic fake
   AWS CLI and produced passing evidence
 

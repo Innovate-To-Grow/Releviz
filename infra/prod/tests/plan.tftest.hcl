@@ -40,6 +40,7 @@ run "production_plan" {
     alarm_action_arns               = ["arn:aws:sns:us-west-2:123456789012:production-alerts"]
     custom_domain                   = "production.releviz.com"
     route53_zone_id                 = "Z1234567890"
+    manage_dns                      = true
     existing_acm_certificate_arn    = "arn:aws:acm:us-west-2:123456789012:certificate/test"
   }
 
@@ -105,6 +106,14 @@ run "production_plan" {
 
   assert {
     condition = (
+      length(aws_route53_record.app) == 1 &&
+      aws_route53_record.app[0].allow_overwrite
+    )
+    error_message = "The reviewed DNS cutover must explicitly replace the prior production alias."
+  }
+
+  assert {
+    condition = (
       length(aws_cloudwatch_metric_alarm.backend_target_5xx.alarm_actions) > 0 &&
       length(aws_cloudwatch_metric_alarm.frontend_target_5xx.alarm_actions) > 0 &&
       contains(aws_cloudwatch_metric_alarm.backend_target_5xx.alarm_actions, var.alarm_action_arns[0]) &&
@@ -114,5 +123,27 @@ run "production_plan" {
       strcontains(aws_cloudwatch_log_metric_filter.permanent_email_failures.pattern, "permanent_failure")
     )
     error_message = "Production must page monitored SNS actions for both services, request exceptions, and permanent email failures."
+  }
+}
+
+run "production_plan_without_dns" {
+  command = plan
+
+  variables {
+    backend_image_tag               = "0123456789abcdef0123456789abcdef01234567"
+    frontend_image_tag              = "0123456789abcdef0123456789abcdef01234567"
+    django_secret_key_arn           = "arn:aws:secretsmanager:us-west-2:123456789012:secret:django"
+    django_field_encryption_key_arn = "arn:aws:secretsmanager:us-west-2:123456789012:secret:field-key"
+    metrics_bearer_token_arn        = "arn:aws:secretsmanager:us-west-2:123456789012:secret:metrics"
+    alarm_action_arns               = ["arn:aws:sns:us-west-2:123456789012:production-alerts"]
+    custom_domain                   = "releviz.com"
+    route53_zone_id                 = "Z1234567890"
+    manage_dns                      = false
+    existing_acm_certificate_arn    = "arn:aws:acm:us-west-2:123456789012:certificate/test"
+  }
+
+  assert {
+    condition     = length(aws_route53_record.app) == 0
+    error_message = "The pre-cutover production apply must not modify Route53."
   }
 }

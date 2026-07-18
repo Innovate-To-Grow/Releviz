@@ -1,0 +1,340 @@
+name: Retire Staging
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type DESTROY_STAGING to permanently delete every Releviz staging resource and its data
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  deployments: write
+  id-token: write
+
+concurrency:
+  group: retire-staging
+  cancel-in-progress: false
+
+jobs:
+  retire:
+    name: Permanently retire Staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # This one-time workflow is only usable from protected main. It is removed
+    # with infra/staging after a successful retirement.
+    if: ${{ github.ref == 'refs/heads/main' }}
+    environment:
+      name: Staging
+      url: https://${{ vars.STAGING_DOMAIN || 'staging.releviz.com' }}
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-west-2' }}
+      AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+      ECR_BACKEND: ${{ vars.ECR_STAGING_BACKEND || 'scheduler-staging-backend' }}
+      ECR_FRONTEND: ${{ vars.ECR_STAGING_FRONTEND || 'scheduler-staging-frontend' }}
+      STAGING_DOMAIN: ${{ vars.STAGING_DOMAIN || 'staging.releviz.com' }}
+      EXPECTED_AWS_ACCOUNT_ID: "394167325273"
+
+    steps:
+      - name: Confirm irreversible staging retirement
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          if [ "$CONFIRMATION" != "DESTROY_STAGING" ]; then
+            echo "::error::Retiring staging requires the exact confirmation DESTROY_STAGING."
+            exit 1
+          fi
+          if [ "$STAGING_DOMAIN" != "staging.releviz.com" ]; then
+            echo "::error::This one-time workflow is restricted to staging.releviz.com."
+            exit 1
+          fi
+          if [ "$ECR_BACKEND" != "scheduler-staging-backend" ] || [ "$ECR_FRONTEND" != "scheduler-staging-frontend" ]; then
+            echo "::error::This one-time workflow is restricted to the two Releviz staging ECR repositories."
+            exit 1
+          fi
+
+      - name: Checkout selected protected commit
+        uses: actions/checkout@v7
+
+      - name: Validate staging Terraform inputs
+        env:
+          DB_PASSWORD: ${{ secrets.STAGING_DB_PASSWORD }}
+          DJANGO_SECRET_KEY: ${{ secrets.STAGING_DJANGO_SECRET_KEY }}
+          FIELD_ENCRYPTION_KEY: ${{ secrets.STAGING_DJANGO_FIELD_ENCRYPTION_KEY }}
+          METRICS_BEARER_TOKEN: ${{ secrets.STAGING_METRICS_BEARER_TOKEN }}
+          CREATE_DEFAULT_ADMIN: ${{ vars.STAGING_CREATE_DEFAULT_ADMIN || 'false' }}
+          SUPERUSER_PASSWORD: ${{ secrets.STAGING_DJANGO_SUPERUSER_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$DB_PASSWORD"
+          test -n "$DJANGO_SECRET_KEY"
+          test -n "$FIELD_ENCRYPTION_KEY"
+          if [ "${#METRICS_BEARER_TOKEN}" -lt 32 ]; then
+            echo "::error::STAGING_METRICS_BEARER_TOKEN must contain at least 32 characters."
+            exit 1
+          fi
+          if [ "$CREATE_DEFAULT_ADMIN" = "true" ] && [ -z "$SUPERUSER_PASSWORD" ]; then
+            echo "::error::STAGING_DJANGO_SUPERUSER_PASSWORD is required when creating an admin."
+            exit 1
+          fi
+
+      - name: Configure AWS credentials with OIDC
+        if: ${{ vars.AWS_ROLE_ARN != '' }}
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # The existing Staging environment can still use its short-lived legacy
+      # credentials for this final teardown. They are removed only after this
+      # workflow succeeds and the environment is deleted.
+      - name: Configure AWS credentials from legacy staging secrets
+        if: ${{ vars.AWS_ROLE_ARN == '' }}
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Discover the isolated staging state bucket
+        id: state
+        run: |
+          set -euo pipefail
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          if [ "$account_id" != "$EXPECTED_AWS_ACCOUNT_ID" ]; then
+            echo "::error::Refusing to retire staging outside the dedicated Releviz AWS account."
+            exit 1
+          fi
+          state_bucket="scheduler-staging-tfstate-${account_id}"
+          case "$state_bucket" in
+            scheduler-staging-tfstate-[0-9]*) ;;
+            *)
+              echo "::error::Refusing an unexpected Terraform state bucket name."
+              exit 1
+              ;;
+          esac
+          aws s3api head-bucket --bucket "$state_bucket"
+          {
+            echo "account_id=$account_id"
+            echo "state_bucket=$state_bucket"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.15.8
+
+      - name: Initialize the existing staging state
+        run: |
+          terraform -chdir=infra/staging init -reconfigure -input=false \
+            -backend-config="bucket=${{ steps.state.outputs.state_bucket }}" \
+            -backend-config="key=staging/terraform.tfstate" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="use_lockfile=true"
+
+      - name: Refuse state that still owns the production apex
+        run: |
+          set -euo pipefail
+          terraform -chdir=infra/staging state list > "$RUNNER_TEMP/staging-state-addresses.txt"
+          if ! grep -qx 'aws_vpc.app' "$RUNNER_TEMP/staging-state-addresses.txt"; then
+            echo "::error::The expected staging VPC is absent from state; refusing to remove the state bucket."
+            exit 1
+          fi
+          terraform -chdir=infra/staging state pull > "$RUNNER_TEMP/staging-state.json"
+          python3 - "$RUNNER_TEMP/staging-state.json" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as fh:
+              state = json.load(fh)
+
+          allowed_resources = {
+              "aws_vpc.app",
+              "aws_internet_gateway.app",
+              "aws_subnet.public_a",
+              "aws_subnet.public_b",
+              "aws_route_table.public",
+              "aws_route.public_internet",
+              "aws_route_table_association.public_a",
+              "aws_route_table_association.public_b",
+              "aws_security_group.alb",
+              "aws_security_group.ecs",
+              "aws_security_group.db",
+              "aws_dynamodb_table.events",
+              "aws_dynamodb_table.participants",
+              "aws_dynamodb_table.weights",
+              "aws_dynamodb_table.users",
+              "aws_dynamodb_table.user_events",
+              "aws_db_subnet_group.app",
+              "aws_db_instance.app",
+              "aws_cloudwatch_log_group.backend",
+              "aws_cloudwatch_log_group.frontend",
+              "aws_iam_role.ecs_execution",
+              "aws_iam_role_policy_attachment.ecs_execution",
+              "aws_iam_role.ecs_task",
+              "aws_iam_role.eventbridge_reminders",
+              "aws_iam_role_policy.eventbridge_reminders",
+              "aws_lb.app",
+              "aws_acm_certificate.staging",
+              "aws_route53_record.staging_cert_validation",
+              "aws_acm_certificate_validation.staging",
+              "aws_route53_record.staging",
+              "aws_lb_target_group.backend",
+              "aws_lb_target_group.frontend",
+              "aws_lb_listener.http",
+              "aws_lb_listener.https",
+              "aws_lb_listener_rule.api",
+              "aws_ecs_cluster.app",
+              "aws_ecs_task_definition.backend",
+              "aws_ecs_task_definition.frontend",
+              "aws_ecs_service.backend",
+              "aws_ecs_service.frontend",
+              "aws_cloudwatch_event_rule.event_reminders",
+              "aws_cloudwatch_event_target.event_reminders",
+              "aws_cloudwatch_metric_alarm.alb_5xx",
+              "aws_cloudwatch_metric_alarm.ecs_backend_tasks",
+              "aws_cloudwatch_metric_alarm.ecs_frontend_tasks",
+          }
+          forbidden = {"releviz.com"}
+          for resource in state.get("resources", []):
+              if resource.get("mode") != "managed":
+                  continue
+              address = f"{resource.get('type')}.{resource.get('name')}"
+              if address not in allowed_resources:
+                  raise SystemExit(
+                      f"Staging state includes an out-of-scope managed resource ({address}); refusing to continue."
+                  )
+              if resource.get("type") not in {"aws_route53_record", "aws_acm_certificate"}:
+                  continue
+              for instance in resource.get("instances", []):
+                  values = instance.get("attributes", {})
+                  hostname = str(values.get("name") or values.get("domain_name") or "").rstrip(".").lower()
+                  if hostname in forbidden:
+                      raise SystemExit(
+                          "Staging state still owns the production apex; move it out of state before retrying."
+                      )
+          PY
+
+      - name: Plan exact permanent staging destroy
+        env:
+          TF_VAR_aws_region: ${{ env.AWS_REGION }}
+          TF_VAR_backend_image_tag: retirement
+          TF_VAR_frontend_image_tag: retirement
+          TF_VAR_ecr_backend_repository: ${{ env.ECR_BACKEND }}
+          TF_VAR_ecr_frontend_repository: ${{ env.ECR_FRONTEND }}
+          TF_VAR_domain_name: ${{ env.STAGING_DOMAIN }}
+          TF_VAR_db_password: ${{ secrets.STAGING_DB_PASSWORD }}
+          TF_VAR_django_secret_key: ${{ secrets.STAGING_DJANGO_SECRET_KEY }}
+          TF_VAR_django_field_encryption_key: ${{ secrets.STAGING_DJANGO_FIELD_ENCRYPTION_KEY }}
+          TF_VAR_metrics_bearer_token: ${{ secrets.STAGING_METRICS_BEARER_TOKEN }}
+          TF_VAR_django_superuser_email: ${{ vars.STAGING_DJANGO_SUPERUSER_EMAIL || '' }}
+          TF_VAR_django_superuser_password: ${{ secrets.STAGING_DJANGO_SUPERUSER_PASSWORD }}
+          TF_VAR_django_create_default_admin: ${{ vars.STAGING_CREATE_DEFAULT_ADMIN || 'false' }}
+        run: |
+          set -euo pipefail
+          terraform -chdir=infra/staging plan -destroy -input=false -out=staging-destroy.tfplan
+          terraform -chdir=infra/staging show -json staging-destroy.tfplan > "$RUNNER_TEMP/staging-destroy-plan.json"
+          python3 - "$RUNNER_TEMP/staging-destroy-plan.json" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as fh:
+              plan = json.load(fh)
+
+          changes = plan.get("resource_changes", [])
+          if not any(
+              change.get("address") == "aws_vpc.app" and "delete" in change.get("change", {}).get("actions", [])
+              for change in changes
+          ):
+              raise SystemExit("The destroy plan does not delete aws_vpc.app; refusing to continue.")
+
+          for change in changes:
+              if change.get("type") not in {"aws_route53_record", "aws_acm_certificate"}:
+                  continue
+              before = change.get("change", {}).get("before") or {}
+              hostname = str(before.get("name") or before.get("domain_name") or "").rstrip(".").lower()
+              if hostname == "releviz.com":
+                  raise SystemExit("The destroy plan includes the production apex; refusing to continue.")
+          PY
+
+      - name: Apply exact permanent staging destroy
+        run: terraform -chdir=infra/staging apply -input=false -auto-approve staging-destroy.tfplan
+
+      - name: Delete staging-only ECR repositories and images
+        run: |
+          set -euo pipefail
+          for repository in "$ECR_BACKEND" "$ECR_FRONTEND"; do
+            if aws ecr describe-repositories --repository-names "$repository" >/dev/null 2>&1; then
+              aws ecr delete-repository --repository-name "$repository" --force
+            fi
+          done
+
+      - name: Permanently delete the staging Terraform state bucket
+        env:
+          STATE_BUCKET: ${{ steps.state.outputs.state_bucket }}
+        run: |
+          set -euo pipefail
+          python3 - "$STATE_BUCKET" <<'PY'
+          import json
+          import subprocess
+          import sys
+
+          bucket = sys.argv[1]
+          if not bucket.startswith("scheduler-staging-tfstate-"):
+              raise SystemExit("Refusing an unexpected Terraform state bucket name.")
+
+          def aws(*args, payload=None):
+              completed = subprocess.run(
+                  ["aws", *args],
+                  input=None if payload is None else json.dumps(payload),
+                  text=True,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  check=False,
+              )
+              if completed.returncode:
+                  sys.stderr.write(completed.stderr)
+                  raise SystemExit(completed.returncode)
+              return json.loads(completed.stdout or "{}")
+
+          while True:
+              listed = aws("s3api", "list-object-versions", "--bucket", bucket, "--output", "json")
+              objects = [
+                  {"Key": item["Key"], "VersionId": item["VersionId"]}
+                  for group in ("Versions", "DeleteMarkers")
+                  for item in listed.get(group, [])
+              ]
+              if not objects:
+                  break
+              aws(
+                  "s3api",
+                  "delete-objects",
+                  "--bucket",
+                  bucket,
+                  "--delete",
+                  json.dumps({"Objects": objects, "Quiet": True}),
+                  "--output",
+                  "json",
+              )
+          PY
+          aws s3api delete-bucket --bucket "$STATE_BUCKET"
+
+      - name: Verify staging retirement completed
+        env:
+          STATE_BUCKET: ${{ steps.state.outputs.state_bucket }}
+        run: |
+          set -euo pipefail
+          for repository in "$ECR_BACKEND" "$ECR_FRONTEND"; do
+            if aws ecr describe-repositories --repository-names "$repository" >/dev/null 2>&1; then
+              echo "::error::Staging ECR repository remains: $repository"
+              exit 1
+            fi
+          done
+          if aws s3api head-bucket --bucket "$STATE_BUCKET" >/dev/null 2>&1; then
+            echo "::error::Staging Terraform state bucket still exists: $STATE_BUCKET"
+            exit 1
+          fi
+          echo "Staging has been permanently retired. Do not recreate it."

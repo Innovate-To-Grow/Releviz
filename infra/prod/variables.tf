@@ -279,6 +279,12 @@ variable "route53_zone_id" {
   }
 }
 
+variable "manage_dns" {
+  type        = bool
+  default     = false
+  description = "Whether this apply may create or replace the production Route53 alias after the new ALB is healthy"
+}
+
 variable "existing_acm_certificate_arn" {
   type        = string
   default     = ""
