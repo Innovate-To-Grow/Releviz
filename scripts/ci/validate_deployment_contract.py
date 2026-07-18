@@ -11,14 +11,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PRODUCTION_SETTINGS = ROOT / "backend/src/config/settings/production.py"
+BOOTSTRAP_TERRAFORM = ROOT / "infra/bootstrap/main.tf"
 TERRAFORM_ENVIRONMENTS = {
-    "staging": ROOT / "infra/staging/main.tf",
     "production": ROOT / "infra/prod/main.tf",
 }
 DEPLOY_WORKFLOWS = {
-    "staging": ROOT / ".github/workflows/deploy-staging.yml",
     "production": ROOT / ".github/workflows/deploy-prod.yml",
 }
+STAGING_DEPLOY_WORKFLOW = ROOT / ".github/workflows/deploy-staging.yml"
+STAGING_RETIRE_WORKFLOW = ROOT / ".github/workflows/retire-staging.yml"
 REQUIRED_CSV_ENVIRONMENT = {
     "DJANGO_ALLOWED_HOSTS",
     "CORS_ALLOWED_ORIGINS",
@@ -77,10 +78,9 @@ def deployment_contract_errors(root: Path = ROOT) -> list[str]:
             )
         if re.search(r"(?:staging|prod)-latest", lower):
             errors.append(f"{environment} deploy workflow uses a mutable image tag")
-        expected_name = "Staging" if environment == "staging" else "Production"
-        if not re.search(rf"environment:\s*\n\s+name:\s*{expected_name}\b", text):
+        if not re.search(r"environment:\s*\n\s+name:\s*Production\b", text):
             errors.append(
-                f"{environment} deploy workflow is not bound to {expected_name}"
+                f"{environment} deploy workflow is not bound to Production"
             )
         if "use_lockfile=true" not in text:
             errors.append(
@@ -91,7 +91,11 @@ def deployment_contract_errors(root: Path = ROOT) -> list[str]:
     for required_fragment in (
         "workflow_dispatch:",
         "role-to-assume:",
-        "production.tfplan",
+        "production-no-dns.tfplan",
+        "production-dns-cutover.tfplan",
+        'TF_VAR_manage_dns: "false"',
+        'TF_VAR_manage_dns: "true"',
+        "--connect-to",
         "refs/heads/main",
         "CI Result",
     ):
@@ -107,6 +111,43 @@ def deployment_contract_errors(root: Path = ROOT) -> list[str]:
                 f"production deploy workflow contains forbidden {forbidden_fragment}"
             )
 
+    staging_deploy_path = root / STAGING_DEPLOY_WORKFLOW.relative_to(ROOT)
+    if staging_deploy_path.exists():
+        errors.append("automatic staging deployment workflow must be removed")
+
+    staging_retire_path = root / STAGING_RETIRE_WORKFLOW.relative_to(ROOT)
+    if not staging_retire_path.exists():
+        errors.append("one-time staging retirement workflow is missing")
+    else:
+        retirement_workflow = staging_retire_path.read_text(encoding="utf-8")
+        if "workflow_run:" in retirement_workflow:
+            errors.append("staging retirement workflow must never run automatically")
+        if "continue-on-error" in retirement_workflow:
+            errors.append("staging retirement workflow allows errors to continue")
+        if not re.search(
+            r"environment:\s*\n\s+name:\s*Staging\b", retirement_workflow
+        ):
+            errors.append("staging retirement workflow is not bound to Staging")
+        for required_fragment in (
+            "workflow_dispatch:",
+            "DESTROY_STAGING",
+            "refs/heads/main",
+            "role-to-assume:",
+            "use_lockfile=true",
+            "plan -destroy",
+            "staging-destroy.tfplan",
+            "delete-repository",
+            "delete-bucket",
+            "EXPECTED_AWS_ACCOUNT_ID",
+            "allowed_resources",
+            "scheduler-staging-backend",
+            "scheduler-staging-frontend",
+        ):
+            if required_fragment not in retirement_workflow:
+                errors.append(
+                    f"staging retirement workflow omits {required_fragment}"
+                )
+
     production_terraform = (
         root / TERRAFORM_ENVIRONMENTS["production"].relative_to(ROOT)
     ).read_text(encoding="utf-8")
@@ -118,10 +159,28 @@ def deployment_contract_errors(root: Path = ROOT) -> list[str]:
         r"manage_master_user_password\s*=\s*true": "an RDS-managed database password",
         r"deployment_circuit_breaker\s*\{": "ECS automatic rollback",
         r"alarm_actions\s*=\s*var\.alarm_action_arns": "monitored alarm actions",
+        r"count\s*=\s*var\.manage_dns\s*\?\s*1\s*:\s*0": "health-gated DNS",
+        r"allow_overwrite\s*=\s*true": "explicit apex alias replacement",
     }
     for pattern, description in production_invariants.items():
         if not re.search(pattern, production_terraform):
             errors.append(f"production Terraform omits {description}")
+
+    bootstrap_terraform = (
+        root / BOOTSTRAP_TERRAFORM.relative_to(ROOT)
+    ).read_text(encoding="utf-8")
+    for pattern, description in {
+        r'backend\s+"s3"\s*\{\s*\}': "an S3 backend declaration for migrated bootstrap state",
+        r'existing_github_oidc_provider_arn': "an explicit shared GitHub OIDC provider input",
+        r'from\s*=\s*aws_iam_openid_connect_provider\.github': "a non-destructive legacy OIDC state removal",
+        r'destroy\s*=\s*false': "a shared OIDC provider preservation guard",
+    }.items():
+        if not re.search(pattern, bootstrap_terraform):
+            errors.append(f"bootstrap Terraform omits {description}")
+    if re.search(
+        r'resource\s+"aws_iam_openid_connect_provider"', bootstrap_terraform
+    ):
+        errors.append("bootstrap Terraform must not manage the shared GitHub OIDC provider")
 
     return errors
 

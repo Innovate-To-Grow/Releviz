@@ -10,8 +10,6 @@ mock_provider "aws" {
   }
 }
 
-mock_provider "tls" {}
-
 run "bootstrap_plan" {
   command = plan
 
@@ -47,9 +45,10 @@ run "bootstrap_plan" {
   assert {
     condition = (
       strcontains(aws_iam_role.production_deploy.assume_role_policy, "repo:Innovate-To-Grow/releviz:environment:Production") &&
-      strcontains(aws_iam_role.production_deploy.assume_role_policy, "sts.amazonaws.com")
+      strcontains(aws_iam_role.production_deploy.assume_role_policy, "sts.amazonaws.com") &&
+      strcontains(aws_iam_role.production_deploy.assume_role_policy, var.existing_github_oidc_provider_arn)
     )
-    error_message = "The production role must trust only the repository's Production Environment through GitHub OIDC."
+    error_message = "The production role must trust only the repository's Production Environment through the shared GitHub OIDC provider."
   }
 
   assert {

@@ -1,14 +1,16 @@
 terraform {
   required_version = ">= 1.15.0"
 
+  # Bootstrap starts with `terraform init -backend=false` while the bucket is
+  # created, then its local state is migrated to bootstrap/terraform.tfstate.
+  # Keeping the backend declaration here prevents future bootstrap work from
+  # silently falling back to untracked local state.
+  backend "s3" {}
+
   required_providers {
     aws = {
       source  = "hashicorp/aws"
       version = "~> 5.0"
-    }
-    tls = {
-      source  = "hashicorp/tls"
-      version = "~> 4.0"
     }
   }
 }
@@ -46,8 +48,12 @@ variable "github_environment" {
 
 variable "existing_github_oidc_provider_arn" {
   type        = string
-  default     = ""
-  description = "Existing account-wide GitHub Actions OIDC provider ARN, when already provisioned"
+  description = "Existing account-wide GitHub Actions OIDC provider ARN; bootstrap never creates or deletes this shared resource"
+
+  validation {
+    condition     = can(regex("^arn:aws[a-z-]*:iam::[0-9]{12}:oidc-provider/token\\.actions\\.githubusercontent\\.com$", var.existing_github_oidc_provider_arn))
+    error_message = "existing_github_oidc_provider_arn must be the account's GitHub Actions OIDC provider ARN."
+  }
 }
 
 variable "production_deploy_role_name" {
@@ -78,9 +84,15 @@ variable "production_ecr_repository_prefix" {
 
 data "aws_caller_identity" "current" {}
 
-data "tls_certificate" "github" {
-  count = var.existing_github_oidc_provider_arn == "" ? 1 : 0
-  url   = "https://token.actions.githubusercontent.com"
+# Older local bootstrap state may still contain the account-wide OIDC provider
+# that this module used to create. Forget that legacy state address without
+# destroying the shared provider; I2G and other repositories may depend on it.
+removed {
+  from = aws_iam_openid_connect_provider.github
+
+  lifecycle {
+    destroy = false
+  }
 }
 
 resource "aws_s3_bucket" "terraform_state" {
@@ -172,20 +184,8 @@ resource "aws_dynamodb_table" "terraform_locks" {
   }
 }
 
-resource "aws_iam_openid_connect_provider" "github" {
-  count = var.existing_github_oidc_provider_arn == "" ? 1 : 0
-
-  url             = "https://token.actions.githubusercontent.com"
-  client_id_list  = ["sts.amazonaws.com"]
-  thumbprint_list = [data.tls_certificate.github[0].certificates[0].sha1_fingerprint]
-}
-
 locals {
-  github_oidc_provider_arn = (
-    var.existing_github_oidc_provider_arn != "" ?
-    var.existing_github_oidc_provider_arn :
-    aws_iam_openid_connect_provider.github[0].arn
-  )
+  github_oidc_provider_arn   = var.existing_github_oidc_provider_arn
   production_role_prefix_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/scheduler-prod-*"
   production_ecr_arn         = "arn:aws:ecr:${var.aws_region}:${data.aws_caller_identity.current.account_id}:repository/${var.production_ecr_repository_prefix}*"
   terraform_state_bucket_arn = "arn:aws:s3:::${var.state_bucket_name}"
