@@ -79,9 +79,7 @@ def deployment_contract_errors(root: Path = ROOT) -> list[str]:
         if re.search(r"(?:staging|prod)-latest", lower):
             errors.append(f"{environment} deploy workflow uses a mutable image tag")
         if not re.search(r"environment:\s*\n\s+name:\s*Production\b", text):
-            errors.append(
-                f"{environment} deploy workflow is not bound to Production"
-            )
+            errors.append(f"{environment} deploy workflow is not bound to Production")
         if "use_lockfile=true" not in text:
             errors.append(
                 f"{environment} deploy workflow does not enable S3 state locking"
@@ -124,9 +122,7 @@ def deployment_contract_errors(root: Path = ROOT) -> list[str]:
             errors.append("staging retirement workflow must never run automatically")
         if "continue-on-error" in retirement_workflow:
             errors.append("staging retirement workflow allows errors to continue")
-        if not re.search(
-            r"environment:\s*\n\s+name:\s*Staging\b", retirement_workflow
-        ):
+        if not re.search(r"environment:\s*\n\s+name:\s*Staging\b", retirement_workflow):
             errors.append("staging retirement workflow is not bound to Staging")
         for required_fragment in (
             "workflow_dispatch:",
@@ -144,9 +140,7 @@ def deployment_contract_errors(root: Path = ROOT) -> list[str]:
             "scheduler-staging-frontend",
         ):
             if required_fragment not in retirement_workflow:
-                errors.append(
-                    f"staging retirement workflow omits {required_fragment}"
-                )
+                errors.append(f"staging retirement workflow omits {required_fragment}")
 
     production_terraform = (
         root / TERRAFORM_ENVIRONMENTS["production"].relative_to(ROOT)
@@ -166,21 +160,21 @@ def deployment_contract_errors(root: Path = ROOT) -> list[str]:
         if not re.search(pattern, production_terraform):
             errors.append(f"production Terraform omits {description}")
 
-    bootstrap_terraform = (
-        root / BOOTSTRAP_TERRAFORM.relative_to(ROOT)
-    ).read_text(encoding="utf-8")
+    bootstrap_terraform = (root / BOOTSTRAP_TERRAFORM.relative_to(ROOT)).read_text(
+        encoding="utf-8"
+    )
     for pattern, description in {
         r'backend\s+"s3"\s*\{\s*\}': "an S3 backend declaration for migrated bootstrap state",
-        r'existing_github_oidc_provider_arn': "an explicit shared GitHub OIDC provider input",
-        r'from\s*=\s*aws_iam_openid_connect_provider\.github': "a non-destructive legacy OIDC state removal",
-        r'destroy\s*=\s*false': "a shared OIDC provider preservation guard",
+        r"existing_github_oidc_provider_arn": "an explicit shared GitHub OIDC provider input",
+        r"from\s*=\s*aws_iam_openid_connect_provider\.github": "a non-destructive legacy OIDC state removal",
+        r"destroy\s*=\s*false": "a shared OIDC provider preservation guard",
     }.items():
         if not re.search(pattern, bootstrap_terraform):
             errors.append(f"bootstrap Terraform omits {description}")
-    if re.search(
-        r'resource\s+"aws_iam_openid_connect_provider"', bootstrap_terraform
-    ):
-        errors.append("bootstrap Terraform must not manage the shared GitHub OIDC provider")
+    if re.search(r'resource\s+"aws_iam_openid_connect_provider"', bootstrap_terraform):
+        errors.append(
+            "bootstrap Terraform must not manage the shared GitHub OIDC provider"
+        )
 
     return errors
 

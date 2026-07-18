@@ -8,7 +8,7 @@ const RESOURCE_AUDIT_MANIFEST = [
   ".github/dependabot.yml",
   ".github/workflows/ci.yml",
   ".github/workflows/deploy-prod.yml",
-  ".github/workflows/deploy-staging.yml",
+  ".github/workflows/retire-staging.yml",
   ".gitignore",
   ".pre-commit-config.yaml",
   ".prettierignore",
