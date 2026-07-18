@@ -261,7 +261,7 @@ variable "health_check_path" {
 
 variable "custom_domain" {
   type        = string
-  description = "Production hostname; must be selected explicitly to prevent accidental staging DNS takeover"
+  description = "Production hostname; must be selected explicitly to prevent accidental DNS takeover"
 
   validation {
     condition     = can(regex("^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$", var.custom_domain))

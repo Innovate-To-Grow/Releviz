@@ -616,7 +616,7 @@ resource "aws_route53_record" "app" {
   # The first production apply deliberately leaves DNS untouched. Once the new
   # ALB has passed an SNI-preserving health check, the release workflow applies
   # this record in a second, exact Terraform plan. This also permits the
-  # production record to replace the retired staging alias at the apex.
+  # production record to replace the prior apex alias after validation.
   allow_overwrite = true
   name            = var.custom_domain
   type            = "A"

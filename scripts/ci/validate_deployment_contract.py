@@ -18,8 +18,11 @@ TERRAFORM_ENVIRONMENTS = {
 DEPLOY_WORKFLOWS = {
     "production": ROOT / ".github/workflows/deploy-prod.yml",
 }
-STAGING_DEPLOY_WORKFLOW = ROOT / ".github/workflows/deploy-staging.yml"
-STAGING_RETIRE_WORKFLOW = ROOT / ".github/workflows/retire-staging.yml"
+RETIRED_STAGING_PATHS = (
+    ".github/workflows/deploy-staging.yml",
+    ".github/workflows/retire-staging.yml",
+    "infra/staging",
+)
 REQUIRED_CSV_ENVIRONMENT = {
     "DJANGO_ALLOWED_HOSTS",
     "CORS_ALLOWED_ORIGINS",
@@ -109,38 +112,9 @@ def deployment_contract_errors(root: Path = ROOT) -> list[str]:
                 f"production deploy workflow contains forbidden {forbidden_fragment}"
             )
 
-    staging_deploy_path = root / STAGING_DEPLOY_WORKFLOW.relative_to(ROOT)
-    if staging_deploy_path.exists():
-        errors.append("automatic staging deployment workflow must be removed")
-
-    staging_retire_path = root / STAGING_RETIRE_WORKFLOW.relative_to(ROOT)
-    if not staging_retire_path.exists():
-        errors.append("one-time staging retirement workflow is missing")
-    else:
-        retirement_workflow = staging_retire_path.read_text(encoding="utf-8")
-        if "workflow_run:" in retirement_workflow:
-            errors.append("staging retirement workflow must never run automatically")
-        if "continue-on-error" in retirement_workflow:
-            errors.append("staging retirement workflow allows errors to continue")
-        if not re.search(r"environment:\s*\n\s+name:\s*Staging\b", retirement_workflow):
-            errors.append("staging retirement workflow is not bound to Staging")
-        for required_fragment in (
-            "workflow_dispatch:",
-            "DESTROY_STAGING",
-            "refs/heads/main",
-            "role-to-assume:",
-            "use_lockfile=true",
-            "plan -destroy",
-            "staging-destroy.tfplan",
-            "delete-repository",
-            "delete-bucket",
-            "EXPECTED_AWS_ACCOUNT_ID",
-            "allowed_resources",
-            "scheduler-staging-backend",
-            "scheduler-staging-frontend",
-        ):
-            if required_fragment not in retirement_workflow:
-                errors.append(f"staging retirement workflow omits {required_fragment}")
+    for relative_path in RETIRED_STAGING_PATHS:
+        if (root / relative_path).exists():
+            errors.append(f"retired staging path remains: {relative_path}")
 
     production_terraform = (
         root / TERRAFORM_ENVIRONMENTS["production"].relative_to(ROOT)

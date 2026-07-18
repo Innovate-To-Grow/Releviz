@@ -138,7 +138,7 @@ repeat usage. Real-user task success, SUS, real SES behavior, target-account ope
 | Python dependency audit   | 0 known vulnerabilities in production requirements                                |
 | Frontend Docker           | Built, audited, and runtime-smoked as non-root `nextjs`                           |
 | Backend Docker            | Built as non-root `appuser`                                                       |
-| Terraform                 | 1.15.8 format/validate/mock tests passed for staging and production               |
+| Terraform                 | 1.15.8 format/validate/mock tests passed for bootstrap and production             |
 | Repository audit          | Required runtime/test/deployment resources present and legacy auth surface absent |
 
 The consolidated command passed after repeating backend coverage, frontend lint/format/coverage and
@@ -204,8 +204,7 @@ git diff --check
 ```
 
 The frontend image was also started locally, fetched over HTTP, and inspected to confirm the
-`nextjs` user and `node server.js` command. The protected staging workflow and staging Terraform
-inputs were hashed before and after full Terraform validation; every hash was unchanged.
+`nextjs` user and `node server.js` command.
 
 ## Failures Found and Root Causes
 

@@ -24,11 +24,7 @@ before a migration release with meaningful data-shape risk.
    `PROD_TF_STATE_BUCKET`.
 3. Configure every production variable listed in the README. Restrict the `Production` Environment
    to `main` and require a reviewer. Production has no static AWS-key fallback.
-4. Run **Retire Staging** from protected `main`, type `DESTROY_STAGING`, and allow it to permanently
-   destroy the staging database, compute, images, state bucket, and `staging.releviz.com` resources.
-   It takes no backup and refuses to destroy a state that still owns `releviz.com`. Do not recreate
-   staging after this one-time operation.
-5. Confirm AWS account quotas cover two NAT gateways, the ALB, Multi-AZ RDS, and at least four
+4. Confirm AWS account quotas cover two NAT gateways, the ALB, Multi-AZ RDS, and at least four
    steady-state Fargate tasks. Record owners for DNS, SNS/on-call, RDS restore, and release approval.
 
 ## Migration Compatibility Window

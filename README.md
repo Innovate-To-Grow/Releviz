@@ -73,13 +73,11 @@ scheduler-monorepo/
   backend/          # Django — API server, account auth, admin
   infra/
     prod/           # HA production Terraform (split frontend/backend services)
-    staging/        # One-time retirement source; removed after permanent teardown
     bootstrap/      # Protected state backend and GitHub OIDC deploy role
   scripts/
     quality-gate.sh # Full lint + test + build for both workspaces
   .github/workflows/
     ci.yml          # Parallel CI for both workspaces
-    retire-staging.yml # One-time, confirmation-gated permanent teardown
     deploy-prod.yml # Manual, Production-environment-gated release
 ```
 
@@ -197,14 +195,6 @@ docker run --rm -p 3000:3000 scheduler-frontend:local
 
 ## Deployment
 
-### One-time staging retirement
-
-Automatic staging deployment has been removed. `retire-staging.yml` is deliberately temporary and
-can run only from protected `main` with the exact `DESTROY_STAGING` confirmation. It destroys the
-isolated staging Terraform state, database, compute, DNS for `staging.releviz.com`, images, and
-state bucket without taking a data backup. The workflow refuses to proceed if staging state still
-owns the production apex. Delete this workflow and `infra/staging` only after it completes.
-
 ### Production
 
 Production deployment remains manually controlled. Terraform provisions guarded ECS rolling
@@ -241,19 +231,5 @@ production AWS keys in GitHub.
   `PROD_ACM_CERTIFICATE_ARN` — optional
 - `PROD_DEFAULT_FROM_EMAIL` — verified production sender address
 
-### Temporary staging retirement variables and secrets
-
-- `AWS_ROLE_ARN` — optional Staging-environment OIDC role used only by `retire-staging.yml`
-- `ECR_STAGING_BACKEND` — `scheduler-staging-backend`
-- `ECR_STAGING_FRONTEND` — `scheduler-staging-frontend`
-- `STAGING_DOMAIN` — `staging.releviz.com`
-- `STAGING_DJANGO_SUPERUSER_EMAIL` and `STAGING_CREATE_DEFAULT_ADMIN`
-- `STAGING_DB_PASSWORD`
-- `STAGING_DJANGO_SECRET_KEY`
-- `STAGING_DJANGO_FIELD_ENCRYPTION_KEY`
-- `STAGING_METRICS_BEARER_TOKEN` — at least 32 characters
-- `STAGING_DJANGO_SUPERUSER_PASSWORD` — required only when `STAGING_CREATE_DEFAULT_ADMIN=true`
-
-The temporary staging values, legacy credentials, Staging environment, and retirement workflow are
-deleted after the permanent teardown. Production application secret values live in AWS Secrets
-Manager; GitHub holds only their ARNs in the protected `Production` Environment.
+Staging was permanently retired. Production application secret values live in AWS Secrets Manager;
+GitHub holds only their ARNs in the protected `Production` Environment.
