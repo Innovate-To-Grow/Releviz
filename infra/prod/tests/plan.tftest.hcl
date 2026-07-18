@@ -61,10 +61,11 @@ run "production_plan" {
       aws_db_instance.app.deletion_protection &&
       !aws_db_instance.app.skip_final_snapshot &&
       !aws_db_instance.app.delete_automated_backups &&
+      aws_db_instance.app.instance_class == "db.t4g.medium" &&
       aws_db_instance.app.backup_retention_period == 30 &&
       aws_db_instance.app.copy_tags_to_snapshot
     )
-    error_message = "Production PostgreSQL must be private, Multi-AZ, encrypted, deletion-protected, and retain automated and final backups."
+    error_message = "Production PostgreSQL must use the db.t4g.medium baseline, be private, Multi-AZ, encrypted, deletion-protected, and retain automated and final backups."
   }
 
   assert {
