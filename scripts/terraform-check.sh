@@ -3,7 +3,7 @@ set -eu
 
 terraform fmt -check -recursive infra
 
-for environment in bootstrap staging prod; do
+for environment in bootstrap prod; do
   data_dir="${TMPDIR:-/tmp}/releviz-terraform-${environment}"
   TF_DATA_DIR="$data_dir" terraform -chdir="infra/${environment}" init \
     -backend=false \
