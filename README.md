@@ -1,8 +1,8 @@
-# Scheduler
+# Releviz
 
-A group meeting scheduler with weighted availability and real-time aggregation. Create an event, share the link, and find the best time for everyone.
+A group meeting planning app with weighted availability and real-time aggregation. Create an event, share the link, and find the best time for everyone.
 
-![Scheduler Screenshot](Screenshoot.png)
+![Releviz Screenshot](Screenshoot.png)
 
 ## How to Use
 
@@ -68,7 +68,7 @@ The weighted average formula: for each time slot, `sum(availability * weight) / 
 ## Project Structure
 
 ```
-scheduler-monorepo/
+releviz-monorepo/
   frontend/         # Next.js 15 — UI only, no API routes
   backend/          # Django — API server, account auth, admin
   infra/
@@ -183,14 +183,14 @@ Operational procedures and product evidence definitions:
 
 ```bash
 # Backend
-docker build -t scheduler-backend:local ./backend
+docker build -t releviz-backend:local ./backend
 docker run --rm -p 4000:4000 \
   -e DJANGO_SETTINGS_MODULE=config.settings.local \
-  scheduler-backend:local
+  releviz-backend:local
 
 # Frontend
-scripts/docker-build-frontend.sh scheduler-frontend:local
-docker run --rm -p 3000:3000 scheduler-frontend:local
+scripts/docker-build-frontend.sh releviz-frontend:local
+docker run --rm -p 3000:3000 releviz-frontend:local
 ```
 
 ## Deployment
@@ -217,8 +217,8 @@ production AWS keys in GitHub.
 - `AWS_REGION` — `us-west-2`
 - `AWS_PROD_ROLE_ARN` — output of `infra/bootstrap`; trusted only for the `Production` Environment
 - `PROD_TF_STATE_BUCKET` — protected state bucket created by `infra/bootstrap`
-- `ECR_PROD_BACKEND` — `scheduler-prod-backend`
-- `ECR_PROD_FRONTEND` — `scheduler-prod-frontend`
+- `ECR_PROD_BACKEND` — `releviz-prod-backend`
+- `ECR_PROD_FRONTEND` — `releviz-prod-frontend`
 - `PROD_DOMAIN` — `releviz.com`
 - `PROD_ROUTE53_ZONE_ID` — hosted-zone ID for `releviz.com`
 - `PROD_DJANGO_SECRET_KEY_ARN`, `PROD_DJANGO_FIELD_ENCRYPTION_KEY_ARN`, and

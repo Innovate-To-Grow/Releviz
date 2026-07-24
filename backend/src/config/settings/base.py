@@ -233,10 +233,10 @@ def _can_any(*app_labels):
 
 
 UNFOLD = {
-    "SITE_TITLE": "Scheduler Admin",
-    "SITE_HEADER": "Scheduler",
-    "SITE_ICON": lambda request: static("images/scheduler-logo.svg"),
-    "SITE_LOGO": lambda request: static("images/scheduler-logo.svg"),
+    "SITE_TITLE": "Releviz Admin",
+    "SITE_HEADER": "Releviz",
+    "SITE_ICON": lambda request: static("images/releviz-logo.svg"),
+    "SITE_LOGO": lambda request: static("images/releviz-logo.svg"),
     "COLORS": {
         "primary": {
             "50": "#f9f9ff",

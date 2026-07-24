@@ -838,7 +838,7 @@ describe("app pages", () => {
     const firstSignup = render(<SignupPage />);
     await userEvent.type(screen.getByLabelText("First name"), "Ada");
     await userEvent.type(screen.getByLabelText("Last name"), "Lovelace");
-    await userEvent.type(screen.getByLabelText("Organization"), "Scheduler");
+    await userEvent.type(screen.getByLabelText("Organization"), "Releviz");
     await userEvent.type(screen.getByLabelText("Title"), "Engineer");
     await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
     await userEvent.type(screen.getByLabelText("Password"), "password123");
@@ -869,7 +869,7 @@ describe("app pages", () => {
     render(<SignupPage />);
     await userEvent.type(screen.getByLabelText("First name"), "Ada");
     await userEvent.type(screen.getByLabelText("Last name"), "Lovelace");
-    await userEvent.type(screen.getByLabelText("Organization"), "Scheduler");
+    await userEvent.type(screen.getByLabelText("Organization"), "Releviz");
     await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
     await userEvent.type(screen.getByLabelText("Password"), "password123");
     await userEvent.type(screen.getByLabelText("Confirm password"), "password123");
@@ -880,7 +880,7 @@ describe("app pages", () => {
     render(<SignupPage />);
     await userEvent.type(screen.getAllByLabelText("First name").at(-1), "Ada");
     await userEvent.type(screen.getAllByLabelText("Last name").at(-1), "Lovelace");
-    await userEvent.type(screen.getAllByLabelText("Organization").at(-1), "Scheduler");
+    await userEvent.type(screen.getAllByLabelText("Organization").at(-1), "Releviz");
     await userEvent.type(screen.getAllByLabelText("Email").at(-1), "ada@example.com");
     await userEvent.type(screen.getAllByLabelText("Password").at(-1), "password123");
     await userEvent.type(screen.getAllByLabelText("Confirm password").at(-1), "password123");
@@ -928,7 +928,7 @@ describe("app pages", () => {
         email: "ada@example.com",
         firstName: "Ada",
         lastName: "Lovelace",
-        organization: "Scheduler",
+        organization: "Releviz",
         title: "Engineer",
       },
     });

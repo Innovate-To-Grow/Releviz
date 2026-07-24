@@ -26,12 +26,12 @@ variable "aws_region" {
 
 variable "state_bucket_name" {
   type    = string
-  default = "scheduler-prod-terraform-state"
+  default = "releviz-prod-terraform-state"
 }
 
 variable "lock_table_name" {
   type    = string
-  default = "scheduler-prod-terraform-locks"
+  default = "releviz-prod-terraform-locks"
 }
 
 variable "github_repository" {
@@ -58,7 +58,7 @@ variable "existing_github_oidc_provider_arn" {
 
 variable "production_deploy_role_name" {
   type    = string
-  default = "scheduler-production-github-deploy"
+  default = "releviz-production-github-deploy"
 }
 
 variable "production_route53_zone_id" {
@@ -78,7 +78,7 @@ variable "production_secret_arns" {
 
 variable "production_ecr_repository_prefix" {
   type        = string
-  default     = "scheduler-prod-"
+  default     = "releviz-prod-"
   description = "Prefix limiting ECR repositories managed by the production deployment role"
 }
 
@@ -186,7 +186,7 @@ resource "aws_dynamodb_table" "terraform_locks" {
 
 locals {
   github_oidc_provider_arn   = var.existing_github_oidc_provider_arn
-  production_role_prefix_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/scheduler-prod-*"
+  production_role_prefix_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/releviz-prod-*"
   production_ecr_arn         = "arn:aws:ecr:${var.aws_region}:${data.aws_caller_identity.current.account_id}:repository/${var.production_ecr_repository_prefix}*"
   terraform_state_bucket_arn = "arn:aws:s3:::${var.state_bucket_name}"
 }
@@ -323,6 +323,7 @@ locals {
           "application-autoscaling:DeregisterScalableTarget",
           "application-autoscaling:DescribeScalingPolicies",
           "application-autoscaling:DescribeScalableTargets",
+          "application-autoscaling:ListTagsForResource",
           "application-autoscaling:PutScalingPolicy",
           "application-autoscaling:RegisterScalableTarget",
           "application-autoscaling:TagResource",
@@ -432,6 +433,7 @@ locals {
           "iam:GetRole",
           "iam:GetRolePolicy",
           "iam:ListAttachedRolePolicies",
+          "iam:ListInstanceProfilesForRole",
           "iam:ListRolePolicies",
           "iam:PassRole",
           "iam:PutRolePolicy",
@@ -462,9 +464,47 @@ locals {
 }
 
 resource "aws_iam_role_policy" "production_deploy" {
-  name   = "scheduler-production-deploy"
+  name   = "releviz-production-deploy"
   role   = aws_iam_role.production_deploy.id
   policy = local.production_deploy_policy
+}
+
+locals {
+  production_kms_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "DiscoverRegionalKmsKeys"
+        Effect   = "Allow"
+        Action   = ["kms:DescribeKey", "kms:ListAliases"]
+        Resource = "*"
+      },
+      {
+        Sid    = "UseKmsThroughManagedServices"
+        Effect = "Allow"
+        Action = [
+          "kms:CreateGrant",
+          "kms:Decrypt",
+          "kms:GenerateDataKey",
+        ]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "kms:ViaService" = [
+              "rds.${var.aws_region}.amazonaws.com",
+              "secretsmanager.${var.aws_region}.amazonaws.com",
+            ]
+          }
+        }
+      },
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "production_deploy_kms" {
+  name   = "releviz-production-deploy-kms"
+  role   = aws_iam_role.production_deploy.id
+  policy = local.production_kms_policy
 }
 
 output "state_bucket_name" {

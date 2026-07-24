@@ -16,10 +16,6 @@ TERRAFORM_ENVIRONMENTS = {
     "production": ROOT / "infra/prod/main.tf",
 }
 PRODUCTION_DEPLOY_WORKFLOW = ROOT / ".github/workflows/deploy-prod.yml"
-DISABLED_PRODUCTION_DEPLOY_WORKFLOW = (
-    ROOT / ".github/workflows/deploy-prod.yml.disabled"
-)
-CD_DISABLED_MARKER = "CD_DISABLED_DURING_PR_CONSOLIDATION"
 RETIRED_STAGING_PATHS = (
     ".github/workflows/deploy-staging.yml",
     ".github/workflows/retire-staging.yml",
@@ -55,19 +51,31 @@ def terraform_environment_names(source: str) -> set[str]:
     return set(ENVIRONMENT_NAME_RE.findall(source))
 
 
-def production_cd_disabled_errors(root: Path = ROOT) -> list[str]:
-    """Ensure production CD remains non-runnable during PR consolidation."""
+def production_cd_errors(root: Path = ROOT) -> list[str]:
+    """Ensure production CD is explicit, protected, immutable, and health-gated."""
 
     errors: list[str] = []
     active_path = root / PRODUCTION_DEPLOY_WORKFLOW.relative_to(ROOT)
-    disabled_path = root / DISABLED_PRODUCTION_DEPLOY_WORKFLOW.relative_to(ROOT)
-    if active_path.exists():
-        errors.append("production CD must remain disabled during PR consolidation")
-    if not disabled_path.exists():
-        errors.append("disabled production CD marker file is missing")
+    if not active_path.exists():
+        errors.append("production CD workflow is missing")
         return errors
-    if CD_DISABLED_MARKER not in disabled_path.read_text(encoding="utf-8"):
-        errors.append("disabled production CD marker file omits its safety marker")
+
+    source = active_path.read_text(encoding="utf-8")
+    required_patterns = {
+        r"workflow_dispatch:": "manual dispatch",
+        r"id-token:\s*write": "OIDC permission",
+        r"CONFIRMATION.*DEPLOY|CONFIRMATION\"\s*!=\s*\"DEPLOY\"": "explicit confirmation",
+        r"CI Result": "successful CI enforcement",
+        r"backend_image_tag.*DEPLOY_SHA": "immutable backend release tag",
+        r"frontend_image_tag.*DEPLOY_SHA": "immutable frontend release tag",
+        r'TF_VAR_manage_dns:\s*"false"': "pre-cutover DNS isolation",
+        r'TF_VAR_manage_dns:\s*"true"': "reviewed DNS cutover",
+        r"Run pre-cutover smoke tests": "pre-cutover smoke tests",
+        r"Run canonical production smoke tests": "post-cutover smoke tests",
+    }
+    for pattern, description in required_patterns.items():
+        if not re.search(pattern, source, re.MULTILINE | re.DOTALL):
+            errors.append(f"production CD omits {description}")
     return errors
 
 
@@ -85,10 +93,18 @@ def deployment_contract_errors(root: Path = ROOT) -> list[str]:
                 f"{environment} Terraform omits runtime settings: {', '.join(missing)}"
             )
 
-    errors.extend(production_cd_disabled_errors(root))
+    errors.extend(production_cd_errors(root))
 
     for relative_path in RETIRED_STAGING_PATHS:
-        if (root / relative_path).exists():
+        candidate = root / relative_path
+        exists = candidate.is_file() or (
+            candidate.is_dir()
+            and any(
+                ".terraform" not in path.relative_to(candidate).parts
+                for path in candidate.rglob("*")
+            )
+        )
+        if exists:
             errors.append(f"retired staging path remains: {relative_path}")
 
     production_terraform = (
@@ -135,7 +151,7 @@ def main() -> int:
         for error in errors:
             print(f"  - {error}", file=sys.stderr)
         return 1
-    print("Production CD is disabled and Terraform retains its safety invariants.")
+    print("Production CD and Terraform retain their release safety invariants.")
     return 0
 
 

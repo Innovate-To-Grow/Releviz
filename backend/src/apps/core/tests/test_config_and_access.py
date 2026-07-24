@@ -94,7 +94,7 @@ class SettingsImportTests(SimpleTestCase):
             "CSRF_TRUSTED_ORIGINS": "https://app.example.com",
             "DJANGO_SECURE_SSL_REDIRECT": "0",
             "EMAIL_BACKEND": "django.core.mail.backends.locmem.EmailBackend",
-            "DEFAULT_FROM_EMAIL": "scheduler@example.com",
+            "DEFAULT_FROM_EMAIL": "releviz@example.com",
             "REQUIRE_ENCRYPTED_PASSWORDS": "0",
             "DJANGO_FIELD_ENCRYPTION_KEY": "test encryption key",
             "METRICS_BEARER_TOKEN": "test-metrics-token",

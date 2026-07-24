@@ -7,8 +7,7 @@ from scripts.ci.check_bundle_size import check_budgets, collect_assets
 from scripts.ci.check_npm_licenses import package_inventory
 from scripts.ci.summarize_workflow_jobs import render
 from scripts.ci.validate_deployment_contract import (
-    CD_DISABLED_MARKER,
-    production_cd_disabled_errors,
+    production_cd_errors,
     required_runtime_environment,
     terraform_environment_names,
 )
@@ -99,20 +98,34 @@ secrets = [
             {"DB_PASSWORD", "DJANGO_SECRET_KEY", "METRICS_BEARER_TOKEN"},
         )
 
-    def test_production_cd_must_have_only_the_disabled_marker_file(self):
+    def test_production_cd_requires_protected_two_phase_release(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             workflows = root / ".github/workflows"
             workflows.mkdir(parents=True)
-            disabled = workflows / "deploy-prod.yml.disabled"
-            disabled.write_text(f"# {CD_DISABLED_MARKER}\n", encoding="utf-8")
-
-            self.assertEqual(production_cd_disabled_errors(root), [])
-
-            (workflows / "deploy-prod.yml").write_text(
-                "name: Deploy\n", encoding="utf-8"
+            workflow = workflows / "deploy-prod.yml"
+            workflow.write_text(
+                """
+on:
+  workflow_dispatch:
+permissions:
+  id-token: write
+steps:
+  - run: |
+      if [ "$CONFIRMATION" != "DEPLOY" ]; then exit 1; fi
+      echo "CI Result"
+      echo "TF_VAR_backend_image_tag: $DEPLOY_SHA"
+      echo "TF_VAR_frontend_image_tag: $DEPLOY_SHA"
+      echo 'TF_VAR_manage_dns: "false"'
+      echo "Run pre-cutover smoke tests"
+      echo 'TF_VAR_manage_dns: "true"'
+      echo "Run canonical production smoke tests"
+""",
+                encoding="utf-8",
             )
-            self.assertEqual(
-                production_cd_disabled_errors(root),
-                ["production CD must remain disabled during PR consolidation"],
+            self.assertEqual(production_cd_errors(root), [])
+
+            workflow.write_text("name: Deploy\n", encoding="utf-8")
+            self.assertIn(
+                "production CD omits manual dispatch", production_cd_errors(root)
             )

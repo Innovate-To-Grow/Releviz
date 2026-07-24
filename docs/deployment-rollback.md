@@ -78,12 +78,12 @@ task definition, the guarded rollout helper can perform and record the service t
 ```bash
 ALLOW_ECS_DEPLOY=1 \
 AWS_REGION=us-west-2 \
-ECS_CLUSTER=scheduler-prod-cluster \
-ECS_SERVICE=scheduler-prod-backend-service \
-scripts/ecs-service-rollout.sh deploy scheduler-prod-backend-task:<revision>
+ECS_CLUSTER=releviz-prod-cluster \
+ECS_SERVICE=releviz-prod-backend-service \
+scripts/ecs-service-rollout.sh deploy releviz-prod-backend-task:<revision>
 ```
 
-Use `scheduler-prod-frontend-service` and `scheduler-prod-frontend-task:<revision>` for an
+Use `releviz-prod-frontend-service` and `releviz-prod-frontend-task:<revision>` for an
 independent frontend-only transition.
 
 The helper resolves an active task-definition ARN, enforces the circuit-breaker and healthy-capacity
@@ -111,11 +111,11 @@ Use the exact current ARN as a race guard and an explicitly selected previous ac
 
 ```bash
 ALLOW_ECS_ROLLBACK=1 \
-EXPECTED_CURRENT_TASK_DEFINITION=arn:aws:ecs:us-west-2:<account>:task-definition/scheduler-prod-backend-task:<bad> \
+EXPECTED_CURRENT_TASK_DEFINITION=arn:aws:ecs:us-west-2:<account>:task-definition/releviz-prod-backend-task:<bad> \
 AWS_REGION=us-west-2 \
-ECS_CLUSTER=scheduler-prod-cluster \
-ECS_SERVICE=scheduler-prod-backend-service \
-scripts/ecs-service-rollout.sh rollback scheduler-prod-backend-task:<previous>
+ECS_CLUSTER=releviz-prod-cluster \
+ECS_SERVICE=releviz-prod-backend-service \
+scripts/ecs-service-rollout.sh rollback releviz-prod-backend-task:<previous>
 ```
 
 The script refuses rollback when the service changed after approval, the target is inactive, the

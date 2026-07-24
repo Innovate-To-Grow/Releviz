@@ -2,7 +2,7 @@
 set -euo pipefail
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-image_tag="${1:-scheduler-frontend:local}"
+image_tag="${1:-releviz-frontend:local}"
 if [ "$#" -gt 0 ]; then
   shift
 fi

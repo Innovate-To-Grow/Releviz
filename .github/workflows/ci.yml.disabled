@@ -74,6 +74,6 @@ jobs:
           file: ./Dockerfile
           push: false
           load: false
-          tags: scheduler:ci-${{ github.sha }}
+          tags: releviz:ci-${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

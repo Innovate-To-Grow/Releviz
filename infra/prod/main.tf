@@ -8,6 +8,14 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 
+data "aws_kms_alias" "rds" {
+  name = "alias/aws/rds"
+}
+
+data "aws_kms_alias" "secretsmanager" {
+  name = "alias/aws/secretsmanager"
+}
+
 locals {
   prefix             = "${var.app_name}-${var.environment}"
   app_url            = "https://${var.custom_domain}"
@@ -401,33 +409,35 @@ resource "aws_db_subnet_group" "app" {
 }
 
 resource "aws_db_instance" "app" {
-  identifier                   = "${local.prefix}-postgres"
-  engine                       = "postgres"
-  engine_version               = "16"
-  instance_class               = var.db_instance_class
-  allocated_storage            = var.db_allocated_storage
-  max_allocated_storage        = var.db_max_allocated_storage
-  storage_type                 = "gp3"
-  db_name                      = var.db_name
-  username                     = var.db_username
-  manage_master_user_password  = true
-  db_subnet_group_name         = aws_db_subnet_group.app.name
-  vpc_security_group_ids       = [aws_security_group.db.id]
-  storage_encrypted            = true
-  publicly_accessible          = false
-  multi_az                     = true
-  backup_retention_period      = var.db_backup_retention_days
-  backup_window                = "03:00-04:00"
-  maintenance_window           = "sun:04:30-sun:05:30"
-  copy_tags_to_snapshot        = true
-  delete_automated_backups     = false
-  auto_minor_version_upgrade   = true
-  skip_final_snapshot          = false
-  final_snapshot_identifier    = "${local.prefix}-postgres-final"
-  deletion_protection          = true
-  apply_immediately            = false
-  performance_insights_enabled = true
-  tags                         = local.common_tags
+  identifier                    = "${local.prefix}-postgres"
+  engine                        = "postgres"
+  engine_version                = "16"
+  instance_class                = var.db_instance_class
+  allocated_storage             = var.db_allocated_storage
+  max_allocated_storage         = var.db_max_allocated_storage
+  storage_type                  = "gp3"
+  db_name                       = var.db_name
+  username                      = var.db_username
+  manage_master_user_password   = true
+  master_user_secret_kms_key_id = data.aws_kms_alias.secretsmanager.target_key_arn
+  db_subnet_group_name          = aws_db_subnet_group.app.name
+  vpc_security_group_ids        = [aws_security_group.db.id]
+  storage_encrypted             = true
+  kms_key_id                    = data.aws_kms_alias.rds.target_key_arn
+  publicly_accessible           = false
+  multi_az                      = true
+  backup_retention_period       = var.db_backup_retention_days
+  backup_window                 = "03:00-04:00"
+  maintenance_window            = "sun:04:30-sun:05:30"
+  copy_tags_to_snapshot         = true
+  delete_automated_backups      = false
+  auto_minor_version_upgrade    = true
+  skip_final_snapshot           = false
+  final_snapshot_identifier     = "${local.prefix}-postgres-final"
+  deletion_protection           = true
+  apply_immediately             = false
+  performance_insights_enabled  = true
+  tags                          = local.common_tags
 
   lifecycle {
     prevent_destroy = true

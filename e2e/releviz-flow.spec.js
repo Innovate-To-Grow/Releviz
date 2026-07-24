@@ -11,6 +11,9 @@ const ADMIN_EMAIL = process.env.DJANGO_SUPERUSER_EMAIL || "admin@releviz.local";
 const ADMIN_PASSWORD = process.env.DJANGO_SUPERUSER_PASSWORD || "Admin12345!";
 
 function decodeQuotedPrintable(value) {
+  if (!/^Content-Transfer-Encoding:\s*quoted-printable\s*$/im.test(value)) {
+    return value;
+  }
   const unfolded = value.replace(/=\r?\n/g, "");
   return unfolded.replace(/(?:=[0-9a-f]{2})+/gi, (encoded) => {
     const bytes = encoded
@@ -396,7 +399,7 @@ assert duplication.duplicate_event_id is None
   });
 }
 
-test.describe("Scheduler account and scheduling flow", () => {
+test.describe("Releviz account and scheduling flow", () => {
   test("registers users, schedules an event, checks permissions, and persists to Postgres", async ({
     browser,
     page,
@@ -1272,12 +1275,12 @@ test.describe("Scheduler account and scheduling flow", () => {
   });
 });
 
-test.describe("Scheduler admin", () => {
+test.describe("Releviz admin", () => {
   test("renders the themed admin login and authenticated sidebar", async ({ page }) => {
     await page.goto(`${BACKEND_URL}/admin/login/?next=/admin/`);
     await expect(page.locator(".login-box")).toBeVisible();
-    await expect(page.locator("img.login-logo")).toHaveAttribute("src", /scheduler-logo\.svg/);
-    await expect(page.getByText("Scheduler Admin")).toBeVisible();
+    await expect(page.locator("img.login-logo")).toHaveAttribute("src", /releviz-logo\.svg/);
+    await expect(page.getByText("Releviz Admin")).toBeVisible();
     await page.locator("#id_email").fill(ADMIN_EMAIL);
     await page.locator("#id_password").fill(ADMIN_PASSWORD);
     await page.getByRole("button", { name: "Sign In" }).click();

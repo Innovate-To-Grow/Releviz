@@ -1,4 +1,4 @@
-"""ASGI config for Scheduler."""
+"""ASGI config for Releviz."""
 
 import os
 

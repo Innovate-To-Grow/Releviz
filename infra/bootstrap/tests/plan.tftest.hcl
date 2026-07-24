@@ -14,7 +14,7 @@ run "bootstrap_plan" {
   command = plan
 
   variables {
-    state_bucket_name                 = "scheduler-prod-terraform-state-123456789012"
+    state_bucket_name                 = "releviz-prod-terraform-state-123456789012"
     production_route53_zone_id        = "Z1234567890"
     existing_github_oidc_provider_arn = "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
     production_secret_arns = [
@@ -66,5 +66,15 @@ run "bootstrap_plan" {
       !strcontains(local.production_deploy_policy, "s3:GetBucketEncryption")
     )
     error_message = "The production role must use the IAM action required to inspect state-bucket encryption."
+  }
+
+  assert {
+    condition = (
+      strcontains(local.production_deploy_policy, "application-autoscaling:ListTagsForResource") &&
+      strcontains(local.production_kms_policy, "kms:CreateGrant") &&
+      strcontains(local.production_kms_policy, "rds.us-west-2.amazonaws.com") &&
+      strcontains(local.production_kms_policy, "secretsmanager.us-west-2.amazonaws.com")
+    )
+    error_message = "The production role must read autoscaling tags and use KMS through RDS and Secrets Manager."
   }
 }

@@ -60,7 +60,7 @@ Product metrics are documented in [product-analytics.md](product-analytics.md). 
 ```bash
 curl --fail --silent --show-error \
   -H "Authorization: Bearer $METRICS_BEARER_TOKEN" \
-  https://scheduler.example/api/metrics
+  https://releviz.example/api/metrics
 ```
 
 ## Runbooks

@@ -140,7 +140,7 @@ def response_deadline_ics(event: Event) -> EmailAttachment | None:
         [
             "BEGIN:VCALENDAR",
             "VERSION:2.0",
-            "PRODID:-//Releviz//Scheduler//EN",
+            "PRODID:-//Releviz//Releviz//EN",
             "CALSCALE:GREGORIAN",
             "METHOD:PUBLISH",
             "BEGIN:VEVENT",
@@ -192,7 +192,7 @@ def final_meeting_ics(
     lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
-        "PRODID:-//Releviz//Scheduler//EN",
+        "PRODID:-//Releviz//Releviz//EN",
         "CALSCALE:GREGORIAN",
         f"METHOD:{method}",
         f"X-WR-TIMEZONE:{_ics_escape(meeting.timezone)}",

@@ -1,0 +1,317 @@
+name: Deploy Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type DEPLOY to release the selected main commit to production
+        required: true
+        type: string
+
+permissions:
+  checks: read
+  contents: read
+  deployments: write
+  id-token: write
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    if: ${{ github.ref == 'refs/heads/main' }}
+    environment:
+      name: Production
+      url: https://${{ vars.PROD_DOMAIN }}
+
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-west-2' }}
+      AWS_ROLE_ARN: ${{ vars.AWS_PROD_ROLE_ARN }}
+      TF_STATE_BUCKET: ${{ vars.PROD_TF_STATE_BUCKET }}
+      ECR_BACKEND: ${{ vars.ECR_PROD_BACKEND || 'releviz-prod-backend' }}
+      ECR_FRONTEND: ${{ vars.ECR_PROD_FRONTEND || 'releviz-prod-frontend' }}
+      PROD_DOMAIN: ${{ vars.PROD_DOMAIN }}
+      DEPLOY_SHA: ${{ github.sha }}
+
+    steps:
+      - name: Confirm protected production release
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          if [ "$CONFIRMATION" != "DEPLOY" ]; then
+            echo "::error::Production releases require the exact confirmation DEPLOY."
+            exit 1
+          fi
+          if ! [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::The selected release is not an immutable Git commit SHA."
+            exit 1
+          fi
+
+      - name: Checkout selected main commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+
+      - name: Verify CI Result passed for the release commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          conclusion="$(gh api \
+            -H 'Accept: application/vnd.github+json' \
+            "repos/${GITHUB_REPOSITORY}/commits/${DEPLOY_SHA}/check-runs?per_page=100" \
+            --jq '[.check_runs[] | select(.name == "CI Result")] | sort_by(.completed_at) | last | .conclusion // ""')"
+          if [ "$conclusion" != "success" ]; then
+            echo "::error::CI Result for ${DEPLOY_SHA} is '${conclusion:-missing}', not success."
+            exit 1
+          fi
+
+      - name: Validate production configuration
+        env:
+          ROUTE53_ZONE_ID: ${{ vars.PROD_ROUTE53_ZONE_ID }}
+          DJANGO_SECRET_KEY_ARN: ${{ vars.PROD_DJANGO_SECRET_KEY_ARN }}
+          FIELD_ENCRYPTION_KEY_ARN: ${{ vars.PROD_DJANGO_FIELD_ENCRYPTION_KEY_ARN }}
+          METRICS_BEARER_TOKEN_ARN: ${{ vars.PROD_METRICS_BEARER_TOKEN_ARN }}
+          ALARM_ACTION_ARNS: ${{ vars.PROD_ALARM_ACTION_ARNS_JSON }}
+        run: |
+          set -euo pipefail
+          for required in \
+            AWS_ROLE_ARN \
+            TF_STATE_BUCKET \
+            PROD_DOMAIN \
+            ROUTE53_ZONE_ID \
+            DJANGO_SECRET_KEY_ARN \
+            FIELD_ENCRYPTION_KEY_ARN \
+            METRICS_BEARER_TOKEN_ARN \
+            ALARM_ACTION_ARNS; do
+            if [ -z "${!required:-}" ]; then
+              echo "::error::Missing required Production environment variable: $required"
+              exit 1
+            fi
+          done
+          if ! jq -e 'type == "array" and length > 0 and all(.[]; type == "string" and startswith("arn:"))' \
+            <<< "$ALARM_ACTION_ARNS" >/dev/null; then
+            echo "::error::PROD_ALARM_ACTION_ARNS_JSON must be a non-empty JSON array of SNS ARNs."
+            exit 1
+          fi
+
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify deployment identity and managed dependencies
+        env:
+          DJANGO_SECRET_KEY_ARN: ${{ vars.PROD_DJANGO_SECRET_KEY_ARN }}
+          FIELD_ENCRYPTION_KEY_ARN: ${{ vars.PROD_DJANGO_FIELD_ENCRYPTION_KEY_ARN }}
+          METRICS_BEARER_TOKEN_ARN: ${{ vars.PROD_METRICS_BEARER_TOKEN_ARN }}
+          SENTRY_DSN_SECRET_ARN: ${{ vars.PROD_SENTRY_DSN_SECRET_ARN }}
+        run: |
+          set -euo pipefail
+          aws sts get-caller-identity
+          for secret_arn in \
+            "$DJANGO_SECRET_KEY_ARN" \
+            "$FIELD_ENCRYPTION_KEY_ARN" \
+            "$METRICS_BEARER_TOKEN_ARN" \
+            "$SENTRY_DSN_SECRET_ARN"; do
+            if [ -n "$secret_arn" ]; then
+              aws secretsmanager describe-secret --secret-id "$secret_arn" >/dev/null
+            fi
+          done
+          aws kms describe-key --key-id alias/aws/rds >/dev/null
+          aws kms describe-key --key-id alias/aws/secretsmanager >/dev/null
+
+      - name: Verify protected Terraform state bucket
+        run: |
+          set -euo pipefail
+          aws s3api head-bucket --bucket "$TF_STATE_BUCKET"
+          versioning="$(aws s3api get-bucket-versioning \
+            --bucket "$TF_STATE_BUCKET" --query Status --output text)"
+          if [ "$versioning" != "Enabled" ]; then
+            echo "::error::Production Terraform state bucket versioning must be enabled."
+            exit 1
+          fi
+          aws s3api get-bucket-encryption --bucket "$TF_STATE_BUCKET" >/dev/null
+          public_block="$(aws s3api get-public-access-block \
+            --bucket "$TF_STATE_BUCKET" \
+            --query 'PublicAccessBlockConfiguration.[BlockPublicAcls,IgnorePublicAcls,BlockPublicPolicy,RestrictPublicBuckets]' \
+            --output text)"
+          if [ "$public_block" != $'True\tTrue\tTrue\tTrue' ]; then
+            echo "::error::Production Terraform state bucket must block all public access."
+            exit 1
+          fi
+
+      - name: Verify Elastic IP capacity
+        run: |
+          set -euo pipefail
+          quota="$(aws service-quotas get-service-quota \
+            --service-code ec2 \
+            --quota-code L-0263D0A3 \
+            --query 'Quota.Value' \
+            --output text)"
+          allocated="$(aws ec2 describe-addresses --query 'length(Addresses)' --output text)"
+          available="$(awk -v quota="$quota" -v allocated="$allocated" 'BEGIN { print int(quota - allocated) }')"
+          if [ "$available" -lt 1 ]; then
+            echo "::error::At least one free EC2-VPC Elastic IP is required; quota=${quota}, allocated=${allocated}."
+            exit 1
+          fi
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.15.8
+
+      - name: Initialize Terraform with remote state
+        run: |
+          terraform -chdir=infra/prod init -reconfigure -input=false \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="key=prod/terraform.tfstate" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="use_lockfile=true"
+
+      - name: Ensure immutable ECR repositories exist
+        run: |
+          set -euo pipefail
+          for repository in "$ECR_BACKEND" "$ECR_FRONTEND"; do
+            if ! aws ecr describe-repositories --repository-names "$repository" >/dev/null 2>&1; then
+              aws ecr create-repository \
+                --repository-name "$repository" \
+                --image-tag-mutability IMMUTABLE \
+                --image-scanning-configuration scanOnPush=true >/dev/null
+            else
+              aws ecr put-image-tag-mutability \
+                --repository-name "$repository" \
+                --image-tag-mutability IMMUTABLE >/dev/null
+              aws ecr put-image-scanning-configuration \
+                --repository-name "$repository" \
+                --image-scanning-configuration scanOnPush=true >/dev/null
+            fi
+          done
+
+      - name: Check whether immutable images already exist
+        id: images
+        run: |
+          set -euo pipefail
+          for component in backend frontend; do
+            repository_variable="ECR_${component^^}"
+            repository="${!repository_variable}"
+            if aws ecr describe-images \
+              --repository-name "$repository" \
+              --image-ids "imageTag=${DEPLOY_SHA}" >/dev/null 2>&1; then
+              echo "${component}_exists=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "${component}_exists=false" >> "$GITHUB_OUTPUT"
+            fi
+          done
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push immutable backend image
+        if: ${{ steps.images.outputs.backend_exists != 'true' }}
+        run: |
+          set -euo pipefail
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          image_uri="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_BACKEND}:${DEPLOY_SHA}"
+          docker build --pull --tag "$image_uri" ./backend
+          docker push "$image_uri"
+
+      - name: Build and push immutable frontend image
+        if: ${{ steps.images.outputs.frontend_exists != 'true' }}
+        run: |
+          set -euo pipefail
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          image_uri="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_FRONTEND}:${DEPLOY_SHA}"
+          docker build \
+            --pull \
+            --build-arg NEXT_PUBLIC_API_BASE_URL="" \
+            --tag "$image_uri" \
+            ./frontend
+          docker push "$image_uri"
+
+      - name: Plan production infrastructure without DNS cutover
+        env:
+          TF_VAR_aws_region: ${{ env.AWS_REGION }}
+          TF_VAR_backend_image_tag: ${{ env.DEPLOY_SHA }}
+          TF_VAR_frontend_image_tag: ${{ env.DEPLOY_SHA }}
+          TF_VAR_ecr_backend_repository: ${{ env.ECR_BACKEND }}
+          TF_VAR_ecr_frontend_repository: ${{ env.ECR_FRONTEND }}
+          TF_VAR_custom_domain: ${{ env.PROD_DOMAIN }}
+          TF_VAR_route53_zone_id: ${{ vars.PROD_ROUTE53_ZONE_ID }}
+          TF_VAR_django_secret_key_arn: ${{ vars.PROD_DJANGO_SECRET_KEY_ARN }}
+          TF_VAR_django_field_encryption_key_arn: ${{ vars.PROD_DJANGO_FIELD_ENCRYPTION_KEY_ARN }}
+          TF_VAR_metrics_bearer_token_arn: ${{ vars.PROD_METRICS_BEARER_TOKEN_ARN }}
+          TF_VAR_sentry_dsn_secret_arn: ${{ vars.PROD_SENTRY_DSN_SECRET_ARN || '' }}
+          TF_VAR_secret_kms_key_arn: ${{ vars.PROD_SECRET_KMS_KEY_ARN || '' }}
+          TF_VAR_existing_acm_certificate_arn: ${{ vars.PROD_ACM_CERTIFICATE_ARN || '' }}
+          TF_VAR_alarm_action_arns: ${{ vars.PROD_ALARM_ACTION_ARNS_JSON }}
+          TF_VAR_default_from_email: ${{ vars.PROD_DEFAULT_FROM_EMAIL || 'noreply@releviz.com' }}
+          TF_VAR_manage_dns: "false"
+        run: terraform -chdir=infra/prod plan -input=false -out=production-no-dns.tfplan
+
+      - name: Apply exact production plan without DNS cutover
+        run: terraform -chdir=infra/prod apply -input=false -auto-approve production-no-dns.tfplan
+
+      - name: Capture deployed ECS and ALB resources
+        id: terraform
+        run: |
+          {
+            echo "cluster_name=$(terraform -chdir=infra/prod output -raw ecs_cluster_name)"
+            echo "backend_service=$(terraform -chdir=infra/prod output -raw backend_service_name)"
+            echo "frontend_service=$(terraform -chdir=infra/prod output -raw frontend_service_name)"
+            echo "alb_dns_name=$(terraform -chdir=infra/prod output -raw alb_dns_name)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Wait for both ECS services to stabilize
+        run: |
+          aws ecs wait services-stable \
+            --cluster "${{ steps.terraform.outputs.cluster_name }}" \
+            --services \
+              "${{ steps.terraform.outputs.backend_service }}" \
+              "${{ steps.terraform.outputs.frontend_service }}"
+
+      - name: Run pre-cutover smoke tests against the new ALB
+        env:
+          ALB_DNS_NAME: ${{ steps.terraform.outputs.alb_dns_name }}
+        run: |
+          set -euo pipefail
+          for path in /api/health/live /api/health /; do
+            curl --fail --show-error --retry 10 --retry-delay 5 \
+              --connect-to "${PROD_DOMAIN}:443:${ALB_DNS_NAME}:443" \
+              "https://${PROD_DOMAIN}${path}"
+          done
+
+      - name: Plan reviewed production DNS cutover
+        env:
+          TF_VAR_aws_region: ${{ env.AWS_REGION }}
+          TF_VAR_backend_image_tag: ${{ env.DEPLOY_SHA }}
+          TF_VAR_frontend_image_tag: ${{ env.DEPLOY_SHA }}
+          TF_VAR_ecr_backend_repository: ${{ env.ECR_BACKEND }}
+          TF_VAR_ecr_frontend_repository: ${{ env.ECR_FRONTEND }}
+          TF_VAR_custom_domain: ${{ env.PROD_DOMAIN }}
+          TF_VAR_route53_zone_id: ${{ vars.PROD_ROUTE53_ZONE_ID }}
+          TF_VAR_django_secret_key_arn: ${{ vars.PROD_DJANGO_SECRET_KEY_ARN }}
+          TF_VAR_django_field_encryption_key_arn: ${{ vars.PROD_DJANGO_FIELD_ENCRYPTION_KEY_ARN }}
+          TF_VAR_metrics_bearer_token_arn: ${{ vars.PROD_METRICS_BEARER_TOKEN_ARN }}
+          TF_VAR_sentry_dsn_secret_arn: ${{ vars.PROD_SENTRY_DSN_SECRET_ARN || '' }}
+          TF_VAR_secret_kms_key_arn: ${{ vars.PROD_SECRET_KMS_KEY_ARN || '' }}
+          TF_VAR_existing_acm_certificate_arn: ${{ vars.PROD_ACM_CERTIFICATE_ARN || '' }}
+          TF_VAR_alarm_action_arns: ${{ vars.PROD_ALARM_ACTION_ARNS_JSON }}
+          TF_VAR_default_from_email: ${{ vars.PROD_DEFAULT_FROM_EMAIL || 'noreply@releviz.com' }}
+          TF_VAR_manage_dns: "true"
+        run: terraform -chdir=infra/prod plan -input=false -out=production-dns-cutover.tfplan
+
+      - name: Apply exact production DNS cutover plan
+        run: terraform -chdir=infra/prod apply -input=false -auto-approve production-dns-cutover.tfplan
+
+      - name: Run canonical production smoke tests
+        run: |
+          curl --fail --show-error --retry 10 --retry-delay 5 "https://${PROD_DOMAIN}/api/health/live"
+          curl --fail --show-error --retry 10 --retry-delay 5 "https://${PROD_DOMAIN}/api/health"
+          curl --fail --show-error --retry 10 --retry-delay 5 "https://${PROD_DOMAIN}/"
