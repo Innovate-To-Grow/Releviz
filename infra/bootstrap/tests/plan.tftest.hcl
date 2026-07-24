@@ -70,6 +70,14 @@ run "bootstrap_plan" {
 
   assert {
     condition = (
+      strcontains(local.production_deploy_policy, "servicequotas:GetServiceQuota") &&
+      strcontains(local.production_deploy_policy, "arn:aws:servicequotas:us-west-2:123456789012:ec2/L-0263D0A3")
+    )
+    error_message = "The production role must read the regional EC2-VPC Elastic IP quota used by deployment preflight."
+  }
+
+  assert {
+    condition = (
       strcontains(local.production_deploy_policy, "application-autoscaling:ListTagsForResource") &&
       strcontains(local.production_kms_policy, "kms:CreateGrant") &&
       strcontains(local.production_kms_policy, "rds.us-west-2.amazonaws.com") &&
