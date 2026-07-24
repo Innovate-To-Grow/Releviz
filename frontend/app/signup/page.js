@@ -7,7 +7,7 @@ import { useAuth } from "@/components/auth/AuthContext";
 import { navigateTo } from "@/lib/navigation";
 
 export default function Signup() {
-  const { signup, verifySignup } = useAuth();
+  const { signup, verifySignup, loading: authLoading } = useAuth();
   const [step, setStep] = useState("details");
   const [form, setForm] = useState({
     firstName: "",
@@ -26,6 +26,7 @@ export default function Signup() {
 
   const submitDetails = async (event) => {
     event.preventDefault();
+    if (authLoading) return;
     setError("");
     if (form.password !== form.passwordConfirm) {
       setError("Passwords do not match.");
@@ -52,6 +53,7 @@ export default function Signup() {
 
   const submitCode = async (event) => {
     event.preventDefault();
+    if (authLoading) return;
     setError("");
     setLoading(true);
     try {
@@ -152,7 +154,7 @@ export default function Signup() {
             />
           </label>
         )}
-        <AppButton type="submit" fullWidth disabled={loading}>
+        <AppButton type="submit" fullWidth disabled={loading || authLoading}>
           {loading
             ? "Working..."
             : step === "details"

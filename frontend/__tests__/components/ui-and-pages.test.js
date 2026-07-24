@@ -671,6 +671,26 @@ describe("app pages", () => {
     await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/dashboard"));
   });
 
+  test("Login and signup wait for auth hydration before allowing submission", () => {
+    useAuth.mockReturnValue({
+      loading: true,
+      login: jest.fn(),
+      requestEmailLoginCode: jest.fn(),
+      verifyEmailLoginCode: jest.fn(),
+    });
+    const login = render(<LoginPage />);
+    expect(screen.getByRole("button", { name: "Log in" })).toBeDisabled();
+    login.unmount();
+
+    useAuth.mockReturnValue({
+      loading: true,
+      signup: jest.fn(),
+      verifySignup: jest.fn(),
+    });
+    render(<SignupPage />);
+    expect(screen.getByRole("button", { name: "Send verification code" })).toBeDisabled();
+  });
+
   test("Login supports email code flow and mode switching", async () => {
     const login = jest.fn();
     const requestEmailLoginCode = jest.fn().mockResolvedValue({});
