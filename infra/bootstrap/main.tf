@@ -185,11 +185,12 @@ resource "aws_dynamodb_table" "terraform_locks" {
 }
 
 locals {
-  github_oidc_provider_arn   = var.existing_github_oidc_provider_arn
-  production_role_prefix_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/releviz-prod-*"
-  production_ecr_arn         = "arn:aws:ecr:${var.aws_region}:${data.aws_caller_identity.current.account_id}:repository/${var.production_ecr_repository_prefix}*"
-  eip_quota_arn              = "arn:aws:servicequotas:${var.aws_region}:${data.aws_caller_identity.current.account_id}:ec2/L-0263D0A3"
-  terraform_state_bucket_arn = "arn:aws:s3:::${var.state_bucket_name}"
+  github_oidc_provider_arn          = var.existing_github_oidc_provider_arn
+  production_role_prefix_arn        = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/releviz-prod-*"
+  legacy_production_role_prefix_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/scheduler-prod-*"
+  production_ecr_arn                = "arn:aws:ecr:${var.aws_region}:${data.aws_caller_identity.current.account_id}:repository/${var.production_ecr_repository_prefix}*"
+  eip_quota_arn                     = "arn:aws:servicequotas:${var.aws_region}:${data.aws_caller_identity.current.account_id}:ec2/L-0263D0A3"
+  terraform_state_bucket_arn        = "arn:aws:s3:::${var.state_bucket_name}"
 }
 
 resource "aws_iam_role" "production_deploy" {
@@ -448,7 +449,10 @@ locals {
           "iam:UntagRole",
           "iam:UpdateAssumeRolePolicy",
         ]
-        Resource = local.production_role_prefix_arn
+        Resource = [
+          local.production_role_prefix_arn,
+          local.legacy_production_role_prefix_arn,
+        ]
       },
       {
         Sid      = "RequiredServiceLinkedRoles"
