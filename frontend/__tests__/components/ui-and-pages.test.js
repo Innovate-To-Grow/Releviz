@@ -7,8 +7,10 @@ import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 
 import AppButton from "@/components/ui/AppButton";
+import AppHeader from "@/components/ui/AppHeader";
 import ScheduleGrid from "@/components/schedule/ScheduleGrid";
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
+import EventHeader from "@/components/event/EventHeader";
 import { DAY_LABELS, DAYS_PER_WEEK } from "@/lib/constants";
 import { formatHour, formatMode, formatTime } from "@/lib/format";
 
@@ -431,6 +433,65 @@ describe("small UI modules", () => {
     expect(screen.getAllByText("N/A")[0]).toBeInTheDocument();
     expect(screen.getByText("Mon, Tue")).toBeInTheDocument();
     expect(screen.getByText("11:00 PM - 1:00 AM (next day)")).toBeInTheDocument();
+  });
+});
+
+describe("role-aware headers", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    useAuth.mockReturnValue({
+      user: { displayName: "Prachi", email: "prachi@example.com" },
+      loading: false,
+      logout: jest.fn(),
+    });
+  });
+
+  test("EventHeader shows event identity, role, and dashboard navigation", () => {
+    const { rerender } = render(
+      <EventHeader eventName="Team Sync" eventCode="ABC12345" isOrganizer />
+    );
+
+    expect(screen.getByText("Team Sync")).toBeInTheDocument();
+    expect(screen.getByText("#ABC12345")).toBeInTheDocument();
+    expect(screen.getByText("Organizer")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Prachi" }));
+    expect(screen.getByRole("link", { name: "My Dashboard" })).toHaveAttribute(
+      "href",
+      "/dashboard"
+    );
+
+    rerender(<EventHeader eventName="Team Sync" eventCode="ABC12345" isOrganizer={false} />);
+    expect(screen.getByText("Participant")).toBeInTheDocument();
+  });
+
+  test("AppHeader shows page context and handles authenticated navigation", async () => {
+    const logout = jest.fn().mockResolvedValue();
+    useAuth.mockReturnValue({
+      user: { displayName: "Prachi", email: "prachi@example.com" },
+      loading: false,
+      logout,
+    });
+
+    render(<AppHeader pageTitle="Create event" contextLabel="Organizer" />);
+
+    expect(screen.getByText("/ Create event")).toBeInTheDocument();
+    expect(screen.getByText("Organizer")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Prachi" }));
+    expect(screen.getByRole("menuitem", { name: "Settings" })).toHaveAttribute("href", "/settings");
+    fireEvent.click(screen.getByRole("menuitem", { name: "Log out" }));
+    await waitFor(() => expect(logout).toHaveBeenCalled());
+  });
+
+  test("AppHeader handles loading and signed-out states", () => {
+    useAuth.mockReturnValue({ user: null, loading: true, logout: jest.fn() });
+    const loading = render(<AppHeader pageTitle="My Dashboard" />);
+    expect(screen.queryByRole("link", { name: "Login" })).not.toBeInTheDocument();
+    loading.unmount();
+
+    useAuth.mockReturnValue({ user: null, loading: false, logout: jest.fn() });
+    render(<AppHeader pageTitle="My Dashboard" />);
+    expect(screen.getByRole("link", { name: "Login" })).toHaveAttribute("href", "/login");
   });
 });
 

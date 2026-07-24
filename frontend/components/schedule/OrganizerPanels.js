@@ -588,6 +588,7 @@ export function OrganizerSchedulePanel({
               showValues={false}
               onCellPaint={onVirtualPaint}
               label={mode === "mixed" ? "Virtual" : undefined}
+              virtual
             />
           )}
           {!responsesOpen && (
@@ -597,7 +598,7 @@ export function OrganizerSchedulePanel({
             </p>
           )}
           <AppButton onClick={onSave} disabled={saving || !responsesOpen} icon={<MdSave />}>
-            {saving ? "Saving..." : "Save My Schedule"}
+            {saving ? "Saving..." : "Confirm"}
           </AppButton>
         </div>
       )}
@@ -1006,6 +1007,7 @@ export function OrganizerResultsPanel({
                 showValues={true}
                 label={mode === "mixed" ? "Virtual Availability" : "Availability"}
                 participantDetails={virtualDetails}
+                virtual
               />
             </div>
           )}
@@ -1070,6 +1072,7 @@ export function OrganizerResultsPanel({
                           readOnly={true}
                           showValues={true}
                           label={mode === "mixed" ? "Virtual" : "Availability"}
+                          virtual
                         />
                       </div>
                     )}

@@ -2,18 +2,10 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import React, { useState, useRef, useEffect } from "react";
-import {
-  MdCheck,
-  MdDashboard,
-  MdLink,
-  MdLogin,
-  MdLogout,
-  MdPerson,
-  MdSettings,
-} from "react-icons/md";
-import AppButton from "@/components/ui/AppButton";
+import { useEffect, useRef, useState } from "react";
+import { MdDashboard, MdLogin, MdLogout, MdPerson, MdSettings } from "react-icons/md";
 import { useAuth } from "@/components/auth/AuthContext";
+import AppButton from "@/components/ui/AppButton";
 
 function UserMenu() {
   const { user, loading, logout } = useAuth();
@@ -21,8 +13,8 @@ function UserMenu() {
   const menuRef = useRef(null);
 
   useEffect(() => {
-    const handleClick = (e) => {
-      if (menuRef.current && !menuRef.current.contains(e.target)) setOpen(false);
+    const handleClick = (event) => {
+      if (menuRef.current && !menuRef.current.contains(event.target)) setOpen(false);
     };
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
@@ -42,11 +34,18 @@ function UserMenu() {
 
   return (
     <div ref={menuRef} style={{ position: "relative" }}>
-      <AppButton variant="outlined" icon={<MdPerson />} onClick={() => setOpen((o) => !o)}>
+      <AppButton
+        variant="outlined"
+        icon={<MdPerson />}
+        onClick={() => setOpen((current) => !current)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
         {user.displayName}
       </AppButton>
       {open && (
         <div
+          role="menu"
           style={{
             position: "absolute",
             right: 0,
@@ -55,13 +54,14 @@ function UserMenu() {
             background: "var(--md-sys-color-surface-container)",
             borderRadius: "12px",
             boxShadow: "0 4px 16px rgba(0,0,0,0.15)",
-            minWidth: "160px",
+            minWidth: "176px",
             zIndex: 100,
             overflow: "hidden",
           }}
         >
           <Link
             href="/dashboard"
+            role="menuitem"
             style={{
               display: "flex",
               alignItems: "center",
@@ -77,6 +77,7 @@ function UserMenu() {
           </Link>
           <Link
             href="/settings"
+            role="menuitem"
             style={{
               display: "flex",
               alignItems: "center",
@@ -91,6 +92,8 @@ function UserMenu() {
             <MdSettings /> Settings
           </Link>
           <button
+            type="button"
+            role="menuitem"
             onClick={async () => {
               setOpen(false);
               await logout();
@@ -117,110 +120,70 @@ function UserMenu() {
   );
 }
 
-function EventHeader({ eventName, eventCode, isOrganizer }) {
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = async () => {
-    const shareUrl = `${window.location.origin}/event?code=${eventCode}`;
-    try {
-      await navigator.clipboard.writeText(shareUrl);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Fallback
-      const input = document.createElement("input");
-      input.value = shareUrl;
-      document.body.appendChild(input);
-      input.select();
-      document.execCommand("copy");
-      document.body.removeChild(input);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
-  };
-
+export default function AppHeader({ pageTitle, contextLabel }) {
   return (
-    <div className="event-header">
-      <Link
-        href="/"
-        style={{
-          textDecoration: "none",
-          display: "flex",
-          alignItems: "center",
-          gap: "12px",
-          minWidth: 0,
-        }}
-      >
-        <Image
-          src="/img/i2glogo.png"
-          alt="i2G Logo"
-          width={36}
-          height={36}
-          style={{ flexShrink: 0 }}
-        />
-        <span
+    <header
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: "16px",
+        padding: "12px 24px",
+        borderBottom: "1px solid var(--md-sys-color-surface-variant)",
+        background: "var(--md-sys-color-surface)",
+        position: "sticky",
+        top: 0,
+        zIndex: 50,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: "12px", minWidth: 0 }}>
+        <Link
+          href="/"
           style={{
-            fontWeight: "700",
-            fontSize: "1.1rem",
-            color: "var(--md-sys-color-primary)",
-            marginRight: "4px",
+            textDecoration: "none",
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
           }}
         >
-          Releviz
-        </span>
-        <h1
-          style={{
-            margin: 0,
-            fontSize: "1.2rem",
-            color: "var(--md-sys-color-primary)",
-            fontWeight: "600",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {eventName}
-        </h1>
-        {eventCode && (
+          <Image src="/img/i2glogo.png" alt="i2G Logo" width={36} height={36} />
           <span
             style={{
-              fontSize: "0.85rem",
-              color: "var(--md-sys-color-on-surface-variant)",
-              fontWeight: "400",
-              whiteSpace: "nowrap",
+              fontWeight: "700",
+              fontSize: "1.1rem",
+              color: "var(--md-sys-color-primary)",
             }}
           >
-            #{eventCode}
+            Releviz
+          </span>
+        </Link>
+        {pageTitle && (
+          <span
+            style={{
+              color: "var(--md-sys-color-on-surface-variant)",
+              fontSize: "0.95rem",
+            }}
+          >
+            / {pageTitle}
           </span>
         )}
-        {isOrganizer !== undefined && (
+        {contextLabel && (
           <span
             style={{
               fontSize: "0.75rem",
               fontWeight: "600",
               padding: "2px 8px",
               borderRadius: "999px",
-              background: isOrganizer
-                ? "var(--md-sys-color-primary-container)"
-                : "var(--md-sys-color-secondary-container)",
-              color: isOrganizer
-                ? "var(--md-sys-color-on-primary-container)"
-                : "var(--md-sys-color-on-secondary-container)",
+              background: "var(--md-sys-color-tertiary-container)",
+              color: "var(--md-sys-color-on-tertiary-container)",
               whiteSpace: "nowrap",
             }}
           >
-            {isOrganizer ? "Organizer" : "Participant"}
+            {contextLabel}
           </span>
         )}
-      </Link>
-      <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-        <AppButton onClick={handleCopy} variant="outlined" icon={copied ? <MdCheck /> : <MdLink />}>
-          {copied ? "Copied!" : "Copy Share Link"}
-        </AppButton>
-        <UserMenu />
       </div>
-    </div>
+      <UserMenu />
+    </header>
   );
 }
-
-export default EventHeader;

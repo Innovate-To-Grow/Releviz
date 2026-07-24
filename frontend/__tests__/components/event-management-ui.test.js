@@ -323,6 +323,18 @@ describe("organizer event management UI", () => {
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/login?next=%2Fedit%3Fcode%3D"));
   });
 
+  test("edit form rejects non-organizers", async () => {
+    searchParams = new URLSearchParams("code=EVENT123");
+    fetchEvent.mockResolvedValue({
+      event: { ...baseEvent, organizerUserId: "another-organizer" },
+    });
+
+    render(<CreateEvent operation="edit" />);
+
+    expect(await screen.findByText("Only the organizer can edit this event.")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Unable to edit event" })).toBeInTheDocument();
+  });
+
   test("create form validates and submits a keyboard-friendly form", async () => {
     createEvent.mockResolvedValue({
       event: { ...baseEvent, code: "CREATED1" },
