@@ -44,6 +44,11 @@ jest.mock("@/lib/api/events", () => ({
   updateEventLifecycle: jest.fn(),
 }));
 
+jest.mock("@/lib/navigation", () => ({
+  navigateTo: jest.fn(),
+  reloadPage: jest.fn(),
+}));
+
 import { useAuth } from "@/components/auth/AuthContext";
 import DashboardPage from "@/components/dashboard/DashboardPage";
 import CreateEvent from "@/components/event/CreateEvent";
@@ -56,6 +61,7 @@ import {
   updateEvent,
   updateEventLifecycle,
 } from "@/lib/api/events";
+import { navigateTo, reloadPage } from "@/lib/navigation";
 
 const organizer = {
   id: "organizer-1",
@@ -100,8 +106,6 @@ describe("organizer event management UI", () => {
     jest.resetAllMocks();
     searchParams = new URLSearchParams();
     authenticated();
-    delete window.location;
-    window.location = { assign: jest.fn(), reload: jest.fn() };
     Object.defineProperty(globalThis, "crypto", {
       configurable: true,
       value: { randomUUID: jest.fn().mockReturnValue("request-key") },
@@ -219,7 +223,7 @@ describe("organizer event management UI", () => {
     const codeField = document.querySelector('md-outlined-text-field[label="Enter Event Code"]');
     setCustomElementValue(codeField, " A B C ");
     fireEvent.keyDown(codeField, { key: "Enter" });
-    expect(window.location.assign).toHaveBeenCalledWith("/event?code=A%20B%20C");
+    expect(navigateTo).toHaveBeenCalledWith("/event?code=A%20B%20C");
   });
 
   test("dashboard reports load failures and redirects unauthenticated users", async () => {
@@ -237,7 +241,7 @@ describe("organizer event management UI", () => {
       getToken: jest.fn(),
     });
     render(<DashboardPage />);
-    expect(window.location.assign).toHaveBeenCalledWith("/login?next=/dashboard");
+    expect(navigateTo).toHaveBeenCalledWith("/login?next=/dashboard");
   });
 
   test("edit form loads values and requires explicit response-reset confirmation", async () => {
@@ -303,7 +307,7 @@ describe("organizer event management UI", () => {
       "The latest saved version is 5."
     );
     await userEvent.click(reloadButton);
-    expect(window.location.reload).toHaveBeenCalled();
+    expect(reloadPage).toHaveBeenCalled();
     first.unmount();
 
     searchParams = new URLSearchParams();

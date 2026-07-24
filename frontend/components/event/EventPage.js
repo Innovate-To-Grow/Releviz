@@ -10,6 +10,7 @@ import OrganizerView from "@/components/schedule/OrganizerView";
 import AppButton from "@/components/ui/AppButton";
 import { useAuth } from "@/components/auth/AuthContext";
 import { fetchEvent, markInvitationOpened } from "@/lib/api/events";
+import { navigateTo, replaceUrl } from "@/lib/navigation";
 
 function EventPage() {
   const searchParams = useSearchParams();
@@ -36,7 +37,7 @@ function EventPage() {
         if (!active) return;
         const url = new URL(window.location.href);
         url.searchParams.delete("invitation");
-        window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+        replaceUrl(`${url.pathname}${url.search}${url.hash}`);
         setInvitationReady(true);
       });
     return () => {
@@ -48,7 +49,7 @@ function EventPage() {
     if (authLoading || !invitationReady) return;
     if (!user) {
       const next = eventCode ? `/event?code=${encodeURIComponent(eventCode)}` : "/event";
-      window.location.assign(`/login?next=${encodeURIComponent(next)}`);
+      navigateTo(`/login?next=${encodeURIComponent(next)}`);
       return;
     }
     if (!eventCode) {

@@ -59,6 +59,10 @@ jest.mock("@/lib/api/feedback", () => ({
   submitFeedback: jest.fn(),
 }));
 
+jest.mock("@/lib/navigation", () => ({
+  navigateTo: jest.fn(),
+}));
+
 jest.mock(
   "@/components/HomePageClient",
   () =>
@@ -108,13 +112,12 @@ import SignInPage from "@/app/sign-in/[[...sign-in]]/page";
 import SignUpPage from "@/app/sign-up/[[...sign-up]]/page";
 import { confirmPasswordReset, requestPasswordResetCode } from "@/lib/api/auth";
 import { submitFeedback } from "@/lib/api/feedback";
+import { navigateTo } from "@/lib/navigation";
 
 describe("small UI modules", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     searchParams = new URLSearchParams();
-    delete window.location;
-    window.location = { assign: jest.fn() };
   });
 
   test("format and constants helpers", () => {
@@ -435,8 +438,6 @@ describe("app pages", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     searchParams = new URLSearchParams();
-    delete window.location;
-    window.location = { assign: jest.fn() };
   });
 
   test("wrapper pages render expected clients and redirects", () => {
@@ -578,7 +579,7 @@ describe("app pages", () => {
     await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
     await userEvent.type(screen.getByLabelText("Password"), "password123");
     await userEvent.click(screen.getByRole("button", { name: "Log in" }));
-    await waitFor(() => expect(window.location.assign).toHaveBeenCalledWith("/dashboard"));
+    await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/dashboard"));
     expect(screen.getByRole("link", { name: "Forgot your password?" })).toHaveAttribute(
       "href",
       "/recover"
@@ -606,7 +607,7 @@ describe("app pages", () => {
     await userEvent.type(screen.getAllByLabelText("Email").at(-1), "ada@example.com");
     await userEvent.type(screen.getAllByLabelText("Password").at(-1), "password123");
     await userEvent.click(screen.getAllByRole("button", { name: "Log in" }).at(-1));
-    await waitFor(() => expect(window.location.assign).toHaveBeenCalledWith("/dashboard"));
+    await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/dashboard"));
   });
 
   test("Login supports email code flow and mode switching", async () => {
@@ -634,7 +635,7 @@ describe("app pages", () => {
         code: "123456",
       })
     );
-    expect(window.location.assign).toHaveBeenCalledWith("/event?code=ABC123");
+    expect(navigateTo).toHaveBeenCalledWith("/event?code=ABC123");
 
     await userEvent.click(screen.getByRole("button", { name: "Password" }));
     expect(screen.queryByLabelText("Verification code")).not.toBeInTheDocument();
@@ -724,7 +725,7 @@ describe("app pages", () => {
         passwordConfirm: "password456",
       })
     );
-    expect(window.location.assign).toHaveBeenCalledWith("/login?status=password-reset");
+    expect(navigateTo).toHaveBeenCalledWith("/login?status=password-reset");
 
     await userEvent.click(screen.getByRole("button", { name: "Use a different email" }));
     expect(screen.getByLabelText("Email")).not.toBeDisabled();
@@ -791,7 +792,7 @@ describe("app pages", () => {
     await waitFor(() => expect(signup).toHaveBeenCalled());
     await userEvent.type(await screen.findByLabelText("Verification code"), "123456");
     await userEvent.click(screen.getByRole("button", { name: "Verify and continue" }));
-    await waitFor(() => expect(window.location.assign).toHaveBeenCalledWith("/dashboard"));
+    await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/dashboard"));
     await screen.findByRole("button", { name: "Verify and continue" });
 
     verifySignup.mockRejectedValueOnce(new Error("Bad code"));
@@ -829,7 +830,7 @@ describe("app pages", () => {
   test("Settings redirects unauthenticated users and saves profiles", async () => {
     useAuth.mockReturnValue({ user: null, loading: false, updateProfile: jest.fn() });
     const unauthenticated = render(<SettingsPage />);
-    expect(window.location.assign).toHaveBeenCalledWith("/login?next=/settings");
+    expect(navigateTo).toHaveBeenCalledWith("/login?next=/settings");
     unauthenticated.unmount();
 
     const updateProfile = jest.fn().mockResolvedValue({});
@@ -920,9 +921,7 @@ describe("app pages", () => {
 
     revokeSession.mockResolvedValueOnce({ currentRevoked: true });
     fireEvent.click(screen.getByRole("button", { name: "Sign out this device" }));
-    await waitFor(() =>
-      expect(window.location.assign).toHaveBeenCalledWith("/login?next=/settings")
-    );
+    await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/login?next=/settings"));
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Sign out all devices" })).not.toBeDisabled()
     );

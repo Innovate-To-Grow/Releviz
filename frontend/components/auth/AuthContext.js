@@ -22,6 +22,7 @@ import {
   refreshAuthSession,
   writeAuthSession,
 } from "@/lib/api/config";
+import { navigateTo } from "@/lib/navigation";
 
 const AuthContext = createContext(null);
 
@@ -100,7 +101,7 @@ export function AuthProvider({ children }) {
   const logout = useCallback(async () => {
     await logoutApi();
     setSession(null);
-    window.location.assign("/");
+    navigateTo("/");
   }, []);
 
   const updateProfile = useCallback(async (updates) => {
@@ -130,20 +131,20 @@ export function AuthProvider({ children }) {
   const logoutAll = useCallback(async () => {
     await revokeAuthSessions({ all: true });
     setSession(null);
-    window.location.assign("/login?status=signed-out-all");
+    navigateTo("/login?status=signed-out-all");
   }, []);
 
   const changePassword = useCallback(async (payload) => {
     const result = await changePasswordApi(payload);
     setSession(null);
-    window.location.assign("/login?status=password-changed");
+    navigateTo("/login?status=password-changed");
     return result;
   }, []);
 
   const deleteAccount = useCallback(async (payload) => {
     const result = await deleteAccountApi(payload);
     setSession(null);
-    window.location.assign("/login?status=account-deleted");
+    navigateTo("/login?status=account-deleted");
     return result;
   }, []);
 

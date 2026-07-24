@@ -38,6 +38,12 @@ jest.mock("@/lib/api/auth", () => ({
   verifyRegistration: jest.fn(),
 }));
 
+jest.mock("@/lib/navigation", () => ({
+  navigateTo: jest.fn(),
+}));
+
+import { navigateTo } from "@/lib/navigation";
+
 function jsonResponse(body, status = 200) {
   return {
     ok: status >= 200 && status < 300,
@@ -96,8 +102,6 @@ describe("AuthContext", () => {
     global.fetch = jest.fn().mockResolvedValue(jsonResponse({}, 401));
     delete window.__token;
     delete window.__sessions;
-    delete window.location;
-    window.location = { assign: jest.fn() };
   });
 
   test("throws when useAuth is outside provider", () => {
@@ -186,7 +190,7 @@ describe("AuthContext", () => {
     await userEvent.click(screen.getByText("token"));
     await waitFor(() => expect(window.__token).toBe("verify-token"));
     await userEvent.click(screen.getByText("logout"));
-    expect(window.location.assign).toHaveBeenCalledWith("/");
+    expect(navigateTo).toHaveBeenCalledWith("/");
   });
 
   test("responds to in-memory auth events", async () => {
@@ -226,9 +230,7 @@ describe("AuthContext", () => {
     writeAuthSession({ access: "b", user: { displayName: "Again" } });
     await userEvent.click(screen.getByText("logout-all"));
     expect(revokeAuthSessions).toHaveBeenCalledWith({ all: true });
-    await waitFor(() =>
-      expect(window.location.assign).toHaveBeenCalledWith("/login?status=signed-out-all")
-    );
+    await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/login?status=signed-out-all"));
   });
 
   test("changes passwords and deletes accounts through security actions", async () => {
@@ -249,9 +251,7 @@ describe("AuthContext", () => {
       newPassword: "new-password",
       newPasswordConfirm: "new-password",
     });
-    await waitFor(() =>
-      expect(window.location.assign).toHaveBeenCalledWith("/login?status=password-changed")
-    );
+    await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/login?status=password-changed"));
     expect(screen.getByTestId("user")).toHaveTextContent("none");
 
     writeAuthSession({ access: "b", user: { displayName: "Again" } });
@@ -260,9 +260,7 @@ describe("AuthContext", () => {
       password: "old",
       confirmation: "DELETE",
     });
-    await waitFor(() =>
-      expect(window.location.assign).toHaveBeenCalledWith("/login?status=account-deleted")
-    );
+    await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/login?status=account-deleted"));
     expect(screen.getByTestId("user")).toHaveTextContent("none");
   });
 

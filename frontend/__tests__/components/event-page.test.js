@@ -44,9 +44,15 @@ jest.mock("@/lib/api/events", () => ({
   markInvitationOpened: jest.fn(),
 }));
 
+jest.mock("@/lib/navigation", () => ({
+  navigateTo: jest.fn(),
+  replaceUrl: jest.fn(),
+}));
+
 import { useAuth } from "@/components/auth/AuthContext";
 import EventPage from "@/components/event/EventPage";
 import { fetchEvent, markInvitationOpened } from "@/lib/api/events";
+import { navigateTo, replaceUrl } from "@/lib/navigation";
 
 const user = { id: "member-1", displayName: "Member" };
 const event = {
@@ -70,12 +76,7 @@ describe("event page routing", () => {
     jest.resetAllMocks();
     searchParams = new URLSearchParams("code=EVENT123");
     auth();
-    delete window.location;
-    window.location = {
-      assign: jest.fn(),
-      href: "https://app.example/event?code=EVENT123",
-    };
-    window.history.replaceState = jest.fn();
+    window.history.replaceState({}, "", "/event?code=EVENT123");
   });
 
   test("loads a participant event with the authenticated API", async () => {
@@ -90,8 +91,11 @@ describe("event page routing", () => {
 
   test("marks an invitation opened, removes the capability token, and loads organizer tools", async () => {
     searchParams = new URLSearchParams("code=EVENT123&invitation=private-token");
-    window.location.href =
-      "https://app.example/event?code=EVENT123&invitation=private-token#availability";
+    window.history.replaceState(
+      {},
+      "",
+      "/event?code=EVENT123&invitation=private-token#availability"
+    );
     markInvitationOpened.mockRejectedValue(new Error("tracking unavailable"));
     fetchEvent.mockResolvedValue({
       event: { ...event, organizerUserId: user.id },
@@ -101,11 +105,7 @@ describe("event page routing", () => {
 
     expect(await screen.findByText("Organizer workflow")).toBeInTheDocument();
     expect(markInvitationOpened).toHaveBeenCalledWith("EVENT123", "private-token");
-    expect(window.history.replaceState).toHaveBeenCalledWith(
-      {},
-      "",
-      "/event?code=EVENT123#availability"
-    );
+    expect(replaceUrl).toHaveBeenCalledWith("/event?code=EVENT123#availability");
   });
 
   test("redirects unauthenticated users without retaining invitation credentials", async () => {
@@ -114,7 +114,7 @@ describe("event page routing", () => {
     render(<EventPage />);
 
     await waitFor(() =>
-      expect(window.location.assign).toHaveBeenCalledWith("/login?next=%2Fevent%3Fcode%3DEVENT123")
+      expect(navigateTo).toHaveBeenCalledWith("/login?next=%2Fevent%3Fcode%3DEVENT123")
     );
     expect(fetchEvent).not.toHaveBeenCalled();
   });

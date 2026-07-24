@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 import AppButton from "@/components/ui/AppButton";
 import { useAuth } from "@/components/auth/AuthContext";
+import { navigateTo } from "@/lib/navigation";
 
 function LoginContent() {
   const searchParams = useSearchParams();
@@ -45,14 +46,14 @@ function LoginContent() {
     try {
       if (mode === "password") {
         await login({ email, password });
-        window.location.assign(next);
+        navigateTo(next);
       } else if (!codeSent) {
         await requestEmailLoginCode({ email });
         setCodeSent(true);
         setStatus("Verification code sent. Check your email.");
       } else {
         await verifyEmailLoginCode({ email, code });
-        window.location.assign(next);
+        navigateTo(next);
       }
     } catch (err) {
       setError(err.message || (mode === "code" ? "Unable to verify code." : "Unable to log in."));
