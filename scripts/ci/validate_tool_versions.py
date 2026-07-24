@@ -15,7 +15,7 @@ REQUIRED_FRAGMENTS = (
     'NODE_VERSION: "24"',
     'TERRAFORM_VERSION: "1.15.8"',
     'PIP_AUDIT_VERSION: "2.10.1"',
-    'SEMGREP_VERSION: "1.107.0"',
+    'SEMGREP_VERSION: "1.170.0"',
     'ACTIONLINT_VERSION: "1.7.7"',
     'GITLEAKS_VERSION: "8.21.2"',
     "actions/checkout@v7",
