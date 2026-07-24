@@ -212,6 +212,9 @@ jobs:
           aws secretsmanager describe-secret --secret-id "$METRICS_BEARER_TOKEN_ARN" >/dev/null
           aws kms describe-key --key-id alias/aws/rds >/dev/null
           aws kms describe-key --key-id alias/aws/secretsmanager >/dev/null
+          aws service-quotas get-service-quota \
+            --service-code ec2 \
+            --quota-code L-0263D0A3 >/dev/null
 
       - name: Restore legacy credentials for cleanup
         if: ${{ always() }}
