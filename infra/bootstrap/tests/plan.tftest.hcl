@@ -96,11 +96,10 @@ run "bootstrap_plan" {
   }
 
   assert {
-    condition = (
-      strcontains(local.production_deploy_policy, "arn:aws:iam::123456789012:role/releviz-prod-*") &&
-      strcontains(local.production_deploy_policy, "arn:aws:iam::123456789012:role/scheduler-prod-*") &&
-      !strcontains(local.production_deploy_policy, "role/scheduler-production-github-deploy")
-    )
-    error_message = "The production role must manage current and legacy application roles without access to the legacy GitHub deployment role."
+    condition = one([
+      for statement in jsondecode(local.production_deploy_policy).Statement :
+      statement.Resource if statement.Sid == "ProductionIamRoles"
+    ]) == "arn:aws:iam::123456789012:role/releviz-prod-*"
+    error_message = "The production role must manage only Releviz application roles."
   }
 }
