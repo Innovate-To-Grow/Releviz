@@ -20,7 +20,7 @@ REQUIRED_FRAGMENTS = (
     'GITLEAKS_VERSION: "8.21.2"',
     "actions/checkout@v7",
     "actions/setup-python@v6",
-    "actions/setup-node@v6",
+    "actions/setup-node@v7",
     "actions/cache@v6",
     "actions/upload-artifact@v7",
     "actions/download-artifact@v8",
