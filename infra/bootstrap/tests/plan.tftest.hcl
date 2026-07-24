@@ -85,4 +85,13 @@ run "bootstrap_plan" {
     )
     error_message = "The production role must read autoscaling tags and use KMS through RDS and Secrets Manager."
   }
+
+  assert {
+    condition = (
+      strcontains(local.production_deploy_policy, "arn:aws:iam::123456789012:role/releviz-prod-*") &&
+      strcontains(local.production_deploy_policy, "arn:aws:iam::123456789012:role/scheduler-prod-*") &&
+      !strcontains(local.production_deploy_policy, "role/scheduler-production-github-deploy")
+    )
+    error_message = "The production role must manage current and legacy application roles without access to the legacy GitHub deployment role."
+  }
 }
