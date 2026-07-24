@@ -11,6 +11,7 @@ import "@material/web/textfield/outlined-text-field.js";
 import "@material/web/select/outlined-select.js";
 import "@material/web/select/select-option.js";
 import { DAY_LABELS } from "@/lib/constants";
+import { reloadPage } from "@/lib/navigation";
 import { formatIsoForDateTimeLocal, zonedLocalDateTimeToIso } from "@/lib/time";
 const MODES = [
   { value: "inperson", label: "In-Person" },
@@ -616,11 +617,7 @@ function CreateEvent({ operation = "create" }) {
               The latest saved version is <strong>{conflictEvent.version}</strong>. Reload before
               deciding which edits to keep.
             </p>
-            <AppButton
-              variant="outlined"
-              icon={<MdRefresh />}
-              onClick={() => window.location.reload()}
-            >
+            <AppButton variant="outlined" icon={<MdRefresh />} onClick={reloadPage}>
               Reload latest event
             </AppButton>
           </div>

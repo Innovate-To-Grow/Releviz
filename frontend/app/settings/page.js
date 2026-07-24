@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import AppButton from "@/components/ui/AppButton";
 import { useAuth } from "@/components/auth/AuthContext";
+import { navigateTo } from "@/lib/navigation";
 
 export default function SettingsPage() {
   const {
@@ -35,7 +36,7 @@ export default function SettingsPage() {
 
   useEffect(() => {
     if (!loading && !user && !securityActionInProgress) {
-      window.location.assign("/login?next=/settings");
+      navigateTo("/login?next=/settings");
     }
   }, [loading, securityActionInProgress, user]);
 
@@ -92,7 +93,7 @@ export default function SettingsPage() {
     try {
       const result = await revokeSession(session.id);
       if (result.currentRevoked) {
-        window.location.assign("/login?next=/settings");
+        navigateTo("/login?next=/settings");
         return;
       }
       setSessions((items) => items.filter((item) => item.id !== session.id));

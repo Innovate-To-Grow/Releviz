@@ -16,6 +16,7 @@ import { useAuth } from "@/components/auth/AuthContext";
 import { fetchDashboardEvents } from "@/lib/api/dashboard";
 import { deleteEvent, duplicateEvent, updateEventLifecycle } from "@/lib/api/events";
 import { formatMode } from "@/lib/format";
+import { navigateTo } from "@/lib/navigation";
 import "@material/web/textfield/outlined-text-field.js";
 
 function newRequestKey() {
@@ -115,7 +116,7 @@ function DashboardPage() {
 
   useEffect(() => {
     if (!authLoading && !user) {
-      window.location.assign("/login?next=/dashboard");
+      navigateTo("/login?next=/dashboard");
       return;
     }
     if (authLoading || !user) return;
@@ -247,7 +248,7 @@ function DashboardPage() {
 
   const handleGoToEvent = () => {
     const code = eventCode.trim();
-    if (code) window.location.assign(`/event?code=${encodeURIComponent(code)}`);
+    if (code) navigateTo(`/event?code=${encodeURIComponent(code)}`);
   };
 
   return (

@@ -570,7 +570,8 @@ describe("organizer workflow", () => {
     );
 
     await userEvent.click(screen.getByRole("button", { name: /Hidden Participants/ }));
-    await userEvent.click(screen.getByRole("button", { name: "Unhide" }));
+    const originallyHiddenRow = screen.getByText("Hidden Person").parentElement;
+    await userEvent.click(within(originallyHiddenRow).getByRole("button", { name: "Unhide" }));
     await waitFor(() =>
       expect(unhideParticipant).toHaveBeenCalledWith(baseEvent.code, "hidden", "token")
     );

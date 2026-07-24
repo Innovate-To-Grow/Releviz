@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import AppButton from "@/components/ui/AppButton";
 import { confirmPasswordReset, requestPasswordResetCode } from "@/lib/api/auth";
+import { navigateTo } from "@/lib/navigation";
 
 export default function RecoverAccountPage() {
   const [step, setStep] = useState("request");
@@ -44,7 +45,7 @@ export default function RecoverAccountPage() {
     setLoading(true);
     try {
       await confirmPasswordReset({ email, code, password, passwordConfirm });
-      window.location.assign("/login?status=password-reset");
+      navigateTo("/login?status=password-reset");
     } catch (err) {
       setError(err.message || "Unable to reset your password.");
     } finally {

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import AppButton from "@/components/ui/AppButton";
 import { useAuth } from "@/components/auth/AuthContext";
+import { navigateTo } from "@/lib/navigation";
 
 export default function Signup() {
   const { signup, verifySignup } = useAuth();
@@ -55,7 +56,7 @@ export default function Signup() {
     setLoading(true);
     try {
       await verifySignup({ email: form.email, code: form.code });
-      window.location.assign("/dashboard");
+      navigateTo("/dashboard");
     } catch (err) {
       setError(err.message || "Unable to verify code.");
     } finally {
