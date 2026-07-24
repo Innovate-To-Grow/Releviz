@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef } from "react";
-import { lerpColor } from "@/components/ui/ColorUtils";
+import { lerpColor, lerpVirtualColor } from "@/components/ui/ColorUtils";
 import { formatTime } from "@/lib/format";
 
 function slotLabel(slot) {
@@ -21,6 +21,7 @@ function ScheduleGrid({
   showValues,
   onCellPaint,
   label,
+  virtual = false,
   participantDetails,
 }) {
   const ignoreMouseUntilRef = useRef(0);
@@ -227,7 +228,7 @@ function ScheduleGrid({
                           }}
                           style={{
                             height: "36px",
-                            backgroundColor: lerpColor(value),
+                            backgroundColor: virtual ? lerpVirtualColor(value) : lerpColor(value),
                             borderTop:
                               row === 0 ? "none" : "1px solid var(--md-sys-color-surface-variant)",
                             borderLeft:

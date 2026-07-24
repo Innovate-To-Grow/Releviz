@@ -12,6 +12,7 @@ import {
   MdSearch,
 } from "react-icons/md";
 import AppButton from "@/components/ui/AppButton";
+import AppHeader from "@/components/ui/AppHeader";
 import { useAuth } from "@/components/auth/AuthContext";
 import { fetchDashboardEvents } from "@/lib/api/dashboard";
 import { deleteEvent, duplicateEvent, updateEventLifecycle } from "@/lib/api/events";
@@ -252,111 +253,114 @@ function DashboardPage() {
   };
 
   return (
-    <main className="page-pad dashboard-shell">
-      {error && (
-        <div className="dashboard-message dashboard-error" role="alert">
-          {error}
-        </div>
-      )}
-      {status && (
-        <div className="dashboard-message dashboard-status" role="status">
-          {status}
-        </div>
-      )}
-
-      <div className="dashboard-heading">
-        <h1>My Dashboard</h1>
-        <Link href="/create" className="dashboard-create-link">
-          <MdAdd aria-hidden="true" /> Create New Event
-        </Link>
-      </div>
-
-      <div className="md-card dashboard-code-search">
-        <md-outlined-text-field
-          label="Enter Event Code"
-          value={eventCode}
-          onInput={(event) => setEventCode(event.target.value)}
-          onKeyDown={(event) => event.key === "Enter" && handleGoToEvent()}
-          style={{ flex: 1 }}
-        ></md-outlined-text-field>
-        <AppButton onClick={handleGoToEvent} variant="outlined" icon={<MdSearch />}>
-          Go
-        </AppButton>
-      </div>
-
-      {deleteTarget && (
-        <form
-          className="dashboard-delete-panel"
-          onSubmit={handleDelete}
-          aria-labelledby="delete-event-heading"
-        >
-          <h2 id="delete-event-heading">Delete {deleteTarget.name}?</h2>
-          <p>
-            This permanently removes the event, participant responses, invitations, final meeting,
-            and queued event emails. This action cannot be undone.
-          </p>
-          <label className="field-label">
-            Type <strong>{deleteTarget.code}</strong> to confirm
-            <input
-              aria-label="Event code confirmation"
-              value={deleteConfirmation}
-              onChange={(event) => setDeleteConfirmation(event.target.value)}
-              autoComplete="off"
-            />
-          </label>
-          <div className="dashboard-delete-actions">
-            <AppButton variant="text" onClick={closeDeletePanel}>
-              Cancel
-            </AppButton>
-            <AppButton
-              type="submit"
-              variant="outlined"
-              className="app-btn-danger"
-              icon={<MdDeleteOutline />}
-              disabled={
-                actionCode === deleteTarget.code || deleteConfirmation !== deleteTarget.code
-              }
-            >
-              {actionCode === deleteTarget.code ? "Deleting..." : "Delete event permanently"}
-            </AppButton>
+    <>
+      <AppHeader pageTitle="My Dashboard" />
+      <main className="page-pad dashboard-shell">
+        {error && (
+          <div className="dashboard-message dashboard-error" role="alert">
+            {error}
           </div>
-        </form>
-      )}
+        )}
+        {status && (
+          <div className="dashboard-message dashboard-status" role="status">
+            {status}
+          </div>
+        )}
 
-      <section className="md-card dashboard-section">
-        <h2>My Events ({organized.length})</h2>
-        {organized.length > 0 ? (
-          <div className="dashboard-event-list">
-            {organized.map((event) => (
-              <EventCard
-                key={event.code}
-                event={event}
-                organizerActions
-                busy={actionCode === event.code}
-                onArchive={handleArchive}
-                onDuplicate={handleDuplicate}
-                onDeleteRequested={openDeletePanel}
+        <div className="dashboard-heading">
+          <h1>My Dashboard</h1>
+          <Link href="/create" className="dashboard-create-link">
+            <MdAdd aria-hidden="true" /> Create New Event
+          </Link>
+        </div>
+
+        <div className="md-card dashboard-code-search">
+          <md-outlined-text-field
+            label="Enter Event Code"
+            value={eventCode}
+            onInput={(event) => setEventCode(event.target.value)}
+            onKeyDown={(event) => event.key === "Enter" && handleGoToEvent()}
+            style={{ flex: 1 }}
+          ></md-outlined-text-field>
+          <AppButton onClick={handleGoToEvent} variant="outlined" icon={<MdSearch />}>
+            Go
+          </AppButton>
+        </div>
+
+        {deleteTarget && (
+          <form
+            className="dashboard-delete-panel"
+            onSubmit={handleDelete}
+            aria-labelledby="delete-event-heading"
+          >
+            <h2 id="delete-event-heading">Delete {deleteTarget.name}?</h2>
+            <p>
+              This permanently removes the event, participant responses, invitations, final meeting,
+              and queued event emails. This action cannot be undone.
+            </p>
+            <label className="field-label">
+              Type <strong>{deleteTarget.code}</strong> to confirm
+              <input
+                aria-label="Event code confirmation"
+                value={deleteConfirmation}
+                onChange={(event) => setDeleteConfirmation(event.target.value)}
+                autoComplete="off"
               />
-            ))}
-          </div>
-        ) : (
-          <p className="dashboard-empty">No events organized yet.</p>
+            </label>
+            <div className="dashboard-delete-actions">
+              <AppButton variant="text" onClick={closeDeletePanel}>
+                Cancel
+              </AppButton>
+              <AppButton
+                type="submit"
+                variant="outlined"
+                className="app-btn-danger"
+                icon={<MdDeleteOutline />}
+                disabled={
+                  actionCode === deleteTarget.code || deleteConfirmation !== deleteTarget.code
+                }
+              >
+                {actionCode === deleteTarget.code ? "Deleting..." : "Delete event permanently"}
+              </AppButton>
+            </div>
+          </form>
         )}
-      </section>
 
-      <section className="md-card dashboard-section">
-        <h2>Events I Participate In ({participating.length})</h2>
-        {participating.length > 0 ? (
-          <div className="dashboard-event-list">
-            {participating.map((event) => (
-              <EventCard key={event.code} event={event} />
-            ))}
-          </div>
-        ) : (
-          <p className="dashboard-empty">Not participating in any events yet.</p>
-        )}
-      </section>
-    </main>
+        <section className="md-card dashboard-section">
+          <h2>My Events ({organized.length})</h2>
+          {organized.length > 0 ? (
+            <div className="dashboard-event-list">
+              {organized.map((event) => (
+                <EventCard
+                  key={event.code}
+                  event={event}
+                  organizerActions
+                  busy={actionCode === event.code}
+                  onArchive={handleArchive}
+                  onDuplicate={handleDuplicate}
+                  onDeleteRequested={openDeletePanel}
+                />
+              ))}
+            </div>
+          ) : (
+            <p className="dashboard-empty">No events organized yet.</p>
+          )}
+        </section>
+
+        <section className="md-card dashboard-section">
+          <h2>Events I Participate In ({participating.length})</h2>
+          {participating.length > 0 ? (
+            <div className="dashboard-event-list">
+              {participating.map((event) => (
+                <EventCard key={event.code} event={event} />
+              ))}
+            </div>
+          ) : (
+            <p className="dashboard-empty">Not participating in any events yet.</p>
+          )}
+        </section>
+      </main>
+    </>
   );
 }
 

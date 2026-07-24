@@ -442,7 +442,7 @@ function ParticipantView() {
             )}
           </h2>
           <p style={{ color: "var(--md-sys-color-on-surface-variant)", margin: 0 }}>
-            Set your availability and see the group schedule.
+            Set your availability.
           </p>
         </div>
         <AppButton
@@ -455,7 +455,14 @@ function ParticipantView() {
       </div>
 
       <div className="two-pane">
-        <div style={{ flex: "1 1 350px", display: "flex", flexDirection: "column", gap: "24px" }}>
+        <div
+          style={{
+            flex: viewPermission === "own_only" ? "1 1 100%" : "1 1 350px",
+            display: "flex",
+            flexDirection: "column",
+            gap: "24px",
+          }}
+        >
           <div
             className="md-card"
             style={{ display: "flex", flexDirection: "column", gap: "24px" }}
@@ -518,6 +525,7 @@ function ParticipantView() {
                 showValues={false}
                 onCellPaint={handleVirtualPaint}
                 label={mode === "mixed" ? "Virtual" : undefined}
+                virtual
               />
             )}
 
@@ -591,97 +599,108 @@ function ParticipantView() {
           </div>
         </div>
 
-        <div style={{ flex: "2 1 700px", display: "flex", flexDirection: "column", gap: "24px" }}>
-          {results ? (
-            <div className="md-card" style={{ overflowX: "auto" }}>
-              <h3 style={{ margin: "0 0 8px 0", color: "var(--md-sys-color-on-surface)" }}>
-                Group Availability
-              </h3>
-              <p
-                style={{
-                  margin: "0 0 16px 0",
-                  color: "var(--md-sys-color-on-surface-variant)",
-                  fontSize: "0.9rem",
-                }}
-              >
-                Based on {results.countedResponseTotal} submitted response(s).{" "}
-                {results.unansweredParticipantTotal} participant(s) are still unanswered.
-              </p>
-              <div style={{ display: "flex", gap: "24px", flexWrap: "wrap" }}>
-                {mode !== "virtual" && (
-                  <div style={{ flex: "1 1 300px", minWidth: 0 }}>
-                    <ScheduleGrid
-                      schedule={avgInperson}
-                      slotGroups={event.slotGroups}
-                      readOnly={true}
-                      showValues={true}
-                      label={mode === "mixed" ? "In-Person Availability" : "Availability"}
-                    />
-                  </div>
-                )}
-                {mode !== "inperson" && (
-                  <div style={{ flex: "1 1 300px", minWidth: 0 }}>
-                    <ScheduleGrid
-                      schedule={avgVirtual}
-                      slotGroups={event.slotGroups}
-                      readOnly={true}
-                      showValues={true}
-                      label={mode === "mixed" ? "Virtual Availability" : "Availability"}
-                    />
-                  </div>
-                )}
-              </div>
-            </div>
-          ) : (
-            <div className="md-card">
-              <h3 style={{ margin: "0 0 8px 0" }}>Group Availability</h3>
-              <p style={{ margin: 0, color: "var(--md-sys-color-on-surface-variant)" }}>
-                {viewPermission === "own_only"
-                  ? "The organizer has limited participants to their own schedules."
-                  : "Submit a valid schedule before shared results become available."}
-              </p>
-            </div>
-          )}
-
-          {results && viewPermission !== "own_only" && participants.length > 0 && (
-            <div>
-              <h3 style={{ margin: "0 0 16px 0", color: "var(--md-sys-color-on-surface)" }}>
-                Individual Schedules
-              </h3>
-              <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
-                {participants.map((participant) => (
-                  <div className="md-card" key={participant.id} style={{ overflowX: "auto" }}>
-                    <h4 style={{ margin: "0 0 16px 0", fontSize: "1.2rem" }}>{participant.name}</h4>
-                    <div style={{ display: "flex", gap: "24px", flexWrap: "wrap" }}>
-                      {mode !== "virtual" && (
-                        <div style={{ flex: "1 1 300px", minWidth: 0 }}>
-                          <ScheduleGrid
-                            schedule={participant.inpersonArray}
-                            slotGroups={event.slotGroups}
-                            readOnly={true}
-                            showValues={true}
-                            label={mode === "mixed" ? "In-Person" : "Availability"}
-                          />
-                        </div>
-                      )}
-                      {mode !== "inperson" && (
-                        <div style={{ flex: "1 1 300px", minWidth: 0 }}>
-                          <ScheduleGrid
-                            schedule={participant.virtualArray}
-                            slotGroups={event.slotGroups}
-                            readOnly={true}
-                            showValues={true}
-                            label={mode === "mixed" ? "Virtual" : "Availability"}
-                          />
-                        </div>
-                      )}
+        {viewPermission !== "own_only" && (
+          <div
+            style={{
+              flex: "2 1 700px",
+              display: "flex",
+              flexDirection: "column",
+              gap: "24px",
+            }}
+          >
+            {results ? (
+              <div className="md-card" style={{ overflowX: "auto" }}>
+                <h3 style={{ margin: "0 0 8px 0", color: "var(--md-sys-color-on-surface)" }}>
+                  Group Availability
+                </h3>
+                <p
+                  style={{
+                    margin: "0 0 16px 0",
+                    color: "var(--md-sys-color-on-surface-variant)",
+                    fontSize: "0.9rem",
+                  }}
+                >
+                  Based on {results.countedResponseTotal} submitted response(s).{" "}
+                  {results.unansweredParticipantTotal} participant(s) are still unanswered.
+                </p>
+                <div style={{ display: "flex", gap: "24px", flexWrap: "wrap" }}>
+                  {mode !== "virtual" && (
+                    <div style={{ flex: "1 1 300px", minWidth: 0 }}>
+                      <ScheduleGrid
+                        schedule={avgInperson}
+                        slotGroups={event.slotGroups}
+                        readOnly={true}
+                        showValues={true}
+                        label={mode === "mixed" ? "In-Person Availability" : "Availability"}
+                      />
                     </div>
-                  </div>
-                ))}
+                  )}
+                  {mode !== "inperson" && (
+                    <div style={{ flex: "1 1 300px", minWidth: 0 }}>
+                      <ScheduleGrid
+                        schedule={avgVirtual}
+                        slotGroups={event.slotGroups}
+                        readOnly={true}
+                        showValues={true}
+                        label={mode === "mixed" ? "Virtual Availability" : "Availability"}
+                        virtual
+                      />
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          )}
-        </div>
+            ) : (
+              <div className="md-card">
+                <h3 style={{ margin: "0 0 8px 0" }}>Group Availability</h3>
+                <p style={{ margin: 0, color: "var(--md-sys-color-on-surface-variant)" }}>
+                  Submit a valid schedule before shared results become available.
+                </p>
+              </div>
+            )}
+
+            {results && viewPermission !== "own_only" && participants.length > 0 && (
+              <div>
+                <h3 style={{ margin: "0 0 16px 0", color: "var(--md-sys-color-on-surface)" }}>
+                  Individual Schedules
+                </h3>
+                <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+                  {participants.map((participant) => (
+                    <div className="md-card" key={participant.id} style={{ overflowX: "auto" }}>
+                      <h4 style={{ margin: "0 0 16px 0", fontSize: "1.2rem" }}>
+                        {participant.name}
+                      </h4>
+                      <div style={{ display: "flex", gap: "24px", flexWrap: "wrap" }}>
+                        {mode !== "virtual" && (
+                          <div style={{ flex: "1 1 300px", minWidth: 0 }}>
+                            <ScheduleGrid
+                              schedule={participant.inpersonArray}
+                              slotGroups={event.slotGroups}
+                              readOnly={true}
+                              showValues={true}
+                              label={mode === "mixed" ? "In-Person" : "Availability"}
+                            />
+                          </div>
+                        )}
+                        {mode !== "inperson" && (
+                          <div style={{ flex: "1 1 300px", minWidth: 0 }}>
+                            <ScheduleGrid
+                              schedule={participant.virtualArray}
+                              slotGroups={event.slotGroups}
+                              readOnly={true}
+                              showValues={true}
+                              label={mode === "mixed" ? "Virtual" : "Availability"}
+                              virtual
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

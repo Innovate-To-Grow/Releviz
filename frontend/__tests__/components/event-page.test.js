@@ -22,8 +22,8 @@ jest.mock("@/components/auth/AuthContext", () => ({
 
 jest.mock("@/components/event/EventHeader", () => ({
   __esModule: true,
-  default: ({ eventName, eventCode }) => (
-    <div data-testid="event-header">
+  default: ({ eventName, eventCode, isOrganizer }) => (
+    <div data-testid="event-header" data-organizer={String(isOrganizer)}>
       {eventName}:{eventCode}
     </div>
   ),
@@ -86,6 +86,7 @@ describe("event page routing", () => {
 
     expect(await screen.findByText("Participant workflow")).toBeInTheDocument();
     expect(screen.getByTestId("event-header")).toHaveTextContent("Planning session:EVENT123");
+    expect(screen.getByTestId("event-header")).toHaveAttribute("data-organizer", "false");
     expect(fetchEvent).toHaveBeenCalledWith("EVENT123", "token");
   });
 
@@ -104,6 +105,7 @@ describe("event page routing", () => {
     render(<EventPage />);
 
     expect(await screen.findByText("Organizer workflow")).toBeInTheDocument();
+    expect(screen.getByTestId("event-header")).toHaveAttribute("data-organizer", "true");
     expect(markInvitationOpened).toHaveBeenCalledWith("EVENT123", "private-token");
     expect(replaceUrl).toHaveBeenCalledWith("/event?code=EVENT123#availability");
   });

@@ -1,4 +1,13 @@
-import { lerpColor, color0, color1, color2 } from "../../components/ui/ColorUtils";
+import {
+  lerpColor,
+  lerpVirtualColor,
+  color0,
+  color1,
+  color2,
+  virtualColor0,
+  virtualColor1,
+  virtualColor2,
+} from "../../components/ui/ColorUtils";
 
 describe("color constants", () => {
   test("color0 is the busy/red color", () => {
@@ -47,5 +56,27 @@ describe("lerpColor", () => {
     expect(result).toMatch(/^rgb\(\d+, \d+, \d+\)$/);
     // Should be midpoint of yellow and green — not red
     expect(result).not.toBe("rgb(255, 180, 171)");
+  });
+});
+
+describe("virtual color constants", () => {
+  test("use red, fuchsia, and blue stops", () => {
+    expect(virtualColor0).toBe("#ffb4ab");
+    expect(virtualColor1).toBe("#f4b8ff");
+    expect(virtualColor2).toBe("#a8c7fa");
+  });
+});
+
+describe("lerpVirtualColor", () => {
+  test.each([
+    [0, "rgb(255, 180, 171)"],
+    [0.5, "rgb(244, 184, 255)"],
+    [1, "rgb(168, 199, 250)"],
+  ])("maps %s to %s", (amount, expected) => {
+    expect(lerpVirtualColor(amount)).toBe(expected);
+  });
+
+  test("uses a different free color from the in-person gradient", () => {
+    expect(lerpVirtualColor(1)).not.toBe(lerpColor(1));
   });
 });

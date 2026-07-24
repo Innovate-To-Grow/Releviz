@@ -117,7 +117,7 @@ function EventPage() {
 
   return (
     <EventContext.Provider value={{ event, setEvent, isOrganizer, numSlots }}>
-      <EventHeader eventName={event.name} eventCode={event.code} />
+      <EventHeader eventName={event.name} eventCode={event.code} isOrganizer={isOrganizer} />
       {isOrganizer ? <OrganizerView /> : <ParticipantView />}
     </EventContext.Provider>
   );

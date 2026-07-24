@@ -323,9 +323,9 @@ describe("participant workflow", () => {
     });
     fetchEventResults.mockRejectedValue(new Error("Not authorized"));
     renderParticipant({ ...baseEvent, participantViewPermission: "own_only" });
-    expect(
-      await screen.findByText("The organizer has limited participants to their own schedules.")
-    ).toBeInTheDocument();
+    await waitFor(() => expect(fetchEventResults).toHaveBeenCalled());
+    expect(screen.getByText("Set your availability.")).toBeInTheDocument();
+    expect(screen.queryByText("Group Availability")).not.toBeInTheDocument();
   });
 });
 
@@ -577,7 +577,7 @@ describe("organizer workflow", () => {
     );
 
     await userEvent.click(screen.getByRole("button", { name: "Paint In-Person" }));
-    await userEvent.click(screen.getByRole("button", { name: "Save My Schedule" }));
+    await userEvent.click(screen.getByRole("button", { name: "Confirm" }));
     await waitFor(() =>
       expect(updateParticipant).toHaveBeenCalledWith(
         baseEvent.code,
