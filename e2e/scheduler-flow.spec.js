@@ -10,6 +10,17 @@ const EMAIL_FILE_PATH = process.env.EMAIL_FILE_PATH || "/tmp/releviz-e2e-mail";
 const ADMIN_EMAIL = process.env.DJANGO_SUPERUSER_EMAIL || "admin@releviz.local";
 const ADMIN_PASSWORD = process.env.DJANGO_SUPERUSER_PASSWORD || "Admin12345!";
 
+function decodeQuotedPrintable(value) {
+  const unfolded = value.replace(/=\r?\n/g, "");
+  return unfolded.replace(/(?:=[0-9a-f]{2})+/gi, (encoded) => {
+    const bytes = encoded
+      .slice(1)
+      .split("=")
+      .map((hex) => Number.parseInt(hex, 16));
+    return Buffer.from(bytes).toString("utf8");
+  });
+}
+
 async function latestVerificationCode(email, afterMs) {
   const body = await latestEmailFor(email, afterMs, (message) =>
     /verification code is \d{6}/i.test(message)
@@ -43,7 +54,10 @@ async function latestEmailFor(email, afterMs, predicate = () => true) {
           .split(",")
           .map((recipient) => recipient.trim().toLowerCase());
         if (!recipients.includes(normalizedEmail)) continue;
-        if (predicate(message)) matches.push({ body: message, mtimeMs: stat.mtimeMs });
+        const decodedMessage = decodeQuotedPrintable(message);
+        if (predicate(decodedMessage)) {
+          matches.push({ body: decodedMessage, mtimeMs: stat.mtimeMs });
+        }
       }
     }
     matches.sort((a, b) => b.mtimeMs - a.mtimeMs);
