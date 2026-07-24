@@ -20,7 +20,7 @@ function LoginContent() {
     }[statusCode] || "";
   const next =
     requestedNext.startsWith("/") && !requestedNext.startsWith("//") ? requestedNext : "/dashboard";
-  const { login, requestEmailLoginCode, verifyEmailLoginCode } = useAuth();
+  const { login, requestEmailLoginCode, verifyEmailLoginCode, loading: authLoading } = useAuth();
   const [mode, setMode] = useState("password");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -40,6 +40,7 @@ function LoginContent() {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
+    if (authLoading) return;
     setError("");
     setStatus("");
     setLoading(true);
@@ -132,7 +133,7 @@ function LoginContent() {
             </label>
           )
         )}
-        <AppButton type="submit" fullWidth disabled={loading}>
+        <AppButton type="submit" fullWidth disabled={loading || authLoading}>
           {loading
             ? mode === "code" && !codeSent
               ? "Sending..."
