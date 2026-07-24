@@ -78,6 +78,15 @@ run "bootstrap_plan" {
 
   assert {
     condition = (
+      strcontains(local.production_deploy_policy, "secretsmanager:CreateSecret") &&
+      strcontains(local.production_deploy_policy, "secretsmanager:TagResource") &&
+      strcontains(local.production_deploy_policy, "arn:aws:secretsmanager:us-west-2:123456789012:secret:rds!db-*")
+    )
+    error_message = "The production role must create only RDS-managed master-password secrets."
+  }
+
+  assert {
+    condition = (
       strcontains(local.production_deploy_policy, "application-autoscaling:ListTagsForResource") &&
       strcontains(local.production_kms_policy, "kms:CreateGrant") &&
       strcontains(local.production_kms_policy, "rds.us-west-2.amazonaws.com") &&
