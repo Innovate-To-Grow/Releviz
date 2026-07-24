@@ -189,6 +189,7 @@ locals {
   production_role_prefix_arn        = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/releviz-prod-*"
   legacy_production_role_prefix_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/scheduler-prod-*"
   production_ecr_arn                = "arn:aws:ecr:${var.aws_region}:${data.aws_caller_identity.current.account_id}:repository/${var.production_ecr_repository_prefix}*"
+  rds_managed_secret_arn            = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:rds!db-*"
   eip_quota_arn                     = "arn:aws:servicequotas:${var.aws_region}:${data.aws_caller_identity.current.account_id}:ec2/L-0263D0A3"
   terraform_state_bucket_arn        = "arn:aws:s3:::${var.state_bucket_name}"
 }
@@ -279,6 +280,15 @@ locals {
         Effect   = "Allow"
         Action   = ["secretsmanager:DescribeSecret"]
         Resource = var.production_secret_arns
+      },
+      {
+        Sid    = "RdsManagedMasterSecret"
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:CreateSecret",
+          "secretsmanager:TagResource",
+        ]
+        Resource = local.rds_managed_secret_arn
       },
       {
         Sid    = "ProductionNetwork"
