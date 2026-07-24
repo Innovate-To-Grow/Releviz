@@ -19,7 +19,7 @@ REQUIRED_FRAGMENTS = (
     'ACTIONLINT_VERSION: "1.7.7"',
     'GITLEAKS_VERSION: "8.21.2"',
     "actions/checkout@v7",
-    "actions/setup-python@v6",
+    "actions/setup-python@v7",
     "actions/setup-node@v6",
     "actions/cache@v6",
     "actions/upload-artifact@v7",
