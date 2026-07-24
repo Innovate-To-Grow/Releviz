@@ -5,7 +5,7 @@ variable "aws_region" {
 
 variable "app_name" {
   type    = string
-  default = "scheduler"
+  default = "releviz"
 }
 
 variable "environment" {
@@ -98,37 +98,37 @@ variable "autoscaling_cpu_target" {
 
 variable "ecr_backend_repository" {
   type    = string
-  default = "scheduler-prod-backend"
+  default = "releviz-prod-backend"
 }
 
 variable "ecr_frontend_repository" {
   type    = string
-  default = "scheduler-prod-frontend"
+  default = "releviz-prod-frontend"
 }
 
 variable "events_table_name" {
   type    = string
-  default = "scheduler-prod-events"
+  default = "releviz-prod-events"
 }
 
 variable "participants_table_name" {
   type    = string
-  default = "scheduler-prod-participants"
+  default = "releviz-prod-participants"
 }
 
 variable "weights_table_name" {
   type    = string
-  default = "scheduler-prod-weights"
+  default = "releviz-prod-weights"
 }
 
 variable "users_table_name" {
   type    = string
-  default = "scheduler-prod-users"
+  default = "releviz-prod-users"
 }
 
 variable "user_events_table_name" {
   type    = string
-  default = "scheduler-prod-user-events"
+  default = "releviz-prod-user-events"
 }
 
 variable "db_name" {

@@ -1,9 +1,0 @@
-# CD_DISABLED_DURING_PR_CONSOLIDATION
-#
-# Production CD is intentionally disabled while the open pull-request backlog is
-# consolidated. GitHub does not load workflow files with the `.disabled` suffix,
-# so this file cannot be dispatched or grant deployment/OIDC permissions.
-#
-# Rebuild and review production CD after the consolidation is complete. The last
-# runnable workflow remains available in Git history before commit 8276f7d.
-name: Deploy Production (disabled)

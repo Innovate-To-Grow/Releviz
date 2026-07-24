@@ -39,7 +39,7 @@ class AuthFlowTests(TestCase):
                 "password_confirm": "password123",
                 "first_name": "Ada",
                 "last_name": "Lovelace",
-                "organization": "Scheduler",
+                "organization": "Releviz",
             },
             format="json",
         )

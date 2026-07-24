@@ -15,6 +15,14 @@ mock_provider "aws" {
     }
   }
 
+  mock_data "aws_kms_alias" {
+    defaults = {
+      arn            = "arn:aws:kms:us-west-2:123456789012:alias/aws/mock"
+      target_key_arn = "arn:aws:kms:us-west-2:123456789012:key/test"
+      target_key_id  = "test"
+    }
+  }
+
   mock_resource "aws_db_instance" {
     defaults = {
       address = "production-db.example.internal"
@@ -55,9 +63,11 @@ run "production_plan" {
   assert {
     condition = (
       aws_db_instance.app.storage_encrypted &&
+      aws_db_instance.app.kms_key_id == data.aws_kms_alias.rds.target_key_arn &&
       aws_db_instance.app.multi_az &&
       !aws_db_instance.app.publicly_accessible &&
       aws_db_instance.app.manage_master_user_password &&
+      aws_db_instance.app.master_user_secret_kms_key_id == data.aws_kms_alias.secretsmanager.target_key_arn &&
       aws_db_instance.app.deletion_protection &&
       !aws_db_instance.app.skip_final_snapshot &&
       !aws_db_instance.app.delete_automated_backups &&
@@ -95,11 +105,11 @@ run "production_plan" {
     condition = (
       endswith(
         local.backend_image_uri,
-        "/scheduler-prod-backend:0123456789abcdef0123456789abcdef01234567"
+        "/releviz-prod-backend:0123456789abcdef0123456789abcdef01234567"
       ) &&
       endswith(
         local.frontend_image_uri,
-        "/scheduler-prod-frontend:0123456789abcdef0123456789abcdef01234567"
+        "/releviz-prod-frontend:0123456789abcdef0123456789abcdef01234567"
       )
     )
     error_message = "Backend and frontend task definitions must use separate repositories and immutable Git SHA tags."

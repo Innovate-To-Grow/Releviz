@@ -4,14 +4,14 @@ from django.test import TestCase
 
 
 class AdminThemeRenderingTests(TestCase):
-    def test_admin_login_uses_scheduler_material_theme(self):
+    def test_admin_login_uses_releviz_material_theme(self):
         response = self.client.get("/admin/login/?next=/admin/")
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Scheduler Admin")
+        self.assertContains(response, "Releviz Admin")
         self.assertContains(response, "login-box")
         self.assertContains(response, "dark .login-box")
-        self.assertContains(response, "/static/images/scheduler-logo")
+        self.assertContains(response, "/static/images/releviz-logo")
         self.assertContains(response, ".svg")
         self.assertContains(response, "admin/css/google-material-admin.css")
         self.assertContains(response, "admin/js/i2g-admin-theme-runtime.js")
@@ -20,7 +20,7 @@ class AdminThemeRenderingTests(TestCase):
         self.assertNotContains(response, "Innovate")
         self.assertNotContains(response, "I2G Home")
 
-    def test_admin_index_uses_scheduler_material_theme_and_groups(self):
+    def test_admin_index_uses_releviz_material_theme_and_groups(self):
         admin = get_user_model().objects.create_superuser(
             email="admin@example.com",
             password="password123",
@@ -30,8 +30,8 @@ class AdminThemeRenderingTests(TestCase):
         response = self.client.get("/admin/")
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Scheduler")
-        self.assertContains(response, "/static/images/scheduler-logo")
+        self.assertContains(response, "Releviz")
+        self.assertContains(response, "/static/images/releviz-logo")
         self.assertContains(response, ".svg")
         self.assertContains(response, "admin/css/google-material-admin.css")
         self.assertContains(response, "admin/css/google-material-admin-overrides.css")
@@ -47,7 +47,7 @@ class AdminThemeRenderingTests(TestCase):
 
     def test_admin_theme_static_assets_are_available(self):
         for path in [
-            "images/scheduler-logo.svg",
+            "images/releviz-logo.svg",
             "admin/css/google-material-admin.css",
             "admin/css/google-material-admin-overrides.css",
             "admin/css/tabs.css",

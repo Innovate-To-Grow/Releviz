@@ -15,3 +15,5 @@ CSRF_TRUSTED_ORIGINS = CORS_ALLOWED_ORIGINS
 EMAIL_FILE_PATH = os.environ.get("EMAIL_FILE_PATH", str(Path("/tmp") / "releviz-e2e-mail"))
 EMAIL_BACKEND = "django.core.mail.backends.filebased.EmailBackend"
 REQUIRE_ENCRYPTED_PASSWORDS = True
+AUTH_RATE_LIMITS = {}
+AUTH_FAILURE_LIMITS = {}

@@ -1,4 +1,4 @@
-"""WSGI config for Scheduler."""
+"""WSGI config for Releviz."""
 
 import os
 

@@ -1,8 +1,8 @@
 aws_region                  = "us-west-2"
-app_name                    = "scheduler"
+app_name                    = "releviz"
 environment                 = "prod"
-ecr_backend_repository      = "scheduler-prod-backend"
-ecr_frontend_repository     = "scheduler-prod-frontend"
+ecr_backend_repository      = "releviz-prod-backend"
+ecr_frontend_repository     = "releviz-prod-frontend"
 # The protected production workflow first applies with manage_dns=false, proves
 # the new ALB through TLS for this hostname, then applies the DNS cutover with
 # manage_dns=true. Keep local/operator plans DNS-safe by default.

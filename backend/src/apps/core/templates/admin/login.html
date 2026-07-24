@@ -13,7 +13,7 @@
 {% endblock %}
 
 {% block title %}
-    {{ title|default:_("Log in") }} | {{ site_title|default:_("Scheduler Admin") }}
+    {{ title|default:_("Log in") }} | {{ site_title|default:_("Releviz Admin") }}
 {% endblock %}
 
 {% block content %}
@@ -21,9 +21,9 @@
         <div class="login-header">
             <div class="login-title-wrap">
                 <span class="login-subtitle">{% translate "Sign in with password" %}</span>
-                <span class="login-title">{{ site_title|default:_('Scheduler Admin') }}</span>
+                <span class="login-title">{{ site_title|default:_('Releviz Admin') }}</span>
             </div>
-            <img src="{% static 'images/scheduler-logo.svg' %}" alt="Scheduler" class="login-logo">
+            <img src="{% static 'images/releviz-logo.svg' %}" alt="Releviz" class="login-logo">
         </div>
 
         {% include "unfold/helpers/messages.html" %}

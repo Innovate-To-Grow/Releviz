@@ -7,7 +7,8 @@ const ROOT = path.resolve(__dirname, "..");
 const RESOURCE_AUDIT_MANIFEST = [
   ".github/dependabot.yml",
   ".github/workflows/ci.yml",
-  ".github/workflows/deploy-prod.yml.disabled",
+  ".github/workflows/bootstrap-releviz-iam.yml",
+  ".github/workflows/deploy-prod.yml",
   ".gitignore",
   ".pre-commit-config.yaml",
   ".prettierignore",
@@ -27,7 +28,7 @@ const RESOURCE_AUDIT_MANIFEST = [
   "backend/src/apps/core/static/admin/css/tabs.css",
   "backend/src/apps/core/static/admin/js/i2g-admin-theme-runtime.js",
   "backend/src/apps/core/static/admin/js/material-web-text-field.js",
-  "backend/src/apps/core/static/images/scheduler-logo.svg",
+  "backend/src/apps/core/static/images/releviz-logo.svg",
   "backend/src/apps/core/templates/admin/base_site.html",
   "backend/src/apps/core/templates/admin/includes/i2g_admin_theme_toggle.html",
   "backend/src/apps/core/templates/admin/includes/itg_login_styles.html",
@@ -118,7 +119,7 @@ test.describe("repository resource audit", () => {
     }
 
     const adminLogo = fs.readFileSync(
-      path.join(ROOT, "backend/src/apps/core/static/images/scheduler-logo.svg"),
+      path.join(ROOT, "backend/src/apps/core/static/images/releviz-logo.svg"),
       "utf8"
     );
     expect(adminLogo).toContain("<svg");

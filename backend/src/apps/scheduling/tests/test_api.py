@@ -15,7 +15,7 @@ from apps.scheduling.utils import (
 )
 
 
-class SchedulerApiTests(TestCase):
+class RelevizApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()
         self.organizer = create_member("organizer@example.com", "Org", "Owner")

@@ -8,7 +8,8 @@ ROOT = Path(__file__).resolve().parents[5]
 RESOURCE_AUDIT_MANIFEST = [
     ".github/dependabot.yml",
     ".github/workflows/ci.yml",
-    ".github/workflows/deploy-prod.yml.disabled",
+    ".github/workflows/bootstrap-releviz-iam.yml",
+    ".github/workflows/deploy-prod.yml",
     ".gitignore",
     ".pre-commit-config.yaml",
     ".prettierignore",
@@ -28,7 +29,7 @@ RESOURCE_AUDIT_MANIFEST = [
     "backend/src/apps/core/static/admin/css/tabs.css",
     "backend/src/apps/core/static/admin/js/i2g-admin-theme-runtime.js",
     "backend/src/apps/core/static/admin/js/material-web-text-field.js",
-    "backend/src/apps/core/static/images/scheduler-logo.svg",
+    "backend/src/apps/core/static/images/releviz-logo.svg",
     "backend/src/apps/core/templates/admin/base_site.html",
     "backend/src/apps/core/templates/admin/includes/i2g_admin_theme_toggle.html",
     "backend/src/apps/core/templates/admin/includes/itg_login_styles.html",
@@ -162,7 +163,7 @@ class RepositorySurfaceTests(SimpleTestCase):
                 self.assertNotIn("clerk_", text.lower())
                 self.assertNotIn("clerk.com", text.lower())
 
-    def test_admin_theme_templates_reference_scheduler_assets(self):
+    def test_admin_theme_templates_reference_releviz_assets(self):
         login = (ROOT / "backend/src/apps/core/templates/admin/login.html").read_text(
             encoding="utf-8"
         )
@@ -170,8 +171,8 @@ class RepositorySurfaceTests(SimpleTestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("Scheduler Admin", login)
-        self.assertIn("scheduler-logo.svg", login)
+        self.assertIn("Releviz Admin", login)
+        self.assertIn("releviz-logo.svg", login)
         self.assertIn("itg_login_styles.html", login)
         self.assertIn("i2g-admin-theme-runtime.js", base_site)
         self.assertIn("google-material-admin-overrides.css", base_site)
