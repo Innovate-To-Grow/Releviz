@@ -63,7 +63,7 @@ The weighted average formula: for each time slot, `sum(availability * weight) / 
 | Database       | PostgreSQL/RDS in deployed environments; SQLite for local development               |
 | Infrastructure | AWS ECS Fargate behind ALB (path-based routing)                                     |
 | IaC            | Terraform (versioned encrypted S3 state with native lock files)                     |
-| CI/CD          | GitHub Actions (required CI, protected production releases)                          |
+| CI/CD          | GitHub Actions (required CI; production CD temporarily disabled)                      |
 
 ## Project Structure
 
@@ -78,7 +78,7 @@ scheduler-monorepo/
     quality-gate.sh # Full lint + test + build for both workspaces
   .github/workflows/
     ci.yml          # Parallel CI for both workspaces
-    deploy-prod.yml # Manual, Production-environment-gated release
+    deploy-prod.yml.disabled # Non-runnable CD marker during PR consolidation
 ```
 
 ## Local Development
@@ -197,16 +197,13 @@ docker run --rm -p 3000:3000 scheduler-frontend:local
 
 ### Production
 
-Production deployment remains manually controlled. Terraform provisions guarded ECS rolling
-deployments for separate frontend and backend services in private subnets, two NAT gateways,
-Multi-AZ RDS with managed credentials and 30-day PITR, autoscaling, TLS/DNS, and monitored alarms.
-`deploy-prod.yml` can run only from `main`, requires the exact `DEPLOY` confirmation, and assumes
-an AWS role through OIDC. It builds immutable commit-SHA images, first applies infrastructure with
-DNS disabled, waits for both services, then checks the new ALB using the canonical hostname and TLS.
-Only after that passes does it apply the exact Route53 cutover plan for `releviz.com`, followed by
-canonical live/readiness smoke tests. Bind the `Production` GitHub Environment to `main` and require
-an environment reviewer before the first live release. Use the reviewed procedure in
-[`docs/deployment-rollback.md`](docs/deployment-rollback.md).
+Production CD is intentionally disabled while the open pull-request backlog is consolidated.
+There is no runnable production workflow and no workflow currently grants deployment or OIDC
+permissions. Terraform still describes the production infrastructure, but it must not be applied
+through GitHub Actions until CD is deliberately rebuilt, reviewed, and protected. The previous
+manual workflow remains recoverable from Git history for reference only. After consolidation,
+rebuild the release workflow and re-review the procedure in
+[`docs/deployment-rollback.md`](docs/deployment-rollback.md) before any live release.
 
 Run `infra/bootstrap` once with an administrator to create the versioned state bucket and the
 repository/environment-scoped OIDC role. Supply the existing account-wide GitHub OIDC provider ARN;

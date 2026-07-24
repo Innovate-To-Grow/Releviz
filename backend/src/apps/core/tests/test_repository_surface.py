@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[5]
 RESOURCE_AUDIT_MANIFEST = [
     ".github/dependabot.yml",
     ".github/workflows/ci.yml",
-    ".github/workflows/deploy-prod.yml",
+    ".github/workflows/deploy-prod.yml.disabled",
     ".gitignore",
     ".pre-commit-config.yaml",
     ".prettierignore",

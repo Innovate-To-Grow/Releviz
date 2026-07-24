@@ -55,11 +55,10 @@ verified backup into a new database and perform a controlled cutover.
 
 ## Deploy
 
-Start **Deploy Production** from the `main` branch, enter `DEPLOY`, and approve the protected
-`Production` Environment after confirming the selected commit passed `CI Result`. The workflow
-builds separate immutable backend/frontend images, first applies the exact DNS-free plan, waits for
-both ECS services, and checks the fresh ALB with `releviz.com` as the TLS and Host name. It then
-applies a second exact plan that replaces the Route53 alias and runs canonical smoke tests.
+Production CD is currently disabled during pull-request consolidation. Do not deploy from GitHub
+Actions: there is no runnable **Deploy Production** workflow. Rebuild and review CD after
+consolidation, then update this section with the approved release procedure before the first live
+release.
 
 For an operator-reviewed local plan, use the protected remote backend and the same environment
 variables as the workflow:
