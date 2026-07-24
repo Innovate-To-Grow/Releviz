@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  PYTHON_VERSION: "3.11"
+  PYTHON_VERSION: "3.14"
   NODE_VERSION: "24"
   TERRAFORM_VERSION: "1.15.8"
   COVERAGE_VERSION: "7.15.2"
