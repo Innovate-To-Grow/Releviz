@@ -7,6 +7,8 @@ from scripts.ci.check_bundle_size import check_budgets, collect_assets
 from scripts.ci.check_npm_licenses import package_inventory
 from scripts.ci.summarize_workflow_jobs import render
 from scripts.ci.validate_deployment_contract import (
+    CD_DISABLED_MARKER,
+    production_cd_disabled_errors,
     required_runtime_environment,
     terraform_environment_names,
 )
@@ -96,3 +98,21 @@ secrets = [
             terraform_environment_names(source),
             {"DB_PASSWORD", "DJANGO_SECRET_KEY", "METRICS_BEARER_TOKEN"},
         )
+
+    def test_production_cd_must_have_only_the_disabled_marker_file(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflows = root / ".github/workflows"
+            workflows.mkdir(parents=True)
+            disabled = workflows / "deploy-prod.yml.disabled"
+            disabled.write_text(f"# {CD_DISABLED_MARKER}\n", encoding="utf-8")
+
+            self.assertEqual(production_cd_disabled_errors(root), [])
+
+            (workflows / "deploy-prod.yml").write_text(
+                "name: Deploy\n", encoding="utf-8"
+            )
+            self.assertEqual(
+                production_cd_disabled_errors(root),
+                ["production CD must remain disabled during PR consolidation"],
+            )

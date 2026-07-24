@@ -15,9 +15,11 @@ BOOTSTRAP_TERRAFORM = ROOT / "infra/bootstrap/main.tf"
 TERRAFORM_ENVIRONMENTS = {
     "production": ROOT / "infra/prod/main.tf",
 }
-DEPLOY_WORKFLOWS = {
-    "production": ROOT / ".github/workflows/deploy-prod.yml",
-}
+PRODUCTION_DEPLOY_WORKFLOW = ROOT / ".github/workflows/deploy-prod.yml"
+DISABLED_PRODUCTION_DEPLOY_WORKFLOW = (
+    ROOT / ".github/workflows/deploy-prod.yml.disabled"
+)
+CD_DISABLED_MARKER = "CD_DISABLED_DURING_PR_CONSOLIDATION"
 RETIRED_STAGING_PATHS = (
     ".github/workflows/deploy-staging.yml",
     ".github/workflows/retire-staging.yml",
@@ -53,6 +55,22 @@ def terraform_environment_names(source: str) -> set[str]:
     return set(ENVIRONMENT_NAME_RE.findall(source))
 
 
+def production_cd_disabled_errors(root: Path = ROOT) -> list[str]:
+    """Ensure production CD remains non-runnable during PR consolidation."""
+
+    errors: list[str] = []
+    active_path = root / PRODUCTION_DEPLOY_WORKFLOW.relative_to(ROOT)
+    disabled_path = root / DISABLED_PRODUCTION_DEPLOY_WORKFLOW.relative_to(ROOT)
+    if active_path.exists():
+        errors.append("production CD must remain disabled during PR consolidation")
+    if not disabled_path.exists():
+        errors.append("disabled production CD marker file is missing")
+        return errors
+    if CD_DISABLED_MARKER not in disabled_path.read_text(encoding="utf-8"):
+        errors.append("disabled production CD marker file omits its safety marker")
+    return errors
+
+
 def deployment_contract_errors(root: Path = ROOT) -> list[str]:
     errors: list[str] = []
     settings_path = root / PRODUCTION_SETTINGS.relative_to(ROOT)
@@ -67,50 +85,7 @@ def deployment_contract_errors(root: Path = ROOT) -> list[str]:
                 f"{environment} Terraform omits runtime settings: {', '.join(missing)}"
             )
 
-    workflow_text = {
-        name: (root / path.relative_to(ROOT)).read_text(encoding="utf-8")
-        for name, path in DEPLOY_WORKFLOWS.items()
-    }
-    for environment, text in workflow_text.items():
-        lower = text.lower()
-        if "continue-on-error" in text:
-            errors.append(f"{environment} deploy workflow allows errors to continue")
-        if "local backend fallback" in lower or "backend_mode=local" in lower:
-            errors.append(
-                f"{environment} deploy workflow permits local Terraform state"
-            )
-        if re.search(r"(?:staging|prod)-latest", lower):
-            errors.append(f"{environment} deploy workflow uses a mutable image tag")
-        if not re.search(r"environment:\s*\n\s+name:\s*Production\b", text):
-            errors.append(f"{environment} deploy workflow is not bound to Production")
-        if "use_lockfile=true" not in text:
-            errors.append(
-                f"{environment} deploy workflow does not enable S3 state locking"
-            )
-
-    production_workflow = workflow_text["production"]
-    for required_fragment in (
-        "workflow_dispatch:",
-        "role-to-assume:",
-        "production-no-dns.tfplan",
-        "production-dns-cutover.tfplan",
-        'TF_VAR_manage_dns: "false"',
-        'TF_VAR_manage_dns: "true"',
-        "--connect-to",
-        "refs/heads/main",
-        "CI Result",
-    ):
-        if required_fragment not in production_workflow:
-            errors.append(f"production deploy workflow omits {required_fragment}")
-    for forbidden_fragment in (
-        "workflow_run:",
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-    ):
-        if forbidden_fragment in production_workflow:
-            errors.append(
-                f"production deploy workflow contains forbidden {forbidden_fragment}"
-            )
+    errors.extend(production_cd_disabled_errors(root))
 
     for relative_path in RETIRED_STAGING_PATHS:
         if (root / relative_path).exists():
@@ -160,9 +135,7 @@ def main() -> int:
         for error in errors:
             print(f"  - {error}", file=sys.stderr)
         return 1
-    print(
-        "Deployment workflows provide every required production setting and safety invariant."
-    )
+    print("Production CD is disabled and Terraform retains its safety invariants.")
     return 0
 
 
