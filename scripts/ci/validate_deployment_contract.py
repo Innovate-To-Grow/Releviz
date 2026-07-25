@@ -120,6 +120,10 @@ def deployment_contract_errors(root: Path = ROOT) -> list[str]:
         r"alarm_actions\s*=\s*var\.alarm_action_arns": "monitored alarm actions",
         r"count\s*=\s*var\.manage_dns\s*\?\s*1\s*:\s*0": "health-gated DNS",
         r"allow_overwrite\s*=\s*true": "explicit apex alias replacement",
+        (
+            r'command\s*=\s*\[\s*"python"\s*,\s*"manage\.py"\s*,'
+            r'\s*"send_due_event_reminders"\s*,\s*"--window-minutes=20"\s*\]'
+        ): "a runnable scheduled reminder command",
     }
     for pattern, description in production_invariants.items():
         if not re.search(pattern, production_terraform):
