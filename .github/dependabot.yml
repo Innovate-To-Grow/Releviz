@@ -3,41 +3,98 @@ updates:
   - package-ecosystem: npm
     directory: /
     schedule:
-      interval: weekly
-    open-pull-requests-limit: 10
+      interval: monthly
+      time: "09:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 1
+    cooldown:
+      default-days: 14
+    groups:
+      npm-version-updates:
+        applies-to: version-updates
+        patterns:
+          - "*"
+      npm-security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
 
   - package-ecosystem: pip
     directory: /src/backend
     schedule:
-      interval: weekly
-    open-pull-requests-limit: 10
+      interval: monthly
+      time: "09:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 1
+    cooldown:
+      default-days: 14
+    groups:
+      pip-version-updates:
+        applies-to: version-updates
+        patterns:
+          - "*"
+      pip-security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
 
   - package-ecosystem: docker
-    directory: /src/backend
+    directories:
+      - /src/backend
+      - /src/frontend
     schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
-
-  - package-ecosystem: docker
-    directory: /src/frontend
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
+      interval: monthly
+      time: "09:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 1
+    cooldown:
+      default-days: 14
+    groups:
+      docker-version-updates:
+        applies-to: version-updates
+        patterns:
+          - "*"
+      docker-security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
-    open-pull-requests-limit: 10
+      interval: monthly
+      time: "09:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 1
+    cooldown:
+      default-days: 14
+    groups:
+      github-actions-version-updates:
+        applies-to: version-updates
+        patterns:
+          - "*"
+      github-actions-security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
 
   - package-ecosystem: terraform
-    directory: /infra/bootstrap
+    directories:
+      - /infra/bootstrap
+      - /infra/prod
     schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
-
-  - package-ecosystem: terraform
-    directory: /infra/prod
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
+      interval: monthly
+      time: "09:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 1
+    cooldown:
+      default-days: 14
+    groups:
+      terraform-version-updates:
+        applies-to: version-updates
+        patterns:
+          - "*"
+      terraform-security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
