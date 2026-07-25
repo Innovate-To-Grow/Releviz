@@ -114,6 +114,7 @@ async function loginWithEmailCode(page, email) {
   await page.getByLabel("Verification code").fill(code);
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(page.getByRole("heading", { name: "My Dashboard" })).toBeVisible();
   const alert = await latestEmailFor(
     email,
     startedAt,
@@ -129,6 +130,7 @@ async function loginWithPassword(page, email, password = "Password123!", verifyA
   await page.getByLabel("Password").fill(password);
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(page.getByRole("heading", { name: "My Dashboard" })).toBeVisible();
   if (!verifyAlert) return;
   const alert = await latestEmailFor(
     email,
