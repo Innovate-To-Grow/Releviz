@@ -161,8 +161,8 @@ npm run quality-gate
   `aa545acff9ae5256c93381a56b3f824b2836eb0bee4beda79b85610286436f62`
 - Monorepo lock:
   `a177cdbe3df9bcdece24d6680515e8e0011f34980e8a4d93110bb11928552ebb`
-- Backend HTML coverage: `backend/htmlcov/index.html`
-- Frontend HTML coverage: `frontend/coverage/lcov-report/index.html`
+- Backend HTML coverage: `src/backend/htmlcov/index.html`
+- Frontend HTML coverage: `src/frontend/coverage/lcov-report/index.html`
 - Backup/restore evidence: `.artifacts/backup-restore/20260716T201425Z/evidence.json`
 - Logical backup SHA-256:
   `1b402e697f46d41c571d9f4679336c6e83e04075bc93a04c1a5266fe3e4d5706`
@@ -182,24 +182,24 @@ npm run quality-gate
 ## Executed Validation Commands
 
 ```text
-PATH="$PWD/.venv/bin:$PATH" npm --workspace=backend run lint
-PATH="$PWD/.venv/bin:$PATH" npm --workspace=backend run format:check
-PATH="$PWD/.venv/bin:$PATH" npm --workspace=backend run test:coverage
-npm --workspace=frontend run lint
-npm --workspace=frontend run format:check
-npm --workspace=frontend run test:coverage
-npm --workspace=frontend run build
+PATH="$PWD/.venv/bin:$PATH" npm --workspace=releviz-backend run lint
+PATH="$PWD/.venv/bin:$PATH" npm --workspace=releviz-backend run format:check
+PATH="$PWD/.venv/bin:$PATH" npm --workspace=releviz-backend run test:coverage
+npm --workspace=releviz-frontend run lint
+npm --workspace=releviz-frontend run format:check
+npm --workspace=releviz-frontend run test:coverage
+npm --workspace=releviz-frontend run build
 npm run test:audit
 PATH="$PWD/.venv/bin:$PATH" DB_TEST_SKIP_DOCKER=1 npm run test:db
 PATH="$PWD/.venv/bin:$PATH" E2E_SKIP_DOCKER=1 npm run test:e2e
 npm audit --audit-level=low
-uvx --from pip-audit==2.10.1 pip-audit -r backend/requirements/production.txt
+uvx --from pip-audit==2.10.1 pip-audit -r src/backend/requirements/production.txt
 scripts/docker-build-frontend.sh releviz-frontend:validation
-docker build -t releviz-backend:validation backend
+docker build -t releviz-backend:validation src/backend
 PATH="/tmp/releviz-tools/terraform-1.15.8:$PATH" scripts/terraform-check.sh
 PATH="$PWD/.venv/bin:$PATH" scripts/backup-restore-drill.sh
-python backend/src/manage.py makemigrations --check --dry-run --settings=config.settings.test
-python backend/src/manage.py check --deploy --settings=config.settings.production
+python src/backend/manage.py makemigrations --check --dry-run --settings=config.settings.test
+python src/backend/manage.py check --deploy --settings=config.settings.production
 git diff --check
 ```
 

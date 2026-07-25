@@ -59,6 +59,13 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      matrix:
+        include:
+          - image: releviz-backend
+            context: ./src/backend
+          - image: releviz-frontend
+            context: ./src/frontend
 
     steps:
       - name: Checkout code
@@ -70,10 +77,9 @@ jobs:
       - name: Build Docker image (no push)
         uses: docker/build-push-action@v6
         with:
-          context: .
-          file: ./Dockerfile
+          context: ${{ matrix.context }}
           push: false
           load: false
-          tags: releviz:ci-${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: ${{ matrix.image }}:ci-${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}

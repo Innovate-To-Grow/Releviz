@@ -12,7 +12,7 @@ The repository also provides a portable logical backup:
 - `scripts/postgres-backup.sh`
 - `scripts/postgres-restore.sh`
 - `scripts/backup-restore-drill.sh`
-- `python backend/src/manage.py database_manifest`
+- `python src/backend/manage.py database_manifest`
 
 Logical archives use PostgreSQL custom format, compression, no owner/ACL metadata, restrictive
 local permissions, archive validation, and a SHA-256 sidecar. The script does not upload or encrypt
@@ -56,10 +56,10 @@ After restore:
 
 ```bash
 DB_NAME=releviz_restore_validation \
-python backend/src/manage.py migrate --check --settings=config.settings.production
+python src/backend/manage.py migrate --check --settings=config.settings.production
 
 DB_NAME=releviz_restore_validation \
-python backend/src/manage.py check --settings=config.settings.production
+python src/backend/manage.py check --settings=config.settings.production
 ```
 
 Run application smoke tests against the restored database before any DNS or service cutover.

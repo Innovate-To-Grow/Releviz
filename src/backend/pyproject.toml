@@ -1,24 +1,24 @@
 [tool.ruff]
 target-version = "py312"
 line-length = 100
-src = ["src"]
+src = ["."]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "DJ"]
 ignore = ["DJ001"]
 
 [tool.ruff.lint.per-file-ignores]
-"src/**/migrations/*.py" = ["E501"]
+"apps/**/migrations/*.py" = ["E501"]
 
 [tool.ruff.format]
 quote-style = "double"
 
 [tool.coverage.run]
 branch = true
-source = ["src/apps", "src/config"]
+source = ["apps", "config"]
 omit = [
-    "src/apps/**/migrations/*",
-    "src/apps/**/tests/*",
+    "apps/**/migrations/*",
+    "apps/**/tests/*",
 ]
 
 [tool.coverage.report]

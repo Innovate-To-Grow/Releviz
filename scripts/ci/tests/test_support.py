@@ -35,7 +35,7 @@ class LicenseReportTests(TestCase):
         lock = {
             "packages": {
                 "": {"name": "root"},
-                "frontend": {"link": True},
+                "src/frontend": {"link": True},
                 "node_modules/demo": {"version": "1.0.0", "license": "MIT"},
             }
         }

@@ -35,7 +35,7 @@ remains persisted for retry.
 Dispatch all due jobs manually:
 
 ```bash
-python backend/src/manage.py dispatch_email_jobs --limit=100 \
+python src/backend/manage.py dispatch_email_jobs --limit=100 \
   --settings=config.settings.production
 ```
 
@@ -44,7 +44,7 @@ The existing scheduled reminder command also dispatches up to 100 due jobs, so t
 a separate in-memory queue:
 
 ```bash
-python backend/src/manage.py send_due_event_reminders --window-minutes=20 \
+python src/backend/manage.py send_due_event_reminders --window-minutes=20 \
   --settings=config.settings.production
 ```
 

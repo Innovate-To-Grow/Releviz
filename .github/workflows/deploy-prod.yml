@@ -219,7 +219,7 @@ jobs:
           set -euo pipefail
           account_id="$(aws sts get-caller-identity --query Account --output text)"
           image_uri="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_BACKEND}:${DEPLOY_SHA}"
-          docker build --pull --tag "$image_uri" ./backend
+          docker build --pull --tag "$image_uri" ./src/backend
           docker push "$image_uri"
 
       - name: Build and push immutable frontend image
@@ -232,7 +232,7 @@ jobs:
             --pull \
             --build-arg NEXT_PUBLIC_API_BASE_URL="" \
             --tag "$image_uri" \
-            ./frontend
+            ./src/frontend
           docker push "$image_uri"
 
       - name: Plan production infrastructure without DNS cutover

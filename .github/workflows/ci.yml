@@ -46,7 +46,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
           cache-dependency-path: |
-            backend/requirements/*.txt
+            src/backend/requirements/*.txt
             .pre-commit-config.yaml
 
       - name: Install preflight tools
@@ -138,9 +138,9 @@ jobs:
           frontend=false
           e2e=false
           infra=false
-          if match '^(backend/|scripts/|\.github/|\.pre-commit-config\.yaml|package(-lock)?\.json|docker-compose\.e2e\.yml)'; then backend=true; fi
-          if match '^(backend/|frontend/|e2e/|scripts/|\.github/|\.pre-commit-config\.yaml|package(-lock)?\.json|docker-compose\.e2e\.yml)'; then frontend=true; fi
-          if match '^(backend/|frontend/|e2e/|scripts/|\.github/|package(-lock)?\.json|docker-compose\.e2e\.yml)'; then e2e=true; fi
+          if match '^(src/backend/|scripts/|\.github/|\.pre-commit-config\.yaml|package(-lock)?\.json|docker-compose\.e2e\.yml)'; then backend=true; fi
+          if match '^(src/backend/|src/frontend/|src/e2e/|scripts/|\.github/|\.pre-commit-config\.yaml|package(-lock)?\.json|docker-compose\.e2e\.yml)'; then frontend=true; fi
+          if match '^(src/backend/|src/frontend/|src/e2e/|scripts/|\.github/|package(-lock)?\.json|docker-compose\.e2e\.yml)'; then e2e=true; fi
           if match '^(infra/|scripts/terraform-check\.sh|\.github/|\.pre-commit-config\.yaml)'; then infra=true; fi
           {
             echo "backend=$backend"
@@ -164,16 +164,16 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: backend/requirements/local.txt
+          cache-dependency-path: src/backend/requirements/local.txt
 
       - name: Install backend dependencies
-        run: python -m pip install -r backend/requirements/local.txt
+        run: python -m pip install -r src/backend/requirements/local.txt
 
       - name: Check Python formatting
-        run: ruff format --check backend/src scripts/ci
+        run: ruff format --check src/backend scripts/ci
 
       - name: Run Python lint
-        run: ruff check backend/src scripts/ci
+        run: ruff check src/backend scripts/ci
 
   backend-full-coverage:
     name: Backend - Lint & Test (100% Coverage)
@@ -183,7 +183,7 @@ jobs:
     if: ${{ needs.changes.outputs.backend == 'true' }}
     defaults:
       run:
-        working-directory: backend
+        working-directory: src/backend
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -193,14 +193,14 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: backend/requirements/local.txt
+          cache-dependency-path: src/backend/requirements/local.txt
 
       - name: Install backend dependencies
         run: python -m pip install -r requirements/local.txt "coverage[toml]==${COVERAGE_VERSION}"
 
       - name: Run complete Django suite with strict coverage
         run: |
-          coverage run src/manage.py test --settings=config.settings.test
+          coverage run manage.py test --settings=config.settings.test
           coverage xml -o coverage.xml
           coverage json --pretty-print -o coverage.json
           coverage report -m --fail-under="${BACKEND_COVERAGE_FAIL_UNDER}"
@@ -231,7 +231,7 @@ jobs:
           PY
 
       - name: Check Django configuration
-        run: python src/manage.py check --settings=config.settings.test
+        run: python manage.py check --settings=config.settings.test
 
       - name: Upload backend aggregate coverage
         if: ${{ always() }}
@@ -239,8 +239,8 @@ jobs:
         with:
           name: backend-coverage
           path: |
-            backend/coverage.xml
-            backend/coverage.json
+            src/backend/coverage.xml
+            src/backend/coverage.json
           if-no-files-found: warn
 
   backend-db-migration:
@@ -265,7 +265,7 @@ jobs:
           --health-retries 20
     defaults:
       run:
-        working-directory: backend
+        working-directory: src/backend
     env:
       DB_HOST: 127.0.0.1
       DB_PORT: 5432
@@ -282,19 +282,19 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: backend/requirements/local.txt
+          cache-dependency-path: src/backend/requirements/local.txt
 
       - name: Install backend dependencies
         run: python -m pip install -r requirements/local.txt
 
       - name: Check migration files are current
-        run: python src/manage.py makemigrations --check --dry-run --settings=config.settings.test_postgres
+        run: python manage.py makemigrations --check --dry-run --settings=config.settings.test_postgres
 
       - name: Apply migrations on PostgreSQL
-        run: python src/manage.py migrate --noinput --settings=config.settings.test_postgres
+        run: python manage.py migrate --noinput --settings=config.settings.test_postgres
 
       - name: Ensure no pending migrations remain
-        run: python src/manage.py migrate --check --settings=config.settings.test_postgres
+        run: python manage.py migrate --check --settings=config.settings.test_postgres
 
   backend-static-and-prod-check:
     name: Backend Static and Production Checks
@@ -304,7 +304,7 @@ jobs:
     if: ${{ needs.changes.outputs.backend == 'true' }}
     defaults:
       run:
-        working-directory: backend
+        working-directory: src/backend
     env:
       DJANGO_SECRET_KEY: ci-production-smoke-secret-key-with-enough-entropy-for-deploy-checks-2026
       DJANGO_FIELD_ENCRYPTION_KEY: ci-field-encryption-key-with-enough-entropy-2026
@@ -330,19 +330,19 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: backend/requirements/local.txt
+          cache-dependency-path: src/backend/requirements/local.txt
 
       - name: Install backend dependencies
         run: python -m pip install -r requirements/local.txt
 
       - name: Import production settings
-        run: DJANGO_SETTINGS_MODULE=config.settings.production python -c "import sys; sys.path.insert(0, 'src'); import django; django.setup()"
+        run: DJANGO_SETTINGS_MODULE=config.settings.production python -c "import django; django.setup()"
 
       - name: Run Django deploy checks
-        run: python src/manage.py check --deploy --settings=config.settings.production
+        run: python manage.py check --deploy --settings=config.settings.production
 
       - name: Dry-run collectstatic with CI settings
-        run: python src/manage.py collectstatic --dry-run --noinput --settings=config.settings.test
+        run: python manage.py collectstatic --dry-run --noinput --settings=config.settings.test
 
   django-test-plan:
     name: Plan Django Test Matrix
@@ -417,7 +417,7 @@ jobs:
           --health-retries 20
     defaults:
       run:
-        working-directory: backend
+        working-directory: src/backend
     env:
       DB_HOST: 127.0.0.1
       DB_PORT: 5432
@@ -434,7 +434,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: backend/requirements/local.txt
+          cache-dependency-path: src/backend/requirements/local.txt
 
       - name: Install backend dependencies
         run: python -m pip install -r requirements/local.txt "coverage[toml]==${COVERAGE_VERSION}"
@@ -446,7 +446,7 @@ jobs:
           coverage run \
             --source="apps.${APP_UNDER_TEST}" \
             --omit="*/migrations/*,*/tests/*" \
-            src/manage.py test "apps.${APP_UNDER_TEST}" \
+            manage.py test "apps.${APP_UNDER_TEST}" \
             --settings=config.settings.test_postgres
           coverage xml --fail-under=0 -o "coverage-${APP_UNDER_TEST}.xml"
           coverage json --fail-under=0 --pretty-print -o "coverage-${APP_UNDER_TEST}.json"
@@ -486,8 +486,8 @@ jobs:
         with:
           name: backend-coverage-${{ matrix.app }}
           path: |
-            backend/coverage-${{ matrix.app }}.xml
-            backend/coverage-${{ matrix.app }}.json
+            src/backend/coverage-${{ matrix.app }}.xml
+            src/backend/coverage-${{ matrix.app }}.json
           if-no-files-found: warn
 
   frontend-lint:
@@ -508,13 +508,13 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Install frontend dependencies
-        run: npm ci --workspace=frontend
+        run: npm ci --workspace=releviz-frontend
 
       - name: Check frontend formatting
-        run: npm --workspace=frontend run format:check
+        run: npm --workspace=releviz-frontend run format:check
 
       - name: Run ESLint
-        run: npm --workspace=frontend run lint
+        run: npm --workspace=releviz-frontend run lint
 
   frontend-unit-coverage:
     name: Frontend Unit Test Coverage
@@ -534,24 +534,24 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Install frontend dependencies
-        run: npm ci --workspace=frontend
+        run: npm ci --workspace=releviz-frontend
 
       - name: Run frontend tests with coverage
-        run: npm --workspace=frontend run test:coverage -- --runInBand
+        run: npm --workspace=releviz-frontend run test:coverage -- --runInBand
         env:
           NODE_OPTIONS: --max-old-space-size=4096
 
       - name: Summarize frontend coverage
         if: ${{ always() }}
         run: |
-          if [ ! -f frontend/coverage/coverage-summary.json ]; then
+          if [ ! -f src/frontend/coverage/coverage-summary.json ]; then
             echo "::warning::Frontend coverage summary was not generated."
             exit 0
           fi
           node - <<'NODE'
           const fs = require("node:fs");
           const summary = JSON.parse(
-            fs.readFileSync("frontend/coverage/coverage-summary.json", "utf8"),
+            fs.readFileSync("src/frontend/coverage/coverage-summary.json", "utf8"),
           ).total;
           const rows = [
             ["Statements", summary.statements],
@@ -580,7 +580,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: frontend-coverage
-          path: frontend/coverage
+          path: src/frontend/coverage
           if-no-files-found: warn
 
   frontend-build:
@@ -601,10 +601,10 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Install frontend dependencies
-        run: npm ci --workspace=frontend
+        run: npm ci --workspace=releviz-frontend
 
       - name: Build frontend for CI and E2E
-        run: npm --workspace=frontend run build
+        run: npm --workspace=releviz-frontend run build
         env:
           NEXT_PUBLIC_API_BASE_URL: ""
           BACKEND_URL: http://127.0.0.1:4100
@@ -615,9 +615,9 @@ jobs:
         with:
           name: frontend-next-ci
           path: |
-            frontend/.next
-            !frontend/.next/cache
-            !frontend/.next/standalone
+            src/frontend/.next
+            !src/frontend/.next/cache
+            !src/frontend/.next/standalone
           include-hidden-files: true
           if-no-files-found: warn
 
@@ -635,10 +635,10 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: frontend-next-ci
-          path: frontend/.next
+          path: src/frontend/.next
 
       - name: Enforce frontend bundle budgets
-        run: python3 scripts/ci/check_bundle_size.py frontend/.next/static
+        run: python3 scripts/ci/check_bundle_size.py src/frontend/.next/static
 
   frontend-security-audit:
     name: Frontend npm Audit
@@ -658,7 +658,7 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Install frontend dependencies
-        run: npm ci --workspace=frontend
+        run: npm ci --workspace=releviz-frontend
 
       - name: Audit npm dependencies
         run: npm audit --audit-level=low
@@ -796,7 +796,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: backend/requirements/production.txt
+          cache-dependency-path: src/backend/requirements/production.txt
 
       - name: Install pip-audit
         run: pip install "pip-audit[cyclonedx]==${PIP_AUDIT_VERSION}"
@@ -805,7 +805,7 @@ jobs:
         run: |
           set -o pipefail
           python -m pip_audit \
-            --requirement backend/requirements/production.txt \
+            --requirement src/backend/requirements/production.txt \
             --progress-spinner off \
             --format columns \
             | tee "$GITHUB_STEP_SUMMARY"
@@ -838,8 +838,8 @@ jobs:
         run: |
           set -euo pipefail
           targets=()
-          if [ "$RUN_BACKEND" = "true" ]; then targets+=(backend); fi
-          if [ "$RUN_FRONTEND" = "true" ]; then targets+=(frontend); fi
+          if [ "$RUN_BACKEND" = "true" ]; then targets+=(src/backend); fi
+          if [ "$RUN_FRONTEND" = "true" ]; then targets+=(src/frontend); fi
           semgrep scan \
             --config p/default \
             --config p/python \
@@ -907,7 +907,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: backend/requirements/production.txt
+          cache-dependency-path: src/backend/requirements/production.txt
 
       - name: Install Python SBOM tools
         run: pip install "pip-audit[cyclonedx]==${PIP_AUDIT_VERSION}"
@@ -915,7 +915,7 @@ jobs:
       - name: Generate Python SBOM
         run: |
           python -m pip_audit \
-            --requirement backend/requirements/production.txt \
+            --requirement src/backend/requirements/production.txt \
             --progress-spinner off \
             --format cyclonedx-json \
             --output python-sbom.cdx.json \
@@ -1014,7 +1014,7 @@ jobs:
       - name: Lint backend Dockerfile
         uses: hadolint/hadolint-action@2332a7b74a6de0dda2e2221d575162eba76ba5e5 # v3.3.0
         with:
-          dockerfile: backend/Dockerfile
+          dockerfile: src/backend/Dockerfile
           failure-threshold: error
 
       - name: Set up Docker Buildx
@@ -1023,7 +1023,7 @@ jobs:
       - name: Build backend image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
-          context: backend
+          context: src/backend
           pull: true
           load: true
           tags: releviz-backend-ci:${{ github.sha }}
@@ -1081,7 +1081,7 @@ jobs:
       - name: Lint frontend Dockerfile
         uses: hadolint/hadolint-action@2332a7b74a6de0dda2e2221d575162eba76ba5e5 # v3.3.0
         with:
-          dockerfile: frontend/Dockerfile
+          dockerfile: src/frontend/Dockerfile
           failure-threshold: error
 
       - name: Set up Docker Buildx
@@ -1090,7 +1090,7 @@ jobs:
       - name: Build frontend image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
-          context: frontend
+          context: src/frontend
           pull: true
           load: true
           tags: releviz-frontend-ci:${{ github.sha }}
@@ -1297,7 +1297,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: backend/requirements/local.txt
+          cache-dependency-path: src/backend/requirements/local.txt
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
@@ -1307,16 +1307,16 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Install backend dependencies
-        run: python -m pip install -r backend/requirements/local.txt
+        run: python -m pip install -r src/backend/requirements/local.txt
 
       - name: Install frontend dependencies
-        run: npm ci --workspace=frontend
+        run: npm ci --workspace=releviz-frontend
 
       - name: Download CI frontend build
         uses: actions/download-artifact@v8
         with:
           name: frontend-next-ci
-          path: frontend/.next
+          path: src/frontend/.next
 
       - name: Resolve Playwright version
         id: playwright-version
@@ -1341,8 +1341,8 @@ jobs:
         run: |
           rm -rf "$EMAIL_FILE_PATH"
           mkdir -p "$EMAIL_FILE_PATH"
-          python backend/src/manage.py migrate --noinput --settings=config.settings.e2e
-          python backend/src/manage.py ensure_default_admin --yes --settings=config.settings.e2e
+          python src/backend/manage.py migrate --noinput --settings=config.settings.e2e
+          python src/backend/manage.py ensure_default_admin --yes --settings=config.settings.e2e
 
       - name: Run Playwright tests
         env:
@@ -1354,7 +1354,7 @@ jobs:
             read -r -a args <<< "$PLAYWRIGHT_SPEC_ARGS"
           fi
           npx playwright test \
-            --config=e2e/playwright.config.js \
+            --config=src/e2e/playwright.config.js \
             "${args[@]}" \
             --project="$PW_PROJECT" \
             --reporter=blob
@@ -1374,7 +1374,7 @@ jobs:
           name: e2e-diagnostics-${{ matrix.project }}
           path: |
             test-results
-            e2e/test-results
+            src/e2e/test-results
           if-no-files-found: ignore
 
   e2e-report:
@@ -1399,7 +1399,7 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Install frontend dependencies
-        run: npm ci --workspace=frontend
+        run: npm ci --workspace=releviz-frontend
 
       - name: Download blob reports
         continue-on-error: true

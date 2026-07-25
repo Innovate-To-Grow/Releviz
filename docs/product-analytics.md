@@ -71,7 +71,7 @@ JSON and `NaN` in Prometheus output rather than being represented as zero.
 Generate a reviewable JSON report:
 
 ```bash
-python backend/src/manage.py product_metrics \
+python src/backend/manage.py product_metrics \
   --days=30 \
   --settings=config.settings.production
 ```
@@ -79,7 +79,7 @@ python backend/src/manage.py product_metrics \
 Generate a deterministic cutoff report:
 
 ```bash
-python backend/src/manage.py product_metrics \
+python src/backend/manage.py product_metrics \
   --days=30 \
   --as-of=2026-07-16T12:00:00+00:00 \
   --settings=config.settings.production

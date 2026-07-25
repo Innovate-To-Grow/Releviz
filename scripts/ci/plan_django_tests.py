@@ -10,20 +10,20 @@ from pathlib import Path
 
 
 APPS = ("authn", "core", "messaging", "scheduling")
-APP_PATTERN = re.compile(r"^backend/src/apps/([^/]+)/")
+APP_PATTERN = re.compile(r"^src/backend/apps/([^/]+)/")
 FULL_SUITE_PREFIXES = (
     ".github/",
     "scripts/",
-    "backend/requirements/",
-    "backend/src/config/",
+    "src/backend/requirements/",
+    "src/backend/config/",
 )
 FULL_SUITE_FILES = {
     ".pre-commit-config.yaml",
-    "backend/Dockerfile",
-    "backend/package.json",
-    "backend/pyproject.toml",
-    "backend/src/apps/__init__.py",
-    "backend/src/manage.py",
+    "src/backend/Dockerfile",
+    "src/backend/package.json",
+    "src/backend/pyproject.toml",
+    "src/backend/apps/__init__.py",
+    "src/backend/manage.py",
     "docker-compose.e2e.yml",
     "package-lock.json",
     "package.json",
@@ -63,7 +63,7 @@ def select_apps(event_name: str, changed_files: list[str]) -> list[str]:
     selected: set[str] = set()
     backend_change = False
     for path in changed_files:
-        if not path.startswith("backend/"):
+        if not path.startswith("src/backend/"):
             continue
         backend_change = True
         match = APP_PATTERN.match(path)

@@ -15,30 +15,30 @@ RESOURCE_AUDIT_MANIFEST = [
     ".prettierrc",
     "README.md",
     "Screenshoot.png",
-    "backend/Dockerfile",
-    "backend/docker-entrypoint.sh",
-    "backend/package.json",
-    "backend/pyproject.toml",
-    "backend/requirements/base.txt",
-    "backend/requirements/local.txt",
-    "backend/requirements/production.txt",
-    "backend/src/apps/core/static/admin/css/file-input.css",
-    "backend/src/apps/core/static/admin/css/google-material-admin-overrides.css",
-    "backend/src/apps/core/static/admin/css/google-material-admin.css",
-    "backend/src/apps/core/static/admin/css/tabs.css",
-    "backend/src/apps/core/static/admin/js/i2g-admin-theme-runtime.js",
-    "backend/src/apps/core/static/admin/js/material-web-text-field.js",
-    "backend/src/apps/core/static/images/releviz-logo.svg",
-    "backend/src/apps/core/templates/admin/base_site.html",
-    "backend/src/apps/core/templates/admin/includes/i2g_admin_theme_toggle.html",
-    "backend/src/apps/core/templates/admin/includes/itg_login_styles.html",
-    "backend/src/apps/core/templates/admin/index.html",
-    "backend/src/apps/core/templates/admin/login.html",
-    "backend/src/apps/core/templates/unfold/helpers/navigation_header.html",
-    "backend/src/apps/core/templates/unfold/helpers/site_branding.html",
-    "backend/src/apps/core/templates/unfold/helpers/site_logo.html",
-    "backend/src/apps/core/templates/unfold/helpers/theme_switch_dropdown.html",
-    "backend/src/apps/core/templates/unfold/helpers/userlinks.html",
+    "src/backend/Dockerfile",
+    "src/backend/docker-entrypoint.sh",
+    "src/backend/package.json",
+    "src/backend/pyproject.toml",
+    "src/backend/requirements/base.txt",
+    "src/backend/requirements/local.txt",
+    "src/backend/requirements/production.txt",
+    "src/backend/apps/core/static/admin/css/file-input.css",
+    "src/backend/apps/core/static/admin/css/google-material-admin-overrides.css",
+    "src/backend/apps/core/static/admin/css/google-material-admin.css",
+    "src/backend/apps/core/static/admin/css/tabs.css",
+    "src/backend/apps/core/static/admin/js/i2g-admin-theme-runtime.js",
+    "src/backend/apps/core/static/admin/js/material-web-text-field.js",
+    "src/backend/apps/core/static/images/releviz-logo.svg",
+    "src/backend/apps/core/templates/admin/base_site.html",
+    "src/backend/apps/core/templates/admin/includes/i2g_admin_theme_toggle.html",
+    "src/backend/apps/core/templates/admin/includes/itg_login_styles.html",
+    "src/backend/apps/core/templates/admin/index.html",
+    "src/backend/apps/core/templates/admin/login.html",
+    "src/backend/apps/core/templates/unfold/helpers/navigation_header.html",
+    "src/backend/apps/core/templates/unfold/helpers/site_branding.html",
+    "src/backend/apps/core/templates/unfold/helpers/site_logo.html",
+    "src/backend/apps/core/templates/unfold/helpers/theme_switch_dropdown.html",
+    "src/backend/apps/core/templates/unfold/helpers/userlinks.html",
     "docker-compose.e2e.yml",
     "docs/auth-security.md",
     "docs/backup-restore.md",
@@ -49,27 +49,28 @@ RESOURCE_AUDIT_MANIFEST = [
     "docs/real-user-validation-plan.md",
     "docs/releviz-goal-progress.md",
     "docs/scheduling-slots.md",
-    "e2e/accessibility.spec.js",
-    "e2e/helpers/accessibility.js",
-    "e2e/playwright.config.js",
-    "frontend/.prettierignore",
-    "frontend/.dockerignore",
-    "frontend/@next/package.json",
-    "frontend/Dockerfile",
-    "frontend/app/globals.css",
-    "frontend/eslint.config.mjs",
-    "frontend/jest.config.js",
-    "frontend/jsconfig.json",
-    "frontend/next.config.js",
-    "frontend/package-lock.docker.json",
-    "frontend/package.json",
-    "frontend/public/favicon.ico",
-    "frontend/public/homepage.png",
-    "frontend/public/img/i2glogo.png",
-    "frontend/public/img/ucmlogo.png",
-    "frontend/public/logo192.png",
-    "frontend/public/logo512.png",
-    "frontend/public/robots.txt",
+    "src/e2e/accessibility.spec.js",
+    "src/e2e/helpers/accessibility.js",
+    "src/e2e/playwright.config.js",
+    "src/frontend/.prettierignore",
+    "src/frontend/.dockerignore",
+    "src/frontend/@next/package.json",
+    "src/frontend/Dockerfile",
+    "src/frontend/app/globals.css",
+    "src/frontend/eslint.config.mjs",
+    "src/frontend/jest.config.js",
+    "src/frontend/jsconfig.json",
+    "src/frontend/next.config.js",
+    "src/frontend/package-lock.docker.json",
+    "src/frontend/package.json",
+    "src/frontend/vendor/brace-expansion-compat/package.json",
+    "src/frontend/public/favicon.ico",
+    "src/frontend/public/homepage.png",
+    "src/frontend/public/img/i2glogo.png",
+    "src/frontend/public/img/ucmlogo.png",
+    "src/frontend/public/logo192.png",
+    "src/frontend/public/logo512.png",
+    "src/frontend/public/robots.txt",
     "infra/bootstrap/main.tf",
     "infra/bootstrap/tests/plan.tftest.hcl",
     "infra/prod/main.tf",
@@ -117,11 +118,11 @@ class RepositorySurfaceTests(SimpleTestCase):
 
     def test_quality_gate_resources_reference_strict_checks(self):
         package_json = (ROOT / "package.json").read_text(encoding="utf-8")
-        backend_package = (ROOT / "backend/package.json").read_text(encoding="utf-8")
-        frontend_package = (ROOT / "frontend/package.json").read_text(encoding="utf-8")
-        pyproject = (ROOT / "backend/pyproject.toml").read_text(encoding="utf-8")
+        backend_package = (ROOT / "src/backend/package.json").read_text(encoding="utf-8")
+        frontend_package = (ROOT / "src/frontend/package.json").read_text(encoding="utf-8")
+        pyproject = (ROOT / "src/backend/pyproject.toml").read_text(encoding="utf-8")
         ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-        frontend_dockerfile = (ROOT / "frontend/Dockerfile").read_text(encoding="utf-8")
+        frontend_dockerfile = (ROOT / "src/frontend/Dockerfile").read_text(encoding="utf-8")
 
         self.assertIn('"test:coverage"', package_json)
         self.assertIn('"quality-gate"', package_json)
@@ -135,8 +136,12 @@ class RepositorySurfaceTests(SimpleTestCase):
         self.assertIn("Supply Chain Result", ci)
         self.assertIn("CI Result", ci)
         self.assertIn("Playwright E2E", ci)
-        self.assertNotIn("cp package-lock.json frontend/", ci)
+        self.assertNotIn("cp package-lock.json src/frontend/", ci)
         self.assertIn("COPY package.json package-lock.docker.json ./", frontend_dockerfile)
+        self.assertIn(
+            "COPY vendor/brace-expansion-compat ./vendor/brace-expansion-compat",
+            frontend_dockerfile,
+        )
 
         restore = (ROOT / "scripts/postgres-restore.sh").read_text(encoding="utf-8")
         drill = (ROOT / "scripts/backup-restore-drill.sh").read_text(encoding="utf-8")
@@ -151,7 +156,7 @@ class RepositorySurfaceTests(SimpleTestCase):
         self.assertIn("EXPECTED_CURRENT_TASK_DEFINITION", rollout)
         self.assertIn("deploymentCircuitBreaker={enable=true,rollback=true}", rollout)
         self.assertIn("aws ecs wait services-stable", rollout)
-        self.assertIn('"$root_dir/frontend"', frontend_build)
+        self.assertIn('"$root_dir/src/frontend"', frontend_build)
         self.assertIn("docker build", frontend_build)
 
     def test_deploy_and_runtime_resources_are_clerk_free(self):
@@ -163,10 +168,10 @@ class RepositorySurfaceTests(SimpleTestCase):
                 self.assertNotIn("clerk.com", text.lower())
 
     def test_admin_theme_templates_reference_releviz_assets(self):
-        login = (ROOT / "backend/src/apps/core/templates/admin/login.html").read_text(
+        login = (ROOT / "src/backend/apps/core/templates/admin/login.html").read_text(
             encoding="utf-8"
         )
-        base_site = (ROOT / "backend/src/apps/core/templates/admin/base_site.html").read_text(
+        base_site = (ROOT / "src/backend/apps/core/templates/admin/base_site.html").read_text(
             encoding="utf-8"
         )
 

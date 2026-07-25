@@ -38,7 +38,7 @@ trap cleanup EXIT
 
 (
   cd "$root_dir"
-  "$python_bin" backend/src/manage.py database_manifest \
+  "$python_bin" src/backend/manage.py database_manifest \
     --settings=config.settings.e2e >"$source_manifest"
 )
 
@@ -50,12 +50,12 @@ ALLOW_DATABASE_RESTORE=1 \
 
 (
   cd "$root_dir"
-  DB_NAME="$restore_database" "$python_bin" backend/src/manage.py database_manifest \
+  DB_NAME="$restore_database" "$python_bin" src/backend/manage.py database_manifest \
     --settings=config.settings.e2e >"$restored_manifest"
-  DB_NAME="$restore_database" "$python_bin" backend/src/manage.py migrate \
+  DB_NAME="$restore_database" "$python_bin" src/backend/manage.py migrate \
     --check \
     --settings=config.settings.e2e
-  DB_NAME="$restore_database" "$python_bin" backend/src/manage.py check \
+  DB_NAME="$restore_database" "$python_bin" src/backend/manage.py check \
     --settings=config.settings.e2e
 )
 

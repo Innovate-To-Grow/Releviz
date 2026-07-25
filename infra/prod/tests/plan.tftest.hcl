@@ -135,6 +135,15 @@ run "production_plan" {
     )
     error_message = "Production must page monitored SNS actions for both services, request exceptions, and permanent email failures."
   }
+
+  assert {
+    condition = (
+      jsondecode(aws_cloudwatch_event_target.event_reminders.input)
+      .containerOverrides[0].command
+      == ["python", "manage.py", "send_due_event_reminders", "--window-minutes=20"]
+    )
+    error_message = "The scheduled reminder task must invoke manage.py at the backend image workdir."
+  }
 }
 
 run "production_plan_without_dns" {

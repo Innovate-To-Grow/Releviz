@@ -994,7 +994,7 @@ resource "aws_cloudwatch_event_target" "event_reminders" {
   input = jsonencode({
     containerOverrides = [{
       name    = "${local.prefix}-backend"
-      command = ["python", "src/manage.py", "send_due_event_reminders", "--window-minutes=20"]
+      command = ["python", "manage.py", "send_due_event_reminders", "--window-minutes=20"]
       environment = [{
         name  = "DJANGO_SKIP_STARTUP_TASKS"
         value = "1"

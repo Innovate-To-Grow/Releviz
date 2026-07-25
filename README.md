@@ -63,14 +63,16 @@ The weighted average formula: for each time slot, `sum(availability * weight) / 
 | Database       | PostgreSQL/RDS in deployed environments; SQLite for local development               |
 | Infrastructure | AWS ECS Fargate behind ALB (path-based routing)                                     |
 | IaC            | Terraform (versioned encrypted S3 state with native lock files)                     |
-| CI/CD          | GitHub Actions (required CI; production CD temporarily disabled)                      |
+| CI/CD          | GitHub Actions (required CI and protected manual production CD)                       |
 
 ## Project Structure
 
 ```
 releviz-monorepo/
-  frontend/         # Next.js 15 — UI only, no API routes
-  backend/          # Django — API server, account auth, admin
+  src/
+    frontend/       # Next.js 15 — UI only, no API routes
+    backend/        # Django — API server, account auth, admin
+    e2e/            # Playwright browser tests
   infra/
     prod/           # HA production Terraform (split frontend/backend services)
     bootstrap/      # Protected state backend and GitHub OIDC deploy role
@@ -78,14 +80,14 @@ releviz-monorepo/
     quality-gate.sh # Full lint + test + build for both workspaces
   .github/workflows/
     ci.yml          # Parallel CI for both workspaces
-    deploy-prod.yml.disabled # Non-runnable CD marker during PR consolidation
+    deploy-prod.yml # Protected, operator-confirmed production release
 ```
 
 ## Local Development
 
 ```bash
 npm install          # install all workspace dependencies
-python3 -m pip install -r backend/requirements/local.txt
+python3 -m pip install -r src/backend/requirements/local.txt
 npm run dev          # start backend (4000) + frontend (3000)
 npm run dev:backend  # backend only
 npm run dev:frontend # frontend only
@@ -96,12 +98,12 @@ The frontend proxies `/api/*` and `/authn/*` requests to `http://localhost:4000`
 Run checks:
 
 ```bash
-npm --workspace=backend run lint
-npm --workspace=frontend run lint
-python backend/src/manage.py test --settings=config.settings.test
-npm --workspace=backend run test
-npm --workspace=frontend run test
-npm --workspace=frontend run build
+npm --workspace=releviz-backend run lint
+npm --workspace=releviz-frontend run lint
+python src/backend/manage.py test --settings=config.settings.test
+npm --workspace=releviz-backend run test
+npm --workspace=releviz-frontend run test
+npm --workspace=releviz-frontend run build
 npm run quality-gate               # all of the above
 ```
 
@@ -183,7 +185,7 @@ Operational procedures and product evidence definitions:
 
 ```bash
 # Backend
-docker build -t releviz-backend:local ./backend
+docker build -t releviz-backend:local ./src/backend
 docker run --rm -p 4000:4000 \
   -e DJANGO_SETTINGS_MODULE=config.settings.local \
   releviz-backend:local
@@ -197,13 +199,11 @@ docker run --rm -p 3000:3000 releviz-frontend:local
 
 ### Production
 
-Production CD is intentionally disabled while the open pull-request backlog is consolidated.
-There is no runnable production workflow and no workflow currently grants deployment or OIDC
-permissions. Terraform still describes the production infrastructure, but it must not be applied
-through GitHub Actions until CD is deliberately rebuilt, reviewed, and protected. The previous
-manual workflow remains recoverable from Git history for reference only. After consolidation,
-rebuild the release workflow and re-review the procedure in
-[`docs/deployment-rollback.md`](docs/deployment-rollback.md) before any live release.
+Production CD is a protected manual workflow on `main`. It requires the exact confirmation
+`DEPLOY`, verifies that the selected immutable commit passed `CI Result`, assumes the production
+AWS role through GitHub OIDC, builds SHA-tagged images from `src/backend` and `src/frontend`, and
+applies reviewed Terraform plans before and after DNS cutover. Review
+[`docs/deployment-rollback.md`](docs/deployment-rollback.md) before every live release.
 
 Run `infra/bootstrap` once with an administrator to create the versioned state bucket and the
 repository/environment-scoped OIDC role. Supply the existing account-wide GitHub OIDC provider ARN;

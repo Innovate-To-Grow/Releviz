@@ -1,2 +1,2 @@
 // Local shim for Next.js 15 in this environment so SWC wasm fallback resolves during tests/build.
-export * from "../../node_modules/@next/swc-wasm-nodejs/wasm.js";
+export * from "../../../node_modules/@next/swc-wasm-nodejs/wasm.js";
