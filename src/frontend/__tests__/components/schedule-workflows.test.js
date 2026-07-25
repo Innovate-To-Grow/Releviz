@@ -234,8 +234,8 @@ describe("participant workflow", () => {
 
     await userEvent.click(screen.getByRole("button", { name: `Join as ${member.displayName}` }));
     expect(await screen.findByText(`Welcome, ${member.displayName}`)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Apply level to all" }));
-    await userEvent.click(screen.getByRole("button", { name: "Submit Schedule" }));
+    await userEvent.click(screen.getByRole("button", { name: "Apply Available to all" }));
+    await userEvent.click(screen.getByRole("button", { name: "Submit Availability" }));
 
     await waitFor(() => expect(updateParticipant).toHaveBeenCalledTimes(2));
     expect(updateParticipant.mock.calls[0][2]).toEqual({
@@ -266,8 +266,8 @@ describe("participant workflow", () => {
     await screen.findByText("Alex");
     await userEvent.click(screen.getByRole("button", { name: `Join as ${member.displayName}` }));
     await screen.findByText(`Welcome, ${member.displayName}`);
-    await userEvent.click(screen.getByRole("button", { name: "Clear all" }));
-    await userEvent.click(screen.getByRole("button", { name: "Submit Schedule" }));
+    await userEvent.click(screen.getByRole("button", { name: "Mark all Busy" }));
+    await userEvent.click(screen.getByRole("button", { name: "Submit Availability" }));
 
     expect(await screen.findByText("A newer response exists.")).toBeInTheDocument();
     expect(screen.getByText("Save the draft successfully before submitting.")).toBeInTheDocument();
@@ -304,7 +304,7 @@ describe("participant workflow", () => {
     expect(
       await screen.findByText("Responses are locked while this event is finalized.")
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Update Schedule" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Update Availability" })).toBeDisabled();
   });
 
   test("renders loading and own-only empty-result semantics", async () => {
@@ -324,7 +324,9 @@ describe("participant workflow", () => {
     fetchEventResults.mockRejectedValue(new Error("Not authorized"));
     renderParticipant({ ...baseEvent, participantViewPermission: "own_only" });
     await waitFor(() => expect(fetchEventResults).toHaveBeenCalled());
-    expect(screen.getByText("Set your availability.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Choose a status, then click or drag across the times below.")
+    ).toBeInTheDocument();
     expect(screen.queryByText("Group Availability")).not.toBeInTheDocument();
   });
 });

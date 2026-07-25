@@ -5,11 +5,10 @@ import { useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 import AppButton from "@/components/ui/AppButton";
 import { useAuth } from "@/components/auth/AuthContext";
-import { navigateTo } from "@/lib/navigation";
+import { navigateTo, safeNextPath } from "@/lib/navigation";
 
 function LoginContent() {
   const searchParams = useSearchParams();
-  const requestedNext = searchParams.get("next") || "/dashboard";
   const statusCode = searchParams.get("status");
   const initialStatus =
     {
@@ -18,8 +17,7 @@ function LoginContent() {
       "signed-out-all": "All devices have been signed out.",
       "account-deleted": "Your account has been deleted.",
     }[statusCode] || "";
-  const next =
-    requestedNext.startsWith("/") && !requestedNext.startsWith("//") ? requestedNext : "/dashboard";
+  const next = safeNextPath(searchParams.get("next"));
   const { login, requestEmailLoginCode, verifyEmailLoginCode, loading: authLoading } = useAuth();
   const [mode, setMode] = useState("password");
   const [email, setEmail] = useState("");
@@ -148,7 +146,7 @@ function LoginContent() {
           </p>
         )}
         <p className="auth-switch">
-          Need an account? <Link href="/signup">Sign up</Link>
+          Need an account? <Link href={`/signup?next=${encodeURIComponent(next)}`}>Sign up</Link>
         </p>
       </form>
     </main>

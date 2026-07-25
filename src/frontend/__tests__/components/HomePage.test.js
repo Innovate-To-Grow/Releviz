@@ -21,9 +21,6 @@ jest.mock("@/components/auth/AuthContext", () => ({
   useAuth: jest.fn(),
 }));
 
-// Mock material web components
-jest.mock("@material/web/textfield/outlined-text-field.js", () => ({}), { virtual: true });
-
 import { useAuth } from "@/components/auth/AuthContext";
 import HomePage from "@/components/HomePage";
 
@@ -32,45 +29,48 @@ describe("HomePage", () => {
     jest.clearAllMocks();
   });
 
-  test("shows loading state when auth is loading", () => {
+  test("keeps the public explanation visible while auth is loading", () => {
     useAuth.mockReturnValue({ user: null, loading: true });
     render(<HomePage />);
-    expect(screen.getByText("Loading...")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Find a time that works for everyone." })
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create a scheduling poll" })).toBeDisabled();
   });
 
-  test("shows Releviz branding", () => {
+  test("explains the product and shows signed-out account actions", () => {
     useAuth.mockReturnValue({ user: null, loading: false });
     render(<HomePage />);
     expect(screen.getByText("Releviz")).toBeInTheDocument();
-    expect(screen.getByText(/Intelligent group scheduling/i)).toBeInTheDocument();
+    expect(screen.getByText(/Create a scheduling poll, share one link/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Log in" })).toHaveAttribute("href", "/login");
+    expect(screen.getByRole("link", { name: "Sign up" })).toHaveAttribute("href", "/signup");
+    expect(screen.getByRole("heading", { name: "Open an existing poll" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "How Releviz works" })).toBeInTheDocument();
   });
 
-  test("shows Organize and Join CTAs", () => {
-    useAuth.mockReturnValue({ user: null, loading: false });
-    render(<HomePage />);
-    expect(screen.getByText("Organize an Event")).toBeInTheDocument();
-    expect(screen.getByText("or")).toBeInTheDocument();
-  });
-
-  test("shows dashboard link for an authenticated account", () => {
+  test("shows a prominent dashboard continuation for an authenticated account", () => {
     useAuth.mockReturnValue({
       user: { id: "user-1", displayName: "Prachi", email: "prachi@test.com" },
       loading: false,
     });
     render(<HomePage />);
-    expect(screen.getByText(/View my dashboard/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Go to my dashboard/i })).toHaveAttribute(
+      "href",
+      "/dashboard"
+    );
   });
 
-  test("redirects to /create when user clicks Organize", () => {
+  test("starts account creation before an anonymous organizer creates a poll", () => {
     const push = jest.fn();
     jest.spyOn(require("next/navigation"), "useRouter").mockReturnValue({ push });
     useAuth.mockReturnValue({ user: null, loading: false });
     render(<HomePage />);
-    fireEvent.click(screen.getByText("Organize an Event"));
-    expect(push).toHaveBeenCalledWith("/create");
+    fireEvent.click(screen.getByRole("button", { name: "Create a scheduling poll" }));
+    expect(push).toHaveBeenCalledWith("/signup?next=%2Fcreate");
   });
 
-  test("redirects to /create when authenticated user clicks Organize", () => {
+  test("opens the create form directly for an authenticated organizer", () => {
     const push = jest.fn();
     jest.spyOn(require("next/navigation"), "useRouter").mockReturnValue({ push });
     useAuth.mockReturnValue({
@@ -78,21 +78,34 @@ describe("HomePage", () => {
       loading: false,
     });
     render(<HomePage />);
-    fireEvent.click(screen.getByText("Organize an Event"));
+    fireEvent.click(screen.getByRole("button", { name: "Create a scheduling poll" }));
     expect(push).toHaveBeenCalledWith("/create");
   });
 
-  test("joins by trimmed event code and ignores empty codes", () => {
+  test("sends an anonymous participant through login without losing the event code", () => {
     const push = jest.fn();
     jest.spyOn(require("next/navigation"), "useRouter").mockReturnValue({ push });
     useAuth.mockReturnValue({ user: null, loading: false });
     render(<HomePage />);
-    fireEvent.click(screen.getByText("Go"));
+    const openButton = screen.getByRole("button", { name: "Open event" });
+    expect(openButton).toBeDisabled();
+    fireEvent.click(openButton);
     expect(push).not.toHaveBeenCalled();
-    const input = document.querySelector("md-outlined-text-field");
-    input.value = " ABC123 ";
-    fireEvent.input(input);
-    fireEvent.keyDown(input, { key: "Enter" });
-    expect(push).toHaveBeenCalledWith("/event?code=ABC123");
+    fireEvent.change(screen.getByLabelText("Event code"), { target: { value: " ABC123 " } });
+    fireEvent.submit(screen.getByLabelText("Event code").closest("form"));
+    expect(push).toHaveBeenCalledWith("/login?next=%2Fevent%3Fcode%3DABC123");
+  });
+
+  test("opens an event directly for an authenticated participant", () => {
+    const push = jest.fn();
+    jest.spyOn(require("next/navigation"), "useRouter").mockReturnValue({ push });
+    useAuth.mockReturnValue({
+      user: { id: "user-1", displayName: "Prachi", email: "prachi@test.com" },
+      loading: false,
+    });
+    render(<HomePage />);
+    fireEvent.change(screen.getByLabelText("Event code"), { target: { value: " EVENT9 " } });
+    fireEvent.click(screen.getByRole("button", { name: "Open event" }));
+    expect(push).toHaveBeenCalledWith("/event?code=EVENT9");
   });
 });
