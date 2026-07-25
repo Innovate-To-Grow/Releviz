@@ -10,12 +10,12 @@ from pathlib import Path
 
 ALL_PROJECTS = ("chromium", "firefox", "webkit")
 FULL_BROWSER_FILES = {
-    "e2e/accessibility.spec.js",
-    "e2e/playwright.config.js",
+    "src/e2e/accessibility.spec.js",
+    "src/e2e/playwright.config.js",
     "package-lock.json",
     "package.json",
 }
-FULL_BROWSER_PREFIXES = (".github/", "scripts/ci/", "frontend/next.config.js")
+FULL_BROWSER_PREFIXES = (".github/", "scripts/ci/", "src/frontend/next.config.js")
 
 
 def read_changed_files(path: Path) -> list[str]:
@@ -35,7 +35,7 @@ def select_matrix(event_name: str, changed_files: list[str]) -> list[dict[str, s
     spec_files = sorted(
         path
         for path in changed_files
-        if path.startswith("e2e/") and path.endswith(".spec.js")
+        if path.startswith("src/e2e/") and path.endswith(".spec.js")
     )
     spec_args = " ".join(spec_files)
     full_browser_coverage = any(

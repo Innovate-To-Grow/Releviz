@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-PRODUCTION_SETTINGS = ROOT / "backend/src/config/settings/production.py"
+PRODUCTION_SETTINGS = ROOT / "src/backend/config/settings/production.py"
 BOOTSTRAP_TERRAFORM = ROOT / "infra/bootstrap/main.tf"
 TERRAFORM_ENVIRONMENTS = {
     "production": ROOT / "infra/prod/main.tf",

@@ -7,4 +7,4 @@ if [ "$#" -gt 0 ]; then
   shift
 fi
 
-docker build -t "$image_tag" "$@" "$root_dir/frontend"
+docker build -t "$image_tag" "$@" "$root_dir/src/frontend"

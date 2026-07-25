@@ -40,10 +40,11 @@ AUDITED_NAMES = {
     "pyproject.toml",
 }
 REFERENCE_FILES = [
-    "backend/src/apps/core/tests/test_admin_theme.py",
-    "backend/src/apps/core/tests/test_repository_surface.py",
-    "e2e/repository-surface.spec.js",
+    "src/backend/apps/core/tests/test_admin_theme.py",
+    "src/backend/apps/core/tests/test_repository_surface.py",
+    "src/e2e/repository-surface.spec.js",
 ]
+LOCAL_ONLY_FILES = {"AGENTS.md"}
 
 
 def tracked_files() -> list[str]:
@@ -51,7 +52,13 @@ def tracked_files() -> list[str]:
     untracked = subprocess.check_output(
         ["git", "ls-files", "--others", "--exclude-standard"], cwd=ROOT, text=True
     )
-    return sorted({line for line in [*output.splitlines(), *untracked.splitlines()] if line})
+    return sorted(
+        {
+            line
+            for line in [*output.splitlines(), *untracked.splitlines()]
+            if line and line not in LOCAL_ONLY_FILES
+        }
+    )
 
 
 def should_audit(path: str) -> bool:
@@ -62,12 +69,12 @@ def should_audit(path: str) -> bool:
             "node_modules/",
             "coverage/",
             "htmlcov/",
-            "frontend/.next/",
-            "frontend/coverage/",
-            "frontend/playwright-report/",
-            "frontend/test-results/",
-            "e2e/playwright-report/",
-            "e2e/test-results/",
+            "src/frontend/.next/",
+            "src/frontend/coverage/",
+            "src/frontend/playwright-report/",
+            "src/frontend/test-results/",
+            "src/e2e/playwright-report/",
+            "src/e2e/test-results/",
             "playwright-report/",
             "test-results/",
         )

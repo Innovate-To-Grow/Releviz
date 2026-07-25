@@ -18,7 +18,9 @@ RUN python -m pip install --no-cache-dir --upgrade \
     "wheel==${WHEEL_VERSION}" \
   && python -m pip install --no-cache-dir -r requirements/production.txt
 
-COPY src ./src
+COPY apps ./apps
+COPY config ./config
+COPY manage.py ./manage.py
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
 
 RUN chmod +x ./docker-entrypoint.sh \
@@ -31,4 +33,4 @@ USER appuser
 EXPOSE 4000
 
 ENTRYPOINT ["./docker-entrypoint.sh"]
-CMD ["sh", "-c", "gunicorn config.wsgi:application --chdir src --bind 0.0.0.0:${PORT:-4000} --workers 3"]
+CMD ["sh", "-c", "gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-4000} --workers 3"]

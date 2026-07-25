@@ -1,7 +1,7 @@
 const { defineConfig, devices } = require("@playwright/test");
 const path = require("node:path");
 
-const rootDir = path.resolve(__dirname, "..");
+const rootDir = path.resolve(__dirname, "../..");
 const backendUrl = process.env.BACKEND_URL || "http://127.0.0.1:4100";
 const frontendUrl = process.env.FRONTEND_URL || "http://127.0.0.1:3100";
 const backendPort = new URL(backendUrl).port || "80";
@@ -35,7 +35,7 @@ module.exports = defineConfig({
   },
   webServer: [
     {
-      command: `python3 backend/src/manage.py runserver 127.0.0.1:${backendPort} --settings=config.settings.e2e`,
+      command: `python3 src/backend/manage.py runserver 127.0.0.1:${backendPort} --settings=config.settings.e2e`,
       cwd: rootDir,
       url: `${backendUrl}/api/health`,
       env: backendEnv,
@@ -43,7 +43,7 @@ module.exports = defineConfig({
       timeout: 60_000,
     },
     {
-      command: `npm --workspace=frontend run start -- --hostname 127.0.0.1 --port ${frontendPort}`,
+      command: `npm --workspace=releviz-frontend run start -- --hostname 127.0.0.1 --port ${frontendPort}`,
       cwd: rootDir,
       url: frontendUrl,
       env: {

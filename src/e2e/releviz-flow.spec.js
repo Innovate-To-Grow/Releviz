@@ -4,7 +4,7 @@ const path = require("node:path");
 const { expect, test } = require("@playwright/test");
 const { expectAccessible } = require("./helpers/accessibility");
 
-const ROOT = path.resolve(__dirname, "..");
+const ROOT = path.resolve(__dirname, "../..");
 const BACKEND_URL = process.env.BACKEND_URL || "http://127.0.0.1:4100";
 const EMAIL_FILE_PATH = process.env.EMAIL_FILE_PATH || "/tmp/releviz-e2e-mail";
 const ADMIN_EMAIL = process.env.DJANGO_SUPERUSER_EMAIL || "admin@releviz.local";
@@ -86,6 +86,7 @@ async function registerAccount(page, email, firstName, lastName) {
   await page.getByLabel("Verification code").fill(code);
   await page.getByRole("button", { name: "Verify and continue" }).click();
   await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(page.getByRole("heading", { name: "My Dashboard" })).toBeVisible();
   const welcome = await latestEmailFor(email, startedAt, (body) =>
     body.includes("Welcome to Releviz")
   );
@@ -288,7 +289,7 @@ assert EmailMessageLog.objects.filter(event=event, message_type="final_cancellat
     cwd: ROOT,
     env: {
       ...process.env,
-      PYTHONPATH: path.join(ROOT, "backend/src"),
+      PYTHONPATH: path.join(ROOT, "src/backend"),
       DJANGO_SETTINGS_MODULE: "config.settings.e2e",
     },
     stdio: "pipe",
@@ -342,7 +343,7 @@ assert BlacklistedToken.objects.filter(token__user=member).exists()
     cwd: ROOT,
     env: {
       ...process.env,
-      PYTHONPATH: path.join(ROOT, "backend/src"),
+      PYTHONPATH: path.join(ROOT, "src/backend"),
       DJANGO_SETTINGS_MODULE: "config.settings.e2e",
     },
     stdio: "pipe",
@@ -392,7 +393,7 @@ assert duplication.duplicate_event_id is None
     cwd: ROOT,
     env: {
       ...process.env,
-      PYTHONPATH: path.join(ROOT, "backend/src"),
+      PYTHONPATH: path.join(ROOT, "src/backend"),
       DJANGO_SETTINGS_MODULE: "config.settings.e2e",
     },
     stdio: "pipe",
