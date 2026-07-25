@@ -57,6 +57,7 @@ const RESOURCE_AUDIT_MANIFEST = [
   "src/frontend/next.config.js",
   "src/frontend/package-lock.docker.json",
   "src/frontend/package.json",
+  "src/frontend/vendor/brace-expansion-compat/package.json",
   "src/frontend/public/favicon.ico",
   "src/frontend/public/homepage.png",
   "src/frontend/public/img/i2glogo.png",

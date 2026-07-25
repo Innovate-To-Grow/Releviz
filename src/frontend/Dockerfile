@@ -6,6 +6,7 @@ ARG NEXT_PUBLIC_API_BASE_URL=""
 ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
 
 COPY package.json package-lock.docker.json ./
+COPY vendor/brace-expansion-compat ./vendor/brace-expansion-compat
 RUN cp package-lock.docker.json package-lock.json && npm ci
 
 COPY . .

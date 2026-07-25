@@ -63,6 +63,7 @@ RESOURCE_AUDIT_MANIFEST = [
     "src/frontend/next.config.js",
     "src/frontend/package-lock.docker.json",
     "src/frontend/package.json",
+    "src/frontend/vendor/brace-expansion-compat/package.json",
     "src/frontend/public/favicon.ico",
     "src/frontend/public/homepage.png",
     "src/frontend/public/img/i2glogo.png",
@@ -137,6 +138,10 @@ class RepositorySurfaceTests(SimpleTestCase):
         self.assertIn("Playwright E2E", ci)
         self.assertNotIn("cp package-lock.json src/frontend/", ci)
         self.assertIn("COPY package.json package-lock.docker.json ./", frontend_dockerfile)
+        self.assertIn(
+            "COPY vendor/brace-expansion-compat ./vendor/brace-expansion-compat",
+            frontend_dockerfile,
+        )
 
         restore = (ROOT / "scripts/postgres-restore.sh").read_text(encoding="utf-8")
         drill = (ROOT / "scripts/backup-restore-drill.sh").read_text(encoding="utf-8")

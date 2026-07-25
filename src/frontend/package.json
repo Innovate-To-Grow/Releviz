@@ -20,6 +20,7 @@
     "@testing-library/jest-dom": "^7.0.0",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^13.5.0",
+    "brace-expansion-safe": "npm:brace-expansion@5.0.8",
     "eslint": "^9.39.5",
     "eslint-config-next": "16.2.11",
     "eslint-config-prettier": "^10.1.8",
@@ -30,6 +31,7 @@
     "prettier": "^3.9.5"
   },
   "overrides": {
+    "brace-expansion": "file:./vendor/brace-expansion-compat",
     "postcss": "$postcss",
     "sharp": "0.35.0"
   },
