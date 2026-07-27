@@ -65,6 +65,7 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
     required_patterns = {
         r"workflow_dispatch:": "manual dispatch",
         r"id-token:\s*write": "OIDC permission",
+        r"terraform_wrapper:\s*false": "raw Terraform output and exit semantics",
         r"CONFIRMATION.*DEPLOY|CONFIRMATION\"\s*!=\s*\"DEPLOY\"": "explicit confirmation",
         r"git rev-parse HEAD": "exact checked-out release verification",
         r"CI Result": "successful CI enforcement",

@@ -184,6 +184,7 @@ jobs:
         uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: 1.15.8
+          terraform_wrapper: false
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
