@@ -22,7 +22,7 @@ jobs:
   deploy:
     name: Deploy to Production
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     if: ${{ github.ref == 'refs/heads/main' }}
     environment:
       name: Production
@@ -36,6 +36,22 @@ jobs:
       ECR_FRONTEND: ${{ vars.ECR_PROD_FRONTEND || 'releviz-prod-frontend' }}
       PROD_DOMAIN: ${{ vars.PROD_DOMAIN }}
       DEPLOY_SHA: ${{ github.sha }}
+      AMPLIFY_ARTIFACT: ${{ github.workspace }}/releviz-amplify-${{ github.sha }}.zip
+      TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-west-2' }}
+      TF_VAR_backend_image_tag: ${{ github.sha }}
+      TF_VAR_ecr_backend_repository: ${{ vars.ECR_PROD_BACKEND || 'releviz-prod-backend' }}
+      TF_VAR_ecr_frontend_repository: ${{ vars.ECR_PROD_FRONTEND || 'releviz-prod-frontend' }}
+      TF_VAR_custom_domain: ${{ vars.PROD_DOMAIN }}
+      TF_VAR_route53_zone_id: ${{ vars.PROD_ROUTE53_ZONE_ID }}
+      TF_VAR_django_secret_key_arn: ${{ vars.PROD_DJANGO_SECRET_KEY_ARN }}
+      TF_VAR_django_field_encryption_key_arn: ${{ vars.PROD_DJANGO_FIELD_ENCRYPTION_KEY_ARN }}
+      TF_VAR_metrics_bearer_token_arn: ${{ vars.PROD_METRICS_BEARER_TOKEN_ARN }}
+      TF_VAR_sentry_dsn_secret_arn: ${{ vars.PROD_SENTRY_DSN_SECRET_ARN || '' }}
+      TF_VAR_secret_kms_key_arn: ${{ vars.PROD_SECRET_KMS_KEY_ARN || '' }}
+      TF_VAR_existing_acm_certificate_arn: ${{ vars.PROD_ACM_CERTIFICATE_ARN || '' }}
+      TF_VAR_alarm_action_arns: ${{ vars.PROD_ALARM_ACTION_ARNS_JSON }}
+      TF_VAR_default_from_email: ${{ vars.PROD_DEFAULT_FROM_EMAIL || 'noreply@releviz.com' }}
+      TF_VAR_amplify_app_id: ${{ vars.PROD_AMPLIFY_APP_ID }}
 
     steps:
       - name: Confirm protected production release
@@ -57,6 +73,15 @@ jobs:
         with:
           ref: ${{ env.DEPLOY_SHA }}
 
+      - name: Verify the exact checked-out release
+        run: |
+          set -euo pipefail
+          checked_out_sha="$(git rev-parse HEAD)"
+          if [ "$checked_out_sha" != "$DEPLOY_SHA" ]; then
+            echo "::error::Checkout is ${checked_out_sha}; expected ${DEPLOY_SHA}."
+            exit 1
+          fi
+
       - name: Verify CI Result passed for the release commit
         env:
           GH_TOKEN: ${{ github.token }}
@@ -77,6 +102,7 @@ jobs:
           DJANGO_SECRET_KEY_ARN: ${{ vars.PROD_DJANGO_SECRET_KEY_ARN }}
           FIELD_ENCRYPTION_KEY_ARN: ${{ vars.PROD_DJANGO_FIELD_ENCRYPTION_KEY_ARN }}
           METRICS_BEARER_TOKEN_ARN: ${{ vars.PROD_METRICS_BEARER_TOKEN_ARN }}
+          AMPLIFY_APP_ID: ${{ vars.PROD_AMPLIFY_APP_ID }}
           ALARM_ACTION_ARNS: ${{ vars.PROD_ALARM_ACTION_ARNS_JSON }}
         run: |
           set -euo pipefail
@@ -88,6 +114,7 @@ jobs:
             DJANGO_SECRET_KEY_ARN \
             FIELD_ENCRYPTION_KEY_ARN \
             METRICS_BEARER_TOKEN_ARN \
+            AMPLIFY_APP_ID \
             ALARM_ACTION_ARNS; do
             if [ -z "${!required:-}" ]; then
               echo "::error::Missing required Production environment variable: $required"
@@ -95,8 +122,12 @@ jobs:
             fi
           done
           if ! jq -e 'type == "array" and length > 0 and all(.[]; type == "string" and startswith("arn:"))' \
-            <<< "$ALARM_ACTION_ARNS" >/dev/null; then
+            <<<"$ALARM_ACTION_ARNS" >/dev/null; then
             echo "::error::PROD_ALARM_ACTION_ARNS_JSON must be a non-empty JSON array of SNS ARNs."
+            exit 1
+          fi
+          if ! [[ "$AMPLIFY_APP_ID" =~ ^d[a-z0-9]{1,19}$ ]]; then
+            echo "::error::PROD_AMPLIFY_APP_ID must be an exact Amplify app ID."
             exit 1
           fi
 
@@ -104,6 +135,7 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          role-duration-seconds: 10800
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Verify deployment identity and managed dependencies
@@ -126,6 +158,7 @@ jobs:
           done
           aws kms describe-key --key-id alias/aws/rds >/dev/null
           aws kms describe-key --key-id alias/aws/secretsmanager >/dev/null
+          aws amplify get-app --app-id "$TF_VAR_amplify_app_id" >/dev/null
 
       - name: Verify protected Terraform state bucket
         run: |
@@ -147,25 +180,17 @@ jobs:
             exit 1
           fi
 
-      - name: Verify Elastic IP capacity
-        run: |
-          set -euo pipefail
-          quota="$(aws service-quotas get-service-quota \
-            --service-code ec2 \
-            --quota-code L-0263D0A3 \
-            --query 'Quota.Value' \
-            --output text)"
-          allocated="$(aws ec2 describe-addresses --query 'length(Addresses)' --output text)"
-          available="$(awk -v quota="$quota" -v allocated="$allocated" 'BEGIN { print int(quota - allocated) }')"
-          if [ "$available" -lt 1 ]; then
-            echo "::error::At least one free EC2-VPC Elastic IP is required; quota=${quota}, allocated=${allocated}."
-            exit 1
-          fi
-
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: 1.15.8
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: package-lock.json
 
       - name: Initialize Terraform with remote state
         run: |
@@ -175,46 +200,255 @@ jobs:
             -backend-config="region=${AWS_REGION}" \
             -backend-config="use_lockfile=true"
 
-      - name: Ensure immutable ECR repositories exist
+      - name: Preserve the deployed ECS frontend as a hot rollback
+        id: rollback_frontend
         run: |
           set -euo pipefail
-          for repository in "$ECR_BACKEND" "$ECR_FRONTEND"; do
-            if ! aws ecr describe-repositories --repository-names "$repository" >/dev/null 2>&1; then
-              aws ecr create-repository \
-                --repository-name "$repository" \
-                --image-tag-mutability IMMUTABLE \
-                --image-scanning-configuration scanOnPush=true >/dev/null
-            else
-              aws ecr put-image-tag-mutability \
-                --repository-name "$repository" \
-                --image-tag-mutability IMMUTABLE >/dev/null
-              aws ecr put-image-scanning-configuration \
-                --repository-name "$repository" \
-                --image-scanning-configuration scanOnPush=true >/dev/null
-            fi
-          done
+          cluster_name="$(terraform -chdir=infra/prod output -raw ecs_cluster_name)"
+          frontend_service="$(terraform -chdir=infra/prod output -raw frontend_service_name)"
+          task_definition="$(
+            aws ecs describe-services \
+              --cluster "$cluster_name" \
+              --services "$frontend_service" \
+              --query "services[0].taskDefinition" \
+              --output text
+          )"
+          image_uri="$(
+            aws ecs describe-task-definition \
+              --task-definition "$task_definition" \
+              --query "taskDefinition.containerDefinitions[0].image" \
+              --output text
+          )"
+          rollback_sha="${image_uri##*:}"
+          if ! [[ "$rollback_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::The deployed ECS frontend is not tagged with an immutable Git SHA: ${image_uri}"
+            exit 1
+          fi
+          if [[ "$image_uri" != */"${ECR_FRONTEND}:${rollback_sha}" ]]; then
+            echo "::error::The deployed ECS frontend does not use the configured rollback repository."
+            exit 1
+          fi
+          {
+            echo "sha=$rollback_sha"
+            echo "task_definition=$task_definition"
+          } >>"$GITHUB_OUTPUT"
+          echo "TF_VAR_frontend_image_tag=$rollback_sha" >>"$GITHUB_ENV"
 
-      - name: Check whether immutable images already exist
-        id: images
+      - name: Detect an existing Amplify domain association
+        id: domain_state
         run: |
           set -euo pipefail
-          for component in backend frontend; do
-            repository_variable="ECR_${component^^}"
-            repository="${!repository_variable}"
-            if aws ecr describe-images \
-              --repository-name "$repository" \
-              --image-ids "imageTag=${DEPLOY_SHA}" >/dev/null 2>&1; then
-              echo "${component}_exists=true" >> "$GITHUB_OUTPUT"
+          state_list="$(terraform -chdir=infra/prod state list)"
+          if grep -q '^aws_amplify_domain_association\.frontend' <<<"$state_list"; then
+            echo "preexisting=true" >>"$GITHUB_OUTPUT"
+            echo "recovered_orphan=false" >>"$GITHUB_OUTPUT"
+          else
+            app_id="$TF_VAR_amplify_app_id"
+            domain_name="${PROD_DOMAIN%.}"
+            association_file="${RUNNER_TEMP}/orphan-amplify-domain-association.json"
+            association_error="${RUNNER_TEMP}/orphan-amplify-domain-association.error"
+            if [ -z "$app_id" ]; then
+              echo "preexisting=false" >>"$GITHUB_OUTPUT"
+              echo "recovered_orphan=false" >>"$GITHUB_OUTPUT"
+            elif aws amplify get-domain-association \
+              --app-id "$app_id" \
+              --domain-name "$domain_name" \
+              --output json >"$association_file" 2>"$association_error"; then
+              export TF_VAR_enable_amplify_domain=true
+              terraform -chdir=infra/prod import \
+                -input=false \
+                'aws_amplify_domain_association.frontend[0]' \
+                "${app_id}/${domain_name}"
+              if ! terraform -chdir=infra/prod state list |
+                grep -q '^aws_amplify_domain_association\.frontend\[0\]$'; then
+                echo "::error::The orphan Amplify domain association was not imported."
+                exit 1
+              fi
+              echo "preexisting=true" >>"$GITHUB_OUTPUT"
+              echo "recovered_orphan=true" >>"$GITHUB_OUTPUT"
+              echo "::notice::Recovered the existing Amplify domain association into Terraform state."
+            elif grep -q 'NotFoundException' "$association_error"; then
+              echo "preexisting=false" >>"$GITHUB_OUTPUT"
+              echo "recovered_orphan=false" >>"$GITHUB_OUTPUT"
             else
-              echo "${component}_exists=false" >> "$GITHUB_OUTPUT"
+              echo "::error::Unable to determine whether an orphan Amplify domain association exists."
+              cat "$association_error" >&2
+              exit 1
             fi
-          done
+          fi
+
+      - name: Detect an existing CloudFront-only origin restriction
+        id: origin_state
+        run: |
+          set -euo pipefail
+          restriction="$(
+            terraform -chdir=infra/prod output -raw origin_restricted_to_cloudfront 2>/dev/null ||
+              true
+          )"
+          case "$restriction" in
+            true)
+              echo "preexisting=true" >>"$GITHUB_OUTPUT"
+              ;;
+            "" | false)
+              echo "preexisting=false" >>"$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::Unexpected origin restriction state: ${restriction}"
+              exit 1
+              ;;
+          esac
+
+      - name: Detect an existing trusted CloudFront proxy chain
+        id: proxy_state
+        run: |
+          set -euo pipefail
+          trusted="$(
+            terraform -chdir=infra/prod output -raw trust_cloudfront_proxy_chain 2>/dev/null ||
+              true
+          )"
+          case "$trusted" in
+            true)
+              echo "preexisting=true" >>"$GITHUB_OUTPUT"
+              ;;
+            "" | false)
+              echo "preexisting=false" >>"$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::Unexpected trusted proxy-chain state: ${trusted}"
+              exit 1
+              ;;
+          esac
+
+      - name: Capture pre-release canonical Route53 alias
+        id: apex_alias
+        env:
+          AMPLIFY_APP_ID: ${{ vars.PROD_AMPLIFY_APP_ID }}
+          PRODUCTION_BRANCH: main
+          ROUTE53_ZONE_ID: ${{ vars.PROD_ROUTE53_ZONE_ID }}
+        run: |
+          set -euo pipefail
+          canonical_name="${PROD_DOMAIN%.}."
+          records_file="${RUNNER_TEMP}/pre-release-route53-records.json"
+          alias_file="${RUNNER_TEMP}/pre-release-apex-a-alias.json"
+          matches_file="${RUNNER_TEMP}/pre-release-apex-a-aliases.json"
+          aws route53 list-resource-record-sets \
+            --hosted-zone-id "$ROUTE53_ZONE_ID" \
+            --output json >"$records_file"
+          jq \
+            --arg name "$canonical_name" \
+            '[.ResourceRecordSets[] | select(.Name == $name and .Type == "A")]' \
+            "$records_file" >"$matches_file"
+          if ! jq -e '
+            length == 1
+            and (.[0].AliasTarget | type == "object")
+            and (.[0].AliasTarget.DNSName | type == "string" and length > 0)
+          ' "$matches_file" >/dev/null; then
+            echo "::error::Expected exactly one canonical Route53 A alias for ${canonical_name}."
+            exit 1
+          fi
+          jq '.[0]' "$matches_file" >"$alias_file"
+
+          alias_target="$(
+            jq -r '.AliasTarget.DNSName | ascii_downcase | rtrimstr(".")' "$alias_file"
+          )"
+          alb_dns_name="$(
+            terraform -chdir=infra/prod output -raw alb_dns_name |
+              tr '[:upper:]' '[:lower:]' |
+              sed 's/\.$//'
+          )"
+          normalized_alias_target="${alias_target#dualstack.}"
+          routes_to_alb=false
+          if [ "$normalized_alias_target" = "$alb_dns_name" ]; then
+            routes_to_alb=true
+          fi
+          if [ "${{ steps.domain_state.outputs.preexisting }}" = "true" ] &&
+            [ "$routes_to_alb" != "true" ]; then
+            association="$(
+              aws amplify get-domain-association \
+                --app-id "$AMPLIFY_APP_ID" \
+                --domain-name "$PROD_DOMAIN" \
+                --output json
+            )"
+            amplify_dns_record="$(
+              jq -er \
+                --arg branch "$PRODUCTION_BRANCH" \
+                '
+                  [
+                    .domainAssociation.subDomains[]
+                    | select(
+                        .subDomainSetting.prefix == ""
+                        and .subDomainSetting.branchName == $branch
+                      )
+                    | .dnsRecord
+                  ]
+                  | if length == 1 then .[0] else error("missing apex DNS record") end
+                ' <<<"$association"
+            )"
+            expected_amplify_target="$(
+              awk '{print $NF}' <<<"$amplify_dns_record" |
+                tr '[:upper:]' '[:lower:]' |
+                sed 's/\.$//'
+            )"
+            if [ -z "$expected_amplify_target" ] ||
+              [ "$alias_target" != "$expected_amplify_target" ]; then
+              echo "::error::The canonical alias is neither the managed ALB fallback nor Amplify's exact reported apex target; refusing deployment."
+              exit 1
+            fi
+          fi
+          if [ "${{ steps.domain_state.outputs.preexisting }}" != "true" ] &&
+            [ "$routes_to_alb" != "true" ]; then
+            echo "::error::The first Amplify cutover requires the canonical alias to target the managed ALB."
+            exit 1
+          fi
+          if [ "$routes_to_alb" = "true" ] &&
+            { [ "${{ steps.origin_state.outputs.preexisting }}" = "true" ] ||
+              [ "${{ steps.proxy_state.outputs.preexisting }}" = "true" ]; }; then
+            echo "::error::An ALB canonical alias requires public ingress and one-hop proxy trust."
+            exit 1
+          fi
+          {
+            echo "record_file=$alias_file"
+            echo "routes_to_alb=$routes_to_alb"
+            echo "alb_dns_name=$alb_dns_name"
+            echo "pre_release_alias_target=$alias_target"
+          } >>"$GITHUB_OUTPUT"
+          echo "::notice::Captured the exact pre-release canonical A alias; routes_to_alb=${routes_to_alb}."
+
+      - name: Ensure immutable backend ECR repository exists
+        run: |
+          set -euo pipefail
+          if ! aws ecr describe-repositories --repository-names "$ECR_BACKEND" >/dev/null 2>&1; then
+            aws ecr create-repository \
+              --repository-name "$ECR_BACKEND" \
+              --image-tag-mutability IMMUTABLE \
+              --image-scanning-configuration scanOnPush=true >/dev/null
+          else
+            aws ecr put-image-tag-mutability \
+              --repository-name "$ECR_BACKEND" \
+              --image-tag-mutability IMMUTABLE >/dev/null
+            aws ecr put-image-scanning-configuration \
+              --repository-name "$ECR_BACKEND" \
+              --image-scanning-configuration scanOnPush=true >/dev/null
+          fi
+
+      - name: Check whether immutable backend image already exists
+        id: backend_image
+        run: |
+          set -euo pipefail
+          if aws ecr describe-images \
+            --repository-name "$ECR_BACKEND" \
+            --image-ids "imageTag=${DEPLOY_SHA}" >/dev/null 2>&1; then
+            echo "exists=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >>"$GITHUB_OUTPUT"
+          fi
 
       - name: Login to Amazon ECR
+        if: ${{ steps.backend_image.outputs.exists != 'true' }}
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build and push immutable backend image
-        if: ${{ steps.images.outputs.backend_exists != 'true' }}
+        if: ${{ steps.backend_image.outputs.exists != 'true' }}
         run: |
           set -euo pipefail
           account_id="$(aws sts get-caller-identity --query Account --output text)"
@@ -222,43 +456,84 @@ jobs:
           docker build --pull --tag "$image_uri" ./src/backend
           docker push "$image_uri"
 
-      - name: Build and push immutable frontend image
-        if: ${{ steps.images.outputs.frontend_exists != 'true' }}
+      - name: Install frontend dependencies
+        run: npm ci --workspace=releviz-frontend
+
+      - name: Build Amplify static artifact
+        env:
+          NEXT_PUBLIC_API_BASE_URL: ""
         run: |
           set -euo pipefail
-          account_id="$(aws sts get-caller-identity --query Account --output text)"
-          image_uri="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_FRONTEND}:${DEPLOY_SHA}"
-          docker build \
-            --pull \
-            --build-arg NEXT_PUBLIC_API_BASE_URL="" \
-            --tag "$image_uri" \
-            ./src/frontend
-          docker push "$image_uri"
+          npm --workspace=releviz-frontend run build:amplify
+          python3 scripts/ci/validate_amplify_static_export.py \
+            --out src/frontend/out \
+            --manifest src/frontend/amplify-routes.json
+          jq -n --arg sha "$DEPLOY_SHA" '{sha: $sha}' >src/frontend/out/release.json
+          (
+            cd src/frontend/out
+            zip -q -r "$AMPLIFY_ARTIFACT" .
+          )
+          unzip -tq "$AMPLIFY_ARTIFACT"
+          (
+            cd "$(dirname "$AMPLIFY_ARTIFACT")"
+            artifact_name="$(basename "$AMPLIFY_ARTIFACT")"
+            sha256sum "$artifact_name" | tee "${artifact_name}.sha256"
+          )
 
-      - name: Plan production infrastructure without DNS cutover
+      - name: Retain immutable Amplify artifact for rollback
+        uses: actions/upload-artifact@v7
+        with:
+          name: releviz-amplify-${{ env.DEPLOY_SHA }}
+          path: |
+            ${{ env.AMPLIFY_ARTIFACT }}
+            ${{ env.AMPLIFY_ARTIFACT }}.sha256
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Plan production infrastructure with current DNS state
         env:
-          TF_VAR_aws_region: ${{ env.AWS_REGION }}
-          TF_VAR_backend_image_tag: ${{ env.DEPLOY_SHA }}
-          TF_VAR_frontend_image_tag: ${{ env.DEPLOY_SHA }}
-          TF_VAR_ecr_backend_repository: ${{ env.ECR_BACKEND }}
-          TF_VAR_ecr_frontend_repository: ${{ env.ECR_FRONTEND }}
-          TF_VAR_custom_domain: ${{ env.PROD_DOMAIN }}
-          TF_VAR_route53_zone_id: ${{ vars.PROD_ROUTE53_ZONE_ID }}
-          TF_VAR_django_secret_key_arn: ${{ vars.PROD_DJANGO_SECRET_KEY_ARN }}
-          TF_VAR_django_field_encryption_key_arn: ${{ vars.PROD_DJANGO_FIELD_ENCRYPTION_KEY_ARN }}
-          TF_VAR_metrics_bearer_token_arn: ${{ vars.PROD_METRICS_BEARER_TOKEN_ARN }}
-          TF_VAR_sentry_dsn_secret_arn: ${{ vars.PROD_SENTRY_DSN_SECRET_ARN || '' }}
-          TF_VAR_secret_kms_key_arn: ${{ vars.PROD_SECRET_KMS_KEY_ARN || '' }}
-          TF_VAR_existing_acm_certificate_arn: ${{ vars.PROD_ACM_CERTIFICATE_ARN || '' }}
-          TF_VAR_alarm_action_arns: ${{ vars.PROD_ALARM_ACTION_ARNS_JSON }}
-          TF_VAR_default_from_email: ${{ vars.PROD_DEFAULT_FROM_EMAIL || 'noreply@releviz.com' }}
-          TF_VAR_manage_dns: "false"
-        run: terraform -chdir=infra/prod plan -input=false -out=production-no-dns.tfplan
+          TF_VAR_enable_amplify_domain: ${{ steps.domain_state.outputs.preexisting }}
+          TF_VAR_restrict_origin_to_cloudfront: ${{ steps.origin_state.outputs.preexisting }}
+          TF_VAR_trust_cloudfront_proxy_chain: ${{ steps.proxy_state.outputs.preexisting }}
+        run: terraform -chdir=infra/prod plan -input=false -out=production-base.tfplan
 
-      - name: Apply exact production plan without DNS cutover
-        run: terraform -chdir=infra/prod apply -input=false -auto-approve production-no-dns.tfplan
+      - name: Guard live Amplify configuration before candidate smoke
+        env:
+          CANONICAL_ROUTES_TO_ALB: ${{ steps.apex_alias.outputs.routes_to_alb }}
+          DOMAIN_PREEXISTING: ${{ steps.domain_state.outputs.preexisting }}
+        run: |
+          set -euo pipefail
+          live_configuration_actions="$(
+            terraform -chdir=infra/prod show -json production-base.tfplan |
+              jq -ce '
+                [
+                  .resource_changes[]?
+                  | select(
+                      .address == "aws_amplify_app.frontend"
+                      or .address == "aws_amplify_branch.production"
+                      or .address == "aws_amplify_domain_association.frontend[0]"
+                    )
+                  | {
+                      address,
+                      actions: .change.actions
+                    }
+                  | select(.actions != ["no-op"])
+                ]
+              '
+          )"
+          if [ "$DOMAIN_PREEXISTING" = "true" ] &&
+            [ "$CANONICAL_ROUTES_TO_ALB" != "true" ] &&
+            [ "$live_configuration_actions" != "[]" ]; then
+            echo "::error::The reviewed plan changes live Amplify app, production-branch, or domain configuration before candidate smoke: ${live_configuration_actions}"
+            echo "::error::Move the canonical alias to the documented ECS fallback before applying global Amplify configuration changes."
+            exit 1
+          fi
 
-      - name: Capture deployed ECS and ALB resources
+      - name: Apply exact production base plan
+        id: base_apply
+        run: terraform -chdir=infra/prod apply -input=false -auto-approve production-base.tfplan
+
+      - name: Capture deployed AWS resources
         id: terraform
         run: |
           {
@@ -266,9 +541,14 @@ jobs:
             echo "backend_service=$(terraform -chdir=infra/prod output -raw backend_service_name)"
             echo "frontend_service=$(terraform -chdir=infra/prod output -raw frontend_service_name)"
             echo "alb_dns_name=$(terraform -chdir=infra/prod output -raw alb_dns_name)"
-          } >> "$GITHUB_OUTPUT"
+            echo "origin_domain=$(terraform -chdir=infra/prod output -raw origin_domain)"
+            echo "amplify_app_id=$(terraform -chdir=infra/prod output -raw amplify_app_id)"
+            echo "amplify_default_domain=$(terraform -chdir=infra/prod output -raw amplify_default_domain)"
+            echo "candidate_branch=$(terraform -chdir=infra/prod output -raw amplify_candidate_branch_name)"
+            echo "production_branch=$(terraform -chdir=infra/prod output -raw amplify_production_branch_name)"
+          } >>"$GITHUB_OUTPUT"
 
-      - name: Wait for both ECS services to stabilize
+      - name: Wait for backend and rollback frontend ECS services
         run: |
           aws ecs wait services-stable \
             --cluster "${{ steps.terraform.outputs.cluster_name }}" \
@@ -276,42 +556,983 @@ jobs:
               "${{ steps.terraform.outputs.backend_service }}" \
               "${{ steps.terraform.outputs.frontend_service }}"
 
-      - name: Run pre-cutover smoke tests against the new ALB
-        env:
-          ALB_DNS_NAME: ${{ steps.terraform.outputs.alb_dns_name }}
+      - name: Verify backend ALB target health
         run: |
           set -euo pipefail
-          for path in /api/health/live /api/health /; do
-            curl --fail --show-error --retry 10 --retry-delay 5 \
-              --connect-to "${PROD_DOMAIN}:443:${ALB_DNS_NAME}:443" \
-              "https://${PROD_DOMAIN}${path}"
+          target_group="$(
+            aws ecs describe-services \
+              --cluster "${{ steps.terraform.outputs.cluster_name }}" \
+              --services "${{ steps.terraform.outputs.backend_service }}" \
+              --query "services[0].loadBalancers[0].targetGroupArn" \
+              --output text
+          )"
+          for attempt in $(seq 1 30); do
+            health="$(aws elbv2 describe-target-health --target-group-arn "$target_group")"
+            if jq -e '
+              [.TargetHealthDescriptions[].TargetHealth.State] as $states
+              | ($states | length) > 0
+              and all($states[]; . == "healthy")
+            ' <<<"$health" >/dev/null; then
+              exit 0
+            fi
+            echo "Backend target health is converging; attempt=${attempt}/30"
+            jq -r '.TargetHealthDescriptions[].TargetHealth.State' <<<"$health"
+            sleep 10
+          done
+          echo "::error::Backend ALB targets did not become healthy."
+          exit 1
+
+      - name: Run pre-Amplify backend smoke tests
+        if: ${{ steps.origin_state.outputs.preexisting != 'true' }}
+        env:
+          ORIGIN_DOMAIN: ${{ steps.terraform.outputs.origin_domain }}
+        run: |
+          set -euo pipefail
+          for path in /api/health/live /api/health /admin/; do
+            curl \
+              --fail \
+              --location \
+              --show-error \
+              --retry 20 \
+              --retry-all-errors \
+              --retry-delay 5 \
+              "https://${ORIGIN_DOMAIN}${path}" >/dev/null
           done
 
-      - name: Plan reviewed production DNS cutover
+      - name: Fail closed when an Amplify release job is active
         env:
-          TF_VAR_aws_region: ${{ env.AWS_REGION }}
-          TF_VAR_backend_image_tag: ${{ env.DEPLOY_SHA }}
-          TF_VAR_frontend_image_tag: ${{ env.DEPLOY_SHA }}
-          TF_VAR_ecr_backend_repository: ${{ env.ECR_BACKEND }}
-          TF_VAR_ecr_frontend_repository: ${{ env.ECR_FRONTEND }}
-          TF_VAR_custom_domain: ${{ env.PROD_DOMAIN }}
-          TF_VAR_route53_zone_id: ${{ vars.PROD_ROUTE53_ZONE_ID }}
-          TF_VAR_django_secret_key_arn: ${{ vars.PROD_DJANGO_SECRET_KEY_ARN }}
-          TF_VAR_django_field_encryption_key_arn: ${{ vars.PROD_DJANGO_FIELD_ENCRYPTION_KEY_ARN }}
-          TF_VAR_metrics_bearer_token_arn: ${{ vars.PROD_METRICS_BEARER_TOKEN_ARN }}
-          TF_VAR_sentry_dsn_secret_arn: ${{ vars.PROD_SENTRY_DSN_SECRET_ARN || '' }}
-          TF_VAR_secret_kms_key_arn: ${{ vars.PROD_SECRET_KMS_KEY_ARN || '' }}
-          TF_VAR_existing_acm_certificate_arn: ${{ vars.PROD_ACM_CERTIFICATE_ARN || '' }}
-          TF_VAR_alarm_action_arns: ${{ vars.PROD_ALARM_ACTION_ARNS_JSON }}
-          TF_VAR_default_from_email: ${{ vars.PROD_DEFAULT_FROM_EMAIL || 'noreply@releviz.com' }}
-          TF_VAR_manage_dns: "true"
-        run: terraform -chdir=infra/prod plan -input=false -out=production-dns-cutover.tfplan
+          AMPLIFY_APP_ID: ${{ steps.terraform.outputs.amplify_app_id }}
+          CANDIDATE_BRANCH: ${{ steps.terraform.outputs.candidate_branch }}
+          PRODUCTION_BRANCH: ${{ steps.terraform.outputs.production_branch }}
+        run: |
+          set -euo pipefail
+          for branch in "$CANDIDATE_BRANCH" "$PRODUCTION_BRANCH"; do
+            jobs="$(
+              aws amplify list-jobs \
+                --app-id "$AMPLIFY_APP_ID" \
+                --branch-name "$branch" \
+                --max-results 50 \
+                --output json
+            )"
+            active_jobs="$(
+              jq -c '
+                [
+                  (.jobSummaries // [])[]
+                  | select(
+                      .status == "CREATED"
+                      or .status == "PENDING"
+                      or .status == "PROVISIONING"
+                      or .status == "RUNNING"
+                      or .status == "CANCELLING"
+                    )
+                  | {jobId, status}
+                ]
+              ' <<<"$jobs"
+            )"
+            if [ "$(jq 'length' <<<"$active_jobs")" -ne 0 ]; then
+              echo "::error::Amplify branch ${branch} has an active release job: ${active_jobs}"
+              echo "::error::Wait for or explicitly stop the prior job before starting a new deployment."
+              exit 1
+            fi
+          done
 
-      - name: Apply exact production DNS cutover plan
-        run: terraform -chdir=infra/prod apply -input=false -auto-approve production-dns-cutover.tfplan
+      - name: Capture current Amplify production rollback point
+        id: previous_amplify_production
+        env:
+          AMPLIFY_DEFAULT_DOMAIN: ${{ steps.terraform.outputs.amplify_default_domain }}
+          AMPLIFY_APP_ID: ${{ steps.terraform.outputs.amplify_app_id }}
+          CANONICAL_ROUTES_TO_ALB: ${{ steps.apex_alias.outputs.routes_to_alb }}
+          DOMAIN_PREEXISTING: ${{ steps.domain_state.outputs.preexisting }}
+          PRODUCTION_BRANCH: ${{ steps.terraform.outputs.production_branch }}
+        run: |
+          set -euo pipefail
+          previous_job_id="$(
+            aws amplify list-jobs \
+              --app-id "$AMPLIFY_APP_ID" \
+              --branch-name "$PRODUCTION_BRANCH" \
+              --max-results 50 \
+              --output json |
+              jq -r '
+                [
+                  (.jobSummaries // [])[]
+                  | select(.status == "SUCCEED")
+                ]
+                | sort_by(.endTime // .startTime // "")
+                | last
+                | .jobId // empty
+              '
+          )"
+          previous_sha=""
+          if [ "$DOMAIN_PREEXISTING" = "true" ] &&
+            [ "$CANONICAL_ROUTES_TO_ALB" != "true" ]; then
+            if [ -z "$previous_job_id" ]; then
+              echo "::error::The live Amplify branch has no successful rollback job."
+              exit 1
+            fi
+            production_url="https://${PRODUCTION_BRANCH}.${AMPLIFY_DEFAULT_DOMAIN}"
+            previous_sha="$(
+              curl \
+                --fail \
+                --silent \
+                --show-error \
+                --retry 10 \
+                --retry-all-errors \
+                --retry-delay 3 \
+                "${production_url}/release.json" |
+                jq -er .sha
+            )"
+            if ! [[ "$previous_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::The live Amplify branch has no immutable release identity."
+              exit 1
+            fi
+          fi
+          {
+            echo "job_id=$previous_job_id"
+            echo "sha=$previous_sha"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Deploy candidate Amplify branch
+        id: candidate_deploy
+        run: |
+          scripts/deploy/amplify-static-deploy.sh \
+            "${{ steps.terraform.outputs.amplify_app_id }}" \
+            "${{ steps.terraform.outputs.candidate_branch }}" \
+            "$AMPLIFY_ARTIFACT"
+
+      - name: Smoke candidate Amplify frontend and same-origin proxy
+        env:
+          AMPLIFY_DEFAULT_DOMAIN: ${{ steps.terraform.outputs.amplify_default_domain }}
+          CANDIDATE_BRANCH: ${{ steps.terraform.outputs.candidate_branch }}
+        run: |
+          set -euo pipefail
+          candidate_url="https://${CANDIDATE_BRANCH}.${AMPLIFY_DEFAULT_DOMAIN}"
+          for path in / /api/health/live /api/health /admin/; do
+            curl \
+              --fail \
+              --location \
+              --show-error \
+              --retry 20 \
+              --retry-all-errors \
+              --retry-delay 5 \
+              "${candidate_url}${path}" >/dev/null
+          done
+          while IFS= read -r route; do
+            for path in "/${route}" "/${route}/"; do
+              curl \
+                --fail \
+                --location \
+                --show-error \
+                --retry 20 \
+                --retry-all-errors \
+                --retry-delay 5 \
+                "${candidate_url}${path}" >/dev/null
+            done
+          done < <(jq -r '.static_routes[]' src/frontend/amplify-routes.json)
+          while IFS= read -r legacy_route; do
+            for path in "/${legacy_route}" "/${legacy_route}/" "/${legacy_route}/legacy"; do
+              curl \
+                --fail \
+                --location \
+                --show-error \
+                --retry 20 \
+                --retry-all-errors \
+                --retry-delay 5 \
+                "${candidate_url}${path}" >/dev/null
+            done
+          done < <(jq -r '.legacy_redirects | keys[]' src/frontend/amplify-routes.json)
+
+          event_redirect_headers="${RUNNER_TEMP}/candidate-event-redirect.headers"
+          event_redirect_status="$(
+            curl \
+              --silent \
+              --show-error \
+              --dump-header "$event_redirect_headers" \
+              --output /dev/null \
+              --write-out "%{http_code}" \
+              "${candidate_url}/event/?code=AMPLIFYSMOKE"
+          )"
+          event_redirect_location="$(
+            awk '
+              BEGIN { IGNORECASE = 1 }
+              /^location:/ {
+                sub(/^[^:]+:[[:space:]]*/, "")
+                sub(/\r$/, "")
+                print
+              }
+            ' "$event_redirect_headers" |
+              tail -1
+          )"
+          if [ "$event_redirect_status" != "301" ]; then
+            echo "::error::Candidate trailing-slash route returned ${event_redirect_status}; expected 301."
+            exit 1
+          fi
+          case "$event_redirect_location" in
+            "/event?code=AMPLIFYSMOKE" | "${candidate_url}/event?code=AMPLIFYSMOKE") ;;
+            *)
+              echo "::error::Candidate route redirect did not preserve the query string: ${event_redirect_location:-missing}"
+              exit 1
+              ;;
+          esac
+
+          static_asset="$(
+            find src/frontend/out/_next/static -type f -name '*.js' -print -quit |
+              sed 's#^src/frontend/out##'
+          )"
+          if [ -z "$static_asset" ]; then
+            echo "::error::The Amplify artifact has no JavaScript asset to smoke-test."
+            exit 1
+          fi
+          curl \
+            --fail \
+            --show-error \
+            --retry 20 \
+            --retry-all-errors \
+            --retry-delay 5 \
+            "${candidate_url}${static_asset}" >/dev/null
+
+          release_sha=""
+          for attempt in $(seq 1 30); do
+            release_sha="$(
+              curl --fail --silent --show-error "${candidate_url}/release.json" |
+                jq -er .sha 2>/dev/null ||
+                true
+            )"
+            if [ "$release_sha" = "$DEPLOY_SHA" ]; then break; fi
+            echo "Candidate release identity is converging; attempt=${attempt}/30"
+            sleep 5
+          done
+          if [ "$release_sha" != "$DEPLOY_SHA" ]; then
+            echo "::error::Candidate Amplify release is ${release_sha}; expected ${DEPLOY_SHA}."
+            exit 1
+          fi
+          refresh_headers="${RUNNER_TEMP}/candidate-refresh.headers"
+          refresh_status="$(
+            curl \
+              --silent \
+              --show-error \
+              --request POST \
+              --header "Origin: ${candidate_url}" \
+              --header "Content-Type: application/json" \
+              --data '{}' \
+              --dump-header "$refresh_headers" \
+              --output /dev/null \
+              --write-out "%{http_code}" \
+              "${candidate_url}/authn/refresh"
+          )"
+          if [ "$refresh_status" != "401" ]; then
+            echo "::error::Candidate no-slash refresh proxy returned ${refresh_status}; expected 401."
+            exit 1
+          fi
+          if ! grep -qiE '^set-cookie:[[:space:]]*releviz_refresh=' "$refresh_headers"; then
+            echo "::error::Candidate auth proxy did not preserve the refresh-cookie response."
+            exit 1
+          fi
+
+          smoke_bearer="amplify-smoke-invalid"
+          for method_and_path in \
+            "PUT /authn/profile" \
+            "DELETE /authn/sessions"; do
+            read -r method path <<<"$method_and_path"
+            protected_status="$(
+              curl \
+                --silent \
+                --show-error \
+                --request "$method" \
+                --oauth2-bearer "$smoke_bearer" \
+                --header "Content-Type: application/json" \
+                --data '{}' \
+                --output /dev/null \
+                --write-out "%{http_code}" \
+                "${candidate_url}${path}"
+            )"
+            if [ "$protected_status" != "401" ]; then
+              echo "::error::Candidate ${method} ${path} returned ${protected_status}; expected 401."
+              exit 1
+            fi
+          done
+
+          admin_headers="${RUNNER_TEMP}/candidate-admin.headers"
+          admin_body="${RUNNER_TEMP}/candidate-admin.html"
+          admin_cookies="${RUNNER_TEMP}/candidate-admin.cookies"
+          admin_post_body="${RUNNER_TEMP}/candidate-admin-post.html"
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            --cookie-jar "$admin_cookies" \
+            --dump-header "$admin_headers" \
+            --output "$admin_body" \
+            "${candidate_url}/admin/login/"
+          if ! grep -qiE '^set-cookie:[[:space:]]*csrftoken=' "$admin_headers"; then
+            echo "::error::Candidate admin proxy did not preserve the CSRF cookie."
+            exit 1
+          fi
+          csrf_token="$(
+            sed -n 's/.*name="csrfmiddlewaretoken" value="\([^"]*\)".*/\1/p' "$admin_body" |
+              head -1
+          )"
+          if [ -z "$csrf_token" ]; then
+            echo "::error::Candidate admin login did not return a CSRF form token."
+            exit 1
+          fi
+          admin_post_status="$(
+            curl \
+              --silent \
+              --show-error \
+              --cookie "$admin_cookies" \
+              --request POST \
+              --header "Origin: ${candidate_url}" \
+              --header "Referer: ${candidate_url}/admin/login/" \
+              --data-urlencode "csrfmiddlewaretoken=${csrf_token}" \
+              --data-urlencode "email=amplify-smoke-${DEPLOY_SHA}@example.invalid" \
+              --data-urlencode "password=amplify-smoke-invalid" \
+              --data-urlencode "next=/admin/" \
+              --output "$admin_post_body" \
+              --write-out "%{http_code}" \
+              "${candidate_url}/admin/login/"
+          )"
+          if [ "$admin_post_status" != "400" ]; then
+            echo "::error::Candidate admin CSRF POST returned ${admin_post_status}; expected the application's 400 invalid-login response."
+            exit 1
+          fi
+          if ! grep -q "Please enter valid staff account credentials." "$admin_post_body"; then
+            echo "::error::Candidate admin POST did not return the expected invalid-login form response."
+            exit 1
+          fi
+
+      - name: Deploy production Amplify branch
+        id: production_deploy
+        run: |
+          scripts/deploy/amplify-static-deploy.sh \
+            "${{ steps.terraform.outputs.amplify_app_id }}" \
+            "${{ steps.terraform.outputs.production_branch }}" \
+            "$AMPLIFY_ARTIFACT"
+
+      - name: Smoke production Amplify branch before domain cutover
+        env:
+          AMPLIFY_DEFAULT_DOMAIN: ${{ steps.terraform.outputs.amplify_default_domain }}
+          PRODUCTION_BRANCH: ${{ steps.terraform.outputs.production_branch }}
+        run: |
+          set -euo pipefail
+          production_url="https://${PRODUCTION_BRANCH}.${AMPLIFY_DEFAULT_DOMAIN}"
+          for path in / /api/health/live /api/health /admin/; do
+            curl \
+              --fail \
+              --location \
+              --show-error \
+              --retry 20 \
+              --retry-all-errors \
+              --retry-delay 5 \
+              "${production_url}${path}" >/dev/null
+          done
+          while IFS= read -r route; do
+            for path in "/${route}" "/${route}/"; do
+              curl \
+                --fail \
+                --location \
+                --show-error \
+                --retry 20 \
+                --retry-all-errors \
+                --retry-delay 5 \
+                "${production_url}${path}" >/dev/null
+            done
+          done < <(jq -r '.static_routes[]' src/frontend/amplify-routes.json)
+          static_asset="$(
+            find src/frontend/out/_next/static -type f -name '*.js' -print -quit |
+              sed 's#^src/frontend/out##'
+          )"
+          curl \
+            --fail \
+            --show-error \
+            --retry 20 \
+            --retry-all-errors \
+            --retry-delay 5 \
+            "${production_url}${static_asset}" >/dev/null
+          release_sha=""
+          for attempt in $(seq 1 30); do
+            release_sha="$(
+              curl --fail --silent --show-error "${production_url}/release.json" |
+                jq -er .sha 2>/dev/null ||
+                true
+            )"
+            if [ "$release_sha" = "$DEPLOY_SHA" ]; then break; fi
+            echo "Production branch release identity is converging; attempt=${attempt}/30"
+            sleep 5
+          done
+          if [ "$release_sha" != "$DEPLOY_SHA" ]; then
+            echo "::error::Production Amplify branch is ${release_sha}; expected ${DEPLOY_SHA}."
+            exit 1
+          fi
+
+      - name: Verify preserved canonical alias immediately before cutover
+        if: ${{ steps.apex_alias.outputs.routes_to_alb == 'true' }}
+        env:
+          ALIAS_FILE: ${{ steps.apex_alias.outputs.record_file }}
+          ROUTE53_ZONE_ID: ${{ vars.PROD_ROUTE53_ZONE_ID }}
+        run: |
+          set -euo pipefail
+          canonical_name="${PROD_DOMAIN%.}."
+          current_alias="$(
+            aws route53 list-resource-record-sets \
+              --hosted-zone-id "$ROUTE53_ZONE_ID" \
+              --output json |
+              jq \
+                --arg name "$canonical_name" \
+                '[
+                  .ResourceRecordSets[]
+                  | select(.Name == $name and .Type == "A")
+                ]
+                | if length == 1 then .[0] else empty end'
+          )"
+          if [ "$(jq -S -c . <<<"$current_alias")" != "$(jq -S -c . "$ALIAS_FILE")" ]; then
+            echo "::error::The canonical alias changed after it was captured; refusing cutover."
+            exit 1
+          fi
+
+      - name: Plan reviewed Amplify domain association
+        env:
+          TF_VAR_enable_amplify_domain: "true"
+          TF_VAR_restrict_origin_to_cloudfront: ${{ steps.origin_state.outputs.preexisting }}
+          TF_VAR_trust_cloudfront_proxy_chain: ${{ steps.proxy_state.outputs.preexisting }}
+        run: terraform -chdir=infra/prod plan -input=false -out=production-domain.tfplan
+
+      - name: Apply exact Amplify domain association plan
+        id: domain_apply
+        run: terraform -chdir=infra/prod apply -input=false -auto-approve production-domain.tfplan
+
+      - name: Reconcile Amplify domain association for a migration retry
+        if: >-
+          ${{ steps.domain_state.outputs.preexisting == 'true' &&
+              steps.apex_alias.outputs.routes_to_alb == 'true' }}
+        env:
+          AMPLIFY_APP_ID: ${{ steps.terraform.outputs.amplify_app_id }}
+          PRODUCTION_BRANCH: ${{ steps.terraform.outputs.production_branch }}
+        run: |
+          set -euo pipefail
+          subdomains="$(
+            jq -nc \
+              --arg branch "$PRODUCTION_BRANCH" \
+              '[{prefix: "", branchName: $branch}]'
+          )"
+          aws amplify update-domain-association \
+            --app-id "$AMPLIFY_APP_ID" \
+            --domain-name "$PROD_DOMAIN" \
+            --no-enable-auto-sub-domain \
+            --sub-domain-settings "$subdomains" \
+            --certificate-settings type=AMPLIFY_MANAGED >/dev/null
+
+      - name: Wait for Amplify custom domain availability
+        env:
+          AMPLIFY_APP_ID: ${{ steps.terraform.outputs.amplify_app_id }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 120); do
+            association="$(
+              aws amplify get-domain-association \
+                --app-id "$AMPLIFY_APP_ID" \
+                --domain-name "$PROD_DOMAIN" \
+                --output json
+            )"
+            status="$(jq -r '.domainAssociation.domainStatus' <<<"$association")"
+            update_status="$(
+              jq -r '.domainAssociation.updateStatus // "NONE"' <<<"$association"
+            )"
+            if [ "$status" = "AVAILABLE" ] &&
+              [[ "$update_status" =~ ^(NONE|UPDATE_COMPLETE)$ ]]; then
+              exit 0
+            fi
+            if [ "$status" = "FAILED" ] || [ "$update_status" = "UPDATE_FAILED" ]; then
+              echo "::error::Amplify domain association failed; domain=${status}, update=${update_status}."
+              exit 1
+            fi
+            echo "Amplify domain=${status}, update=${update_status}; attempt=${attempt}/120"
+            sleep 10
+          done
+          echo "::error::Timed out waiting for Amplify custom domain."
+          exit 1
+
+      - name: Verify Amplify canonical DNS cutover
+        id: amplify_alias
+        env:
+          AMPLIFY_APP_ID: ${{ steps.terraform.outputs.amplify_app_id }}
+          PRODUCTION_BRANCH: ${{ steps.terraform.outputs.production_branch }}
+          ROUTE53_ZONE_ID: ${{ vars.PROD_ROUTE53_ZONE_ID }}
+        run: |
+          set -euo pipefail
+          canonical_name="${PROD_DOMAIN%.}."
+          amplify_alias_file="${RUNNER_TEMP}/amplify-apex-a-alias.json"
+          association="$(
+            aws amplify get-domain-association \
+              --app-id "$AMPLIFY_APP_ID" \
+              --domain-name "$PROD_DOMAIN" \
+              --output json
+          )"
+          amplify_dns_record="$(
+            jq -er \
+              --arg branch "$PRODUCTION_BRANCH" \
+              '
+                [
+                  .domainAssociation.subDomains[]
+                  | select(
+                      .subDomainSetting.prefix == ""
+                      and .subDomainSetting.branchName == $branch
+                    )
+                  | .dnsRecord
+                ]
+                | if length == 1 then .[0] else error("missing apex DNS record") end
+              ' <<<"$association"
+          )"
+          expected_amplify_target="$(
+            awk '{print $NF}' <<<"$amplify_dns_record" |
+              tr '[:upper:]' '[:lower:]' |
+              sed 's/\.$//'
+          )"
+          if [ -z "$expected_amplify_target" ]; then
+            echo "::error::Amplify returned an invalid canonical DNS target."
+            exit 1
+          fi
+          if [ "${{ steps.apex_alias.outputs.routes_to_alb }}" = "true" ] &&
+            [ "$expected_amplify_target" = "${{ steps.apex_alias.outputs.pre_release_alias_target }}" ]; then
+            echo "::error::Amplify returned the existing ALB as its canonical DNS target."
+            exit 1
+          fi
+          cutover_confirmed=false
+          for attempt in $(seq 1 60); do
+            matches="$(
+              aws route53 list-resource-record-sets \
+                --hosted-zone-id "$ROUTE53_ZONE_ID" \
+                --output json |
+                jq \
+                  --arg name "$canonical_name" \
+                  '[
+                    .ResourceRecordSets[]
+                    | select(.Name == $name and .Type == "A")
+                  ]'
+            )"
+            alias_target="$(
+              jq -r '
+                if length == 1
+                then .[0].AliasTarget.DNSName // "" | ascii_downcase | rtrimstr(".")
+                else ""
+                end
+              ' <<<"$matches"
+            )"
+            if [ -n "$alias_target" ] &&
+              [ "$alias_target" = "$expected_amplify_target" ]; then
+              jq '.[0]' <<<"$matches" >"$amplify_alias_file"
+              cutover_confirmed=true
+              break
+            fi
+            echo "Canonical Route53 alias is converging to Amplify; attempt=${attempt}/60"
+            sleep 10
+          done
+          if [ "$cutover_confirmed" != "true" ]; then
+            echo "::error::The canonical alias did not match Amplify's exact apex DNS target."
+            exit 1
+          fi
+          echo "record_file=$amplify_alias_file" >>"$GITHUB_OUTPUT"
 
       - name: Run canonical production smoke tests
         run: |
-          curl --fail --show-error --retry 10 --retry-delay 5 "https://${PROD_DOMAIN}/api/health/live"
-          curl --fail --show-error --retry 10 --retry-delay 5 "https://${PROD_DOMAIN}/api/health"
-          curl --fail --show-error --retry 10 --retry-delay 5 "https://${PROD_DOMAIN}/"
+          set -euo pipefail
+          for path in / /api/health/live /api/health /admin/; do
+            curl \
+              --fail \
+              --location \
+              --show-error \
+              --retry 30 \
+              --retry-all-errors \
+              --retry-delay 10 \
+              "https://${PROD_DOMAIN}${path}" >/dev/null
+          done
+          release_sha=""
+          for attempt in $(seq 1 30); do
+            release_sha="$(
+              curl --fail --silent --show-error "https://${PROD_DOMAIN}/release.json" |
+                jq -er .sha 2>/dev/null ||
+                true
+            )"
+            if [ "$release_sha" = "$DEPLOY_SHA" ]; then break; fi
+            echo "Canonical release identity is converging; attempt=${attempt}/30"
+            sleep 5
+          done
+          if [ "$release_sha" != "$DEPLOY_SHA" ]; then
+            echo "::error::Canonical production release is ${release_sha}; expected ${DEPLOY_SHA}."
+            exit 1
+          fi
+
+      - name: Allow legacy Route53 alias caches to expire
+        if: ${{ steps.apex_alias.outputs.routes_to_alb == 'true' }}
+        run: |
+          set -euo pipefail
+          for interval in $(seq 1 12); do
+            echo "Waiting for the former ALB alias TTL; interval=${interval}/12"
+            sleep 10
+          done
+
+      - name: Plan CloudFront-only origin hardening
+        env:
+          TF_VAR_enable_amplify_domain: "true"
+          TF_VAR_restrict_origin_to_cloudfront: "true"
+          TF_VAR_trust_cloudfront_proxy_chain: ${{ steps.proxy_state.outputs.preexisting }}
+        run: terraform -chdir=infra/prod plan -input=false -out=production-harden-origin.tfplan
+
+      - name: Apply exact CloudFront-only origin hardening plan
+        run: terraform -chdir=infra/prod apply -input=false -auto-approve production-harden-origin.tfplan
+
+      - name: Verify production through the CloudFront-only origin
+        run: |
+          set -euo pipefail
+          for path in / /api/health/live /api/health /admin/; do
+            curl \
+              --fail \
+              --location \
+              --show-error \
+              --retry 20 \
+              --retry-all-errors \
+              --retry-delay 5 \
+              "https://${PROD_DOMAIN}${path}" >/dev/null
+          done
+
+      - name: Plan trusted CloudFront proxy chain
+        env:
+          TF_VAR_enable_amplify_domain: "true"
+          TF_VAR_restrict_origin_to_cloudfront: "true"
+          TF_VAR_trust_cloudfront_proxy_chain: "true"
+        run: terraform -chdir=infra/prod plan -input=false -out=production-trust-proxy.tfplan
+
+      - name: Apply exact trusted CloudFront proxy-chain plan
+        run: terraform -chdir=infra/prod apply -input=false -auto-approve production-trust-proxy.tfplan
+
+      - name: Wait for trusted-proxy backend rollout
+        run: |
+          aws ecs wait services-stable \
+            --cluster "${{ steps.terraform.outputs.cluster_name }}" \
+            --services "${{ steps.terraform.outputs.backend_service }}"
+
+      - name: Verify trusted-proxy backend target health
+        run: |
+          set -euo pipefail
+          target_group="$(
+            aws ecs describe-services \
+              --cluster "${{ steps.terraform.outputs.cluster_name }}" \
+              --services "${{ steps.terraform.outputs.backend_service }}" \
+              --query "services[0].loadBalancers[0].targetGroupArn" \
+              --output text
+          )"
+          for attempt in $(seq 1 30); do
+            health="$(aws elbv2 describe-target-health --target-group-arn "$target_group")"
+            if jq -e '
+              [.TargetHealthDescriptions[].TargetHealth.State] as $states
+              | ($states | length) > 0
+              and all($states[]; . == "healthy")
+            ' <<<"$health" >/dev/null; then
+              exit 0
+            fi
+            echo "Trusted-proxy backend health is converging; attempt=${attempt}/30"
+            jq -r '.TargetHealthDescriptions[].TargetHealth.State' <<<"$health"
+            sleep 10
+          done
+          echo "::error::Trusted-proxy backend targets did not become healthy."
+          exit 1
+
+      - name: Verify production through the trusted CloudFront proxy chain
+        run: |
+          set -euo pipefail
+          for path in / /api/health/live /api/health /admin/; do
+            curl \
+              --fail \
+              --location \
+              --show-error \
+              --retry 20 \
+              --retry-all-errors \
+              --retry-delay 5 \
+              "https://${PROD_DOMAIN}${path}" >/dev/null
+          done
+          release_sha=""
+          for attempt in $(seq 1 12); do
+            release_sha="$(
+              curl --fail --silent --show-error "https://${PROD_DOMAIN}/release.json" |
+                jq -er .sha 2>/dev/null ||
+                true
+            )"
+            if [ "$release_sha" = "$DEPLOY_SHA" ]; then break; fi
+            echo "Hardened release identity is converging; attempt=${attempt}/12"
+            sleep 5
+          done
+          if [ "$release_sha" != "$DEPLOY_SHA" ]; then
+            echo "::error::Hardened production release is ${release_sha}; expected ${DEPLOY_SHA}."
+            exit 1
+          fi
+
+      - name: Restore pre-release origin safety state after failure
+        id: restore_origin_safety
+        if: >-
+          ${{ always() &&
+              (failure() || cancelled()) &&
+              steps.domain_state.outcome == 'success' &&
+              steps.origin_state.outcome == 'success' &&
+              steps.proxy_state.outcome == 'success' &&
+              (steps.base_apply.outcome == 'success' ||
+               steps.base_apply.outcome == 'failure' ||
+               steps.base_apply.outcome == 'cancelled') }}
+        env:
+          PREEXISTING_DOMAIN: ${{ steps.domain_state.outputs.preexisting }}
+          PREEXISTING_ORIGIN_RESTRICTION: ${{ steps.origin_state.outputs.preexisting }}
+          PREEXISTING_PROXY_TRUST: ${{ steps.proxy_state.outputs.preexisting }}
+        run: |
+          set -euo pipefail
+          state_list="$(terraform -chdir=infra/prod state list)"
+          restore_domain="$PREEXISTING_DOMAIN"
+          if grep -q '^aws_amplify_domain_association\.frontend' <<<"$state_list"; then
+            restore_domain=true
+          fi
+          export TF_VAR_enable_amplify_domain="$restore_domain"
+          export TF_VAR_restrict_origin_to_cloudfront="$PREEXISTING_ORIGIN_RESTRICTION"
+          export TF_VAR_trust_cloudfront_proxy_chain="$PREEXISTING_PROXY_TRUST"
+          terraform -chdir=infra/prod plan -input=false -out=production-restore-origin.tfplan
+          terraform -chdir=infra/prod apply \
+            -input=false \
+            -auto-approve \
+            production-restore-origin.tfplan
+          cluster_name="$(terraform -chdir=infra/prod output -raw ecs_cluster_name)"
+          backend_service="$(terraform -chdir=infra/prod output -raw backend_service_name)"
+          frontend_service="$(terraform -chdir=infra/prod output -raw frontend_service_name)"
+          aws ecs wait services-stable \
+            --cluster "$cluster_name" \
+            --services "$backend_service" "$frontend_service"
+          echo "::notice::Restored the pre-release origin restriction and proxy-trust state."
+
+      - name: Restore pre-release canonical Route53 alias after failed first cutover
+        id: restore_apex_alias
+        if: >-
+          ${{ always() &&
+              (failure() || cancelled()) &&
+              steps.apex_alias.outputs.routes_to_alb == 'true' &&
+              steps.restore_origin_safety.outcome == 'success' &&
+              (steps.domain_apply.outcome == 'success' ||
+               steps.domain_apply.outcome == 'failure' ||
+               steps.domain_apply.outcome == 'cancelled') }}
+        env:
+          ALIAS_FILE: ${{ steps.apex_alias.outputs.record_file }}
+          AMPLIFY_ALIAS_FILE: ${{ steps.amplify_alias.outputs.record_file }}
+          AMPLIFY_APP_ID: ${{ steps.terraform.outputs.amplify_app_id }}
+          PRODUCTION_BRANCH: ${{ steps.terraform.outputs.production_branch }}
+          ROUTE53_ZONE_ID: ${{ vars.PROD_ROUTE53_ZONE_ID }}
+        run: |
+          set -euo pipefail
+          canonical_name="${PROD_DOMAIN%.}."
+          if ! jq -e \
+            --arg name "$canonical_name" \
+            '
+              .Name == $name
+              and .Type == "A"
+              and (.AliasTarget | type == "object")
+              and (.AliasTarget.DNSName | type == "string" and length > 0)
+            ' "$ALIAS_FILE" >/dev/null; then
+            echo "::error::The captured canonical alias is missing or invalid."
+            exit 1
+          fi
+          current_alias="$(
+            aws route53 list-resource-record-sets \
+              --hosted-zone-id "$ROUTE53_ZONE_ID" \
+              --output json |
+              jq \
+                --arg name "$canonical_name" \
+                '[
+                  .ResourceRecordSets[]
+                  | select(.Name == $name and .Type == "A")
+                ]
+                | if length == 1 then .[0] else empty end'
+          )"
+          expected_alias="$(jq -S -c . "$ALIAS_FILE")"
+          actual_alias="$(jq -S -c . <<<"$current_alias")"
+          if [ "$actual_alias" = "$expected_alias" ]; then
+            echo "::notice::The exact pre-release ALB alias is already authoritative."
+            exit 0
+          fi
+          recognized_amplify_alias=false
+          if [ -n "$AMPLIFY_ALIAS_FILE" ] && [ -s "$AMPLIFY_ALIAS_FILE" ]; then
+            amplify_alias="$(jq -S -c . "$AMPLIFY_ALIAS_FILE")"
+            if [ "$actual_alias" = "$amplify_alias" ]; then
+              recognized_amplify_alias=true
+            fi
+          else
+            association="$(
+              aws amplify get-domain-association \
+                --app-id "$AMPLIFY_APP_ID" \
+                --domain-name "$PROD_DOMAIN" \
+                --output json
+            )"
+            amplify_dns_record="$(
+              jq -er \
+                --arg branch "$PRODUCTION_BRANCH" \
+                '
+                  [
+                    .domainAssociation.subDomains[]
+                    | select(
+                        .subDomainSetting.prefix == ""
+                        and .subDomainSetting.branchName == $branch
+                      )
+                    | .dnsRecord
+                  ]
+                  | if length == 1 then .[0] else error("missing apex DNS record") end
+                ' <<<"$association"
+            )"
+            amplify_target="$(
+              awk '{print $NF}' <<<"$amplify_dns_record" |
+                tr '[:upper:]' '[:lower:]' |
+                sed 's/\.$//'
+            )"
+            actual_target="$(
+              jq -r '.AliasTarget.DNSName // "" | ascii_downcase | rtrimstr(".")' \
+                <<<"$current_alias"
+            )"
+            if [ -n "$amplify_target" ] && [ "$actual_target" = "$amplify_target" ]; then
+              recognized_amplify_alias=true
+            fi
+          fi
+          if [ "$recognized_amplify_alias" != "true" ]; then
+            echo "::error::The canonical alias changed after Amplify cutover; refusing to overwrite it."
+            exit 1
+          fi
+
+          change_batch="${RUNNER_TEMP}/restore-pre-release-apex-alias.json"
+          jq -n \
+            --arg comment "Restore exact pre-Amplify canonical alias after failed release ${DEPLOY_SHA}" \
+            --slurpfile record "$ALIAS_FILE" \
+            '{
+              Comment: $comment,
+              Changes: [
+                {
+                  Action: "UPSERT",
+                  ResourceRecordSet: $record[0]
+                }
+              ]
+            }' >"$change_batch"
+          change_id="$(
+            aws route53 change-resource-record-sets \
+              --hosted-zone-id "$ROUTE53_ZONE_ID" \
+              --change-batch "file://${change_batch}" \
+              --query "ChangeInfo.Id" \
+              --output text
+          )"
+          aws route53 wait resource-record-sets-changed --id "$change_id"
+
+          current_alias="$(
+            aws route53 list-resource-record-sets \
+              --hosted-zone-id "$ROUTE53_ZONE_ID" \
+              --output json |
+              jq \
+                --arg name "$canonical_name" \
+                '[
+                  .ResourceRecordSets[]
+                  | select(.Name == $name and .Type == "A")
+                ]
+                | if length == 1 then .[0] else empty end'
+          )"
+          actual_alias="$(jq -S -c . <<<"$current_alias")"
+          if [ "$actual_alias" != "$expected_alias" ]; then
+            echo "::error::Authoritative Route53 state does not match the captured pre-release alias."
+            exit 1
+          fi
+          echo "::notice::Atomically restored the exact pre-release ALB alias with change ${change_id}."
+
+      - name: Roll back production Amplify branch after failed release
+        if: >-
+          ${{ always() &&
+              (failure() || cancelled()) &&
+              steps.apex_alias.outputs.routes_to_alb != 'true' &&
+              steps.domain_state.outputs.preexisting == 'true' &&
+              steps.previous_amplify_production.outcome == 'success' &&
+              steps.production_deploy.outputs.terminal_confirmed == 'true' &&
+              steps.production_deploy.outcome != 'skipped' }}
+        env:
+          AMPLIFY_DEFAULT_DOMAIN: ${{ steps.terraform.outputs.amplify_default_domain }}
+          AMPLIFY_APP_ID: ${{ steps.terraform.outputs.amplify_app_id }}
+          PREVIOUS_JOB_ID: ${{ steps.previous_amplify_production.outputs.job_id }}
+          PREVIOUS_SHA: ${{ steps.previous_amplify_production.outputs.sha }}
+          PRODUCTION_BRANCH: ${{ steps.terraform.outputs.production_branch }}
+        run: |
+          set -euo pipefail
+          if [ -z "$PREVIOUS_JOB_ID" ] || ! [[ "$PREVIOUS_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::A valid Amplify rollback point was not captured."
+            exit 1
+          fi
+          rollback_job_id="$(
+            aws amplify start-job \
+              --app-id "$AMPLIFY_APP_ID" \
+              --branch-name "$PRODUCTION_BRANCH" \
+              --job-id "$PREVIOUS_JOB_ID" \
+              --job-type RETRY \
+              --query "jobSummary.jobId" \
+              --output text
+          )"
+          for attempt in $(seq 1 180); do
+            status="$(
+              aws amplify get-job \
+                --app-id "$AMPLIFY_APP_ID" \
+                --branch-name "$PRODUCTION_BRANCH" \
+                --job-id "$rollback_job_id" \
+                --query "job.summary.status" \
+                --output text
+            )"
+            case "$status" in
+              SUCCEED)
+                break
+                ;;
+              FAILED | CANCELLED)
+                echo "::error::Amplify rollback job ${rollback_job_id} ended ${status}."
+                exit 1
+                ;;
+              *)
+                echo "Amplify rollback status=${status}; attempt=${attempt}/180"
+                sleep 10
+                ;;
+            esac
+          done
+          status="$(
+            aws amplify get-job \
+              --app-id "$AMPLIFY_APP_ID" \
+              --branch-name "$PRODUCTION_BRANCH" \
+              --job-id "$rollback_job_id" \
+              --query "job.summary.status" \
+              --output text
+          )"
+          if [ "$status" != "SUCCEED" ]; then
+            echo "::error::Timed out rolling back Amplify production."
+            exit 1
+          fi
+          production_url="https://${PRODUCTION_BRANCH}.${AMPLIFY_DEFAULT_DOMAIN}"
+          release_sha=""
+          for attempt in $(seq 1 30); do
+            release_sha="$(
+              curl --fail --silent --show-error "${production_url}/release.json" |
+                jq -er .sha 2>/dev/null ||
+                true
+            )"
+            if [ "$release_sha" = "$PREVIOUS_SHA" ]; then break; fi
+            echo "Amplify rollback identity is converging; attempt=${attempt}/30"
+            sleep 5
+          done
+          if [ "$release_sha" != "$PREVIOUS_SHA" ]; then
+            echo "::error::Amplify rollback is ${release_sha}; expected ${PREVIOUS_SHA}."
+            exit 1
+          fi
+          echo "::notice::Restored Amplify production to ${PREVIOUS_SHA} with job ${rollback_job_id}."
+
+      - name: Summarize immutable production release
+        if: ${{ always() }}
+        run: |
+          {
+            echo "## Production release"
+            echo
+            echo "- Git SHA: \`${DEPLOY_SHA}\`"
+            echo "- Amplify app: \`${{ steps.terraform.outputs.amplify_app_id }}\`"
+            echo "- Candidate job: \`${{ steps.candidate_deploy.outputs.job_id }}\`"
+            echo "- Production job: \`${{ steps.production_deploy.outputs.job_id }}\`"
+            echo "- ECS frontend hot rollback SHA: \`${{ steps.rollback_frontend.outputs.sha }}\`"
+            echo "- Domain-association orphan recovered: \`${{ steps.domain_state.outputs.recovered_orphan }}\`"
+            echo "- Pre-release canonical alias targeted ALB: \`${{ steps.apex_alias.outputs.routes_to_alb }}\`"
+            echo "- First-cutover DNS compensation: \`${{ steps.restore_apex_alias.outcome }}\`"
+          } >>"$GITHUB_STEP_SUMMARY"

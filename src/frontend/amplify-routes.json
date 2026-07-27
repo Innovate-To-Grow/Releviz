@@ -1,0 +1,20 @@
+{
+  "static_routes": [
+    "create",
+    "dashboard",
+    "edit",
+    "event",
+    "feedback",
+    "login",
+    "privacy",
+    "recover",
+    "settings",
+    "signup",
+    "support",
+    "terms"
+  ],
+  "legacy_redirects": {
+    "sign-in": "login",
+    "sign-up": "signup"
+  }
+}

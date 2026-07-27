@@ -1,5 +1,6 @@
 """Production settings."""
 
+import ipaddress
 import os
 
 from django.core.exceptions import ImproperlyConfigured
@@ -63,6 +64,30 @@ CSRF_TRUSTED_ORIGINS = split_csv("CSRF_TRUSTED_ORIGINS")
 CORS_ALLOW_CREDENTIALS = True
 AUTH_REFRESH_COOKIE_SECURE = True
 AUTH_TRUSTED_PROXY_COUNT = int(os.environ.get("AUTH_TRUSTED_PROXY_COUNT", "1"))
+AUTH_TRUSTED_PROXY_CIDRS = split_csv("AUTH_TRUSTED_PROXY_CIDRS")
+try:
+    AUTH_TRUSTED_PROXY_CIDR_HOPS = int(os.environ.get("AUTH_TRUSTED_PROXY_CIDR_HOPS", "0"))
+except ValueError as exc:
+    raise ImproperlyConfigured(
+        "AUTH_TRUSTED_PROXY_CIDR_HOPS must be a non-negative integer."
+    ) from exc
+if AUTH_TRUSTED_PROXY_CIDR_HOPS < 0:
+    raise ImproperlyConfigured("AUTH_TRUSTED_PROXY_CIDR_HOPS must be a non-negative integer.")
+if AUTH_TRUSTED_PROXY_CIDR_HOPS and not AUTH_TRUSTED_PROXY_CIDRS:
+    raise ImproperlyConfigured(
+        "AUTH_TRUSTED_PROXY_CIDRS is required when AUTH_TRUSTED_PROXY_CIDR_HOPS is set."
+    )
+if AUTH_TRUSTED_PROXY_COUNT > 1 and not AUTH_TRUSTED_PROXY_CIDRS:
+    raise ImproperlyConfigured(
+        "AUTH_TRUSTED_PROXY_CIDRS is required when AUTH_TRUSTED_PROXY_COUNT exceeds one."
+    )
+try:
+    for trusted_proxy_cidr in AUTH_TRUSTED_PROXY_CIDRS:
+        ipaddress.ip_network(trusted_proxy_cidr, strict=False)
+except ValueError as exc:
+    raise ImproperlyConfigured(
+        "AUTH_TRUSTED_PROXY_CIDRS must contain valid IPv4 or IPv6 networks."
+    ) from exc
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SECURE_SSL_REDIRECT = os.environ.get("DJANGO_SECURE_SSL_REDIRECT", "1") != "0"

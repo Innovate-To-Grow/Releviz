@@ -6,8 +6,36 @@ output "custom_domain" {
   value = var.custom_domain
 }
 
+output "origin_domain" {
+  value = var.origin_domain
+}
+
+output "origin_restricted_to_cloudfront" {
+  value = var.restrict_origin_to_cloudfront
+}
+
+output "trust_cloudfront_proxy_chain" {
+  value = var.trust_cloudfront_proxy_chain
+}
+
 output "https_url" {
   value = "https://${var.custom_domain}"
+}
+
+output "amplify_app_id" {
+  value = aws_amplify_app.frontend.id
+}
+
+output "amplify_default_domain" {
+  value = aws_amplify_app.frontend.default_domain
+}
+
+output "amplify_candidate_branch_name" {
+  value = aws_amplify_branch.candidate.branch_name
+}
+
+output "amplify_production_branch_name" {
+  value = aws_amplify_branch.production.branch_name
 }
 
 output "ecs_cluster_name" {

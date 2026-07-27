@@ -26,16 +26,44 @@ def normalize_security_identity(value: str) -> str:
 
 def client_ip(request) -> str:
     trusted_proxy_count = max(int(getattr(settings, "AUTH_TRUSTED_PROXY_COUNT", 0)), 0)
+    trusted_cidr_hops = max(int(getattr(settings, "AUTH_TRUSTED_PROXY_CIDR_HOPS", 0)), 0)
     forwarded = [
         item.strip()
         for item in str(request.META.get("HTTP_X_FORWARDED_FOR", "")).split(",")
         if item.strip()
     ]
-    candidate = (
-        forwarded[-trusted_proxy_count]
-        if trusted_proxy_count and len(forwarded) >= trusted_proxy_count
-        else str(request.META.get("REMOTE_ADDR", "") or "")
-    )
+    configured_cidrs = getattr(settings, "AUTH_TRUSTED_PROXY_CIDRS", [])
+    if isinstance(configured_cidrs, str):
+        configured_cidrs = configured_cidrs.split(",")
+    trusted_networks = []
+    for value in configured_cidrs:
+        try:
+            trusted_networks.append(ipaddress.ip_network(str(value).strip(), strict=False))
+        except ValueError:
+            continue
+
+    if trusted_cidr_hops and forwarded and trusted_networks:
+        # ALB appends its requester to the right of X-Forwarded-For. Peel only
+        # consecutive, explicitly trusted proxy addresses from that side; a
+        # direct caller's forged prefix can never change the selected address.
+        candidate_index = len(forwarded) - 1
+        remaining_proxy_hops = trusted_cidr_hops
+        while remaining_proxy_hops > 0 and candidate_index >= 0:
+            try:
+                proxy_address = ipaddress.ip_address(forwarded[candidate_index])
+            except ValueError:
+                break
+            if not any(proxy_address in network for network in trusted_networks):
+                break
+            candidate_index -= 1
+            remaining_proxy_hops -= 1
+        candidate = forwarded[candidate_index] if candidate_index >= 0 else ""
+    elif trusted_proxy_count and len(forwarded) >= trusted_proxy_count:
+        # Compatibility fallback for non-production environments that specify
+        # a fixed, fully trusted proxy depth without network allowlisting.
+        candidate = forwarded[-trusted_proxy_count]
+    else:
+        candidate = str(request.META.get("REMOTE_ADDR", "") or "")
     try:
         return str(ipaddress.ip_address(candidate))
     except ValueError:

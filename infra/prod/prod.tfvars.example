@@ -3,11 +3,22 @@ app_name                    = "releviz"
 environment                 = "prod"
 ecr_backend_repository      = "releviz-prod-backend"
 ecr_frontend_repository     = "releviz-prod-frontend"
-# The protected production workflow first applies with manage_dns=false, proves
-# the new ALB through TLS for this hostname, then applies the DNS cutover with
-# manage_dns=true. Keep local/operator plans DNS-safe by default.
 custom_domain               = "releviz.com"
-manage_dns                  = false
+origin_domain               = "origin.releviz.com"
+# Created once with infra/bootstrap/provision-amplify.sh, then supplied to both
+# this module and infra/bootstrap so GitHub is authorized for this app only.
+amplify_app_id               = "replace-with-amplify-app-id"
+# Keep false only for the first Amplify infrastructure apply. After both
+# manually deployed branches pass smoke tests, set true for the custom-domain
+# cutover and keep it true on all subsequent applies.
+enable_amplify_domain       = false
+# Enable only in a final post-cutover apply after the canonical Amplify domain
+# is healthy. Set this and trust_cloudfront_proxy_chain false together before
+# an emergency DNS rollback to the ALB.
+restrict_origin_to_cloudfront = false
+# Enable together with restrict_origin_to_cloudfront only after all public
+# ingress has been removed, so X-Forwarded-For cannot be supplied directly.
+trust_cloudfront_proxy_chain = false
 route53_zone_id             = "replace-with-route53-zone-id"
 django_secret_key_arn       = "arn:aws:secretsmanager:us-west-2:123456789012:secret:releviz/prod/django-secret-key"
 django_field_encryption_key_arn = "arn:aws:secretsmanager:us-west-2:123456789012:secret:releviz/prod/field-encryption-key"

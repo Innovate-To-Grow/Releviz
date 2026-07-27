@@ -102,7 +102,9 @@ def event_management_error_response(exc):
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def health_live(request):
-    return Response({"ok": True})
+    response = Response({"ok": True})
+    patch_cache_control(response, no_store=True)
+    return response
 
 
 @api_view(["GET"])

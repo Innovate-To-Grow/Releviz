@@ -8,6 +8,10 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 
+data "aws_ec2_managed_prefix_list" "cloudfront_origin_facing" {
+  name = "com.amazonaws.global.cloudfront.origin-facing"
+}
+
 data "aws_kms_alias" "rds" {
   name = "alias/aws/rds"
 }
@@ -17,11 +21,84 @@ data "aws_kms_alias" "secretsmanager" {
 }
 
 locals {
-  prefix             = "${var.app_name}-${var.environment}"
-  app_url            = "https://${var.custom_domain}"
-  backend_image_uri  = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.aws_region}.amazonaws.com/${var.ecr_backend_repository}:${var.backend_image_tag}"
-  frontend_image_uri = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.aws_region}.amazonaws.com/${var.ecr_frontend_repository}:${var.frontend_image_tag}"
-  availability_zones = length(var.availability_zones) >= 2 ? var.availability_zones : slice(data.aws_availability_zones.available.names, 0, 2)
+  prefix                    = "${var.app_name}-${var.environment}"
+  app_url                   = "https://${var.custom_domain}"
+  origin_url                = "https://${var.origin_domain}"
+  backend_image_uri         = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.aws_region}.amazonaws.com/${var.ecr_backend_repository}:${var.backend_image_tag}"
+  frontend_image_uri        = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.aws_region}.amazonaws.com/${var.ecr_frontend_repository}:${var.frontend_image_tag}"
+  availability_zones        = length(var.availability_zones) >= 2 ? var.availability_zones : slice(data.aws_availability_zones.available.names, 0, 2)
+  cloudfront_origin_cidrs   = sort([for entry in data.aws_ec2_managed_prefix_list.cloudfront_origin_facing.entries : entry.cidr])
+  amplify_production_branch = "main"
+  amplify_candidate_branch  = "candidate"
+  amplify_production_url    = "https://${local.amplify_production_branch}.${aws_amplify_app.frontend.default_domain}"
+  amplify_candidate_url     = "https://${local.amplify_candidate_branch}.${aws_amplify_app.frontend.default_domain}"
+  amplify_route_manifest    = jsondecode(file("${path.module}/../../src/frontend/amplify-routes.json"))
+  backend_allowed_hosts = join(",", [
+    var.custom_domain,
+    var.origin_domain,
+    aws_lb.app.dns_name,
+    "${local.amplify_production_branch}.${aws_amplify_app.frontend.default_domain}",
+    "${local.amplify_candidate_branch}.${aws_amplify_app.frontend.default_domain}",
+  ])
+  browser_trusted_origins = join(",", [
+    local.app_url,
+    local.amplify_production_url,
+    local.amplify_candidate_url,
+  ])
+  amplify_proxy_origin = local.origin_url
+  amplify_authn_routes = [
+    "public-key",
+    "register",
+    "register/verify-code",
+    "register/resend-code",
+    "login",
+    "login/request-code",
+    "login/verify-code",
+    "email-auth/request-code",
+    "email-auth/verify-code",
+    "phone-auth/request-code",
+    "phone-auth/verify-code",
+    "logout",
+    "refresh",
+    "profile",
+    "sessions",
+    "account-emails",
+    "contact-phones",
+    "password-reset/request-code",
+    "password-reset/verify-code",
+    "password-reset/confirm",
+    "change-password",
+    "delete-account",
+  ]
+  amplify_authn_rewrites = flatten([
+    for route in local.amplify_authn_routes : [
+      {
+        source = "/authn/${route}"
+        target = "${local.amplify_proxy_origin}/authn/${route}/"
+      },
+      {
+        source = "/authn/${route}/"
+        target = "${local.amplify_proxy_origin}/authn/${route}/"
+      },
+    ]
+  ])
+  amplify_static_routes = local.amplify_route_manifest.static_routes
+  amplify_legacy_auth_redirects = flatten([
+    for source, target in local.amplify_route_manifest.legacy_redirects : [
+      {
+        source = "/${source}"
+        target = "/${target}"
+      },
+      {
+        source = "/${source}/"
+        target = "/${target}"
+      },
+      {
+        source = "/${source}/<*>"
+        target = "/${target}"
+      },
+    ]
+  ])
   common_tags = {
     Project     = var.app_name
     Environment = var.environment
@@ -180,7 +257,7 @@ resource "aws_route_table_association" "app_b" {
 
 resource "aws_security_group" "alb" {
   name        = "${local.prefix}-alb-sg"
-  description = "Allow public HTTP and HTTPS ingress to the load balancer"
+  description = "Allow HTTP and controlled HTTPS ingress to the load balancer"
   vpc_id      = aws_vpc.app.id
 
   ingress {
@@ -190,11 +267,26 @@ resource "aws_security_group" "alb" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
+  dynamic "ingress" {
+    for_each = var.restrict_origin_to_cloudfront ? [] : [true]
+
+    content {
+      description = "Public HTTPS before Amplify cutover and during rollback"
+      from_port   = 443
+      to_port     = 443
+      protocol    = "tcp"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  }
+
+  # Install the CloudFront rule before the public rule is removed. Keeping it
+  # present in both phases prevents a Terraform graph ordering gap at cutover.
   ingress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    description     = "Amplify CloudFront origin-facing HTTPS"
+    from_port       = 443
+    to_port         = 443
+    protocol        = "tcp"
+    prefix_list_ids = [data.aws_ec2_managed_prefix_list.cloudfront_origin_facing.id]
   }
 
   egress {
@@ -558,6 +650,240 @@ resource "aws_iam_role_policy" "eventbridge_reminders" {
   })
 }
 
+# --- Amplify Hosting ---
+
+# The app and release branches are created once by an administrator with
+# infra/bootstrap/provision-amplify.sh. Config-driven imports let the protected
+# production workflow adopt those exact IDs without granting GitHub any
+# CreateApp, CreateBranch, or TagResource permission.
+import {
+  to = aws_amplify_app.frontend
+  id = var.amplify_app_id
+}
+
+import {
+  to = aws_amplify_branch.candidate
+  id = "${var.amplify_app_id}/${local.amplify_candidate_branch}"
+}
+
+import {
+  to = aws_amplify_branch.production
+  id = "${var.amplify_app_id}/${local.amplify_production_branch}"
+}
+
+resource "aws_amplify_app" "frontend" {
+  name        = "${local.prefix}-frontend"
+  description = "Releviz production static frontend deployed manually from the protected release workflow"
+  platform    = "WEB"
+
+  enable_auto_branch_creation = false
+  enable_basic_auth           = false
+  enable_branch_auto_build    = false
+  enable_branch_auto_deletion = false
+
+  # The managed cache mode includes cookies in the cache key. Authentication
+  # and CSRF cookies must reach the same-origin reverse proxy unchanged.
+  cache_config {
+    type = "AMPLIFY_MANAGED"
+  }
+
+  # Preserve the no-trailing-slash compatibility contract from next.config.js.
+  # Django rejects POST redirects generated by APPEND_SLASH, so both public
+  # spellings are proxied directly to the canonical trailing-slash endpoint.
+  dynamic "custom_rule" {
+    for_each = local.amplify_authn_rewrites
+
+    content {
+      source = custom_rule.value.source
+      target = custom_rule.value.target
+      status = "200"
+    }
+  }
+
+  custom_rule {
+    source = "/api"
+    target = "${local.amplify_proxy_origin}/api/"
+    status = "200"
+  }
+
+  custom_rule {
+    source = "/api/<*>"
+    target = "${local.amplify_proxy_origin}/api/<*>"
+    status = "200"
+  }
+
+  custom_rule {
+    source = "/authn"
+    target = "${local.amplify_proxy_origin}/authn/"
+    status = "200"
+  }
+
+  custom_rule {
+    source = "/authn/"
+    target = "${local.amplify_proxy_origin}/authn/"
+    status = "200"
+  }
+
+  custom_rule {
+    source = "/authn/<*>"
+    target = "${local.amplify_proxy_origin}/authn/<*>"
+    status = "200"
+  }
+
+  custom_rule {
+    source = "/admin"
+    target = "/admin/"
+    status = "301"
+  }
+
+  custom_rule {
+    source = "/admin/"
+    target = "${local.amplify_proxy_origin}/admin/"
+    status = "200"
+  }
+
+  custom_rule {
+    source = "/admin/<*>"
+    target = "${local.amplify_proxy_origin}/admin/<*>"
+    status = "200"
+  }
+
+  custom_rule {
+    source = "/static"
+    target = "${local.amplify_proxy_origin}/static/"
+    status = "200"
+  }
+
+  custom_rule {
+    source = "/static/"
+    target = "${local.amplify_proxy_origin}/static/"
+    status = "200"
+  }
+
+  custom_rule {
+    source = "/static/<*>"
+    target = "${local.amplify_proxy_origin}/static/<*>"
+    status = "200"
+  }
+
+  # Next static export writes /route.html. Amplify resolves /route cleanly,
+  # but /route/ requires /route/index.html, which Next does not emit. Preserve
+  # the previous Next server's trailing-slash route contract with a canonical
+  # redirect; Amplify keeps the original query string on 301 responses.
+  dynamic "custom_rule" {
+    for_each = toset(local.amplify_static_routes)
+
+    content {
+      source = "/${custom_rule.value}/"
+      target = "/${custom_rule.value}"
+      status = "301"
+    }
+  }
+
+  dynamic "custom_rule" {
+    for_each = local.amplify_legacy_auth_redirects
+
+    content {
+      source = custom_rule.value.source
+      target = custom_rule.value.target
+      status = "301"
+    }
+  }
+
+  custom_headers = <<-YAML
+    customHeaders:
+      - pattern: "**"
+        headers:
+          - key: "Strict-Transport-Security"
+            value: "max-age=31536000; includeSubDomains"
+          - key: "X-Content-Type-Options"
+            value: "nosniff"
+          - key: "X-Frame-Options"
+            value: "DENY"
+          - key: "Referrer-Policy"
+            value: "no-referrer"
+          - key: "Content-Security-Policy"
+            value: "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://challenges.cloudflare.com https://esm.run blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' ws: wss:; worker-src 'self' blob:; frame-src https://challenges.cloudflare.com;"
+  YAML
+
+  tags = local.common_tags
+
+  lifecycle {
+    prevent_destroy = true
+
+    postcondition {
+      condition     = self.id == var.amplify_app_id
+      error_message = "The managed Amplify app must match the explicitly provisioned amplify_app_id."
+    }
+  }
+}
+
+resource "aws_amplify_branch" "candidate" {
+  app_id       = aws_amplify_app.frontend.id
+  branch_name  = local.amplify_candidate_branch
+  display_name = local.amplify_candidate_branch
+  description  = "Pre-production branch for the exact release artifact"
+  framework    = "Next.js - Static"
+  stage        = "BETA"
+
+  enable_auto_build           = false
+  enable_basic_auth           = false
+  enable_notification         = false
+  enable_performance_mode     = false
+  enable_pull_request_preview = false
+
+  tags = local.common_tags
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_amplify_branch" "production" {
+  app_id       = aws_amplify_app.frontend.id
+  branch_name  = local.amplify_production_branch
+  display_name = local.amplify_production_branch
+  description  = "Production branch promoted from the smoke-tested candidate artifact"
+  framework    = "Next.js - Static"
+  stage        = "PRODUCTION"
+
+  enable_auto_build           = false
+  enable_basic_auth           = false
+  enable_notification         = false
+  enable_performance_mode     = false
+  enable_pull_request_preview = false
+
+  tags = local.common_tags
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_amplify_domain_association" "frontend" {
+  count = var.enable_amplify_domain ? 1 : 0
+
+  app_id                 = aws_amplify_app.frontend.id
+  domain_name            = var.custom_domain
+  enable_auto_sub_domain = false
+  wait_for_verification  = true
+
+  certificate_settings {
+    type = "AMPLIFY_MANAGED"
+  }
+
+  sub_domain {
+    branch_name = aws_amplify_branch.production.branch_name
+    prefix      = ""
+  }
+
+  # An accidental false value after cutover must fail safely instead of
+  # disassociating the public production domain.
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
 # --- ALB, TLS, and DNS ---
 
 resource "aws_lb" "app" {
@@ -567,7 +893,9 @@ resource "aws_lb" "app" {
   security_groups            = [aws_security_group.alb.id]
   subnets                    = [aws_subnet.public_a.id, aws_subnet.public_b.id]
   enable_deletion_protection = true
+  enable_xff_client_port     = false
   drop_invalid_header_fields = true
+  xff_header_processing_mode = "append"
   tags                       = local.common_tags
 }
 
@@ -612,6 +940,43 @@ resource "aws_acm_certificate_validation" "app" {
   }
 }
 
+resource "aws_acm_certificate" "origin" {
+  domain_name       = var.origin_domain
+  validation_method = "DNS"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  tags = local.common_tags
+}
+
+resource "aws_route53_record" "origin_cert_validation" {
+  for_each = {
+    for option in aws_acm_certificate.origin.domain_validation_options : option.domain_name => {
+      name   = option.resource_record_name
+      record = option.resource_record_value
+      type   = option.resource_record_type
+    }
+  }
+
+  allow_overwrite = true
+  name            = each.value.name
+  records         = [each.value.record]
+  ttl             = 60
+  type            = each.value.type
+  zone_id         = var.route53_zone_id
+}
+
+resource "aws_acm_certificate_validation" "origin" {
+  certificate_arn         = aws_acm_certificate.origin.arn
+  validation_record_fqdns = [for record in aws_route53_record.origin_cert_validation : record.fqdn]
+
+  timeouts {
+    create = "20m"
+  }
+}
+
 locals {
   https_certificate_arn = (
     var.existing_acm_certificate_arn != "" ?
@@ -620,15 +985,21 @@ locals {
   )
 }
 
-resource "aws_route53_record" "app" {
-  count = var.manage_dns ? 1 : 0
+# The previous configuration conditionally managed the apex ALB alias with
+# count. Turning that count off deleted production DNS before the second apply.
+# Forget the old address while leaving its physical record live; Amplify only
+# replaces it after the tested production branch is explicitly associated.
+removed {
+  from = aws_route53_record.app
 
-  # The first production apply deliberately leaves DNS untouched. Once the new
-  # ALB has passed an SNI-preserving health check, the release workflow applies
-  # this record in a second, exact Terraform plan. This also permits the
-  # production record to replace the prior apex alias after validation.
+  lifecycle {
+    destroy = false
+  }
+}
+
+resource "aws_route53_record" "origin" {
   allow_overwrite = true
-  name            = var.custom_domain
+  name            = var.origin_domain
   type            = "A"
   zone_id         = var.route53_zone_id
 
@@ -711,6 +1082,11 @@ resource "aws_lb_listener" "https" {
   }
 }
 
+resource "aws_lb_listener_certificate" "origin" {
+  listener_arn    = aws_lb_listener.https.arn
+  certificate_arn = aws_acm_certificate_validation.origin.certificate_arn
+}
+
 resource "aws_lb_listener_rule" "backend" {
   listener_arn = aws_lb_listener.https.arn
   priority     = 100
@@ -761,13 +1137,19 @@ resource "aws_ecs_task_definition" "backend" {
     environment = [
       { name = "DJANGO_SETTINGS_MODULE", value = "config.settings.production" },
       { name = "PORT", value = tostring(var.backend_port) },
-      { name = "DJANGO_ALLOWED_HOSTS", value = "${var.custom_domain},${aws_lb.app.dns_name}" },
+      { name = "DJANGO_ALLOWED_HOSTS", value = local.backend_allowed_hosts },
+      # New releases validate the additional CloudFront hop by CIDR throughout
+      # DNS propagation. Keep the legacy count gate so a rollback to an older
+      # image still uses one-hop behavior while the ALB remains public.
+      { name = "AUTH_TRUSTED_PROXY_COUNT", value = var.trust_cloudfront_proxy_chain ? "2" : "1" },
+      { name = "AUTH_TRUSTED_PROXY_CIDRS", value = join(",", local.cloudfront_origin_cidrs) },
+      { name = "AUTH_TRUSTED_PROXY_CIDR_HOPS", value = "1" },
       { name = "USE_SES_EMAIL_PROVIDER", value = "1" },
       { name = "REQUIRE_ENCRYPTED_PASSWORDS", value = "1" },
       { name = "FRONTEND_URL", value = local.app_url },
       { name = "BACKEND_URL", value = local.app_url },
-      { name = "CORS_ALLOWED_ORIGINS", value = local.app_url },
-      { name = "CSRF_TRUSTED_ORIGINS", value = local.app_url },
+      { name = "CORS_ALLOWED_ORIGINS", value = local.browser_trusted_origins },
+      { name = "CSRF_TRUSTED_ORIGINS", value = local.browser_trusted_origins },
       { name = "DB_NAME", value = var.db_name },
       { name = "DB_USER", value = var.db_username },
       { name = "DB_HOST", value = aws_db_instance.app.address },
@@ -1021,6 +1403,27 @@ resource "aws_cloudwatch_metric_alarm" "alb_5xx" {
 
   dimensions = {
     LoadBalancer = aws_lb.app.arn_suffix
+  }
+
+  tags = local.common_tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "amplify_5xx" {
+  alarm_name          = "${local.prefix}-amplify-5xx"
+  alarm_description   = "Amplify Hosting returned 5xx responses"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "5xxErrors"
+  namespace           = "AWS/AmplifyHosting"
+  period              = 60
+  statistic           = "Sum"
+  threshold           = 1
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = var.alarm_action_arns
+  ok_actions          = var.alarm_action_arns
+
+  dimensions = {
+    App = aws_amplify_app.frontend.id
   }
 
   tags = local.common_tags

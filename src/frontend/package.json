@@ -38,6 +38,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:amplify": "AMPLIFY_STATIC_EXPORT=1 next build",
     "start": "next start",
     "test": "jest --forceExit",
     "test:coverage": "jest --coverage --ci --forceExit --silent",

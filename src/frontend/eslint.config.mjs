@@ -3,7 +3,7 @@ import prettierConfig from "eslint-config-prettier";
 
 const config = [
   {
-    ignores: [".next/**", "coverage/**", "node_modules/**"],
+    ignores: [".next/**", "out/**", "coverage/**", "node_modules/**"],
   },
   ...nextConfig,
   prettierConfig,

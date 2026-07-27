@@ -279,10 +279,51 @@ variable "route53_zone_id" {
   }
 }
 
-variable "manage_dns" {
+variable "origin_domain" {
+  type        = string
+  default     = "origin.releviz.com"
+  description = "TLS-protected ALB hostname used only as the Amplify reverse-proxy origin"
+
+  validation {
+    condition = (
+      can(regex("^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$", var.origin_domain)) &&
+      var.origin_domain != var.custom_domain
+    )
+    error_message = "origin_domain must be a lowercase fully qualified hostname distinct from custom_domain."
+  }
+}
+
+variable "enable_amplify_domain" {
   type        = bool
   default     = false
-  description = "Whether this apply may create or replace the production Route53 alias after the new ALB is healthy"
+  description = "Associate custom_domain with the Amplify production branch after both manual-deploy artifacts pass smoke tests"
+}
+
+variable "amplify_app_id" {
+  type        = string
+  description = "Exact Amplify app ID created by infra/bootstrap/provision-amplify.sh and adopted through Terraform import blocks"
+
+  validation {
+    condition     = can(regex("^d[a-z0-9]{1,19}$", var.amplify_app_id))
+    error_message = "amplify_app_id must match d[a-z0-9]+ and contain at most 20 characters."
+  }
+}
+
+variable "restrict_origin_to_cloudfront" {
+  type        = bool
+  default     = false
+  description = "Remove public ALB HTTPS ingress after the always-present CloudFront origin rule is proven"
+}
+
+variable "trust_cloudfront_proxy_chain" {
+  type        = bool
+  default     = false
+  description = "Enable the legacy two-hop rollback count after CIDR-verified CloudFront client-IP handling is proven"
+
+  validation {
+    condition     = !var.trust_cloudfront_proxy_chain || var.restrict_origin_to_cloudfront
+    error_message = "trust_cloudfront_proxy_chain may be true only when restrict_origin_to_cloudfront is true."
+  }
 }
 
 variable "existing_acm_certificate_arn" {
