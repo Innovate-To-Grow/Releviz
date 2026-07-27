@@ -416,6 +416,7 @@ locals {
           "ec2:Describe*",
           "ec2:DetachInternetGateway",
           "ec2:DisassociateRouteTable",
+          "ec2:GetManagedPrefixListEntries",
           "ec2:ModifySubnetAttribute",
           "ec2:ModifyVpcAttribute",
           "ec2:ReleaseAddress",

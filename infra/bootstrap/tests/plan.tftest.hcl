@@ -74,6 +74,20 @@ run "bootstrap_plan" {
 
   assert {
     condition = (
+      contains(one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Action if statement.Sid == "ProductionNetwork"
+      ]), "ec2:GetManagedPrefixListEntries") &&
+      one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Resource if statement.Sid == "ProductionNetwork"
+      ]) == "*"
+    )
+    error_message = "The production role must read the entries in AWS-managed CloudFront prefix lists."
+  }
+
+  assert {
+    condition = (
       strcontains(local.production_deploy_policy, "secretsmanager:CreateSecret") &&
       strcontains(local.production_deploy_policy, "secretsmanager:TagResource") &&
       strcontains(local.production_deploy_policy, "arn:aws:secretsmanager:us-west-2:123456789012:secret:rds!db-*")
