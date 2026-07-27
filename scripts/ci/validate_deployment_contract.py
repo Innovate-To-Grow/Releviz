@@ -339,6 +339,40 @@ def amplify_deploy_script_errors(root: Path = ROOT) -> list[str]:
     return errors
 
 
+def production_alb_security_group_errors(terraform_source: str) -> list[str]:
+    start = re.search(
+        r'resource\s+"aws_security_group"\s+"alb"\s*\{',
+        terraform_source,
+    )
+    if start is None:
+        return ["production Terraform omits the ALB security group"]
+
+    end = re.search(
+        r'resource\s+"aws_security_group"\s+"backend"\s*\{',
+        terraform_source[start.end() :],
+    )
+    if end is None:
+        return ["production Terraform cannot isolate the ALB security-group block"]
+
+    block = terraform_source[start.start() : start.end() + end.start()]
+    errors: list[str] = []
+    if not re.search(
+        r'description\s*=\s*"Allow public HTTP and HTTPS ingress to the load balancer"',
+        block,
+    ):
+        errors.append(
+            "production Terraform changes the immutable live ALB security-group description"
+        )
+    if not re.search(
+        r"lifecycle\s*\{\s*prevent_destroy\s*=\s*true\s*\}",
+        block,
+    ):
+        errors.append(
+            "production Terraform omits ALB security-group destroy protection"
+        )
+    return errors
+
+
 def deployment_contract_errors(root: Path = ROOT) -> list[str]:
     errors: list[str] = []
     settings_path = root / PRODUCTION_SETTINGS.relative_to(ROOT)
@@ -418,6 +452,7 @@ def deployment_contract_errors(root: Path = ROOT) -> list[str]:
     for pattern, description in production_invariants.items():
         if not re.search(pattern, production_terraform):
             errors.append(f"production Terraform omits {description}")
+    errors.extend(production_alb_security_group_errors(production_terraform))
 
     bootstrap_terraform = (root / BOOTSTRAP_TERRAFORM.relative_to(ROOT)).read_text(
         encoding="utf-8"

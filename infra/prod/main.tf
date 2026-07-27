@@ -256,9 +256,15 @@ resource "aws_route_table_association" "app_b" {
 # --- Security groups ---
 
 resource "aws_security_group" "alb" {
-  name        = "${local.prefix}-alb-sg"
-  description = "Allow HTTP and controlled HTTPS ingress to the load balancer"
+  name = "${local.prefix}-alb-sg"
+  # AWS treats a security-group description change as ForceNew. Keep the
+  # deployed description stable so the Amplify cutover only updates rules.
+  description = "Allow public HTTP and HTTPS ingress to the load balancer"
   vpc_id      = aws_vpc.app.id
+
+  lifecycle {
+    prevent_destroy = true
+  }
 
   ingress {
     from_port   = 80
