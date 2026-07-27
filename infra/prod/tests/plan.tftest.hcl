@@ -279,6 +279,14 @@ run "production_plan" {
 
   assert {
     condition = (
+      aws_security_group.alb.description ==
+      "Allow public HTTP and HTTPS ingress to the load balancer"
+    )
+    error_message = "The attached production ALB security group must retain its deployed ForceNew description."
+  }
+
+  assert {
+    condition = (
       length([
         for rule in aws_security_group.alb.ingress : rule
         if contains(coalesce(rule.prefix_list_ids, []), data.aws_ec2_managed_prefix_list.cloudfront_origin_facing.id)

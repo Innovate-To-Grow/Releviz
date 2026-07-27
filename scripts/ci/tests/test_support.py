@@ -12,6 +12,7 @@ from scripts.ci.summarize_workflow_jobs import render
 from scripts.ci.validate_amplify_static_export import amplify_static_export_errors
 from scripts.ci.validate_deployment_contract import (
     amplify_deploy_script_errors,
+    production_alb_security_group_errors,
     production_cd_errors,
     required_runtime_environment,
     terraform_environment_names,
@@ -142,6 +143,37 @@ class AmplifyStaticExportTests(TestCase):
 
 
 class DeploymentContractTests(TestCase):
+    def test_production_alb_security_group_is_in_place_only(self):
+        source = """
+resource "aws_security_group" "alb" {
+  name        = "releviz-prod-alb-sg"
+  description = "Allow public HTTP and HTTPS ingress to the load balancer"
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_security_group" "backend" {
+}
+"""
+        self.assertEqual(production_alb_security_group_errors(source), [])
+        self.assertIn(
+            "production Terraform changes the immutable live ALB security-group description",
+            production_alb_security_group_errors(
+                source.replace(
+                    "Allow public HTTP and HTTPS ingress to the load balancer",
+                    "Allow controlled HTTPS ingress to the load balancer",
+                )
+            ),
+        )
+        self.assertIn(
+            "production Terraform omits ALB security-group destroy protection",
+            production_alb_security_group_errors(
+                source.replace("prevent_destroy = true", "prevent_destroy = false")
+            ),
+        )
+
     def test_required_runtime_environment_reads_required_calls_and_security_lists(self):
         source = """
 SECRET_KEY = required_env("DJANGO_SECRET_KEY")
