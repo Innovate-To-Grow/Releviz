@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import React, { useState, useRef, useEffect } from "react";
 import {
@@ -14,6 +13,7 @@ import {
 } from "react-icons/md";
 import AppButton from "@/components/ui/AppButton";
 import { useAuth } from "@/components/auth/AuthContext";
+import BrandLogo from "@/components/ui/BrandLogo";
 
 function UserMenu() {
   const { user, loading, logout } = useAuth();
@@ -151,23 +151,7 @@ function EventHeader({ eventName, eventCode, isOrganizer }) {
           minWidth: 0,
         }}
       >
-        <Image
-          src="/img/i2glogo.png"
-          alt="i2G Logo"
-          width={36}
-          height={36}
-          style={{ flexShrink: 0 }}
-        />
-        <span
-          style={{
-            fontWeight: "700",
-            fontSize: "1.1rem",
-            color: "var(--md-sys-color-primary)",
-            marginRight: "4px",
-          }}
-        >
-          Releviz
-        </span>
+        <BrandLogo alt="Releviz" className="brand-logo brand-logo--event-header" priority />
         <h1
           style={{
             margin: 0,

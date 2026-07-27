@@ -8,6 +8,7 @@ import "@testing-library/jest-dom";
 
 import AppButton from "@/components/ui/AppButton";
 import AppHeader from "@/components/ui/AppHeader";
+import BrandLogo, { BrandHomeLink } from "@/components/ui/BrandLogo";
 import ScheduleGrid from "@/components/schedule/ScheduleGrid";
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
 import EventHeader from "@/components/event/EventHeader";
@@ -42,7 +43,7 @@ jest.mock("next/link", () => ({
 
 jest.mock("next/image", () => ({
   __esModule: true,
-  default: ({ alt, ...props }) => <img alt={alt || ""} {...props} />,
+  default: ({ alt, priority: _priority, ...props }) => <img alt={alt || ""} {...props} />,
 }));
 
 jest.mock("@/components/auth/AuthContext", () => ({
@@ -104,7 +105,7 @@ jest.mock(
 
 import { useAuth } from "@/components/auth/AuthContext";
 import Home from "@/app/page";
-import RootLayout from "@/app/layout";
+import RootLayout, { metadata as rootMetadata } from "@/app/layout";
 import NotFound from "@/app/not-found";
 import CreatePage from "@/app/create/page";
 import DashboardPage from "@/app/dashboard/page";
@@ -159,6 +160,25 @@ describe("small UI modules", () => {
     expect(screen.getByText("Save").closest("button")).toHaveClass("app-btn-full", "extra");
     expect(screen.getByTestId("icon")).toBeInTheDocument();
     expect(screen.getByText("Cancel").closest("button")).toHaveClass("app-btn-outlined");
+  });
+
+  test("brand logo exposes wordmark and square assets", () => {
+    const { rerender } = render(<BrandLogo />);
+    expect(screen.getByRole("img", { name: "Releviz" })).toHaveAttribute(
+      "src",
+      "/brand/releviz-logo.png"
+    );
+
+    rerender(<BrandLogo variant="mark" />);
+    expect(screen.getByRole("img", { name: "Releviz" })).toHaveAttribute(
+      "src",
+      "/brand/releviz-mark.png"
+    );
+
+    rerender(<BrandHomeLink logoClassName="brand-logo--footer" />);
+    expect(screen.getByRole("link", { name: "Releviz home" })).toHaveAttribute("href", "/");
+    expect(rootMetadata.manifest).toBe("/manifest.json");
+    expect(rootMetadata.icons.icon[1].url).toBe("/brand/releviz-mark.png");
   });
 
   test("ScheduleGrid paints mouse and touch cells and renders values/tooltips", () => {

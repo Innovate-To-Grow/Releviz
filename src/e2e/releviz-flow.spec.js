@@ -1290,7 +1290,7 @@ test.describe("Releviz admin", () => {
   test("renders the themed admin login and authenticated sidebar", async ({ page }) => {
     await page.goto(`${BACKEND_URL}/admin/login/?next=/admin/`);
     await expect(page.locator(".login-box")).toBeVisible();
-    await expect(page.locator("img.login-logo")).toHaveAttribute("src", /releviz-logo\.svg/);
+    await expect(page.locator("img.login-logo")).toHaveAttribute("src", /releviz-mark\.png/);
     await expect(page.getByText("Releviz Admin")).toBeVisible();
     await page.locator("#id_email").fill(ADMIN_EMAIL);
     await page.locator("#id_password").fill(ADMIN_PASSWORD);

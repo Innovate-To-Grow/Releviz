@@ -11,8 +11,7 @@ class AdminThemeRenderingTests(TestCase):
         self.assertContains(response, "Releviz Admin")
         self.assertContains(response, "login-box")
         self.assertContains(response, "dark .login-box")
-        self.assertContains(response, "/static/images/releviz-logo")
-        self.assertContains(response, ".svg")
+        self.assertContains(response, "/static/images/releviz-mark.png")
         self.assertContains(response, "admin/css/google-material-admin.css")
         self.assertContains(response, "admin/js/i2g-admin-theme-runtime.js")
         self.assertContains(response, 'data-admin-theme-choice="dark"')
@@ -31,8 +30,7 @@ class AdminThemeRenderingTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Releviz")
-        self.assertContains(response, "/static/images/releviz-logo")
-        self.assertContains(response, ".svg")
+        self.assertContains(response, "/static/images/releviz-mark.png")
         self.assertContains(response, "admin/css/google-material-admin.css")
         self.assertContains(response, "admin/css/google-material-admin-overrides.css")
         self.assertContains(response, "admin/js/i2g-admin-theme-runtime.js")
@@ -47,7 +45,7 @@ class AdminThemeRenderingTests(TestCase):
 
     def test_admin_theme_static_assets_are_available(self):
         for path in [
-            "images/releviz-logo.svg",
+            "images/releviz-mark.png",
             "admin/css/google-material-admin.css",
             "admin/css/google-material-admin-overrides.css",
             "admin/css/tabs.css",

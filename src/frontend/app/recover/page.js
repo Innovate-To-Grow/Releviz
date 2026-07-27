@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import AppButton from "@/components/ui/AppButton";
+import { BrandHomeLink } from "@/components/ui/BrandLogo";
 import { confirmPasswordReset, requestPasswordResetCode } from "@/lib/api/auth";
 import { navigateTo } from "@/lib/navigation";
 
@@ -65,6 +66,11 @@ export default function RecoverAccountPage() {
   return (
     <main className="auth-page">
       <form className="auth-panel" onSubmit={step === "request" ? requestCode : resetPassword}>
+        <BrandHomeLink
+          className="auth-brand-link"
+          logoClassName="brand-logo brand-logo--auth"
+          priority
+        />
         <div>
           <h1>Recover your account</h1>
           <p>

@@ -28,7 +28,7 @@ RESOURCE_AUDIT_MANIFEST = [
     "src/backend/apps/core/static/admin/css/tabs.css",
     "src/backend/apps/core/static/admin/js/i2g-admin-theme-runtime.js",
     "src/backend/apps/core/static/admin/js/material-web-text-field.js",
-    "src/backend/apps/core/static/images/releviz-logo.svg",
+    "src/backend/apps/core/static/images/releviz-mark.png",
     "src/backend/apps/core/templates/admin/base_site.html",
     "src/backend/apps/core/templates/admin/includes/i2g_admin_theme_toggle.html",
     "src/backend/apps/core/templates/admin/includes/itg_login_styles.html",
@@ -56,7 +56,13 @@ RESOURCE_AUDIT_MANIFEST = [
     "src/frontend/.dockerignore",
     "src/frontend/@next/package.json",
     "src/frontend/Dockerfile",
+    "src/frontend/app/apple-icon.png",
     "src/frontend/app/globals.css",
+    "src/frontend/app/icon.png",
+    "src/frontend/app/opengraph-image.alt.txt",
+    "src/frontend/app/opengraph-image.png",
+    "src/frontend/app/twitter-image.alt.txt",
+    "src/frontend/app/twitter-image.png",
     "src/frontend/eslint.config.mjs",
     "src/frontend/jest.config.js",
     "src/frontend/jsconfig.json",
@@ -64,12 +70,14 @@ RESOURCE_AUDIT_MANIFEST = [
     "src/frontend/package-lock.docker.json",
     "src/frontend/package.json",
     "src/frontend/vendor/brace-expansion-compat/package.json",
+    "src/frontend/public/brand/releviz-logo.png",
+    "src/frontend/public/brand/releviz-mark.png",
     "src/frontend/public/favicon.ico",
     "src/frontend/public/homepage.png",
-    "src/frontend/public/img/i2glogo.png",
     "src/frontend/public/img/ucmlogo.png",
     "src/frontend/public/logo192.png",
     "src/frontend/public/logo512.png",
+    "src/frontend/public/manifest.json",
     "src/frontend/public/robots.txt",
     "infra/bootstrap/main.tf",
     "infra/bootstrap/tests/plan.tftest.hcl",
@@ -176,7 +184,7 @@ class RepositorySurfaceTests(SimpleTestCase):
         )
 
         self.assertIn("Releviz Admin", login)
-        self.assertIn("releviz-logo.svg", login)
+        self.assertIn("releviz-mark.png", login)
         self.assertIn("itg_login_styles.html", login)
         self.assertIn("i2g-admin-theme-runtime.js", base_site)
         self.assertIn("google-material-admin-overrides.css", base_site)

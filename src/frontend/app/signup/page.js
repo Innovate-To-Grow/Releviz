@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 import AppButton from "@/components/ui/AppButton";
+import { BrandHomeLink } from "@/components/ui/BrandLogo";
 import { useAuth } from "@/components/auth/AuthContext";
 import { navigateTo, safeNextPath } from "@/lib/navigation";
 
@@ -72,6 +73,11 @@ function SignupContent() {
   return (
     <main className="auth-page">
       <form className="auth-panel" onSubmit={step === "details" ? submitDetails : submitCode}>
+        <BrandHomeLink
+          className="auth-brand-link"
+          logoClassName="brand-logo brand-logo--auth"
+          priority
+        />
         <div>
           <h1>Create account</h1>
           <p>

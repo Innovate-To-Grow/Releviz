@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { BrandHomeLink } from "@/components/ui/BrandLogo";
 
 const footerLinks = [
   { href: "/privacy", label: "Privacy" },
@@ -10,9 +11,7 @@ const footerLinks = [
 export default function SiteFooter() {
   return (
     <footer className="site-footer">
-      <Link className="site-footer-brand" href="/">
-        Releviz
-      </Link>
+      <BrandHomeLink className="site-footer-brand" logoClassName="brand-logo brand-logo--footer" />
       <nav aria-label="Product and support">
         <ul className="site-footer-links">
           {footerLinks.map((link) => (
