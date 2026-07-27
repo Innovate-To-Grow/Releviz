@@ -64,6 +64,7 @@ RESOURCE_AUDIT_MANIFEST = [
     "src/frontend/app/twitter-image.alt.txt",
     "src/frontend/app/twitter-image.png",
     "src/frontend/eslint.config.mjs",
+    "src/frontend/amplify-routes.json",
     "src/frontend/jest.config.js",
     "src/frontend/jsconfig.json",
     "src/frontend/next.config.js",
@@ -79,7 +80,9 @@ RESOURCE_AUDIT_MANIFEST = [
     "src/frontend/public/logo512.png",
     "src/frontend/public/manifest.json",
     "src/frontend/public/robots.txt",
+    "infra/bootstrap/README.md",
     "infra/bootstrap/main.tf",
+    "infra/bootstrap/provision-amplify.sh",
     "infra/bootstrap/tests/plan.tftest.hcl",
     "infra/prod/main.tf",
     "infra/prod/outputs.tf",
@@ -96,9 +99,11 @@ RESOURCE_AUDIT_MANIFEST = [
     "scripts/ci/plan_django_tests.py",
     "scripts/ci/plan_e2e_tests.py",
     "scripts/ci/summarize_workflow_jobs.py",
+    "scripts/ci/validate_amplify_static_export.py",
     "scripts/ci/validate_deployment_contract.py",
     "scripts/ci/validate_dependabot_labels.py",
     "scripts/ci/validate_tool_versions.py",
+    "scripts/deploy/amplify-static-deploy.sh",
     "scripts/docker-build-frontend.sh",
     "scripts/ecs-service-rollout.sh",
     "scripts/postgres-backup.sh",
@@ -140,6 +145,9 @@ class RepositorySurfaceTests(SimpleTestCase):
         self.assertIn("Backend - Lint & Test", ci)
         self.assertIn("Frontend Unit Test Coverage", ci)
         self.assertIn("Frontend CI Build Artifact", ci)
+        self.assertIn("Frontend Amplify Static Export", ci)
+        self.assertIn("run build:amplify", ci)
+        self.assertIn("- frontend-amplify-build", ci)
         self.assertIn("Security Required Result", ci)
         self.assertIn("Supply Chain Result", ci)
         self.assertIn("CI Result", ci)

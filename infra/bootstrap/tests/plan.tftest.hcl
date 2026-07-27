@@ -16,6 +16,8 @@ run "bootstrap_plan" {
   variables {
     state_bucket_name                 = "releviz-prod-terraform-state-123456789012"
     production_route53_zone_id        = "Z1234567890"
+    production_domain_name            = "releviz.com"
+    production_amplify_app_id         = "dsecure123"
     existing_github_oidc_provider_arn = "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
     production_secret_arns = [
       "arn:aws:secretsmanager:us-west-2:123456789012:secret:django",
@@ -54,10 +56,12 @@ run "bootstrap_plan" {
   assert {
     condition = (
       length(local.production_deploy_policy) <= 10240 &&
+      length(local.production_kms_policy) <= 10240 &&
+      length(local.production_deploy_policy) + length(local.production_kms_policy) < 10240 &&
       !strcontains(local.production_deploy_policy, "AdministratorAccess") &&
       !strcontains(local.production_deploy_policy, "iam:*")
     )
-    error_message = "The production inline policy must fit AWS limits and remain narrower than administrator IAM access."
+    error_message = "The production deploy and KMS inline policies must individually fit, and collectively stay below, the 10,240-character per-role AWS limit while remaining narrower than administrator IAM access."
   }
 
   assert {
@@ -66,14 +70,6 @@ run "bootstrap_plan" {
       !strcontains(local.production_deploy_policy, "s3:GetBucketEncryption")
     )
     error_message = "The production role must use the IAM action required to inspect state-bucket encryption."
-  }
-
-  assert {
-    condition = (
-      strcontains(local.production_deploy_policy, "servicequotas:GetServiceQuota") &&
-      strcontains(local.production_deploy_policy, "arn:aws:servicequotas:us-west-2:123456789012:ec2/L-0263D0A3")
-    )
-    error_message = "The production role must read the regional EC2-VPC Elastic IP quota used by deployment preflight."
   }
 
   assert {
@@ -88,11 +84,81 @@ run "bootstrap_plan" {
   assert {
     condition = (
       strcontains(local.production_deploy_policy, "application-autoscaling:ListTagsForResource") &&
+      strcontains(local.production_deploy_policy, "elasticloadbalancing:AddListenerCertificates") &&
+      strcontains(local.production_deploy_policy, "elasticloadbalancing:RemoveListenerCertificates") &&
+      strcontains(local.production_deploy_policy, "amplify:CreateDeployment") &&
+      strcontains(local.production_deploy_policy, "amplify:StartDeployment") &&
+      strcontains(local.production_deploy_policy, "amplify:StartJob") &&
+      strcontains(local.production_deploy_policy, "amplify:CreateDomainAssociation") &&
+      strcontains(local.production_deploy_policy, "arn:aws:amplify:us-west-2:123456789012:apps/dsecure123/branches/candidate") &&
+      strcontains(local.production_deploy_policy, "arn:aws:amplify:us-west-2:123456789012:apps/dsecure123/branches/main") &&
+      strcontains(local.production_deploy_policy, "arn:aws:amplify:us-west-2:123456789012:apps/dsecure123/domains/releviz.com") &&
+      !strcontains(local.production_deploy_policy, "arn:aws:amplify:us-west-2:123456789012:apps/*") &&
+      !strcontains(local.production_deploy_policy, "\"amplify:CreateApp\"") &&
+      !strcontains(local.production_deploy_policy, "\"amplify:CreateBranch\"") &&
+      !strcontains(local.production_deploy_policy, "\"amplify:TagResource\"") &&
+      !strcontains(local.production_deploy_policy, "\"amplify:UntagResource\"") &&
+      !strcontains(local.production_deploy_policy, "amplify:DeleteApp") &&
+      !strcontains(local.production_deploy_policy, "amplify:DeleteBranch") &&
+      !strcontains(local.production_deploy_policy, "amplify:DeleteDomainAssociation") &&
       strcontains(local.production_kms_policy, "kms:CreateGrant") &&
       strcontains(local.production_kms_policy, "rds.us-west-2.amazonaws.com") &&
       strcontains(local.production_kms_policy, "secretsmanager.us-west-2.amazonaws.com")
     )
-    error_message = "The production role must read autoscaling tags and use KMS through RDS and Secrets Manager."
+    error_message = "The production role must deploy Amplify branches, read autoscaling tags, and use KMS through RDS and Secrets Manager."
+  }
+
+  assert {
+    condition     = aws_iam_role.production_deploy.max_session_duration == 10800
+    error_message = "The production OIDC role must outlive the bounded two-hour release workflow."
+  }
+
+  assert {
+    condition = (
+      one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Resource
+        if statement.Sid == "ManageExactProductionAmplifyApp"
+      ]) == "arn:aws:amplify:us-west-2:123456789012:apps/dsecure123" &&
+      one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Condition.StringEquals["aws:ResourceTag/Project"]
+        if statement.Sid == "ManageExactProductionAmplifyApp"
+      ]) == "releviz" &&
+      one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Condition.StringEquals["aws:ResourceTag/Environment"]
+        if statement.Sid == "ManageExactProductionAmplifyApp"
+      ]) == "prod" &&
+      one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Resource
+        if statement.Sid == "ManageExactProductionAmplifyBranches"
+        ]) == [
+        "arn:aws:amplify:us-west-2:123456789012:apps/dsecure123/branches/candidate",
+        "arn:aws:amplify:us-west-2:123456789012:apps/dsecure123/branches/main",
+      ]
+    )
+    error_message = "The steady-state role must manage only the exact pre-provisioned app and its two release branches."
+  }
+
+  assert {
+    condition = (
+      one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Resource
+        if statement.Sid == "ManageExactProductionAmplifyJobs"
+        ]) == [
+        "arn:aws:amplify:us-west-2:123456789012:apps/dsecure123/branches/candidate/jobs/*",
+        "arn:aws:amplify:us-west-2:123456789012:apps/dsecure123/branches/main/jobs/*",
+      ] &&
+      one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Resource
+        if statement.Sid == "ManageExactProductionAmplifyDomain"
+      ]) == "arn:aws:amplify:us-west-2:123456789012:apps/dsecure123/domains/releviz.com"
+    )
+    error_message = "Job and domain permissions must use the exact app ID, release branches, and canonical domain."
   }
 
   assert {
@@ -101,5 +167,30 @@ run "bootstrap_plan" {
       statement.Resource if statement.Sid == "ProductionIamRoles"
     ]) == "arn:aws:iam::123456789012:role/releviz-prod-*"
     error_message = "The production role must manage only Releviz application roles."
+  }
+}
+
+run "bootstrap_plan_before_amplify_provisioning" {
+  command = plan
+
+  variables {
+    state_bucket_name                 = "releviz-prod-terraform-state-123456789012"
+    production_route53_zone_id        = "Z1234567890"
+    production_domain_name            = "releviz.com"
+    production_amplify_app_id         = ""
+    existing_github_oidc_provider_arn = "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
+    production_secret_arns = [
+      "arn:aws:secretsmanager:us-west-2:123456789012:secret:django",
+      "arn:aws:secretsmanager:us-west-2:123456789012:secret:field-key",
+      "arn:aws:secretsmanager:us-west-2:123456789012:secret:metrics",
+    ]
+  }
+
+  assert {
+    condition = (
+      length(local.production_amplify_policy_statements) == 0 &&
+      !strcontains(local.production_deploy_policy, "\"amplify:")
+    )
+    error_message = "Before the exact app ID is registered, the GitHub role must have no Amplify API permissions."
   }
 }

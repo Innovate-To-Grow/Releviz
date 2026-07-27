@@ -72,6 +72,13 @@ Cookie-authenticated mutation endpoints validate `Origin` when it is present. Al
 from the frontend URL, backend URL, configured CSRF trusted origins, and the request origin. Rejected
 origins are security-logged.
 
+Production keeps these requests same-origin through Amplify Hosting rewrites for `/authn`, `/api`,
+`/admin`, and `/static`. The ALB origin is TLS-only and, after cutover, accepts HTTPS only from the
+AWS-managed CloudFront origin-facing prefix list. The ALB appends the CloudFront peer to
+`X-Forwarded-For` without a client-port suffix. Django removes that right-most entry only when it
+belongs to the injected CloudFront CIDR allowlist, then uses the preceding browser address. A
+direct request cannot make an arbitrary spoofed chain trusted during the migration window.
+
 ## Abuse Controls
 
 Rate-limit counters are persisted in PostgreSQL, updated under row locks, and keyed with an
@@ -125,9 +132,19 @@ The scheduled reminder command also removes:
 - expired SimpleJWT outstanding-token records
 - stale undelivered authentication challenges and their pending delivery jobs
 
-Set `AUTH_TRUSTED_PROXY_COUNT` to the exact number of trusted reverse proxies in front of Django.
-Production defaults to one. An incorrect value can make rate limits and same-client refresh
-recovery use the wrong address.
+`AUTH_TRUSTED_PROXY_COUNT` remains the compatibility depth for environments with a fixed trusted
+proxy chain. Production additionally injects the current AWS-managed CloudFront origin-facing
+networks through `AUTH_TRUSTED_PROXY_CIDRS` and allows one CIDR-verified hop through
+`AUTH_TRUSTED_PROXY_CIDR_HOPS`. Django peels a right-most forwarded address only when that address
+belongs to the allowlist, so direct ALB traffic cannot choose a forged prefix while ALB and
+Amplify traffic coexist during DNS propagation. The ALB is explicitly kept in XFF `append` mode
+with client-port suffixes disabled. Production startup fails if multi-hop trust is configured
+without a valid network allowlist.
+
+The prefix-list entries are snapshotted into each ECS task definition. Because the ALB security
+group follows the AWS-managed prefix-list ID automatically, rerun the production Terraform release
+after an AWS prefix-list version change so the application allowlist and network boundary remain
+identical; treat a sustained increase in shared-IP throttles as configuration drift.
 
 ## Remaining Scope
 

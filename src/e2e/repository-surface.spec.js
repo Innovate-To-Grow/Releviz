@@ -59,6 +59,7 @@ const RESOURCE_AUDIT_MANIFEST = [
   "src/frontend/app/twitter-image.alt.txt",
   "src/frontend/app/twitter-image.png",
   "src/frontend/eslint.config.mjs",
+  "src/frontend/amplify-routes.json",
   "src/frontend/jest.config.js",
   "src/frontend/jsconfig.json",
   "src/frontend/next.config.js",
@@ -75,7 +76,9 @@ const RESOURCE_AUDIT_MANIFEST = [
   "src/frontend/public/logo512.png",
   "src/frontend/public/manifest.json",
   "src/frontend/public/robots.txt",
+  "infra/bootstrap/README.md",
   "infra/bootstrap/main.tf",
+  "infra/bootstrap/provision-amplify.sh",
   "infra/bootstrap/tests/plan.tftest.hcl",
   "infra/prod/main.tf",
   "infra/prod/outputs.tf",
@@ -91,9 +94,11 @@ const RESOURCE_AUDIT_MANIFEST = [
   "scripts/ci/plan_django_tests.py",
   "scripts/ci/plan_e2e_tests.py",
   "scripts/ci/summarize_workflow_jobs.py",
+  "scripts/ci/validate_amplify_static_export.py",
   "scripts/ci/validate_deployment_contract.py",
   "scripts/ci/validate_dependabot_labels.py",
   "scripts/ci/validate_tool_versions.py",
+  "scripts/deploy/amplify-static-deploy.sh",
   "scripts/docker-build-frontend.sh",
   "scripts/run-db-tests.sh",
   "scripts/run-e2e.sh",
@@ -113,6 +118,13 @@ test.describe("repository resource audit", () => {
       expect(text, entry).not.toContain("clerk_");
       expect(text, entry).not.toContain("clerk.com");
     }
+  });
+
+  test("CI requires an Amplify static export", async () => {
+    const ci = fs.readFileSync(path.join(ROOT, ".github/workflows/ci.yml"), "utf8");
+    expect(ci).toContain("Frontend Amplify Static Export");
+    expect(ci).toContain("run build:amplify");
+    expect(ci).toContain("- frontend-amplify-build");
   });
 
   test("frontend static images and admin logo are loadable", async ({ page }) => {

@@ -66,6 +66,28 @@ variable "production_route53_zone_id" {
   description = "Route53 hosted-zone ID the production deployment may update"
 }
 
+variable "production_domain_name" {
+  type        = string
+  default     = "releviz.com"
+  description = "Canonical domain that the production Amplify deployment role may associate"
+
+  validation {
+    condition     = can(regex("^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$", var.production_domain_name))
+    error_message = "production_domain_name must be a lowercase fully qualified hostname."
+  }
+}
+
+variable "production_amplify_app_id" {
+  type        = string
+  default     = ""
+  description = "Exact production Amplify app ID. Leave empty only during the administrator-run provisioning phase; re-apply bootstrap with the prod amplify_app_id output before enabling GitHub deployments."
+
+  validation {
+    condition     = var.production_amplify_app_id == "" || can(regex("^d[a-z0-9]{1,19}$", var.production_amplify_app_id))
+    error_message = "production_amplify_app_id must be empty or an Amplify app ID matching d[a-z0-9]+ (maximum 20 characters)."
+  }
+}
+
 variable "production_secret_arns" {
   type        = list(string)
   description = "Application secret ARNs the production workflow may validate"
@@ -189,13 +211,95 @@ locals {
   production_role_prefix_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/releviz-prod-*"
   production_ecr_arn         = "arn:aws:ecr:${var.aws_region}:${data.aws_caller_identity.current.account_id}:repository/${var.production_ecr_repository_prefix}*"
   rds_managed_secret_arn     = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:rds!db-*"
-  eip_quota_arn              = "arn:aws:servicequotas:${var.aws_region}:${data.aws_caller_identity.current.account_id}:ec2/L-0263D0A3"
   terraform_state_bucket_arn = "arn:aws:s3:::${var.state_bucket_name}"
+  production_amplify_app_arn = "arn:aws:amplify:${var.aws_region}:${data.aws_caller_identity.current.account_id}:apps/${var.production_amplify_app_id}"
+  production_amplify_branch_arns = [
+    "${local.production_amplify_app_arn}/branches/candidate",
+    "${local.production_amplify_app_arn}/branches/main",
+  ]
+  production_amplify_job_arns = [
+    for branch_arn in local.production_amplify_branch_arns : "${branch_arn}/jobs/*"
+  ]
+  production_amplify_domain_arn = "${local.production_amplify_app_arn}/domains/${var.production_domain_name}"
+}
+
+locals {
+  # Amplify app and branch creation is deliberately excluded from the GitHub
+  # role. An administrator creates them with provision-amplify.sh, records the
+  # resulting app ID, and re-applies this bootstrap module with that exact ID.
+  # Until then, the production role receives no Amplify permissions.
+  production_amplify_policy_statements = [
+    for statement in jsondecode(jsonencode([
+      {
+        Sid    = "ManageExactProductionAmplifyApp"
+        Effect = "Allow"
+        Action = [
+          "amplify:GetApp",
+          "amplify:ListBranches",
+          "amplify:ListDomainAssociations",
+          "amplify:ListTagsForResource",
+          "amplify:UpdateApp",
+        ]
+        Resource = local.production_amplify_app_arn
+        Condition = {
+          StringEquals = {
+            "aws:ResourceTag/Project"     = "releviz"
+            "aws:ResourceTag/Environment" = "prod"
+          }
+        }
+      },
+      {
+        Sid    = "ManageExactProductionAmplifyBranches"
+        Effect = "Allow"
+        Action = [
+          "amplify:CreateDeployment",
+          "amplify:GetBranch",
+          "amplify:ListJobs",
+          "amplify:ListTagsForResource",
+          "amplify:StartDeployment",
+          "amplify:UpdateBranch",
+        ]
+        Resource = local.production_amplify_branch_arns
+        Condition = {
+          StringEquals = {
+            "aws:ResourceTag/Project"     = "releviz"
+            "aws:ResourceTag/Environment" = "prod"
+          }
+        }
+      },
+      {
+        # Amplify jobs do not expose resource-tag condition keys, so constrain
+        # them to the exact app and the two release branches.
+        Sid    = "ManageExactProductionAmplifyJobs"
+        Effect = "Allow"
+        Action = [
+          "amplify:GetJob",
+          "amplify:StartJob",
+          "amplify:StopJob",
+        ]
+        Resource = local.production_amplify_job_arns
+      },
+      {
+        # The protected release performs the one-time canonical-domain cutover
+        # only after both exact artifacts pass smoke tests. This write remains
+        # limited to one domain on one pre-provisioned app.
+        Sid    = "ManageExactProductionAmplifyDomain"
+        Effect = "Allow"
+        Action = [
+          "amplify:CreateDomainAssociation",
+          "amplify:GetDomainAssociation",
+          "amplify:ListTagsForResource",
+          "amplify:UpdateDomainAssociation",
+        ]
+        Resource = local.production_amplify_domain_arn
+      },
+    ])) : statement if var.production_amplify_app_id != ""
+  ]
 }
 
 resource "aws_iam_role" "production_deploy" {
   name                 = var.production_deploy_role_name
-  max_session_duration = 3600
+  max_session_duration = 10800
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -218,7 +322,7 @@ resource "aws_iam_role" "production_deploy" {
 locals {
   production_deploy_policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Sid    = "TerraformStateBucket"
         Effect = "Allow"
@@ -247,12 +351,7 @@ locals {
         Action   = ["ecr:GetAuthorizationToken", "sts:GetCallerIdentity"]
         Resource = "*"
       },
-      {
-        Sid      = "ElasticIpQuotaRead"
-        Effect   = "Allow"
-        Action   = "servicequotas:GetServiceQuota"
-        Resource = local.eip_quota_arn
-      },
+      ], local.production_amplify_policy_statements, [
       {
         Sid    = "ImmutableProductionImages"
         Effect = "Allow"
@@ -374,6 +473,7 @@ locals {
           "ecs:UpdateClusterSettings",
           "ecs:UpdateService",
           "elasticloadbalancing:AddTags",
+          "elasticloadbalancing:AddListenerCertificates",
           "elasticloadbalancing:CreateListener",
           "elasticloadbalancing:CreateLoadBalancer",
           "elasticloadbalancing:CreateRule",
@@ -389,6 +489,7 @@ locals {
           "elasticloadbalancing:ModifyTargetGroup",
           "elasticloadbalancing:ModifyTargetGroupAttributes",
           "elasticloadbalancing:RemoveTags",
+          "elasticloadbalancing:RemoveListenerCertificates",
           "elasticloadbalancing:SetSecurityGroups",
           "elasticloadbalancing:SetSubnets",
           "events:DeleteRule",
@@ -472,11 +573,12 @@ locals {
               "elasticloadbalancing.amazonaws.com",
               "rds.amazonaws.com",
               "ecs.application-autoscaling.amazonaws.com",
+              "amplify.amazonaws.com",
             ]
           }
         }
       },
-    ]
+    ])
   })
 }
 
@@ -534,4 +636,9 @@ output "lock_table_name" {
 
 output "production_deploy_role_arn" {
   value = aws_iam_role.production_deploy.arn
+}
+
+output "production_amplify_app_id" {
+  value       = var.production_amplify_app_id
+  description = "Exact Amplify app ID authorized for the production GitHub role; empty until the administrator completes provisioning"
 }

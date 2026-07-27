@@ -56,28 +56,29 @@ The weighted average formula: for each time slot, `sum(availability * weight) / 
 
 ## Tech Stack
 
-| Layer          | Technology                                                                          |
-| -------------- | ----------------------------------------------------------------------------------- |
-| Frontend       | [Next.js 15](https://nextjs.org/) (App Router) + React 18 + Material Web components |
-| Backend        | [Django 5](https://www.djangoproject.com/) + DRF + SimpleJWT                        |
-| Database       | PostgreSQL/RDS in deployed environments; SQLite for local development               |
-| Infrastructure | AWS ECS Fargate behind ALB (path-based routing)                                     |
-| IaC            | Terraform (versioned encrypted S3 state with native lock files)                     |
-| CI/CD          | GitHub Actions (required CI and protected manual production CD)                       |
+| Layer          | Technology                                                                                         |
+| -------------- | -------------------------------------------------------------------------------------------------- |
+| Frontend       | [Next.js 16](https://nextjs.org/) static export + React 19 + Material Web components               |
+| Backend        | [Django 5](https://www.djangoproject.com/) + DRF + SimpleJWT                                       |
+| Database       | PostgreSQL/RDS in deployed environments; SQLite for local development                              |
+| Infrastructure | AWS Amplify Hosting frontend; ECS Fargate backend behind an ALB; same-origin Amplify reverse proxy |
+| IaC            | Terraform (versioned encrypted S3 state with native lock files)                                    |
+| CI/CD          | GitHub Actions (required CI and protected manual Amplify/ECS production CD)                        |
 
 ## Project Structure
 
 ```
 releviz-monorepo/
   src/
-    frontend/       # Next.js 15 — UI only, no API routes
+    frontend/       # Next.js 16 — statically exported UI, no API routes
     backend/        # Django — API server, account auth, admin
     e2e/            # Playwright browser tests
   infra/
-    prod/           # HA production Terraform (split frontend/backend services)
+    prod/           # Amplify frontend, HA ECS backend, RDS, ALB, DNS, and monitoring
     bootstrap/      # Protected state backend and GitHub OIDC deploy role
   scripts/
     quality-gate.sh # Full lint + test + build for both workspaces
+    deploy/         # Bounded manual Amplify artifact deployment helper
   .github/workflows/
     ci.yml          # Parallel CI for both workspaces
     deploy-prod.yml # Protected, operator-confirmed production release
@@ -104,17 +105,20 @@ python src/backend/manage.py test --settings=config.settings.test
 npm --workspace=releviz-backend run test
 npm --workspace=releviz-frontend run test
 npm --workspace=releviz-frontend run build
+npm --workspace=releviz-frontend run build:amplify
 npm run quality-gate               # all of the above
 ```
 
 Pull requests use diff-scoped GitHub Actions jobs for the backend, frontend, E2E, and Terraform
 areas. Every push to `main` runs the full suite and produces one stable `CI Result` check. The
 pipeline includes workflow/configuration preflight checks, strict aggregate
-backend coverage, PostgreSQL migration and app tests, frontend coverage and bundle budgets,
-dependency/secret/SAST scans, SBOM and license reports, Terraform tests, and Docker image scans.
-Chromium, Firefox, and WebKit E2E runs and high/critical container findings block `CI Result`.
-The workflow runs for every pull request, including documentation-only changes, so branch
-protection always receives the same required check.
+backend coverage, PostgreSQL migration and app tests, frontend coverage and bundle budgets, a
+required Amplify static-export build, dependency/secret/SAST scans, SBOM and license reports,
+Terraform tests, and Docker image scans. The normal Next build and frontend Docker scan remain as
+development/E2E and migration-fallback validation; production frontend releases use the static
+artifact. Chromium, Firefox, and WebKit E2E runs and high/critical container findings block
+`CI Result`. The workflow runs for every pull request, including documentation-only changes, so
+branch protection always receives the same required check.
 
 ## Runtime Environment Variables
 
@@ -157,6 +161,12 @@ protection always receives the same required check.
 
 - `NEXT_PUBLIC_API_BASE_URL` — API base URL (empty = relative paths via proxy)
 - `BACKEND_URL` — dev proxy target (default: `http://localhost:4000`)
+- `AMPLIFY_STATIC_EXPORT` — set by `build:amplify` to produce `src/frontend/out`; do not set for the
+  local standalone Next server
+
+Production builds keep `NEXT_PUBLIC_API_BASE_URL` empty. Amplify serves the static UI and proxies
+`/api`, `/authn`, `/admin`, and `/static` to `https://origin.releviz.com`, so browser-visible URLs,
+`HttpOnly` cookies, and CSRF requests remain same-origin.
 
 Authentication is handled by the Django backend using email/password accounts, email verification
 codes, short-lived in-memory JWT access credentials, an `HttpOnly` refresh cookie bound to a
@@ -190,7 +200,7 @@ docker run --rm -p 4000:4000 \
   -e DJANGO_SETTINGS_MODULE=config.settings.local \
   releviz-backend:local
 
-# Frontend
+# Frontend development/migration-fallback image (production traffic uses Amplify)
 scripts/docker-build-frontend.sh releviz-frontend:local
 docker run --rm -p 3000:3000 releviz-frontend:local
 ```
@@ -201,8 +211,28 @@ docker run --rm -p 3000:3000 releviz-frontend:local
 
 Production CD is a protected manual workflow on `main`. It requires the exact confirmation
 `DEPLOY`, verifies that the selected immutable commit passed `CI Result`, assumes the production
-AWS role through GitHub OIDC, builds SHA-tagged images from `src/backend` and `src/frontend`, and
-applies reviewed Terraform plans before and after DNS cutover. Review
+AWS role through GitHub OIDC, builds and pushes only the SHA-tagged backend image, and creates one
+SHA-identified static ZIP from `src/frontend/out`. The workflow manually deploys that exact ZIP to
+an Amplify `candidate` branch, verifies the frontend and same-origin backend/admin proxy, promotes
+the same ZIP to Amplify `main`, and only then associates `releviz.com`. Two reviewed plans first
+remove public ALB HTTPS ingress and then roll the backend to trust the CloudFront-to-ALB proxy
+chain, with health checks and automatic state restoration between stages. The Amplify app is not
+connected to GitHub and does not use a PAT or an auto-build webhook.
+
+The static build must match `src/frontend/amplify-routes.json`. Candidate smoke tests exercise
+clean and trailing-slash routes, deployed JavaScript, query-preserving redirects, protected
+non-GET auth requests, and a cookie/CSRF Django admin POST. After Amplify becomes canonical, the
+base plan fails closed if it would change global app, production-branch, or domain configuration before
+candidate verification; use the documented ECS fallback for such configuration migrations.
+
+The existing ECS frontend image tag is discovered and preserved as a hot migration rollback; CD
+does not build or roll that service. The workflow also retains each Amplify ZIP and SHA256 file for
+90 days and checks `/release.json` against the exact selected SHA at candidate,
+production-default, canonical, and post-hardening stages. Later releases capture the current
+successful Amplify job and automatically retry it if any release stage fails after the new `main`
+deployment. The first cutover also snapshots the exact Route 53 ALB alias; if a later migration
+stage fails, CD restores public ALB ingress and proxy trust before atomically restoring that alias.
+The protected Amplify domain association remains available for a safe retry. Review
 [`docs/deployment-rollback.md`](docs/deployment-rollback.md) before every live release.
 
 Run `infra/bootstrap` once with an administrator to create the versioned state bucket and the
@@ -212,13 +242,28 @@ first apply, then migrate the local bootstrap state to `bootstrap/terraform.tfst
 bucket. Set its `production_deploy_role_arn` output as `AWS_PROD_ROLE_ARN`; do not store long-lived
 production AWS keys in GitHub.
 
+Existing installations must first run the administrator-only command:
+
+```bash
+export EXPECTED_AWS_ACCOUNT_ID="<12-digit-production-account-id>"
+amplify_app_id="$(infra/bootstrap/provision-amplify.sh)"
+```
+
+Then re-apply `infra/bootstrap` with that exact `production_amplify_app_id` before the first
+Amplify release. The script verifies the active administrator identity with AWS STS before any
+Amplify read or write. This binds the scoped production role to the one approved app and its
+release resources.
+
 ### GitHub Actions Variables
 
 - `AWS_REGION` — `us-west-2`
 - `AWS_PROD_ROLE_ARN` — output of `infra/bootstrap`; trusted only for the `Production` Environment
 - `PROD_TF_STATE_BUCKET` — protected state bucket created by `infra/bootstrap`
+- `PROD_AMPLIFY_APP_ID` — exact administrator-provisioned `releviz-prod-frontend` app ID authorized
+  by bootstrap and consumed as `TF_VAR_amplify_app_id`
 - `ECR_PROD_BACKEND` — `releviz-prod-backend`
-- `ECR_PROD_FRONTEND` — `releviz-prod-frontend`
+- `ECR_PROD_FRONTEND` — `releviz-prod-frontend`; used only to validate and preserve the existing
+  ECS migration fallback
 - `PROD_DOMAIN` — `releviz.com`
 - `PROD_ROUTE53_ZONE_ID` — hosted-zone ID for `releviz.com`
 - `PROD_DJANGO_SECRET_KEY_ARN`, `PROD_DJANGO_FIELD_ENCRYPTION_KEY_ARN`, and

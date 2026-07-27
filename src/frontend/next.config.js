@@ -1,7 +1,6 @@
-/** @type {import('next').NextConfig} */
-const nextConfig = {
-  output: "standalone",
-  skipTrailingSlashRedirect: true,
+const isAmplifyStaticExport = process.env.AMPLIFY_STATIC_EXPORT === "1";
+
+const serverConfig = {
   async headers() {
     return [
       {
@@ -54,6 +53,17 @@ const nextConfig = {
       { source: "/authn/:path*", destination: `${backendUrl}/authn/:path*` },
     ];
   },
+};
+
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  output: isAmplifyStaticExport ? "export" : "standalone",
+  skipTrailingSlashRedirect: true,
+  ...(isAmplifyStaticExport
+    ? {
+        images: { unoptimized: true },
+      }
+    : serverConfig),
 };
 
 module.exports = nextConfig;

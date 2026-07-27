@@ -45,14 +45,17 @@ substitute for the private metrics bearer token.
 Production Terraform provides:
 
 - ALB-generated 5xx alarm
+- Amplify Hosting 5xx alarm
 - separate backend/frontend target 5xx alarms
 - separate backend/frontend ECS running-task alarms
 - JSON-log metric and alarm for `request_exception`
 - JSON-log metric and alarm for `email_delivery_failed` with `status=permanent_failure`
 
 Production plans reject an empty `alarm_action_arns`; configure at least one monitored SNS topic
-and prove notification delivery before launch. Backend and frontend logs use separate CloudWatch log
-groups with 30-day retention.
+and prove notification delivery before launch. The backend and preserved ECS frontend fallback use
+separate CloudWatch log groups with 30-day retention. The active static frontend is monitored
+through Amplify deployment jobs, `/release.json`, canonical availability smokes, and the ALB/API
+alarms for its same-origin proxy routes.
 
 Product metrics are documented in [product-analytics.md](product-analytics.md). Access
 `GET /api/metrics` with the dedicated bearer token:
@@ -81,6 +84,21 @@ For ECS running-task alarms:
    connectivity.
 2. Confirm that the deployment circuit breaker completed or rolled back.
 3. Avoid reducing the minimum healthy percentage to force a rollout.
+
+For an Amplify frontend or proxy failure:
+
+1. Compare canonical `/release.json` with the approved release SHA and inspect the active Amplify
+   `main` job.
+2. Test `/`, `/api/health/live`, and `/admin/` through the Amplify branch default domain to
+   distinguish custom-domain problems from artifact or origin problems.
+3. Inspect the domain-association status and backend target health. Do not open the ALB origin to
+   the internet as a diagnostic shortcut.
+4. Retry the last known-good Amplify job by following
+   [deployment-rollback.md](deployment-rollback.md).
+5. Compare the AWS-managed CloudFront origin-facing prefix-list version with the CIDRs in the
+   active backend task definition. The ALB security group follows prefix-list updates
+   automatically, but a changed CIDR set requires a normal production release to roll the
+   snapshotted backend allowlist.
 
 For permanent email failures:
 

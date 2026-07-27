@@ -99,6 +99,9 @@ class SettingsImportTests(SimpleTestCase):
             "DJANGO_FIELD_ENCRYPTION_KEY": "test encryption key",
             "METRICS_BEARER_TOKEN": "test-metrics-token",
             "FEEDBACK_SUBMISSION_RETENTION_DAYS": "365",
+            "AUTH_TRUSTED_PROXY_COUNT": "2",
+            "AUTH_TRUSTED_PROXY_CIDRS": "203.0.113.0/24,2001:db8::/32",
+            "AUTH_TRUSTED_PROXY_CIDR_HOPS": "1",
         }
         for invalid_retention in ["invalid", "0"]:
             sys.modules.pop("config.settings.production", None)
@@ -111,6 +114,40 @@ class SettingsImportTests(SimpleTestCase):
                     ImproperlyConfigured,
                     "FEEDBACK_SUBMISSION_RETENTION_DAYS must be a positive integer.",
                 ):
+                    importlib.import_module("config.settings.production")
+
+        for invalid_proxy_env, expected_message in [
+            (
+                {"AUTH_TRUSTED_PROXY_CIDR_HOPS": "not-a-number"},
+                "AUTH_TRUSTED_PROXY_CIDR_HOPS must be a non-negative integer.",
+            ),
+            (
+                {
+                    "AUTH_TRUSTED_PROXY_CIDRS": "",
+                    "AUTH_TRUSTED_PROXY_CIDR_HOPS": "1",
+                },
+                "AUTH_TRUSTED_PROXY_CIDRS is required",
+            ),
+            (
+                {"AUTH_TRUSTED_PROXY_CIDR_HOPS": "-1"},
+                "AUTH_TRUSTED_PROXY_CIDR_HOPS must be a non-negative integer.",
+            ),
+            (
+                {
+                    "AUTH_TRUSTED_PROXY_COUNT": "2",
+                    "AUTH_TRUSTED_PROXY_CIDRS": "",
+                    "AUTH_TRUSTED_PROXY_CIDR_HOPS": "0",
+                },
+                "AUTH_TRUSTED_PROXY_CIDRS is required when AUTH_TRUSTED_PROXY_COUNT exceeds one.",
+            ),
+            (
+                {"AUTH_TRUSTED_PROXY_CIDRS": "not-a-network"},
+                "AUTH_TRUSTED_PROXY_CIDRS must contain valid IPv4 or IPv6 networks.",
+            ),
+        ]:
+            sys.modules.pop("config.settings.production", None)
+            with patch.dict(os.environ, {**env, **invalid_proxy_env}, clear=True):
+                with self.assertRaisesMessage(ImproperlyConfigured, expected_message):
                     importlib.import_module("config.settings.production")
 
         sys.modules.pop("config.settings.production", None)
@@ -131,6 +168,11 @@ class SettingsImportTests(SimpleTestCase):
         self.assertTrue(module.USE_SES_EMAIL_PROVIDER)
         self.assertEqual(module.METRICS_BEARER_TOKEN, "test-metrics-token")
         self.assertEqual(module.FEEDBACK_SUBMISSION_RETENTION.days, 365)
+        self.assertEqual(module.AUTH_TRUSTED_PROXY_CIDR_HOPS, 1)
+        self.assertEqual(
+            module.AUTH_TRUSTED_PROXY_CIDRS,
+            ["203.0.113.0/24", "2001:db8::/32"],
+        )
 
     def test_asgi_and_wsgi_imports(self):
         asgi = importlib.import_module("config.asgi")

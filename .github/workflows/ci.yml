@@ -621,6 +621,54 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
 
+  frontend-amplify-build:
+    name: Frontend Amplify Static Export
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [preflight, changes]
+    if: ${{ needs.changes.outputs.frontend == 'true' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci --workspace=releviz-frontend
+
+      - name: Build static Amplify artifact
+        env:
+          NEXT_PUBLIC_API_BASE_URL: ""
+        run: |
+          set -euo pipefail
+          npm --workspace=releviz-frontend run build:amplify
+          python3 scripts/ci/validate_amplify_static_export.py \
+            --out src/frontend/out \
+            --manifest src/frontend/amplify-routes.json
+          server_only="$(
+            find src/frontend/out -type f \
+              \( -name 'server.js' -o -name '*.nft.json' \) \
+              -print
+          )"
+          if [ -n "$server_only" ]; then
+            echo "::error::Static Amplify output contains server-only artifacts:"
+            echo "$server_only"
+            exit 1
+          fi
+
+      - name: Upload Amplify static export
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: frontend-amplify-static
+          path: src/frontend/out
+          if-no-files-found: error
+
   frontend-bundle-size:
     name: Frontend Bundle Size
     runs-on: ubuntu-latest
@@ -707,6 +755,7 @@ jobs:
       - frontend-lint
       - frontend-unit-coverage
       - frontend-build
+      - frontend-amplify-build
       - frontend-bundle-size
       - frontend-security-audit
       - frontend-supply-chain-report
@@ -1176,6 +1225,7 @@ jobs:
     needs:
       - backend-docker-build
       - frontend-docker-build
+      - frontend-amplify-build
       - infrastructure-plan
       - changes
     if: ${{ always() }}
@@ -1200,7 +1250,7 @@ jobs:
               for name, result in failed.items():
                   print(f"{name}: {result}")
               sys.exit(1)
-          print("Docker and infrastructure checks passed or were not required.")
+          print("Docker, Amplify, and infrastructure checks passed or were not required.")
           PY
 
   e2e-plan:

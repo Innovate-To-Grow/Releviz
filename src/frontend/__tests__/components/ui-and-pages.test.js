@@ -119,8 +119,12 @@ import FeedbackPage, { safeFeedbackPath } from "@/app/feedback/page";
 import PrivacyPage, { metadata as privacyMetadata } from "@/app/privacy/page";
 import SupportPage, { metadata as supportMetadata } from "@/app/support/page";
 import TermsPage, { metadata as termsMetadata } from "@/app/terms/page";
-import SignInPage from "@/app/sign-in/[[...sign-in]]/page";
-import SignUpPage from "@/app/sign-up/[[...sign-up]]/page";
+import SignInPage, {
+  generateStaticParams as generateSignInStaticParams,
+} from "@/app/sign-in/[[...sign-in]]/page";
+import SignUpPage, {
+  generateStaticParams as generateSignUpStaticParams,
+} from "@/app/sign-up/[[...sign-up]]/page";
 import { confirmPasswordReset, requestPasswordResetCode } from "@/lib/api/auth";
 import { submitFeedback } from "@/lib/api/feedback";
 import { navigateTo } from "@/lib/navigation";
@@ -528,6 +532,7 @@ describe("app pages", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     searchParams = new URLSearchParams();
+    delete process.env.AMPLIFY_STATIC_EXPORT;
   });
 
   test("wrapper pages render expected clients and redirects", () => {
@@ -558,6 +563,26 @@ describe("app pages", () => {
     SignUpPage();
     expect(redirect).toHaveBeenCalledWith("/login");
     expect(redirect).toHaveBeenCalledWith("/signup");
+    expect(generateSignInStaticParams()).toEqual([{ "sign-in": [] }]);
+    expect(generateSignUpStaticParams()).toEqual([{ "sign-up": [] }]);
+  });
+
+  test("legacy auth pages use client redirects in the Amplify static export", async () => {
+    process.env.AMPLIFY_STATIC_EXPORT = "1";
+    const signIn = render(<SignInPage />);
+    expect(screen.getByRole("link", { name: "Continue to log in" })).toHaveAttribute(
+      "href",
+      "/login"
+    );
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/login"));
+    signIn.unmount();
+
+    render(<SignUpPage />);
+    expect(screen.getByRole("link", { name: "Continue to sign up" })).toHaveAttribute(
+      "href",
+      "/signup"
+    );
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/signup"));
   });
 
   test("privacy, terms, and support pages provide working entry points", () => {

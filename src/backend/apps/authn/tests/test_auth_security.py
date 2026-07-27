@@ -472,6 +472,37 @@ class AuthAbuseControlTests(TestCase):
         with override_settings(AUTH_TRUSTED_PROXY_COUNT=1):
             proxied = self.request(HTTP_X_FORWARDED_FOR="192.0.2.1, 203.0.113.8")
             self.assertEqual(client_ip(proxied), "203.0.113.8")
+        with override_settings(AUTH_TRUSTED_PROXY_COUNT=2):
+            cloudfront = self.request(HTTP_X_FORWARDED_FOR="192.0.2.1, 203.0.113.8")
+            normalized_cloudfront = self.request(HTTP_X_FORWARDED_FOR="192.0.2.1")
+            self.assertEqual(client_ip(cloudfront), "192.0.2.1")
+            self.assertEqual(client_ip(normalized_cloudfront), "198.51.100.10")
+        with override_settings(
+            AUTH_TRUSTED_PROXY_COUNT=1,
+            AUTH_TRUSTED_PROXY_CIDRS=["203.0.113.0/24"],
+            AUTH_TRUSTED_PROXY_CIDR_HOPS=1,
+        ):
+            direct_with_forged_prefix = self.request(
+                HTTP_X_FORWARDED_FOR="192.0.2.1, 198.51.100.10"
+            )
+            cloudfront_with_forged_prefix = self.request(
+                HTTP_X_FORWARDED_FOR="192.0.2.1, 198.51.100.10, 203.0.113.8"
+            )
+            malformed_rightmost = self.request(HTTP_X_FORWARDED_FOR="192.0.2.1, not-an-ip")
+            trusted_proxy_without_client = self.request(HTTP_X_FORWARDED_FOR="203.0.113.8")
+            self.assertEqual(client_ip(direct_with_forged_prefix), "198.51.100.10")
+            self.assertEqual(client_ip(cloudfront_with_forged_prefix), "198.51.100.10")
+            self.assertEqual(client_ip(malformed_rightmost), "unknown")
+            self.assertEqual(client_ip(trusted_proxy_without_client), "unknown")
+        with override_settings(
+            AUTH_TRUSTED_PROXY_COUNT=1,
+            AUTH_TRUSTED_PROXY_CIDRS="invalid-network,203.0.113.0/24",
+            AUTH_TRUSTED_PROXY_CIDR_HOPS=1,
+        ):
+            string_configured_cidrs = self.request(
+                HTTP_X_FORWARDED_FOR="198.51.100.10, 203.0.113.8"
+            )
+            self.assertEqual(client_ip(string_configured_cidrs), "198.51.100.10")
         self.assertEqual(client_ip(self.request(REMOTE_ADDR="not-an-ip")), "unknown")
 
         self.assertTrue(consume_request_rate_limit("missing", request).allowed)

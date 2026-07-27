@@ -22,6 +22,12 @@ npm --workspace=releviz-frontend run test:coverage
 echo "=== Frontend: build ==="
 npm --workspace=releviz-frontend run build
 
+echo "=== Frontend: Amplify static export ==="
+npm --workspace=releviz-frontend run build:amplify
+python3 scripts/ci/validate_amplify_static_export.py \
+  --out src/frontend/out \
+  --manifest src/frontend/amplify-routes.json
+
 echo "=== Repository: resource audit ==="
 npm run test:audit
 

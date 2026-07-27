@@ -135,7 +135,9 @@ class RelevizApiTests(TestCase):
         self.assertEqual(res.data["participant"]["hidden"], 0)
 
     def test_health_and_missing_or_unknown_event_errors(self):
-        self.assertEqual(self.client.get("/api/health/live").data, {"ok": True})
+        live = self.client.get("/api/health/live")
+        self.assertEqual(live.data, {"ok": True})
+        self.assertIn("no-store", live["Cache-Control"])
         for path in ["/api/health", "/api/health/ready"]:
             response = self.client.get(path)
             self.assertEqual(response.status_code, 200)
