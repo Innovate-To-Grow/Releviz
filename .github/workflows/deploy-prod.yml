@@ -651,10 +651,17 @@ jobs:
               --app-id "$AMPLIFY_APP_ID" \
               --branch-name "$PRODUCTION_BRANCH" \
               --max-results 50 \
-              --query 'jobSummaries[?status==`SUCCEED`] | [0].jobId' \
-              --output text
+              --output json |
+              jq -r '
+                [
+                  (.jobSummaries // [])[]
+                  | select(.status == "SUCCEED")
+                ]
+                | sort_by(.endTime // .startTime // "")
+                | last
+                | .jobId // empty
+              '
           )"
-          if [ "$previous_job_id" = "None" ]; then previous_job_id=""; fi
           previous_sha=""
           if [ "$DOMAIN_PREEXISTING" = "true" ] &&
             [ "$CANONICAL_ROUTES_TO_ALB" != "true" ]; then
