@@ -1,12 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useState } from "react";
 import AppButton from "@/components/ui/AppButton";
 import { useAuth } from "@/components/auth/AuthContext";
-import { navigateTo } from "@/lib/navigation";
+import { navigateTo, safeNextPath } from "@/lib/navigation";
 
-export default function Signup() {
+function SignupContent() {
+  const searchParams = useSearchParams();
+  const next = safeNextPath(searchParams.get("next"));
   const { signup, verifySignup, loading: authLoading } = useAuth();
   const [step, setStep] = useState("details");
   const [form, setForm] = useState({
@@ -58,7 +61,7 @@ export default function Signup() {
     setLoading(true);
     try {
       await verifySignup({ email: form.email, code: form.code });
-      navigateTo("/dashboard");
+      navigateTo(next);
     } catch (err) {
       setError(err.message || "Unable to verify code.");
     } finally {
@@ -99,11 +102,11 @@ export default function Signup() {
               </label>
             </div>
             <label>
-              Organization
+              Organization <span className="auth-optional">(optional)</span>
               <input
+                aria-label="Organization"
                 value={form.organization}
                 onChange={(event) => setField("organization", event.target.value)}
-                required
               />
             </label>
             <label>
@@ -162,9 +165,24 @@ export default function Signup() {
               : "Verify and continue"}
         </AppButton>
         <p className="auth-switch">
-          Already have an account? <Link href="/login">Log in</Link>
+          Already have an account?{" "}
+          <Link href={`/login?next=${encodeURIComponent(next)}`}>Log in</Link>
         </p>
       </form>
     </main>
+  );
+}
+
+export default function Signup() {
+  return (
+    <Suspense
+      fallback={
+        <main className="auth-page">
+          <div className="auth-panel">Loading...</div>
+        </main>
+      }
+    >
+      <SignupContent />
+    </Suspense>
   );
 }

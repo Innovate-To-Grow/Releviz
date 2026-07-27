@@ -24,11 +24,14 @@ function UserMenu() {
 
   if (!user) {
     return (
-      <Link href="/login">
-        <AppButton variant="outlined" icon={<MdLogin />}>
-          Login
-        </AppButton>
-      </Link>
+      <nav className="app-header-auth" aria-label="Account">
+        <Link className="app-header-login" href="/login">
+          <MdLogin aria-hidden="true" /> Log in
+        </Link>
+        <Link className="app-header-signup" href="/signup">
+          Sign up
+        </Link>
+      </nav>
     );
   }
 
@@ -123,6 +126,7 @@ function UserMenu() {
 export default function AppHeader({ pageTitle, contextLabel }) {
   return (
     <header
+      className="app-header"
       style={{
         display: "flex",
         alignItems: "center",

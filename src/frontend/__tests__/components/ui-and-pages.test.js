@@ -63,6 +63,14 @@ jest.mock("@/lib/api/feedback", () => ({
 
 jest.mock("@/lib/navigation", () => ({
   navigateTo: jest.fn(),
+  safeNextPath: (value, fallback = "/dashboard") => {
+    if (!value || !value.startsWith("/") || value.startsWith("//")) return fallback;
+    const baseUrl = "https://releviz.invalid";
+    const resolved = new URL(value, baseUrl);
+    return resolved.origin === baseUrl
+      ? `${resolved.pathname}${resolved.search}${resolved.hash}`
+      : fallback;
+  },
 }));
 
 jest.mock(
@@ -486,12 +494,13 @@ describe("role-aware headers", () => {
   test("AppHeader handles loading and signed-out states", () => {
     useAuth.mockReturnValue({ user: null, loading: true, logout: jest.fn() });
     const loading = render(<AppHeader pageTitle="My Dashboard" />);
-    expect(screen.queryByRole("link", { name: "Login" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Log in" })).not.toBeInTheDocument();
     loading.unmount();
 
     useAuth.mockReturnValue({ user: null, loading: false, logout: jest.fn() });
     render(<AppHeader pageTitle="My Dashboard" />);
-    expect(screen.getByRole("link", { name: "Login" })).toHaveAttribute("href", "/login");
+    expect(screen.getByRole("link", { name: "Log in" })).toHaveAttribute("href", "/login");
+    expect(screen.getByRole("link", { name: "Sign up" })).toHaveAttribute("href", "/signup");
   });
 });
 
@@ -644,6 +653,10 @@ describe("app pages", () => {
     expect(screen.getByRole("link", { name: "Forgot your password?" })).toHaveAttribute(
       "href",
       "/recover"
+    );
+    expect(screen.getByRole("link", { name: "Sign up" })).toHaveAttribute(
+      "href",
+      "/signup?next=%2Fdashboard"
     );
 
     firstLogin.unmount();
@@ -906,6 +919,30 @@ describe("app pages", () => {
     await userEvent.type(screen.getAllByLabelText("Confirm password").at(-1), "password123");
     await userEvent.click(screen.getAllByRole("button", { name: "Send verification code" }).at(-1));
     expect(await screen.findByText("Unable to start registration.")).toBeInTheDocument();
+  });
+
+  test("Signup preserves the intended destination through verification and login", async () => {
+    const signup = jest.fn().mockResolvedValue({});
+    const verifySignup = jest.fn().mockResolvedValue({});
+    useAuth.mockReturnValue({ signup, verifySignup, loading: false });
+    searchParams = new URLSearchParams("next=/event?code=ABC123");
+    render(<SignupPage />);
+
+    expect(screen.getByRole("link", { name: "Log in" })).toHaveAttribute(
+      "href",
+      "/login?next=%2Fevent%3Fcode%3DABC123"
+    );
+
+    await userEvent.type(screen.getByLabelText("First name"), "Ada");
+    await userEvent.type(screen.getByLabelText("Last name"), "Lovelace");
+    await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
+    await userEvent.type(screen.getByLabelText("Password"), "password123");
+    await userEvent.type(screen.getByLabelText("Confirm password"), "password123");
+    await userEvent.click(screen.getByRole("button", { name: "Send verification code" }));
+    await userEvent.type(await screen.findByLabelText("Verification code"), "123456");
+    await userEvent.click(screen.getByRole("button", { name: "Verify and continue" }));
+
+    await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/event?code=ABC123"));
   });
 
   test("Settings redirects unauthenticated users and saves profiles", async () => {

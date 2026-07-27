@@ -687,6 +687,70 @@ function OrganizerView() {
     <div className="page-pad" style={{ maxWidth: "1400px", margin: "0 auto" }}>
       <OrganizerHeader onRefresh={() => setRefreshKey((key) => key + 1)} />
 
+      <LifecyclePanel
+        event={event}
+        activeParticipantCount={activeParticipants.length}
+        submittedCount={submittedCount}
+        countedResponseTotal={countedResponseTotal}
+        unansweredParticipantTotal={unansweredParticipantTotal}
+        excludedParticipantTotal={excludedParticipantTotal}
+        deadline={lifecycleDeadline}
+        setDeadline={setLifecycleDeadline}
+        changing={changingLifecycle}
+        onChange={handleLifecycleChange}
+        error={lifecycleError}
+      />
+
+      <InvitationsPanel
+        invitations={invitations}
+        inviteEmails={inviteEmails}
+        setInviteEmails={setInviteEmails}
+        inviteMessage={inviteMessage}
+        setInviteMessage={setInviteMessage}
+        inviteStatus={inviteStatus}
+        inviteError={inviteError}
+        sendingInvites={sendingInvites}
+        sendingReminders={sendingReminders}
+        onSendInvitations={handleSendInvitations}
+        onSendReminders={handleSendReminders}
+      />
+
+      <div className="two-pane" style={{ marginBottom: "24px" }}>
+        <div style={{ flex: "1 1 350px", display: "flex", flexDirection: "column", gap: "24px" }}>
+          <OrganizerSchedulePanel
+            event={event}
+            mode={mode}
+            user={user}
+            joined={myJoined}
+            participantName={myParticipantName}
+            inperson={myInperson}
+            virtual={myVirtual}
+            responsesOpen={responsesOpen}
+            saving={mySaving}
+            onJoin={handleMyJoin}
+            onInpersonPaint={handleMyInpersonPaint}
+            onVirtualPaint={handleMyVirtualPaint}
+            onSave={handleMySave}
+          />
+        </div>
+
+        <OrganizerResultsPanel
+          event={event}
+          mode={mode}
+          activeParticipants={activeParticipants}
+          weights={weights}
+          weightedInperson={weightedInperson}
+          weightedVirtual={weightedVirtual}
+          inpersonDetails={inpersonDetails}
+          virtualDetails={virtualDetails}
+          countedResponseTotal={countedResponseTotal}
+          unansweredParticipantTotal={unansweredParticipantTotal}
+          excludedParticipantTotal={excludedParticipantTotal}
+          totalWeight={totalWeight}
+          requiredConflictTotal={requiredConflictTotal}
+        />
+      </div>
+
       <RecommendationsPanel
         event={event}
         recommendations={recommendations}
@@ -716,91 +780,27 @@ function OrganizerView() {
         error={finalizationError}
       />
 
-      <LifecyclePanel
-        event={event}
-        activeParticipantCount={activeParticipants.length}
-        submittedCount={submittedCount}
-        countedResponseTotal={countedResponseTotal}
-        unansweredParticipantTotal={unansweredParticipantTotal}
-        excludedParticipantTotal={excludedParticipantTotal}
-        deadline={lifecycleDeadline}
-        setDeadline={setLifecycleDeadline}
-        changing={changingLifecycle}
-        onChange={handleLifecycleChange}
-        error={lifecycleError}
+      <ParticipantManagerPanel
+        activeParticipants={activeParticipants}
+        hiddenParticipants={hiddenParticipants}
+        filteredParticipants={filteredParticipants}
+        groups={groups}
+        groupNames={groupNames}
+        weights={weights}
+        searchQuery={searchQuery}
+        setSearchQuery={setSearchQuery}
+        showHidden={showHidden}
+        setShowHidden={setShowHidden}
+        hidingParticipantId={hidingParticipantId}
+        onCheckAll={handleCheckAll}
+        onIncludedChange={handleIncludedChange}
+        onWeightChange={handleWeightChange}
+        onRequiredChange={handleRequiredChange}
+        onGroupChange={handleGroupChange}
+        onMoveParticipant={handleMoveParticipant}
+        onHideParticipant={handleHideParticipant}
+        onUnhideParticipant={handleUnhideParticipant}
       />
-
-      <InvitationsPanel
-        invitations={invitations}
-        inviteEmails={inviteEmails}
-        setInviteEmails={setInviteEmails}
-        inviteMessage={inviteMessage}
-        setInviteMessage={setInviteMessage}
-        inviteStatus={inviteStatus}
-        inviteError={inviteError}
-        sendingInvites={sendingInvites}
-        sendingReminders={sendingReminders}
-        onSendInvitations={handleSendInvitations}
-        onSendReminders={handleSendReminders}
-      />
-
-      <div className="two-pane">
-        <div style={{ flex: "1 1 350px", display: "flex", flexDirection: "column", gap: "24px" }}>
-          <OrganizerSchedulePanel
-            event={event}
-            mode={mode}
-            user={user}
-            joined={myJoined}
-            participantName={myParticipantName}
-            inperson={myInperson}
-            virtual={myVirtual}
-            responsesOpen={responsesOpen}
-            saving={mySaving}
-            onJoin={handleMyJoin}
-            onInpersonPaint={handleMyInpersonPaint}
-            onVirtualPaint={handleMyVirtualPaint}
-            onSave={handleMySave}
-          />
-
-          <ParticipantManagerPanel
-            activeParticipants={activeParticipants}
-            hiddenParticipants={hiddenParticipants}
-            filteredParticipants={filteredParticipants}
-            groups={groups}
-            groupNames={groupNames}
-            weights={weights}
-            searchQuery={searchQuery}
-            setSearchQuery={setSearchQuery}
-            showHidden={showHidden}
-            setShowHidden={setShowHidden}
-            hidingParticipantId={hidingParticipantId}
-            onCheckAll={handleCheckAll}
-            onIncludedChange={handleIncludedChange}
-            onWeightChange={handleWeightChange}
-            onRequiredChange={handleRequiredChange}
-            onGroupChange={handleGroupChange}
-            onMoveParticipant={handleMoveParticipant}
-            onHideParticipant={handleHideParticipant}
-            onUnhideParticipant={handleUnhideParticipant}
-          />
-        </div>
-
-        <OrganizerResultsPanel
-          event={event}
-          mode={mode}
-          activeParticipants={activeParticipants}
-          weights={weights}
-          weightedInperson={weightedInperson}
-          weightedVirtual={weightedVirtual}
-          inpersonDetails={inpersonDetails}
-          virtualDetails={virtualDetails}
-          countedResponseTotal={countedResponseTotal}
-          unansweredParticipantTotal={unansweredParticipantTotal}
-          excludedParticipantTotal={excludedParticipantTotal}
-          totalWeight={totalWeight}
-          requiredConflictTotal={requiredConflictTotal}
-        />
-      </div>
 
       {hideError && (
         <p

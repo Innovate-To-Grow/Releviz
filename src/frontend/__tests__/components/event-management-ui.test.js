@@ -258,6 +258,7 @@ describe("organizer event management UI", () => {
 
     render(<CreateEvent operation="edit" />);
     expect(await screen.findByRole("heading", { name: "Edit event" })).toBeInTheDocument();
+    expect(screen.getByText("Advanced options").closest("details")).toHaveAttribute("open");
     const nameField = document.querySelector('md-outlined-text-field[label="Event Name"]');
     expect(nameField).toHaveAttribute("value", baseEvent.name);
     setCustomElementValue(nameField, "Updated planning");
@@ -340,6 +341,14 @@ describe("organizer event management UI", () => {
       event: { ...baseEvent, code: "CREATED1" },
     });
     render(<CreateEvent />);
+    expect(screen.getByRole("heading", { name: "Schedule" })).toBeInTheDocument();
+    const advancedOptions = screen.getByText("Advanced options").closest("details");
+    expect(advancedOptions).not.toHaveAttribute("open");
+    await userEvent.click(screen.getByText("Advanced options"));
+    expect(advancedOptions).toHaveAttribute("open");
+    expect(screen.getByRole("heading", { name: "Meeting details" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Time settings" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Response settings" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Create Event" }));
     expect(await screen.findByText("Event name is required")).toBeInTheDocument();
 

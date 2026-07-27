@@ -1,4 +1,4 @@
-import { navigateTo, reloadPage, replaceUrl } from "@/lib/navigation";
+import { navigateTo, reloadPage, replaceUrl, safeNextPath } from "@/lib/navigation";
 
 describe("browser navigation helpers", () => {
   test("navigates through the provided location object", () => {
@@ -23,5 +23,13 @@ describe("browser navigation helpers", () => {
     replaceUrl("/event?code=EVENT123", historyObject);
 
     expect(historyObject.replaceState).toHaveBeenCalledWith({}, "", "/event?code=EVENT123");
+  });
+
+  test("keeps internal next paths and rejects external or missing paths", () => {
+    expect(safeNextPath("/event?code=EVENT123")).toBe("/event?code=EVENT123");
+    expect(safeNextPath("//evil.example")).toBe("/dashboard");
+    expect(safeNextPath("/\\evil.example")).toBe("/dashboard");
+    expect(safeNextPath("https://evil.example")).toBe("/dashboard");
+    expect(safeNextPath(null, "/")).toBe("/");
   });
 });

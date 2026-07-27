@@ -114,6 +114,7 @@ async function loginWithEmailCode(page, email) {
   await page.getByLabel("Verification code").fill(code);
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(page.getByRole("heading", { name: "My Dashboard" })).toBeVisible();
   const alert = await latestEmailFor(
     email,
     startedAt,
@@ -129,6 +130,7 @@ async function loginWithPassword(page, email, password = "Password123!", verifyA
   await page.getByLabel("Password").fill(password);
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(page.getByRole("heading", { name: "My Dashboard" })).toBeVisible();
   if (!verifyAlert) return;
   const alert = await latestEmailFor(
     email,
@@ -140,6 +142,12 @@ async function loginWithPassword(page, email, password = "Password123!", verifyA
 
 async function fillTextbox(page, name, value) {
   await page.getByRole("textbox", { name }).fill(value);
+}
+
+async function expandAdvancedOptions(page) {
+  const panel = page.locator("details").filter({ hasText: "Advanced options" });
+  await panel.locator("summary").click();
+  await expect(panel).toHaveAttribute("open", "");
 }
 
 async function readSession(page) {
@@ -418,6 +426,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(page.getByRole("heading", { name: "Create event" })).toBeVisible();
     await expectAccessible(page, "create event");
     await fillTextbox(page, "Event Name", `E2E Planning ${runId}`);
+    await expandAdvancedOptions(page);
     await fillTextbox(page, "Location / Address", "E2E Room");
     await page.getByLabel("Event timezone").fill("UTC");
     await page.locator('input[type="datetime-local"]').fill(datetimeLocalHoursFromNow(48));
@@ -550,7 +559,7 @@ test.describe("Releviz account and scheduling flow", () => {
         return event.defaultPrevented;
       });
 
-    await participantPage.getByRole("button", { name: "Apply level to all" }).click();
+    await participantPage.getByRole("button", { name: "Apply Available to all" }).click();
     await expect(participantPage.getByText("Saving draft…")).toBeVisible();
     await expect(savedStatus).toBeVisible();
     let draftState = await apiJson(
@@ -576,7 +585,7 @@ test.describe("Releviz account and scheduling flow", () => {
     expect(registeredInvitation.status).toBe("draft_saved");
     expect(registeredInvitation.draftSavedAt).toBeTruthy();
 
-    await participantPage.getByRole("button", { name: "Clear all" }).click();
+    await participantPage.getByRole("button", { name: "Mark all Busy" }).click();
     await expect(participantPage.getByText("Saving draft…")).toBeVisible();
     await expect(savedStatus).toBeVisible();
     draftState = await apiJson(
@@ -700,7 +709,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await participantPage.reload();
     await expect(participantPage.getByText(/Welcome, Pat Participant/)).toBeVisible();
     await expect(cell(availableSlots[0].index)).toHaveAttribute("aria-selected", "true");
-    await participantPage.getByRole("button", { name: "Submit Schedule" }).click();
+    await participantPage.getByRole("button", { name: "Submit Availability" }).click();
     await expect(participantPage.getByText("Schedule submitted.")).toBeVisible();
 
     const submittedSchedule = await apiJson(
@@ -1052,6 +1061,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await registerAccount(page, email, "Morgan", "Manager");
     await page.getByRole("link", { name: "Create New Event" }).click();
     await fillTextbox(page, "Event Name", originalName);
+    await expandAdvancedOptions(page);
     await fillTextbox(page, "Location / Address", "Lifecycle Room");
     await page.getByLabel("Event timezone").fill("UTC");
     await page.locator('input[type="datetime-local"]').fill(datetimeLocalHoursFromNow(48));

@@ -8,8 +8,13 @@ import ScheduleGrid from "@/components/schedule/ScheduleGrid";
 import { useAuth } from "@/components/auth/AuthContext";
 import { fetchParticipants, joinEvent, updateParticipant } from "@/lib/api/participants";
 import { fetchEventResults } from "@/lib/api/events";
-import "@material/web/slider/slider.js";
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
+
+const AVAILABILITY_CHOICES = [
+  { label: "Busy", value: 0 },
+  { label: "If needed", value: 0.5 },
+  { label: "Available", value: 1 },
+];
 
 function ParticipantView() {
   const { event, numSlots } = useContext(EventContext);
@@ -21,7 +26,7 @@ function ParticipantView() {
   const [joined, setJoined] = useState(false);
   const [scheduleInperson, setScheduleInperson] = useState([]);
   const [scheduleVirtual, setScheduleVirtual] = useState([]);
-  const [sliderValue, setSliderValue] = useState(1);
+  const [availabilityValue, setAvailabilityValue] = useState(1);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [preJoinParticipants, setPreJoinParticipants] = useState([]);
@@ -237,7 +242,7 @@ function ParticipantView() {
 
     const scheduleRef = channel === "inperson" ? scheduleInpersonRef : scheduleVirtualRef;
     const next = [...scheduleRef.current];
-    next[idx] = paintModeRef.current === "erase" ? 0 : sliderValue;
+    next[idx] = paintModeRef.current === "erase" ? 0 : availabilityValue;
     scheduleRef.current = next;
     if (channel === "inperson") setScheduleInperson(next);
     else setScheduleVirtual(next);
@@ -336,7 +341,7 @@ function ParticipantView() {
           <div style={{ textAlign: "center" }}>
             <h2 style={{ color: "var(--md-sys-color-primary)", margin: 0 }}>Join Event</h2>
             <p style={{ color: "var(--md-sys-color-on-surface-variant)", margin: "8px 0 0 0" }}>
-              Your account will be used as your participant identity.
+              Join, mark the times that work for you, then submit your response.
             </p>
           </div>
 
@@ -442,7 +447,7 @@ function ParticipantView() {
             )}
           </h2>
           <p style={{ color: "var(--md-sys-color-on-surface-variant)", margin: 0 }}>
-            Set your availability.
+            Choose a status, then click or drag across the times below.
           </p>
         </div>
         <AppButton
@@ -468,18 +473,24 @@ function ParticipantView() {
             style={{ display: "flex", flexDirection: "column", gap: "24px" }}
           >
             <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-              <label style={{ fontWeight: "500" }}>
-                Availability Level:{" "}
-                <span style={{ color: "var(--md-sys-color-primary)" }}>{sliderValue}</span>
-              </label>
-              <md-slider
-                min="0"
-                max="1"
-                step="0.25"
-                value={sliderValue}
-                onInput={(e) => setSliderValue(Number(e.target.value))}
-                style={{ width: "100%", maxWidth: "300px" }}
-              ></md-slider>
+              <p style={{ fontWeight: "500", margin: 0 }}>Mark times as</p>
+              <div
+                role="group"
+                aria-label="Availability status"
+                style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}
+              >
+                {AVAILABILITY_CHOICES.map((choice) => (
+                  <AppButton
+                    key={choice.value}
+                    onClick={() => setAvailabilityValue(choice.value)}
+                    variant={availabilityValue === choice.value ? "filled" : "outlined"}
+                    aria-pressed={availabilityValue === choice.value}
+                    disabled={responseChangesDisabled}
+                  >
+                    {choice.label}
+                  </AppButton>
+                ))}
+              </div>
               <p
                 style={{
                   fontSize: "0.85rem",
@@ -487,22 +498,24 @@ function ParticipantView() {
                   margin: 0,
                 }}
               >
-                0 = Busy, 1 = Free
+                Your changes save automatically.
               </p>
               <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
                 <AppButton
-                  onClick={() => fillAllAvailability(sliderValue)}
+                  onClick={() => fillAllAvailability(availabilityValue)}
                   variant="outlined"
                   disabled={responseChangesDisabled}
                 >
-                  Apply level to all
+                  Apply{" "}
+                  {AVAILABILITY_CHOICES.find((choice) => choice.value === availabilityValue)?.label}{" "}
+                  to all
                 </AppButton>
                 <AppButton
                   onClick={() => fillAllAvailability(0)}
                   variant="outlined"
                   disabled={responseChangesDisabled}
                 >
-                  Clear all
+                  Mark all Busy
                 </AppButton>
               </div>
             </div>
@@ -593,7 +606,11 @@ function ParticipantView() {
                 disabled={isSubmitting || responseChangesDisabled}
                 icon={<MdSend />}
               >
-                {isSubmitting ? "Saving..." : submitted ? "Update Schedule" : "Submit Schedule"}
+                {isSubmitting
+                  ? "Submitting..."
+                  : submitted
+                    ? "Update Availability"
+                    : "Submit Availability"}
               </AppButton>
             </div>
           </div>

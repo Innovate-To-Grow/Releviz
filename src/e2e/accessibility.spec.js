@@ -6,7 +6,7 @@ test.use({ viewport: { width: 320, height: 720 } });
 test.describe("automated accessibility baseline", () => {
   test("public entry pages meet WCAG A/AA checks at 320px", async ({ page }) => {
     for (const [path, heading] of [
-      ["/", "Releviz"],
+      ["/", "Find a time that works for everyone."],
       ["/login", "Log in"],
       ["/signup", "Create account"],
       ["/recover", "Recover your account"],
