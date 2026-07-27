@@ -28,6 +28,7 @@ const RESOURCE_AUDIT_MANIFEST = [
   "src/backend/apps/core/static/admin/js/i2g-admin-theme-runtime.js",
   "src/backend/apps/core/static/admin/js/material-web-text-field.js",
   "src/backend/apps/core/static/images/releviz-logo.svg",
+  "src/backend/apps/core/static/images/releviz-mark.png",
   "src/backend/apps/core/templates/admin/base_site.html",
   "src/backend/apps/core/templates/admin/includes/i2g_admin_theme_toggle.html",
   "src/backend/apps/core/templates/admin/includes/itg_login_styles.html",
@@ -50,7 +51,13 @@ const RESOURCE_AUDIT_MANIFEST = [
   "src/frontend/.dockerignore",
   "src/frontend/@next/package.json",
   "src/frontend/Dockerfile",
+  "src/frontend/app/apple-icon.png",
   "src/frontend/app/globals.css",
+  "src/frontend/app/icon.png",
+  "src/frontend/app/opengraph-image.alt.txt",
+  "src/frontend/app/opengraph-image.png",
+  "src/frontend/app/twitter-image.alt.txt",
+  "src/frontend/app/twitter-image.png",
   "src/frontend/eslint.config.mjs",
   "src/frontend/jest.config.js",
   "src/frontend/jsconfig.json",
@@ -58,12 +65,15 @@ const RESOURCE_AUDIT_MANIFEST = [
   "src/frontend/package-lock.docker.json",
   "src/frontend/package.json",
   "src/frontend/vendor/brace-expansion-compat/package.json",
+  "src/frontend/public/brand/releviz-logo.png",
+  "src/frontend/public/brand/releviz-mark.png",
   "src/frontend/public/favicon.ico",
   "src/frontend/public/homepage.png",
   "src/frontend/public/img/i2glogo.png",
   "src/frontend/public/img/ucmlogo.png",
   "src/frontend/public/logo192.png",
   "src/frontend/public/logo512.png",
+  "src/frontend/public/manifest.json",
   "src/frontend/public/robots.txt",
   "infra/bootstrap/main.tf",
   "infra/bootstrap/tests/plan.tftest.hcl",
@@ -109,19 +119,24 @@ test.describe("repository resource audit", () => {
     for (const asset of [
       "/favicon.ico",
       "/homepage.png",
-      "/img/i2glogo.png",
       "/img/ucmlogo.png",
       "/logo192.png",
       "/logo512.png",
+      "/manifest.json",
+      "/brand/releviz-logo.png",
+      "/brand/releviz-mark.png",
+      "/apple-icon.png",
+      "/icon.png",
+      "/opengraph-image.png",
+      "/twitter-image.png",
     ]) {
       const response = await page.goto(asset);
       expect(response?.ok(), asset).toBeTruthy();
     }
 
-    const adminLogo = fs.readFileSync(
-      path.join(ROOT, "src/backend/apps/core/static/images/releviz-logo.svg"),
-      "utf8"
+    const adminMark = fs.readFileSync(
+      path.join(ROOT, "src/backend/apps/core/static/images/releviz-mark.png")
     );
-    expect(adminLogo).toContain("<svg");
+    expect(adminMark.subarray(1, 4).toString("ascii")).toBe("PNG");
   });
 });

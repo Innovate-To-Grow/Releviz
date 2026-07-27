@@ -13,7 +13,7 @@ jest.mock("next/navigation", () => ({
 // Mock next/image
 jest.mock("next/image", () => ({
   __esModule: true,
-  default: ({ alt, ...props }) => <img alt={alt || ""} {...props} />,
+  default: ({ alt, priority: _priority, ...props }) => <img alt={alt || ""} {...props} />,
 }));
 
 // Mock AuthContext
@@ -41,7 +41,7 @@ describe("HomePage", () => {
   test("explains the product and shows signed-out account actions", () => {
     useAuth.mockReturnValue({ user: null, loading: false });
     render(<HomePage />);
-    expect(screen.getByText("Releviz")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Releviz home" })).toHaveAttribute("href", "/");
     expect(screen.getByText(/Create a scheduling poll, share one link/i)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Log in" })).toHaveAttribute("href", "/login");
     expect(screen.getByRole("link", { name: "Sign up" })).toHaveAttribute("href", "/signup");

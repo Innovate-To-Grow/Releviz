@@ -93,6 +93,43 @@ body {
   font-weight: 600;
 }
 
+.brand-home-link,
+.site-footer-brand,
+.auth-brand-link {
+  align-items: center;
+  display: inline-flex;
+  flex: 0 0 auto;
+  text-decoration: none;
+}
+
+.brand-logo {
+  display: block;
+  height: auto;
+  object-fit: contain;
+}
+
+.brand-logo--header {
+  width: 132px;
+}
+
+.brand-logo--event-header {
+  flex: 0 0 auto;
+  width: 120px;
+}
+
+.brand-logo--footer {
+  width: 112px;
+}
+
+.auth-brand-link {
+  align-self: center;
+  margin-bottom: 4px;
+}
+
+.brand-logo--auth {
+  width: 168px;
+}
+
 .site-footer-links {
   display: flex;
   flex-wrap: wrap;
@@ -1231,6 +1268,14 @@ md-dialog {
 @media (max-width: 600px) {
   .app-header {
     padding: 10px 12px !important;
+  }
+
+  .brand-logo--header {
+    width: 108px;
+  }
+
+  .brand-logo--event-header {
+    width: 104px;
   }
 
   .app-header-auth {

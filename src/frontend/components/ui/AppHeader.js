@@ -1,11 +1,11 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { MdDashboard, MdLogin, MdLogout, MdPerson, MdSettings } from "react-icons/md";
 import { useAuth } from "@/components/auth/AuthContext";
 import AppButton from "@/components/ui/AppButton";
+import { BrandHomeLink } from "@/components/ui/BrandLogo";
 
 function UserMenu() {
   const { user, loading, logout } = useAuth();
@@ -141,26 +141,7 @@ export default function AppHeader({ pageTitle, contextLabel }) {
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: "12px", minWidth: 0 }}>
-        <Link
-          href="/"
-          style={{
-            textDecoration: "none",
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-          }}
-        >
-          <Image src="/img/i2glogo.png" alt="i2G Logo" width={36} height={36} />
-          <span
-            style={{
-              fontWeight: "700",
-              fontSize: "1.1rem",
-              color: "var(--md-sys-color-primary)",
-            }}
-          >
-            Releviz
-          </span>
-        </Link>
+        <BrandHomeLink logoClassName="brand-logo brand-logo--header" priority />
         {pageTitle && (
           <span
             style={{
