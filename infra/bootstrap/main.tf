@@ -274,6 +274,10 @@ locals {
         Effect = "Allow"
         Action = [
           "amplify:GetJob",
+          # AWS documents ListJobs against a branch resource, but the live
+          # service also authorizes the branch's jobs/* resource. Keep both
+          # exact scopes so the preflight remains least-privilege and usable.
+          "amplify:ListJobs",
           "amplify:StartJob",
           "amplify:StopJob",
         ]
