@@ -129,6 +129,16 @@ run "bootstrap_plan" {
 
   assert {
     condition = (
+      contains(one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Action
+        if statement.Sid == "ManageExactProductionAmplifyBranches"
+      ]), "amplify:ListJobs") &&
+      contains(one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Action
+        if statement.Sid == "ManageExactProductionAmplifyJobs"
+      ]), "amplify:ListJobs") &&
       one([
         for statement in jsondecode(local.production_deploy_policy).Statement :
         statement.Resource
@@ -172,7 +182,7 @@ run "bootstrap_plan" {
         if statement.Sid == "ManageExactProductionAmplifyDomain"
       ]) == "arn:aws:amplify:us-west-2:123456789012:apps/dsecure123/domains/releviz.com"
     )
-    error_message = "Job and domain permissions must use the exact app ID, release branches, and canonical domain."
+    error_message = "ListJobs must cover both exact branch and jobs scopes; all job and domain permissions must remain limited to the release resources."
   }
 
   assert {
