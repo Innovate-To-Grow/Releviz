@@ -185,6 +185,9 @@ on:
 permissions:
   id-token: write
 steps:
+  - uses: hashicorp/setup-terraform@v4
+    with:
+      terraform_wrapper: false
   - run: |
       if [ "$CONFIRMATION" != "DEPLOY" ]; then exit 1; fi
       git rev-parse HEAD
