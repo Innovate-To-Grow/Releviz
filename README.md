@@ -142,7 +142,8 @@ branch protection always receives the same required check.
 - `DB_PASSWORD`
 - `DB_HOST`
 - `DB_PORT` (default: `5432`)
-- `DJANGO_CREATE_DEFAULT_ADMIN` (`1` to run default admin bootstrap at container start)
+- `DJANGO_CREATE_DEFAULT_ADMIN` (`1` enables legacy container-start bootstrap; production keeps
+  this at `0`)
 - `DJANGO_SUPERUSER_EMAIL`
 - `DJANGO_SUPERUSER_PASSWORD`
 - `USE_SES_EMAIL_PROVIDER` (`1` in deployed environments; local/test email backends bypass SES)
@@ -239,6 +240,13 @@ After the API-aware Amplify release passes canonical smoke, the final reviewed p
 ECS fallback to the current SHA, waits for it to become healthy, and removes that compatibility
 surface plus the legacy `origin.releviz.com` DNS/certificate.
 
+After the backend service is stable and its direct smoke tests pass, CD runs exactly one dedicated
+private Fargate task to create or verify `admin@releviz.com`. The task receives its initial
+password only from AWS Secrets Manager and exits before any Amplify release begins. Existing,
+valid administrators are verified without changing their password or profile; an unexpected
+existing identity or invalid privilege state fails the deployment closed. Long-running backend
+and reminder tasks never receive the administrator password.
+
 The current SHA-tagged ECS frontend remains a hot migration fallback. The workflow also retains
 each Amplify ZIP and SHA256 file for 90 days and checks `/release.json` against the exact selected
 SHA at candidate, production-default, and canonical stages. If a release fails after replacing
@@ -264,6 +272,14 @@ bootstrap never creates or deletes that shared provider. Initialize with `-backe
 first apply, then migrate the local bootstrap state to `bootstrap/terraform.tfstate` in the new
 bucket. Set its `production_deploy_role_arn` output as `AWS_PROD_ROLE_ARN`; do not store long-lived
 production AWS keys in GitHub.
+
+Before enabling production CD, create `releviz/prod/default-admin-password` in AWS Secrets Manager
+with a cryptographically generated password of at least 32 characters containing uppercase,
+lowercase, numeric, and special characters. Store the secret as a JSON object with exactly one
+string field named `password` (not as a raw plaintext SecretString); ECS selects that field
+without exposing the rest of the secret. Supply its ARN as the fourth
+`production_secret_arns` entry when applying `infra/bootstrap`; never put the password value in
+Terraform inputs, GitHub, shell history, CI logs, or this repository.
 
 Existing installations must first run the administrator-only command:
 
@@ -293,6 +309,11 @@ release resources.
 - `PROD_ROUTE53_ZONE_ID` — hosted-zone ID for `releviz.com`
 - `PROD_DJANGO_SECRET_KEY_ARN`, `PROD_DJANGO_FIELD_ENCRYPTION_KEY_ARN`, and
   `PROD_METRICS_BEARER_TOKEN_ARN` — Secrets Manager ARNs, not secret values
+- `PROD_DEFAULT_ADMIN_EMAIL` — optional override constrained to the reviewed
+  `admin@releviz.com` address
+- `PROD_DEFAULT_ADMIN_PASSWORD_SECRET_ARN` — exact ARN of
+  `releviz/prod/default-admin-password`, whose SecretString is the documented JSON object with a
+  `password` field; never the password value
 - `PROD_ALARM_ACTION_ARNS_JSON` — non-empty JSON array of monitored SNS topic ARNs
 - `PROD_SENTRY_DSN_SECRET_ARN`, `PROD_SECRET_KMS_KEY_ARN`, and
   `PROD_ACM_CERTIFICATE_ARN` — optional

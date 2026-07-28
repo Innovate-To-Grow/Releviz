@@ -17,6 +17,8 @@ route53_zone_id             = "replace-with-route53-zone-id"
 django_secret_key_arn       = "arn:aws:secretsmanager:us-west-2:123456789012:secret:releviz/prod/django-secret-key"
 django_field_encryption_key_arn = "arn:aws:secretsmanager:us-west-2:123456789012:secret:releviz/prod/field-encryption-key"
 metrics_bearer_token_arn    = "arn:aws:secretsmanager:us-west-2:123456789012:secret:releviz/prod/metrics-bearer-token"
+default_admin_email         = "admin@releviz.com"
+default_admin_password_secret_arn = "arn:aws:secretsmanager:us-west-2:123456789012:secret:releviz/prod/default-admin-password-Ab12Cd"
 alarm_action_arns           = ["arn:aws:sns:us-west-2:123456789012:releviz-prod-alerts"]
 
 # Release-specific values are always supplied by the deployment workflow:

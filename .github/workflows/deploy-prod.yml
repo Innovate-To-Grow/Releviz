@@ -38,6 +38,7 @@ jobs:
       PROD_DOMAIN: ${{ vars.PROD_DOMAIN }}
       API_DOMAIN: ${{ vars.PROD_API_DOMAIN || 'api.releviz.com' }}
       LEGACY_ORIGIN_DOMAIN: ${{ vars.PROD_LEGACY_ORIGIN_DOMAIN || 'origin.releviz.com' }}
+      DEFAULT_ADMIN_EMAIL: ${{ vars.PROD_DEFAULT_ADMIN_EMAIL || 'admin@releviz.com' }}
       DEPLOY_SHA: ${{ github.sha }}
       PRODUCTION_JOB_TIMEOUT_SECONDS: "9600"
       AMPLIFY_TIMEOUT_SECONDS: "1200"
@@ -55,6 +56,8 @@ jobs:
       TF_VAR_django_secret_key_arn: ${{ vars.PROD_DJANGO_SECRET_KEY_ARN }}
       TF_VAR_django_field_encryption_key_arn: ${{ vars.PROD_DJANGO_FIELD_ENCRYPTION_KEY_ARN }}
       TF_VAR_metrics_bearer_token_arn: ${{ vars.PROD_METRICS_BEARER_TOKEN_ARN }}
+      TF_VAR_default_admin_email: ${{ vars.PROD_DEFAULT_ADMIN_EMAIL || 'admin@releviz.com' }}
+      TF_VAR_default_admin_password_secret_arn: ${{ vars.PROD_DEFAULT_ADMIN_PASSWORD_SECRET_ARN }}
       TF_VAR_sentry_dsn_secret_arn: ${{ vars.PROD_SENTRY_DSN_SECRET_ARN || '' }}
       TF_VAR_secret_kms_key_arn: ${{ vars.PROD_SECRET_KMS_KEY_ARN || '' }}
       TF_VAR_existing_acm_certificate_arn: ${{ vars.PROD_ACM_CERTIFICATE_ARN || '' }}
@@ -115,6 +118,7 @@ jobs:
           DJANGO_SECRET_KEY_ARN: ${{ vars.PROD_DJANGO_SECRET_KEY_ARN }}
           FIELD_ENCRYPTION_KEY_ARN: ${{ vars.PROD_DJANGO_FIELD_ENCRYPTION_KEY_ARN }}
           METRICS_BEARER_TOKEN_ARN: ${{ vars.PROD_METRICS_BEARER_TOKEN_ARN }}
+          DEFAULT_ADMIN_PASSWORD_SECRET_ARN: ${{ vars.PROD_DEFAULT_ADMIN_PASSWORD_SECRET_ARN }}
           AMPLIFY_APP_ID: ${{ vars.PROD_AMPLIFY_APP_ID }}
           ALARM_ACTION_ARNS: ${{ vars.PROD_ALARM_ACTION_ARNS_JSON }}
         run: |
@@ -127,6 +131,8 @@ jobs:
             DJANGO_SECRET_KEY_ARN \
             FIELD_ENCRYPTION_KEY_ARN \
             METRICS_BEARER_TOKEN_ARN \
+            DEFAULT_ADMIN_EMAIL \
+            DEFAULT_ADMIN_PASSWORD_SECRET_ARN \
             AMPLIFY_APP_ID \
             ALARM_ACTION_ARNS; do
             if [ -z "${!required:-}" ]; then
@@ -141,6 +147,25 @@ jobs:
           fi
           if ! [[ "$AMPLIFY_APP_ID" =~ ^d[a-z0-9]{1,19}$ ]]; then
             echo "::error::PROD_AMPLIFY_APP_ID must be an exact Amplify app ID."
+            exit 1
+          fi
+          if [ "$DEFAULT_ADMIN_EMAIL" != "admin@releviz.com" ]; then
+            echo "::error::PROD_DEFAULT_ADMIN_EMAIL must be the reviewed address admin@releviz.com."
+            exit 1
+          fi
+          if ! [[ "$DEFAULT_ADMIN_PASSWORD_SECRET_ARN" =~ ^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:releviz/prod/default-admin-password-[A-Za-z0-9]{6}$ ]]; then
+            echo "::error::PROD_DEFAULT_ADMIN_PASSWORD_SECRET_ARN must be the complete ARN for releviz/prod/default-admin-password."
+            exit 1
+          fi
+          if ! jq -en \
+            --arg django "$DJANGO_SECRET_KEY_ARN" \
+            --arg field "$FIELD_ENCRYPTION_KEY_ARN" \
+            --arg metrics "$METRICS_BEARER_TOKEN_ARN" \
+            --arg admin "$DEFAULT_ADMIN_PASSWORD_SECRET_ARN" '
+              [$django, $field, $metrics, $admin] as $secrets
+              | ($secrets | length) == ($secrets | unique | length)
+            ' >/dev/null; then
+            echo "::error::Production application secrets must use four distinct ARNs."
             exit 1
           fi
           for domain in "$PROD_DOMAIN" "$API_DOMAIN" "$LEGACY_ORIGIN_DOMAIN"; do
@@ -172,6 +197,7 @@ jobs:
           DJANGO_SECRET_KEY_ARN: ${{ vars.PROD_DJANGO_SECRET_KEY_ARN }}
           FIELD_ENCRYPTION_KEY_ARN: ${{ vars.PROD_DJANGO_FIELD_ENCRYPTION_KEY_ARN }}
           METRICS_BEARER_TOKEN_ARN: ${{ vars.PROD_METRICS_BEARER_TOKEN_ARN }}
+          DEFAULT_ADMIN_PASSWORD_SECRET_ARN: ${{ vars.PROD_DEFAULT_ADMIN_PASSWORD_SECRET_ARN }}
           SENTRY_DSN_SECRET_ARN: ${{ vars.PROD_SENTRY_DSN_SECRET_ARN }}
         run: |
           set -euo pipefail
@@ -180,11 +206,22 @@ jobs:
             "$DJANGO_SECRET_KEY_ARN" \
             "$FIELD_ENCRYPTION_KEY_ARN" \
             "$METRICS_BEARER_TOKEN_ARN" \
+            "$DEFAULT_ADMIN_PASSWORD_SECRET_ARN" \
             "$SENTRY_DSN_SECRET_ARN"; do
             if [ -n "$secret_arn" ]; then
               aws secretsmanager describe-secret --secret-id "$secret_arn" >/dev/null
             fi
           done
+          default_admin_secret_name="$(
+            aws secretsmanager describe-secret \
+              --secret-id "$DEFAULT_ADMIN_PASSWORD_SECRET_ARN" \
+              --query Name \
+              --output text
+          )"
+          if [ "$default_admin_secret_name" != "releviz/prod/default-admin-password" ]; then
+            echo "::error::The default-admin ARN resolves to an unexpected Secrets Manager name."
+            exit 1
+          fi
           aws kms describe-key --key-id alias/aws/rds >/dev/null
           aws kms describe-key --key-id alias/aws/secretsmanager >/dev/null
           aws amplify get-app --app-id "$TF_VAR_amplify_app_id" >/dev/null
@@ -620,6 +657,8 @@ jobs:
             echo "cluster_name=$(terraform -chdir=infra/prod output -raw ecs_cluster_name)"
             echo "backend_service=$(terraform -chdir=infra/prod output -raw backend_service_name)"
             echo "frontend_service=$(terraform -chdir=infra/prod output -raw frontend_service_name)"
+            echo "default_admin_task_definition=$(terraform -chdir=infra/prod output -raw default_admin_task_definition_arn)"
+            echo "default_admin_container=$(terraform -chdir=infra/prod output -raw default_admin_container_name)"
             echo "event_reminders_rule=$(terraform -chdir=infra/prod output -raw event_reminders_rule_name)"
             echo "alb_dns_name=$(terraform -chdir=infra/prod output -raw alb_dns_name)"
             echo "api_domain=$(terraform -chdir=infra/prod output -raw api_domain)"
@@ -779,6 +818,367 @@ jobs:
                 "https://${PROD_DOMAIN}${path}" >/dev/null
             done
           fi
+
+      - name: Ensure production default administrator through one-off ECS task
+        id: default_admin
+        env:
+          CLUSTER_NAME: ${{ steps.terraform.outputs.cluster_name }}
+          BACKEND_SERVICE: ${{ steps.terraform.outputs.backend_service }}
+          DEFAULT_ADMIN_TASK_DEFINITION: ${{ steps.terraform.outputs.default_admin_task_definition }}
+          DEFAULT_ADMIN_CONTAINER: ${{ steps.terraform.outputs.default_admin_container }}
+        run: |
+          set -euo pipefail
+          task_arn=""
+          started_by="admin-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          admin_task_verified="false"
+          if ! [[ "$started_by" =~ ^[A-Za-z0-9_-]{1,36}$ ]]; then
+            echo "::error::The generated ECS started-by token is invalid."
+            exit 1
+          fi
+          echo "started_by=${started_by}" >>"$GITHUB_OUTPUT"
+
+          discover_default_admin_tasks() {
+            local attempt
+            local discovered=""
+            for attempt in 1 2 3 4 5 6; do
+              discovered="$(
+                aws ecs list-tasks \
+                  --cluster "$CLUSTER_NAME" \
+                  --started-by "$started_by" \
+                  --query taskArns \
+                  --output text 2>/dev/null || true
+              )"
+              if [ -n "$discovered" ] && [ "$discovered" != "None" ]; then
+                printf '%s\n' "$discovered"
+                return
+              fi
+              if [ "$attempt" -lt 6 ]; then
+                sleep 2
+              fi
+            done
+          }
+
+          cleanup_default_admin_task() {
+            local candidate
+            local discovered_tasks=""
+            local task_status=""
+            local -a discovered=()
+            local -A seen=()
+            if [ "$admin_task_verified" = "true" ]; then
+              return
+            fi
+            discovered_tasks="$(discover_default_admin_tasks)"
+            read -r -a discovered <<<"$discovered_tasks"
+            if [ -n "$task_arn" ]; then
+              discovered+=("$task_arn")
+            fi
+            for candidate in "${discovered[@]}"; do
+              if [ -z "$candidate" ] || [ -n "${seen[$candidate]:-}" ]; then
+                continue
+              fi
+              seen["$candidate"]=1
+              task_status="$(
+                aws ecs describe-tasks \
+                  --cluster "$CLUSTER_NAME" \
+                  --tasks "$candidate" \
+                  --query 'tasks[0].lastStatus' \
+                  --output text 2>/dev/null || true
+              )"
+              if [ -n "$task_status" ] &&
+                [ "$task_status" != "None" ] &&
+                [ "$task_status" != "STOPPED" ]; then
+                aws ecs stop-task \
+                  --cluster "$CLUSTER_NAME" \
+                  --task "$candidate" \
+                  --reason "Production default-admin bootstrap cleanup" >/dev/null || true
+                timeout --signal=TERM 180s \
+                  aws ecs wait tasks-stopped \
+                  --cluster "$CLUSTER_NAME" \
+                  --tasks "$candidate" || true
+              fi
+            done
+          }
+          trap cleanup_default_admin_task EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+
+          expected_task_definition="$(
+            terraform -chdir=infra/prod output -raw default_admin_task_definition_arn
+          )"
+          expected_container="$(
+            terraform -chdir=infra/prod output -raw default_admin_container_name
+          )"
+          if [ "$DEFAULT_ADMIN_TASK_DEFINITION" != "$expected_task_definition" ] ||
+            [ "$DEFAULT_ADMIN_CONTAINER" != "$expected_container" ]; then
+            echo "::error::Captured default-admin task identity differs from the reviewed Terraform outputs."
+            exit 1
+          fi
+
+          task_definition_state="$(
+            aws ecs describe-task-definition \
+              --task-definition "$expected_task_definition" \
+              --output json
+          )"
+          if ! jq -e \
+            --arg expected "$expected_task_definition" \
+            --arg container "$expected_container" \
+            --arg email "$DEFAULT_ADMIN_EMAIL" \
+            --arg password_secret "${TF_VAR_default_admin_password_secret_arn}:password::" '
+              .taskDefinition.taskDefinitionArn == $expected
+              and .taskDefinition.family == "releviz-prod-default-admin-task"
+              and .taskDefinition.networkMode == "awsvpc"
+              and (.taskDefinition.requiresCompatibilities | index("FARGATE")) != null
+              and ((.taskDefinition.taskRoleArn // "") == "")
+              and (.taskDefinition.containerDefinitions | length) == 1
+              and .taskDefinition.containerDefinitions[0].name == $container
+              and .taskDefinition.containerDefinitions[0].command
+                == ["python", "manage.py", "ensure_default_admin", "--yes", "--create-only"]
+              and (
+                [
+                  .taskDefinition.containerDefinitions[0].environment[]
+                  | select(.name == "DJANGO_SKIP_STARTUP_TASKS" and .value == "1")
+                ] | length
+              ) == 1
+              and (
+                [
+                  .taskDefinition.containerDefinitions[0].environment[]
+                  | select(.name == "DJANGO_CREATE_DEFAULT_ADMIN" and .value == "0")
+                ] | length
+              ) == 1
+              and (
+                [
+                  .taskDefinition.containerDefinitions[0].environment[]
+                  | select(.name == "DJANGO_SUPERUSER_EMAIL" and .value == $email)
+                ] | length
+              ) == 1
+              and (
+                [
+                  .taskDefinition.containerDefinitions[0].secrets[]
+                  | select(
+                      .name == "DJANGO_SUPERUSER_PASSWORD"
+                      and .valueFrom == $password_secret
+                    )
+                ] | length
+              ) == 1
+            ' <<<"$task_definition_state" >/dev/null; then
+            echo "::error::The default-admin task definition does not match the reviewed bootstrap contract."
+            exit 1
+          fi
+          default_admin_image="$(
+            jq -er '.taskDefinition.containerDefinitions[0].image' <<<"$task_definition_state"
+          )"
+
+          service_state="$(
+            aws ecs describe-services \
+              --cluster "$CLUSTER_NAME" \
+              --services "$BACKEND_SERVICE" \
+              --output json
+          )"
+          if ! jq -e '
+            (.failures | length) == 0
+            and (.services | length) == 1
+            and (
+              .services[0].networkConfiguration.awsvpcConfiguration
+              | (.subnets | length) > 0
+              and (.securityGroups | length) > 0
+              and .assignPublicIp == "DISABLED"
+            )
+          ' <<<"$service_state" >/dev/null; then
+            echo "::error::The backend service does not expose a valid private Fargate network configuration."
+            exit 1
+          fi
+          backend_task_definition="$(jq -er '.services[0].taskDefinition' <<<"$service_state")"
+          backend_task_state="$(
+            aws ecs describe-task-definition \
+              --task-definition "$backend_task_definition" \
+              --output json
+          )"
+          if ! jq -e \
+            --arg expected "$backend_task_definition" '
+              .taskDefinition.taskDefinitionArn == $expected
+              and all(
+                .taskDefinition.containerDefinitions[].secrets[]?;
+                .name != "DJANGO_SUPERUSER_PASSWORD"
+              )
+              and all(
+                .taskDefinition.containerDefinitions[].environment[]?;
+                .name != "DJANGO_SUPERUSER_EMAIL"
+              )
+              and (
+                [
+                  .taskDefinition.containerDefinitions[].environment[]
+                  | select(.name == "DJANGO_CREATE_DEFAULT_ADMIN" and .value == "0")
+                ] | length
+              ) == 1
+            ' <<<"$backend_task_state" >/dev/null; then
+            echo "::error::The long-running backend task exposes administrator bootstrap inputs."
+            exit 1
+          fi
+          backend_image="$(
+            jq -er '.taskDefinition.containerDefinitions[0].image' <<<"$backend_task_state"
+          )"
+          if [ "$default_admin_image" != "$backend_image" ]; then
+            echo "::error::The default-admin task does not use the deployed immutable backend image."
+            exit 1
+          fi
+          network_configuration="$(
+            jq -cer '
+              {
+                awsvpcConfiguration:
+                  .services[0].networkConfiguration.awsvpcConfiguration
+              }
+            ' <<<"$service_state"
+          )"
+
+          run_state="$(
+            aws ecs run-task \
+              --cluster "$CLUSTER_NAME" \
+              --launch-type FARGATE \
+              --task-definition "$expected_task_definition" \
+              --network-configuration "$network_configuration" \
+              --count 1 \
+              --started-by "$started_by" \
+              --tags \
+                key=Project,value=releviz \
+                key=Environment,value=prod \
+                key=Purpose,value=default-admin-bootstrap \
+              --output json
+          )"
+          task_arn="$(jq -er '.tasks[0].taskArn // empty' <<<"$run_state" || true)"
+          if [ -n "$task_arn" ]; then
+            echo "task_arn=${task_arn}" >>"$GITHUB_OUTPUT"
+          fi
+          if ! jq -e \
+            --arg expected "$expected_task_definition" '
+              (.failures | length) == 0
+              and (.tasks | length) == 1
+              and .tasks[0].taskDefinitionArn == $expected
+            ' <<<"$run_state" >/dev/null; then
+            echo "::error::ECS did not start exactly one reviewed default-admin task."
+            jq -c '{failures, taskCount: (.tasks | length)}' <<<"$run_state" >&2
+            exit 1
+          fi
+
+          if ! timeout --signal=TERM 900s \
+            aws ecs wait tasks-stopped \
+              --cluster "$CLUSTER_NAME" \
+              --tasks "$task_arn"; then
+            echo "::error::Timed out waiting for the default-admin task to stop."
+            exit 1
+          fi
+          stopped_state="$(
+            aws ecs describe-tasks \
+              --cluster "$CLUSTER_NAME" \
+              --tasks "$task_arn" \
+              --output json
+          )"
+          if ! jq -e \
+            --arg expected "$expected_task_definition" \
+            --arg container "$expected_container" '
+              (.failures | length) == 0
+              and (.tasks | length) == 1
+              and .tasks[0].taskDefinitionArn == $expected
+              and .tasks[0].lastStatus == "STOPPED"
+              and .tasks[0].stopCode == "EssentialContainerExited"
+              and (
+                [
+                  .tasks[0].containers[]
+                  | select(
+                      .name == $container
+                      and .lastStatus == "STOPPED"
+                      and .exitCode == 0
+                    )
+                ] | length
+              ) == 1
+            ' <<<"$stopped_state" >/dev/null; then
+            echo "::error::The production default administrator was not created or verified."
+            jq -c '
+              {
+                failures,
+                tasks: [
+                  .tasks[]
+                  | {
+                      taskArn,
+                      taskDefinitionArn,
+                      lastStatus,
+                      stopCode,
+                      stoppedReason,
+                      containers: [
+                        .containers[]
+                        | {name, lastStatus, exitCode, reason}
+                      ]
+                    }
+                ]
+              }
+            ' <<<"$stopped_state" >&2
+            exit 1
+          fi
+          admin_task_verified="true"
+          trap - EXIT INT TERM
+
+      - name: Clean up an interrupted default-administrator task
+        if: ${{ always() && steps.default_admin.outcome != 'success' && steps.default_admin.outputs.started_by != '' }}
+        env:
+          CLUSTER_NAME: ${{ steps.terraform.outputs.cluster_name }}
+          DEFAULT_ADMIN_STARTED_BY: ${{ steps.default_admin.outputs.started_by }}
+        run: |
+          set -euo pipefail
+          discover_default_admin_tasks() {
+            local attempt
+            local discovered=""
+            for attempt in 1 2 3 4 5 6; do
+              discovered="$(
+                aws ecs list-tasks \
+                  --cluster "$CLUSTER_NAME" \
+                  --started-by "$DEFAULT_ADMIN_STARTED_BY" \
+                  --query taskArns \
+                  --output text
+              )"
+              if [ -n "$discovered" ] && [ "$discovered" != "None" ]; then
+                printf '%s\n' "$discovered"
+                return
+              fi
+              if [ "$attempt" -lt 6 ]; then
+                sleep 2
+              fi
+            done
+          }
+
+          discovered_tasks="$(discover_default_admin_tasks)"
+          read -r -a task_arns <<<"$discovered_tasks"
+          for task_arn in "${task_arns[@]}"; do
+            if [ -z "$task_arn" ]; then
+              continue
+            fi
+            task_status="$(
+              aws ecs describe-tasks \
+                --cluster "$CLUSTER_NAME" \
+                --tasks "$task_arn" \
+                --query 'tasks[0].lastStatus' \
+                --output text
+            )"
+            if [ "$task_status" != "STOPPED" ]; then
+              aws ecs stop-task \
+                --cluster "$CLUSTER_NAME" \
+                --task "$task_arn" \
+                --reason "Production default-admin bootstrap compensation" >/dev/null
+              timeout --signal=TERM 180s \
+                aws ecs wait tasks-stopped \
+                  --cluster "$CLUSTER_NAME" \
+                  --tasks "$task_arn"
+            fi
+            stopped_status="$(
+              aws ecs describe-tasks \
+                --cluster "$CLUSTER_NAME" \
+                --tasks "$task_arn" \
+                --query 'tasks[0].lastStatus' \
+                --output text
+            )"
+            if [ "$stopped_status" != "STOPPED" ]; then
+              echo "::error::The interrupted default-admin task is still running."
+              exit 1
+            fi
+          done
 
       - name: Fail closed when an Amplify release job is active
         env:

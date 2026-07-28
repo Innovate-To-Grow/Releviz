@@ -90,11 +90,21 @@ variable "production_amplify_app_id" {
 
 variable "production_secret_arns" {
   type        = list(string)
-  description = "Application secret ARNs the production workflow may validate"
+  description = "Unique application secret ARNs whose metadata the production workflow may validate"
 
   validation {
-    condition     = length(var.production_secret_arns) >= 3
-    error_message = "Provide the Django key, field-encryption key, and metrics-token secret ARNs."
+    condition = (
+      length(var.production_secret_arns) >= 4 &&
+      length(distinct(var.production_secret_arns)) == length(var.production_secret_arns) &&
+      alltrue([
+        for secret_arn in var.production_secret_arns :
+        can(regex(
+          "^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+$",
+          secret_arn,
+        ))
+      ])
+    )
+    error_message = "Provide at least four unique Secrets Manager ARNs, including the Django key, field-encryption key, metrics token, and default-admin password."
   }
 }
 
@@ -212,6 +222,7 @@ locals {
   production_ecr_arn         = "arn:aws:ecr:${var.aws_region}:${data.aws_caller_identity.current.account_id}:repository/${var.production_ecr_repository_prefix}*"
   rds_managed_secret_arn     = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:rds!db-*"
   terraform_state_bucket_arn = "arn:aws:s3:::${var.state_bucket_name}"
+  production_cluster_arn     = "arn:aws:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:cluster/releviz-prod-cluster"
   production_amplify_app_arn = "arn:aws:amplify:${var.aws_region}:${data.aws_caller_identity.current.account_id}:apps/${var.production_amplify_app_id}"
   production_amplify_branch_arns = [
     "${local.production_amplify_app_arn}/branches/candidate",
@@ -224,6 +235,16 @@ locals {
     for branch_arn in local.production_amplify_branch_arns : "${branch_arn}/deployments/*"
   ]
   production_amplify_domain_arn = "${local.production_amplify_app_arn}/domains/${var.production_domain_name}"
+}
+
+locals {
+  production_default_admin_task_definition_arn = "arn:aws:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:task-definition/releviz-prod-default-admin-task:*"
+  production_default_admin_task_arn            = "arn:aws:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:task/releviz-prod-cluster/*"
+  production_ecs_role_arns = [
+    "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/releviz-prod-ecs-execution-role",
+    "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/releviz-prod-ecs-task-role",
+  ]
+  production_eventbridge_role_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/releviz-prod-eventbridge-reminders-role"
 }
 
 locals {
@@ -408,6 +429,45 @@ locals {
         Resource = var.production_secret_arns
       },
       {
+        Sid      = "RunProductionDefaultAdminTask"
+        Effect   = "Allow"
+        Action   = ["ecs:RunTask"]
+        Resource = local.production_default_admin_task_definition_arn
+        Condition = {
+          ArnEquals = {
+            "ecs:cluster" = local.production_cluster_arn
+          }
+          StringEquals = {
+            "aws:RequestTag/Project"     = "releviz"
+            "aws:RequestTag/Environment" = "prod"
+            "aws:RequestTag/Purpose"     = "default-admin-bootstrap"
+          }
+          "ForAllValues:StringEquals" = {
+            "aws:TagKeys" = [
+              "Project",
+              "Environment",
+              "Purpose",
+            ]
+          }
+        }
+      },
+      {
+        Sid      = "StopProductionDefaultAdminTask"
+        Effect   = "Allow"
+        Action   = ["ecs:StopTask"]
+        Resource = local.production_default_admin_task_arn
+        Condition = {
+          ArnEquals = {
+            "ecs:cluster" = local.production_cluster_arn
+          }
+          StringEquals = {
+            "aws:ResourceTag/Project"     = "releviz"
+            "aws:ResourceTag/Environment" = "prod"
+            "aws:ResourceTag/Purpose"     = "default-admin-bootstrap"
+          }
+        }
+      },
+      {
         Sid    = "RdsManagedMasterSecret"
         Effect = "Allow"
         Action = [
@@ -581,13 +641,34 @@ locals {
           "iam:ListAttachedRolePolicies",
           "iam:ListInstanceProfilesForRole",
           "iam:ListRolePolicies",
-          "iam:PassRole",
           "iam:PutRolePolicy",
           "iam:TagRole",
           "iam:UntagRole",
           "iam:UpdateAssumeRolePolicy",
         ]
         Resource = local.production_role_prefix_arn
+      },
+      {
+        Sid      = "PassExactProductionEcsRoles"
+        Effect   = "Allow"
+        Action   = ["iam:PassRole"]
+        Resource = local.production_ecs_role_arns
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = "ecs-tasks.amazonaws.com"
+          }
+        }
+      },
+      {
+        Sid      = "PassExactProductionEventBridgeRole"
+        Effect   = "Allow"
+        Action   = ["iam:PassRole"]
+        Resource = local.production_eventbridge_role_arn
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = "events.amazonaws.com"
+          }
+        }
       },
       {
         Sid      = "RequiredServiceLinkedRoles"

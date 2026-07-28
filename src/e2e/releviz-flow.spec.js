@@ -8,7 +8,11 @@ const ROOT = path.resolve(__dirname, "../..");
 const BACKEND_URL = process.env.BACKEND_URL || "http://127.0.0.1:4100";
 const EMAIL_FILE_PATH = process.env.EMAIL_FILE_PATH || "/tmp/releviz-e2e-mail";
 const ADMIN_EMAIL = process.env.DJANGO_SUPERUSER_EMAIL || "admin@releviz.local";
-const ADMIN_PASSWORD = process.env.DJANGO_SUPERUSER_PASSWORD || "Admin12345!";
+const ADMIN_PASSWORD = process.env.DJANGO_SUPERUSER_PASSWORD;
+
+if (!ADMIN_PASSWORD) {
+  throw new Error("DJANGO_SUPERUSER_PASSWORD must be set before running Playwright.");
+}
 
 function decodeQuotedPrintable(value) {
   if (!/^Content-Transfer-Encoding:\s*quoted-printable\s*$/im.test(value)) {

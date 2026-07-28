@@ -175,8 +175,16 @@ locals {
     var.django_secret_key_arn,
     var.django_field_encryption_key_arn,
     var.metrics_bearer_token_arn,
+    var.default_admin_password_secret_arn,
     var.sentry_dsn_secret_arn,
   ])
+}
+
+check "application_secret_arns_are_distinct" {
+  assert {
+    condition     = length(local.application_secret_arns) == length(distinct(local.application_secret_arns))
+    error_message = "Every production application purpose must use a distinct Secrets Manager ARN."
+  }
 }
 
 # --- Networking ---
@@ -1226,6 +1234,71 @@ resource "aws_ecs_cluster" "app" {
   tags = local.common_tags
 }
 
+locals {
+  backend_container_environment = [
+    { name = "DJANGO_SETTINGS_MODULE", value = "config.settings.production" },
+    { name = "PORT", value = tostring(var.backend_port) },
+    { name = "DJANGO_ALLOWED_HOSTS", value = local.backend_allowed_hosts },
+    # The public ALB appends the actual requester to the right side of XFF.
+    # Trust only that hop so a direct origin caller cannot forge its identity.
+    { name = "AUTH_TRUSTED_PROXY_COUNT", value = "1" },
+    {
+      name  = "ENABLE_LEGACY_API_PREFIX"
+      value = var.enable_legacy_api_compatibility ? "1" : "0"
+    },
+    { name = "USE_SES_EMAIL_PROVIDER", value = "1" },
+    { name = "REQUIRE_ENCRYPTED_PASSWORDS", value = "1" },
+    { name = "FRONTEND_URL", value = local.app_url },
+    { name = "BACKEND_URL", value = local.api_url },
+    { name = "CORS_ALLOWED_ORIGINS", value = local.browser_trusted_origins },
+    { name = "CSRF_TRUSTED_ORIGINS", value = local.browser_trusted_origins },
+    { name = "DB_NAME", value = var.db_name },
+    { name = "DB_USER", value = var.db_username },
+    { name = "DB_HOST", value = aws_db_instance.app.address },
+    { name = "DB_PORT", value = tostring(aws_db_instance.app.port) },
+    { name = "DB_SSLMODE", value = "require" },
+    { name = "DEFAULT_FROM_EMAIL", value = var.default_from_email },
+    { name = "SENTRY_ENVIRONMENT", value = var.environment },
+    { name = "SENTRY_RELEASE", value = var.backend_image_tag },
+    { name = "SENTRY_TRACES_SAMPLE_RATE", value = tostring(var.sentry_traces_sample_rate) },
+  ]
+  backend_container_secrets = concat(
+    [
+      { name = "DJANGO_SECRET_KEY", valueFrom = var.django_secret_key_arn },
+      { name = "DJANGO_FIELD_ENCRYPTION_KEY", valueFrom = var.django_field_encryption_key_arn },
+      { name = "METRICS_BEARER_TOKEN", valueFrom = var.metrics_bearer_token_arn },
+      { name = "DB_PASSWORD", valueFrom = "${aws_db_instance.app.master_user_secret[0].secret_arn}:password::" },
+    ],
+    var.sentry_dsn_secret_arn == "" ? [] : [
+      { name = "SENTRY_DSN", valueFrom = var.sentry_dsn_secret_arn },
+    ],
+  )
+  default_admin_container_environment = [
+    { name = "DJANGO_SETTINGS_MODULE", value = "config.settings.production" },
+    { name = "DJANGO_ALLOWED_HOSTS", value = var.api_domain },
+    { name = "FRONTEND_URL", value = local.app_url },
+    { name = "BACKEND_URL", value = local.api_url },
+    { name = "CORS_ALLOWED_ORIGINS", value = local.app_url },
+    { name = "CSRF_TRUSTED_ORIGINS", value = local.app_url },
+    { name = "REQUIRE_ENCRYPTED_PASSWORDS", value = "1" },
+    { name = "DB_NAME", value = var.db_name },
+    { name = "DB_USER", value = var.db_username },
+    { name = "DB_HOST", value = aws_db_instance.app.address },
+    { name = "DB_PORT", value = tostring(aws_db_instance.app.port) },
+    { name = "DB_SSLMODE", value = "require" },
+    { name = "DJANGO_CREATE_DEFAULT_ADMIN", value = "0" },
+    { name = "DJANGO_SKIP_STARTUP_TASKS", value = "1" },
+    { name = "DJANGO_SUPERUSER_EMAIL", value = var.default_admin_email },
+  ]
+  default_admin_container_secrets = [
+    { name = "DJANGO_SECRET_KEY", valueFrom = var.django_secret_key_arn },
+    { name = "DJANGO_FIELD_ENCRYPTION_KEY", valueFrom = var.django_field_encryption_key_arn },
+    { name = "METRICS_BEARER_TOKEN", valueFrom = var.metrics_bearer_token_arn },
+    { name = "DB_PASSWORD", valueFrom = "${aws_db_instance.app.master_user_secret[0].secret_arn}:password::" },
+    { name = "DJANGO_SUPERUSER_PASSWORD", valueFrom = "${var.default_admin_password_secret_arn}:password::" },
+  ]
+}
+
 resource "aws_ecs_task_definition" "backend" {
   family                   = "${local.prefix}-backend-task"
   cpu                      = var.backend_task_cpu
@@ -1248,51 +1321,50 @@ resource "aws_ecs_task_definition" "backend" {
     mountPoints    = []
     systemControls = []
     volumesFrom    = []
-    environment = [
-      { name = "DJANGO_SETTINGS_MODULE", value = "config.settings.production" },
-      { name = "PORT", value = tostring(var.backend_port) },
-      { name = "DJANGO_ALLOWED_HOSTS", value = local.backend_allowed_hosts },
-      # The public ALB appends the actual requester to the right side of XFF.
-      # Trust only that hop so a direct origin caller cannot forge its identity.
-      { name = "AUTH_TRUSTED_PROXY_COUNT", value = "1" },
-      {
-        name  = "ENABLE_LEGACY_API_PREFIX"
-        value = var.enable_legacy_api_compatibility ? "1" : "0"
-      },
-      { name = "USE_SES_EMAIL_PROVIDER", value = "1" },
-      { name = "REQUIRE_ENCRYPTED_PASSWORDS", value = "1" },
-      { name = "FRONTEND_URL", value = local.app_url },
-      { name = "BACKEND_URL", value = local.api_url },
-      { name = "CORS_ALLOWED_ORIGINS", value = local.browser_trusted_origins },
-      { name = "CSRF_TRUSTED_ORIGINS", value = local.browser_trusted_origins },
-      { name = "DB_NAME", value = var.db_name },
-      { name = "DB_USER", value = var.db_username },
-      { name = "DB_HOST", value = aws_db_instance.app.address },
-      { name = "DB_PORT", value = tostring(aws_db_instance.app.port) },
-      { name = "DB_SSLMODE", value = "require" },
-      { name = "DJANGO_CREATE_DEFAULT_ADMIN", value = "0" },
-      { name = "DEFAULT_FROM_EMAIL", value = var.default_from_email },
-      { name = "SENTRY_ENVIRONMENT", value = var.environment },
-      { name = "SENTRY_RELEASE", value = var.backend_image_tag },
-      { name = "SENTRY_TRACES_SAMPLE_RATE", value = tostring(var.sentry_traces_sample_rate) },
-    ]
-    secrets = concat(
-      [
-        { name = "DJANGO_SECRET_KEY", valueFrom = var.django_secret_key_arn },
-        { name = "DJANGO_FIELD_ENCRYPTION_KEY", valueFrom = var.django_field_encryption_key_arn },
-        { name = "METRICS_BEARER_TOKEN", valueFrom = var.metrics_bearer_token_arn },
-        { name = "DB_PASSWORD", valueFrom = "${aws_db_instance.app.master_user_secret[0].secret_arn}:password::" },
-      ],
-      var.sentry_dsn_secret_arn == "" ? [] : [
-        { name = "SENTRY_DSN", valueFrom = var.sentry_dsn_secret_arn },
-      ]
+    environment = concat(
+      local.backend_container_environment,
+      [{ name = "DJANGO_CREATE_DEFAULT_ADMIN", value = "0" }],
     )
+    secrets = local.backend_container_secrets
     logConfiguration = {
       logDriver = "awslogs"
       options = {
         awslogs-group         = aws_cloudwatch_log_group.backend.name
         awslogs-region        = var.aws_region
         awslogs-stream-prefix = "ecs"
+      }
+    }
+  }])
+
+  tags = local.common_tags
+}
+
+resource "aws_ecs_task_definition" "default_admin" {
+  family                   = "${local.prefix}-default-admin-task"
+  cpu                      = var.backend_task_cpu
+  memory                   = var.backend_task_memory
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  execution_role_arn       = aws_iam_role.ecs_execution.arn
+  enable_fault_injection   = false
+
+  container_definitions = jsonencode([{
+    name           = "${local.prefix}-default-admin"
+    image          = local.backend_image_uri
+    essential      = true
+    command        = ["python", "manage.py", "ensure_default_admin", "--yes", "--create-only"]
+    portMappings   = []
+    mountPoints    = []
+    systemControls = []
+    volumesFrom    = []
+    environment    = local.default_admin_container_environment
+    secrets        = local.default_admin_container_secrets
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-group         = aws_cloudwatch_log_group.backend.name
+        awslogs-region        = var.aws_region
+        awslogs-stream-prefix = "default-admin"
       }
     }
   }])

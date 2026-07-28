@@ -103,8 +103,13 @@ before a migration release with meaningful data-shape risk.
 
 ## One-time Production Setup
 
-1. Create the Django secret key, field-encryption key, and metrics bearer token in AWS Secrets
-   Manager. Create a monitored SNS topic and verify a real subscriber receives a test notification.
+1. Create the Django secret key, field-encryption key, metrics bearer token, and
+   `releviz/prod/default-admin-password` in AWS Secrets Manager. Generate the administrator
+   password with at least 32 characters and uppercase, lowercase, numeric, and special characters.
+   Store the administrator secret as a JSON object with exactly one string field named `password`;
+   do not use a raw plaintext SecretString. Do not copy its value into Terraform, GitHub, shell
+   history, logs, or the repository. Create a monitored SNS topic and verify a real subscriber
+   receives a test notification.
 2. With administrator credentials, set
    `EXPECTED_AWS_ACCOUNT_ID="<12-digit-production-account-id>"` and run
    `infra/bootstrap/provision-amplify.sh` to create or verify the tagged
@@ -113,16 +118,19 @@ before a migration release with meaningful data-shape risk.
    the wrong account, ambiguous names, or incorrectly owned resources.
 3. Run `infra/bootstrap` once with an administrator, supplying that
    `production_amplify_app_id`, a globally unique
-   `state_bucket_name`, `production_route53_zone_id`, the three `production_secret_arns`, and the
+   `state_bucket_name`, `production_route53_zone_id`, the four `production_secret_arns`, and the
    existing account-wide GitHub OIDC provider ARN. Run the first apply with `-backend=false`, then
    migrate local state to `bootstrap/terraform.tfstate` in the new bucket. Bootstrap never creates
    or deletes the shared OIDC provider.
 4. Set the bootstrap `production_deploy_role_arn` output as `AWS_PROD_ROLE_ARN`, its bucket output
    as `PROD_TF_STATE_BUCKET`, and its exact app ID as `PROD_AMPLIFY_APP_ID` in the GitHub
    `Production` Environment. The role includes the bounded Amplify manual-deployment and
-   domain-association actions used by the workflow. Existing ECS-only installations must re-apply
-   `infra/bootstrap` once before their first Amplify release so the deployed role receives these
-   actions.
+   domain-association actions used by the workflow, plus `ecs:RunTask` for only the
+   `releviz-prod-default-admin-task` family in `releviz-prod-cluster`. Set
+   `PROD_DEFAULT_ADMIN_EMAIL=admin@releviz.com` and
+   `PROD_DEFAULT_ADMIN_PASSWORD_SECRET_ARN` to the fourth secret's ARN. Existing installations
+   must re-apply `infra/bootstrap` before deploying so the role can describe that exact secret and
+   run the bounded task.
 5. Configure every production variable listed in the README. Restrict the `Production` Environment
    to `main`, require a reviewer, and do not configure static AWS keys or an Amplify repository
    access token.
@@ -136,6 +144,13 @@ before a migration release with meaningful data-shape risk.
    closed if it cannot preserve this rollback target.
 8. Confirm AWS quotas cover the ALB, Multi-AZ RDS, Amplify app/domain, and steady-state Fargate
    tasks. Record owners for DNS, SNS/on-call, RDS restore, and release approval.
+
+Every production deployment starts one private, create-only administrator task after backend
+health checks. A missing account is created; an existing active, verified staff superuser is
+accepted without changing its password. Any conflicting or partially configured identity, task
+startup failure, wrong task definition, or non-zero exit code fails CD before Amplify mutation.
+Changing the Secrets Manager value after creation does not rotate the existing administrator
+password; perform password rotation through a separately reviewed operational procedure.
 
 ## Migration Compatibility Window
 

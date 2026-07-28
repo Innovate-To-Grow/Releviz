@@ -54,6 +54,14 @@ output "backend_task_definition_arn" {
   value = aws_ecs_task_definition.backend.arn
 }
 
+output "default_admin_task_definition_arn" {
+  value = aws_ecs_task_definition.default_admin.arn
+}
+
+output "default_admin_container_name" {
+  value = "${local.prefix}-default-admin"
+}
+
 output "frontend_task_definition_arn" {
   value = aws_ecs_task_definition.frontend.arn
 }

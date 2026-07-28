@@ -119,6 +119,20 @@ Verification challenges expire, have bounded attempts, permit only one pending c
 member/purpose/channel, and cannot be replayed after use. Public registration, resend, login-code,
 and password-reset responses avoid confirming whether an account exists.
 
+## Production Administrator Bootstrap
+
+Production CD creates or verifies `admin@releviz.com` with a dedicated, one-off private Fargate
+task. Its initial 32-plus-character password is generated and stored in AWS Secrets Manager; only
+the secret ARN is kept in the protected GitHub Production Environment and Terraform inputs. The
+password value is never placed in Terraform state, GitHub variables, deployment command
+arguments, or logs.
+
+The long-running backend and scheduled reminder task definitions do not receive the administrator
+password. The bootstrap command creates only a missing identity. If the address already belongs to
+an active, verified staff superuser with a usable password, deployment performs a read-only
+verification and leaves its password and profile unchanged. Conflicting, disabled, unverified, or
+under-privileged identities fail closed instead of being silently promoted or reactivated.
+
 ## Idempotency and Replay Protection
 
 Invitation and reminder requests require a UUID idempotency key. Reusing a key with changed content

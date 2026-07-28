@@ -197,6 +197,30 @@ variable "metrics_bearer_token_arn" {
   }
 }
 
+variable "default_admin_password_secret_arn" {
+  type        = string
+  description = "Secrets Manager ARN containing the initial production administrator password"
+
+  validation {
+    condition = can(regex(
+      "^arn:(aws|aws-us-gov|aws-cn):secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:releviz/prod/default-admin-password-[A-Za-z0-9]{6}$",
+      var.default_admin_password_secret_arn,
+    ))
+    error_message = "default_admin_password_secret_arn must be the complete ARN for releviz/prod/default-admin-password."
+  }
+}
+
+variable "default_admin_email" {
+  type        = string
+  default     = "admin@releviz.com"
+  description = "Reviewed production administrator email used only by the one-off bootstrap task"
+
+  validation {
+    condition     = var.default_admin_email == "admin@releviz.com"
+    error_message = "default_admin_email must be the reviewed production address admin@releviz.com."
+  }
+}
+
 variable "sentry_dsn_secret_arn" {
   type        = string
   default     = ""
