@@ -408,6 +408,71 @@ def production_alb_security_group_errors(terraform_source: str) -> list[str]:
     return errors
 
 
+def production_amplify_custom_headers_errors(terraform_source: str) -> list[str]:
+    """Require format-insensitive but semantic Amplify header drift detection."""
+
+    start = re.search(
+        r'resource\s+"aws_amplify_app"\s+"frontend"\s*\{',
+        terraform_source,
+    )
+    if start is None:
+        return ["production Terraform omits the Amplify frontend app"]
+
+    end = re.search(
+        r'resource\s+"aws_amplify_branch"\s+"candidate"\s*\{',
+        terraform_source[start.end() :],
+    )
+    if end is None:
+        return ["production Terraform cannot isolate the Amplify frontend app block"]
+
+    block = terraform_source[start.start() : start.end() + end.start()]
+    errors: list[str] = []
+    if not re.search(
+        (
+            r"(?m)^[ \t]*custom_headers\s*=\s*"
+            r"jsonencode\(\s*local\.amplify_custom_headers\s*\)[ \t]*$"
+        ),
+        block,
+    ):
+        errors.append(
+            "production Terraform does not render Amplify custom headers from "
+            "the reviewed semantic policy"
+        )
+    if not re.search(
+        r"(?m)^[ \t]*ignore_changes\s*=\s*\[\s*custom_headers\s*\][ \t]*$",
+        block,
+    ):
+        errors.append(
+            "production Terraform does not suppress provider-only Amplify "
+            "custom-header formatting drift"
+        )
+
+    postconditions = re.findall(
+        r"(?ms)^[ \t]*postcondition\s*\{(?P<body>[^{}]*)^[ \t]*\}",
+        block,
+    )
+    semantic_patterns = (
+        r"(?m)^[ \t]*condition\s*=\s*try\(",
+        r"jsonencode\(\s*try\(",
+        (
+            r"(?m)^[ \t]*yamldecode\(\s*self\.custom_headers\s*\)"
+            r"\.customHeaders,[ \t]*$"
+        ),
+        r"(?m)^[ \t]*yamldecode\(\s*self\.custom_headers\s*\),[ \t]*$",
+        r"\)\s*==\s*jsonencode\(\s*local\.amplify_custom_headers\s*\)",
+        r"(?m)^[ \t]*false,[ \t]*$",
+    )
+    if not any(
+        all(re.search(pattern, postcondition) for pattern in semantic_patterns)
+        for postcondition in postconditions
+    ):
+        errors.append(
+            "production Terraform does not reject semantic JSON or YAML drift "
+            "in live Amplify custom headers"
+        )
+    return errors
+
+
 def deployment_contract_errors(root: Path = ROOT) -> list[str]:
     errors: list[str] = []
     settings_path = root / PRODUCTION_SETTINGS.relative_to(ROOT)
@@ -488,6 +553,7 @@ def deployment_contract_errors(root: Path = ROOT) -> list[str]:
         if not re.search(pattern, production_terraform):
             errors.append(f"production Terraform omits {description}")
     errors.extend(production_alb_security_group_errors(production_terraform))
+    errors.extend(production_amplify_custom_headers_errors(production_terraform))
 
     bootstrap_terraform = (root / BOOTSTRAP_TERRAFORM.relative_to(ROOT)).read_text(
         encoding="utf-8"

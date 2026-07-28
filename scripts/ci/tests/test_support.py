@@ -13,6 +13,7 @@ from scripts.ci.validate_amplify_static_export import amplify_static_export_erro
 from scripts.ci.validate_deployment_contract import (
     amplify_deploy_script_errors,
     production_alb_security_group_errors,
+    production_amplify_custom_headers_errors,
     production_cd_errors,
     required_runtime_environment,
     terraform_environment_names,
@@ -245,6 +246,115 @@ class AmplifyApexTargetTests(TestCase):
 
 
 class DeploymentContractTests(TestCase):
+    def test_production_amplify_headers_ignore_only_formatting_drift(self):
+        source = """
+locals {
+  amplify_custom_headers = []
+}
+
+resource "aws_amplify_app" "frontend" {
+  custom_headers = jsonencode(local.amplify_custom_headers)
+
+  lifecycle {
+    ignore_changes = [custom_headers]
+
+    postcondition {
+      condition = try(
+        jsonencode(try(
+          yamldecode(self.custom_headers).customHeaders,
+          yamldecode(self.custom_headers),
+        )) == jsonencode(local.amplify_custom_headers),
+        false,
+      )
+      error_message = "semantic drift"
+    }
+  }
+}
+
+resource "aws_amplify_branch" "candidate" {
+}
+"""
+        self.assertEqual(production_amplify_custom_headers_errors(source), [])
+
+        cases = (
+            (
+                "ignore_changes = [custom_headers]",
+                "ignore_changes = []",
+                "production Terraform does not suppress provider-only Amplify custom-header formatting drift",
+            ),
+            (
+                "yamldecode(self.custom_headers).customHeaders",
+                "yamldecode(self.custom_headers).unexpected",
+                "production Terraform does not reject semantic JSON or YAML drift in live Amplify custom headers",
+            ),
+            (
+                "yamldecode(self.custom_headers),",
+                "[],",
+                "production Terraform does not reject semantic JSON or YAML drift in live Amplify custom headers",
+            ),
+            (
+                "yamldecode(self.custom_headers),",
+                "yamldecode(self.custom_headers).customHeaders,",
+                "production Terraform does not reject semantic JSON or YAML drift in live Amplify custom headers",
+            ),
+            (
+                "jsonencode(local.amplify_custom_headers)",
+                "jsonencode([])",
+                "production Terraform does not render Amplify custom headers from the reviewed semantic policy",
+            ),
+            (
+                "false,\n      )",
+                "true,\n      )",
+                "production Terraform does not reject semantic JSON or YAML drift in live Amplify custom headers",
+            ),
+        )
+        for expected, replacement, error in cases:
+            with self.subTest(expected=expected):
+                self.assertIn(
+                    error,
+                    production_amplify_custom_headers_errors(
+                        source.replace(expected, replacement)
+                    ),
+                )
+
+        misplaced_guard = (
+            source.replace(
+                "ignore_changes = [custom_headers]",
+                "ignore_changes = []",
+                1,
+            ).replace(
+                "yamldecode(self.custom_headers).customHeaders",
+                "yamldecode(self.custom_headers).unexpected",
+                1,
+            )
+            + """
+resource "terraform_data" "decoy" {
+  lifecycle {
+    ignore_changes = [custom_headers]
+    postcondition {
+      condition = try(
+        jsonencode(try(
+          yamldecode(self.custom_headers).customHeaders,
+          yamldecode(self.custom_headers),
+        )) == jsonencode(local.amplify_custom_headers),
+        false,
+      )
+      error_message = "semantic drift"
+    }
+  }
+}
+"""
+        )
+        misplaced_errors = production_amplify_custom_headers_errors(misplaced_guard)
+        self.assertIn(
+            "production Terraform does not suppress provider-only Amplify custom-header formatting drift",
+            misplaced_errors,
+        )
+        self.assertIn(
+            "production Terraform does not reject semantic JSON or YAML drift in live Amplify custom headers",
+            misplaced_errors,
+        )
+
     def test_production_alb_security_group_is_in_place_only(self):
         source = """
 resource "aws_security_group" "alb" {
