@@ -482,11 +482,7 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
             rf"(?m)^{re.escape(indent)}-\s+(?:name|uses|run):",
             source[match.end() :],
         )
-        end = (
-            match.end() + next_step.start()
-            if next_step is not None
-            else len(source)
-        )
+        end = match.end() + next_step.start() if next_step is not None else len(source)
         return source[match.start() : end]
 
     configuration_step = named_step("Validate production configuration")
@@ -524,7 +520,7 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
     )
     admin_step_guards = {
         (
-            r'--arg\s+password_secret\s+'
+            r"--arg\s+password_secret\s+"
             r'"\$\{TF_VAR_default_admin_password_secret_arn\}:password::"'
             r"[\s\S]{0,2200}DJANGO_SUPERUSER_PASSWORD"
             r"[\s\S]{0,200}\.valueFrom\s*==\s*\$password_secret"
