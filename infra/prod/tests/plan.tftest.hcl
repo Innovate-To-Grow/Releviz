@@ -214,6 +214,25 @@ run "production_plan" {
 
   assert {
     condition = (
+      length(jsondecode(aws_amplify_app.frontend.custom_headers)) == 1 &&
+      one(jsondecode(aws_amplify_app.frontend.custom_headers)).pattern == "**" &&
+      length(one(jsondecode(aws_amplify_app.frontend.custom_headers)).headers) == 5 &&
+      toset([
+        for header in one(jsondecode(aws_amplify_app.frontend.custom_headers)).headers :
+        "${header.key}|${header.value}"
+        ]) == toset([
+        "Strict-Transport-Security|max-age=31536000; includeSubDomains",
+        "X-Content-Type-Options|nosniff",
+        "X-Frame-Options|DENY",
+        "Referrer-Policy|no-referrer",
+        "Content-Security-Policy|default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://challenges.cloudflare.com https://esm.run blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' ws: wss:; worker-src 'self' blob:; frame-src https://challenges.cloudflare.com;",
+      ])
+    )
+    error_message = "Amplify custom headers must use the provider-stable JSON form and preserve the complete production security policy."
+  }
+
+  assert {
+    condition = (
       contains(
         [for rule in aws_amplify_app.frontend.custom_rule : "${rule.source}|${rule.target}|${rule.status}"],
         "/authn/login|https://origin.releviz.com/authn/login/|200"
