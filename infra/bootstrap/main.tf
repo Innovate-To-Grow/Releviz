@@ -220,6 +220,9 @@ locals {
   production_amplify_job_arns = [
     for branch_arn in local.production_amplify_branch_arns : "${branch_arn}/jobs/*"
   ]
+  production_amplify_deployment_arns = [
+    for branch_arn in local.production_amplify_branch_arns : "${branch_arn}/deployments/*"
+  ]
   production_amplify_domain_arn = "${local.production_amplify_app_arn}/domains/${var.production_domain_name}"
 }
 
@@ -266,6 +269,18 @@ locals {
             "aws:ResourceTag/Environment" = "prod"
           }
         }
+      },
+      {
+        # AWS documents manual deployment actions against branch resources,
+        # but the live service also authorizes the branch's deployments/*
+        # resource. Keep both exact scopes for candidate and production.
+        Sid    = "ManageExactProductionAmplifyDeployments"
+        Effect = "Allow"
+        Action = [
+          "amplify:CreateDeployment",
+          "amplify:StartDeployment",
+        ]
+        Resource = local.production_amplify_deployment_arns
       },
       {
         # Amplify jobs do not expose resource-tag condition keys, so constrain
