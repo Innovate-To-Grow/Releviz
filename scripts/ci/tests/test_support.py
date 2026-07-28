@@ -16,6 +16,7 @@ from scripts.ci.validate_deployment_contract import (
     production_amplify_custom_headers_errors,
     production_amplify_custom_headers_policy_errors,
     production_cd_errors,
+    production_ecs_task_definition_errors,
     production_proxy_configuration_errors,
     required_runtime_environment,
     terraform_environment_names,
@@ -469,6 +470,40 @@ environment = [
                     production_proxy_configuration_errors(
                         f"{source}\n{retired_source}\n"
                     ),
+                )
+
+    def test_production_ecs_task_definitions_pin_provider_defaults(self):
+        task_definition = """
+enable_fault_injection = false
+mountPoints = []
+systemControls = []
+volumesFrom = []
+"""
+        source = task_definition * 2
+        self.assertEqual(production_ecs_task_definition_errors(source), [])
+
+        for field, expected_error in {
+            "enable_fault_injection = false": (
+                "production Terraform must set explicitly disabled ECS fault "
+                "injection on both ECS task definitions"
+            ),
+            "mountPoints = []": (
+                "production Terraform must set canonical empty ECS mount points "
+                "on both ECS task definitions"
+            ),
+            "systemControls = []": (
+                "production Terraform must set canonical empty ECS system controls "
+                "on both ECS task definitions"
+            ),
+            "volumesFrom = []": (
+                "production Terraform must set canonical empty ECS volume sources "
+                "on both ECS task definitions"
+            ),
+        }.items():
+            with self.subTest(field=field):
+                self.assertIn(
+                    expected_error,
+                    production_ecs_task_definition_errors(source.replace(field, "", 1)),
                 )
 
     def test_required_runtime_environment_reads_required_calls_and_security_lists(self):

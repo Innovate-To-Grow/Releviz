@@ -1234,6 +1234,7 @@ resource "aws_ecs_task_definition" "backend" {
   requires_compatibilities = ["FARGATE"]
   execution_role_arn       = aws_iam_role.ecs_execution.arn
   task_role_arn            = aws_iam_role.ecs_task.arn
+  enable_fault_injection   = false
 
   container_definitions = jsonencode([{
     name      = "${local.prefix}-backend"
@@ -1244,6 +1245,9 @@ resource "aws_ecs_task_definition" "backend" {
       hostPort      = var.backend_port
       protocol      = "tcp"
     }]
+    mountPoints    = []
+    systemControls = []
+    volumesFrom    = []
     environment = [
       { name = "DJANGO_SETTINGS_MODULE", value = "config.settings.production" },
       { name = "PORT", value = tostring(var.backend_port) },
@@ -1303,6 +1307,7 @@ resource "aws_ecs_task_definition" "frontend" {
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
   execution_role_arn       = aws_iam_role.ecs_execution.arn
+  enable_fault_injection   = false
 
   container_definitions = jsonencode([{
     name      = "${local.prefix}-frontend"
@@ -1313,6 +1318,9 @@ resource "aws_ecs_task_definition" "frontend" {
       hostPort      = var.frontend_port
       protocol      = "tcp"
     }]
+    mountPoints    = []
+    systemControls = []
+    volumesFrom    = []
     environment = [
       { name = "NODE_ENV", value = "production" },
       { name = "PORT", value = tostring(var.frontend_port) },

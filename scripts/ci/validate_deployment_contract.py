@@ -1386,6 +1386,32 @@ def production_proxy_configuration_errors(terraform_source: str) -> list[str]:
     return errors
 
 
+def production_ecs_task_definition_errors(terraform_source: str) -> list[str]:
+    """Keep AWS provider defaults stable across the two-phase production plan."""
+
+    errors: list[str] = []
+    canonical_defaults = {
+        r"(?m)^[ \t]*enable_fault_injection\s*=\s*false[ \t]*$": (
+            "explicitly disabled ECS fault injection"
+        ),
+        r"(?m)^[ \t]*mountPoints\s*=\s*\[\][ \t]*$": (
+            "canonical empty ECS mount points"
+        ),
+        r"(?m)^[ \t]*systemControls\s*=\s*\[\][ \t]*$": (
+            "canonical empty ECS system controls"
+        ),
+        r"(?m)^[ \t]*volumesFrom\s*=\s*\[\][ \t]*$": (
+            "canonical empty ECS volume sources"
+        ),
+    }
+    for pattern, description in canonical_defaults.items():
+        if len(re.findall(pattern, terraform_source)) != 2:
+            errors.append(
+                f"production Terraform must set {description} on both ECS task definitions"
+            )
+    return errors
+
+
 def production_amplify_custom_headers_policy_errors(source: str) -> list[str]:
     """Require the reviewed policy shape accepted by Amplify's customHeaders API."""
 
@@ -1570,6 +1596,7 @@ def deployment_contract_errors(root: Path = ROOT) -> list[str]:
             errors.append(f"production Terraform omits {description}")
     errors.extend(production_alb_security_group_errors(production_terraform))
     errors.extend(production_proxy_configuration_errors(production_terraform))
+    errors.extend(production_ecs_task_definition_errors(production_terraform))
     errors.extend(production_amplify_custom_headers_errors(production_terraform))
 
     bootstrap_terraform = (root / BOOTSTRAP_TERRAFORM.relative_to(ROOT)).read_text(
