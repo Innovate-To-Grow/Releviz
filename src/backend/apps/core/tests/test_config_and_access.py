@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from django.core.exceptions import ImproperlyConfigured
 from django.test import SimpleTestCase, override_settings
+from django.urls import resolve
 
 from apps.core.access import user_can_access_app
 
@@ -188,4 +189,5 @@ class SettingsImportTests(SimpleTestCase):
         sys.modules.pop("config.urls", None)
         module = importlib.import_module("config.urls")
         self.assertEqual(sum(pattern.pattern._route == "api/" for pattern in module.urlpatterns), 2)
+        self.assertEqual(resolve("/api/health", urlconf=module).url_name, "api-health")
         sys.modules.pop("config.urls", None)

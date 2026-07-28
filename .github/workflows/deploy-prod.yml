@@ -637,6 +637,90 @@ jobs:
               "${{ steps.terraform.outputs.backend_service }}" \
               "${{ steps.terraform.outputs.frontend_service }}"
 
+      - name: Verify base ECS services use Terraform-selected task definitions
+        run: |
+          set -euo pipefail
+          for role in backend frontend; do
+            if [ "$role" = "backend" ]; then
+              service="${{ steps.terraform.outputs.backend_service }}"
+            else
+              service="${{ steps.terraform.outputs.frontend_service }}"
+            fi
+            expected="$(
+              terraform -chdir=infra/prod output -raw "${role}_task_definition_arn"
+            )"
+            service_state="$(
+              aws ecs describe-services \
+                --cluster "${{ steps.terraform.outputs.cluster_name }}" \
+                --services "$service" \
+                --output json
+            )"
+            if ! jq -e --arg expected "$expected" '
+              (.failures | length) == 0
+              and (.services | length) == 1
+              and .services[0].taskDefinition == $expected
+              and (
+                [.services[0].deployments[] | select(.status == "PRIMARY")]
+                | length
+              ) == 1
+              and (
+                [
+                  .services[0].deployments[]
+                  | select(.status == "PRIMARY")
+                  | .taskDefinition
+                ] == [$expected]
+              )
+            ' <<<"$service_state" >/dev/null; then
+              echo "::error::The ${role} service stabilized on a task definition other than the reviewed Terraform release."
+              jq -r '
+                .services[0]
+                | {
+                    taskDefinition,
+                    deployments: [
+                      .deployments[]
+                      | {status, rolloutState, taskDefinition}
+                    ]
+                  }
+              ' <<<"$service_state" >&2
+              exit 1
+            fi
+
+            task_list="$(
+              aws ecs list-tasks \
+                --cluster "${{ steps.terraform.outputs.cluster_name }}" \
+                --service-name "$service" \
+                --desired-status RUNNING \
+                --output json
+            )"
+            mapfile -t task_arns < <(jq -r '.taskArns[]' <<<"$task_list")
+            if [ "${#task_arns[@]}" -eq 0 ]; then
+              echo "::error::The ${role} service has no running tasks after stabilization."
+              exit 1
+            fi
+            running_tasks="$(
+              aws ecs describe-tasks \
+                --cluster "${{ steps.terraform.outputs.cluster_name }}" \
+                --tasks "${task_arns[@]}" \
+                --output json
+            )"
+            if ! jq -e --arg expected "$expected" '
+              (.failures | length) == 0
+              and (.tasks | length) > 0
+              and all(
+                .tasks[];
+                .lastStatus == "RUNNING"
+                and .taskDefinitionArn == $expected
+              )
+            ' <<<"$running_tasks" >/dev/null; then
+              echo "::error::The ${role} service has running tasks outside the reviewed Terraform release."
+              jq -r '
+                .tasks[]
+                | {taskArn, lastStatus, taskDefinitionArn}
+              ' <<<"$running_tasks" >&2
+              exit 1
+            fi
+          done
+
       - name: Verify backend ALB target health
         run: |
           set -euo pipefail

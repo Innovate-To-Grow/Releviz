@@ -89,6 +89,22 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
             r"steps\.rollback_frontend\.outputs\.sha\s*\}\}"
             r"[\s\S]{0,500}production-base\.tfplan"
         ): "the deployed ECS frontend SHA in the base Terraform plan",
+        r"Verify base ECS services use Terraform-selected task definitions": (
+            "post-wait base ECS release identity verification"
+        ),
+        (
+            r"terraform\s+-chdir=infra/prod\s+output\s+-raw\s+"
+            r'"\$\{role\}_task_definition_arn"'
+        ): "Terraform-selected base ECS task definitions",
+        (
+            r"\.services\[0\]\.taskDefinition\s*==\s*\$expected"
+            r"[\s\S]{0,350}\.taskDefinition[\s\S]{0,80}==\s*\[\$expected\]"
+        ): "base ECS service and primary-deployment task-definition identity",
+        (
+            r"all\([\s\S]{0,150}\.tasks\[\][\s\S]{0,150}"
+            r'\.lastStatus\s*==\s*"RUNNING"[\s\S]{0,100}'
+            r"\.taskDefinitionArn\s*==\s*\$expected"
+        ): "base ECS running-task release identity",
         r"Build and push immutable ECS fallback frontend image": (
             "an API-aware ECS frontend fallback build"
         ),

@@ -43,6 +43,49 @@ class AlbHealthCheckHostMiddlewareTests(SimpleTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(observed, {"host": "releviz.com", "proto": "https"})
 
+    @override_settings(ENABLE_LEGACY_API_PREFIX=True)
+    @patch("apps.core.middleware.settings.ALLOWED_HOSTS", ["api.releviz.com"])
+    def test_normalizes_legacy_alb_probes_only_while_compatibility_is_enabled(self):
+        for path in ("/api/health", "/api/health/live", "/api/health/ready"):
+            with self.subTest(path=path):
+                request = self.factory.get(
+                    path,
+                    HTTP_HOST="10.0.11.42:4000",
+                    HTTP_USER_AGENT=ALB_HEALTH_CHECK_USER_AGENT,
+                )
+
+                response = AlbHealthCheckHostMiddleware(lambda current: HttpResponse(status=200))(
+                    request
+                )
+
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(request.META["HTTP_HOST"], "api.releviz.com")
+                self.assertEqual(request.META["HTTP_X_FORWARDED_PROTO"], "https")
+
+        spoofed_request = self.factory.get(
+            "/api/health",
+            HTTP_HOST="10.0.11.42:4000",
+            HTTP_USER_AGENT="spoofed-health-checker",
+        )
+        AlbHealthCheckHostMiddleware(lambda current: HttpResponse())(spoofed_request)
+        self.assertEqual(spoofed_request.META["HTTP_HOST"], "10.0.11.42:4000")
+        self.assertNotIn("HTTP_X_FORWARDED_PROTO", spoofed_request.META)
+
+    @override_settings(ENABLE_LEGACY_API_PREFIX=False)
+    @patch("apps.core.middleware.settings.ALLOWED_HOSTS", ["api.releviz.com"])
+    def test_does_not_normalize_legacy_alb_probe_after_compatibility_is_disabled(self):
+        request = self.factory.get(
+            "/api/health",
+            HTTP_HOST="10.0.11.42:4000",
+            HTTP_USER_AGENT=ALB_HEALTH_CHECK_USER_AGENT,
+        )
+
+        response = AlbHealthCheckHostMiddleware(lambda current: HttpResponse())(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(request.META["HTTP_HOST"], "10.0.11.42:4000")
+        self.assertNotIn("HTTP_X_FORWARDED_PROTO", request.META)
+
     @patch("apps.core.middleware.settings.ALLOWED_HOSTS", ["releviz.com"])
     def test_does_not_normalize_other_paths_or_user_agents(self):
         cases = [

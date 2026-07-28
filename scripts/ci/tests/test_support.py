@@ -543,6 +543,11 @@ steps:
       echo "Plan production infrastructure with current DNS state"
       echo 'TF_VAR_frontend_image_tag: ${{ steps.rollback_frontend.outputs.sha }}'
       echo production-base.tfplan
+      echo "Verify base ECS services use Terraform-selected task definitions"
+      terraform -chdir=infra/prod output -raw "${role}_task_definition_arn"
+      echo '.services[0].taskDefinition == $expected'
+      echo '[.services[0].deployments[] | select(.status == "PRIMARY") | .taskDefinition] == [$expected]'
+      echo 'all(.tasks[]; .lastStatus == "RUNNING" and .taskDefinitionArn == $expected)'
       terraform -chdir=infra/prod state list
       echo "Detect API-subdomain transition state"
       echo "Install reviewed Amplify security headers"
