@@ -89,7 +89,6 @@ class Command(BaseCommand):
         with transaction.atomic():
             contacts = list(
                 ContactEmail.objects.select_for_update()
-                .select_related("member")
                 .filter(email_address__iexact=email)
                 .order_by("pk")[:2]
             )
@@ -99,7 +98,11 @@ class Command(BaseCommand):
                     "refusing to choose one."
                 )
             contact = contacts[0] if contacts else None
-            member = contact.member if contact else None
+            member = (
+                Member.objects.select_for_update().get(pk=contact.member_id)
+                if contact is not None and contact.member_id is not None
+                else None
+            )
             if options["create_only"]:
                 conflicting_member = (
                     Member.objects.select_for_update()
