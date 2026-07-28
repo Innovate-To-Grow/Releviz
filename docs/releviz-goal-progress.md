@@ -104,7 +104,11 @@ repeat usage. Real-user task success, SUS, real SES behavior, target-account ope
 
 ### Operations, Observability, Analytics, and Feedback
 
-- `/api/health/live` is process liveness; `/api/health` is database-aware readiness.
+- The static frontend is served at `https://releviz.com`; the browser calls the Django backend
+  directly at `https://api.releviz.com`, and business endpoints have no `/api` prefix.
+- `https://api.releviz.com/health/live` is process liveness;
+  `https://api.releviz.com/health` is database-aware readiness.
+- Django admin is served by the backend at `https://api.releviz.com/admin/`, not by Amplify.
 - Startup migrations use a PostgreSQL advisory lock through `migrate_safely`.
 - Application logs are structured JSON with request IDs and a privacy-safe field allowlist.
 - Optional Sentry integration removes PII, bodies, user data, breadcrumbs, extras, and arbitrary
@@ -251,7 +255,9 @@ The frontend image was also started locally, fetched over HTTP, and inspected to
   produce a duplicate retry; stable `Message-ID` values provide a deduplication signal but do not
   prove exactly-once delivery.
 - Refresh lost-response recovery and rate attribution depend on correct
-  `AUTH_TRUSTED_PROXY_COUNT` configuration at the deployed proxy boundary.
+  `AUTH_TRUSTED_PROXY_COUNT` configuration at the public API ALB boundary.
+- The first API-subdomain cutover can require users to sign in again because the previous
+  frontend-host refresh cookie is not transferred to `api.releviz.com`.
 - Alarm resources do not page anyone until monitored SNS action ARNs are configured and tested in
   the target account.
 - RPO/RTO values are planning targets until measured on representative encrypted RDS data.

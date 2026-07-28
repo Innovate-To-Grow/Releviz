@@ -13,9 +13,9 @@ logger = logging.getLogger("releviz.requests")
 ALB_HEALTH_CHECK_USER_AGENT = "ELB-HealthChecker/2.0"
 ALB_HEALTH_CHECK_PATHS = frozenset(
     {
-        "/api/health",
-        "/api/health/live",
-        "/api/health/ready",
+        "/health",
+        "/health/live",
+        "/health/ready",
     }
 )
 

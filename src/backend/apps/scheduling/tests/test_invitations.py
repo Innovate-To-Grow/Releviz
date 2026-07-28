@@ -436,10 +436,10 @@ class InvitationApiTests(TestCase):
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token_for(member)}")
 
     def invitation_url(self):
-        return f"/api/events/invitations?code={self.event.code}"
+        return f"/events/invitations?code={self.event.code}"
 
     def reminder_url(self):
-        return f"/api/events/reminders?code={self.event.code}"
+        return f"/events/reminders?code={self.event.code}"
 
     def test_public_open_tracking_is_non_enumerating_and_organizer_visible(self):
         invitation = EventInvitation.objects.create(
@@ -454,7 +454,7 @@ class InvitationApiTests(TestCase):
             {"code": "WRONG", "token": str(invitation.access_token)},
         ]:
             response = self.client.post(
-                "/api/events/invitations/open",
+                "/events/invitations/open",
                 payload,
                 format="json",
             )
@@ -464,7 +464,7 @@ class InvitationApiTests(TestCase):
         self.assertIsNone(invitation.opened_at)
 
         opened = self.client.post(
-            "/api/events/invitations/open",
+            "/events/invitations/open",
             {
                 "code": self.event.code,
                 "token": str(invitation.access_token),
@@ -504,7 +504,7 @@ class InvitationApiTests(TestCase):
         self.authenticate(self.organizer)
         future_deadline = timezone.now() + timedelta(days=2)
         response = self.client.post(
-            "/api/events",
+            "/events",
             {
                 "name": "Timed",
                 "responseDeadline": future_deadline.isoformat(),
@@ -519,7 +519,7 @@ class InvitationApiTests(TestCase):
         self.assertIsNotNone(response.data["event"]["responseDeadline"])
 
         aware = self.client.post(
-            "/api/events",
+            "/events",
             {
                 "name": "Aware deadline",
                 "responseDeadline": (timezone.now() + timedelta(days=3)).isoformat(),
@@ -536,7 +536,7 @@ class InvitationApiTests(TestCase):
         ]
         for payload, message in invalid_payloads:
             with self.subTest(message=message):
-                response = self.client.post("/api/events", payload, format="json")
+                response = self.client.post("/events", payload, format="json")
                 self.assertEqual(response.status_code, 400)
                 self.assertIn(message, response.data["error"])
 
@@ -544,13 +544,13 @@ class InvitationApiTests(TestCase):
         self.authenticate(self.participant)
         forbidden = self.client.get(self.invitation_url())
         self.assertEqual(forbidden.status_code, 403)
-        self.assertEqual(self.client.get("/api/events/invitations").status_code, 400)
-        self.assertEqual(self.client.get("/api/events/invitations?code=NOPE").status_code, 404)
+        self.assertEqual(self.client.get("/events/invitations").status_code, 400)
+        self.assertEqual(self.client.get("/events/invitations?code=NOPE").status_code, 404)
 
         self.authenticate(self.organizer)
         self.assertEqual(
             self.client.post(
-                "/api/events/invitations",
+                "/events/invitations",
                 request_payload(["a@example.com"]),
                 format="json",
             ).status_code,
@@ -665,7 +665,7 @@ class InvitationApiTests(TestCase):
         )
         self.authenticate(self.participant)
         join = self.client.post(
-            f"/api/events/participants?code={self.event.code}",
+            f"/events/participants?code={self.event.code}",
             {},
             format="json",
         )
@@ -674,7 +674,7 @@ class InvitationApiTests(TestCase):
         self.assertEqual(invitation.status, EventInvitation.Status.JOINED)
 
         draft = self.client.put(
-            f"/api/events/participants/update?code={self.event.code}"
+            f"/events/participants/update?code={self.event.code}"
             f"&participantId={self.participant.pk}",
             {
                 "availabilityInperson": [1, 0],
@@ -688,7 +688,7 @@ class InvitationApiTests(TestCase):
         self.assertEqual(invitation.status, EventInvitation.Status.DRAFT_SAVED)
 
         repeated_draft = self.client.put(
-            f"/api/events/participants/update?code={self.event.code}"
+            f"/events/participants/update?code={self.event.code}"
             f"&participantId={self.participant.pk}",
             {
                 "availabilityInperson": [1, 0],
@@ -704,7 +704,7 @@ class InvitationApiTests(TestCase):
         )
 
         update = self.client.put(
-            f"/api/events/participants/update?code={self.event.code}"
+            f"/events/participants/update?code={self.event.code}"
             f"&participantId={self.participant.pk}",
             {
                 "submitted": 1,
@@ -719,7 +719,7 @@ class InvitationApiTests(TestCase):
             Participant.objects.get(member=self.participant, event=self.event).submitted
         )
         unchanged_submitted_schedule = self.client.put(
-            f"/api/events/participants/update?code={self.event.code}"
+            f"/events/participants/update?code={self.event.code}"
             f"&participantId={self.participant.pk}",
             {
                 "availabilityInperson": [1, 0],
@@ -731,7 +731,7 @@ class InvitationApiTests(TestCase):
 
         self.authenticate(self.organizer)
         unchanged_group = self.client.put(
-            f"/api/events/participants/update?code={self.event.code}"
+            f"/events/participants/update?code={self.event.code}"
             f"&participantId={self.participant.pk}",
             {"groupName": None},
             format="json",
@@ -750,7 +750,7 @@ class InvitationApiTests(TestCase):
         )
         self.assertEqual(
             self.client.post(
-                "/api/events/reminders",
+                "/events/reminders",
                 {"idempotencyKey": str(key)},
                 format="json",
             ).status_code,
@@ -758,7 +758,7 @@ class InvitationApiTests(TestCase):
         )
         self.assertEqual(
             self.client.post(
-                "/api/events/reminders?code=NOPE",
+                "/events/reminders?code=NOPE",
                 {"idempotencyKey": str(key)},
                 format="json",
             ).status_code,

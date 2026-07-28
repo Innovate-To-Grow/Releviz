@@ -2,7 +2,7 @@ import { API_BASE, apiFetch, extractError } from "./config";
 
 export async function fetchWeights(code, token) {
   const res = await apiFetch(
-    `${API_BASE}/api/events/weights?code=${encodeURIComponent(code)}`,
+    `${API_BASE}/events/weights?code=${encodeURIComponent(code)}`,
     {},
     token
   );
@@ -12,7 +12,7 @@ export async function fetchWeights(code, token) {
 
 export async function updateWeights(code, weights, token) {
   const res = await apiFetch(
-    `${API_BASE}/api/events/weights?code=${encodeURIComponent(code)}`,
+    `${API_BASE}/events/weights?code=${encodeURIComponent(code)}`,
     {
       method: "PUT",
       headers: { "Content-Type": "application/json" },

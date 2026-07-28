@@ -6,7 +6,7 @@ export async function submitFeedback({
   pagePath = "",
   consentToFollowUp = false,
 }) {
-  const res = await apiFetch(`${API_BASE}/api/feedback`, {
+  const res = await apiFetch(`${API_BASE}/feedback`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({

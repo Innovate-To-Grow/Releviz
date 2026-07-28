@@ -2,7 +2,7 @@ FROM node:26.5.0-bookworm-slim@sha256:2d49d876e96237d76de412761cf05dbfe5aee325cc
 
 WORKDIR /app
 
-ARG NEXT_PUBLIC_API_BASE_URL=""
+ARG NEXT_PUBLIC_API_BASE_URL="https://api.releviz.com"
 ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
 
 COPY package.json package-lock.docker.json ./

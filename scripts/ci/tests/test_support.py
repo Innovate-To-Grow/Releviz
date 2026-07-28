@@ -14,6 +14,7 @@ from scripts.ci.validate_deployment_contract import (
     amplify_deploy_script_errors,
     production_alb_security_group_errors,
     production_amplify_custom_headers_errors,
+    production_amplify_custom_headers_policy_errors,
     production_cd_errors,
     production_proxy_configuration_errors,
     required_runtime_environment,
@@ -254,7 +255,7 @@ locals {
 }
 
 resource "aws_amplify_app" "frontend" {
-  custom_headers = jsonencode(local.amplify_custom_headers)
+  custom_headers = file("${path.module}/amplify-custom-headers.json")
 
   lifecycle {
     ignore_changes = [custom_headers]
@@ -299,9 +300,9 @@ resource "aws_amplify_branch" "candidate" {
                 "production Terraform does not reject semantic JSON or YAML drift in live Amplify custom headers",
             ),
             (
-                "jsonencode(local.amplify_custom_headers)",
-                "jsonencode([])",
-                "production Terraform does not render Amplify custom headers from the reviewed semantic policy",
+                'custom_headers = file("${path.module}/amplify-custom-headers.json")',
+                "custom_headers = jsonencode(local.amplify_custom_headers)",
+                "production Terraform does not render Amplify custom headers from the reviewed policy file",
             ),
             (
                 "false,\n      )",
@@ -354,6 +355,30 @@ resource "terraform_data" "decoy" {
         self.assertIn(
             "production Terraform does not reject semantic JSON or YAML drift in live Amplify custom headers",
             misplaced_errors,
+        )
+
+    def test_production_amplify_headers_policy_has_top_level_custom_headers(self):
+        self.assertEqual(
+            production_amplify_custom_headers_policy_errors(
+                json.dumps({"customHeaders": []})
+            ),
+            [],
+        )
+        self.assertEqual(
+            production_amplify_custom_headers_policy_errors("not-json"),
+            ["production Amplify custom-header policy is not valid JSON"],
+        )
+        self.assertEqual(
+            production_amplify_custom_headers_policy_errors("[]"),
+            ["production Amplify custom-header policy must be a top-level JSON object"],
+        )
+        self.assertEqual(
+            production_amplify_custom_headers_policy_errors(
+                json.dumps({"headers": []})
+            ),
+            [
+                "production Amplify custom-header policy omits the top-level customHeaders list"
+            ],
         )
 
     def test_production_alb_security_group_is_in_place_only(self):
@@ -489,7 +514,13 @@ on:
 permissions:
   actions: read
   id-token: write
+timeout-minutes: 160
+PRODUCTION_JOB_TIMEOUT_SECONDS: "9600"
+AMPLIFY_TIMEOUT_SECONDS: "1200"
 steps:
+  - name: Record production job time budget
+    id: job_budget
+    run: echo "started_at=$(date +%s)" >>"$GITHUB_OUTPUT"
   - uses: hashicorp/setup-terraform@v4
     with:
       terraform_wrapper: false
@@ -499,7 +530,9 @@ steps:
       echo "CI Result"
       echo "TF_VAR_backend_image_tag: $DEPLOY_SHA"
       aws ecs describe-task-definition
-      echo "TF_VAR_frontend_image_tag=$rollback_sha"
+      echo "TF_VAR_frontend_image_tag: ${{ github.sha }}"
+      echo "Build and push immutable ECS fallback frontend image"
+      echo "NEXT_PUBLIC_API_BASE_URL=https://${API_DOMAIN}"
       npm ci --workspace=releviz-frontend
       npm --workspace=releviz-frontend run build:amplify
       python3 scripts/ci/validate_amplify_static_export.py --out src/frontend/out
@@ -507,7 +540,13 @@ steps:
       echo "retention-days: 90"
       echo release.json
       test "$release_sha" = "$DEPLOY_SHA"
+      echo "Plan production infrastructure with current DNS state"
+      echo 'TF_VAR_frontend_image_tag: ${{ steps.rollback_frontend.outputs.sha }}'
+      echo production-base.tfplan
       terraform -chdir=infra/prod state list
+      echo "Detect API-subdomain transition state"
+      echo "Install reviewed Amplify security headers"
+      aws amplify update-app --custom-headers "$custom_headers"
       echo "TF_VAR_amplify_app_id: ${{ vars.PROD_AMPLIFY_APP_ID }}"
       aws amplify get-domain-association
       terraform -chdir=infra/prod state pull
@@ -572,27 +611,85 @@ steps:
         jq -e --arg sha "$PREVIOUS_SHA" '.sha == $sha'
       echo "Deploy candidate Amplify branch"
       scripts/deploy/amplify-static-deploy.sh
-      echo "Smoke candidate Amplify frontend and same-origin proxy"
+      echo "Smoke candidate Amplify frontend and direct API boundary"
+      candidate_security_headers="${RUNNER_TEMP}/candidate-security.headers"
+      curl --dump-header "$candidate_security_headers" "${candidate_url}/"
+      echo "strict-transport-security: max-age=31536000; includeSubDomains"
+      echo "x-content-type-options: nosniff"
+      echo "x-frame-options: DENY"
+      echo "referrer-policy: no-referrer"
+      echo "^content-security-policy:"
+      echo "connect-src 'self' https://${API_DOMAIN}"
       jq -r '.static_routes[]' src/frontend/amplify-routes.json
       jq -r '.legacy_redirects | keys[]' src/frontend/amplify-routes.json
       echo 'event/?code=AMPLIFYSMOKE'
       find src/frontend/out/_next/static
+      echo "Access-Control-Request-Method: PUT"
+      echo "access-control-allow-origin"
+      echo '${api_url}/admin/login/'
+      echo '<form'
       echo csrfmiddlewaretoken
-      echo 'email=amplify-smoke-${DEPLOY_SHA}@example.invalid'
-      echo 'admin_post_status" != "400"'
-      echo "Please enter valid staff account credentials."
+      echo '${api_url}/static/admin/css/base.css'
+      echo 'if [ "$admin_post_status" != "200" ] && [ "$admin_post_status" != "400" ]; then'
       echo 'PUT /authn/profile'
       echo 'DELETE /authn/sessions'
+      echo "Revalidate Amplify production rollback point"
+      echo "Require a safe live-branch mutation budget"
+      echo 'JOB_STARTED_AT: ${{ steps.job_budget.outputs.started_at }}'
+      now="$(date +%s)"
+      elapsed=$((now - JOB_STARTED_AT))
+      remaining=$((PRODUCTION_JOB_TIMEOUT_SECONDS - elapsed))
+      rollback_reserve=$((90 * 60))
+      if [ "$remaining" -lt "$rollback_reserve" ]; then
+        exit 1
+      fi
       echo "Deploy production Amplify branch"
       echo "Smoke production Amplify branch before domain cutover"
+      phase_deadline=$((SECONDS + 600))
+      bounded_curl() {
+        local remaining=$((phase_deadline - SECONDS))
+        if [ "$remaining" -le 0 ]; then return 124; fi
+        timeout --signal=TERM "${remaining}s" curl "$@"
+      }
       jq -r '.static_routes[]' src/frontend/amplify-routes.json
       find src/frontend/out/_next/static
+      if ((SECONDS >= phase_deadline)); then exit 1; fi
+      canonical_preflight_headers="${RUNNER_TEMP}/canonical-api-preflight.headers"
+      canonical_preflight_status="$(
+        curl \
+          --request OPTIONS \
+          --header "Origin: https://${PROD_DOMAIN}" \
+          --header "Access-Control-Request-Method: PUT" \
+          --header "Access-Control-Request-Headers: authorization,content-type" \
+          --dump-header "$canonical_preflight_headers" \
+          --write-out "%{http_code}" \
+          "https://${API_DOMAIN}/authn/profile/"
+      )"
+      if [ "$canonical_preflight_status" != "200" ] ||
+        ! grep -Fqi "access-control-allow-origin: https://${PROD_DOMAIN}" \
+          "$canonical_preflight_headers" ||
+        ! grep -qiE 'access-control-allow-credentials: true' \
+          "$canonical_preflight_headers"; then
+        exit 1
+      fi
       echo "Verify preserved canonical alias immediately before cutover"
       echo "refusing cutover"
       echo "Plan reviewed Amplify domain association"
       echo 'TF_VAR_enable_amplify_domain: "true"'
+      echo 'TF_VAR_frontend_image_tag: ${{ steps.rollback_frontend.outputs.sha }}'
       terraform -chdir=infra/prod show -json production-domain.tfplan
       echo '.change.actions | index("delete")) == null'
+      echo "Require a safe first-cutover time budget"
+      echo "if: ${{ steps.apex_alias.outputs.routes_to_alb == 'true' }}"
+      echo 'JOB_STARTED_AT: ${{ steps.job_budget.outputs.started_at }}'
+      now="$(date +%s)"
+      elapsed=$((now - JOB_STARTED_AT))
+      remaining=$((PRODUCTION_JOB_TIMEOUT_SECONDS - elapsed))
+      compensation_reserve=$((70 * 60))
+      if [ "$remaining" -lt "$compensation_reserve" ]; then
+        exit 1
+      fi
+      echo "Apply exact Amplify domain association plan"
       echo "Reconcile Amplify domain association for a migration retry"
       aws amplify update-domain-association
       echo "Wait for Amplify custom domain availability"
@@ -602,7 +699,224 @@ steps:
       echo "The canonical alias did not match Amplify's exact apex DNS target"
       aws elbv2 describe-target-health
       echo "Run canonical production smoke tests"
+      phase_deadline=$((SECONDS + 600))
+      bounded_curl() {
+        local remaining=$((phase_deadline - SECONDS))
+        if [ "$remaining" -le 0 ]; then return 124; fi
+        timeout --signal=TERM "${remaining}s" curl "$@"
+      }
+      if ((SECONDS >= phase_deadline)); then exit 1; fi
+      canonical_security_headers="${RUNNER_TEMP}/canonical-security.headers"
+      curl --dump-header "$canonical_security_headers" "https://${PROD_DOMAIN}/"
+      echo "strict-transport-security: max-age=31536000; includeSubDomains"
+      echo "x-content-type-options: nosniff"
+      echo "x-frame-options: DENY"
+      echo "referrer-policy: no-referrer"
+      echo "^content-security-policy:"
+      echo "connect-src 'self' https://${API_DOMAIN}"
+      canonical_preflight_headers="${RUNNER_TEMP}/canonical-api-preflight.headers"
+      canonical_preflight_status="$(
+        curl \
+          --request OPTIONS \
+          --header "Origin: https://${PROD_DOMAIN}" \
+          --header "Access-Control-Request-Method: PUT" \
+          --header "Access-Control-Request-Headers: authorization,content-type" \
+          --dump-header "$canonical_preflight_headers" \
+          --write-out "%{http_code}" \
+          "https://${API_DOMAIN}/authn/profile/"
+      )"
+      if [ "$canonical_preflight_status" != "200" ] ||
+        ! grep -Fqi "access-control-allow-origin: https://${PROD_DOMAIN}" \
+          "$canonical_preflight_headers" ||
+        ! grep -qiE 'access-control-allow-credentials: true' \
+          "$canonical_preflight_headers"; then
+        exit 1
+      fi
+      echo "Plan final production topology"
+      echo 'TF_VAR_frontend_image_tag: ${{ github.sha }}'
+      echo 'TF_VAR_enable_legacy_api_compatibility: "false"'
+      echo production-final.tfplan
+      account_id="$(aws sts get-caller-identity --query Account --output text)"
+      expected_frontend_image="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_FRONTEND}:${DEPLOY_SHA}"
+      unexpected_changes="$(
+        echo '--arg frontend_image "$expected_frontend_image"'
+        echo 'def backend_proxy_source:'
+        echo 'def reviewed_backend_rule:'
+        echo 'def prune_unknown:'
+        echo 'def normalized_task:'
+        echo 'def normalized_backend_container:'
+        echo 'def normalized_frontend_container:'
+        echo 'def backend_final_values_are_safe:'
+        echo 'def frontend_final_values_are_safe:'
+        echo '.resource_changes[]?'
+        echo 'select(.change.actions != ["no-op"])'
+        echo 'del(.custom_rule)'
+        echo '. == "/api"'
+        echo '. == "/authn"'
+        echo '. == "/admin"'
+        echo '. == "/static"'
+        echo 'startswith("/api/")'
+        echo '.target | startswith($legacy_origin_url + "/")'
+        echo '.status == "200"'
+        echo '.change.after_unknown | prune_unknown'
+        echo 'del(.ecs_target[0].task_definition_arn)'
+        echo 'del(.task_definition)'
+        echo 'del(.health_check[0].path)'
+        echo '.change.before.health_check[0].path != "/api/health"'
+        echo '.change.after.health_check[0].path != "/health"'
+        echo 'ENABLE_LEGACY_API_PREFIX == "0"'
+        echo 'BACKEND_URL == $api_url'
+        echo '$container.image == $frontend_image'
+        echo '$actions != ["update"]'
+        echo '($actions | sort) != ["create", "delete"]'
+        echo '$actions != ["delete"]'
+        echo '"aws_amplify_app.frontend"'
+        echo '"aws_cloudwatch_event_target.event_reminders"'
+        echo '"aws_ecs_service.backend"'
+        echo '"aws_ecs_service.frontend"'
+        echo '"aws_lb_target_group.backend"'
+        echo '"aws_ecs_task_definition.backend"'
+        echo '"aws_ecs_task_definition.frontend"'
+        echo '"aws_acm_certificate.origin[0]"'
+        echo '"aws_acm_certificate_validation.origin[0]"'
+        echo '"aws_lb_listener_certificate.origin[0]"'
+        echo '"aws_lb_listener_rule.backend[0]"'
+        echo '"aws_route53_record.origin[0]"'
+        echo '"aws_route53_record.origin_cert_validation["'
+        echo 'else true end'
+      )"
+      if [ "$unexpected_changes" != "[]" ]; then exit 1; fi
+      echo "Apply exact final production topology plan"
+      terraform -chdir=infra/prod apply -input=false production-final.tfplan
+      echo "Verify final API-only backend topology"
+      account_id="$(aws sts get-caller-identity --query Account --output text)"
+      expected_backend_image="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_BACKEND}:${DEPLOY_SHA}"
+      expected_frontend_image="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_FRONTEND}:${DEPLOY_SHA}"
+      backend_task_definition="$(
+        aws ecs describe-services \
+          --services "${{ steps.terraform.outputs.backend_service }}" \
+          --query "services[0].taskDefinition"
+      )"
+      expected_backend_task_definition="$(
+        terraform -chdir=infra/prod output -raw backend_task_definition_arn
+      )"
+      if [ "$backend_task_definition" != "$expected_backend_task_definition" ]; then
+        exit 1
+      fi
+      backend_image="$(
+        aws ecs describe-task-definition \
+          --task-definition "$backend_task_definition" \
+          --query "taskDefinition.containerDefinitions[0].image"
+      )"
+      if [ "$backend_image" != "$expected_backend_image" ]; then exit 1; fi
+      frontend_task_definition="$(
+        aws ecs describe-services \
+          --services "${{ steps.terraform.outputs.frontend_service }}" \
+          --query "services[0].taskDefinition"
+      )"
+      expected_frontend_task_definition="$(
+        terraform -chdir=infra/prod output -raw frontend_task_definition_arn
+      )"
+      if [ "$frontend_task_definition" != "$expected_frontend_task_definition" ]; then
+        exit 1
+      fi
+      frontend_image="$(
+        aws ecs describe-task-definition \
+          --task-definition "$frontend_task_definition" \
+          --query "taskDefinition.containerDefinitions[0].image"
+      )"
+      if [ "$frontend_image" != "$expected_frontend_image" ]; then exit 1; fi
+      event_targets="$(
+        aws events list-targets-by-rule \
+          --output json
+      )"
+      if ! jq -e \
+        --arg expected "$expected_backend_task_definition" \
+        '(.Targets | length) == 1
+          and .Targets[0].EcsParameters.TaskDefinitionArn == $expected' \
+          <<<"$event_targets" >/dev/null; then
+        exit 1
+      fi
+      final_preflight_headers="${RUNNER_TEMP}/final-api-preflight.headers"
+      final_preflight_status="$(
+        curl \
+          --request OPTIONS \
+          --header "Origin: https://${PROD_DOMAIN}" \
+          --header "Access-Control-Request-Method: PUT" \
+          --header "Access-Control-Request-Headers: authorization,content-type" \
+          --dump-header "$final_preflight_headers" \
+          --write-out "%{http_code}" \
+          "https://${API_DOMAIN}/authn/profile/"
+      )"
+      if [ "$final_preflight_status" != "200" ] ||
+        ! grep -Fqi "access-control-allow-origin: https://${PROD_DOMAIN}" \
+          "$final_preflight_headers" ||
+        ! grep -qiE 'access-control-allow-credentials: true' \
+          "$final_preflight_headers"; then
+        exit 1
+      fi
+      echo 'https://${API_DOMAIN}/api/health'
+      legacy_urls=(
+        "https://${PROD_DOMAIN}/api/health"
+        "https://${PROD_DOMAIN}/admin/"
+        "https://${PROD_DOMAIN}/authn/public-key/"
+        "https://${PROD_DOMAIN}/static/admin/css/base.css"
+        "https://${API_DOMAIN}/api/health"
+      )
+      stable_retired_cycles=0
+      for attempt in $(seq 1 30); do
+        all_retired=true
+        for legacy_url in "${legacy_urls[@]}"; do
+          echo "Cache-Control: no-cache"
+          echo "Pragma: no-cache"
+          status="$(curl "${legacy_url}?retired_check=${DEPLOY_SHA}-${attempt}")"
+          if [ "$status" != "404" ]; then all_retired=false; fi
+        done
+        if [ "$all_retired" = "true" ]; then
+          stable_retired_cycles=$((stable_retired_cycles + 1))
+          if [ "$stable_retired_cycles" -ge 3 ]; then break; fi
+        else
+          stable_retired_cycles=0
+        fi
+      done
+      if [ "$stable_retired_cycles" -lt 3 ]; then exit 1; fi
       echo "Restore pre-release canonical Route53 alias after failed first cutover"
+      echo "steps.canonical_smoke.outcome != 'success'"
+      association_terminal=false
+      for attempt in $(seq 1 120); do
+        aws amplify get-domain-association
+        echo '.domainAssociation.domainStatus'
+        echo '.domainAssociation.updateStatus'
+        domain_status="AVAILABLE"
+        update_status="NONE"
+        if { [ "$domain_status" = "AVAILABLE" ] &&
+          [[ "$update_status" =~ ^(NONE|UPDATE_COMPLETE)$ ]]; } ||
+          [ "$update_status" = "UPDATE_FAILED" ] ||
+          { [ "$domain_status" = "FAILED" ] && [ "$update_status" = "NONE" ]; }; then
+          association_terminal=true
+          break
+        elif grep -q 'NotFoundException' "$association_error"; then
+          association_terminal=true
+          break
+        fi
+      done
+      if [ "$association_terminal" != "true" ]; then exit 1; fi
+      restore_canonical_alias() {
+        aws route53 change-resource-record-sets
+      }
+      stable_alias_checks=0
+      for attempt in $(seq 1 12); do
+        if [ "$actual_alias" = "$expected_alias" ]; then
+          stable_alias_checks=$((stable_alias_checks + 1))
+          if [ "$stable_alias_checks" -ge 6 ]; then break; fi
+        elif is_recognized_amplify_alias "$actual_alias"; then
+          restore_canonical_alias
+          stable_alias_checks=0
+        else
+          exit 1
+        fi
+      done
+      if [ "$stable_alias_checks" -lt 6 ]; then exit 1; fi
       aws route53 change-resource-record-sets
       echo 'Action: "UPSERT"'
       aws route53 wait resource-record-sets-changed
@@ -612,18 +926,316 @@ steps:
       echo "Roll back production Amplify branch after failed release"
       echo "steps.apex_alias.outputs.routes_to_alb != 'true'"
       echo "steps.production_deploy.outputs.terminal_confirmed == 'true'"
+      echo 'API_COMPATIBILITY: ${{ steps.api_transition.outputs.compatibility }}'
       scripts/deploy/amplify-static-deploy.sh \
         "$AMPLIFY_APP_ID" "$PRODUCTION_BRANCH" "$ROLLBACK_ARCHIVE"
       production_url="https://${PRODUCTION_BRANCH}.${AMPLIFY_DEFAULT_DOMAIN}"
+      phase_deadline=$((SECONDS + 300))
+      bounded_curl() {
+        local remaining=$((phase_deadline - SECONDS))
+        if [ "$remaining" -le 0 ]; then return 124; fi
+        timeout --signal=TERM "${remaining}s" curl "$@"
+      }
+      if ((SECONDS >= phase_deadline)); then exit 1; fi
       for base_url in "$production_url" "https://${PROD_DOMAIN}"; do
+        curl "${base_url}/"
         curl "${base_url}/release.json" | jq -er .sha
         test "$release_sha" = "$PREVIOUS_SHA"
       done
+      for path in /health/live /health /admin/ /static/admin/css/base.css; do
+        curl "https://${API_DOMAIN}${path}"
+      done
+      if [ "$API_COMPATIBILITY" = "true" ]; then
+        for base_url in "$production_url" "https://${PROD_DOMAIN}"; do
+          for path in /api/health/live /api/health /admin/; do
+            curl "${base_url}${path}"
+          done
+        done
+      else
+        for base_url in "$production_url" "https://${PROD_DOMAIN}"; do
+          for path in /api/health /admin/; do
+            status="$(curl "${base_url}${path}")"
+            if [ "$status" != "404" ]; then exit 1; fi
+          done
+        done
+      fi
+      echo "Summarize immutable production release"
 """,
                 encoding="utf-8",
             )
             self.assertEqual(production_cd_errors(root), [])
             protected_source = workflow.read_text(encoding="utf-8")
+
+            workflow.write_text(
+                protected_source.replace(
+                    "- name: Record production job time budget",
+                    "- name: Record production job time budget too late",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assertIn(
+                "production CD does not record the job epoch in its first step",
+                production_cd_errors(root),
+            )
+
+            workflow.write_text(
+                protected_source.replace(
+                    "timeout-minutes: 160",
+                    "timeout-minutes: 120",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assertIn(
+                "production CD omits the reviewed 160-minute production job limit",
+                production_cd_errors(root),
+            )
+
+            workflow.write_text(
+                protected_source.replace(
+                    'PRODUCTION_JOB_TIMEOUT_SECONDS: "9600"',
+                    'PRODUCTION_JOB_TIMEOUT_SECONDS: "7200"',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assertIn(
+                "production CD omits the production job timeout in seconds",
+                production_cd_errors(root),
+            )
+
+            workflow.write_text(
+                protected_source.replace(
+                    'AMPLIFY_TIMEOUT_SECONDS: "1200"',
+                    'AMPLIFY_TIMEOUT_SECONDS: "1800"',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assertIn(
+                "production CD omits the bounded Amplify deployment-helper timeout",
+                production_cd_errors(root),
+            )
+
+            workflow.write_text(
+                protected_source.replace(
+                    "rollback_reserve=$((90 * 60))",
+                    "rollback_reserve=$((30 * 60))",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assertIn(
+                "production CD omits the 5,400-second live-branch rollback reserve",
+                production_cd_errors(root),
+            )
+
+            workflow.write_text(
+                protected_source.replace(
+                    "steps.apex_alias.outputs.routes_to_alb == 'true'",
+                    "steps.apex_alias.outputs.routes_to_alb != 'true'",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assertIn(
+                "production CD omits ALB-only first-cutover budget enforcement",
+                production_cd_errors(root),
+            )
+
+            workflow.write_text(
+                protected_source.replace(
+                    "compensation_reserve=$((70 * 60))",
+                    "compensation_reserve=$((30 * 60))",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assertIn(
+                "production CD omits the 4,200-second DNS-compensation reserve",
+                production_cd_errors(root),
+            )
+
+            workflow.write_text(
+                protected_source.replace(
+                    "Plan reviewed Amplify domain association",
+                    "__DOMAIN_PLAN_MARKER__",
+                    1,
+                )
+                .replace(
+                    "Require a safe first-cutover time budget",
+                    "Plan reviewed Amplify domain association",
+                    1,
+                )
+                .replace(
+                    "__DOMAIN_PLAN_MARKER__",
+                    "Require a safe first-cutover time budget",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assertIn(
+                "production CD must place the first-cutover budget guard after "
+                "the domain plan and before its apply",
+                production_cd_errors(root),
+            )
+
+            workflow.write_text(
+                protected_source.replace(
+                    '      echo "Apply exact Amplify domain association plan"',
+                    "      - name: Unreviewed step between cutover guard and apply\n"
+                    '      echo "Apply exact Amplify domain association plan"',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assertIn(
+                "production CD must place the first-cutover budget guard "
+                "immediately before the domain apply",
+                production_cd_errors(root),
+            )
+
+            workflow.write_text(
+                protected_source.replace(
+                    "phase_deadline=$((SECONDS + 600))",
+                    "phase_deadline=$((SECONDS + 900))",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assertIn(
+                "production CD omits a 600-second hard deadline in production branch smoke",
+                production_cd_errors(root),
+            )
+
+            canonical_smoke_position = protected_source.index(
+                "Run canonical production smoke tests"
+            )
+            canonical_deadline_source = protected_source[
+                :canonical_smoke_position
+            ] + protected_source[canonical_smoke_position:].replace(
+                "phase_deadline=$((SECONDS + 600))",
+                "phase_deadline=$((SECONDS + 900))",
+                1,
+            )
+            workflow.write_text(canonical_deadline_source, encoding="utf-8")
+            self.assertIn(
+                "production CD omits a 600-second hard deadline in "
+                "canonical production smoke",
+                production_cd_errors(root),
+            )
+
+            workflow.write_text(
+                protected_source.replace(
+                    "phase_deadline=$((SECONDS + 300))",
+                    "phase_deadline=$((SECONDS + 600))",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assertIn(
+                "production CD omits a 300-second hard deadline in rollback smoke",
+                production_cd_errors(root),
+            )
+
+            workflow.write_text(
+                protected_source.replace(
+                    "echo '$container.image == $frontend_image'",
+                    "echo 'endswith($frontend_image)'",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assertIn(
+                "production CD omits exact frontend image equality in the final task",
+                production_cd_errors(root),
+            )
+
+            workflow.write_text(
+                protected_source.replace(
+                    'if [ "$backend_image" != "$expected_backend_image" ]; then',
+                    'if [ "$backend_image" != "$DEPLOY_SHA" ]; then',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assertIn(
+                "production CD omits exact backend runtime image equality",
+                production_cd_errors(root),
+            )
+
+            workflow.write_text(
+                protected_source.replace(
+                    "(.Targets | length) == 1",
+                    "(.Targets | length) >= 1",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assertIn(
+                "production CD omits exactly one EventBridge reminder target",
+                production_cd_errors(root),
+            )
+
+            workflow.write_text(
+                protected_source.replace(
+                    ".Targets[0].EcsParameters.TaskDefinitionArn == $expected",
+                    ".Targets[0].EcsParameters.TaskDefinitionArn != $expected",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assertIn(
+                "production CD omits exact reminder-target backend "
+                "task-definition ARN equality",
+                production_cd_errors(root),
+            )
+
+            workflow.write_text(
+                protected_source.replace(
+                    '--header "Origin: https://${PROD_DOMAIN}"',
+                    '--header "Origin: https://wrong.example"',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assertIn(
+                "production CD omits the canonical frontend origin in "
+                "production branch pre-cutover CORS preflight",
+                production_cd_errors(root),
+            )
+
+            canonical_cors_source = protected_source[
+                :canonical_smoke_position
+            ] + protected_source[canonical_smoke_position:].replace(
+                '--header "Access-Control-Request-Method: PUT"',
+                '--header "Access-Control-Request-Method: GET"',
+                1,
+            )
+            workflow.write_text(canonical_cors_source, encoding="utf-8")
+            self.assertIn(
+                "production CD omits the protected PUT request method in "
+                "canonical post-cutover CORS preflight",
+                production_cd_errors(root),
+            )
+
+            final_marker_position = protected_source.index(
+                "Verify final API-only backend topology"
+            )
+            final_cors_source = protected_source[
+                :final_marker_position
+            ] + protected_source[final_marker_position:].replace(
+                "access-control-allow-credentials: true",
+                "access-control-allow-credentials: false",
+                1,
+            )
+            workflow.write_text(final_cors_source, encoding="utf-8")
+            self.assertIn(
+                "production CD omits credentialed CORS enforcement in "
+                "final API topology CORS preflight",
+                production_cd_errors(root),
+            )
 
             compensated = protected_source.replace(
                 "aws route53 change-resource-record-sets",
@@ -690,6 +1302,240 @@ steps:
             )
             self.assertIn(
                 "production CD must resolve and verify rollback artifacts before candidate, production, and custom-domain stages",
+                production_cd_errors(root),
+            )
+
+            required_api_topology_contract = (
+                (
+                    'echo "Plan production infrastructure with current DNS state"\n'
+                    "      echo 'TF_VAR_frontend_image_tag: "
+                    "${{ steps.rollback_frontend.outputs.sha }}'",
+                    'echo "Plan production infrastructure with current DNS state"\n'
+                    "      echo 'TF_VAR_frontend_image_tag: ${{ github.sha }}'",
+                    "production CD omits the deployed ECS frontend SHA in the base Terraform plan",
+                ),
+                (
+                    'echo "Plan reviewed Amplify domain association"\n'
+                    "      echo 'TF_VAR_enable_amplify_domain: \"true\"'\n"
+                    "      echo 'TF_VAR_frontend_image_tag: "
+                    "${{ steps.rollback_frontend.outputs.sha }}'",
+                    'echo "Plan reviewed Amplify domain association"\n'
+                    "      echo 'TF_VAR_enable_amplify_domain: \"true\"'\n"
+                    "      echo 'TF_VAR_frontend_image_tag: ${{ github.sha }}'",
+                    "production CD omits the deployed ECS frontend SHA in the domain Terraform plan",
+                ),
+                (
+                    "echo 'TF_VAR_frontend_image_tag: ${{ github.sha }}'\n"
+                    "      echo 'TF_VAR_enable_legacy_api_compatibility: \"false\"'\n"
+                    "      echo production-final.tfplan",
+                    "echo 'TF_VAR_frontend_image_tag: "
+                    "${{ steps.rollback_frontend.outputs.sha }}'\n"
+                    "      echo 'TF_VAR_enable_legacy_api_compatibility: \"false\"'\n"
+                    "      echo production-final.tfplan",
+                    "production CD omits the current frontend SHA in the final Terraform plan",
+                ),
+                (
+                    "echo \"steps.canonical_smoke.outcome != 'success'\"",
+                    "echo \"steps.canonical_smoke.outcome == 'success'\"",
+                    "production CD omits a canonical-smoke failure guard on first-cutover DNS compensation",
+                ),
+                (
+                    "      echo '<form'\n",
+                    "",
+                    "production CD omits the Django admin login form in candidate smoke",
+                ),
+                (
+                    "      echo '${api_url}/static/admin/css/base.css'\n",
+                    "",
+                    "production CD omits the direct Django admin static asset in candidate smoke",
+                ),
+                (
+                    '        curl "https://${API_DOMAIN}${path}"',
+                    '        curl "${base_url}${path}"',
+                    "production CD omits the API subdomain boundary in rollback smoke",
+                ),
+                (
+                    "for path in /api/health /admin/; do",
+                    "for path in /api/health; do",
+                    "production CD omits retired frontend backend-route checks in rollback smoke",
+                ),
+            )
+            for needle, replacement, expected_error in required_api_topology_contract:
+                with self.subTest(expected_error=expected_error):
+                    self.assertIn(needle, protected_source)
+                    workflow.write_text(
+                        protected_source.replace(needle, replacement, 1),
+                        encoding="utf-8",
+                    )
+                    self.assertIn(expected_error, production_cd_errors(root))
+
+            reviewed_response_headers = (
+                (
+                    "strict-transport-security: max-age=31536000; includeSubDomains",
+                    "missing-strict-transport-security",
+                    "Strict-Transport-Security",
+                ),
+                (
+                    "x-content-type-options: nosniff",
+                    "missing-x-content-type-options",
+                    "X-Content-Type-Options",
+                ),
+                (
+                    "x-frame-options: DENY",
+                    "missing-x-frame-options",
+                    "X-Frame-Options",
+                ),
+                (
+                    "referrer-policy: no-referrer",
+                    "missing-referrer-policy",
+                    "Referrer-Policy",
+                ),
+                (
+                    "^content-security-policy:",
+                    "missing-content-security-policy",
+                    "Content-Security-Policy",
+                ),
+            )
+            for needle, replacement, header in reviewed_response_headers:
+                with self.subTest(response_header=header):
+                    self.assertEqual(protected_source.count(needle), 2)
+                    workflow.write_text(
+                        protected_source.replace(needle, replacement),
+                        encoding="utf-8",
+                    )
+                    errors = production_cd_errors(root)
+                    self.assertIn(
+                        f"production CD omits the {header} check on actual candidate Amplify responses",
+                        errors,
+                    )
+                    self.assertIn(
+                        f"production CD omits the {header} check on actual canonical Amplify responses",
+                        errors,
+                    )
+
+            workflow.write_text(
+                protected_source.replace(
+                    'curl --dump-header "$candidate_security_headers" "${candidate_url}/"',
+                    'curl "${candidate_url}/"',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assertIn(
+                "production CD omits actual candidate Amplify response-header capture",
+                production_cd_errors(root),
+            )
+
+            workflow.write_text(
+                protected_source.replace(
+                    '"aws_lb_target_group.backend"',
+                    '"aws_lb_target_group.unreviewed"',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assertIn(
+                "production CD final plan does not use the exact reviewed unexpected_changes address allowlist",
+                production_cd_errors(root),
+            )
+
+            workflow.write_text(
+                protected_source.replace(
+                    '      unexpected_changes="$(',
+                    '      unchecked_changes="$(',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assertIn(
+                "production CD omits an unexpected_changes result",
+                production_cd_errors(root),
+            )
+
+            workflow.write_text(
+                protected_source.replace(
+                    "        else\n          stable_retired_cycles=0",
+                    "        else\n          stable_retired_cycles=1",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assertIn(
+                "production CD does not reset retired-route stability after a non-404 cycle",
+                production_cd_errors(root),
+            )
+
+            workflow.write_text(
+                protected_source.replace(
+                    "          restore_canonical_alias\n          stable_alias_checks=0",
+                    "          restore_canonical_alias\n          stable_alias_checks=1",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assertIn(
+                "production CD does not reset DNS compensation stability after an alias rewrite",
+                production_cd_errors(root),
+            )
+
+            workflow.write_text(
+                protected_source.replace(
+                    "        aws amplify get-domain-association",
+                    "        echo missing-domain-association-poll",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assertIn(
+                "production CD omits Amplify association polling before DNS compensation",
+                production_cd_errors(root),
+            )
+
+            for marker in (
+                "Plan final production topology",
+                "Apply exact final production topology plan",
+                "Verify final API-only backend topology",
+            ):
+                with self.subTest(unconditional_final_step=marker):
+                    workflow.write_text(
+                        protected_source.replace(
+                            f'echo "{marker}"\n',
+                            f'echo "{marker}"\n'
+                            "      if: ${{ steps.api_transition.outputs.compatibility == 'true' }}\n",
+                            1,
+                        ),
+                        encoding="utf-8",
+                    )
+                    self.assertIn(
+                        f"production CD conditionally skips {marker}",
+                        production_cd_errors(root),
+                    )
+
+            workflow.write_text(
+                protected_source.replace(
+                    'echo \'if [ "$admin_post_status" != "200" ] && '
+                    '[ "$admin_post_status" != "400" ]; then\'',
+                    'if [ "$admin_post_status" != "400" ]; then',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assertIn(
+                "production CD retains an exclusive custom 400 Django admin contract",
+                production_cd_errors(root),
+            )
+
+            workflow.write_text(
+                protected_source.replace(
+                    "      echo '<form'\n",
+                    "      echo '<form'\n"
+                    '      echo "Please enter valid staff account credentials."\n',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assertIn(
+                "production CD retains a custom Django admin error-message contract",
                 production_cd_errors(root),
             )
 
@@ -881,7 +1727,9 @@ steps:
                 "production CD omits manual dispatch", production_cd_errors(root)
             )
 
-    def test_production_cd_rejects_legacy_dns_and_frontend_docker(self):
+    def test_production_cd_rejects_legacy_dns_and_requires_api_aware_frontend_docker(
+        self,
+    ):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             workflows = root / ".github/workflows"
@@ -904,7 +1752,12 @@ terraform -chdir=infra/prod plan -out=production-restore-origin.tfplan
                 "production CD retains legacy DNS-disable cutover flow", errors
             )
             self.assertIn(
-                "production CD retains a production frontend Docker build", errors
+                "production CD omits an API-aware ECS frontend fallback build",
+                errors,
+            )
+            self.assertIn(
+                "production CD omits the API subdomain baked into the ECS frontend fallback",
+                errors,
             )
             self.assertIn(
                 "production CD retains retired CloudFront origin-hardening input",
@@ -949,7 +1802,9 @@ curl --connect-timeout 10 --max-time 300 --retry-max-time 300 --upload-file arti
 aws amplify start-deployment
 aws amplify get-job
 aws amplify stop-job
-AMPLIFY_STOP_ATTEMPTS=5
+stop_attempts="${AMPLIFY_STOP_ATTEMPTS:-5}"
+cancel_polls_per_attempt="${AMPLIFY_CANCEL_POLLS_PER_ATTEMPT:-12}"
+cancel_poll_seconds="${AMPLIFY_CANCEL_POLL_SECONDS:-5}"
 AMPLIFY_CANCELLATION_UNCONFIRMED_EXIT_CODE=75
 echo "$GITHUB_OUTPUT terminal_confirmed cancellation_confirmed"
 echo "Do not start a retry or rollback job"
@@ -964,6 +1819,20 @@ echo "Timed out waiting"
                 encoding="utf-8",
             )
             self.assertEqual(amplify_deploy_script_errors(root), [])
+
+            bounded_helper = script.read_text(encoding="utf-8")
+            script.write_text(
+                bounded_helper.replace(
+                    'cancel_poll_seconds="${AMPLIFY_CANCEL_POLL_SECONDS:-5}"',
+                    'cancel_poll_seconds="${AMPLIFY_CANCEL_POLL_SECONDS:-10}"',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assertIn(
+                "manual Amplify deployment helper omits five-second cancellation polling",
+                amplify_deploy_script_errors(root),
+            )
 
             script.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
             self.assertIn(

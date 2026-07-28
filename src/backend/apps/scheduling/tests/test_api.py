@@ -27,7 +27,7 @@ class RelevizApiTests(TestCase):
     def create_event(self):
         self.authenticate(self.organizer)
         res = self.client.post(
-            "/api/events",
+            "/events",
             {
                 "name": "Planning",
                 "startTime": "09:00",
@@ -43,12 +43,12 @@ class RelevizApiTests(TestCase):
         return res.data["event"]["code"]
 
     def test_missing_auth_returns_401(self):
-        res = self.client.get("/api/dashboard/events")
+        res = self.client.get("/dashboard/events")
         self.assertEqual(res.status_code, 401)
 
     def test_create_event_uses_authenticated_user_as_organizer(self):
         code = self.create_event()
-        res = self.client.get(f"/api/events?code={code}")
+        res = self.client.get(f"/events?code={code}")
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.data["event"]["organizerUserId"], str(self.organizer.pk))
 
@@ -56,13 +56,13 @@ class RelevizApiTests(TestCase):
         code = self.create_event()
 
         self.authenticate(self.participant)
-        res = self.client.post(f"/api/events/participants?code={code}", {}, format="json")
+        res = self.client.post(f"/events/participants?code={code}", {}, format="json")
         self.assertEqual(res.status_code, 201)
         self.assertEqual(res.data["participant"]["id"], str(self.participant.pk))
 
         schedule = [1, 0, 1, 0, 1, 0, 1, 0]
         res = self.client.put(
-            f"/api/events/participants/update?code={code}&participantId={self.participant.pk}",
+            f"/events/participants/update?code={code}&participantId={self.participant.pk}",
             {
                 "availabilityInperson": schedule,
                 "submitted": 1,
@@ -73,24 +73,24 @@ class RelevizApiTests(TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.data["participant"]["submitted"], 1)
 
-        res = self.client.get("/api/dashboard/events")
+        res = self.client.get("/dashboard/events")
         self.assertEqual(res.status_code, 200)
         self.assertEqual([event["code"] for event in res.data["participating"]], [code])
 
     def test_non_organizer_cannot_modify_organizer_controls(self):
         code = self.create_event()
         self.authenticate(self.participant)
-        self.client.post(f"/api/events/participants?code={code}", {}, format="json")
+        self.client.post(f"/events/participants?code={code}", {}, format="json")
 
         res = self.client.put(
-            f"/api/events/participants/update?code={code}&participantId={self.participant.pk}",
+            f"/events/participants/update?code={code}&participantId={self.participant.pk}",
             {"groupName": "A"},
             format="json",
         )
         self.assertEqual(res.status_code, 403)
 
         res = self.client.put(
-            f"/api/events/weights?code={code}",
+            f"/events/weights?code={code}",
             {
                 "weights": [
                     {"participantId": str(self.participant.pk), "weight": 0.5, "included": 1}
@@ -101,18 +101,18 @@ class RelevizApiTests(TestCase):
         self.assertEqual(res.status_code, 403)
 
         res = self.client.delete(
-            f"/api/events/participants/update?code={code}&participantId={self.participant.pk}"
+            f"/events/participants/update?code={code}&participantId={self.participant.pk}"
         )
         self.assertEqual(res.status_code, 403)
 
     def test_organizer_can_update_weights_hide_and_unhide(self):
         code = self.create_event()
         self.authenticate(self.participant)
-        self.client.post(f"/api/events/participants?code={code}", {}, format="json")
+        self.client.post(f"/events/participants?code={code}", {}, format="json")
 
         self.authenticate(self.organizer)
         res = self.client.put(
-            f"/api/events/weights?code={code}",
+            f"/events/weights?code={code}",
             {
                 "weights": [
                     {"participantId": str(self.participant.pk), "weight": 0.5, "included": 1}
@@ -124,56 +124,55 @@ class RelevizApiTests(TestCase):
         self.assertEqual(res.data["weights"][0]["weight"], 0.5)
 
         res = self.client.delete(
-            f"/api/events/participants/update?code={code}&participantId={self.participant.pk}"
+            f"/events/participants/update?code={code}&participantId={self.participant.pk}"
         )
         self.assertEqual(res.status_code, 200)
 
         res = self.client.put(
-            f"/api/events/participants/update/unhide?code={code}&participantId={self.participant.pk}"
+            f"/events/participants/update/unhide?code={code}&participantId={self.participant.pk}"
         )
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.data["participant"]["hidden"], 0)
 
     def test_health_and_missing_or_unknown_event_errors(self):
-        live = self.client.get("/api/health/live")
+        live = self.client.get("/health/live")
         self.assertEqual(live.data, {"ok": True})
         self.assertIn("no-store", live["Cache-Control"])
-        for path in ["/api/health", "/api/health/ready"]:
+        for path in ["/health", "/health/ready"]:
             response = self.client.get(path)
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.data, {"ok": True, "checks": {"database": "ok"}})
             self.assertIn("no-store", response["Cache-Control"])
+        self.assertEqual(self.client.get("/api/health").status_code, 404)
         self.authenticate(self.organizer)
         for path in [
-            "/api/events",
-            "/api/events/participants",
-            "/api/events/participants/update",
-            "/api/events/participants/update/unhide",
-            "/api/events/weights",
+            "/events",
+            "/events/participants",
+            "/events/participants/update",
+            "/events/participants/update/unhide",
+            "/events/weights",
         ]:
             response = self.client.get(path) if "update" not in path else self.client.put(path)
             self.assertEqual(response.status_code, 400)
-        self.assertEqual(self.client.get("/api/events?code=NOPE").status_code, 404)
-        self.assertEqual(self.client.get("/api/events/participants?code=NOPE").status_code, 404)
+        self.assertEqual(self.client.get("/events?code=NOPE").status_code, 404)
+        self.assertEqual(self.client.get("/events/participants?code=NOPE").status_code, 404)
         self.assertEqual(
-            self.client.put(
-                "/api/events/participants/update?code=NOPE&participantId=x"
-            ).status_code,
+            self.client.put("/events/participants/update?code=NOPE&participantId=x").status_code,
             404,
         )
         self.assertEqual(
             self.client.put(
-                "/api/events/participants/update/unhide?code=NOPE&participantId=x"
+                "/events/participants/update/unhide?code=NOPE&participantId=x"
             ).status_code,
             404,
         )
-        self.assertEqual(self.client.get("/api/events/weights?code=NOPE").status_code, 404)
+        self.assertEqual(self.client.get("/events/weights?code=NOPE").status_code, 404)
 
     @patch("apps.scheduling.views.connection.cursor")
     def test_readiness_reports_database_failure_without_details(self, cursor):
         cursor.side_effect = DatabaseError("database credentials must not leak")
 
-        for path in ["/api/health", "/api/health/ready"]:
+        for path in ["/health", "/health/ready"]:
             with self.assertLogs("apps.scheduling.views", level="WARNING") as logs:
                 response = self.client.get(path)
             self.assertEqual(response.status_code, 503)
@@ -265,12 +264,12 @@ class RelevizApiTests(TestCase):
         ]
         for payload, message in invalid_payloads:
             with self.subTest(message=message):
-                response = self.client.post("/api/events", payload, format="json")
+                response = self.client.post("/events", payload, format="json")
                 self.assertEqual(response.status_code, 400)
                 self.assertIn(message, response.data["error"])
 
         response = self.client.post(
-            "/api/events",
+            "/events",
             {"name": "Virtual", "mode": "virtual"},
             format="json",
         )
@@ -281,7 +280,7 @@ class RelevizApiTests(TestCase):
         self.assertEqual(response.data["event"]["reminderHoursBefore"], 24)
 
         response = self.client.post(
-            "/api/events",
+            "/events",
             {
                 "name": "Dates",
                 "startTime": "09:00",
@@ -302,7 +301,7 @@ class RelevizApiTests(TestCase):
         self.assertEqual([group["date"] for group in data["slotGroups"]], data["specificDates"])
 
         cross_midnight = self.client.post(
-            "/api/events",
+            "/events",
             {
                 "name": "Overnight",
                 "startTime": "23:00",
@@ -317,7 +316,7 @@ class RelevizApiTests(TestCase):
         self.assertEqual(cross_midnight.data["event"]["slotCount"], 8)
 
         fifteen_minutes = self.client.post(
-            "/api/events",
+            "/events",
             {
                 "name": "Quarter hours",
                 "startTime": "09:15",
@@ -353,7 +352,7 @@ class RelevizApiTests(TestCase):
                 start_minutes=9 * 60,
                 end_minutes=10 * 60,
             )
-            response = self.client.post("/api/events", {"name": "New"}, format="json")
+            response = self.client.post("/events", {"name": "New"}, format="json")
         self.assertEqual(response.status_code, 500)
 
     def test_participant_join_edge_cases_and_include_hidden(self):
@@ -362,45 +361,43 @@ class RelevizApiTests(TestCase):
         nameless = get_user_model().objects.create_user(password="password123", is_active=True)
         self.authenticate(nameless)
         with patch.object(nameless.__class__, "display_name", return_value=""):
-            response = self.client.post(f"/api/events/participants?code={code}", {}, format="json")
+            response = self.client.post(f"/events/participants?code={code}", {}, format="json")
             self.assertEqual(response.status_code, 400)
         with patch.object(nameless.__class__, "display_name", return_value="x" * 101):
-            response = self.client.post(f"/api/events/participants?code={code}", {}, format="json")
+            response = self.client.post(f"/events/participants?code={code}", {}, format="json")
             self.assertEqual(response.status_code, 400)
 
         self.authenticate(self.participant)
-        response = self.client.post("/api/events/participants", {}, format="json")
+        response = self.client.post("/events/participants", {}, format="json")
         self.assertEqual(response.status_code, 400)
-        response = self.client.post("/api/events/participants?code=NOPE", {}, format="json")
+        response = self.client.post("/events/participants?code=NOPE", {}, format="json")
         self.assertEqual(response.status_code, 404)
 
-        self.client.post(f"/api/events/participants?code={code}", {}, format="json")
+        self.client.post(f"/events/participants?code={code}", {}, format="json")
         participant = Participant.objects.get(member=self.participant, event=event)
         participant.participant_name = "Changed"
         participant.save(update_fields=["participant_name"])
-        repeat = self.client.post(f"/api/events/participants?code={code}", {}, format="json")
+        repeat = self.client.post(f"/events/participants?code={code}", {}, format="json")
         self.assertEqual(repeat.status_code, 200)
         participant.refresh_from_db()
         self.assertEqual(participant.participant_name, "Part Person")
 
         self.authenticate(self.organizer)
         self.client.delete(
-            f"/api/events/participants/update?code={code}&participantId={self.participant.pk}"
+            f"/events/participants/update?code={code}&participantId={self.participant.pk}"
         )
-        hidden = self.client.get(f"/api/events/participants?code={code}")
+        hidden = self.client.get(f"/events/participants?code={code}")
         self.assertEqual(hidden.data["participants"], [])
-        included = self.client.get(f"/api/events/participants?code={code}&includeHidden=true")
+        included = self.client.get(f"/events/participants?code={code}&includeHidden=true")
         self.assertEqual(len(included.data["participants"]), 1)
-        organizer_join = self.client.post(
-            f"/api/events/participants?code={code}", {}, format="json"
-        )
+        organizer_join = self.client.post(f"/events/participants?code={code}", {}, format="json")
         self.assertEqual(organizer_join.status_code, 201)
 
     def test_participant_update_validation_and_noop(self):
         code = self.create_event()
         self.authenticate(self.participant)
-        self.client.post(f"/api/events/participants?code={code}", {}, format="json")
-        base = f"/api/events/participants/update?code={code}&participantId={self.participant.pk}"
+        self.client.post(f"/events/participants?code={code}", {}, format="json")
+        base = f"/events/participants/update?code={code}&participantId={self.participant.pk}"
 
         response = self.client.put(base, {"availabilityInperson": "[bad"}, format="json")
         self.assertEqual(response.status_code, 400)
@@ -414,7 +411,7 @@ class RelevizApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         other = create_member("missing-participant@example.com")
         response = self.client.put(
-            f"/api/events/participants/update?code={code}&participantId={other.pk}",
+            f"/events/participants/update?code={code}&participantId={other.pk}",
             {"submitted": 1},
             format="json",
         )
@@ -438,39 +435,39 @@ class RelevizApiTests(TestCase):
         response = self.client.delete(base)
         self.assertEqual(response.status_code, 403)
         response = self.client.delete(
-            f"/api/events/participants/update?code={code}&participantId={other.pk}"
+            f"/events/participants/update?code={code}&participantId={other.pk}"
         )
         self.assertEqual(response.status_code, 404)
 
     def test_unhide_and_weight_validation_errors(self):
         code = self.create_event()
         self.authenticate(self.participant)
-        self.client.post(f"/api/events/participants?code={code}", {}, format="json")
+        self.client.post(f"/events/participants?code={code}", {}, format="json")
 
         self.authenticate(self.participant)
         response = self.client.put(
-            f"/api/events/participants/update/unhide?code={code}&participantId={self.participant.pk}"
+            f"/events/participants/update/unhide?code={code}&participantId={self.participant.pk}"
         )
         self.assertEqual(response.status_code, 403)
 
         self.authenticate(self.organizer)
         other = create_member("other-unhide@example.com")
         missing = self.client.put(
-            f"/api/events/participants/update/unhide?code={code}&participantId={other.pk}"
+            f"/events/participants/update/unhide?code={code}&participantId={other.pk}"
         )
         self.assertEqual(missing.status_code, 404)
 
         self.authenticate(self.participant)
-        self.assertEqual(self.client.get(f"/api/events/weights?code={code}").status_code, 403)
+        self.assertEqual(self.client.get(f"/events/weights?code={code}").status_code, 403)
 
         self.authenticate(self.organizer)
         self.assertEqual(
-            self.client.put("/api/events/weights", {"weights": []}, format="json").status_code,
+            self.client.put("/events/weights", {"weights": []}, format="json").status_code,
             400,
         )
         self.assertEqual(
             self.client.put(
-                "/api/events/weights?code=NOPE", {"weights": []}, format="json"
+                "/events/weights?code=NOPE", {"weights": []}, format="json"
             ).status_code,
             404,
         )
@@ -483,22 +480,20 @@ class RelevizApiTests(TestCase):
             {"weights": [{"participantId": "missing", "weight": 0.5, "included": 1}]},
         ]:
             with self.subTest(payload=payload):
-                response = self.client.put(
-                    f"/api/events/weights?code={code}", payload, format="json"
-                )
+                response = self.client.put(f"/events/weights?code={code}", payload, format="json")
                 self.assertEqual(response.status_code, 400)
 
         response = self.client.put(
-            f"/api/events/weights?code={code}",
+            f"/events/weights?code={code}",
             {"weights": [{"id": str(self.participant.pk), "weight": 0.75, "included": 0}]},
             format="json",
         )
         self.assertEqual(response.status_code, 200)
-        response = self.client.get(f"/api/events/weights?code={code}")
+        response = self.client.get(f"/events/weights?code={code}")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["weights"][0]["included"], 0)
 
-        dashboard = self.client.get("/api/dashboard/events")
+        dashboard = self.client.get("/dashboard/events")
         self.assertEqual([event["code"] for event in dashboard.data["organized"]], [code])
 
     def test_model_strings_and_schedule_helpers(self):
@@ -506,7 +501,7 @@ class RelevizApiTests(TestCase):
         event = Event.objects.get(code=code)
         self.authenticate(self.participant)
         participant_response = self.client.post(
-            f"/api/events/participants?code={code}", {}, format="json"
+            f"/events/participants?code={code}", {}, format="json"
         )
         participant = Participant.objects.get(member=self.participant, event=event)
         UserEvent.objects.get_or_create(member=self.participant, event=event, role="participant")

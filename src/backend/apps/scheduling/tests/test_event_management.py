@@ -55,21 +55,21 @@ class EventManagementApiTests(TestCase):
 
     def edit(self, event, payload):
         return self.client.put(
-            f"/api/events?code={event.code}",
+            f"/events?code={event.code}",
             payload,
             format="json",
         )
 
     def duplicate(self, event, payload):
         return self.client.post(
-            f"/api/events/duplicate?code={event.code}",
+            f"/events/duplicate?code={event.code}",
             payload,
             format="json",
         )
 
     def delete(self, event, payload):
         return self.client.delete(
-            f"/api/events?code={event.code}",
+            f"/events?code={event.code}",
             payload,
             format="json",
         )
@@ -138,7 +138,7 @@ class EventManagementApiTests(TestCase):
             "apps.scheduling.event_management.generate_event_code",
             side_effect=["TOMBSTON", "FRESH001"],
         ):
-            created = self.client.post("/api/events", {"name": "Fresh"}, format="json")
+            created = self.client.post("/events", {"name": "Fresh"}, format="json")
         self.assertEqual(created.status_code, 201)
         self.assertEqual(created.data["event"]["code"], "FRESH001")
 
@@ -158,12 +158,12 @@ class EventManagementApiTests(TestCase):
             ),
             patch.object(Event.objects, "create", side_effect=racing_create),
         ):
-            raced = self.client.post("/api/events", {"name": "Race safe"}, format="json")
+            raced = self.client.post("/events", {"name": "Race safe"}, format="json")
         self.assertEqual(raced.status_code, 201)
         self.assertEqual(raced.data["event"]["code"], "RACE0002")
 
         cleared_deadline = self.client.post(
-            "/api/events",
+            "/events",
             {"name": "No deadline", "responseDeadline": None},
             format="json",
         )
@@ -182,14 +182,14 @@ class EventManagementApiTests(TestCase):
             ),
         ):
             exhausted = self.client.post(
-                "/api/events",
+                "/events",
                 {"name": "Cannot insert"},
                 format="json",
             )
         self.assertEqual(exhausted.status_code, 500)
 
         invalid = self.client.post(
-            "/api/events",
+            "/events",
             {"name": "Invalid reminder", "reminderHoursBefore": True},
             format="json",
         )
@@ -202,10 +202,10 @@ class EventManagementApiTests(TestCase):
         participant = self.participant(event)
         invitation = self.invitation(event)
 
-        self.assertEqual(self.client.put("/api/events", {}, format="json").status_code, 400)
+        self.assertEqual(self.client.put("/events", {}, format="json").status_code, 400)
         self.assertEqual(
             self.client.put(
-                "/api/events?code=UNKNOWN",
+                "/events?code=UNKNOWN",
                 {"expectedVersion": 1},
                 format="json",
             ).status_code,
@@ -417,12 +417,12 @@ class EventManagementApiTests(TestCase):
         }
 
         self.assertEqual(
-            self.client.post("/api/events/duplicate", {}, format="json").status_code,
+            self.client.post("/events/duplicate", {}, format="json").status_code,
             400,
         )
         self.assertEqual(
             self.client.post(
-                "/api/events/duplicate?code=UNKNOWN",
+                "/events/duplicate?code=UNKNOWN",
                 payload,
                 format="json",
             ).status_code,
@@ -563,10 +563,10 @@ class EventManagementApiTests(TestCase):
             "confirmation": event.code,
         }
 
-        self.assertEqual(self.client.delete("/api/events", {}, format="json").status_code, 400)
+        self.assertEqual(self.client.delete("/events", {}, format="json").status_code, 400)
         self.assertEqual(
             self.client.delete(
-                "/api/events?code=UNKNOWN",
+                "/events?code=UNKNOWN",
                 payload,
                 format="json",
             ).status_code,
@@ -622,14 +622,14 @@ class EventManagementApiTests(TestCase):
         self.assertIn(event.code, str(record))
 
         replay = self.client.delete(
-            f"/api/events?code={event.code}",
+            f"/events?code={event.code}",
             payload,
             format="json",
         )
         self.assertEqual(replay.status_code, 200)
         self.assertTrue(replay.data["idempotent"])
         changed_replay = self.client.delete(
-            f"/api/events?code={event.code}",
+            f"/events?code={event.code}",
             {**payload, "confirmation": "DIFFERENT"},
             format="json",
         )

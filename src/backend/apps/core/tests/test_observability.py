@@ -34,7 +34,7 @@ class AlbHealthCheckHostMiddlewareTests(SimpleTestCase):
             return HttpResponse(status=200)
 
         request = self.factory.get(
-            "/api/health",
+            "/health",
             HTTP_HOST="10.0.11.42:4000",
             HTTP_USER_AGENT=ALB_HEALTH_CHECK_USER_AGENT,
         )
@@ -46,8 +46,8 @@ class AlbHealthCheckHostMiddlewareTests(SimpleTestCase):
     @patch("apps.core.middleware.settings.ALLOWED_HOSTS", ["releviz.com"])
     def test_does_not_normalize_other_paths_or_user_agents(self):
         cases = [
-            ("/api/events", ALB_HEALTH_CHECK_USER_AGENT),
-            ("/api/health", "spoofed-health-checker"),
+            ("/events", ALB_HEALTH_CHECK_USER_AGENT),
+            ("/health", "spoofed-health-checker"),
         ]
         for path, user_agent in cases:
             with self.subTest(path=path, user_agent=user_agent):
@@ -64,7 +64,7 @@ class AlbHealthCheckHostMiddlewareTests(SimpleTestCase):
     @patch("apps.core.middleware.settings.ALLOWED_HOSTS", ["", "*", ".example.com"])
     def test_does_not_normalize_probe_without_a_strict_canonical_host(self):
         request = self.factory.get(
-            "/api/health/ready",
+            "/health/ready",
             HTTP_HOST="10.0.11.42:4000",
             HTTP_USER_AGENT=ALB_HEALTH_CHECK_USER_AGENT,
         )
@@ -82,14 +82,14 @@ class AlbHealthCheckHostMiddlewareTests(SimpleTestCase):
     )
     def test_full_middleware_stack_accepts_alb_liveness_probe_only(self):
         accepted = self.client.get(
-            "/api/health/live",
+            "/health/live",
             HTTP_HOST="10.0.11.42:4000",
             HTTP_USER_AGENT=ALB_HEALTH_CHECK_USER_AGENT,
         )
         self.assertEqual(accepted.status_code, 200)
 
         rejected = self.client.get(
-            "/api/health/live",
+            "/health/live",
             HTTP_HOST="10.0.11.42:4000",
             HTTP_USER_AGENT="not-the-load-balancer",
         )
@@ -172,17 +172,17 @@ class RequestObservabilityMiddlewareTests(SimpleTestCase):
         self.assertIsInstance(uuid.UUID(_request_id(invalid)), uuid.UUID)
 
     def test_route_uses_resolver_template_and_never_raw_path(self):
-        request = self.factory.get("/api/events/private-code?token=private")
+        request = self.factory.get("/events/private-code?token=private")
         self.assertEqual(_route(request), "<unresolved>")
-        request.resolver_match = SimpleNamespace(route="api/events/<str:code>")
-        self.assertEqual(_route(request), "/api/events/<str:code>")
+        request.resolver_match = SimpleNamespace(route="events/<str:code>")
+        self.assertEqual(_route(request), "/events/<str:code>")
         request.resolver_match = SimpleNamespace(route="")
         self.assertEqual(_route(request), "/")
 
     def test_middleware_correlates_success_and_server_error_responses(self):
         supplied = "11111111-1111-4111-8111-111111111111"
         request = self.factory.get("/", HTTP_X_REQUEST_ID=supplied)
-        request.resolver_match = SimpleNamespace(route="api/health/live")
+        request.resolver_match = SimpleNamespace(route="health/live")
         middleware = RequestObservabilityMiddleware(lambda current: HttpResponse(status=204))
         with self.assertLogs("releviz.requests", level="INFO") as logs:
             response = middleware(request)

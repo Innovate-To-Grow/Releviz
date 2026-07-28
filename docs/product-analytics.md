@@ -85,10 +85,11 @@ python src/backend/manage.py product_metrics \
   --settings=config.settings.production
 ```
 
-Prometheus-compatible metrics are available from `GET /api/metrics`. Production requires a
-dedicated `METRICS_BEARER_TOKEN`; normal user JWTs do not authorize this endpoint. Responses are
-private and `no-store`. Scrape at a low frequency because metrics perform authoritative domain
-classification and are intended for product review, not high-frequency request telemetry.
+Prometheus-compatible metrics are available from
+`GET https://api.releviz.com/metrics`. Production requires a dedicated
+`METRICS_BEARER_TOKEN`; normal user JWTs do not authorize this endpoint. Responses are private and
+`no-store`. Scrape at a low frequency because metrics perform authoritative domain classification
+and are intended for product review, not high-frequency request telemetry.
 
 ## Internal Traffic, Privacy, and Retention
 

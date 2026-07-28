@@ -1,4 +1,14 @@
-export const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "";
+const defaultApiBase =
+  process.env.NODE_ENV === "production"
+    ? "https://api.releviz.com"
+    : process.env.NODE_ENV === "test"
+      ? ""
+      : "http://localhost:4000";
+
+export const API_BASE = (process.env.NEXT_PUBLIC_API_BASE_URL || defaultApiBase).replace(
+  /\/+$/,
+  ""
+);
 export const LEGACY_AUTH_SESSION_KEY = "releviz.auth";
 
 let authSession = null;

@@ -142,12 +142,12 @@ describe("api config session helpers", () => {
       .mockResolvedValueOnce(jsonResponse({ access: "new" }))
       .mockResolvedValueOnce(jsonResponse({ ok: true }));
 
-    const res = await apiFetch("/api/things", { headers: { "X-Test": "1" } });
+    const res = await apiFetch("/things", { headers: { "X-Test": "1" } });
 
     expect(res.status).toBe(200);
     expect(global.fetch).toHaveBeenNthCalledWith(
       1,
-      "/api/things",
+      "/things",
       expect.objectContaining({
         credentials: "include",
         headers: { "X-Test": "1", Authorization: "Bearer old" },
@@ -155,7 +155,7 @@ describe("api config session helpers", () => {
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
       3,
-      "/api/things",
+      "/things",
       expect.objectContaining({ headers: { "X-Test": "1", Authorization: "Bearer new" } })
     );
     expect(readAuthSession().access).toBe("new");
@@ -164,7 +164,7 @@ describe("api config session helpers", () => {
   test("refresh is cookie-backed, single-flight, and clears failed sessions", async () => {
     writeAuthSession({ access: "old" });
     global.fetch.mockResolvedValueOnce(textResponse("no", { status: 401 }));
-    const skipped = await apiFetch("/api/things", { skipAuthRefresh: true });
+    const skipped = await apiFetch("/things", { skipAuthRefresh: true });
     expect(skipped.status).toBe(401);
 
     let resolveRefresh;
@@ -191,14 +191,14 @@ describe("api config session helpers", () => {
     global.fetch
       .mockResolvedValueOnce(textResponse("no", { status: 401 }))
       .mockResolvedValueOnce(textResponse("bad", { status: 401 }));
-    const failed = await apiFetch("/api/things");
+    const failed = await apiFetch("/things");
     expect(failed.status).toBe(401);
     expect(readAuthSession()).toBeNull();
 
     global.fetch
       .mockResolvedValueOnce(textResponse("no cookie", { status: 401 }))
       .mockResolvedValueOnce(textResponse("still unauthorized", { status: 401 }));
-    const noRefresh = await apiFetch("/api/things");
+    const noRefresh = await apiFetch("/things");
     expect(noRefresh.status).toBe(401);
 
     writeAuthSession({
@@ -209,7 +209,7 @@ describe("api config session helpers", () => {
       .mockResolvedValueOnce(jsonResponse({ access: "fresh" }))
       .mockResolvedValueOnce(jsonResponse({ ok: true }));
     await expect(getAccessToken()).resolves.toBe("fresh");
-    const explicit = await apiFetch("/api/explicit", {}, "provided");
+    const explicit = await apiFetch("/explicit", {}, "provided");
     expect(explicit.status).toBe(200);
 
     writeAuthSession({ access: "old-again" });
@@ -217,7 +217,7 @@ describe("api config session helpers", () => {
       .mockResolvedValueOnce(textResponse("expired", { status: 401 }))
       .mockResolvedValueOnce(jsonResponse({ access: "new-again" }))
       .mockResolvedValueOnce(jsonResponse({ ok: true }));
-    await expect(apiFetch("/api/no-headers")).resolves.toEqual(
+    await expect(apiFetch("/no-headers")).resolves.toEqual(
       expect.objectContaining({ status: 200 })
     );
   });
@@ -665,11 +665,11 @@ describe("business API helpers", () => {
     });
 
     const urls = global.fetch.mock.calls.map(([url]) => url);
-    expect(urls).toContain("/api/dashboard/events");
-    expect(urls).toContain("/api/events?code=ABC%20123");
-    expect(urls).toContain("/api/events/duplicate?code=ABC%20123");
+    expect(urls).toContain("/dashboard/events");
+    expect(urls).toContain("/events?code=ABC%20123");
+    expect(urls).toContain("/events/duplicate?code=ABC%20123");
     expect(global.fetch).toHaveBeenCalledWith(
-      "/api/events?code=ABC%20123",
+      "/events?code=ABC%20123",
       expect.objectContaining({
         method: "PUT",
         body: JSON.stringify({
@@ -680,7 +680,7 @@ describe("business API helpers", () => {
       })
     );
     expect(global.fetch).toHaveBeenCalledWith(
-      "/api/events/duplicate?code=ABC%20123",
+      "/events/duplicate?code=ABC%20123",
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({
@@ -690,7 +690,7 @@ describe("business API helpers", () => {
       })
     );
     expect(global.fetch).toHaveBeenCalledWith(
-      "/api/events?code=ABC%20123",
+      "/events?code=ABC%20123",
       expect.objectContaining({
         method: "DELETE",
         body: JSON.stringify({
@@ -700,13 +700,13 @@ describe("business API helpers", () => {
         }),
       })
     );
-    expect(urls).toContain("/api/events/results?code=ABC%20123");
-    expect(urls).toContain("/api/events/finalization/preview?code=ABC%20123");
-    expect(urls).toContain("/api/events/finalization?code=ABC%20123");
-    expect(urls).toContain("/api/events/lifecycle?code=ABC%20123");
-    expect(urls).toContain("/api/events/invitations?code=ABC%20123");
+    expect(urls).toContain("/events/results?code=ABC%20123");
+    expect(urls).toContain("/events/finalization/preview?code=ABC%20123");
+    expect(urls).toContain("/events/finalization?code=ABC%20123");
+    expect(urls).toContain("/events/lifecycle?code=ABC%20123");
+    expect(urls).toContain("/events/invitations?code=ABC%20123");
     expect(global.fetch).toHaveBeenCalledWith(
-      "/api/events/invitations/open",
+      "/events/invitations/open",
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({
@@ -715,9 +715,9 @@ describe("business API helpers", () => {
         }),
       })
     );
-    expect(urls).toContain("/api/events/reminders?code=ABC%20123");
+    expect(urls).toContain("/events/reminders?code=ABC%20123");
     expect(global.fetch).toHaveBeenCalledWith(
-      "/api/events/invitations?code=ABC%20123",
+      "/events/invitations?code=ABC%20123",
       expect.objectContaining({
         body: JSON.stringify({
           emails: ["a@example.com"],
@@ -727,17 +727,17 @@ describe("business API helpers", () => {
       })
     );
     expect(global.fetch).toHaveBeenCalledWith(
-      "/api/events/reminders?code=ABC%20123",
+      "/events/reminders?code=ABC%20123",
       expect.objectContaining({
         body: JSON.stringify({ idempotencyKey: "reminder-key" }),
       })
     );
-    expect(urls).toContain("/api/events/participants?code=ABC%20123&includeHidden=true");
+    expect(urls).toContain("/events/participants?code=ABC%20123&includeHidden=true");
     expect(urls).toContain(
-      "/api/events/participants/update/unhide?code=ABC%20123&participantId=user%201"
+      "/events/participants/update/unhide?code=ABC%20123&participantId=user%201"
     );
     expect(global.fetch).toHaveBeenCalledWith(
-      "/api/feedback",
+      "/feedback",
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({

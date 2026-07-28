@@ -55,17 +55,16 @@ Production plans reject an empty `alarm_action_arns`; configure at least one mon
 and prove notification delivery before launch. The backend and preserved ECS frontend fallback use
 separate CloudWatch log groups with 30-day retention. The active static frontend is monitored
 through Amplify deployment jobs, `/release.json`, canonical availability smokes, and the ALB/API
-alarms for its same-origin proxy routes. The ALB is intentionally reachable on public HTTPS so
-Amplify's external 200 rewrites can reach it; ECS tasks remain private and accept traffic only from
-the ALB security group.
+alarms for `https://api.releviz.com`. The API ALB is intentionally reachable on public HTTPS;
+ECS tasks remain private and accept traffic only from the ALB security group.
 
 Product metrics are documented in [product-analytics.md](product-analytics.md). Access
-`GET /api/metrics` with the dedicated bearer token:
+`GET https://api.releviz.com/metrics` with the dedicated bearer token:
 
 ```bash
 curl --fail --silent --show-error \
   -H "Authorization: Bearer $METRICS_BEARER_TOKEN" \
-  https://releviz.example/api/metrics
+  https://api.releviz.com/metrics
 ```
 
 ## Runbooks
@@ -73,7 +72,8 @@ curl --fail --silent --show-error \
 For target 5xx or request exceptions:
 
 1. Record the alarm time, release, request IDs, affected route templates, and exception types.
-2. Check `/api/health/live` and the database-aware `/api/health`.
+2. Check `https://api.releviz.com/health/live` and the database-aware
+   `https://api.releviz.com/health`.
 3. Inspect the ECS deployment state and task exits.
 4. Correlate with the most recent deployment and migrations.
 5. Roll back the application revision when a release regression is likely, following
@@ -87,24 +87,32 @@ For ECS running-task alarms:
 2. Confirm that the deployment circuit breaker completed or rolled back.
 3. Avoid reducing the minimum healthy percentage to force a rollout.
 
-For an Amplify frontend or proxy failure:
+For an Amplify frontend failure:
 
 1. Compare canonical `/release.json` with the approved release SHA and inspect the active Amplify
    `main` job.
-2. Test `/`, `/api/health/live`, and `/admin/` through the Amplify branch default domain to
-   distinguish custom-domain problems from artifact or origin problems.
-3. Inspect the domain-association status, the public TLS listener and certificate, and backend
-   target health. Confirm that ECS still has no public IP and that its security group accepts
-   application traffic only from the ALB; do not expose ECS or broaden the ALB beyond required
-   HTTP-to-HTTPS redirection and HTTPS.
+2. Test `/` and `/release.json` through the Amplify branch default domain to distinguish
+   custom-domain problems from artifact problems.
+3. Test `https://api.releviz.com/health/live` and `https://api.releviz.com/admin/` independently.
+   A healthy API with an unhealthy Amplify branch is a frontend-hosting incident, not an API
+   routing incident.
 4. Restore the last known-good frontend from its trusted Actions artifact by following
    [deployment-rollback.md](deployment-rollback.md).
-5. Confirm production still uses `AUTH_TRUSTED_PROXY_COUNT=1` with no CIDR-based multi-hop trust.
-   Amplify proxy requests can share an egress address, so correlate shared-IP throttles with
-   identity-keyed counters before treating them as an attack.
-6. The ZIP and SHA256 rollback pair is retained for 90 days. If the required artifact has expired,
+5. The ZIP and SHA256 rollback pair is retained for 90 days. If the required artifact has expired,
    do not treat an Amplify job ID as recoverable content; prepare a reviewed roll-forward or source
    revert that passes current CI.
+
+For an API-domain or backend failure:
+
+1. Confirm DNS and the ACM certificate for `api.releviz.com`, then inspect the host-based ALB rule
+   and backend target health.
+2. Confirm production still uses `AUTH_TRUSTED_PROXY_COUNT=1` with no CIDR-based multi-hop trust.
+3. Verify credentialed CORS permits `https://releviz.com` and the deployed Amplify branch origins.
+4. Confirm that ECS still has no public IP and accepts application traffic only from the ALB
+   security group; do not expose tasks directly.
+5. During the first cutover, distinguish the bounded legacy compatibility phase from the final
+   API-only topology. After cleanup, `/api/health` and frontend `/admin/` must not be treated as
+   valid recovery endpoints.
 
 For permanent email failures:
 

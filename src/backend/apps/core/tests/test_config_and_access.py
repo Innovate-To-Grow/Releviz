@@ -4,7 +4,7 @@ import sys
 from unittest.mock import patch
 
 from django.core.exceptions import ImproperlyConfigured
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, override_settings
 
 from apps.core.access import user_can_access_app
 
@@ -35,6 +35,7 @@ class SettingsImportTests(SimpleTestCase):
             "config.settings.local",
             "config.settings.production",
             "config.settings.test_postgres",
+            "config.urls",
         ]:
             sys.modules.pop(name, None)
 
@@ -102,6 +103,7 @@ class SettingsImportTests(SimpleTestCase):
             "AUTH_TRUSTED_PROXY_COUNT": "2",
             "AUTH_TRUSTED_PROXY_CIDRS": "203.0.113.0/24,2001:db8::/32",
             "AUTH_TRUSTED_PROXY_CIDR_HOPS": "1",
+            "ENABLE_LEGACY_API_PREFIX": "1",
         }
         for invalid_retention in ["invalid", "0"]:
             sys.modules.pop("config.settings.production", None)
@@ -168,6 +170,7 @@ class SettingsImportTests(SimpleTestCase):
         self.assertTrue(module.USE_SES_EMAIL_PROVIDER)
         self.assertEqual(module.METRICS_BEARER_TOKEN, "test-metrics-token")
         self.assertEqual(module.FEEDBACK_SUBMISSION_RETENTION.days, 365)
+        self.assertTrue(module.ENABLE_LEGACY_API_PREFIX)
         self.assertEqual(module.AUTH_TRUSTED_PROXY_CIDR_HOPS, 1)
         self.assertEqual(
             module.AUTH_TRUSTED_PROXY_CIDRS,
@@ -179,3 +182,10 @@ class SettingsImportTests(SimpleTestCase):
         wsgi = importlib.import_module("config.wsgi")
         self.assertTrue(callable(asgi.application))
         self.assertTrue(callable(wsgi.application))
+
+    @override_settings(ENABLE_LEGACY_API_PREFIX=True)
+    def test_legacy_api_prefix_can_be_enabled_for_cutover(self):
+        sys.modules.pop("config.urls", None)
+        module = importlib.import_module("config.urls")
+        self.assertEqual(sum(pattern.pattern._route == "api/" for pattern in module.urlpatterns), 2)
+        sys.modules.pop("config.urls", None)

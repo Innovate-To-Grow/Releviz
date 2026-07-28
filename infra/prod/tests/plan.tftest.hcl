@@ -9,6 +9,13 @@ mock_provider "aws" {
     }
   }
 
+  mock_data "aws_partition" {
+    defaults = {
+      partition  = "aws"
+      dns_suffix = "amazonaws.com"
+    }
+  }
+
   mock_data "aws_availability_zones" {
     defaults = {
       names = ["us-west-2a", "us-west-2b", "us-west-2c"]
@@ -25,11 +32,11 @@ mock_provider "aws" {
 
   mock_resource "aws_acm_certificate" {
     defaults = {
-      arn         = "arn:aws:acm:us-west-2:123456789012:certificate/origin"
-      domain_name = "origin.releviz.com"
+      arn         = "arn:aws:acm:us-west-2:123456789012:certificate/api"
+      domain_name = "api.releviz.com"
       domain_validation_options = [{
-        domain_name           = "origin.releviz.com"
-        resource_record_name  = "_validation.origin.releviz.com"
+        domain_name           = "api.releviz.com"
+        resource_record_name  = "_validation.api.releviz.com"
         resource_record_type  = "CNAME"
         resource_record_value = "_validation.acm-validations.aws"
       }]
@@ -38,7 +45,7 @@ mock_provider "aws" {
 
   mock_resource "aws_acm_certificate_validation" {
     defaults = {
-      certificate_arn = "arn:aws:acm:us-west-2:123456789012:certificate/origin"
+      certificate_arn = "arn:aws:acm:us-west-2:123456789012:certificate/api"
     }
   }
 
@@ -62,6 +69,20 @@ mock_provider "aws" {
     target = aws_amplify_branch.production
     values = {
       arn = "arn:aws:amplify:us-west-2:123456789012:apps/dtest/branches/main"
+    }
+  }
+
+  override_resource {
+    target = aws_iam_role.ecs_execution
+    values = {
+      arn = "arn:aws:iam::123456789012:role/releviz-prod-ecs-execution-role"
+    }
+  }
+
+  override_resource {
+    target = aws_iam_role.ecs_task
+    values = {
+      arn = "arn:aws:iam::123456789012:role/releviz-prod-ecs-task-role"
     }
   }
 
@@ -107,7 +128,7 @@ run "production_plan" {
 
   assert {
     condition = (
-      aws_lb_target_group.backend.health_check[0].path == "/api/health" &&
+      aws_lb_target_group.backend.health_check[0].path == "/health" &&
       aws_lb_target_group.frontend.health_check[0].path == "/"
     )
     error_message = "Production must health-check the database-aware backend endpoint and the frontend root."
@@ -170,6 +191,32 @@ run "production_plan" {
 
   assert {
     condition = (
+      length(jsondecode(aws_iam_role_policy.eventbridge_reminders.policy).Statement) == 2 &&
+      toset(one([
+        for statement in jsondecode(aws_iam_role_policy.eventbridge_reminders.policy).Statement :
+        statement.Action if contains(statement.Action, "ecs:RunTask")
+      ])) == toset(["ecs:RunTask"]) &&
+      one([
+        for statement in jsondecode(aws_iam_role_policy.eventbridge_reminders.policy).Statement :
+        statement if contains(statement.Action, "ecs:RunTask")
+      ]).Resource == "arn:aws:ecs:us-west-2:123456789012:task-definition/releviz-prod-backend-task:*" &&
+      toset(one([
+        for statement in jsondecode(aws_iam_role_policy.eventbridge_reminders.policy).Statement :
+        statement.Action if contains(statement.Action, "iam:PassRole")
+      ])) == toset(["iam:PassRole"]) &&
+      toset(one([
+        for statement in jsondecode(aws_iam_role_policy.eventbridge_reminders.policy).Statement :
+        statement if contains(statement.Action, "iam:PassRole")
+        ]).Resource) == toset([
+        aws_iam_role.ecs_execution.arn,
+        aws_iam_role.ecs_task.arn,
+      ])
+    )
+    error_message = "EventBridge may run only the reviewed backend task family and pass only the two ECS task roles."
+  }
+
+  assert {
+    condition = (
       length(aws_amplify_domain_association.frontend) == 1 &&
       aws_amplify_domain_association.frontend[0].domain_name == var.custom_domain &&
       !aws_amplify_domain_association.frontend[0].wait_for_verification &&
@@ -195,7 +242,7 @@ run "production_plan" {
 
   assert {
     condition = (
-      jsondecode(aws_amplify_app.frontend.custom_headers) == local.amplify_custom_headers &&
+      jsondecode(aws_amplify_app.frontend.custom_headers).customHeaders == local.amplify_custom_headers &&
       length(local.amplify_custom_headers) == 1 &&
       one(local.amplify_custom_headers).pattern == "**" &&
       length(one(local.amplify_custom_headers).headers) == 5 &&
@@ -207,7 +254,7 @@ run "production_plan" {
         "X-Content-Type-Options|nosniff",
         "X-Frame-Options|DENY",
         "Referrer-Policy|no-referrer",
-        "Content-Security-Policy|default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://challenges.cloudflare.com https://esm.run blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' ws: wss:; worker-src 'self' blob:; frame-src https://challenges.cloudflare.com;",
+        "Content-Security-Policy|default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://challenges.cloudflare.com https://esm.run blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://api.releviz.com ws: wss:; worker-src 'self' blob:; frame-src https://challenges.cloudflare.com;",
       ])
     )
     error_message = "Amplify custom headers must use the reviewed semantic policy and preserve all five production security headers."
@@ -215,26 +262,11 @@ run "production_plan" {
 
   assert {
     condition = (
-      contains(
-        [for rule in aws_amplify_app.frontend.custom_rule : "${rule.source}|${rule.target}|${rule.status}"],
-        "/authn/login|https://origin.releviz.com/authn/login/|200"
-      ) &&
-      contains(
-        [for rule in aws_amplify_app.frontend.custom_rule : "${rule.source}|${rule.target}|${rule.status}"],
-        "/authn/login/|https://origin.releviz.com/authn/login/|200"
-      ) &&
-      contains(
-        [for rule in aws_amplify_app.frontend.custom_rule : "${rule.source}|${rule.target}|${rule.status}"],
-        "/api/<*>|https://origin.releviz.com/api/<*>|200"
-      ) &&
-      contains(
-        [for rule in aws_amplify_app.frontend.custom_rule : "${rule.source}|${rule.target}|${rule.status}"],
-        "/admin|/admin/|301"
-      ) &&
-      contains(
-        [for rule in aws_amplify_app.frontend.custom_rule : "${rule.source}|${rule.target}|${rule.status}"],
-        "/static/<*>|https://origin.releviz.com/static/<*>|200"
-      ) &&
+      alltrue([
+        for rule in aws_amplify_app.frontend.custom_rule :
+        !startswith(rule.target, "https://") &&
+        !contains(["/api", "/api/<*>", "/authn", "/authn/<*>", "/admin", "/admin/<*>", "/static", "/static/<*>"], rule.source)
+      ]) &&
       alltrue([
         for route in local.amplify_static_routes :
         contains(
@@ -267,16 +299,19 @@ run "production_plan" {
         "/sign-up/<*>|/signup|301"
       )
     )
-    error_message = "Amplify must preserve exported-page, auth trailing-slash, and legacy sign-in semantics while proxying API, auth, admin, and static paths over HTTPS."
+    error_message = "Amplify must preserve static-route redirects without proxying API, auth, admin, or static backend paths."
   }
 
   assert {
     condition = (
-      aws_route53_record.origin.name == "origin.releviz.com" &&
-      aws_route53_record.origin.alias[0].name == aws_lb.app.dns_name &&
-      aws_lb_listener_certificate.origin.certificate_arn == aws_acm_certificate_validation.origin.certificate_arn
+      aws_route53_record.api.name == "api.releviz.com" &&
+      aws_route53_record.api.alias[0].name == aws_lb.app.dns_name &&
+      aws_lb_listener_certificate.api.certificate_arn == aws_acm_certificate_validation.api.certificate_arn &&
+      toset(one(aws_lb_listener_rule.backend_api_host.condition).host_header[0].values) == toset(["api.releviz.com"]) &&
+      length(aws_lb_listener_rule.backend) == 0 &&
+      length(aws_route53_record.origin) == 0
     )
-    error_message = "The Amplify origin must have a stable ALB alias and a validated SNI certificate."
+    error_message = "The API hostname must have an ALB alias, validated SNI certificate, and host-wide backend routing without legacy origin resources."
   }
 
   assert {
@@ -321,8 +356,20 @@ run "production_plan" {
           for environment in jsondecode(aws_ecs_task_definition.backend.container_definitions)[0].environment :
           environment.value if environment.name == "DJANGO_ALLOWED_HOSTS"
         ]),
-        "origin.releviz.com"
+        "api.releviz.com"
       ) &&
+      one([
+        for environment in jsondecode(aws_ecs_task_definition.backend.container_definitions)[0].environment :
+        environment.value if environment.name == "BACKEND_URL"
+      ]) == "https://api.releviz.com" &&
+      one([
+        for environment in jsondecode(aws_ecs_task_definition.backend.container_definitions)[0].environment :
+        environment.value if environment.name == "ENABLE_LEGACY_API_PREFIX"
+      ]) == "0" &&
+      one([
+        for environment in jsondecode(aws_ecs_task_definition.frontend.container_definitions)[0].environment :
+        environment.value if environment.name == "BACKEND_URL"
+      ]) == "https://api.releviz.com" &&
       strcontains(
         one([
           for environment in jsondecode(aws_ecs_task_definition.backend.container_definitions)[0].environment :
@@ -331,7 +378,7 @@ run "production_plan" {
         "https://candidate.dtest.amplifyapp.com"
       )
     )
-    error_message = "Django must trust the origin hostname and both Amplify branch origins during smoke testing."
+    error_message = "Django must use the API hostname, disable the legacy prefix, and trust both frontend branch origins during smoke testing."
   }
 
   assert {
@@ -381,9 +428,10 @@ run "production_plan_before_amplify_domain_cutover" {
   assert {
     condition = (
       length(aws_amplify_domain_association.frontend) == 0 &&
-      aws_route53_record.origin.name == "origin.releviz.com"
+      aws_route53_record.api.name == "api.releviz.com" &&
+      length(aws_route53_record.origin) == 0
     )
-    error_message = "The initial apply must leave the canonical domain unassociated while provisioning the stable origin."
+    error_message = "The initial apply must leave the frontend domain unassociated while provisioning the stable API hostname."
   }
 
   assert {
@@ -410,6 +458,68 @@ run "production_plan_before_amplify_domain_cutover" {
       aws_lb.app.xff_header_processing_mode == "append" &&
       !aws_lb.app.enable_xff_client_port
     )
-    error_message = "The pre-cutover origin must use the same public HTTPS and one-hop proxy contract as the canonical Amplify path."
+    error_message = "The pre-cutover API must use public HTTPS and one trusted ALB hop."
+  }
+}
+
+run "production_api_subdomain_transition" {
+  command = plan
+
+  variables {
+    backend_image_tag               = "0123456789abcdef0123456789abcdef01234567"
+    frontend_image_tag              = "0123456789abcdef0123456789abcdef01234567"
+    django_secret_key_arn           = "arn:aws:secretsmanager:us-west-2:123456789012:secret:django"
+    django_field_encryption_key_arn = "arn:aws:secretsmanager:us-west-2:123456789012:secret:field-key"
+    metrics_bearer_token_arn        = "arn:aws:secretsmanager:us-west-2:123456789012:secret:metrics"
+    alarm_action_arns               = ["arn:aws:sns:us-west-2:123456789012:production-alerts"]
+    amplify_app_id                  = "dtest"
+    custom_domain                   = "releviz.com"
+    route53_zone_id                 = "Z1234567890"
+    enable_amplify_domain           = true
+    enable_legacy_api_compatibility = true
+    existing_acm_certificate_arn    = "arn:aws:acm:us-west-2:123456789012:certificate/test"
+  }
+
+  assert {
+    condition = (
+      aws_lb_target_group.backend.health_check[0].path == "/api/health" &&
+      length(aws_lb_listener_rule.backend) == 1 &&
+      length(aws_route53_record.origin) == 1 &&
+      aws_route53_record.origin[0].name == "origin.releviz.com" &&
+      aws_route53_record.api.name == "api.releviz.com"
+    )
+    error_message = "The migration plan must preserve the old health path and origin while adding the API hostname."
+  }
+
+  assert {
+    condition = (
+      contains(
+        [for rule in aws_amplify_app.frontend.custom_rule : "${rule.source}|${rule.target}|${rule.status}"],
+        "/api/<*>|https://origin.releviz.com/api/<*>|200"
+      ) &&
+      contains(
+        [for rule in aws_amplify_app.frontend.custom_rule : "${rule.source}|${rule.target}|${rule.status}"],
+        "/admin/<*>|https://origin.releviz.com/admin/<*>|200"
+      ) &&
+      one([
+        for environment in jsondecode(aws_ecs_task_definition.backend.container_definitions)[0].environment :
+        environment.value if environment.name == "ENABLE_LEGACY_API_PREFIX"
+      ]) == "1"
+      && one([
+        for environment in jsondecode(aws_ecs_task_definition.frontend.container_definitions)[0].environment :
+        environment.value if environment.name == "BACKEND_URL"
+      ]) == "https://releviz.com"
+      && contains(
+        split(
+          ",",
+          one([
+            for environment in jsondecode(aws_ecs_task_definition.backend.container_definitions)[0].environment :
+            environment.value if environment.name == "DJANGO_ALLOWED_HOSTS"
+          ]),
+        ),
+        "releviz.com",
+      )
+    )
+    error_message = "The migration plan must preserve the frontend host, old Amplify rollback routes, and the Django /api alias until the new frontend passes smoke tests."
   }
 }

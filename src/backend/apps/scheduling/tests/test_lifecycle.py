@@ -167,7 +167,7 @@ class LifecycleApiTests(TestCase):
     def join(self):
         self.authenticate(self.participant)
         response = self.client.post(
-            f"/api/events/participants?code={self.event.code}",
+            f"/events/participants?code={self.event.code}",
             {},
             format="json",
         )
@@ -179,7 +179,7 @@ class LifecycleApiTests(TestCase):
         if deadline_marker:
             payload["responseDeadline"] = deadline
         return self.client.put(
-            f"/api/events/lifecycle?code={self.event.code}",
+            f"/events/lifecycle?code={self.event.code}",
             payload,
             format="json",
         )
@@ -187,7 +187,7 @@ class LifecycleApiTests(TestCase):
     def test_event_creation_status_and_deadline_validation(self):
         self.authenticate(self.organizer)
         draft = self.client.post(
-            "/api/events",
+            "/events",
             {"name": "Draft", "status": "draft"},
             format="json",
         )
@@ -196,7 +196,7 @@ class LifecycleApiTests(TestCase):
         self.assertIsNone(draft.data["event"]["openedAt"])
 
         open_event = self.client.post(
-            "/api/events",
+            "/events",
             {"name": "Open", "status": "open"},
             format="json",
         )
@@ -204,20 +204,20 @@ class LifecycleApiTests(TestCase):
         self.assertIsNotNone(open_event.data["event"]["openedAt"])
         naive_future = (timezone.now() + timedelta(days=1)).replace(tzinfo=None)
         naive_deadline = self.client.post(
-            "/api/events",
+            "/events",
             {"name": "Naive deadline", "responseDeadline": naive_future.isoformat()},
             format="json",
         )
         self.assertEqual(naive_deadline.status_code, 201)
 
         invalid = self.client.post(
-            "/api/events",
+            "/events",
             {"name": "Invalid", "status": "closed"},
             format="json",
         )
         self.assertEqual(invalid.status_code, 400)
         past = self.client.post(
-            "/api/events",
+            "/events",
             {
                 "name": "Past",
                 "responseDeadline": (timezone.now() - timedelta(minutes=1)).isoformat(),
@@ -228,12 +228,10 @@ class LifecycleApiTests(TestCase):
 
     def test_lifecycle_permissions_conflicts_idempotency_and_reopening(self):
         self.authenticate(self.other)
-        self.assertEqual(
-            self.client.put("/api/events/lifecycle", {}, format="json").status_code, 400
-        )
+        self.assertEqual(self.client.put("/events/lifecycle", {}, format="json").status_code, 400)
         self.assertEqual(
             self.client.put(
-                "/api/events/lifecycle?code=NOPE",
+                "/events/lifecycle?code=NOPE",
                 {"status": "closed", "expectedVersion": 1},
                 format="json",
             ).status_code,
@@ -246,7 +244,7 @@ class LifecycleApiTests(TestCase):
 
         self.authenticate(self.organizer)
         missing_version = self.client.put(
-            f"/api/events/lifecycle?code={self.event.code}",
+            f"/events/lifecycle?code={self.event.code}",
             {"status": "closed"},
             format="json",
         )
@@ -340,7 +338,7 @@ class LifecycleApiTests(TestCase):
     def test_deadline_status_and_concurrent_response_writes(self):
         participant = self.join()
         base_url = (
-            f"/api/events/participants/update?code={self.event.code}"
+            f"/events/participants/update?code={self.event.code}"
             f"&participantId={self.participant.pk}"
         )
         schedule_one = [1] * 2
@@ -534,7 +532,7 @@ class LifecycleApiTests(TestCase):
         late_member = create_member("late-lifecycle@example.com")
         self.authenticate(late_member)
         late_join = self.client.post(
-            f"/api/events/participants?code={self.event.code}",
+            f"/events/participants?code={self.event.code}",
             {},
             format="json",
         )
@@ -543,7 +541,7 @@ class LifecycleApiTests(TestCase):
     def test_response_analytics_timestamps_are_first_occurrence_and_idempotent(self):
         participant_payload = self.join()
         base_url = (
-            f"/api/events/participants/update?code={self.event.code}"
+            f"/events/participants/update?code={self.event.code}"
             f"&participantId={self.participant.pk}"
         )
 

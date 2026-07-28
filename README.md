@@ -56,14 +56,14 @@ The weighted average formula: for each time slot, `sum(availability * weight) / 
 
 ## Tech Stack
 
-| Layer          | Technology                                                                                  |
-| -------------- | ------------------------------------------------------------------------------------------- |
-| Frontend       | [Next.js 16](https://nextjs.org/) static export + React 19 + Material Web components        |
-| Backend        | [Django 5](https://www.djangoproject.com/) + DRF + SimpleJWT                                |
-| Database       | PostgreSQL/RDS in deployed environments; SQLite for local development                       |
-| Infrastructure | AWS Amplify frontend; external HTTPS proxy to a public TLS ALB; private ECS Fargate backend |
-| IaC            | Terraform (versioned encrypted S3 state with native lock files)                             |
-| CI/CD          | GitHub Actions (required CI and protected manual Amplify/ECS production CD)                 |
+| Layer          | Technology                                                                               |
+| -------------- | ---------------------------------------------------------------------------------------- |
+| Frontend       | [Next.js 16](https://nextjs.org/) static export + React 19 + Material Web components     |
+| Backend        | [Django 5](https://www.djangoproject.com/) + DRF + SimpleJWT                             |
+| Database       | PostgreSQL/RDS in deployed environments; SQLite for local development                    |
+| Infrastructure | AWS Amplify frontend; `api.releviz.com` on a public TLS ALB; private ECS Fargate backend |
+| IaC            | Terraform (versioned encrypted S3 state with native lock files)                          |
+| CI/CD          | GitHub Actions (required CI and protected manual Amplify/ECS production CD)              |
 
 ## Project Structure
 
@@ -94,7 +94,10 @@ npm run dev:backend  # backend only
 npm run dev:frontend # frontend only
 ```
 
-The frontend proxies `/api/*` and `/authn/*` requests to `http://localhost:4000` in dev via `next.config.js` rewrites.
+The frontend calls the Django service directly. Local development defaults to
+`http://localhost:4000`; override `NEXT_PUBLIC_API_BASE_URL` when the backend uses another origin.
+Business endpoints do not have an `/api` prefix, so the local readiness endpoint is
+`http://localhost:4000/health`.
 
 Run checks:
 
@@ -131,7 +134,7 @@ branch protection always receives the same required check.
   content
 - `DJANGO_ALLOWED_HOSTS`
 - `FRONTEND_URL`
-- `BACKEND_URL`
+- `BACKEND_URL` — canonical backend origin; production uses `https://api.releviz.com`
 - `CORS_ALLOWED_ORIGINS`
 - `CSRF_TRUSTED_ORIGINS`
 - `DB_NAME`
@@ -159,22 +162,28 @@ branch protection always receives the same required check.
 
 ### Frontend
 
-- `NEXT_PUBLIC_API_BASE_URL` — API base URL (empty = relative paths via proxy)
-- `BACKEND_URL` — dev proxy target (default: `http://localhost:4000`)
+- `NEXT_PUBLIC_API_BASE_URL` — API origin; defaults to `https://api.releviz.com` in production and
+  `http://localhost:4000` in local development
 - `AMPLIFY_STATIC_EXPORT` — set by `build:amplify` to produce `src/frontend/out`; do not set for the
   local standalone Next server
 
-Production builds keep `NEXT_PUBLIC_API_BASE_URL` empty. Amplify serves the static UI and proxies
-`/api`, `/authn`, `/admin`, and `/static` to `https://origin.releviz.com`, so browser-visible URLs,
-`HttpOnly` cookies, and CSRF requests remain same-origin. Amplify reaches that external origin over
-public HTTPS. The ALB terminates TLS, while the ECS backend has no public IP and accepts application
-traffic only from the ALB security group.
+Production builds set `NEXT_PUBLIC_API_BASE_URL=https://api.releviz.com`. Amplify serves only the
+static UI at `https://releviz.com`; browser API and authentication requests go directly to the API
+hostname. Business endpoints are rooted at that hostname, for example
+`https://api.releviz.com/health` and `https://api.releviz.com/events`. The public ALB terminates
+TLS, while the ECS backend has no public IP and accepts application traffic only from the ALB
+security group.
 
 Authentication is handled by the Django backend using email/password accounts, email verification
 codes, short-lived in-memory JWT access credentials, an `HttpOnly` refresh cookie bound to a
 revocable server session, browser-side public-key encryption when required by the deployment,
-account recovery and session controls, and a Django/Unfold admin at `/admin/`. See
+account recovery and session controls. Django admin is served directly at
+`https://api.releviz.com/admin/`; it is not a frontend route. See
 [`docs/auth-security.md`](docs/auth-security.md).
+
+The first production switch to the API hostname can require users to sign in again. Refresh
+cookies previously issued on the frontend hostname are host-scoped and are not transferred to
+`api.releviz.com`.
 
 Availability uses backend-authored 15/30-minute slot groups with explicit timezone and DST
 semantics. See [`docs/scheduling-slots.md`](docs/scheduling-slots.md).
@@ -213,25 +222,27 @@ docker run --rm -p 3000:3000 releviz-frontend:local
 
 Production CD is a protected manual workflow on `main`. It requires the exact confirmation
 `DEPLOY`, verifies that the selected immutable commit passed `CI Result`, assumes the production
-AWS role through GitHub OIDC, builds and pushes only the SHA-tagged backend image, and creates one
-SHA-identified static ZIP from `src/frontend/out`. The workflow manually deploys that exact ZIP to
-an Amplify `candidate` branch, verifies the frontend and same-origin backend/admin proxy, promotes
-the same ZIP to Amplify `main`, and only then associates `releviz.com`. The reviewed infrastructure
-plan preserves the public TLS ALB and private ECS boundary and keeps the backend on a fixed
-one-hop proxy trust model. Amplify's external 200 rewrite has no documented fixed egress-source
-contract, so production keeps the ALB reachable on public HTTPS. The Amplify app is not connected
-to GitHub and does not use a PAT or an auto-build webhook.
+AWS role through GitHub OIDC, builds and pushes SHA-tagged backend and ECS-fallback frontend
+images, and creates one SHA-identified static ZIP from `src/frontend/out`. The workflow manually
+deploys that exact ZIP to an Amplify `candidate` branch, verifies the frontend plus the direct
+`https://api.releviz.com` CORS/auth/admin boundary, promotes the same ZIP to Amplify `main`, and
+only then associates `releviz.com`. The reviewed infrastructure plan preserves the public TLS ALB
+and private ECS boundary and keeps the backend on a fixed one-hop ALB trust model. The Amplify app
+is not connected to GitHub and does not use a PAT or an auto-build webhook.
 
 The static build must match `src/frontend/amplify-routes.json`. Candidate smoke tests exercise
-clean and trailing-slash routes, deployed JavaScript, query-preserving redirects, protected
-non-GET auth requests, and a cookie/CSRF Django admin POST. After Amplify becomes canonical, the
-base plan fails closed if it would change global app, production-branch, or domain configuration before
-candidate verification; use the documented ECS fallback for such configuration migrations.
+clean and trailing-slash routes, deployed JavaScript, query-preserving redirects, credentialed
+CORS, protected non-GET auth requests, and a cookie/CSRF Django admin POST directly on the API
+hostname. During the first API-subdomain cutover only, the workflow temporarily preserves the old
+frontend proxy and `/api` prefix while the last-known-good ECS frontend remains the hot fallback.
+After the API-aware Amplify release passes canonical smoke, the final reviewed plan advances the
+ECS fallback to the current SHA, waits for it to become healthy, and removes that compatibility
+surface plus the legacy `origin.releviz.com` DNS/certificate.
 
-The existing ECS frontend image tag is discovered and preserved as a hot migration rollback; CD
-does not build or roll that service. The workflow also retains each Amplify ZIP and SHA256 file for
-90 days and checks `/release.json` against the exact selected SHA at candidate,
-production-default, and canonical stages. If a release fails after replacing Amplify `main`, CD
+The current SHA-tagged ECS frontend remains a hot migration fallback. The workflow also retains
+each Amplify ZIP and SHA256 file for 90 days and checks `/release.json` against the exact selected
+SHA at candidate, production-default, and canonical stages. If a release fails after replacing
+Amplify `main`, CD
 downloads the previous release's trusted Actions artifact, verifies its SHA256 and embedded
 `release.json`, and republishes it with Amplify `CreateDeployment` and `StartDeployment`. It does
 not retry completed Amplify job metadata, because this manually deployed,
@@ -243,10 +254,9 @@ alias if migration fails. The protected Amplify domain association remains avail
 retry. Review
 [`docs/deployment-rollback.md`](docs/deployment-rollback.md) before every live release.
 
-Keeping the origin private requires a separately reviewed architecture migration. The preferred
-direction is a self-managed CloudFront distribution with a VPC origin and private ALB; API Gateway
-with a VPC Link is another option for the dynamic routes. The current Amplify external
-reverse-proxy hop must remain on the documented public HTTPS boundary.
+Keeping the API load balancer private requires a separately reviewed architecture migration. The
+preferred direction is API Gateway with a VPC Link, or another documented private ingress design.
+The current `api.releviz.com` boundary is public HTTPS at the ALB; ECS tasks remain private.
 
 Run `infra/bootstrap` once with an administrator to create the versioned state bucket and the
 repository/environment-scoped OIDC role. Supply the existing account-wide GitHub OIDC provider ARN;
@@ -275,9 +285,11 @@ release resources.
 - `PROD_AMPLIFY_APP_ID` — exact administrator-provisioned `releviz-prod-frontend` app ID authorized
   by bootstrap and consumed as `TF_VAR_amplify_app_id`
 - `ECR_PROD_BACKEND` — `releviz-prod-backend`
-- `ECR_PROD_FRONTEND` — `releviz-prod-frontend`; used only to validate and preserve the existing
-  ECS migration fallback
+- `ECR_PROD_FRONTEND` — `releviz-prod-frontend`; stores the current-SHA ECS migration fallback
 - `PROD_DOMAIN` — `releviz.com`
+- `PROD_API_DOMAIN` — must be the reviewed hostname `api.releviz.com`
+- `PROD_LEGACY_ORIGIN_DOMAIN` — `origin.releviz.com`; used only during the one-time compatibility
+  phase and removed after the new frontend/API boundary passes production smoke tests
 - `PROD_ROUTE53_ZONE_ID` — hosted-zone ID for `releviz.com`
 - `PROD_DJANGO_SECRET_KEY_ARN`, `PROD_DJANGO_FIELD_ENCRYPTION_KEY_ARN`, and
   `PROD_METRICS_BEARER_TOKEN_ARN` — Secrets Manager ARNs, not secret values

@@ -450,18 +450,18 @@ class AggregationPermissionApiTests(TestCase):
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token_for(member)}")
 
     def test_direct_api_access_and_result_visibility_matrix(self):
-        self.assertEqual(self.client.get("/api/events/results").status_code, 401)
+        self.assertEqual(self.client.get("/events/results").status_code, 401)
 
         self.authenticate(self.unrelated)
-        unrelated_participants = self.client.get(f"/api/events/participants?code={self.event.code}")
+        unrelated_participants = self.client.get(f"/events/participants?code={self.event.code}")
         self.assertEqual(unrelated_participants.status_code, 403)
         self.assertEqual(
-            self.client.get(f"/api/events/results?code={self.event.code}").status_code,
+            self.client.get(f"/events/results?code={self.event.code}").status_code,
             403,
         )
 
         self.authenticate(self.first)
-        own_only = self.client.get(f"/api/events/participants?code={self.event.code}")
+        own_only = self.client.get(f"/events/participants?code={self.event.code}")
         self.assertEqual(own_only.status_code, 200)
         self.assertEqual(
             [participant["id"] for participant in own_only.data["participants"]],
@@ -471,14 +471,14 @@ class AggregationPermissionApiTests(TestCase):
         self.assertIn("no-store", own_only["Cache-Control"])
         self.assertIn("Authorization", own_only["Vary"])
         self.assertEqual(
-            self.client.get(f"/api/events/results?code={self.event.code}").status_code,
+            self.client.get(f"/events/results?code={self.event.code}").status_code,
             403,
         )
 
         self.authenticate(self.organizer)
-        organizer_list = self.client.get(f"/api/events/participants?code={self.event.code}")
+        organizer_list = self.client.get(f"/events/participants?code={self.event.code}")
         self.assertEqual(len(organizer_list.data["participants"]), 3)
-        organizer_results = self.client.get(f"/api/events/results?code={self.event.code}")
+        organizer_results = self.client.get(f"/events/results?code={self.event.code}")
         self.assertEqual(organizer_results.status_code, 200)
         self.assertEqual(organizer_results.data["results"]["countedResponseTotal"], 2)
         self.assertEqual(organizer_results.data["results"]["unansweredParticipantTotal"], 1)
@@ -491,37 +491,37 @@ class AggregationPermissionApiTests(TestCase):
         self.event.participant_view_permission = "all_after_submit"
         self.event.save(update_fields=["participant_view_permission"])
         self.authenticate(self.unsubmitted)
-        before_submit = self.client.get(f"/api/events/participants?code={self.event.code}")
+        before_submit = self.client.get(f"/events/participants?code={self.event.code}")
         self.assertEqual(
             [participant["id"] for participant in before_submit.data["participants"]],
             [str(self.unsubmitted.pk)],
         )
         self.assertEqual(
-            self.client.get(f"/api/events/results?code={self.event.code}").status_code,
+            self.client.get(f"/events/results?code={self.event.code}").status_code,
             403,
         )
 
         self.authenticate(self.first)
-        after_submit = self.client.get(f"/api/events/participants?code={self.event.code}")
+        after_submit = self.client.get(f"/events/participants?code={self.event.code}")
         self.assertEqual(
             {participant["id"] for participant in after_submit.data["participants"]},
             {str(self.first.pk), str(self.second.pk)},
         )
         self.assertEqual(
-            self.client.get(f"/api/events/results?code={self.event.code}").status_code,
+            self.client.get(f"/events/results?code={self.event.code}").status_code,
             200,
         )
 
         self.event.participant_view_permission = "realtime"
         self.event.save(update_fields=["participant_view_permission"])
         self.authenticate(self.unsubmitted)
-        realtime = self.client.get(f"/api/events/participants?code={self.event.code}")
+        realtime = self.client.get(f"/events/participants?code={self.event.code}")
         self.assertEqual(
             {participant["id"] for participant in realtime.data["participants"]},
             {str(self.first.pk), str(self.second.pk), str(self.unsubmitted.pk)},
         )
         self.assertEqual(
-            self.client.get(f"/api/events/results?code={self.event.code}").status_code,
+            self.client.get(f"/events/results?code={self.event.code}").status_code,
             200,
         )
 
@@ -531,18 +531,18 @@ class AggregationPermissionApiTests(TestCase):
             included=False,
         )
         self.assertEqual(
-            self.client.get(f"/api/events/results?code={self.event.code}").status_code,
+            self.client.get(f"/events/results?code={self.event.code}").status_code,
             403,
         )
 
         self.authenticate(self.organizer)
-        self.assertEqual(self.client.get("/api/events/results").status_code, 400)
-        self.assertEqual(self.client.get("/api/events/results?code=NOPE").status_code, 404)
+        self.assertEqual(self.client.get("/events/results").status_code, 400)
+        self.assertEqual(self.client.get("/events/results?code=NOPE").status_code, 404)
 
     def test_canonical_permission_and_required_weight_api(self):
         self.authenticate(self.organizer)
         created = self.client.post(
-            "/api/events",
+            "/events",
             {
                 "name": "Legacy client",
                 "participantViewPermission": "all",
@@ -556,7 +556,7 @@ class AggregationPermissionApiTests(TestCase):
         )
 
         updated = self.client.put(
-            f"/api/events/weights?code={self.event.code}",
+            f"/events/weights?code={self.event.code}",
             {
                 "weights": [
                     {
@@ -573,7 +573,7 @@ class AggregationPermissionApiTests(TestCase):
         self.assertEqual(updated.data["weights"][0]["required"], 1)
 
         preserved = self.client.put(
-            f"/api/events/weights?code={self.event.code}",
+            f"/events/weights?code={self.event.code}",
             {"weights": [{"participantId": str(self.first.pk)}]},
             format="json",
         )
@@ -587,7 +587,7 @@ class AggregationPermissionApiTests(TestCase):
         ]:
             with self.subTest(entry=entry):
                 response = self.client.put(
-                    f"/api/events/weights?code={self.event.code}",
+                    f"/events/weights?code={self.event.code}",
                     {"weights": [entry]},
                     format="json",
                 )
