@@ -929,8 +929,27 @@ steps:
         for legacy_url in "${legacy_urls[@]}"; do
           echo "Cache-Control: no-cache"
           echo "Pragma: no-cache"
-          status="$(curl "${legacy_url}?retired_check=${DEPLOY_SHA}-${attempt}")"
-          if [ "$status" != "404" ]; then all_retired=false; fi
+          probe_result="$(
+            curl \
+              --location \
+              --max-redirs 5 \
+              --write-out $'%{http_code}\\t%{url_effective}' \
+              "${legacy_url}?retired_check=${DEPLOY_SHA}-${attempt}"
+          )"
+          status="${probe_result%%$'\\t'*}"
+          effective_url="${probe_result#*$'\\t'}"
+          if [[ "$legacy_url" == "https://${PROD_DOMAIN}/"* ]]; then
+            expected_origin="https://${PROD_DOMAIN}/"
+          elif [[ "$legacy_url" == "https://${API_DOMAIN}/"* ]]; then
+            expected_origin="https://${API_DOMAIN}/"
+          else
+            expected_origin=""
+          fi
+          if [ "$status" != "404" ] ||
+            [ -z "$expected_origin" ] ||
+            [[ "$effective_url" != "${expected_origin}"* ]]; then
+            all_retired=false
+          fi
         done
         if [ "$all_retired" = "true" ]; then
           stable_retired_cycles=$((stable_retired_cycles + 1))
@@ -1421,6 +1440,52 @@ steps:
                 ),
             )
             for needle, replacement, expected_error in required_api_topology_contract:
+                with self.subTest(expected_error=expected_error):
+                    self.assertIn(needle, protected_source)
+                    workflow.write_text(
+                        protected_source.replace(needle, replacement, 1),
+                        encoding="utf-8",
+                    )
+                    self.assertIn(expected_error, production_cd_errors(root))
+
+            retired_redirect_contract = (
+                (
+                    "--location",
+                    "--no-location",
+                    "production CD omits bounded redirect following for retired routes",
+                ),
+                (
+                    "--max-redirs 5",
+                    "--max-redirs 50",
+                    "production CD omits a five-redirect ceiling for retired routes",
+                ),
+                (
+                    "%{http_code}\\t%{url_effective}",
+                    "%{http_code}",
+                    "production CD omits terminal retired-route status and effective URL capture",
+                ),
+                (
+                    'expected_origin="https://${PROD_DOMAIN}/"',
+                    'expected_origin="http://${PROD_DOMAIN}/"',
+                    "production CD omits the canonical frontend same-origin boundary",
+                ),
+                (
+                    'expected_origin="https://${API_DOMAIN}/"',
+                    'expected_origin="http://${API_DOMAIN}/"',
+                    "production CD omits the canonical API same-origin boundary",
+                ),
+                (
+                    '[ -z "$expected_origin" ]',
+                    '[ -n "$expected_origin" ]',
+                    "production CD omits fail-closed unknown retired-route origin handling",
+                ),
+                (
+                    '[[ "$effective_url" != "${expected_origin}"* ]]',
+                    '[[ "$effective_url" == "${expected_origin}"* ]]',
+                    "production CD omits same-origin terminal redirect enforcement",
+                ),
+            )
+            for needle, replacement, expected_error in retired_redirect_contract:
                 with self.subTest(expected_error=expected_error):
                     self.assertIn(needle, protected_source)
                     workflow.write_text(

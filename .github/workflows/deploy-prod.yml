@@ -2305,22 +2305,38 @@ jobs:
           for attempt in $(seq 1 30); do
             all_retired=true
             for legacy_url in "${legacy_urls[@]}"; do
-              status="$(
+              probe_result="$(
                 curl \
                   --connect-timeout 5 \
                   --header "Cache-Control: no-cache" \
                   --header "Pragma: no-cache" \
+                  --location \
                   --max-time 20 \
+                  --max-redirs 5 \
                   --silent \
                   --show-error \
                   --output /dev/null \
-                  --write-out "%{http_code}" \
+                  --write-out $'%{http_code}\t%{url_effective}' \
                   "${legacy_url}?retired_check=${DEPLOY_SHA}-${attempt}" ||
                   true
               )"
-              if [ "$status" != "404" ]; then
+              status="${probe_result%%$'\t'*}"
+              effective_url="${probe_result#*$'\t'}"
+              if [ "$effective_url" = "$probe_result" ]; then
+                effective_url=""
+              fi
+              if [[ "$legacy_url" == "https://${PROD_DOMAIN}/"* ]]; then
+                expected_origin="https://${PROD_DOMAIN}/"
+              elif [[ "$legacy_url" == "https://${API_DOMAIN}/"* ]]; then
+                expected_origin="https://${API_DOMAIN}/"
+              else
+                expected_origin=""
+              fi
+              if [ "$status" != "404" ] ||
+                [ -z "$expected_origin" ] ||
+                [[ "$effective_url" != "${expected_origin}"* ]]; then
                 all_retired=false
-                echo "Retired URL is still converging; url=${legacy_url}, status=${status:-request-failed}, attempt=${attempt}/30"
+                echo "Retired URL is still converging; url=${legacy_url}, status=${status:-request-failed}, effective_url=${effective_url:-request-failed}, attempt=${attempt}/30"
               fi
             done
             if [ "$all_retired" = "true" ]; then
