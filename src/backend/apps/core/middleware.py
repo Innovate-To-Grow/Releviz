@@ -18,6 +18,7 @@ ALB_HEALTH_CHECK_PATHS = frozenset(
         "/health/ready",
     }
 )
+LEGACY_ALB_HEALTH_CHECK_PATHS = frozenset(f"/api{path}" for path in ALB_HEALTH_CHECK_PATHS)
 
 
 class AlbHealthCheckHostMiddleware:
@@ -33,8 +34,11 @@ class AlbHealthCheckHostMiddleware:
         self.get_response = get_response
 
     def __call__(self, request):
+        is_health_check_path = request.path in ALB_HEALTH_CHECK_PATHS or (
+            settings.ENABLE_LEGACY_API_PREFIX and request.path in LEGACY_ALB_HEALTH_CHECK_PATHS
+        )
         is_alb_probe = (
-            request.path in ALB_HEALTH_CHECK_PATHS
+            is_health_check_path
             and request.META.get("HTTP_USER_AGENT") == ALB_HEALTH_CHECK_USER_AGENT
         )
         if is_alb_probe:
