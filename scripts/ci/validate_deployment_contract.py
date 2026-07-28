@@ -757,12 +757,56 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
             "the exact final target-group health path"
         ),
         r"def\s+normalized_task:": "normalized task-definition comparison",
+        r"\.ipc_mode\s*=\s*\(\.ipc_mode\s*//\s*\"\"\)": (
+            "provider-canonical empty ECS IPC mode comparison"
+        ),
+        r"\.pid_mode\s*=\s*\(\.pid_mode\s*//\s*\"\"\)": (
+            "provider-canonical empty ECS PID mode comparison"
+        ),
+        r"\.task_role_arn\s*=\s*\(\.task_role_arn\s*//\s*\"\"\)": (
+            "provider-canonical empty ECS task-role comparison"
+        ),
+        r"def\s+named_entries_are_unique:": (
+            "duplicate-name rejection before order-independent task comparison"
+        ),
         r"def\s+normalized_backend_container:": (
             "normalized backend container comparison"
         ),
         r"def\s+normalized_frontend_container:": (
             "normalized frontend container comparison"
         ),
+        (
+            r"def\s+normalized_backend_container:[\s\S]{0,900}"
+            r"\.environment\s*\|=[\s\S]{0,600}sort_by\(\.name\)"
+        ): "order-independent backend environment comparison",
+        (
+            r"def\s+normalized_backend_container:[\s\S]{0,1200}"
+            r"\.secrets\s*\|=\s*sort_by\(\.name\)"
+        ): "order-independent backend secret comparison",
+        (
+            r"def\s+normalized_frontend_container:[\s\S]{0,700}"
+            r"\.environment\s*\|=[\s\S]{0,500}sort_by\(\.name\)"
+        ): "order-independent frontend environment comparison",
+        (
+            r"\$before_container\.environment\s*\|\s*named_entries_are_unique"
+        ): "unique backend environment names before normalization",
+        (
+            r"\$after_container\.environment\s*\|\s*named_entries_are_unique"
+        ): "unique backend environment names after normalization",
+        (
+            r"\$before_container\.secrets\s*\|\s*named_entries_are_unique"
+        ): "unique backend secret names before normalization",
+        (
+            r"\$after_container\.secrets\s*\|\s*named_entries_are_unique"
+        ): "unique backend secret names after normalization",
+        (
+            r"\$before_containers\[0\]\.environment\s*\|\s*"
+            r"named_entries_are_unique"
+        ): "unique frontend environment names before normalization",
+        (
+            r"\$after_containers\[0\]\.environment\s*\|\s*"
+            r"named_entries_are_unique"
+        ): "unique frontend environment names after normalization",
         r"def\s+backend_final_values_are_safe:": (
             "backend final-value safety validation"
         ),
@@ -798,6 +842,14 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         r'if\s+\[\s*"\$unexpected_changes"\s*!=\s*"\[\]"\s*\]\s*;\s*then': (
             "fail-closed enforcement of unexpected final changes"
         ),
+        r"task_definition_diagnostics=": (
+            "sanitized task-definition comparison diagnostics"
+        ),
+        r"before_environment_order:": ("task-definition environment-order diagnostics"),
+        r"before_optional_task_strings:": (
+            "task-definition optional-string diagnostics"
+        ),
+        r"remaining_after_unknown:": ("task-definition unknown-value diagnostics"),
     }
     for pattern, description in final_plan_patterns.items():
         if not re.search(pattern, final_plan, re.MULTILINE | re.DOTALL):

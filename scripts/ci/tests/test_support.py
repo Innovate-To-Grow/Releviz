@@ -784,8 +784,21 @@ steps:
         echo 'def reviewed_backend_rule:'
         echo 'def prune_unknown:'
         echo 'def normalized_task:'
+        echo '.ipc_mode = (.ipc_mode // "")'
+        echo '.pid_mode = (.pid_mode // "")'
+        echo '.task_role_arn = (.task_role_arn // "")'
+        echo 'def named_entries_are_unique:'
         echo 'def normalized_backend_container:'
+        echo '.environment |= (map(.) | sort_by(.name))'
+        echo '.secrets |= sort_by(.name)'
         echo 'def normalized_frontend_container:'
+        echo '.environment |= (map(.) | sort_by(.name))'
+        echo '$before_container.environment | named_entries_are_unique'
+        echo '$after_container.environment | named_entries_are_unique'
+        echo '$before_container.secrets | named_entries_are_unique'
+        echo '$after_container.secrets | named_entries_are_unique'
+        echo '$before_containers[0].environment | named_entries_are_unique'
+        echo '$after_containers[0].environment | named_entries_are_unique'
         echo 'def backend_final_values_are_safe:'
         echo 'def frontend_final_values_are_safe:'
         echo '.resource_changes[]?'
@@ -825,7 +838,14 @@ steps:
         echo '"aws_route53_record.origin_cert_validation["'
         echo 'else true end'
       )"
-      if [ "$unexpected_changes" != "[]" ]; then exit 1; fi
+      if [ "$unexpected_changes" != "[]" ]; then
+        task_definition_diagnostics="$(
+          echo 'before_environment_order:'
+          echo 'before_optional_task_strings:'
+          echo 'remaining_after_unknown:'
+        )"
+        exit 1
+      fi
       echo "Apply exact final production topology plan"
       terraform -chdir=infra/prod apply -input=false production-final.tfplan
       echo "Verify final API-only backend topology"
