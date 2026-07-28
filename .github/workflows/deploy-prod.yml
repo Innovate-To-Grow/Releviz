@@ -279,11 +279,11 @@ jobs:
             )"
             case "$instance_status" in
               ready)
-                echo "recovered_taint=false" >>"$GITHUB_OUTPUT"
+                recovered_taint=false
                 ;;
               tainted)
                 terraform -chdir=infra/prod untaint "$state_address"
-                echo "recovered_taint=true" >>"$GITHUB_OUTPUT"
+                recovered_taint=true
                 echo "::notice::Recovered the verified Amplify domain association from tainted Terraform state."
                 ;;
               *)
@@ -291,13 +291,13 @@ jobs:
                 exit 1
                 ;;
             esac
-            echo "preexisting=true" >>"$GITHUB_OUTPUT"
-            echo "recovered_orphan=false" >>"$GITHUB_OUTPUT"
+            preexisting=true
+            recovered_orphan=false
           else
             if [ -z "$app_id" ]; then
-              echo "preexisting=false" >>"$GITHUB_OUTPUT"
-              echo "recovered_orphan=false" >>"$GITHUB_OUTPUT"
-              echo "recovered_taint=false" >>"$GITHUB_OUTPUT"
+              preexisting=false
+              recovered_orphan=false
+              recovered_taint=false
             elif aws amplify get-domain-association \
               --app-id "$app_id" \
               --domain-name "$domain_name" \
@@ -312,20 +312,25 @@ jobs:
                 echo "::error::The orphan Amplify domain association was not imported."
                 exit 1
               fi
-              echo "preexisting=true" >>"$GITHUB_OUTPUT"
-              echo "recovered_orphan=true" >>"$GITHUB_OUTPUT"
-              echo "recovered_taint=false" >>"$GITHUB_OUTPUT"
+              preexisting=true
+              recovered_orphan=true
+              recovered_taint=false
               echo "::notice::Recovered the existing Amplify domain association into Terraform state."
             elif grep -q 'NotFoundException' "$association_error"; then
-              echo "preexisting=false" >>"$GITHUB_OUTPUT"
-              echo "recovered_orphan=false" >>"$GITHUB_OUTPUT"
-              echo "recovered_taint=false" >>"$GITHUB_OUTPUT"
+              preexisting=false
+              recovered_orphan=false
+              recovered_taint=false
             else
               echo "::error::Unable to determine whether an orphan Amplify domain association exists."
               cat "$association_error" >&2
               exit 1
             fi
           fi
+          {
+            echo "preexisting=$preexisting"
+            echo "recovered_orphan=$recovered_orphan"
+            echo "recovered_taint=$recovered_taint"
+          } >>"$GITHUB_OUTPUT"
 
       - name: Detect an existing CloudFront-only origin restriction
         id: origin_state
