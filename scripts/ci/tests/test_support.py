@@ -238,6 +238,10 @@ steps:
       terraform -chdir=infra/prod output -raw trust_cloudfront_proxy_chain
       echo "TF_VAR_amplify_app_id: ${{ vars.PROD_AMPLIFY_APP_ID }}"
       aws amplify get-domain-association
+      terraform -chdir=infra/prod state pull
+      echo '.status // "ready"'
+      terraform -chdir=infra/prod untaint 'aws_amplify_domain_association.frontend[0]'
+      echo "Recovered the verified Amplify domain association from tainted Terraform state"
       terraform -chdir=infra/prod import 'aws_amplify_domain_association.frontend[0]' "${app_id}/${domain_name}"
       echo "Recovered the existing Amplify domain association into Terraform state"
       echo "Capture pre-release canonical Route53 alias"
@@ -285,6 +289,8 @@ steps:
       echo "refusing cutover"
       echo "Plan reviewed Amplify domain association"
       echo 'TF_VAR_enable_amplify_domain: "true"'
+      terraform -chdir=infra/prod show -json production-domain.tfplan
+      echo '.change.actions | index("delete")) == null'
       echo "Reconcile Amplify domain association for a migration retry"
       aws amplify update-domain-association
       echo "Wait for Amplify custom domain availability"
@@ -304,7 +310,10 @@ steps:
       echo "Verify production through the trusted CloudFront proxy chain"
       echo "Restore pre-release origin safety state after failure"
       echo "steps.restore_origin_safety.outcome == 'success'"
+      terraform -chdir=infra/prod untaint 'aws_amplify_domain_association.frontend[0]'
       terraform -chdir=infra/prod plan -out=production-restore-origin.tfplan
+      terraform -chdir=infra/prod show -json production-restore-origin.tfplan
+      echo '(.change.actions | index("delete")) == null'
       echo "Restore pre-release canonical Route53 alias after failed first cutover"
       aws route53 change-resource-record-sets
       echo 'Action: "UPSERT"'
@@ -361,6 +370,31 @@ steps:
             )
             self.assertIn(
                 "production CD omits a pre-candidate guard for live Amplify configuration",
+                production_cd_errors(root),
+            )
+
+            workflow.write_text(
+                protected_source.replace(
+                    "terraform -chdir=infra/prod untaint",
+                    "echo missing-safe-untaint",
+                ),
+                encoding="utf-8",
+            )
+            self.assertIn(
+                "production CD omits verified tainted-domain recovery during detection or failure restoration",
+                production_cd_errors(root),
+            )
+
+            marker = "Wait for Amplify custom domain availability"
+            next_marker = "Verify Amplify canonical DNS cutover"
+            workflow.write_text(
+                protected_source.replace(marker, "__WAIT_MARKER__", 1)
+                .replace(next_marker, marker, 1)
+                .replace("__WAIT_MARKER__", next_marker, 1),
+                encoding="utf-8",
+            )
+            self.assertIn(
+                "production CD must verify candidate, production, custom-domain, and origin-hardening stages in order",
                 production_cd_errors(root),
             )
 

@@ -210,6 +210,22 @@ run "bootstrap_plan" {
   }
 
   assert {
+    condition = (
+      one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Action
+        if statement.Sid == "DiscoverProductionRoute53HostedZones"
+      ]) == ["route53:ListHostedZones"] &&
+      one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Resource
+        if statement.Sid == "DiscoverProductionRoute53HostedZones"
+      ]) == "*"
+    )
+    error_message = "Amplify domain association must discover Route53 hosted zones with only the required account-level list action."
+  }
+
+  assert {
     condition = one([
       for statement in jsondecode(local.production_deploy_policy).Statement :
       statement.Resource if statement.Sid == "ProductionIamRoles"

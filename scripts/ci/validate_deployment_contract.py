@@ -131,6 +131,13 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         r"Recovered the existing Amplify domain association into Terraform state": (
             "explicit orphan-recovery evidence"
         ),
+        r"terraform -chdir=infra/prod state pull": (
+            "exact Terraform instance-state inspection"
+        ),
+        r'\.status // "ready"': "tainted Amplify domain-state detection",
+        r"Recovered the verified Amplify domain association from tainted Terraform state": (
+            "verified tainted-domain state recovery"
+        ),
         r"origin_restricted_to_cloudfront": "existing origin restriction detection",
         r"trust_cloudfront_proxy_chain": "existing trusted proxy-chain detection",
         r"Capture pre-release canonical Route53 alias": (
@@ -178,6 +185,12 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
             "non-destructive initial trusted proxy-chain state"
         ),
         r'TF_VAR_enable_amplify_domain:\s*"true"': "reviewed Amplify domain association",
+        r"terraform -chdir=infra/prod show -json production-domain\.tfplan": (
+            "machine-readable Amplify domain plan review"
+        ),
+        r'\.change\.actions \| index\("delete"\)\) == null': (
+            "a no-destroy Amplify domain plan gate"
+        ),
         r'TF_VAR_restrict_origin_to_cloudfront:\s*"true"': (
             "reviewed CloudFront-only origin hardening"
         ),
@@ -223,6 +236,9 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
             "automatic infrastructure state restoration"
         ),
         r"production-restore-origin\.tfplan": "an exact infrastructure restoration plan",
+        r"terraform -chdir=infra/prod show -json production-restore-origin\.tfplan": (
+            "machine-readable origin-safety restoration plan review"
+        ),
         r"Restore pre-release canonical Route53 alias after failed first cutover": (
             "automatic first-cutover DNS compensation"
         ),
@@ -255,6 +271,14 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         errors.append(
             "production CD omits a deployed static asset from candidate or production branch smokes"
         )
+    if source.count("terraform -chdir=infra/prod untaint") < 2:
+        errors.append(
+            "production CD omits verified tainted-domain recovery during detection or failure restoration"
+        )
+    if source.count('.change.actions | index("delete")) == null') < 2:
+        errors.append(
+            "production CD omits a no-destroy gate for domain cutover or failure restoration"
+        )
 
     forbidden_patterns = {
         r"TF_VAR_manage_dns": "legacy DNS-disable cutover flow",
@@ -265,6 +289,9 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         r"amplify delete-domain-association": (
             "a destructive automated Amplify domain disassociation"
         ),
+        r"terraform [^\n]* state rm": "destructive automated Terraform state removal",
+        r"terraform [^\n]* -replace": "an automated forced resource replacement",
+        r"terraform [^\n]* taint": "automated resource tainting",
     }
     for pattern, description in forbidden_patterns.items():
         if re.search(pattern, source, re.MULTILINE | re.IGNORECASE):
@@ -282,6 +309,7 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         "Verify preserved canonical alias immediately before cutover",
         "Plan reviewed Amplify domain association",
         "Reconcile Amplify domain association for a migration retry",
+        "Wait for Amplify custom domain availability",
         "Verify Amplify canonical DNS cutover",
         "Run canonical production smoke tests",
         "Plan CloudFront-only origin hardening",
@@ -462,6 +490,9 @@ def deployment_contract_errors(root: Path = ROOT) -> list[str]:
         r"existing_github_oidc_provider_arn": "an explicit shared GitHub OIDC provider input",
         r"from\s*=\s*aws_iam_openid_connect_provider\.github": "a non-destructive legacy OIDC state removal",
         r"destroy\s*=\s*false": "a shared OIDC provider preservation guard",
+        r'"route53:ListHostedZones"': (
+            "the observed Amplify Route53 hosted-zone discovery permission"
+        ),
     }.items():
         if not re.search(pattern, bootstrap_terraform):
             errors.append(f"bootstrap Terraform omits {description}")
