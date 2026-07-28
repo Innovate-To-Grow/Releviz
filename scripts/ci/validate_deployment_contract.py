@@ -93,7 +93,7 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
             "post-wait base ECS release identity verification"
         ),
         (
-            r'terraform\s+-chdir=infra/prod\s+output\s+-raw\s+'
+            r"terraform\s+-chdir=infra/prod\s+output\s+-raw\s+"
             r'"\$\{role\}_task_definition_arn"'
         ): "Terraform-selected base ECS task definitions",
         (
