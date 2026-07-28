@@ -309,23 +309,6 @@ variable "amplify_app_id" {
   }
 }
 
-variable "restrict_origin_to_cloudfront" {
-  type        = bool
-  default     = false
-  description = "Remove public ALB HTTPS ingress after the always-present CloudFront origin rule is proven"
-}
-
-variable "trust_cloudfront_proxy_chain" {
-  type        = bool
-  default     = false
-  description = "Enable the legacy two-hop rollback count after CIDR-verified CloudFront client-IP handling is proven"
-
-  validation {
-    condition     = !var.trust_cloudfront_proxy_chain || var.restrict_origin_to_cloudfront
-    error_message = "trust_cloudfront_proxy_chain may be true only when restrict_origin_to_cloudfront is true."
-  }
-}
-
 variable "existing_acm_certificate_arn" {
   type        = string
   default     = ""

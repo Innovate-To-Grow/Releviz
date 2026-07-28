@@ -15,23 +15,6 @@ mock_provider "aws" {
     }
   }
 
-  mock_data "aws_ec2_managed_prefix_list" {
-    defaults = {
-      id   = "pl-cloudfront"
-      name = "com.amazonaws.global.cloudfront.origin-facing"
-      entries = [
-        {
-          cidr        = "203.0.113.0/24"
-          description = "mock CloudFront IPv4"
-        },
-        {
-          cidr        = "2001:db8::/48"
-          description = "mock CloudFront IPv6"
-        },
-      ]
-    }
-  }
-
   mock_data "aws_kms_alias" {
     defaults = {
       arn            = "arn:aws:kms:us-west-2:123456789012:alias/aws/mock"
@@ -119,8 +102,6 @@ run "production_plan" {
     custom_domain                   = "production.releviz.com"
     route53_zone_id                 = "Z1234567890"
     enable_amplify_domain           = true
-    restrict_origin_to_cloudfront   = true
-    trust_cloudfront_proxy_chain    = true
     existing_acm_certificate_arn    = "arn:aws:acm:us-west-2:123456789012:certificate/test"
   }
 
@@ -310,30 +291,27 @@ run "production_plan" {
     condition = (
       length([
         for rule in aws_security_group.alb.ingress : rule
-        if contains(coalesce(rule.prefix_list_ids, []), data.aws_ec2_managed_prefix_list.cloudfront_origin_facing.id)
+        if contains(coalesce(rule.cidr_blocks, []), "0.0.0.0/0") && rule.from_port == 443
       ]) == 1 &&
       length([
         for rule in aws_security_group.alb.ingress : rule
-        if contains(coalesce(rule.cidr_blocks, []), "0.0.0.0/0") && rule.from_port == 443
+        if length(coalesce(rule.prefix_list_ids, [])) > 0
       ]) == 0 &&
       one([
         for environment in jsondecode(aws_ecs_task_definition.backend.container_definitions)[0].environment :
         environment.value if environment.name == "AUTH_TRUSTED_PROXY_COUNT"
-      ]) == "2" &&
-      one([
-        for environment in jsondecode(aws_ecs_task_definition.backend.container_definitions)[0].environment :
-        environment.value if environment.name == "AUTH_TRUSTED_PROXY_CIDR_HOPS"
       ]) == "1" &&
-      one([
+      length([
         for environment in jsondecode(aws_ecs_task_definition.backend.container_definitions)[0].environment :
-        environment.value if environment.name == "AUTH_TRUSTED_PROXY_CIDRS"
-      ]) == "2001:db8::/48,203.0.113.0/24" &&
+        environment if contains(
+          ["AUTH_TRUSTED_PROXY_CIDRS", "AUTH_TRUSTED_PROXY_CIDR_HOPS"],
+          environment.name
+        )
+      ]) == 0 &&
       aws_lb.app.xff_header_processing_mode == "append" &&
-      !aws_lb.app.enable_xff_client_port &&
-      output.origin_restricted_to_cloudfront &&
-      output.trust_cloudfront_proxy_chain
+      !aws_lb.app.enable_xff_client_port
     )
-    error_message = "Post-cutover HTTPS must keep the CloudFront rule, remove public ingress, and trust the two-hop proxy chain."
+    error_message = "Amplify reverse proxy traffic requires public HTTPS and a single non-forgeable ALB-appended XFF hop."
   }
 
   assert {
@@ -397,8 +375,6 @@ run "production_plan_before_amplify_domain_cutover" {
     custom_domain                   = "releviz.com"
     route53_zone_id                 = "Z1234567890"
     enable_amplify_domain           = false
-    restrict_origin_to_cloudfront   = false
-    trust_cloudfront_proxy_chain    = false
     existing_acm_certificate_arn    = "arn:aws:acm:us-west-2:123456789012:certificate/test"
   }
 
@@ -418,47 +394,22 @@ run "production_plan_before_amplify_domain_cutover" {
       ]) == 1 &&
       length([
         for rule in aws_security_group.alb.ingress : rule
-        if contains(coalesce(rule.prefix_list_ids, []), data.aws_ec2_managed_prefix_list.cloudfront_origin_facing.id)
-      ]) == 1 &&
+        if length(coalesce(rule.prefix_list_ids, [])) > 0
+      ]) == 0 &&
       one([
         for environment in jsondecode(aws_ecs_task_definition.backend.container_definitions)[0].environment :
         environment.value if environment.name == "AUTH_TRUSTED_PROXY_COUNT"
       ]) == "1" &&
-      one([
+      length([
         for environment in jsondecode(aws_ecs_task_definition.backend.container_definitions)[0].environment :
-        environment.value if environment.name == "AUTH_TRUSTED_PROXY_CIDR_HOPS"
-      ]) == "1" &&
-      one([
-        for environment in jsondecode(aws_ecs_task_definition.backend.container_definitions)[0].environment :
-        environment.value if environment.name == "AUTH_TRUSTED_PROXY_CIDRS"
-      ]) == "2001:db8::/48,203.0.113.0/24" &&
+        environment if contains(
+          ["AUTH_TRUSTED_PROXY_CIDRS", "AUTH_TRUSTED_PROXY_CIDR_HOPS"],
+          environment.name
+        )
+      ]) == 0 &&
       aws_lb.app.xff_header_processing_mode == "append" &&
-      !aws_lb.app.enable_xff_client_port &&
-      !output.origin_restricted_to_cloudfront &&
-      !output.trust_cloudfront_proxy_chain
+      !aws_lb.app.enable_xff_client_port
     )
-    error_message = "Before cutover, public and CloudFront HTTPS must coexist with CIDR-aware proxy parsing and the legacy one-hop rollback count."
+    error_message = "The pre-cutover origin must use the same public HTTPS and one-hop proxy contract as the canonical Amplify path."
   }
-}
-
-run "rejects_trusting_cloudfront_while_origin_is_public" {
-  command = plan
-
-  variables {
-    backend_image_tag               = "0123456789abcdef0123456789abcdef01234567"
-    frontend_image_tag              = "0123456789abcdef0123456789abcdef01234567"
-    django_secret_key_arn           = "arn:aws:secretsmanager:us-west-2:123456789012:secret:django"
-    django_field_encryption_key_arn = "arn:aws:secretsmanager:us-west-2:123456789012:secret:field-key"
-    metrics_bearer_token_arn        = "arn:aws:secretsmanager:us-west-2:123456789012:secret:metrics"
-    alarm_action_arns               = ["arn:aws:sns:us-west-2:123456789012:production-alerts"]
-    amplify_app_id                  = "dtest"
-    custom_domain                   = "releviz.com"
-    route53_zone_id                 = "Z1234567890"
-    enable_amplify_domain           = false
-    restrict_origin_to_cloudfront   = false
-    trust_cloudfront_proxy_chain    = true
-    existing_acm_certificate_arn    = "arn:aws:acm:us-west-2:123456789012:certificate/test"
-  }
-
-  expect_failures = [var.trust_cloudfront_proxy_chain]
 }

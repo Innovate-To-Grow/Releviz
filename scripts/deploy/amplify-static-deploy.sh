@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+readonly helper_started_seconds=$SECONDS
+
 usage() {
   echo "Usage: amplify-static-deploy.sh <app-id> <branch-name> <static-zip>" >&2
 }
@@ -15,6 +17,9 @@ branch_name="$2"
 archive="$3"
 poll_seconds="${AMPLIFY_POLL_SECONDS:-10}"
 timeout_seconds="${AMPLIFY_TIMEOUT_SECONDS:-1800}"
+upload_connect_timeout_seconds="${AMPLIFY_UPLOAD_CONNECT_TIMEOUT_SECONDS:-10}"
+upload_max_time_seconds="${AMPLIFY_UPLOAD_MAX_TIME_SECONDS:-300}"
+upload_retry_max_time_seconds="${AMPLIFY_UPLOAD_RETRY_MAX_TIME_SECONDS:-300}"
 stop_attempts="${AMPLIFY_STOP_ATTEMPTS:-5}"
 cancel_polls_per_attempt="${AMPLIFY_CANCEL_POLLS_PER_ATTEMPT:-12}"
 cancel_poll_seconds="${AMPLIFY_CANCEL_POLL_SECONDS:-5}"
@@ -145,14 +150,37 @@ if [ ! -f "$archive" ]; then
 fi
 if ! [[ "$poll_seconds" =~ ^[1-9][0-9]*$ ]] ||
   ! [[ "$timeout_seconds" =~ ^[1-9][0-9]*$ ]] ||
+  ! [[ "$upload_connect_timeout_seconds" =~ ^[1-9][0-9]*$ ]] ||
+  ! [[ "$upload_max_time_seconds" =~ ^[1-9][0-9]*$ ]] ||
+  ! [[ "$upload_retry_max_time_seconds" =~ ^[1-9][0-9]*$ ]] ||
   ! [[ "$stop_attempts" =~ ^[1-9][0-9]*$ ]] ||
   ! [[ "$cancel_polls_per_attempt" =~ ^[1-9][0-9]*$ ]] ||
   ! [[ "$cancel_poll_seconds" =~ ^[1-9][0-9]*$ ]]; then
-  echo "Amplify polling, timeout, and cancellation values must be positive integers." >&2
+  echo "Amplify polling, upload timeout, and cancellation values must be positive integers." >&2
+  exit 64
+fi
+if ((10#$upload_connect_timeout_seconds > 10#$upload_max_time_seconds)); then
+  echo "Amplify upload connect timeout must not exceed the upload maximum time." >&2
+  exit 64
+fi
+if ((10#$upload_max_time_seconds > 10#$timeout_seconds)) ||
+  ((10#$upload_retry_max_time_seconds > 10#$timeout_seconds - 10#$upload_max_time_seconds)); then
+  echo "Amplify upload maximum and retry time must fit within the overall timeout." >&2
   exit 64
 fi
 
+readonly deadline=$((helper_started_seconds + 10#$timeout_seconds))
+
+ensure_time_remaining() {
+  local phase="$1"
+  if ((SECONDS >= deadline)); then
+    echo "Timed out before ${phase}: branch=${branch_name}, job=${job_id:-not-created}" >&2
+    return 1
+  fi
+}
+
 unzip -tq "$archive" >/dev/null
+ensure_time_remaining "creating the Amplify deployment"
 
 deployment="$(
   aws amplify create-deployment \
@@ -165,26 +193,39 @@ upload_url="$(jq -er '.zipUploadUrl' <<<"$deployment")"
 persist_evidence "job_id" "$job_id"
 echo "Created Amplify deployment: branch=${branch_name}, job=${job_id}"
 
+ensure_time_remaining "uploading the Amplify artifact"
+upload_time_remaining=$((deadline - SECONDS))
+if ((10#$upload_max_time_seconds + 10#$upload_retry_max_time_seconds > upload_time_remaining)); then
+  echo \
+    "Timed out before the bounded Amplify artifact upload could start: branch=${branch_name}, job=${job_id}" \
+    >&2
+  exit 1
+fi
+
 # The presigned URL is intentionally never printed or persisted.
 curl \
+  --connect-timeout "$upload_connect_timeout_seconds" \
   --fail \
+  --max-time "$upload_max_time_seconds" \
   --silent \
   --show-error \
   --retry 5 \
   --retry-all-errors \
   --retry-delay 2 \
+  --retry-max-time "$upload_retry_max_time_seconds" \
   --request PUT \
   --header "Content-Type: application/zip" \
   --upload-file "$archive" \
   "$upload_url"
 
+ensure_time_remaining "starting the Amplify deployment"
 aws amplify start-deployment \
   --app-id "$app_id" \
   --branch-name "$branch_name" \
   --job-id "$job_id" \
   >/dev/null
 
-deadline=$((SECONDS + timeout_seconds))
+ensure_time_remaining "polling the Amplify deployment"
 while ((SECONDS < deadline)); do
   status="$(
     aws amplify get-job \

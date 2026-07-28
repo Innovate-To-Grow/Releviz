@@ -8,10 +8,6 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 
-data "aws_ec2_managed_prefix_list" "cloudfront_origin_facing" {
-  name = "com.amazonaws.global.cloudfront.origin-facing"
-}
-
 data "aws_kms_alias" "rds" {
   name = "alias/aws/rds"
 }
@@ -27,7 +23,6 @@ locals {
   backend_image_uri         = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.aws_region}.amazonaws.com/${var.ecr_backend_repository}:${var.backend_image_tag}"
   frontend_image_uri        = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.aws_region}.amazonaws.com/${var.ecr_frontend_repository}:${var.frontend_image_tag}"
   availability_zones        = length(var.availability_zones) >= 2 ? var.availability_zones : slice(data.aws_availability_zones.available.names, 0, 2)
-  cloudfront_origin_cidrs   = sort([for entry in data.aws_ec2_managed_prefix_list.cloudfront_origin_facing.entries : entry.cidr])
   amplify_production_branch = "main"
   amplify_candidate_branch  = "candidate"
   amplify_production_url    = "https://${local.amplify_production_branch}.${aws_amplify_app.frontend.default_domain}"
@@ -300,26 +295,17 @@ resource "aws_security_group" "alb" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  dynamic "ingress" {
-    for_each = var.restrict_origin_to_cloudfront ? [] : [true]
-
-    content {
-      description = "Public HTTPS before Amplify cutover and during rollback"
-      from_port   = 443
-      to_port     = 443
-      protocol    = "tcp"
-      cidr_blocks = ["0.0.0.0/0"]
-    }
-  }
-
-  # Install the CloudFront rule before the public rule is removed. Keeping it
-  # present in both phases prevents a Terraform graph ordering gap at cutover.
+  # Amplify Hosting external 200 rewrites do not use the CloudFront
+  # origin-facing managed prefix list. Keep HTTPS public so the supported
+  # reverse-proxy path remains reachable.
   ingress {
-    description     = "Amplify CloudFront origin-facing HTTPS"
-    from_port       = 443
-    to_port         = 443
-    protocol        = "tcp"
-    prefix_list_ids = [data.aws_ec2_managed_prefix_list.cloudfront_origin_facing.id]
+    # Keep the deployed rule description stable so Terraform preserves this
+    # exact set element while removing the unsupported prefix-list rule.
+    description = "Public HTTPS before Amplify cutover and during rollback"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   egress {
@@ -1176,12 +1162,9 @@ resource "aws_ecs_task_definition" "backend" {
       { name = "DJANGO_SETTINGS_MODULE", value = "config.settings.production" },
       { name = "PORT", value = tostring(var.backend_port) },
       { name = "DJANGO_ALLOWED_HOSTS", value = local.backend_allowed_hosts },
-      # New releases validate the additional CloudFront hop by CIDR throughout
-      # DNS propagation. Keep the legacy count gate so a rollback to an older
-      # image still uses one-hop behavior while the ALB remains public.
-      { name = "AUTH_TRUSTED_PROXY_COUNT", value = var.trust_cloudfront_proxy_chain ? "2" : "1" },
-      { name = "AUTH_TRUSTED_PROXY_CIDRS", value = join(",", local.cloudfront_origin_cidrs) },
-      { name = "AUTH_TRUSTED_PROXY_CIDR_HOPS", value = "1" },
+      # The public ALB appends the actual requester to the right side of XFF.
+      # Trust only that hop so a direct origin caller cannot forge its identity.
+      { name = "AUTH_TRUSTED_PROXY_COUNT", value = "1" },
       { name = "USE_SES_EMAIL_PROVIDER", value = "1" },
       { name = "REQUIRE_ENCRYPTED_PASSWORDS", value = "1" },
       { name = "FRONTEND_URL", value = local.app_url },

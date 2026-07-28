@@ -55,7 +55,9 @@ Production plans reject an empty `alarm_action_arns`; configure at least one mon
 and prove notification delivery before launch. The backend and preserved ECS frontend fallback use
 separate CloudWatch log groups with 30-day retention. The active static frontend is monitored
 through Amplify deployment jobs, `/release.json`, canonical availability smokes, and the ALB/API
-alarms for its same-origin proxy routes.
+alarms for its same-origin proxy routes. The ALB is intentionally reachable on public HTTPS so
+Amplify's external 200 rewrites can reach it; ECS tasks remain private and accept traffic only from
+the ALB security group.
 
 Product metrics are documented in [product-analytics.md](product-analytics.md). Access
 `GET /api/metrics` with the dedicated bearer token:
@@ -91,14 +93,18 @@ For an Amplify frontend or proxy failure:
    `main` job.
 2. Test `/`, `/api/health/live`, and `/admin/` through the Amplify branch default domain to
    distinguish custom-domain problems from artifact or origin problems.
-3. Inspect the domain-association status and backend target health. Do not open the ALB origin to
-   the internet as a diagnostic shortcut.
-4. Retry the last known-good Amplify job by following
+3. Inspect the domain-association status, the public TLS listener and certificate, and backend
+   target health. Confirm that ECS still has no public IP and that its security group accepts
+   application traffic only from the ALB; do not expose ECS or broaden the ALB beyond required
+   HTTP-to-HTTPS redirection and HTTPS.
+4. Restore the last known-good frontend from its trusted Actions artifact by following
    [deployment-rollback.md](deployment-rollback.md).
-5. Compare the AWS-managed CloudFront origin-facing prefix-list version with the CIDRs in the
-   active backend task definition. The ALB security group follows prefix-list updates
-   automatically, but a changed CIDR set requires a normal production release to roll the
-   snapshotted backend allowlist.
+5. Confirm production still uses `AUTH_TRUSTED_PROXY_COUNT=1` with no CIDR-based multi-hop trust.
+   Amplify proxy requests can share an egress address, so correlate shared-IP throttles with
+   identity-keyed counters before treating them as an attack.
+6. The ZIP and SHA256 rollback pair is retained for 90 days. If the required artifact has expired,
+   do not treat an Amplify job ID as recoverable content; prepare a reviewed roll-forward or source
+   revert that passes current CI.
 
 For permanent email failures:
 

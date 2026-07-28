@@ -56,14 +56,14 @@ The weighted average formula: for each time slot, `sum(availability * weight) / 
 
 ## Tech Stack
 
-| Layer          | Technology                                                                                         |
-| -------------- | -------------------------------------------------------------------------------------------------- |
-| Frontend       | [Next.js 16](https://nextjs.org/) static export + React 19 + Material Web components               |
-| Backend        | [Django 5](https://www.djangoproject.com/) + DRF + SimpleJWT                                       |
-| Database       | PostgreSQL/RDS in deployed environments; SQLite for local development                              |
-| Infrastructure | AWS Amplify Hosting frontend; ECS Fargate backend behind an ALB; same-origin Amplify reverse proxy |
-| IaC            | Terraform (versioned encrypted S3 state with native lock files)                                    |
-| CI/CD          | GitHub Actions (required CI and protected manual Amplify/ECS production CD)                        |
+| Layer          | Technology                                                                                  |
+| -------------- | ------------------------------------------------------------------------------------------- |
+| Frontend       | [Next.js 16](https://nextjs.org/) static export + React 19 + Material Web components        |
+| Backend        | [Django 5](https://www.djangoproject.com/) + DRF + SimpleJWT                                |
+| Database       | PostgreSQL/RDS in deployed environments; SQLite for local development                       |
+| Infrastructure | AWS Amplify frontend; external HTTPS proxy to a public TLS ALB; private ECS Fargate backend |
+| IaC            | Terraform (versioned encrypted S3 state with native lock files)                             |
+| CI/CD          | GitHub Actions (required CI and protected manual Amplify/ECS production CD)                 |
 
 ## Project Structure
 
@@ -74,7 +74,7 @@ releviz-monorepo/
     backend/        # Django — API server, account auth, admin
     e2e/            # Playwright browser tests
   infra/
-    prod/           # Amplify frontend, HA ECS backend, RDS, ALB, DNS, and monitoring
+    prod/           # Amplify frontend, public TLS ALB, private HA ECS backend, RDS, DNS, and monitoring
     bootstrap/      # Protected state backend and GitHub OIDC deploy role
   scripts/
     quality-gate.sh # Full lint + test + build for both workspaces
@@ -146,7 +146,7 @@ branch protection always receives the same required check.
 - `REQUIRE_ENCRYPTED_PASSWORDS` (`1` by default in production; password-bearing API requests
   negotiate the active RSA public key and use RSA-OAEP/SHA-256)
 - `AUTH_TRUSTED_PROXY_COUNT` (number of trusted proxies used to resolve the client IP; production
-  defaults to `1`)
+  fixes this at `1` so only the public ALB's appended requester is trusted)
 - `METRICS_BEARER_TOKEN` (required in production; dedicated credential for the private product
   metrics endpoint)
 - `FEEDBACK_SUBMISSION_RETENTION_DAYS` (default: `730`; scheduled deletion boundary for feedback
@@ -166,7 +166,9 @@ branch protection always receives the same required check.
 
 Production builds keep `NEXT_PUBLIC_API_BASE_URL` empty. Amplify serves the static UI and proxies
 `/api`, `/authn`, `/admin`, and `/static` to `https://origin.releviz.com`, so browser-visible URLs,
-`HttpOnly` cookies, and CSRF requests remain same-origin.
+`HttpOnly` cookies, and CSRF requests remain same-origin. Amplify reaches that external origin over
+public HTTPS. The ALB terminates TLS, while the ECS backend has no public IP and accepts application
+traffic only from the ALB security group.
 
 Authentication is handled by the Django backend using email/password accounts, email verification
 codes, short-lived in-memory JWT access credentials, an `HttpOnly` refresh cookie bound to a
@@ -214,10 +216,11 @@ Production CD is a protected manual workflow on `main`. It requires the exact co
 AWS role through GitHub OIDC, builds and pushes only the SHA-tagged backend image, and creates one
 SHA-identified static ZIP from `src/frontend/out`. The workflow manually deploys that exact ZIP to
 an Amplify `candidate` branch, verifies the frontend and same-origin backend/admin proxy, promotes
-the same ZIP to Amplify `main`, and only then associates `releviz.com`. Two reviewed plans first
-remove public ALB HTTPS ingress and then roll the backend to trust the CloudFront-to-ALB proxy
-chain, with health checks and automatic state restoration between stages. The Amplify app is not
-connected to GitHub and does not use a PAT or an auto-build webhook.
+the same ZIP to Amplify `main`, and only then associates `releviz.com`. The reviewed infrastructure
+plan preserves the public TLS ALB and private ECS boundary and keeps the backend on a fixed
+one-hop proxy trust model. Amplify's external 200 rewrite has no documented fixed egress-source
+contract, so production keeps the ALB reachable on public HTTPS. The Amplify app is not connected
+to GitHub and does not use a PAT or an auto-build webhook.
 
 The static build must match `src/frontend/amplify-routes.json`. Candidate smoke tests exercise
 clean and trailing-slash routes, deployed JavaScript, query-preserving redirects, protected
@@ -228,12 +231,22 @@ candidate verification; use the documented ECS fallback for such configuration m
 The existing ECS frontend image tag is discovered and preserved as a hot migration rollback; CD
 does not build or roll that service. The workflow also retains each Amplify ZIP and SHA256 file for
 90 days and checks `/release.json` against the exact selected SHA at candidate,
-production-default, canonical, and post-hardening stages. Later releases capture the current
-successful Amplify job and automatically retry it if any release stage fails after the new `main`
-deployment. The first cutover also snapshots the exact Route 53 ALB alias; if a later migration
-stage fails, CD restores public ALB ingress and proxy trust before atomically restoring that alias.
-The protected Amplify domain association remains available for a safe retry. Review
+production-default, and canonical stages. If a release fails after replacing Amplify `main`, CD
+downloads the previous release's trusted Actions artifact, verifies its SHA256 and embedded
+`release.json`, and republishes it with Amplify `CreateDeployment` and `StartDeployment`. It does
+not retry completed Amplify job metadata, because this manually deployed,
+repository-disconnected app requires a freshly uploaded deployment. GitHub retains these rollback
+artifacts for 90 days; after that boundary, an old Amplify job record alone is not a recoverable
+release artifact, so recovery requires a reviewed roll-forward or revert that passes current CI.
+The first cutover also snapshots the exact Route 53 ALB alias so it can atomically restore that
+alias if migration fails. The protected Amplify domain association remains available for a safe
+retry. Review
 [`docs/deployment-rollback.md`](docs/deployment-rollback.md) before every live release.
+
+Keeping the origin private requires a separately reviewed architecture migration. The preferred
+direction is a self-managed CloudFront distribution with a VPC origin and private ALB; API Gateway
+with a VPC Link is another option for the dynamic routes. The current Amplify external
+reverse-proxy hop must remain on the documented public HTTPS boundary.
 
 Run `infra/bootstrap` once with an administrator to create the versioned state bucket and the
 repository/environment-scoped OIDC role. Supply the existing account-wide GitHub OIDC provider ARN;

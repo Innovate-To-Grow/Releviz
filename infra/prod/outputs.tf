@@ -10,14 +10,6 @@ output "origin_domain" {
   value = var.origin_domain
 }
 
-output "origin_restricted_to_cloudfront" {
-  value = var.restrict_origin_to_cloudfront
-}
-
-output "trust_cloudfront_proxy_chain" {
-  value = var.trust_cloudfront_proxy_chain
-}
-
 output "https_url" {
   value = "https://${var.custom_domain}"
 }

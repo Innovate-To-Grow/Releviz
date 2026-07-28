@@ -73,11 +73,12 @@ from the frontend URL, backend URL, configured CSRF trusted origins, and the req
 origins are security-logged.
 
 Production keeps these requests same-origin through Amplify Hosting rewrites for `/authn`, `/api`,
-`/admin`, and `/static`. The ALB origin is TLS-only and, after cutover, accepts HTTPS only from the
-AWS-managed CloudFront origin-facing prefix list. The ALB appends the CloudFront peer to
-`X-Forwarded-For` without a client-port suffix. Django removes that right-most entry only when it
-belongs to the injected CloudFront CIDR allowlist, then uses the preceding browser address. A
-direct request cannot make an arbitrary spoofed chain trusted during the migration window.
+`/admin`, and `/static`. Amplify's external 200 rewrite reaches the public
+`https://origin.releviz.com` ALB over HTTPS; AWS does not document a fixed egress-source range for
+that reverse-proxy traffic. The ALB terminates TLS and appends its actual requester to the right
+side of `X-Forwarded-For` without a client-port suffix. Production trusts exactly that one appended
+hop and never trusts an earlier, caller-supplied address. The ECS backend has no public IP and
+accepts application traffic only from the ALB security group.
 
 ## Abuse Controls
 
@@ -133,18 +134,16 @@ The scheduled reminder command also removes:
 - stale undelivered authentication challenges and their pending delivery jobs
 
 `AUTH_TRUSTED_PROXY_COUNT` remains the compatibility depth for environments with a fixed trusted
-proxy chain. Production additionally injects the current AWS-managed CloudFront origin-facing
-networks through `AUTH_TRUSTED_PROXY_CIDRS` and allows one CIDR-verified hop through
-`AUTH_TRUSTED_PROXY_CIDR_HOPS`. Django peels a right-most forwarded address only when that address
-belongs to the allowlist, so direct ALB traffic cannot choose a forged prefix while ALB and
-Amplify traffic coexist during DNS propagation. The ALB is explicitly kept in XFF `append` mode
-with client-port suffixes disabled. Production startup fails if multi-hop trust is configured
-without a valid network allowlist.
+proxy chain. Production fixes it at `1`, leaves CIDR-hop trust disabled, and keeps the ALB in XFF
+`append` mode with client-port suffixes disabled. Django therefore uses the immediate requester
+that the ALB appended and cannot be tricked by an arbitrary forwarded prefix. For requests proxied
+by Amplify, that safe identity can be an Amplify egress address rather than the browser address;
+IP-keyed limits can consequently be shared by multiple users. Identity-keyed limits remain the
+primary abuse boundary, and a sustained increase in shared-IP throttles should be investigated.
 
-The prefix-list entries are snapshotted into each ECS task definition. Because the ALB security
-group follows the AWS-managed prefix-list ID automatically, rerun the production Terraform release
-after an AWS prefix-list version change so the application allowlist and network boundary remain
-identical; treat a sustained increase in shared-IP throttles as configuration drift.
+A future private-origin design must replace this managed external rewrite with a documented private
+connection, such as self-managed CloudFront with a VPC origin or API Gateway with a VPC Link. It
+must establish an explicit trusted proxy boundary rather than inferring a multi-hop client identity.
 
 ## Remaining Scope
 
