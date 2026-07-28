@@ -23,6 +23,7 @@ run "bootstrap_plan" {
       "arn:aws:secretsmanager:us-west-2:123456789012:secret:django",
       "arn:aws:secretsmanager:us-west-2:123456789012:secret:field-key",
       "arn:aws:secretsmanager:us-west-2:123456789012:secret:metrics",
+      "arn:aws:secretsmanager:us-west-2:123456789012:secret:default-admin-password",
     ]
   }
 
@@ -79,6 +80,130 @@ run "bootstrap_plan" {
       strcontains(local.production_deploy_policy, "arn:aws:secretsmanager:us-west-2:123456789012:secret:rds!db-*")
     )
     error_message = "The production role must create only RDS-managed master-password secrets."
+  }
+
+  assert {
+    condition = (
+      one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Action
+        if statement.Sid == "ApplicationSecretsMetadata"
+        ]) == [
+        "secretsmanager:DescribeSecret",
+      ] &&
+      one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Resource
+        if statement.Sid == "ApplicationSecretsMetadata"
+        ]) == [
+        "arn:aws:secretsmanager:us-west-2:123456789012:secret:django",
+        "arn:aws:secretsmanager:us-west-2:123456789012:secret:field-key",
+        "arn:aws:secretsmanager:us-west-2:123456789012:secret:metrics",
+        "arn:aws:secretsmanager:us-west-2:123456789012:secret:default-admin-password",
+      ]
+    )
+    error_message = "The production role must be limited to metadata reads for the four exact application secrets."
+  }
+
+  assert {
+    condition = (
+      one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Action
+        if statement.Sid == "RunProductionDefaultAdminTask"
+        ]) == [
+        "ecs:RunTask",
+      ] &&
+      one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Resource
+        if statement.Sid == "RunProductionDefaultAdminTask"
+      ]) == "arn:aws:ecs:us-west-2:123456789012:task-definition/releviz-prod-default-admin-task:*" &&
+      one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Condition.ArnEquals["ecs:cluster"]
+        if statement.Sid == "RunProductionDefaultAdminTask"
+      ]) == "arn:aws:ecs:us-west-2:123456789012:cluster/releviz-prod-cluster" &&
+      one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Condition.StringEquals["aws:RequestTag/Project"]
+        if statement.Sid == "RunProductionDefaultAdminTask"
+      ]) == "releviz" &&
+      one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Condition.StringEquals["aws:RequestTag/Environment"]
+        if statement.Sid == "RunProductionDefaultAdminTask"
+      ]) == "prod" &&
+      one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Condition.StringEquals["aws:RequestTag/Purpose"]
+        if statement.Sid == "RunProductionDefaultAdminTask"
+      ]) == "default-admin-bootstrap" &&
+      one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Condition["ForAllValues:StringEquals"]["aws:TagKeys"]
+        if statement.Sid == "RunProductionDefaultAdminTask"
+        ]) == [
+        "Project",
+        "Environment",
+        "Purpose",
+      ]
+    )
+    error_message = "The production role may run only the tagged default-admin task family and only in the exact production cluster."
+  }
+
+  assert {
+    condition = (
+      one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Action
+        if statement.Sid == "StopProductionDefaultAdminTask"
+        ]) == [
+        "ecs:StopTask",
+      ] &&
+      one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Resource
+        if statement.Sid == "StopProductionDefaultAdminTask"
+      ]) == "arn:aws:ecs:us-west-2:123456789012:task/releviz-prod-cluster/*" &&
+      one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Condition.ArnEquals["ecs:cluster"]
+        if statement.Sid == "StopProductionDefaultAdminTask"
+      ]) == "arn:aws:ecs:us-west-2:123456789012:cluster/releviz-prod-cluster" &&
+      one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Condition.StringEquals["aws:ResourceTag/Project"]
+        if statement.Sid == "StopProductionDefaultAdminTask"
+      ]) == "releviz" &&
+      one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Condition.StringEquals["aws:ResourceTag/Environment"]
+        if statement.Sid == "StopProductionDefaultAdminTask"
+      ]) == "prod" &&
+      one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Condition.StringEquals["aws:ResourceTag/Purpose"]
+        if statement.Sid == "StopProductionDefaultAdminTask"
+      ]) == "default-admin-bootstrap"
+    )
+    error_message = "Compensating cleanup may stop only tagged default-admin bootstrap tasks in the exact production cluster."
+  }
+
+  assert {
+    condition = (
+      !contains(one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Action
+        if statement.Sid == "ProductionPlatform"
+      ]), "ecs:RunTask") &&
+      !contains(one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Action
+        if statement.Sid == "ProductionPlatform"
+      ]), "ecs:StopTask")
+    )
+    error_message = "Broad production platform permissions must not include RunTask or StopTask."
   }
 
   assert {
@@ -212,11 +337,46 @@ run "bootstrap_plan" {
   }
 
   assert {
-    condition = one([
-      for statement in jsondecode(local.production_deploy_policy).Statement :
-      statement.Resource if statement.Sid == "ProductionIamRoles"
-    ]) == "arn:aws:iam::123456789012:role/releviz-prod-*"
-    error_message = "The production role must manage only Releviz application roles."
+    condition = (
+      one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Resource if statement.Sid == "ProductionIamRoles"
+      ]) == "arn:aws:iam::123456789012:role/releviz-prod-*" &&
+      !contains(one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Action if statement.Sid == "ProductionIamRoles"
+      ]), "iam:PassRole") &&
+      one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Action if statement.Sid == "PassExactProductionEcsRoles"
+      ]) == ["iam:PassRole"] &&
+      one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Resource if statement.Sid == "PassExactProductionEcsRoles"
+        ]) == [
+        "arn:aws:iam::123456789012:role/releviz-prod-ecs-execution-role",
+        "arn:aws:iam::123456789012:role/releviz-prod-ecs-task-role",
+      ] &&
+      one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Condition.StringEquals["iam:PassedToService"]
+        if statement.Sid == "PassExactProductionEcsRoles"
+      ]) == "ecs-tasks.amazonaws.com" &&
+      one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Action if statement.Sid == "PassExactProductionEventBridgeRole"
+      ]) == ["iam:PassRole"] &&
+      one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Resource if statement.Sid == "PassExactProductionEventBridgeRole"
+      ]) == "arn:aws:iam::123456789012:role/releviz-prod-eventbridge-reminders-role" &&
+      one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Condition.StringEquals["iam:PassedToService"]
+        if statement.Sid == "PassExactProductionEventBridgeRole"
+      ]) == "events.amazonaws.com"
+    )
+    error_message = "Role management must exclude PassRole; only exact ECS and EventBridge roles may be passed to their trusted services."
   }
 }
 
@@ -233,6 +393,7 @@ run "bootstrap_plan_before_amplify_provisioning" {
       "arn:aws:secretsmanager:us-west-2:123456789012:secret:django",
       "arn:aws:secretsmanager:us-west-2:123456789012:secret:field-key",
       "arn:aws:secretsmanager:us-west-2:123456789012:secret:metrics",
+      "arn:aws:secretsmanager:us-west-2:123456789012:secret:default-admin-password",
     ]
   }
 
@@ -243,4 +404,38 @@ run "bootstrap_plan_before_amplify_provisioning" {
     )
     error_message = "Before the exact app ID is registered, the GitHub role must have no Amplify API permissions."
   }
+}
+
+run "reject_duplicate_production_secret_arns" {
+  command = plan
+
+  variables {
+    production_route53_zone_id        = "Z1234567890"
+    existing_github_oidc_provider_arn = "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
+    production_secret_arns = [
+      "arn:aws:secretsmanager:us-west-2:123456789012:secret:django",
+      "arn:aws:secretsmanager:us-west-2:123456789012:secret:field-key",
+      "arn:aws:secretsmanager:us-west-2:123456789012:secret:metrics",
+      "arn:aws:secretsmanager:us-west-2:123456789012:secret:metrics",
+    ]
+  }
+
+  expect_failures = [var.production_secret_arns]
+}
+
+run "reject_invalid_production_secret_arn" {
+  command = plan
+
+  variables {
+    production_route53_zone_id        = "Z1234567890"
+    existing_github_oidc_provider_arn = "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
+    production_secret_arns = [
+      "arn:aws:secretsmanager:us-west-2:123456789012:secret:django",
+      "arn:aws:secretsmanager:us-west-2:123456789012:secret:field-key",
+      "arn:aws:secretsmanager:us-west-2:123456789012:secret:metrics",
+      "not-a-secrets-manager-arn",
+    ]
+  }
+
+  expect_failures = [var.production_secret_arns]
 }

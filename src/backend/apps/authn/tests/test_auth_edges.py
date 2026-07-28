@@ -42,6 +42,8 @@ from apps.messaging.models import EmailDeliveryJob, EmailDeliveryRequest, EmailM
 from apps.messaging.services import EmailDeliveryError, dispatch_email_job
 from apps.scheduling.models import Event, EventInvitation, FinalMeeting, Participant
 
+DEFAULT_ADMIN_PASSWORD = f"Test-Aa1!{uuid.uuid4().hex}"
+
 
 def latest_code() -> str:
     job = (
@@ -984,9 +986,15 @@ class AuthViewTests(TestCase):
         with self.assertRaises(CommandError):
             call_command("ensure_default_admin", "--yes", email="admin@example.com")
 
-        with patch.dict(os.environ, {"DJANGO_SUPERUSER_PASSWORD": "password123"}):
+        with patch.dict(os.environ, {"DJANGO_SUPERUSER_PASSWORD": DEFAULT_ADMIN_PASSWORD}):
             output = StringIO()
-            call_command("ensure_default_admin", "--yes", email="admin@example.com", stdout=output)
+            call_command(
+                "ensure_default_admin",
+                "--yes",
+                "--create-only",
+                email="admin@example.com",
+                stdout=output,
+            )
             self.assertIn("created", output.getvalue())
             output = StringIO()
             call_command(
@@ -997,3 +1005,153 @@ class AuthViewTests(TestCase):
                 stdout=output,
             )
             self.assertIn("updated", output.getvalue())
+
+    def test_default_admin_command_rejects_weak_password_without_writing(self):
+        weak_password = "weak-password"
+        with patch.dict(os.environ, {"DJANGO_SUPERUSER_PASSWORD": weak_password}):
+            with self.assertRaisesMessage(CommandError, "at least 32 characters") as context:
+                call_command("ensure_default_admin", "--yes", email="admin@example.com")
+
+        self.assertNotIn(weak_password, str(context.exception))
+        self.assertFalse(ContactEmail.objects.filter(email_address="admin@example.com").exists())
+
+    def test_default_admin_command_reports_django_password_rejection_safely(self):
+        with (
+            patch.dict(os.environ, {"DJANGO_SUPERUSER_PASSWORD": DEFAULT_ADMIN_PASSWORD}),
+            patch(
+                "apps.authn.management.commands.ensure_default_admin.validate_password",
+                side_effect=ValidationError("Rejected"),
+            ),
+        ):
+            with self.assertRaisesMessage(
+                CommandError, "configured password validators"
+            ) as context:
+                call_command("ensure_default_admin", "--yes", email="admin@example.com")
+
+        self.assertNotIn(DEFAULT_ADMIN_PASSWORD, str(context.exception))
+        self.assertFalse(ContactEmail.objects.filter(email_address="admin@example.com").exists())
+
+    def test_default_admin_create_only_verifies_without_modifying_existing_admin(self):
+        member = create_member(
+            "admin@example.com",
+            first_name="Existing",
+            last_name="Administrator",
+            is_staff=True,
+            is_superuser=True,
+        )
+        member.refresh_from_db()
+        password_hash = member.password
+        original_profile = (member.email, member.first_name, member.last_name)
+
+        with patch.dict(os.environ, {"DJANGO_SUPERUSER_PASSWORD": DEFAULT_ADMIN_PASSWORD}):
+            output = StringIO()
+            call_command(
+                "ensure_default_admin",
+                "--yes",
+                "--create-only",
+                email="admin@example.com",
+                first_name="Replacement",
+                last_name="Profile",
+                stdout=output,
+            )
+
+        member.refresh_from_db()
+        self.assertIn("verified", output.getvalue())
+        self.assertEqual(member.password, password_hash)
+        self.assertEqual((member.email, member.first_name, member.last_name), original_profile)
+
+    def test_default_admin_create_only_fails_closed_for_invalid_existing_account(self):
+        member = create_member(
+            "admin@example.com",
+            is_staff=False,
+            is_superuser=False,
+        )
+        member.refresh_from_db()
+        password_hash = member.password
+
+        with patch.dict(os.environ, {"DJANGO_SUPERUSER_PASSWORD": DEFAULT_ADMIN_PASSWORD}):
+            with self.assertRaisesMessage(CommandError, "not bootstrap-ready"):
+                call_command(
+                    "ensure_default_admin",
+                    "--yes",
+                    "--create-only",
+                    email="admin@example.com",
+                )
+
+        member.refresh_from_db()
+        self.assertFalse(member.is_staff)
+        self.assertFalse(member.is_superuser)
+        self.assertEqual(member.password, password_hash)
+
+    def test_default_admin_create_only_refuses_to_claim_unowned_contact(self):
+        contact = ContactEmail.objects.create(
+            member=None,
+            email_address="admin@example.com",
+            email_type="primary",
+            verified=False,
+        )
+        member_count = get_user_model().objects.count()
+
+        with patch.dict(os.environ, {"DJANGO_SUPERUSER_PASSWORD": DEFAULT_ADMIN_PASSWORD}):
+            with self.assertRaisesMessage(CommandError, "without an owner"):
+                call_command(
+                    "ensure_default_admin",
+                    "--yes",
+                    "--create-only",
+                    email="admin@example.com",
+                )
+
+        contact.refresh_from_db()
+        self.assertIsNone(contact.member)
+        self.assertEqual(get_user_model().objects.count(), member_count)
+
+    def test_default_admin_create_only_refuses_conflicting_member_email(self):
+        member = get_user_model().objects.create_user(
+            email="admin@example.com",
+            password="existing-account-password",
+            is_active=True,
+        )
+        password_hash = member.password
+
+        with patch.dict(os.environ, {"DJANGO_SUPERUSER_PASSWORD": DEFAULT_ADMIN_PASSWORD}):
+            with self.assertRaisesMessage(CommandError, "conflicts with an existing account"):
+                call_command(
+                    "ensure_default_admin",
+                    "--yes",
+                    "--create-only",
+                    email="admin@example.com",
+                )
+
+        member.refresh_from_db()
+        self.assertEqual(member.password, password_hash)
+        self.assertFalse(ContactEmail.objects.filter(email_address="admin@example.com").exists())
+
+    def test_default_admin_create_only_refuses_ambiguous_contact_email(self):
+        ContactEmail.objects.create(
+            member=None,
+            email_address="admin@example.com",
+            email_type="primary",
+            verified=False,
+        )
+        ContactEmail.objects.create(
+            member=None,
+            email_address="ADMIN@example.com",
+            email_type="secondary",
+            verified=False,
+        )
+        member_count = get_user_model().objects.count()
+
+        with patch.dict(os.environ, {"DJANGO_SUPERUSER_PASSWORD": DEFAULT_ADMIN_PASSWORD}):
+            with self.assertRaisesMessage(CommandError, "multiple contact records"):
+                call_command(
+                    "ensure_default_admin",
+                    "--yes",
+                    "--create-only",
+                    email="admin@example.com",
+                )
+
+        self.assertEqual(get_user_model().objects.count(), member_count)
+        self.assertEqual(
+            ContactEmail.objects.filter(email_address__iexact="admin@example.com").count(),
+            2,
+        )

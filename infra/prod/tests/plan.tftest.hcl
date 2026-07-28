@@ -113,17 +113,18 @@ run "production_plan" {
   command = plan
 
   variables {
-    backend_image_tag               = "0123456789abcdef0123456789abcdef01234567"
-    frontend_image_tag              = "0123456789abcdef0123456789abcdef01234567"
-    django_secret_key_arn           = "arn:aws:secretsmanager:us-west-2:123456789012:secret:django"
-    django_field_encryption_key_arn = "arn:aws:secretsmanager:us-west-2:123456789012:secret:field-key"
-    metrics_bearer_token_arn        = "arn:aws:secretsmanager:us-west-2:123456789012:secret:metrics"
-    alarm_action_arns               = ["arn:aws:sns:us-west-2:123456789012:production-alerts"]
-    amplify_app_id                  = "dtest"
-    custom_domain                   = "production.releviz.com"
-    route53_zone_id                 = "Z1234567890"
-    enable_amplify_domain           = true
-    existing_acm_certificate_arn    = "arn:aws:acm:us-west-2:123456789012:certificate/test"
+    backend_image_tag                 = "0123456789abcdef0123456789abcdef01234567"
+    frontend_image_tag                = "0123456789abcdef0123456789abcdef01234567"
+    django_secret_key_arn             = "arn:aws:secretsmanager:us-west-2:123456789012:secret:django"
+    django_field_encryption_key_arn   = "arn:aws:secretsmanager:us-west-2:123456789012:secret:field-key"
+    metrics_bearer_token_arn          = "arn:aws:secretsmanager:us-west-2:123456789012:secret:metrics"
+    default_admin_password_secret_arn = "arn:aws:secretsmanager:us-west-2:123456789012:secret:releviz/prod/default-admin-password-Ab12Cd"
+    alarm_action_arns                 = ["arn:aws:sns:us-west-2:123456789012:production-alerts"]
+    amplify_app_id                    = "dtest"
+    custom_domain                     = "production.releviz.com"
+    route53_zone_id                   = "Z1234567890"
+    enable_amplify_domain             = true
+    existing_acm_certificate_arn      = "arn:aws:acm:us-west-2:123456789012:certificate/test"
   }
 
   assert {
@@ -383,16 +384,94 @@ run "production_plan" {
 
   assert {
     condition = (
+      aws_ecs_task_definition.default_admin.family == "releviz-prod-default-admin-task" &&
+      aws_ecs_task_definition.default_admin.execution_role_arn == aws_iam_role.ecs_execution.arn &&
+      aws_ecs_task_definition.default_admin.task_role_arn == null &&
+      aws_ecs_task_definition.default_admin.requires_compatibilities == toset(["FARGATE"]) &&
+      jsondecode(aws_ecs_task_definition.default_admin.container_definitions)[0].name == "releviz-prod-default-admin" &&
+      jsondecode(aws_ecs_task_definition.default_admin.container_definitions)[0].image == local.backend_image_uri &&
+      jsondecode(aws_ecs_task_definition.default_admin.container_definitions)[0].command == [
+        "python",
+        "manage.py",
+        "ensure_default_admin",
+        "--yes",
+        "--create-only",
+      ] &&
+      jsondecode(aws_ecs_task_definition.default_admin.container_definitions)[0].portMappings == [] &&
+      one([
+        for environment in jsondecode(aws_ecs_task_definition.default_admin.container_definitions)[0].environment :
+        environment.value if environment.name == "DJANGO_SKIP_STARTUP_TASKS"
+      ]) == "1" &&
+      one([
+        for environment in jsondecode(aws_ecs_task_definition.default_admin.container_definitions)[0].environment :
+        environment.value if environment.name == "DJANGO_CREATE_DEFAULT_ADMIN"
+      ]) == "0" &&
+      one([
+        for environment in jsondecode(aws_ecs_task_definition.default_admin.container_definitions)[0].environment :
+        environment.value if environment.name == "DJANGO_SUPERUSER_EMAIL"
+      ]) == "admin@releviz.com" &&
+      length([
+        for environment in jsondecode(aws_ecs_task_definition.default_admin.container_definitions)[0].environment :
+        environment if environment.name == "ENABLE_LEGACY_API_PREFIX"
+      ]) == 0
+    )
+    error_message = "The default administrator must run through a dedicated role-free Fargate task definition with the immutable backend image and create-only command."
+  }
+
+  assert {
+    condition = (
+      length(jsondecode(aws_ecs_task_definition.default_admin.container_definitions)[0].secrets) == 5 &&
+      length(distinct([
+        for secret in jsondecode(aws_ecs_task_definition.default_admin.container_definitions)[0].secrets :
+        secret.name
+      ])) == 5 &&
+      toset([
+        for secret in jsondecode(aws_ecs_task_definition.default_admin.container_definitions)[0].secrets :
+        secret.name
+        ]) == toset([
+        "DJANGO_SECRET_KEY",
+        "DJANGO_FIELD_ENCRYPTION_KEY",
+        "METRICS_BEARER_TOKEN",
+        "DB_PASSWORD",
+        "DJANGO_SUPERUSER_PASSWORD",
+      ]) &&
+      one([
+        for secret in jsondecode(aws_ecs_task_definition.default_admin.container_definitions)[0].secrets :
+        secret.valueFrom if secret.name == "DJANGO_SUPERUSER_PASSWORD"
+      ]) == "${var.default_admin_password_secret_arn}:password::" &&
+      length([
+        for secret in jsondecode(aws_ecs_task_definition.backend.container_definitions)[0].secrets :
+        secret if secret.name == "DJANGO_SUPERUSER_PASSWORD"
+      ]) == 0 &&
+      length([
+        for environment in jsondecode(aws_ecs_task_definition.backend.container_definitions)[0].environment :
+        environment if environment.name == "DJANGO_SUPERUSER_EMAIL"
+      ]) == 0 &&
+      anytrue([
+        for statement in jsondecode(aws_iam_role_policy.ecs_execution_secrets.policy).Statement :
+        contains(statement.Action, "secretsmanager:GetSecretValue") &&
+        contains(statement.Resource, var.default_admin_password_secret_arn)
+      ])
+    )
+    error_message = "Only the one-off task may receive the administrator password and email, while the execution role must be able to retrieve that exact secret."
+  }
+
+  assert {
+    condition = (
       !aws_ecs_task_definition.backend.enable_fault_injection &&
+      !aws_ecs_task_definition.default_admin.enable_fault_injection &&
       !aws_ecs_task_definition.frontend.enable_fault_injection &&
       jsondecode(aws_ecs_task_definition.backend.container_definitions)[0].mountPoints == [] &&
       jsondecode(aws_ecs_task_definition.backend.container_definitions)[0].systemControls == [] &&
       jsondecode(aws_ecs_task_definition.backend.container_definitions)[0].volumesFrom == [] &&
+      jsondecode(aws_ecs_task_definition.default_admin.container_definitions)[0].mountPoints == [] &&
+      jsondecode(aws_ecs_task_definition.default_admin.container_definitions)[0].systemControls == [] &&
+      jsondecode(aws_ecs_task_definition.default_admin.container_definitions)[0].volumesFrom == [] &&
       jsondecode(aws_ecs_task_definition.frontend.container_definitions)[0].mountPoints == [] &&
       jsondecode(aws_ecs_task_definition.frontend.container_definitions)[0].systemControls == [] &&
       jsondecode(aws_ecs_task_definition.frontend.container_definitions)[0].volumesFrom == []
     )
-    error_message = "Both ECS task definitions must explicitly match provider-canonical fault-injection and empty container defaults."
+    error_message = "All ECS task definitions must explicitly match provider-canonical fault-injection and empty container defaults."
   }
 
   assert {
@@ -426,17 +505,18 @@ run "production_plan_before_amplify_domain_cutover" {
   command = plan
 
   variables {
-    backend_image_tag               = "0123456789abcdef0123456789abcdef01234567"
-    frontend_image_tag              = "0123456789abcdef0123456789abcdef01234567"
-    django_secret_key_arn           = "arn:aws:secretsmanager:us-west-2:123456789012:secret:django"
-    django_field_encryption_key_arn = "arn:aws:secretsmanager:us-west-2:123456789012:secret:field-key"
-    metrics_bearer_token_arn        = "arn:aws:secretsmanager:us-west-2:123456789012:secret:metrics"
-    alarm_action_arns               = ["arn:aws:sns:us-west-2:123456789012:production-alerts"]
-    amplify_app_id                  = "dtest"
-    custom_domain                   = "releviz.com"
-    route53_zone_id                 = "Z1234567890"
-    enable_amplify_domain           = false
-    existing_acm_certificate_arn    = "arn:aws:acm:us-west-2:123456789012:certificate/test"
+    backend_image_tag                 = "0123456789abcdef0123456789abcdef01234567"
+    frontend_image_tag                = "0123456789abcdef0123456789abcdef01234567"
+    django_secret_key_arn             = "arn:aws:secretsmanager:us-west-2:123456789012:secret:django"
+    django_field_encryption_key_arn   = "arn:aws:secretsmanager:us-west-2:123456789012:secret:field-key"
+    metrics_bearer_token_arn          = "arn:aws:secretsmanager:us-west-2:123456789012:secret:metrics"
+    default_admin_password_secret_arn = "arn:aws:secretsmanager:us-west-2:123456789012:secret:releviz/prod/default-admin-password-Ab12Cd"
+    alarm_action_arns                 = ["arn:aws:sns:us-west-2:123456789012:production-alerts"]
+    amplify_app_id                    = "dtest"
+    custom_domain                     = "releviz.com"
+    route53_zone_id                   = "Z1234567890"
+    enable_amplify_domain             = false
+    existing_acm_certificate_arn      = "arn:aws:acm:us-west-2:123456789012:certificate/test"
   }
 
   assert {
@@ -480,18 +560,19 @@ run "production_api_subdomain_transition" {
   command = plan
 
   variables {
-    backend_image_tag               = "0123456789abcdef0123456789abcdef01234567"
-    frontend_image_tag              = "0123456789abcdef0123456789abcdef01234567"
-    django_secret_key_arn           = "arn:aws:secretsmanager:us-west-2:123456789012:secret:django"
-    django_field_encryption_key_arn = "arn:aws:secretsmanager:us-west-2:123456789012:secret:field-key"
-    metrics_bearer_token_arn        = "arn:aws:secretsmanager:us-west-2:123456789012:secret:metrics"
-    alarm_action_arns               = ["arn:aws:sns:us-west-2:123456789012:production-alerts"]
-    amplify_app_id                  = "dtest"
-    custom_domain                   = "releviz.com"
-    route53_zone_id                 = "Z1234567890"
-    enable_amplify_domain           = true
-    enable_legacy_api_compatibility = true
-    existing_acm_certificate_arn    = "arn:aws:acm:us-west-2:123456789012:certificate/test"
+    backend_image_tag                 = "0123456789abcdef0123456789abcdef01234567"
+    frontend_image_tag                = "0123456789abcdef0123456789abcdef01234567"
+    django_secret_key_arn             = "arn:aws:secretsmanager:us-west-2:123456789012:secret:django"
+    django_field_encryption_key_arn   = "arn:aws:secretsmanager:us-west-2:123456789012:secret:field-key"
+    metrics_bearer_token_arn          = "arn:aws:secretsmanager:us-west-2:123456789012:secret:metrics"
+    default_admin_password_secret_arn = "arn:aws:secretsmanager:us-west-2:123456789012:secret:releviz/prod/default-admin-password-Ab12Cd"
+    alarm_action_arns                 = ["arn:aws:sns:us-west-2:123456789012:production-alerts"]
+    amplify_app_id                    = "dtest"
+    custom_domain                     = "releviz.com"
+    route53_zone_id                   = "Z1234567890"
+    enable_amplify_domain             = true
+    enable_legacy_api_compatibility   = true
+    existing_acm_certificate_arn      = "arn:aws:acm:us-west-2:123456789012:certificate/test"
   }
 
   assert {
@@ -518,7 +599,15 @@ run "production_api_subdomain_transition" {
       one([
         for environment in jsondecode(aws_ecs_task_definition.backend.container_definitions)[0].environment :
         environment.value if environment.name == "ENABLE_LEGACY_API_PREFIX"
-      ]) == "1"
+      ]) == "1" &&
+      length([
+        for environment in jsondecode(aws_ecs_task_definition.default_admin.container_definitions)[0].environment :
+        environment if environment.name == "ENABLE_LEGACY_API_PREFIX"
+      ]) == 0 &&
+      one([
+        for environment in jsondecode(aws_ecs_task_definition.default_admin.container_definitions)[0].environment :
+        environment.value if environment.name == "BACKEND_URL"
+      ]) == "https://api.releviz.com"
       && one([
         for environment in jsondecode(aws_ecs_task_definition.frontend.container_definitions)[0].environment :
         environment.value if environment.name == "BACKEND_URL"
@@ -536,4 +625,24 @@ run "production_api_subdomain_transition" {
     )
     error_message = "The migration plan must preserve the frontend host, old Amplify rollback routes, and the Django /api alias until the new frontend passes smoke tests."
   }
+}
+
+run "reject_reused_default_admin_secret" {
+  command = plan
+
+  variables {
+    backend_image_tag                 = "0123456789abcdef0123456789abcdef01234567"
+    frontend_image_tag                = "0123456789abcdef0123456789abcdef01234567"
+    django_secret_key_arn             = "arn:aws:secretsmanager:us-west-2:123456789012:secret:releviz/prod/default-admin-password-Ab12Cd"
+    django_field_encryption_key_arn   = "arn:aws:secretsmanager:us-west-2:123456789012:secret:field-key"
+    metrics_bearer_token_arn          = "arn:aws:secretsmanager:us-west-2:123456789012:secret:metrics"
+    default_admin_password_secret_arn = "arn:aws:secretsmanager:us-west-2:123456789012:secret:releviz/prod/default-admin-password-Ab12Cd"
+    alarm_action_arns                 = ["arn:aws:sns:us-west-2:123456789012:production-alerts"]
+    amplify_app_id                    = "dtest"
+    custom_domain                     = "releviz.com"
+    route53_zone_id                   = "Z1234567890"
+    existing_acm_certificate_arn      = "arn:aws:acm:us-west-2:123456789012:certificate/test"
+  }
+
+  expect_failures = [check.application_secret_arns_are_distinct]
 }

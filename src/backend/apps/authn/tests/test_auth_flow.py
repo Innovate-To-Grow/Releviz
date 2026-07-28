@@ -1,5 +1,6 @@
 import os
 import re
+import secrets
 from io import StringIO
 from unittest.mock import patch
 
@@ -11,6 +12,8 @@ from rest_framework.test import APIClient
 from apps.authn.models import ContactEmail
 from apps.messaging.crypto import decrypt_secret
 from apps.messaging.models import EmailDeliveryJob, EmailMessageLog
+
+DEFAULT_ADMIN_PASSWORD = f"Test-Aa1!{secrets.token_hex(24)}"
 
 
 def latest_code() -> str:
@@ -70,11 +73,12 @@ class AuthFlowTests(TestCase):
     def test_ensure_default_admin_creates_staff_login(self):
         with patch.dict(
             os.environ,
-            {"DJANGO_SUPERUSER_PASSWORD": "password123"},
+            {"DJANGO_SUPERUSER_PASSWORD": DEFAULT_ADMIN_PASSWORD},
         ):
             call_command(
                 "ensure_default_admin",
                 "--yes",
+                "--create-only",
                 email="admin@example.com",
                 stdout=StringIO(),
             )
@@ -86,7 +90,7 @@ class AuthFlowTests(TestCase):
 
         res = self.client.post(
             "/admin/login/",
-            {"email": "admin@example.com", "password": "password123"},
+            {"email": "admin@example.com", "password": DEFAULT_ADMIN_PASSWORD},
         )
         self.assertEqual(res.status_code, 302)
         self.assertTrue(

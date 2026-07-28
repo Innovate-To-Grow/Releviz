@@ -6,6 +6,11 @@ const backendUrl = process.env.BACKEND_URL || "http://127.0.0.1:4100";
 const frontendUrl = process.env.FRONTEND_URL || "http://127.0.0.1:3100";
 const backendPort = new URL(backendUrl).port || "80";
 const frontendPort = new URL(frontendUrl).port || "80";
+const adminPassword = process.env.DJANGO_SUPERUSER_PASSWORD;
+
+if (!adminPassword) {
+  throw new Error("DJANGO_SUPERUSER_PASSWORD must be set before running Playwright.");
+}
 
 const backendEnv = {
   DB_HOST: process.env.DB_HOST || "127.0.0.1",
@@ -19,7 +24,7 @@ const backendEnv = {
   FRONTEND_URL: frontendUrl,
   BACKEND_URL: backendUrl,
   DJANGO_SUPERUSER_EMAIL: process.env.DJANGO_SUPERUSER_EMAIL || "admin@releviz.local",
-  DJANGO_SUPERUSER_PASSWORD: process.env.DJANGO_SUPERUSER_PASSWORD || "Admin12345!",
+  DJANGO_SUPERUSER_PASSWORD: adminPassword,
 };
 
 module.exports = defineConfig({

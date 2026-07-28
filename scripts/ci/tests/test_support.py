@@ -16,6 +16,7 @@ from scripts.ci.validate_deployment_contract import (
     production_amplify_custom_headers_errors,
     production_amplify_custom_headers_policy_errors,
     production_cd_errors,
+    production_default_admin_task_errors,
     production_ecs_task_definition_errors,
     production_proxy_configuration_errors,
     required_runtime_environment,
@@ -479,31 +480,97 @@ mountPoints = []
 systemControls = []
 volumesFrom = []
 """
-        source = task_definition * 2
+        source = task_definition * 3
         self.assertEqual(production_ecs_task_definition_errors(source), [])
 
         for field, expected_error in {
             "enable_fault_injection = false": (
                 "production Terraform must set explicitly disabled ECS fault "
-                "injection on both ECS task definitions"
+                "injection on all three ECS task definitions"
             ),
             "mountPoints = []": (
                 "production Terraform must set canonical empty ECS mount points "
-                "on both ECS task definitions"
+                "on all three ECS task definitions"
             ),
             "systemControls = []": (
                 "production Terraform must set canonical empty ECS system controls "
-                "on both ECS task definitions"
+                "on all three ECS task definitions"
             ),
             "volumesFrom = []": (
                 "production Terraform must set canonical empty ECS volume sources "
-                "on both ECS task definitions"
+                "on all three ECS task definitions"
             ),
         }.items():
             with self.subTest(field=field):
                 self.assertIn(
                     expected_error,
                     production_ecs_task_definition_errors(source.replace(field, "", 1)),
+                )
+
+    def test_default_admin_task_is_dedicated_and_create_only(self):
+        source = """
+locals {
+  application_secret_arns = compact([
+    var.default_admin_password_secret_arn,
+  ])
+  default_admin_container_environment = [
+    { name = "DJANGO_SKIP_STARTUP_TASKS", value = "1" },
+    { name = "DJANGO_CREATE_DEFAULT_ADMIN", value = "0" },
+    { name = "DJANGO_SUPERUSER_EMAIL", value = var.default_admin_email },
+  ]
+  default_admin_container_secrets = [
+    {
+      name      = "DJANGO_SUPERUSER_PASSWORD"
+      valueFrom = "${var.default_admin_password_secret_arn}:password::"
+    },
+  ]
+}
+resource "aws_ecs_task_definition" "backend" {
+  container_definitions = jsonencode([{
+    environment = [
+      { name = "DJANGO_CREATE_DEFAULT_ADMIN", value = "0" },
+    ]
+  }])
+}
+resource "aws_ecs_task_definition" "default_admin" {
+  family = "${local.prefix}-default-admin-task"
+  image = local.backend_image_uri
+  command = ["python", "manage.py", "ensure_default_admin", "--yes", "--create-only"]
+  environment = local.default_admin_container_environment
+  secrets = local.default_admin_container_secrets
+}
+resource "aws_ecs_task_definition" "frontend" {}
+"""
+        self.assertEqual(production_default_admin_task_errors(source), [])
+
+        mutations = {
+            '"--create-only"': "production Terraform omits the create-only default-admin command",
+            '"DJANGO_SKIP_STARTUP_TASKS"': (
+                "production Terraform omits startup-task suppression in the default-admin task"
+            ),
+            '"DJANGO_SUPERUSER_PASSWORD"': (
+                "production Terraform omits Secrets Manager password injection in the dedicated task"
+            ),
+            "environment = local.default_admin_container_environment": (
+                "production Terraform omits the dedicated default-admin environment reference"
+            ),
+            "secrets = local.default_admin_container_secrets": (
+                "production Terraform omits the dedicated default-admin secrets reference"
+            ),
+            "image = local.backend_image_uri": (
+                "production Terraform omits the immutable backend image in the dedicated default-admin task"
+            ),
+            "var.default_admin_password_secret_arn,\n  ])": (
+                "the ECS execution role secret allowlist omits the default-admin password ARN"
+            ),
+        }
+        for needle, expected_error in mutations.items():
+            with self.subTest(needle=needle):
+                self.assertIn(
+                    expected_error,
+                    production_default_admin_task_errors(
+                        source.replace(needle, "missing", 1)
+                    ),
                 )
 
     def test_required_runtime_environment_reads_required_calls_and_security_lists(self):
@@ -537,6 +604,7 @@ secrets = [
         )
 
     def test_production_cd_requires_protected_amplify_release(self):
+        self.maxDiff = None
         with TemporaryDirectory() as directory:
             root = Path(directory)
             workflows = root / ".github/workflows"
@@ -552,6 +620,8 @@ permissions:
 timeout-minutes: 160
 PRODUCTION_JOB_TIMEOUT_SECONDS: "9600"
 AMPLIFY_TIMEOUT_SECONDS: "1200"
+TF_VAR_default_admin_email: ${{ vars.PROD_DEFAULT_ADMIN_EMAIL || 'admin@releviz.com' }}
+TF_VAR_default_admin_password_secret_arn: ${{ vars.PROD_DEFAULT_ADMIN_PASSWORD_SECRET_ARN }}
 steps:
   - name: Record production job time budget
     id: job_budget
@@ -564,6 +634,29 @@ steps:
       git rev-parse HEAD
       echo "CI Result"
       echo "TF_VAR_backend_image_tag: $DEPLOY_SHA"
+  - name: Validate production configuration
+    run: |
+      if [ "$DEFAULT_ADMIN_EMAIL" != "admin@releviz.com" ]; then exit 1; fi
+      if ! jq -en \
+        --arg django "$DJANGO_SECRET_KEY_ARN" \
+        --arg field "$FIELD_ENCRYPTION_KEY_ARN" \
+        --arg metrics "$METRICS_BEARER_TOKEN_ARN" \
+        --arg admin "$DEFAULT_ADMIN_PASSWORD_SECRET_ARN" '
+          [$django, $field, $metrics, $admin] as $secrets
+          | ($secrets | length) == ($secrets | unique | length)
+        '; then exit 1; fi
+  - name: Verify deployment identity and managed dependencies
+    run: |
+      default_admin_secret_name="$(
+        aws secretsmanager describe-secret \
+          --secret-id "$DEFAULT_ADMIN_PASSWORD_SECRET_ARN" \
+          --query Name \
+          --output text
+      )"
+      if [ "$default_admin_secret_name" != "releviz/prod/default-admin-password" ]; then
+        exit 1
+      fi
+  - run: |
       aws ecs describe-task-definition
       echo "TF_VAR_frontend_image_tag: ${{ github.sha }}"
       echo "Build and push immutable ECS fallback frontend image"
@@ -611,6 +704,97 @@ steps:
       echo "neither the managed ALB fallback nor Amplify's exact reported apex target"
       echo "TF_VAR_enable_amplify_domain: ${{ steps.domain_state.outputs.preexisting }}"
       echo amplify_default_domain
+      echo "Run pre-Amplify backend smoke tests"
+  - name: Ensure production default administrator through one-off ECS task
+    run: |
+      started_by="admin-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+      echo "started_by=${started_by}" >>"$GITHUB_OUTPUT"
+      terraform -chdir=infra/prod output -raw default_admin_task_definition_arn
+      task_definition_state="$(aws ecs describe-task-definition)"
+      jq -e \
+        --arg password_secret "${TF_VAR_default_admin_password_secret_arn}:password::" '
+          .taskDefinition.family == "releviz-prod-default-admin-task"
+          and .taskDefinition.containerDefinitions[0].command
+            == ["python", "manage.py", "ensure_default_admin", "--yes", "--create-only"]
+          and (
+            .taskDefinition.containerDefinitions[0].environment[]
+            | select(.name == "DJANGO_SKIP_STARTUP_TASKS" and .value == "1")
+          )
+          and (
+            .taskDefinition.containerDefinitions[0].environment[]
+            | select(.name == "DJANGO_CREATE_DEFAULT_ADMIN" and .value == "0")
+          )
+          and (
+            .taskDefinition.containerDefinitions[0].secrets[]
+            | select(
+                .name == "DJANGO_SUPERUSER_PASSWORD"
+                and .valueFrom == $password_secret
+              )
+          )
+        ' <<<"$task_definition_state"
+      aws ecs describe-services
+      echo 'networkConfiguration.awsvpcConfiguration'
+      echo 'assignPublicIp == "DISABLED"'
+      backend_task_state="$(
+        aws ecs describe-task-definition \
+          --task-definition "$backend_task_definition"
+      )"
+      jq -e '
+        all(
+          .taskDefinition.containerDefinitions[].secrets[]?;
+          .name != "DJANGO_SUPERUSER_PASSWORD"
+        )
+        and all(
+          .taskDefinition.containerDefinitions[].environment[]?;
+          .name != "DJANGO_SUPERUSER_EMAIL"
+        )
+      ' <<<"$backend_task_state"
+      default_admin_image="immutable-backend-image"
+      backend_image="immutable-backend-image"
+      if [ "$default_admin_image" != "$backend_image" ]; then exit 1; fi
+      aws ecs list-tasks \
+        --cluster "$CLUSTER_NAME" \
+        --started-by "$started_by"
+      aws ecs run-task \
+        --cluster "$CLUSTER_NAME" \
+        --launch-type FARGATE \
+        --task-definition "$expected_task_definition" \
+        --network-configuration "$network_configuration" \
+        --count 1 \
+        --started-by "$started_by" \
+        --tags \
+          key=Project,value=releviz \
+          key=Environment,value=prod \
+          key=Purpose,value=default-admin-bootstrap \
+        --output json
+      timeout --signal=TERM 900s \
+        aws ecs wait tasks-stopped \
+          --cluster "$CLUSTER_NAME" \
+          --tasks "$task_arn"
+      stopped_state="$(
+        aws ecs describe-tasks \
+          --cluster "$CLUSTER_NAME" \
+          --tasks "$task_arn"
+      )"
+      jq -e '
+        .tasks[0].taskDefinitionArn == $expected
+        and .tasks[0].lastStatus == "STOPPED"
+        and .tasks[0].containers[0].exitCode == 0
+      ' <<<"$stopped_state"
+  - name: Clean up an interrupted default-administrator task
+    if: ${{ always() && steps.default_admin.outputs.started_by != '' }}
+    run: |
+      aws ecs list-tasks \
+        --cluster "$CLUSTER_NAME" \
+        --started-by "$DEFAULT_ADMIN_STARTED_BY"
+      aws ecs stop-task \
+        --cluster "$CLUSTER_NAME" \
+        --task "$task_arn"
+      timeout --signal=TERM 180s \
+        aws ecs wait tasks-stopped \
+          --cluster "$CLUSTER_NAME" \
+          --tasks "$task_arn"
+  - run: |
       echo "Fail closed when an Amplify release job is active"
       for branch in "$CANDIDATE_BRANCH" "$PRODUCTION_BRANCH"; do
         echo '"CREATED" "PENDING" "PROVISIONING" "RUNNING" "CANCELLING"'
@@ -1044,6 +1228,102 @@ steps:
             )
             self.assertEqual(production_cd_errors(root), [])
             protected_source = workflow.read_text(encoding="utf-8")
+
+            default_admin_guards = (
+                (
+                    "terraform -chdir=infra/prod output -raw default_admin_task_definition_arn",
+                    "echo unreviewed-default-admin-task",
+                    "production CD omits the Terraform-selected default-admin task definition",
+                ),
+                (
+                    '--network-configuration "$network_configuration"',
+                    '--network-configuration "awsvpcConfiguration={assignPublicIp=ENABLED}"',
+                    "production CD omits exactly one private Fargate default-admin task",
+                ),
+                (
+                    "timeout --signal=TERM 900s",
+                    "timeout --signal=TERM 0s",
+                    "production CD omits a bounded stopped-state wait for the default-admin task",
+                ),
+                (
+                    ".tasks[0].containers[0].exitCode == 0",
+                    ".tasks[0].containers[0].exitCode != 0",
+                    "production CD omits stopped-task dataflow and successful container exit verification",
+                ),
+                (
+                    "[$django, $field, $metrics, $admin]",
+                    "[$django, $field, $metrics]",
+                    "production CD omits a four-way production application-secret uniqueness guard",
+                ),
+                (
+                    '"releviz/prod/default-admin-password"',
+                    '"releviz/prod/other-secret"',
+                    "production CD omits an exact default-admin Secrets Manager name guard",
+                ),
+                (
+                    "${TF_VAR_default_admin_password_secret_arn}:password::",
+                    "${TF_VAR_default_admin_password_secret_arn}:wrong::",
+                    "production CD omits the default-admin JSON password-key selector",
+                ),
+                (
+                    'echo "started_by=${started_by}" >>"$GITHUB_OUTPUT"',
+                    'echo "started_by=${started_by}"',
+                    "production CD omits a persisted unique default-admin started-by token",
+                ),
+                (
+                    '--started-by "$started_by"',
+                    '--started-by "not-the-recorded-token"',
+                    "production CD omits started-by discovery for interrupted default-admin tasks",
+                ),
+                (
+                    "key=Purpose,value=default-admin-bootstrap",
+                    "key=Purpose,value=unreviewed",
+                    "production CD omits the three required default-admin task tags",
+                ),
+                (
+                    "--count 1",
+                    "--count 1\n        --overrides '{}'",
+                    "production CD must not override roles or commands on the default-admin task",
+                ),
+                (
+                    'if [ "$default_admin_image" != "$backend_image" ]; then exit 1; fi',
+                    'if [ "$default_admin_image" = "$backend_image" ]; then exit 1; fi',
+                    "production CD omits runtime equality of the default-admin and backend images",
+                ),
+                (
+                    '<<<"$backend_task_state"',
+                    '<<<"$task_definition_state"',
+                    "production CD omits runtime isolation of administrator inputs from the deployed backend task",
+                ),
+                (
+                    "steps.default_admin.outputs.started_by != ''",
+                    "steps.default_admin.outputs.started_by == ''",
+                    "production CD omits an always-run started-by cleanup guard",
+                ),
+                (
+                    '--started-by "$DEFAULT_ADMIN_STARTED_BY"',
+                    '--started-by "unreviewed"',
+                    "production CD omits compensating discovery of interrupted default-admin tasks",
+                ),
+                (
+                    "aws ecs stop-task",
+                    "aws ecs describe-tasks",
+                    "production CD omits compensating stop of interrupted default-admin tasks",
+                ),
+                (
+                    "timeout --signal=TERM 180s",
+                    "timeout --signal=TERM 0s",
+                    "production CD omits bounded verification of compensating default-admin cleanup",
+                ),
+            )
+            for needle, replacement, expected_error in default_admin_guards:
+                with self.subTest(expected_error=expected_error):
+                    self.assertIn(needle, protected_source)
+                    workflow.write_text(
+                        protected_source.replace(needle, replacement, 1),
+                        encoding="utf-8",
+                    )
+                    self.assertIn(expected_error, production_cd_errors(root))
 
             workflow.write_text(
                 protected_source.replace(

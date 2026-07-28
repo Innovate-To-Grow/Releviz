@@ -81,6 +81,21 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         r"git rev-parse HEAD": "exact checked-out release verification",
         r"CI Result": "successful CI enforcement",
         r"backend_image_tag.*DEPLOY_SHA": "immutable backend release tag",
+        (
+            r"TF_VAR_default_admin_email:\s*\$\{\{\s*"
+            r"vars\.PROD_DEFAULT_ADMIN_EMAIL\s*\|\|\s*'admin@releviz\.com'\s*\}\}"
+        ): "the reviewed production default-admin email input",
+        (
+            r"TF_VAR_default_admin_password_secret_arn:\s*\$\{\{\s*"
+            r"vars\.PROD_DEFAULT_ADMIN_PASSWORD_SECRET_ARN\s*\}\}"
+        ): "the production default-admin password secret ARN input",
+        (
+            r'DEFAULT_ADMIN_EMAIL"\s*!=\s*"admin@releviz\.com"'
+        ): "an exact production default-admin identity guard",
+        (
+            r'DEFAULT_ADMIN_PASSWORD_SECRET_ARN"[\s\S]{0,1200}'
+            r"secretsmanager describe-secret"
+        ): "default-admin password secret metadata verification",
         r"describe-task-definition": "deployed ECS frontend rollback discovery",
         r"frontend_image_tag.*github\.sha": "immutable ECS fallback frontend release tag",
         (
@@ -355,6 +370,55 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
             r'[\s\S]*"RUNNING"[\s\S]*"CANCELLING"'
         ): "all non-terminal Amplify job-state guards",
         r"describe-target-health": "backend ALB target-health verification",
+        r"Ensure production default administrator through one-off ECS task": (
+            "a one-off default-administrator bootstrap task"
+        ),
+        (
+            r"terraform\s+-chdir=infra/prod\s+output\s+-raw\s+"
+            r"default_admin_task_definition_arn"
+        ): "the Terraform-selected default-admin task definition",
+        (
+            r"describe-task-definition[\s\S]{0,1800}"
+            r'family\s*==\s*"releviz-prod-default-admin-task"'
+            r"[\s\S]{0,1200}ensure_default_admin"
+            r'[\s\S]{0,200}"--create-only"'
+        ): "the reviewed create-only default-admin task command",
+        (
+            r"DJANGO_SKIP_STARTUP_TASKS[\s\S]{0,100}"
+            r'\.value\s*==\s*"1"'
+        ): "startup-task suppression in the default-admin task",
+        (
+            r"DJANGO_CREATE_DEFAULT_ADMIN[\s\S]{0,100}"
+            r'\.value\s*==\s*"0"'
+        ): "container-start default-admin bootstrap suppression",
+        (
+            r"DJANGO_SUPERUSER_PASSWORD[\s\S]{0,160}"
+            r"\.valueFrom\s*==\s*\$password_secret"
+        ): "Secrets Manager-only default-admin password injection",
+        (
+            r'\.name\s*!=\s*"DJANGO_SUPERUSER_PASSWORD"'
+            r'[\s\S]{0,400}\.name\s*!=\s*"DJANGO_SUPERUSER_EMAIL"'
+        ): "runtime isolation of administrator inputs from the backend service",
+        (
+            r"describe-services[\s\S]{0,2200}"
+            r"networkConfiguration\.awsvpcConfiguration"
+            r'[\s\S]{0,500}assignPublicIp\s*==\s*"DISABLED"'
+        ): "the backend service's private network for the default-admin task",
+        (
+            r"aws\s+ecs\s+run-task[\s\S]{0,500}"
+            r"--launch-type\s+FARGATE[\s\S]{0,500}"
+            r'--task-definition\s+"\$expected_task_definition"'
+            r'[\s\S]{0,500}--network-configuration\s+"\$network_configuration"'
+            r"[\s\S]{0,300}--count\s+1"
+        ): "exactly one private Fargate default-admin task",
+        (
+            r"aws\s+ecs\s+wait\s+tasks-stopped[\s\S]{0,200}"
+            r'--tasks\s+"\$task_arn"'
+        ): "a stopped-state wait for the default-admin task",
+        (
+            r"\.tasks\[0\]\.taskDefinitionArn\s*==\s*\$expected"
+            r"[\s\S]{0,500}\.exitCode\s*==\s*0"
+        ): "task-definition and successful-exit verification for the default admin",
         r"Run canonical production smoke tests": "post-cutover smoke tests",
         (
             r"Plan final production topology"
@@ -404,6 +468,149 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
     }
     for pattern, description in required_patterns.items():
         if not re.search(pattern, source, re.MULTILINE | re.DOTALL):
+            errors.append(f"production CD omits {description}")
+
+    def named_step(name: str) -> str:
+        match = re.search(
+            rf"(?m)^(?P<indent>[ \t]*)-\s+name:\s*{re.escape(name)}\s*$",
+            source,
+        )
+        if match is None:
+            return ""
+        indent = match.group("indent")
+        next_step = re.search(
+            rf"(?m)^{re.escape(indent)}-\s+(?:name|uses|run):",
+            source[match.end() :],
+        )
+        end = match.end() + next_step.start() if next_step is not None else len(source)
+        return source[match.start() : end]
+
+    configuration_step = named_step("Validate production configuration")
+    configuration_guards = {
+        (
+            r'--arg\s+django\s+"\$DJANGO_SECRET_KEY_ARN"'
+            r'[\s\S]{0,300}--arg\s+field\s+"\$FIELD_ENCRYPTION_KEY_ARN"'
+            r'[\s\S]{0,300}--arg\s+metrics\s+"\$METRICS_BEARER_TOKEN_ARN"'
+            r'[\s\S]{0,300}--arg\s+admin\s+"\$DEFAULT_ADMIN_PASSWORD_SECRET_ARN"'
+            r"[\s\S]{0,500}\[\$django,\s*\$field,\s*\$metrics,\s*\$admin\]"
+            r"[\s\S]{0,300}unique"
+        ): "a four-way production application-secret uniqueness guard",
+    }
+    for pattern, description in configuration_guards.items():
+        if not re.search(pattern, configuration_step, re.MULTILINE | re.DOTALL):
+            errors.append(f"production CD omits {description}")
+
+    dependency_step = named_step("Verify deployment identity and managed dependencies")
+    dependency_guards = {
+        (
+            r'default_admin_secret_name="\$\([\s\S]{0,500}'
+            r"aws\s+secretsmanager\s+describe-secret"
+            r'[\s\S]{0,250}--secret-id\s+"\$DEFAULT_ADMIN_PASSWORD_SECRET_ARN"'
+            r"[\s\S]{0,200}--query\s+Name[\s\S]{0,100}\)\""
+            r'[\s\S]{0,300}default_admin_secret_name"\s*!=\s*'
+            r'"releviz/prod/default-admin-password"'
+        ): "an exact default-admin Secrets Manager name guard",
+    }
+    for pattern, description in dependency_guards.items():
+        if not re.search(pattern, dependency_step, re.MULTILINE | re.DOTALL):
+            errors.append(f"production CD omits {description}")
+
+    admin_step = named_step(
+        "Ensure production default administrator through one-off ECS task"
+    )
+    admin_step_guards = {
+        (
+            r"--arg\s+password_secret\s+"
+            r'"\$\{TF_VAR_default_admin_password_secret_arn\}:password::"'
+            r"[\s\S]{0,2200}DJANGO_SUPERUSER_PASSWORD"
+            r"[\s\S]{0,200}\.valueFrom\s*==\s*\$password_secret"
+        ): "the default-admin JSON password-key selector",
+        (
+            r'started_by="admin-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}"'
+            r'[\s\S]{0,500}echo\s+"started_by=\$\{started_by\}"'
+            r'\s*>>"\$GITHUB_OUTPUT"'
+            r'[\s\S]{0,9000}--started-by\s+"\$started_by"'
+        ): "a persisted unique default-admin started-by token",
+        (
+            r"aws\s+ecs\s+list-tasks\s+\\?\s*"
+            r'--cluster\s+"\$CLUSTER_NAME"\s+\\?\s*'
+            r'--started-by\s+"\$started_by"'
+        ): "started-by discovery for interrupted default-admin tasks",
+        (
+            r"--tags[\s\S]{0,250}key=Project,value=releviz"
+            r"[\s\S]{0,150}key=Environment,value=prod"
+            r"[\s\S]{0,150}key=Purpose,value=default-admin-bootstrap"
+        ): "the three required default-admin task tags",
+        (
+            r'if\s+\[\s*"\$default_admin_image"\s*!=\s*'
+            r'"\$backend_image"\s*\]\s*;\s*then'
+        ): "runtime equality of the default-admin and backend images",
+        (
+            r'backend_task_state="\$\([\s\S]{0,500}'
+            r"aws\s+ecs\s+describe-task-definition"
+            r'[\s\S]{0,250}--task-definition\s+"\$backend_task_definition"'
+            r"[\s\S]{0,150}\)\""
+            r'[\s\S]{0,1200}\.name\s*!=\s*"DJANGO_SUPERUSER_PASSWORD"'
+            r'[\s\S]{0,500}\.name\s*!=\s*"DJANGO_SUPERUSER_EMAIL"'
+            r'[\s\S]{0,700}<<<"\$backend_task_state"'
+        ): "runtime isolation of administrator inputs from the deployed backend task",
+        (
+            r"timeout\s+--signal=TERM\s+900s"
+            r"[\s\S]{0,100}aws\s+ecs\s+wait\s+tasks-stopped"
+            r'[\s\S]{0,200}--cluster\s+"\$CLUSTER_NAME"'
+            r'[\s\S]{0,100}--tasks\s+"\$task_arn"'
+        ): "a bounded stopped-state wait for the default-admin task",
+        (
+            r'stopped_state="\$\([\s\S]{0,400}'
+            r"aws\s+ecs\s+describe-tasks"
+            r'[\s\S]{0,200}--cluster\s+"\$CLUSTER_NAME"'
+            r'[\s\S]{0,150}--tasks\s+"\$task_arn"'
+            r"[\s\S]{0,100}\)\""
+            r"[\s\S]{0,900}\.lastStatus\s*==\s*\"STOPPED\""
+            r"[\s\S]{0,500}\.exitCode\s*==\s*0"
+            r'[\s\S]{0,200}<<<"\$stopped_state"'
+        ): "stopped-task dataflow and successful container exit verification",
+    }
+    for pattern, description in admin_step_guards.items():
+        if not re.search(pattern, admin_step, re.MULTILINE | re.DOTALL):
+            errors.append(f"production CD omits {description}")
+    run_task = re.search(
+        r"aws\s+ecs\s+run-task[\s\S]{0,1800}--output\s+json",
+        admin_step,
+        re.MULTILINE | re.DOTALL,
+    )
+    if run_task is None:
+        errors.append("production CD omits the reviewed default-admin RunTask call")
+    elif re.search(r"(?m)^\s*--overrides(?:\s|$)", run_task.group(0)):
+        errors.append(
+            "production CD must not override roles or commands on the default-admin task"
+        )
+
+    cleanup_step = named_step("Clean up an interrupted default-administrator task")
+    cleanup_step_guards = {
+        (
+            r"if:\s*\$\{\{\s*always\(\)"
+            r"[\s\S]{0,250}steps\.default_admin\.outputs\.started_by\s*!=\s*''"
+        ): "an always-run started-by cleanup guard",
+        (
+            r"aws\s+ecs\s+list-tasks\s+\\?\s*"
+            r'--cluster\s+"\$CLUSTER_NAME"\s+\\?\s*'
+            r'--started-by\s+"\$DEFAULT_ADMIN_STARTED_BY"'
+        ): "compensating discovery of interrupted default-admin tasks",
+        (
+            r"aws\s+ecs\s+stop-task"
+            r'[\s\S]{0,200}--cluster\s+"\$CLUSTER_NAME"'
+            r'[\s\S]{0,150}--task\s+"\$task_arn"'
+        ): "compensating stop of interrupted default-admin tasks",
+        (
+            r"timeout\s+--signal=TERM\s+180s"
+            r"[\s\S]{0,100}aws\s+ecs\s+wait\s+tasks-stopped"
+            r'[\s\S]{0,200}--cluster\s+"\$CLUSTER_NAME"'
+            r'[\s\S]{0,100}--tasks\s+"\$task_arn"'
+        ): "bounded verification of compensating default-admin cleanup",
+    }
+    for pattern, description in cleanup_step_guards.items():
+        if not re.search(pattern, cleanup_step, re.MULTILINE | re.DOTALL):
             errors.append(f"production CD omits {description}")
 
     def marker_section(start_marker: str, end_marker: str) -> str:
@@ -1276,6 +1483,8 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
     ordered_markers = (
         "Capture pre-release canonical Route53 alias",
         "Guard live Amplify configuration before candidate smoke",
+        "Run pre-Amplify backend smoke tests",
+        "Ensure production default administrator through one-off ECS task",
         "Fail closed when an Amplify release job is active",
         "Capture current Amplify production rollback point",
         "Resolve retained Amplify rollback artifact",
@@ -1478,10 +1687,167 @@ def production_ecs_task_definition_errors(terraform_source: str) -> list[str]:
         ),
     }
     for pattern, description in canonical_defaults.items():
-        if len(re.findall(pattern, terraform_source)) != 2:
+        if len(re.findall(pattern, terraform_source)) != 3:
             errors.append(
-                f"production Terraform must set {description} on both ECS task definitions"
+                f"production Terraform must set {description} on all three ECS task definitions"
             )
+    return errors
+
+
+def _terraform_resource_source(
+    terraform_source: str, resource_type: str, resource_name: str
+) -> str:
+    """Return one top-level resource stanza without attempting to parse HCL."""
+
+    start = re.search(
+        rf'(?m)^resource\s+"{re.escape(resource_type)}"\s+'
+        rf'"{re.escape(resource_name)}"\s*\{{',
+        terraform_source,
+    )
+    if start is None:
+        return ""
+    next_resource = re.search(
+        r'(?m)^resource\s+"[^"]+"\s+"[^"]+"\s*\{',
+        terraform_source[start.end() :],
+    )
+    end = (
+        start.end() + next_resource.start()
+        if next_resource is not None
+        else len(terraform_source)
+    )
+    return terraform_source[start.start() : end]
+
+
+def _terraform_local_assignment_source(terraform_source: str, name: str) -> str:
+    """Return one two-space-indented assignment from a top-level locals block."""
+
+    start = re.search(
+        rf"(?m)^  {re.escape(name)}\s*=",
+        terraform_source,
+    )
+    if start is None:
+        return ""
+    next_assignment = re.search(
+        r"(?m)^  [a-zA-Z_][a-zA-Z0-9_]*\s*=",
+        terraform_source[start.end() :],
+    )
+    end = (
+        start.end() + next_assignment.start()
+        if next_assignment is not None
+        else len(terraform_source)
+    )
+    return terraform_source[start.start() : end]
+
+
+def production_default_admin_task_errors(terraform_source: str) -> list[str]:
+    """Keep administrator credentials confined to a create-only one-off task."""
+
+    errors: list[str] = []
+    backend = _terraform_resource_source(
+        terraform_source, "aws_ecs_task_definition", "backend"
+    )
+    default_admin = _terraform_resource_source(
+        terraform_source, "aws_ecs_task_definition", "default_admin"
+    )
+    default_admin_environment = _terraform_local_assignment_source(
+        terraform_source, "default_admin_container_environment"
+    )
+    default_admin_secrets = _terraform_local_assignment_source(
+        terraform_source, "default_admin_container_secrets"
+    )
+    if not default_admin:
+        return [
+            "production Terraform omits the dedicated default-admin task definition"
+        ]
+
+    required_resource = {
+        r'family\s*=\s*"\$\{local\.prefix\}-default-admin-task"': (
+            "the dedicated default-admin task family"
+        ),
+        (
+            r'command\s*=\s*\[\s*"python"\s*,\s*"manage\.py"\s*,'
+            r'\s*"ensure_default_admin"\s*,\s*"--yes"\s*,\s*"--create-only"\s*\]'
+        ): "the create-only default-admin command",
+        (
+            r"environment\s*=\s*local\.default_admin_container_environment"
+        ): "the dedicated default-admin environment reference",
+        (
+            r"secrets\s*=\s*local\.default_admin_container_secrets"
+        ): "the dedicated default-admin secrets reference",
+        r"image\s*=\s*local\.backend_image_uri": (
+            "the immutable backend image in the dedicated default-admin task"
+        ),
+    }
+    for pattern, description in required_resource.items():
+        if not re.search(pattern, default_admin, re.MULTILINE | re.DOTALL):
+            errors.append(f"production Terraform omits {description}")
+
+    required_environment = {
+        (
+            r'\{\s*name\s*=\s*"DJANGO_SKIP_STARTUP_TASKS"\s*,'
+            r'\s*value\s*=\s*"1"\s*\}'
+        ): "startup-task suppression in the default-admin task",
+        (
+            r'\{\s*name\s*=\s*"DJANGO_CREATE_DEFAULT_ADMIN"\s*,'
+            r'\s*value\s*=\s*"0"\s*\}'
+        ): "container-start admin-bootstrap suppression",
+        (
+            r'\{\s*name\s*=\s*"DJANGO_SUPERUSER_EMAIL"\s*,'
+            r"\s*value\s*=\s*var\.default_admin_email\s*\}"
+        ): "the reviewed default-admin email",
+    }
+    for pattern, description in required_environment.items():
+        if not re.search(
+            pattern,
+            default_admin_environment,
+            re.MULTILINE | re.DOTALL,
+        ):
+            errors.append(f"production Terraform omits {description}")
+
+    required_secrets = {
+        (
+            r'\{\s*name\s*=\s*"DJANGO_SUPERUSER_PASSWORD"\s*,?'
+            r'\s*valueFrom\s*=\s*"\$\{var\.default_admin_password_secret_arn\}'
+            r':password::"\s*\}'
+        ): "Secrets Manager password injection in the dedicated task",
+    }
+    for pattern, description in required_secrets.items():
+        if not re.search(
+            pattern,
+            default_admin_secrets,
+            re.MULTILINE | re.DOTALL,
+        ):
+            errors.append(f"production Terraform omits {description}")
+
+    if re.search(r"(?m)^[ \t]*task_role_arn\s*=", default_admin):
+        errors.append(
+            "the default-admin task must not receive an application task role"
+        )
+    if "ENABLE_LEGACY_API_PREFIX" in (
+        default_admin + default_admin_environment + default_admin_secrets
+    ):
+        errors.append(
+            "the default-admin task must not vary with legacy API compatibility"
+        )
+    if "DJANGO_SUPERUSER_PASSWORD" in backend:
+        errors.append(
+            "the long-running backend task must not receive the default-admin password"
+        )
+    if "DJANGO_SUPERUSER_EMAIL" in backend:
+        errors.append(
+            "the long-running backend task must not receive default-admin bootstrap inputs"
+        )
+    application_secret_arns = _terraform_local_assignment_source(
+        terraform_source, "application_secret_arns"
+    )
+    if not re.search(
+        r"application_secret_arns\s*=\s*compact\(\[[\s\S]{0,300}"
+        r"var\.default_admin_password_secret_arn",
+        application_secret_arns,
+    ):
+        errors.append(
+            "the ECS execution role secret allowlist omits the default-admin password ARN"
+        )
     return errors
 
 
@@ -1670,6 +2036,7 @@ def deployment_contract_errors(root: Path = ROOT) -> list[str]:
     errors.extend(production_alb_security_group_errors(production_terraform))
     errors.extend(production_proxy_configuration_errors(production_terraform))
     errors.extend(production_ecs_task_definition_errors(production_terraform))
+    errors.extend(production_default_admin_task_errors(production_terraform))
     errors.extend(production_amplify_custom_headers_errors(production_terraform))
 
     bootstrap_terraform = (root / BOOTSTRAP_TERRAFORM.relative_to(ROOT)).read_text(
@@ -1682,6 +2049,66 @@ def deployment_contract_errors(root: Path = ROOT) -> list[str]:
         r"destroy\s*=\s*false": "a shared OIDC provider preservation guard",
         r'"route53:ListHostedZones"': (
             "the observed Amplify Route53 hosted-zone discovery permission"
+        ),
+        r"length\(var\.production_secret_arns\)\s*>=\s*4": (
+            "metadata access for all four production application secrets"
+        ),
+        r'Sid\s*=\s*"RunProductionDefaultAdminTask"': (
+            "a separate default-admin task launch permission"
+        ),
+        (
+            r"task-definition/releviz-prod-default-admin-task:\*"
+        ): "a task-family-scoped default-admin launch permission",
+        (
+            r'ArnEquals\s*=\s*\{[\s\S]{0,160}"ecs:cluster"'
+            r"\s*=\s*local\.production_cluster_arn"
+        ): "an exact production-cluster condition on the default-admin task",
+        r'Sid\s*=\s*"StopProductionDefaultAdminTask"': (
+            "a separate tagged default-admin task cleanup permission"
+        ),
+        r"task/releviz-prod-cluster/\*": (
+            "a production-cluster task scope for default-admin cleanup"
+        ),
+        r'"aws:RequestTag/Project"\s*=\s*"releviz"': (
+            "the default-admin Project request-tag guard"
+        ),
+        r'"aws:RequestTag/Environment"\s*=\s*"prod"': (
+            "the default-admin Environment request-tag guard"
+        ),
+        r'"aws:RequestTag/Purpose"\s*=\s*"default-admin-bootstrap"': (
+            "the default-admin Purpose request-tag guard"
+        ),
+        r'"ForAllValues:StringEquals"\s*=\s*\{[\s\S]{0,120}'
+        r'"aws:TagKeys"\s*=\s*\[[\s\S]{0,120}"Project"'
+        r'[\s\S]{0,80}"Environment"[\s\S]{0,80}"Purpose"': (
+            "an exact default-admin request tag-key allowlist"
+        ),
+        r'"aws:ResourceTag/Project"\s*=\s*"releviz"': (
+            "the default-admin cleanup Project tag guard"
+        ),
+        r'"aws:ResourceTag/Environment"\s*=\s*"prod"': (
+            "the default-admin cleanup Environment tag guard"
+        ),
+        r'"aws:ResourceTag/Purpose"\s*=\s*"default-admin-bootstrap"': (
+            "the default-admin cleanup Purpose tag guard"
+        ),
+        r"production_ecs_role_arns\s*=\s*\[[\s\S]{0,250}"
+        r"releviz-prod-ecs-execution-role[\s\S]{0,150}"
+        r"releviz-prod-ecs-task-role": "the two exact production ECS role ARNs",
+        r'Sid\s*=\s*"PassExactProductionEcsRoles"[\s\S]{0,350}'
+        r"Resource\s*=\s*local\.production_ecs_role_arns[\s\S]{0,250}"
+        r'"iam:PassedToService"\s*=\s*"ecs-tasks\.amazonaws\.com"': (
+            "exact ECS role passing limited to the ECS tasks service"
+        ),
+        r"production_eventbridge_role_arn\s*=\s*"
+        r'"arn:aws:iam::\$\{data\.aws_caller_identity\.current\.account_id\}:'
+        r'role/releviz-prod-eventbridge-reminders-role"': (
+            "the exact production EventBridge role ARN"
+        ),
+        r'Sid\s*=\s*"PassExactProductionEventBridgeRole"[\s\S]{0,350}'
+        r"Resource\s*=\s*local\.production_eventbridge_role_arn[\s\S]{0,250}"
+        r'"iam:PassedToService"\s*=\s*"events\.amazonaws\.com"': (
+            "exact EventBridge role passing limited to the EventBridge service"
         ),
     }.items():
         if not re.search(pattern, bootstrap_terraform):

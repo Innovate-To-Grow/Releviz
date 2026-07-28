@@ -1335,7 +1335,6 @@ jobs:
       FRONTEND_URL: http://127.0.0.1:3100
       EMAIL_FILE_PATH: /tmp/releviz-e2e-mail
       DJANGO_SUPERUSER_EMAIL: admin@releviz.local
-      DJANGO_SUPERUSER_PASSWORD: Admin12345!
       PW_PROJECT: ${{ matrix.project }}
     steps:
       - name: Checkout code
@@ -1385,6 +1384,18 @@ jobs:
       - name: Install Playwright system dependencies on cache hit
         if: ${{ steps.playwright-cache.outputs.cache-hit == 'true' }}
         run: npx playwright install-deps chromium firefox webkit
+
+      - name: Generate ephemeral E2E administrator password
+        run: |
+          python - <<'PY'
+          import os
+          import secrets
+
+          password = f"E2E-Aa1!{secrets.token_hex(24)}"
+          print(f"::add-mask::{password}")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as github_env:
+              github_env.write(f"DJANGO_SUPERUSER_PASSWORD={password}\n")
+          PY
 
       - name: Prepare backend database and email sink
         run: |
