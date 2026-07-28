@@ -33,6 +33,33 @@ locals {
   amplify_production_url    = "https://${local.amplify_production_branch}.${aws_amplify_app.frontend.default_domain}"
   amplify_candidate_url     = "https://${local.amplify_candidate_branch}.${aws_amplify_app.frontend.default_domain}"
   amplify_route_manifest    = jsondecode(file("${path.module}/../../src/frontend/amplify-routes.json"))
+  amplify_custom_headers = [
+    {
+      pattern = "**"
+      headers = [
+        {
+          key   = "Strict-Transport-Security"
+          value = "max-age=31536000; includeSubDomains"
+        },
+        {
+          key   = "X-Content-Type-Options"
+          value = "nosniff"
+        },
+        {
+          key   = "X-Frame-Options"
+          value = "DENY"
+        },
+        {
+          key   = "Referrer-Policy"
+          value = "no-referrer"
+        },
+        {
+          key   = "Content-Security-Policy"
+          value = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://challenges.cloudflare.com https://esm.run blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' ws: wss:; worker-src 'self' blob:; frame-src https://challenges.cloudflare.com;"
+        },
+      ]
+    },
+  ]
   backend_allowed_hosts = join(",", [
     var.custom_domain,
     var.origin_domain,
@@ -796,45 +823,32 @@ resource "aws_amplify_app" "frontend" {
     }
   }
 
-  # Amplify normalizes this API field to a JSON array on read. Keep the
-  # configuration in that canonical representation so refreshes do not create
-  # a perpetual live-app diff from an equivalent customHeaders YAML document.
-  custom_headers = jsonencode([
-    {
-      pattern = "**"
-      headers = [
-        {
-          key   = "Strict-Transport-Security"
-          value = "max-age=31536000; includeSubDomains"
-        },
-        {
-          key   = "X-Content-Type-Options"
-          value = "nosniff"
-        },
-        {
-          key   = "X-Frame-Options"
-          value = "DENY"
-        },
-        {
-          key   = "Referrer-Policy"
-          value = "no-referrer"
-        },
-        {
-          key   = "Content-Security-Policy"
-          value = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://challenges.cloudflare.com https://esm.run blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' ws: wss:; worker-src 'self' blob:; frame-src https://challenges.cloudflare.com;"
-        },
-      ]
-    },
-  ])
+  custom_headers = jsonencode(local.amplify_custom_headers)
 
   tags = local.common_tags
 
   lifecycle {
     prevent_destroy = true
 
+    # Amplify rewrites equivalent JSON/YAML and whitespace on read, so Terraform
+    # cannot compare this string reliably. Ignore only the provider-normalized
+    # representation; the postcondition below still rejects semantic drift.
+    ignore_changes = [custom_headers]
+
     postcondition {
       condition     = self.id == var.amplify_app_id
       error_message = "The managed Amplify app must match the explicitly provisioned amplify_app_id."
+    }
+
+    postcondition {
+      condition = try(
+        jsonencode(try(
+          yamldecode(self.custom_headers).customHeaders,
+          yamldecode(self.custom_headers),
+        )) == jsonencode(local.amplify_custom_headers),
+        false,
+      )
+      error_message = "The live Amplify custom headers must semantically match the reviewed production security policy."
     }
   }
 }
