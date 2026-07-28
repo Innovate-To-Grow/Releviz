@@ -872,7 +872,10 @@ resource "aws_amplify_domain_association" "frontend" {
   app_id                 = aws_amplify_app.frontend.id
   domain_name            = var.custom_domain
   enable_auto_sub_domain = false
-  wait_for_verification  = true
+  # The protected workflow owns the bounded, fail-closed availability gate.
+  # Returning after the API create prevents an asynchronous service failure
+  # from tainting a successfully persisted association in Terraform state.
+  wait_for_verification = false
 
   certificate_settings {
     type = "AMPLIFY_MANAGED"

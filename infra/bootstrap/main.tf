@@ -312,6 +312,16 @@ locals {
         ]
         Resource = local.production_amplify_domain_arn
       },
+      {
+        # Amplify discovers whether the exact custom domain is hosted in
+        # Route53 while creating the association. ListHostedZones does not
+        # support resource-level permissions, so keep this observed discovery
+        # action separate from the exact hosted-zone write permissions.
+        Sid      = "DiscoverProductionRoute53HostedZones"
+        Effect   = "Allow"
+        Action   = ["route53:ListHostedZones"]
+        Resource = "*"
+      },
     ])) : statement if var.production_amplify_app_id != ""
   ]
 }

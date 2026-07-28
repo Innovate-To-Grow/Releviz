@@ -191,6 +191,7 @@ run "production_plan" {
     condition = (
       length(aws_amplify_domain_association.frontend) == 1 &&
       aws_amplify_domain_association.frontend[0].domain_name == var.custom_domain &&
+      !aws_amplify_domain_association.frontend[0].wait_for_verification &&
       one(aws_amplify_domain_association.frontend[0].sub_domain).branch_name == "main" &&
       one(aws_amplify_domain_association.frontend[0].sub_domain).prefix == ""
     )

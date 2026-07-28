@@ -239,18 +239,65 @@ jobs:
         id: domain_state
         run: |
           set -euo pipefail
+          app_id="$TF_VAR_amplify_app_id"
+          domain_name="${PROD_DOMAIN%.}"
+          state_address='aws_amplify_domain_association.frontend[0]'
+          association_file="${RUNNER_TEMP}/existing-amplify-domain-association.json"
+          association_error="${RUNNER_TEMP}/existing-amplify-domain-association.error"
           state_list="$(terraform -chdir=infra/prod state list)"
-          if grep -q '^aws_amplify_domain_association\.frontend' <<<"$state_list"; then
-            echo "preexisting=true" >>"$GITHUB_OUTPUT"
-            echo "recovered_orphan=false" >>"$GITHUB_OUTPUT"
-          else
-            app_id="$TF_VAR_amplify_app_id"
-            domain_name="${PROD_DOMAIN%.}"
-            association_file="${RUNNER_TEMP}/orphan-amplify-domain-association.json"
-            association_error="${RUNNER_TEMP}/orphan-amplify-domain-association.error"
+          if grep -q '^aws_amplify_domain_association\.frontend\[0\]$' <<<"$state_list"; then
             if [ -z "$app_id" ]; then
-              echo "preexisting=false" >>"$GITHUB_OUTPUT"
-              echo "recovered_orphan=false" >>"$GITHUB_OUTPUT"
+              echo "::error::Terraform tracks the Amplify domain but no app ID is configured."
+              exit 1
+            fi
+            if ! aws amplify get-domain-association \
+              --app-id "$app_id" \
+              --domain-name "$domain_name" \
+              --output json >"$association_file" 2>"$association_error"; then
+              echo "::error::Terraform tracks the Amplify domain but the exact AWS association could not be verified."
+              cat "$association_error" >&2
+              exit 1
+            fi
+            instance_status="$(
+              terraform -chdir=infra/prod state pull |
+                jq -er '
+                  [
+                    .resources[]
+                    | select(
+                        .mode == "managed" and
+                        .type == "aws_amplify_domain_association" and
+                        .name == "frontend"
+                      )
+                    | .instances[]
+                    | select(.index_key == 0)
+                    | (.status // "ready")
+                  ]
+                  | if length == 1 then .[0]
+                    else error("expected exactly one Amplify domain instance")
+                    end
+                '
+            )"
+            case "$instance_status" in
+              ready)
+                recovered_taint=false
+                ;;
+              tainted)
+                terraform -chdir=infra/prod untaint "$state_address"
+                recovered_taint=true
+                echo "::notice::Recovered the verified Amplify domain association from tainted Terraform state."
+                ;;
+              *)
+                echo "::error::Unexpected Amplify domain Terraform state: ${instance_status}"
+                exit 1
+                ;;
+            esac
+            preexisting=true
+            recovered_orphan=false
+          else
+            if [ -z "$app_id" ]; then
+              preexisting=false
+              recovered_orphan=false
+              recovered_taint=false
             elif aws amplify get-domain-association \
               --app-id "$app_id" \
               --domain-name "$domain_name" \
@@ -265,18 +312,25 @@ jobs:
                 echo "::error::The orphan Amplify domain association was not imported."
                 exit 1
               fi
-              echo "preexisting=true" >>"$GITHUB_OUTPUT"
-              echo "recovered_orphan=true" >>"$GITHUB_OUTPUT"
+              preexisting=true
+              recovered_orphan=true
+              recovered_taint=false
               echo "::notice::Recovered the existing Amplify domain association into Terraform state."
             elif grep -q 'NotFoundException' "$association_error"; then
-              echo "preexisting=false" >>"$GITHUB_OUTPUT"
-              echo "recovered_orphan=false" >>"$GITHUB_OUTPUT"
+              preexisting=false
+              recovered_orphan=false
+              recovered_taint=false
             else
               echo "::error::Unable to determine whether an orphan Amplify domain association exists."
               cat "$association_error" >&2
               exit 1
             fi
           fi
+          {
+            echo "preexisting=$preexisting"
+            echo "recovered_orphan=$recovered_orphan"
+            echo "recovered_taint=$recovered_taint"
+          } >>"$GITHUB_OUTPUT"
 
       - name: Detect an existing CloudFront-only origin restriction
         id: origin_state
@@ -995,7 +1049,16 @@ jobs:
           TF_VAR_enable_amplify_domain: "true"
           TF_VAR_restrict_origin_to_cloudfront: ${{ steps.origin_state.outputs.preexisting }}
           TF_VAR_trust_cloudfront_proxy_chain: ${{ steps.proxy_state.outputs.preexisting }}
-        run: terraform -chdir=infra/prod plan -input=false -out=production-domain.tfplan
+        run: |
+          set -euo pipefail
+          terraform -chdir=infra/prod plan -input=false -out=production-domain.tfplan
+          terraform -chdir=infra/prod show -json production-domain.tfplan |
+            jq -e '
+              all(
+                .resource_changes[]?;
+                (.change.actions | index("delete")) == null
+              )
+            ' >/dev/null
 
       - name: Apply exact Amplify domain association plan
         id: domain_apply
@@ -1283,15 +1346,53 @@ jobs:
           PREEXISTING_PROXY_TRUST: ${{ steps.proxy_state.outputs.preexisting }}
         run: |
           set -euo pipefail
+          state_address='aws_amplify_domain_association.frontend[0]'
           state_list="$(terraform -chdir=infra/prod state list)"
           restore_domain="$PREEXISTING_DOMAIN"
-          if grep -q '^aws_amplify_domain_association\.frontend' <<<"$state_list"; then
+          if grep -q '^aws_amplify_domain_association\.frontend\[0\]$' <<<"$state_list"; then
+            instance_status="$(
+              terraform -chdir=infra/prod state pull |
+                jq -er '
+                  [
+                    .resources[]
+                    | select(
+                        .mode == "managed" and
+                        .type == "aws_amplify_domain_association" and
+                        .name == "frontend"
+                      )
+                    | .instances[]
+                    | select(.index_key == 0)
+                    | (.status // "ready")
+                  ]
+                  | if length == 1 then .[0]
+                    else error("expected exactly one Amplify domain instance")
+                    end
+                '
+            )"
+            if [ "$instance_status" = "tainted" ]; then
+              aws amplify get-domain-association \
+                --app-id "$TF_VAR_amplify_app_id" \
+                --domain-name "${PROD_DOMAIN%.}" \
+                --output json >/dev/null
+              terraform -chdir=infra/prod untaint "$state_address"
+              echo "::notice::Recovered the verified Amplify domain association from tainted Terraform state before safety restoration."
+            elif [ "$instance_status" != "ready" ]; then
+              echo "::error::Unexpected Amplify domain Terraform state: ${instance_status}"
+              exit 1
+            fi
             restore_domain=true
           fi
           export TF_VAR_enable_amplify_domain="$restore_domain"
           export TF_VAR_restrict_origin_to_cloudfront="$PREEXISTING_ORIGIN_RESTRICTION"
           export TF_VAR_trust_cloudfront_proxy_chain="$PREEXISTING_PROXY_TRUST"
           terraform -chdir=infra/prod plan -input=false -out=production-restore-origin.tfplan
+          terraform -chdir=infra/prod show -json production-restore-origin.tfplan |
+            jq -e '
+              all(
+                .resource_changes[]?;
+                (.change.actions | index("delete")) == null
+              )
+            ' >/dev/null
           terraform -chdir=infra/prod apply \
             -input=false \
             -auto-approve \
