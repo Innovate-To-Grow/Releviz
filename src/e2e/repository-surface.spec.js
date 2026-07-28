@@ -98,6 +98,7 @@ const RESOURCE_AUDIT_MANIFEST = [
   "scripts/ci/validate_deployment_contract.py",
   "scripts/ci/validate_dependabot_labels.py",
   "scripts/ci/validate_tool_versions.py",
+  "scripts/deploy/amplify-apex-target.sh",
   "scripts/deploy/amplify-static-deploy.sh",
   "scripts/docker-build-frontend.sh",
   "scripts/run-db-tests.sh",

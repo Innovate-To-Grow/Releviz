@@ -251,7 +251,9 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
             "authoritative DNS change propagation"
         ),
         r"AMPLIFY_ALIAS_FILE": "a captured post-cutover alias race guard",
-        r"\.dnsRecord": "service-reported Amplify alias verification during compensation",
+        r"amplify-apex-target\.sh": (
+            "service-reported Amplify apex-target extraction during compensation"
+        ),
         r"refusing to overwrite it": "fail-closed DNS compensation on manual drift",
         (
             r"apex_alias\.outputs\.routes_to_alb != 'true'[\s\S]{0,300}"
@@ -278,6 +280,11 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
     if source.count('.change.actions | index("delete")) == null') < 2:
         errors.append(
             "production CD omits a no-destroy gate for domain cutover or failure restoration"
+        )
+    if source.count("amplify-apex-target.sh") < 3:
+        errors.append(
+            "production CD must use the shared Amplify apex-target parser during "
+            "preflight, cutover, and failure compensation"
         )
 
     forbidden_patterns = {
