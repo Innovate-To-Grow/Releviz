@@ -4,7 +4,8 @@ environment                 = "prod"
 ecr_backend_repository      = "releviz-prod-backend"
 ecr_frontend_repository     = "releviz-prod-frontend"
 custom_domain               = "releviz.com"
-origin_domain               = "origin.releviz.com"
+api_domain                  = "api.releviz.com"
+legacy_origin_domain        = "origin.releviz.com"
 # Created once with infra/bootstrap/provision-amplify.sh, then supplied to both
 # this module and infra/bootstrap so GitHub is authorized for this app only.
 amplify_app_id               = "replace-with-amplify-app-id"

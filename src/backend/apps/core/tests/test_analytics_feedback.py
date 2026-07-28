@@ -28,7 +28,7 @@ class FeedbackApiTests(TestCase):
     def test_anonymous_and_authenticated_feedback_is_persisted_without_url_secrets(self):
         with self.assertLogs("apps.core.views", level="INFO") as logs:
             response = self.client.post(
-                "/api/feedback",
+                "/feedback",
                 {
                     "category": "problem",
                     "message": "The final action was unclear.",
@@ -51,7 +51,7 @@ class FeedbackApiTests(TestCase):
         member = create_member("feedback-member@example.com")
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token_for(member)}")
         authenticated = self.client.post(
-            "/api/feedback",
+            "/feedback",
             {
                 "category": "idea",
                 "message": "Add a compact result view.",
@@ -81,7 +81,7 @@ class FeedbackApiTests(TestCase):
         ]
         for payload in invalid_payloads:
             with self.subTest(payload=payload):
-                response = self.client.post("/api/feedback", payload, format="json")
+                response = self.client.post("/feedback", payload, format="json")
                 self.assertEqual(response.status_code, 400)
         self.assertEqual(FeedbackSubmission.objects.count(), 0)
         AuthRateLimitBucket.objects.all().delete()
@@ -93,12 +93,12 @@ class FeedbackApiTests(TestCase):
         }
         with override_settings(AUTH_RATE_LIMITS=limits):
             accepted = self.client.post(
-                "/api/feedback",
+                "/feedback",
                 {"category": "other", "message": "First report"},
                 format="json",
             )
             blocked = self.client.post(
-                "/api/feedback",
+                "/feedback",
                 {"category": "other", "message": "Second report"},
                 format="json",
             )
@@ -107,17 +107,17 @@ class FeedbackApiTests(TestCase):
 
     def test_metrics_endpoint_requires_its_dedicated_bearer_token(self):
         with override_settings(METRICS_BEARER_TOKEN=""):
-            unavailable = self.client.get("/api/metrics")
+            unavailable = self.client.get("/metrics")
         self.assertEqual(unavailable.status_code, 503)
 
         with override_settings(METRICS_BEARER_TOKEN="metrics-secret"):
-            missing = self.client.get("/api/metrics")
+            missing = self.client.get("/metrics")
             wrong = self.client.get(
-                "/api/metrics",
+                "/metrics",
                 HTTP_AUTHORIZATION="Bearer wrong",
             )
             accepted = self.client.get(
-                "/api/metrics",
+                "/metrics",
                 HTTP_AUTHORIZATION="Bearer metrics-secret",
             )
         self.assertEqual(missing.status_code, 401)

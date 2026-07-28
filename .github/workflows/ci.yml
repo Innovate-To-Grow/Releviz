@@ -606,8 +606,7 @@ jobs:
       - name: Build frontend for CI and E2E
         run: npm --workspace=releviz-frontend run build
         env:
-          NEXT_PUBLIC_API_BASE_URL: ""
-          BACKEND_URL: http://127.0.0.1:4100
+          NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:4100
 
       - name: Upload frontend build
         if: ${{ always() }}
@@ -643,7 +642,7 @@ jobs:
 
       - name: Build static Amplify artifact
         env:
-          NEXT_PUBLIC_API_BASE_URL: ""
+          NEXT_PUBLIC_API_BASE_URL: https://api.releviz.com
         run: |
           set -euo pipefail
           npm --workspace=releviz-frontend run build:amplify

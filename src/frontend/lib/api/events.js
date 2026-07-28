@@ -37,7 +37,7 @@ export async function createEvent(
   token
 ) {
   const res = await apiFetch(
-    `${API_BASE}/api/events`,
+    `${API_BASE}/events`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -65,14 +65,14 @@ export async function createEvent(
 }
 
 export async function fetchEvent(code, token) {
-  const res = await apiFetch(`${API_BASE}/api/events?code=${encodeURIComponent(code)}`, {}, token);
+  const res = await apiFetch(`${API_BASE}/events?code=${encodeURIComponent(code)}`, {}, token);
   if (!res.ok) throw new Error(await extractError(res));
   return res.json();
 }
 
 export async function updateEvent(code, payload, token) {
   const res = await apiFetch(
-    `${API_BASE}/api/events?code=${encodeURIComponent(code)}`,
+    `${API_BASE}/events?code=${encodeURIComponent(code)}`,
     {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -86,7 +86,7 @@ export async function updateEvent(code, payload, token) {
 
 export async function duplicateEvent(code, payload, token) {
   const res = await apiFetch(
-    `${API_BASE}/api/events/duplicate?code=${encodeURIComponent(code)}`,
+    `${API_BASE}/events/duplicate?code=${encodeURIComponent(code)}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -100,7 +100,7 @@ export async function duplicateEvent(code, payload, token) {
 
 export async function deleteEvent(code, payload, token) {
   const res = await apiFetch(
-    `${API_BASE}/api/events?code=${encodeURIComponent(code)}`,
+    `${API_BASE}/events?code=${encodeURIComponent(code)}`,
     {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
@@ -114,7 +114,7 @@ export async function deleteEvent(code, payload, token) {
 
 export async function fetchEventResults(code, token) {
   const res = await apiFetch(
-    `${API_BASE}/api/events/results?code=${encodeURIComponent(code)}`,
+    `${API_BASE}/events/results?code=${encodeURIComponent(code)}`,
     {},
     token
   );
@@ -124,7 +124,7 @@ export async function fetchEventResults(code, token) {
 
 export async function previewFinalMeeting(code, payload, token) {
   const res = await apiFetch(
-    `${API_BASE}/api/events/finalization/preview?code=${encodeURIComponent(code)}`,
+    `${API_BASE}/events/finalization/preview?code=${encodeURIComponent(code)}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -138,7 +138,7 @@ export async function previewFinalMeeting(code, payload, token) {
 
 export async function confirmFinalMeeting(code, payload, token) {
   const res = await apiFetch(
-    `${API_BASE}/api/events/finalization?code=${encodeURIComponent(code)}`,
+    `${API_BASE}/events/finalization?code=${encodeURIComponent(code)}`,
     {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -152,7 +152,7 @@ export async function confirmFinalMeeting(code, payload, token) {
 
 export async function fetchFinalization(code, token) {
   const res = await apiFetch(
-    `${API_BASE}/api/events/finalization?code=${encodeURIComponent(code)}`,
+    `${API_BASE}/events/finalization?code=${encodeURIComponent(code)}`,
     {},
     token
   );
@@ -166,7 +166,7 @@ export async function updateEventLifecycle(
   token
 ) {
   const res = await apiFetch(
-    `${API_BASE}/api/events/lifecycle?code=${encodeURIComponent(code)}`,
+    `${API_BASE}/events/lifecycle?code=${encodeURIComponent(code)}`,
     {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -180,7 +180,7 @@ export async function updateEventLifecycle(
 
 export async function fetchInvitations(code, token) {
   const res = await apiFetch(
-    `${API_BASE}/api/events/invitations?code=${encodeURIComponent(code)}`,
+    `${API_BASE}/events/invitations?code=${encodeURIComponent(code)}`,
     {},
     token
   );
@@ -189,7 +189,7 @@ export async function fetchInvitations(code, token) {
 }
 
 export async function markInvitationOpened(code, invitationToken) {
-  const res = await apiFetch(`${API_BASE}/api/events/invitations/open`, {
+  const res = await apiFetch(`${API_BASE}/events/invitations/open`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ code, token: invitationToken }),
@@ -200,7 +200,7 @@ export async function markInvitationOpened(code, invitationToken) {
 
 export async function sendInvitations(code, { emails, message = "", idempotencyKey }, token) {
   const res = await apiFetch(
-    `${API_BASE}/api/events/invitations?code=${encodeURIComponent(code)}`,
+    `${API_BASE}/events/invitations?code=${encodeURIComponent(code)}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -214,7 +214,7 @@ export async function sendInvitations(code, { emails, message = "", idempotencyK
 
 export async function sendReminders(code, { idempotencyKey }, token) {
   const res = await apiFetch(
-    `${API_BASE}/api/events/reminders?code=${encodeURIComponent(code)}`,
+    `${API_BASE}/events/reminders?code=${encodeURIComponent(code)}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },

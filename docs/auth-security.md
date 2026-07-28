@@ -42,6 +42,11 @@ Invalid refresh responses delete the cookie so the browser does not loop indefin
 frontend uses one in-flight refresh promise per loaded application instance and retries an API call
 at most once after a 401.
 
+Production refresh cookies are issued by `https://api.releviz.com` and remain host-scoped to that
+API hostname. During the first switch from frontend-proxied authentication to the API subdomain,
+the browser does not copy an existing frontend-host cookie to the new host. A user with an old
+session can therefore be asked to sign in again when the in-memory access token expires.
+
 ## Revocation
 
 Users can:
@@ -72,13 +77,17 @@ Cookie-authenticated mutation endpoints validate `Origin` when it is present. Al
 from the frontend URL, backend URL, configured CSRF trusted origins, and the request origin. Rejected
 origins are security-logged.
 
-Production keeps these requests same-origin through Amplify Hosting rewrites for `/authn`, `/api`,
-`/admin`, and `/static`. Amplify's external 200 rewrite reaches the public
-`https://origin.releviz.com` ALB over HTTPS; AWS does not document a fixed egress-source range for
-that reverse-proxy traffic. The ALB terminates TLS and appends its actual requester to the right
-side of `X-Forwarded-For` without a client-port suffix. Production trusts exactly that one appended
-hop and never trusts an earlier, caller-supplied address. The ECS backend has no public IP and
-accepts application traffic only from the ALB security group.
+Production sends browser API and authentication requests directly from `https://releviz.com` to
+`https://api.releviz.com`. The two origins are different but remain same-site siblings. Django
+allows the reviewed frontend and Amplify branch origins through credentialed CORS and CSRF origin
+checks; the frontend CSP explicitly permits the API origin. Business endpoints have no `/api`
+prefix. Django admin and its static assets are served by the backend at
+`https://api.releviz.com/admin/` and `https://api.releviz.com/static/`, not through Amplify.
+
+The public ALB terminates API TLS and appends its actual requester to the right side of
+`X-Forwarded-For` without a client-port suffix. Production trusts exactly that one appended hop and
+never trusts an earlier, caller-supplied address. The ECS backend has no public IP and accepts
+application traffic only from the ALB security group.
 
 ## Abuse Controls
 
@@ -136,14 +145,13 @@ The scheduled reminder command also removes:
 `AUTH_TRUSTED_PROXY_COUNT` remains the compatibility depth for environments with a fixed trusted
 proxy chain. Production fixes it at `1`, leaves CIDR-hop trust disabled, and keeps the ALB in XFF
 `append` mode with client-port suffixes disabled. Django therefore uses the immediate requester
-that the ALB appended and cannot be tricked by an arbitrary forwarded prefix. For requests proxied
-by Amplify, that safe identity can be an Amplify egress address rather than the browser address;
-IP-keyed limits can consequently be shared by multiple users. Identity-keyed limits remain the
-primary abuse boundary, and a sustained increase in shared-IP throttles should be investigated.
+that the ALB appended and cannot be tricked by an arbitrary forwarded prefix. Requests reach the
+API ALB directly rather than through an Amplify reverse proxy, so that trusted hop represents the
+ALB-observed requester. Identity-keyed controls remain the primary abuse boundary.
 
-A future private-origin design must replace this managed external rewrite with a documented private
-connection, such as self-managed CloudFront with a VPC origin or API Gateway with a VPC Link. It
-must establish an explicit trusted proxy boundary rather than inferring a multi-hop client identity.
+A future private-ingress design must replace the public API ALB boundary with a documented private
+connection, such as API Gateway with a VPC Link. It must establish an explicit trusted proxy
+boundary rather than inferring a multi-hop client identity.
 
 ## Remaining Scope
 

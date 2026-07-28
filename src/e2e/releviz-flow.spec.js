@@ -151,8 +151,8 @@ async function expandAdvancedOptions(page) {
 }
 
 async function readSession(page) {
-  return page.evaluate(async () => {
-    const response = await fetch("/authn/refresh/", {
+  return page.evaluate(async (backendUrl) => {
+    const response = await fetch(`${backendUrl}/authn/refresh/`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: "{}",
@@ -160,7 +160,7 @@ async function readSession(page) {
     });
     if (!response.ok) throw new Error(`Unable to refresh test session: ${response.status}`);
     return response.json();
-  });
+  }, BACKEND_URL);
 }
 
 function datetimeLocalHoursFromNow(hours) {
@@ -441,7 +441,7 @@ test.describe("Releviz account and scheduling flow", () => {
     const organizerDraft = await apiJson(
       request,
       "POST",
-      `/api/events/participants?code=${eventCode}`,
+      `/events/participants?code=${eventCode}`,
       organizerSession.access,
       {}
     );
@@ -449,7 +449,7 @@ test.describe("Releviz account and scheduling flow", () => {
     const eventDefinitionResponse = await apiJson(
       request,
       "GET",
-      `/api/events?code=${eventCode}`,
+      `/events?code=${eventCode}`,
       organizerSession.access
     );
     expect(eventDefinitionResponse.response.status()).toBe(200);
@@ -504,7 +504,7 @@ test.describe("Releviz account and scheduling flow", () => {
     let invitationState = await apiJson(
       request,
       "GET",
-      `/api/events/invitations?code=${eventCode}`,
+      `/events/invitations?code=${eventCode}`,
       organizerSession.access
     );
     let registeredInvitation = invitationState.payload.invitations.find(
@@ -519,7 +519,7 @@ test.describe("Releviz account and scheduling flow", () => {
     invitationState = await apiJson(
       request,
       "GET",
-      `/api/events/invitations?code=${eventCode}`,
+      `/events/invitations?code=${eventCode}`,
       organizerSession.access
     );
     registeredInvitation = invitationState.payload.invitations.find(
@@ -532,7 +532,7 @@ test.describe("Releviz account and scheduling flow", () => {
     const participantState = await apiJson(
       request,
       "GET",
-      `/api/events/participants?code=${eventCode}`,
+      `/events/participants?code=${eventCode}`,
       participantSession.access
     );
     expect(participantState.response.status()).toBe(200);
@@ -565,7 +565,7 @@ test.describe("Releviz account and scheduling flow", () => {
     let draftState = await apiJson(
       request,
       "GET",
-      `/api/events/participants?code=${eventCode}`,
+      `/events/participants?code=${eventCode}`,
       participantSession.access
     );
     let currentParticipant = draftState.payload.participants.find(
@@ -576,7 +576,7 @@ test.describe("Releviz account and scheduling flow", () => {
     invitationState = await apiJson(
       request,
       "GET",
-      `/api/events/invitations?code=${eventCode}`,
+      `/events/invitations?code=${eventCode}`,
       organizerSession.access
     );
     registeredInvitation = invitationState.payload.invitations.find(
@@ -591,7 +591,7 @@ test.describe("Releviz account and scheduling flow", () => {
     draftState = await apiJson(
       request,
       "GET",
-      `/api/events/participants?code=${eventCode}`,
+      `/events/participants?code=${eventCode}`,
       participantSession.access
     );
     currentParticipant = draftState.payload.participants.find(
@@ -606,7 +606,7 @@ test.describe("Releviz account and scheduling flow", () => {
     draftState = await apiJson(
       request,
       "GET",
-      `/api/events/participants?code=${eventCode}`,
+      `/events/participants?code=${eventCode}`,
       participantSession.access
     );
     currentParticipant = draftState.payload.participants.find(
@@ -620,7 +620,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(participantPage.getByText(/Welcome, Pat Participant/)).toBeVisible();
     await expect(cell(touchSlotIndex)).toHaveAttribute("aria-selected", "true");
 
-    const updateRoutePattern = /\/api\/events\/participants\/update\?.*/;
+    const updateRoutePattern = /\/events\/participants\/update\?.*/;
     let failNextAutosave = true;
     const failAutosaveOnce = async (route) => {
       if (failNextAutosave && route.request().method() === "PUT") {
@@ -648,7 +648,7 @@ test.describe("Releviz account and scheduling flow", () => {
     draftState = await apiJson(
       request,
       "GET",
-      `/api/events/participants?code=${eventCode}`,
+      `/events/participants?code=${eventCode}`,
       participantSession.access
     );
     currentParticipant = draftState.payload.participants.find(
@@ -661,7 +661,7 @@ test.describe("Releviz account and scheduling flow", () => {
     const concurrentUpdate = await apiJson(
       request,
       "PUT",
-      `/api/events/participants/update?code=${eventCode}&participantId=${participantSession.user.id}`,
+      `/events/participants/update?code=${eventCode}&participantId=${participantSession.user.id}`,
       participantSession.access,
       {
         availabilityInperson: concurrentSchedule,
@@ -696,7 +696,7 @@ test.describe("Releviz account and scheduling flow", () => {
     const savedFinalDraft = await apiJson(
       request,
       "PUT",
-      `/api/events/participants/update?code=${eventCode}&participantId=${participantSession.user.id}`,
+      `/events/participants/update?code=${eventCode}&participantId=${participantSession.user.id}`,
       participantSession.access,
       {
         availabilityInperson: schedule,
@@ -715,7 +715,7 @@ test.describe("Releviz account and scheduling flow", () => {
     const submittedSchedule = await apiJson(
       request,
       "GET",
-      `/api/events/participants?code=${eventCode}`,
+      `/events/participants?code=${eventCode}`,
       participantSession.access
     );
     expect(submittedSchedule.response.status()).toBe(200);
@@ -727,7 +727,7 @@ test.describe("Releviz account and scheduling flow", () => {
     invitationState = await apiJson(
       request,
       "GET",
-      `/api/events/invitations?code=${eventCode}`,
+      `/events/invitations?code=${eventCode}`,
       organizerSession.access
     );
     registeredInvitation = invitationState.payload.invitations.find(
@@ -739,7 +739,7 @@ test.describe("Releviz account and scheduling flow", () => {
     const officialResults = await apiJson(
       request,
       "GET",
-      `/api/events/results?code=${eventCode}`,
+      `/events/results?code=${eventCode}`,
       organizerSession.access
     );
     expect(officialResults.response.status()).toBe(200);
@@ -761,14 +761,14 @@ test.describe("Releviz account and scheduling flow", () => {
     const participantOwnOnlyResults = await apiJson(
       request,
       "GET",
-      `/api/events/results?code=${eventCode}`,
+      `/events/results?code=${eventCode}`,
       participantSession.access
     );
     expect(participantOwnOnlyResults.response.status()).toBe(403);
     const participantOwnOnlySchedules = await apiJson(
       request,
       "GET",
-      `/api/events/participants?code=${eventCode}`,
+      `/events/participants?code=${eventCode}`,
       participantSession.access
     );
     expect(participantOwnOnlySchedules.response.status()).toBe(200);
@@ -787,7 +787,7 @@ test.describe("Releviz account and scheduling flow", () => {
     invitationState = await apiJson(
       request,
       "GET",
-      `/api/events/invitations?code=${eventCode}`,
+      `/events/invitations?code=${eventCode}`,
       organizerSession.access
     );
     const manualInvitation = invitationState.payload.invitations.find(
@@ -815,7 +815,7 @@ test.describe("Releviz account and scheduling flow", () => {
     const deniedWeights = await apiJson(
       request,
       "PUT",
-      `/api/events/weights?code=${eventCode}`,
+      `/events/weights?code=${eventCode}`,
       participantSession.access,
       { weights: [{ participantId: participantSession.user.id, weight: 0.25, included: 1 }] }
     );
@@ -824,7 +824,7 @@ test.describe("Releviz account and scheduling flow", () => {
     const deniedGroup = await apiJson(
       request,
       "PUT",
-      `/api/events/participants/update?code=${eventCode}&participantId=${participantSession.user.id}`,
+      `/events/participants/update?code=${eventCode}&participantId=${participantSession.user.id}`,
       participantSession.access,
       { groupName: "Denied" }
     );
@@ -833,7 +833,7 @@ test.describe("Releviz account and scheduling flow", () => {
     const savedWeight = await apiJson(
       request,
       "PUT",
-      `/api/events/weights?code=${eventCode}`,
+      `/events/weights?code=${eventCode}`,
       organizerSession.access,
       { weights: [{ participantId: participantSession.user.id, weight: 0.5, included: 1 }] }
     );
@@ -849,7 +849,7 @@ test.describe("Releviz account and scheduling flow", () => {
     const groupUpdate = await apiJson(
       request,
       "PUT",
-      `/api/events/participants/update?code=${eventCode}&participantId=${participantSession.user.id}`,
+      `/events/participants/update?code=${eventCode}&participantId=${participantSession.user.id}`,
       organizerSession.access,
       { groupName: "E2E Group", sortOrder: 2 }
     );
@@ -859,14 +859,14 @@ test.describe("Releviz account and scheduling flow", () => {
     const hideResult = await apiJson(
       request,
       "DELETE",
-      `/api/events/participants/update?code=${eventCode}&participantId=${participantSession.user.id}`,
+      `/events/participants/update?code=${eventCode}&participantId=${participantSession.user.id}`,
       organizerSession.access
     );
     expect(hideResult.response.status()).toBe(200);
     const unhideResult = await apiJson(
       request,
       "PUT",
-      `/api/events/participants/update/unhide?code=${eventCode}&participantId=${participantSession.user.id}`,
+      `/events/participants/update/unhide?code=${eventCode}&participantId=${participantSession.user.id}`,
       organizerSession.access
     );
     expect(unhideResult.response.status()).toBe(200);
@@ -874,13 +874,13 @@ test.describe("Releviz account and scheduling flow", () => {
     const eventState = await apiJson(
       request,
       "GET",
-      `/api/events?code=${eventCode}`,
+      `/events?code=${eventCode}`,
       organizerSession.access
     );
     const closedEvent = await apiJson(
       request,
       "PUT",
-      `/api/events/lifecycle?code=${eventCode}`,
+      `/events/lifecycle?code=${eventCode}`,
       organizerSession.access,
       {
         status: "closed",
@@ -892,7 +892,7 @@ test.describe("Releviz account and scheduling flow", () => {
     const duplicateClose = await apiJson(
       request,
       "PUT",
-      `/api/events/lifecycle?code=${eventCode}`,
+      `/events/lifecycle?code=${eventCode}`,
       organizerSession.access,
       {
         status: "closed",
@@ -904,7 +904,7 @@ test.describe("Releviz account and scheduling flow", () => {
     const lockedResponse = await apiJson(
       request,
       "PUT",
-      `/api/events/participants/update?code=${eventCode}&participantId=${participantSession.user.id}`,
+      `/events/participants/update?code=${eventCode}&participantId=${participantSession.user.id}`,
       participantSession.access,
       {
         availabilityInperson: schedule,
@@ -915,7 +915,7 @@ test.describe("Releviz account and scheduling flow", () => {
     const reopenedEvent = await apiJson(
       request,
       "PUT",
-      `/api/events/lifecycle?code=${eventCode}`,
+      `/events/lifecycle?code=${eventCode}`,
       organizerSession.access,
       {
         status: "open",
@@ -944,7 +944,7 @@ test.describe("Releviz account and scheduling flow", () => {
     const firstFinalEvent = await apiJson(
       request,
       "GET",
-      `/api/events?code=${eventCode}`,
+      `/events?code=${eventCode}`,
       organizerSession.access
     );
     expect(firstFinalEvent.payload.event.status).toBe("finalized");
@@ -986,7 +986,7 @@ test.describe("Releviz account and scheduling flow", () => {
     const reconfirmedEvent = await apiJson(
       request,
       "GET",
-      `/api/events?code=${eventCode}`,
+      `/events?code=${eventCode}`,
       organizerSession.access
     );
     expect(reconfirmedEvent.payload.event.finalMeeting.calendarUid).toBe(calendarUid);
@@ -1001,7 +1001,7 @@ test.describe("Releviz account and scheduling flow", () => {
     const duplicateFinal = await apiJson(
       request,
       "PUT",
-      `/api/events/finalization?code=${eventCode}`,
+      `/events/finalization?code=${eventCode}`,
       organizerSession.access,
       {
         startsAt: `${finalDate}T10:00:00.000Z`,
@@ -1019,7 +1019,7 @@ test.describe("Releviz account and scheduling flow", () => {
     const finalizedLock = await apiJson(
       request,
       "PUT",
-      `/api/events/participants/update?code=${eventCode}&participantId=${participantSession.user.id}`,
+      `/events/participants/update?code=${eventCode}&participantId=${participantSession.user.id}`,
       participantSession.access,
       {
         availabilityInperson: schedule,
@@ -1028,7 +1028,7 @@ test.describe("Releviz account and scheduling flow", () => {
     );
     expect(finalizedLock.response.status()).toBe(409);
     const participantCalendar = await request.get(
-      `${BACKEND_URL}/api/events/finalization/calendar?code=${eventCode}`,
+      `${BACKEND_URL}/events/finalization/calendar?code=${eventCode}`,
       {
         headers: { Authorization: `Bearer ${participantSession.access}` },
       }
@@ -1073,14 +1073,14 @@ test.describe("Releviz account and scheduling flow", () => {
     const eventDefinition = await apiJson(
       request,
       "GET",
-      `/api/events?code=${originalCode}`,
+      `/events?code=${originalCode}`,
       organizerSession.access
     );
     expect(eventDefinition.response.status()).toBe(200);
     const joined = await apiJson(
       request,
       "POST",
-      `/api/events/participants?code=${originalCode}`,
+      `/events/participants?code=${originalCode}`,
       organizerSession.access,
       {}
     );
@@ -1089,7 +1089,7 @@ test.describe("Releviz account and scheduling flow", () => {
     const submitted = await apiJson(
       request,
       "PUT",
-      `/api/events/participants/update?code=${originalCode}&participantId=${organizerSession.user.id}`,
+      `/events/participants/update?code=${originalCode}&participantId=${organizerSession.user.id}`,
       organizerSession.access,
       {
         availabilityInperson: schedule,
@@ -1121,7 +1121,7 @@ test.describe("Releviz account and scheduling flow", () => {
     const resetParticipants = await apiJson(
       request,
       "GET",
-      `/api/events/participants?code=${originalCode}&includeHidden=true`,
+      `/events/participants?code=${originalCode}&includeHidden=true`,
       organizerSession.access
     );
     expect(resetParticipants.response.status()).toBe(200);
@@ -1150,7 +1150,7 @@ test.describe("Releviz account and scheduling flow", () => {
     const copyParticipants = await apiJson(
       request,
       "GET",
-      `/api/events/participants?code=${copyCode}&includeHidden=true`,
+      `/events/participants?code=${copyCode}&includeHidden=true`,
       organizerSession.access
     );
     expect(copyParticipants.response.status()).toBe(200);
@@ -1176,7 +1176,7 @@ test.describe("Releviz account and scheduling flow", () => {
     const deletedCopy = await apiJson(
       request,
       "GET",
-      `/api/events?code=${copyCode}`,
+      `/events?code=${copyCode}`,
       organizerSession.access
     );
     expect(deletedCopy.response.status()).toBe(404);

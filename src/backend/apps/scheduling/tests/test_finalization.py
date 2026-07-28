@@ -680,7 +680,7 @@ class FinalizationApiTests(TestCase):
             **changes,
         }
         return self.client.put(
-            f"/api/events/finalization?code={self.event.code}",
+            f"/events/finalization?code={self.event.code}",
             payload,
             format="json",
         )
@@ -688,19 +688,19 @@ class FinalizationApiTests(TestCase):
     def test_preview_and_confirmation_validation_permissions_and_delivery(self):
         self.authenticate(self.other)
         self.assertEqual(
-            self.client.post("/api/events/finalization/preview", {}, format="json").status_code,
+            self.client.post("/events/finalization/preview", {}, format="json").status_code,
             400,
         )
         self.assertEqual(
             self.client.post(
-                "/api/events/finalization/preview?code=NOPE",
+                "/events/finalization/preview?code=NOPE",
                 self.payload,
                 format="json",
             ).status_code,
             404,
         )
         denied = self.client.post(
-            f"/api/events/finalization/preview?code={self.event.code}",
+            f"/events/finalization/preview?code={self.event.code}",
             self.payload,
             format="json",
         )
@@ -716,14 +716,14 @@ class FinalizationApiTests(TestCase):
         ):
             with self.subTest(payload=payload):
                 response = self.client.post(
-                    f"/api/events/finalization/preview?code={self.event.code}",
+                    f"/events/finalization/preview?code={self.event.code}",
                     payload,
                     format="json",
                 )
                 self.assertEqual(response.status_code, 400)
 
         preview = self.client.post(
-            f"/api/events/finalization/preview?code={self.event.code}",
+            f"/events/finalization/preview?code={self.event.code}",
             self.payload,
             format="json",
         )
@@ -732,12 +732,12 @@ class FinalizationApiTests(TestCase):
         self.assertEqual(preview.data["proposedMeeting"]["timezone"], "UTC")
 
         self.assertEqual(
-            self.client.put("/api/events/finalization", {}, format="json").status_code,
+            self.client.put("/events/finalization", {}, format="json").status_code,
             400,
         )
         self.assertEqual(
             self.client.put(
-                f"/api/events/finalization?code={self.event.code}",
+                f"/events/finalization?code={self.event.code}",
                 self.payload,
                 format="json",
             ).status_code,
@@ -790,7 +790,7 @@ class FinalizationApiTests(TestCase):
         self.assertIn("provider timeout", job.last_error)
 
         participant_url = (
-            f"/api/events/participants/update?code={self.event.code}"
+            f"/events/participants/update?code={self.event.code}"
             f"&participantId={self.participant.pk}"
         )
         self.assertEqual(
@@ -799,7 +799,7 @@ class FinalizationApiTests(TestCase):
         )
         self.assertEqual(
             self.client.put(
-                f"/api/events/participants/update/unhide?code={self.event.code}"
+                f"/events/participants/update/unhide?code={self.event.code}"
                 f"&participantId={self.participant.pk}",
                 {},
                 format="json",
@@ -808,7 +808,7 @@ class FinalizationApiTests(TestCase):
         )
         self.assertEqual(
             self.client.put(
-                f"/api/events/weights?code={self.event.code}",
+                f"/events/weights?code={self.event.code}",
                 {"weights": []},
                 format="json",
             ).status_code,
@@ -816,7 +816,7 @@ class FinalizationApiTests(TestCase):
         )
         self.assertEqual(
             self.client.post(
-                f"/api/events/invitations?code={self.event.code}",
+                f"/events/invitations?code={self.event.code}",
                 {"emails": ["new@example.com"]},
                 format="json",
             ).status_code,
@@ -824,7 +824,7 @@ class FinalizationApiTests(TestCase):
         )
         self.assertEqual(
             self.client.post(
-                f"/api/events/reminders?code={self.event.code}",
+                f"/events/reminders?code={self.event.code}",
                 {},
                 format="json",
             ).status_code,
@@ -838,7 +838,7 @@ class FinalizationApiTests(TestCase):
         finalized_version = confirmed.data["event"]["version"]
         with self.captureOnCommitCallbacks(execute=True):
             reopened = self.client.put(
-                f"/api/events/lifecycle?code={self.event.code}",
+                f"/events/lifecycle?code={self.event.code}",
                 {
                     "status": "open",
                     "expectedVersion": finalized_version,
@@ -871,27 +871,25 @@ class FinalizationApiTests(TestCase):
     def test_finalization_detail_and_calendar_authorization(self):
         self.authenticate(self.organizer)
         for path in (
-            "/api/events/finalization",
-            "/api/events/finalization/calendar",
+            "/events/finalization",
+            "/events/finalization/calendar",
         ):
             self.assertEqual(self.client.get(path).status_code, 400)
             self.assertEqual(self.client.get(f"{path}?code=NOPE").status_code, 404)
         self.assertEqual(
-            self.client.get(f"/api/events/finalization?code={self.event.code}").status_code,
+            self.client.get(f"/events/finalization?code={self.event.code}").status_code,
             404,
         )
         self.assertEqual(
-            self.client.get(
-                f"/api/events/finalization/calendar?code={self.event.code}"
-            ).status_code,
+            self.client.get(f"/events/finalization/calendar?code={self.event.code}").status_code,
             404,
         )
 
         self.confirm()
-        details = self.client.get(f"/api/events/finalization?code={self.event.code}")
+        details = self.client.get(f"/events/finalization?code={self.event.code}")
         self.assertEqual(details.status_code, 200)
         self.assertIn("attendance", details.data["finalMeeting"])
-        calendar = self.client.get(f"/api/events/finalization/calendar?code={self.event.code}")
+        calendar = self.client.get(f"/events/finalization/calendar?code={self.event.code}")
         self.assertEqual(calendar.status_code, 200)
         self.assertEqual(calendar["Cache-Control"], "private, no-store")
         self.assertIn("text/calendar", calendar["Content-Type"])
@@ -899,13 +897,11 @@ class FinalizationApiTests(TestCase):
 
         self.authenticate(self.other)
         self.assertEqual(
-            self.client.get(f"/api/events/finalization?code={self.event.code}").status_code,
+            self.client.get(f"/events/finalization?code={self.event.code}").status_code,
             403,
         )
         self.assertEqual(
-            self.client.get(
-                f"/api/events/finalization/calendar?code={self.event.code}"
-            ).status_code,
+            self.client.get(f"/events/finalization/calendar?code={self.event.code}").status_code,
             403,
         )
         EventInvitation.objects.create(
@@ -913,29 +909,25 @@ class FinalizationApiTests(TestCase):
             email=self.other.email,
             invited_by=self.organizer,
         )
-        invited_calendar = self.client.get(
-            f"/api/events/finalization/calendar?code={self.event.code}"
-        )
+        invited_calendar = self.client.get(f"/events/finalization/calendar?code={self.event.code}")
         self.assertEqual(invited_calendar.status_code, 200)
 
         FinalMeeting.objects.filter(event=self.event).update(active=False)
         self.assertEqual(
-            self.client.get(
-                f"/api/events/finalization/calendar?code={self.event.code}"
-            ).status_code,
+            self.client.get(f"/events/finalization/calendar?code={self.event.code}").status_code,
             404,
         )
 
     def test_event_creation_timezone_validation_and_preview_finalized_state(self):
         self.authenticate(self.organizer)
         invalid = self.client.post(
-            "/api/events",
+            "/events",
             {"name": "Invalid zone", "timezone": "Moon/Base"},
             format="json",
         )
         self.assertEqual(invalid.status_code, 400)
         created = self.client.post(
-            "/api/events",
+            "/events",
             {"name": "Paris", "timezone": "Europe/Paris"},
             format="json",
         )
@@ -944,7 +936,7 @@ class FinalizationApiTests(TestCase):
 
         self.confirm()
         preview = self.client.post(
-            f"/api/events/finalization/preview?code={self.event.code}",
+            f"/events/finalization/preview?code={self.event.code}",
             self.payload,
             format="json",
         )

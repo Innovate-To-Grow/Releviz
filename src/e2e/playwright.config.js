@@ -37,7 +37,7 @@ module.exports = defineConfig({
     {
       command: `python3 src/backend/manage.py runserver 127.0.0.1:${backendPort} --settings=config.settings.e2e`,
       cwd: rootDir,
-      url: `${backendUrl}/api/health`,
+      url: `${backendUrl}/health`,
       env: backendEnv,
       reuseExistingServer: !process.env.CI,
       timeout: 60_000,
@@ -47,8 +47,7 @@ module.exports = defineConfig({
       cwd: rootDir,
       url: frontendUrl,
       env: {
-        NEXT_PUBLIC_API_BASE_URL: process.env.NEXT_PUBLIC_API_BASE_URL || "",
-        BACKEND_URL: backendUrl,
+        NEXT_PUBLIC_API_BASE_URL: process.env.NEXT_PUBLIC_API_BASE_URL || backendUrl,
       },
       reuseExistingServer: !process.env.CI,
       timeout: 60_000,

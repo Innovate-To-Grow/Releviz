@@ -65,7 +65,7 @@ test.describe("automated accessibility baseline", () => {
     const [response] = await Promise.all([
       page.waitForResponse(
         (candidate) =>
-          candidate.url().endsWith("/api/feedback") && candidate.request().method() === "POST"
+          candidate.url().endsWith("/feedback") && candidate.request().method() === "POST"
       ),
       page.getByRole("button", { name: "Send feedback" }).click(),
     ]);

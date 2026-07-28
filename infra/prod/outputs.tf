@@ -6,12 +6,20 @@ output "custom_domain" {
   value = var.custom_domain
 }
 
-output "origin_domain" {
-  value = var.origin_domain
+output "api_domain" {
+  value = var.api_domain
+}
+
+output "legacy_origin_domain" {
+  value = var.enable_legacy_api_compatibility ? var.legacy_origin_domain : null
 }
 
 output "https_url" {
   value = "https://${var.custom_domain}"
+}
+
+output "api_url" {
+  value = "https://${var.api_domain}"
 }
 
 output "amplify_app_id" {
@@ -48,6 +56,10 @@ output "backend_task_definition_arn" {
 
 output "frontend_task_definition_arn" {
   value = aws_ecs_task_definition.frontend.arn
+}
+
+output "event_reminders_rule_name" {
+  value = aws_cloudwatch_event_rule.event_reminders.name
 }
 
 output "database_master_secret_arn" {

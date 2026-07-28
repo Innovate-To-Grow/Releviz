@@ -4,6 +4,8 @@ provider "aws" {
 
 data "aws_caller_identity" "current" {}
 
+data "aws_partition" "current" {}
+
 data "aws_availability_zones" "available" {
   state = "available"
 }
@@ -19,7 +21,8 @@ data "aws_kms_alias" "secretsmanager" {
 locals {
   prefix                    = "${var.app_name}-${var.environment}"
   app_url                   = "https://${var.custom_domain}"
-  origin_url                = "https://${var.origin_domain}"
+  api_url                   = "https://${var.api_domain}"
+  legacy_origin_url         = "https://${var.legacy_origin_domain}"
   backend_image_uri         = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.aws_region}.amazonaws.com/${var.ecr_backend_repository}:${var.backend_image_tag}"
   frontend_image_uri        = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.aws_region}.amazonaws.com/${var.ecr_frontend_repository}:${var.frontend_image_tag}"
   availability_zones        = length(var.availability_zones) >= 2 ? var.availability_zones : slice(data.aws_availability_zones.available.names, 0, 2)
@@ -28,46 +31,26 @@ locals {
   amplify_production_url    = "https://${local.amplify_production_branch}.${aws_amplify_app.frontend.default_domain}"
   amplify_candidate_url     = "https://${local.amplify_candidate_branch}.${aws_amplify_app.frontend.default_domain}"
   amplify_route_manifest    = jsondecode(file("${path.module}/../../src/frontend/amplify-routes.json"))
-  amplify_custom_headers = [
-    {
-      pattern = "**"
-      headers = [
-        {
-          key   = "Strict-Transport-Security"
-          value = "max-age=31536000; includeSubDomains"
-        },
-        {
-          key   = "X-Content-Type-Options"
-          value = "nosniff"
-        },
-        {
-          key   = "X-Frame-Options"
-          value = "DENY"
-        },
-        {
-          key   = "Referrer-Policy"
-          value = "no-referrer"
-        },
-        {
-          key   = "Content-Security-Policy"
-          value = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://challenges.cloudflare.com https://esm.run blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' ws: wss:; worker-src 'self' blob:; frame-src https://challenges.cloudflare.com;"
-        },
-      ]
-    },
-  ]
-  backend_allowed_hosts = join(",", [
-    var.custom_domain,
-    var.origin_domain,
-    aws_lb.app.dns_name,
-    "${local.amplify_production_branch}.${aws_amplify_app.frontend.default_domain}",
-    "${local.amplify_candidate_branch}.${aws_amplify_app.frontend.default_domain}",
-  ])
+  amplify_custom_headers_document = jsondecode(
+    file("${path.module}/amplify-custom-headers.json"),
+  )
+  amplify_custom_headers = local.amplify_custom_headers_document.customHeaders
+  backend_allowed_hosts = join(
+    ",",
+    concat(
+      [
+        var.api_domain,
+        aws_lb.app.dns_name,
+      ],
+      var.enable_legacy_api_compatibility ? [var.custom_domain, var.legacy_origin_domain] : [],
+    ),
+  )
   browser_trusted_origins = join(",", [
     local.app_url,
     local.amplify_production_url,
     local.amplify_candidate_url,
   ])
-  amplify_proxy_origin = local.origin_url
+  amplify_proxy_origin = local.legacy_origin_url
   amplify_authn_routes = [
     "public-key",
     "register",
@@ -97,13 +80,75 @@ locals {
       {
         source = "/authn/${route}"
         target = "${local.amplify_proxy_origin}/authn/${route}/"
+        status = "200"
       },
       {
         source = "/authn/${route}/"
         target = "${local.amplify_proxy_origin}/authn/${route}/"
+        status = "200"
       },
     ]
   ])
+  amplify_backend_proxy_rules = concat(
+    local.amplify_authn_rewrites,
+    [
+      {
+        source = "/api"
+        target = "${local.amplify_proxy_origin}/api/"
+        status = "200"
+      },
+      {
+        source = "/api/<*>"
+        target = "${local.amplify_proxy_origin}/api/<*>"
+        status = "200"
+      },
+      {
+        source = "/authn"
+        target = "${local.amplify_proxy_origin}/authn/"
+        status = "200"
+      },
+      {
+        source = "/authn/"
+        target = "${local.amplify_proxy_origin}/authn/"
+        status = "200"
+      },
+      {
+        source = "/authn/<*>"
+        target = "${local.amplify_proxy_origin}/authn/<*>"
+        status = "200"
+      },
+      {
+        source = "/admin"
+        target = "/admin/"
+        status = "301"
+      },
+      {
+        source = "/admin/"
+        target = "${local.amplify_proxy_origin}/admin/"
+        status = "200"
+      },
+      {
+        source = "/admin/<*>"
+        target = "${local.amplify_proxy_origin}/admin/<*>"
+        status = "200"
+      },
+      {
+        source = "/static"
+        target = "${local.amplify_proxy_origin}/static/"
+        status = "200"
+      },
+      {
+        source = "/static/"
+        target = "${local.amplify_proxy_origin}/static/"
+        status = "200"
+      },
+      {
+        source = "/static/<*>"
+        target = "${local.amplify_proxy_origin}/static/<*>"
+        status = "200"
+      },
+    ],
+  )
   amplify_static_routes = local.amplify_route_manifest.static_routes
   amplify_legacy_auth_redirects = flatten([
     for source, target in local.amplify_route_manifest.legacy_redirects : [
@@ -653,9 +698,12 @@ resource "aws_iam_role_policy" "eventbridge_reminders" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect   = "Allow"
-        Action   = ["ecs:RunTask"]
-        Resource = aws_ecs_task_definition.backend.arn
+        Effect = "Allow"
+        Action = ["ecs:RunTask"]
+        # EventBridge may run any immutable revision in this one reviewed task
+        # family. This avoids rewriting the IAM policy on every deployment while
+        # keeping RunTask scoped away from every other ECS task family.
+        Resource = "arn:${data.aws_partition.current.partition}:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:task-definition/${local.prefix}-backend-task:*"
       },
       {
         Effect = "Allow"
@@ -700,89 +748,21 @@ resource "aws_amplify_app" "frontend" {
   enable_branch_auto_build    = false
   enable_branch_auto_deletion = false
 
-  # The managed cache mode includes cookies in the cache key. Authentication
-  # and CSRF cookies must reach the same-origin reverse proxy unchanged.
   cache_config {
     type = "AMPLIFY_MANAGED"
   }
 
-  # Preserve the no-trailing-slash compatibility contract from next.config.js.
-  # Django rejects POST redirects generated by APPEND_SLASH, so both public
-  # spellings are proxied directly to the canonical trailing-slash endpoint.
+  # Keep the old same-origin backend proxy only during the first API-subdomain
+  # cutover. It is removed after the API-aware Amplify release passes canonical
+  # smoke and the current-SHA ECS fallback is ready to advance.
   dynamic "custom_rule" {
-    for_each = local.amplify_authn_rewrites
+    for_each = var.enable_legacy_api_compatibility ? local.amplify_backend_proxy_rules : []
 
     content {
       source = custom_rule.value.source
       target = custom_rule.value.target
-      status = "200"
+      status = custom_rule.value.status
     }
-  }
-
-  custom_rule {
-    source = "/api"
-    target = "${local.amplify_proxy_origin}/api/"
-    status = "200"
-  }
-
-  custom_rule {
-    source = "/api/<*>"
-    target = "${local.amplify_proxy_origin}/api/<*>"
-    status = "200"
-  }
-
-  custom_rule {
-    source = "/authn"
-    target = "${local.amplify_proxy_origin}/authn/"
-    status = "200"
-  }
-
-  custom_rule {
-    source = "/authn/"
-    target = "${local.amplify_proxy_origin}/authn/"
-    status = "200"
-  }
-
-  custom_rule {
-    source = "/authn/<*>"
-    target = "${local.amplify_proxy_origin}/authn/<*>"
-    status = "200"
-  }
-
-  custom_rule {
-    source = "/admin"
-    target = "/admin/"
-    status = "301"
-  }
-
-  custom_rule {
-    source = "/admin/"
-    target = "${local.amplify_proxy_origin}/admin/"
-    status = "200"
-  }
-
-  custom_rule {
-    source = "/admin/<*>"
-    target = "${local.amplify_proxy_origin}/admin/<*>"
-    status = "200"
-  }
-
-  custom_rule {
-    source = "/static"
-    target = "${local.amplify_proxy_origin}/static/"
-    status = "200"
-  }
-
-  custom_rule {
-    source = "/static/"
-    target = "${local.amplify_proxy_origin}/static/"
-    status = "200"
-  }
-
-  custom_rule {
-    source = "/static/<*>"
-    target = "${local.amplify_proxy_origin}/static/<*>"
-    status = "200"
   }
 
   # Next static export writes /route.html. Amplify resolves /route cleanly,
@@ -809,7 +789,7 @@ resource "aws_amplify_app" "frontend" {
     }
   }
 
-  custom_headers = jsonencode(local.amplify_custom_headers)
+  custom_headers = file("${path.module}/amplify-custom-headers.json")
 
   tags = local.common_tags
 
@@ -964,8 +944,8 @@ resource "aws_acm_certificate_validation" "app" {
   }
 }
 
-resource "aws_acm_certificate" "origin" {
-  domain_name       = var.origin_domain
+resource "aws_acm_certificate" "api" {
+  domain_name       = var.api_domain
   validation_method = "DNS"
 
   lifecycle {
@@ -975,9 +955,9 @@ resource "aws_acm_certificate" "origin" {
   tags = local.common_tags
 }
 
-resource "aws_route53_record" "origin_cert_validation" {
+resource "aws_route53_record" "api_cert_validation" {
   for_each = {
-    for option in aws_acm_certificate.origin.domain_validation_options : option.domain_name => {
+    for option in aws_acm_certificate.api.domain_validation_options : option.domain_name => {
       name   = option.resource_record_name
       record = option.resource_record_value
       type   = option.resource_record_type
@@ -992,13 +972,64 @@ resource "aws_route53_record" "origin_cert_validation" {
   zone_id         = var.route53_zone_id
 }
 
+resource "aws_acm_certificate_validation" "api" {
+  certificate_arn         = aws_acm_certificate.api.arn
+  validation_record_fqdns = [for record in aws_route53_record.api_cert_validation : record.fqdn]
+
+  timeouts {
+    create = "20m"
+  }
+}
+
+moved {
+  from = aws_acm_certificate.origin
+  to   = aws_acm_certificate.origin[0]
+}
+
+resource "aws_acm_certificate" "origin" {
+  count = var.enable_legacy_api_compatibility ? 1 : 0
+
+  domain_name       = var.legacy_origin_domain
+  validation_method = "DNS"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  tags = local.common_tags
+}
+
+resource "aws_route53_record" "origin_cert_validation" {
+  for_each = var.enable_legacy_api_compatibility ? {
+    for option in aws_acm_certificate.origin[0].domain_validation_options : option.domain_name => {
+      name   = option.resource_record_name
+      record = option.resource_record_value
+      type   = option.resource_record_type
+    }
+  } : {}
+
+  allow_overwrite = true
+  name            = each.value.name
+  records         = [each.value.record]
+  ttl             = 60
+  type            = each.value.type
+  zone_id         = var.route53_zone_id
+}
+
 resource "aws_acm_certificate_validation" "origin" {
-  certificate_arn         = aws_acm_certificate.origin.arn
+  count = var.enable_legacy_api_compatibility ? 1 : 0
+
+  certificate_arn         = aws_acm_certificate.origin[0].arn
   validation_record_fqdns = [for record in aws_route53_record.origin_cert_validation : record.fqdn]
 
   timeouts {
     create = "20m"
   }
+}
+
+moved {
+  from = aws_acm_certificate_validation.origin
+  to   = aws_acm_certificate_validation.origin[0]
 }
 
 locals {
@@ -1022,8 +1053,28 @@ removed {
 }
 
 resource "aws_route53_record" "origin" {
+  count = var.enable_legacy_api_compatibility ? 1 : 0
+
   allow_overwrite = true
-  name            = var.origin_domain
+  name            = var.legacy_origin_domain
+  type            = "A"
+  zone_id         = var.route53_zone_id
+
+  alias {
+    evaluate_target_health = true
+    name                   = aws_lb.app.dns_name
+    zone_id                = aws_lb.app.zone_id
+  }
+}
+
+moved {
+  from = aws_route53_record.origin
+  to   = aws_route53_record.origin[0]
+}
+
+resource "aws_route53_record" "api" {
+  allow_overwrite = true
+  name            = var.api_domain
   type            = "A"
   zone_id         = var.route53_zone_id
 
@@ -1043,7 +1094,7 @@ resource "aws_lb_target_group" "backend" {
   deregistration_delay = 30
 
   health_check {
-    path                = var.health_check_path
+    path                = var.enable_legacy_api_compatibility ? "/api/health" : var.health_check_path
     healthy_threshold   = 2
     unhealthy_threshold = 3
     timeout             = 5
@@ -1107,11 +1158,20 @@ resource "aws_lb_listener" "https" {
 }
 
 resource "aws_lb_listener_certificate" "origin" {
+  count = var.enable_legacy_api_compatibility ? 1 : 0
+
   listener_arn    = aws_lb_listener.https.arn
-  certificate_arn = aws_acm_certificate_validation.origin.certificate_arn
+  certificate_arn = aws_acm_certificate_validation.origin[0].certificate_arn
+}
+
+moved {
+  from = aws_lb_listener_certificate.origin
+  to   = aws_lb_listener_certificate.origin[0]
 }
 
 resource "aws_lb_listener_rule" "backend" {
+  count = var.enable_legacy_api_compatibility ? 1 : 0
+
   listener_arn = aws_lb_listener.https.arn
   priority     = 100
 
@@ -1123,6 +1183,32 @@ resource "aws_lb_listener_rule" "backend" {
   condition {
     path_pattern {
       values = ["/api/*", "/authn/*", "/admin/*", "/static/*"]
+    }
+  }
+}
+
+moved {
+  from = aws_lb_listener_rule.backend
+  to   = aws_lb_listener_rule.backend[0]
+}
+
+resource "aws_lb_listener_certificate" "api" {
+  listener_arn    = aws_lb_listener.https.arn
+  certificate_arn = aws_acm_certificate_validation.api.certificate_arn
+}
+
+resource "aws_lb_listener_rule" "backend_api_host" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 50
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.backend.arn
+  }
+
+  condition {
+    host_header {
+      values = [var.api_domain]
     }
   }
 }
@@ -1165,10 +1251,14 @@ resource "aws_ecs_task_definition" "backend" {
       # The public ALB appends the actual requester to the right side of XFF.
       # Trust only that hop so a direct origin caller cannot forge its identity.
       { name = "AUTH_TRUSTED_PROXY_COUNT", value = "1" },
+      {
+        name  = "ENABLE_LEGACY_API_PREFIX"
+        value = var.enable_legacy_api_compatibility ? "1" : "0"
+      },
       { name = "USE_SES_EMAIL_PROVIDER", value = "1" },
       { name = "REQUIRE_ENCRYPTED_PASSWORDS", value = "1" },
       { name = "FRONTEND_URL", value = local.app_url },
-      { name = "BACKEND_URL", value = local.app_url },
+      { name = "BACKEND_URL", value = local.api_url },
       { name = "CORS_ALLOWED_ORIGINS", value = local.browser_trusted_origins },
       { name = "CSRF_TRUSTED_ORIGINS", value = local.browser_trusted_origins },
       { name = "DB_NAME", value = var.db_name },
@@ -1227,7 +1317,14 @@ resource "aws_ecs_task_definition" "frontend" {
       { name = "NODE_ENV", value = "production" },
       { name = "PORT", value = tostring(var.frontend_port) },
       { name = "HOSTNAME", value = "0.0.0.0" },
-      { name = "BACKEND_URL", value = local.app_url },
+      {
+        name = "BACKEND_URL"
+        value = (
+          var.enable_legacy_api_compatibility ?
+          local.app_url :
+          local.api_url
+        )
+      },
     ]
     logConfiguration = {
       logDriver = "awslogs"
@@ -1274,8 +1371,11 @@ resource "aws_ecs_service" "backend" {
     ignore_changes = [desired_count]
   }
 
-  depends_on = [aws_lb_listener_rule.backend]
-  tags       = local.common_tags
+  depends_on = [
+    aws_lb_listener_rule.backend,
+    aws_lb_listener_rule.backend_api_host,
+  ]
+  tags = local.common_tags
 }
 
 resource "aws_ecs_service" "frontend" {

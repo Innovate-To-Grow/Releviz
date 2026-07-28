@@ -256,7 +256,7 @@ variable "default_from_email" {
 
 variable "health_check_path" {
   type    = string
-  default = "/api/health"
+  default = "/health"
 }
 
 variable "custom_domain" {
@@ -279,18 +279,40 @@ variable "route53_zone_id" {
   }
 }
 
-variable "origin_domain" {
+variable "api_domain" {
   type        = string
-  default     = "origin.releviz.com"
-  description = "TLS-protected ALB hostname used only as the Amplify reverse-proxy origin"
+  default     = "api.releviz.com"
+  description = "Canonical public hostname for the Django API and admin"
 
   validation {
     condition = (
-      can(regex("^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$", var.origin_domain)) &&
-      var.origin_domain != var.custom_domain
+      can(regex("^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$", var.api_domain)) &&
+      var.api_domain != var.custom_domain &&
+      var.api_domain == "api.releviz.com"
     )
-    error_message = "origin_domain must be a lowercase fully qualified hostname distinct from custom_domain."
+    error_message = "api_domain must be the reviewed hostname api.releviz.com and distinct from custom_domain."
   }
+}
+
+variable "legacy_origin_domain" {
+  type        = string
+  default     = "origin.releviz.com"
+  description = "Temporary ALB hostname retained while existing rollback points still use the Amplify proxy"
+
+  validation {
+    condition = (
+      can(regex("^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$", var.legacy_origin_domain)) &&
+      var.legacy_origin_domain != var.custom_domain &&
+      var.legacy_origin_domain != var.api_domain
+    )
+    error_message = "legacy_origin_domain must be a lowercase hostname distinct from custom_domain and api_domain."
+  }
+}
+
+variable "enable_legacy_api_compatibility" {
+  type        = bool
+  default     = false
+  description = "Temporarily preserve the old /api routes and Amplify/ALB proxy during API-subdomain cutover"
 }
 
 variable "enable_amplify_domain" {
