@@ -129,6 +129,30 @@ run "bootstrap_plan" {
 
   assert {
     condition = (
+      alltrue([
+        for action in [
+          "amplify:CreateDeployment",
+          "amplify:StartDeployment",
+        ] :
+        contains(one([
+          for statement in jsondecode(local.production_deploy_policy).Statement :
+          statement.Action
+          if statement.Sid == "ManageExactProductionAmplifyBranches"
+        ]), action) &&
+        contains(one([
+          for statement in jsondecode(local.production_deploy_policy).Statement :
+          statement.Action
+          if statement.Sid == "ManageExactProductionAmplifyDeployments"
+        ]), action)
+      ]) &&
+      one([
+        for statement in jsondecode(local.production_deploy_policy).Statement :
+        statement.Resource
+        if statement.Sid == "ManageExactProductionAmplifyDeployments"
+        ]) == [
+        "arn:aws:amplify:us-west-2:123456789012:apps/dsecure123/branches/candidate/deployments/*",
+        "arn:aws:amplify:us-west-2:123456789012:apps/dsecure123/branches/main/deployments/*",
+      ] &&
       contains(one([
         for statement in jsondecode(local.production_deploy_policy).Statement :
         statement.Action
@@ -182,7 +206,7 @@ run "bootstrap_plan" {
         if statement.Sid == "ManageExactProductionAmplifyDomain"
       ]) == "arn:aws:amplify:us-west-2:123456789012:apps/dsecure123/domains/releviz.com"
     )
-    error_message = "ListJobs must cover both exact branch and jobs scopes; all job and domain permissions must remain limited to the release resources."
+    error_message = "Manual deployment and ListJobs actions must cover documented and live runtime scopes while remaining limited to the exact release resources."
   }
 
   assert {
