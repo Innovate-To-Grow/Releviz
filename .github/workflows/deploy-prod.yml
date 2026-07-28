@@ -424,25 +424,9 @@ jobs:
                 --domain-name "$PROD_DOMAIN" \
                 --output json
             )"
-            amplify_dns_record="$(
-              jq -er \
-                --arg branch "$PRODUCTION_BRANCH" \
-                '
-                  [
-                    .domainAssociation.subDomains[]
-                    | select(
-                        .subDomainSetting.prefix == ""
-                        and .subDomainSetting.branchName == $branch
-                      )
-                    | .dnsRecord
-                  ]
-                  | if length == 1 then .[0] else error("missing apex DNS record") end
-                ' <<<"$association"
-            )"
             expected_amplify_target="$(
-              awk '{print $NF}' <<<"$amplify_dns_record" |
-                tr '[:upper:]' '[:lower:]' |
-                sed 's/\.$//'
+              bash scripts/deploy/amplify-apex-target.sh \
+                "$PRODUCTION_BRANCH" <<<"$association"
             )"
             if [ -z "$expected_amplify_target" ] ||
               [ "$alias_target" != "$expected_amplify_target" ]; then
@@ -1131,25 +1115,9 @@ jobs:
               --domain-name "$PROD_DOMAIN" \
               --output json
           )"
-          amplify_dns_record="$(
-            jq -er \
-              --arg branch "$PRODUCTION_BRANCH" \
-              '
-                [
-                  .domainAssociation.subDomains[]
-                  | select(
-                      .subDomainSetting.prefix == ""
-                      and .subDomainSetting.branchName == $branch
-                    )
-                  | .dnsRecord
-                ]
-                | if length == 1 then .[0] else error("missing apex DNS record") end
-              ' <<<"$association"
-          )"
           expected_amplify_target="$(
-            awk '{print $NF}' <<<"$amplify_dns_record" |
-              tr '[:upper:]' '[:lower:]' |
-              sed 's/\.$//'
+            bash scripts/deploy/amplify-apex-target.sh \
+              "$PRODUCTION_BRANCH" <<<"$association"
           )"
           if [ -z "$expected_amplify_target" ]; then
             echo "::error::Amplify returned an invalid canonical DNS target."
@@ -1466,25 +1434,9 @@ jobs:
                 --domain-name "$PROD_DOMAIN" \
                 --output json
             )"
-            amplify_dns_record="$(
-              jq -er \
-                --arg branch "$PRODUCTION_BRANCH" \
-                '
-                  [
-                    .domainAssociation.subDomains[]
-                    | select(
-                        .subDomainSetting.prefix == ""
-                        and .subDomainSetting.branchName == $branch
-                      )
-                    | .dnsRecord
-                  ]
-                  | if length == 1 then .[0] else error("missing apex DNS record") end
-                ' <<<"$association"
-            )"
             amplify_target="$(
-              awk '{print $NF}' <<<"$amplify_dns_record" |
-                tr '[:upper:]' '[:lower:]' |
-                sed 's/\.$//'
+              bash scripts/deploy/amplify-apex-target.sh \
+                "$PRODUCTION_BRANCH" <<<"$association"
             )"
             actual_target="$(
               jq -r '.AliasTarget.DNSName // "" | ascii_downcase | rtrimstr(".")' \

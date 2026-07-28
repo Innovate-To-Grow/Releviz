@@ -142,6 +142,108 @@ class AmplifyStaticExportTests(TestCase):
             )
 
 
+class AmplifyApexTargetTests(TestCase):
+    script = (
+        Path(__file__).resolve().parents[3]
+        / "scripts"
+        / "deploy"
+        / "amplify-apex-target.sh"
+    )
+
+    def extract(self, subdomains, branch="main"):
+        return subprocess.run(
+            ["bash", str(self.script), branch],
+            input=json.dumps({"domainAssociation": {"subDomains": subdomains}}),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    def test_accepts_aws_omitted_apex_prefix_and_normalizes_target(self):
+        result = self.extract(
+            [
+                {
+                    "subDomainSetting": {"branchName": "main"},
+                    "dnsRecord": " CNAME D161PBWA2VPG59.CLOUDFRONT.NET.",
+                }
+            ]
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "d161pbwa2vpg59.cloudfront.net")
+
+    def test_accepts_explicit_empty_prefix_and_ignores_other_subdomains(self):
+        result = self.extract(
+            [
+                {
+                    "subDomainSetting": {
+                        "prefix": "www",
+                        "branchName": "main",
+                    },
+                    "dnsRecord": "www CNAME ignored.example.net",
+                },
+                {
+                    "subDomainSetting": {
+                        "prefix": "",
+                        "branchName": "main",
+                    },
+                    "dnsRecord": " CNAME expected.example.net",
+                },
+            ]
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "expected.example.net")
+
+    def test_rejects_missing_or_ambiguous_apex_mapping(self):
+        missing = self.extract(
+            [
+                {
+                    "subDomainSetting": {
+                        "prefix": "www",
+                        "branchName": "main",
+                    },
+                    "dnsRecord": "www CNAME ignored.example.net",
+                }
+            ]
+        )
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn("missing unique apex DNS record", missing.stderr)
+
+        ambiguous = self.extract(
+            [
+                {
+                    "subDomainSetting": {"branchName": "main"},
+                    "dnsRecord": " CNAME one.example.net",
+                },
+                {
+                    "subDomainSetting": {
+                        "prefix": "",
+                        "branchName": "main",
+                    },
+                    "dnsRecord": " CNAME two.example.net",
+                },
+            ]
+        )
+        self.assertNotEqual(ambiguous.returncode, 0)
+        self.assertIn("missing unique apex DNS record", ambiguous.stderr)
+
+    def test_rejects_non_string_apex_prefixes(self):
+        for malformed_prefix in (None, False):
+            with self.subTest(prefix=malformed_prefix):
+                result = self.extract(
+                    [
+                        {
+                            "subDomainSetting": {
+                                "prefix": malformed_prefix,
+                                "branchName": "main",
+                            },
+                            "dnsRecord": " CNAME malformed.example.net",
+                        }
+                    ]
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("missing unique apex DNS record", result.stderr)
+
+
 class DeploymentContractTests(TestCase):
     def test_production_alb_security_group_is_in_place_only(self):
         source = """
@@ -245,6 +347,7 @@ steps:
       terraform -chdir=infra/prod import 'aws_amplify_domain_association.frontend[0]' "${app_id}/${domain_name}"
       echo "Recovered the existing Amplify domain association into Terraform state"
       echo "Capture pre-release canonical Route53 alias"
+      echo "bash scripts/deploy/amplify-apex-target.sh"
       echo "Guard live Amplify configuration before candidate smoke"
       terraform -chdir=infra/prod show -json production-base.tfplan
       echo 'address == "aws_amplify_app.frontend"'
@@ -295,6 +398,7 @@ steps:
       aws amplify update-domain-association
       echo "Wait for Amplify custom domain availability"
       echo "Verify Amplify canonical DNS cutover"
+      echo "bash scripts/deploy/amplify-apex-target.sh"
       echo expected_amplify_target
       echo "The canonical alias did not match Amplify's exact apex DNS target"
       aws elbv2 describe-target-health
@@ -319,7 +423,7 @@ steps:
       echo 'Action: "UPSERT"'
       aws route53 wait resource-record-sets-changed
       echo AMPLIFY_ALIAS_FILE
-      echo .dnsRecord
+      echo "bash scripts/deploy/amplify-apex-target.sh"
       echo "refusing to overwrite it"
       echo "Roll back production Amplify branch after failed release"
       echo "steps.apex_alias.outputs.routes_to_alb != 'true'"
