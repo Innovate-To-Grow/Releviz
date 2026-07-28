@@ -383,6 +383,20 @@ run "production_plan" {
 
   assert {
     condition = (
+      !aws_ecs_task_definition.backend.enable_fault_injection &&
+      !aws_ecs_task_definition.frontend.enable_fault_injection &&
+      jsondecode(aws_ecs_task_definition.backend.container_definitions)[0].mountPoints == [] &&
+      jsondecode(aws_ecs_task_definition.backend.container_definitions)[0].systemControls == [] &&
+      jsondecode(aws_ecs_task_definition.backend.container_definitions)[0].volumesFrom == [] &&
+      jsondecode(aws_ecs_task_definition.frontend.container_definitions)[0].mountPoints == [] &&
+      jsondecode(aws_ecs_task_definition.frontend.container_definitions)[0].systemControls == [] &&
+      jsondecode(aws_ecs_task_definition.frontend.container_definitions)[0].volumesFrom == []
+    )
+    error_message = "Both ECS task definitions must explicitly match provider-canonical fault-injection and empty container defaults."
+  }
+
+  assert {
+    condition = (
       length(aws_cloudwatch_metric_alarm.backend_target_5xx.alarm_actions) > 0 &&
       length(aws_cloudwatch_metric_alarm.frontend_target_5xx.alarm_actions) > 0 &&
       length(aws_cloudwatch_metric_alarm.amplify_5xx.alarm_actions) > 0 &&
