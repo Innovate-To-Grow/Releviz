@@ -1021,6 +1021,10 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
                     f"production CD omits {description} in {scope} CORS preflight"
                 )
 
+    retirement_start = final_verification.find("legacy_urls=(")
+    retirement_verification = (
+        final_verification[retirement_start:] if retirement_start >= 0 else ""
+    )
     stable_retirement_patterns = {
         r"legacy_urls=\(": "the complete retired-route URL set",
         r"for\s+attempt\s+in\s+\$\(seq\s+1\s+30\)": (
@@ -1040,6 +1044,23 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         r"https://\$\{API_DOMAIN\}/api/health": "the retired API prefix",
         r"stable_retired_cycles=0": "retired-route stability tracking",
         r"all_retired=true": "an all-routes-retired cycle guard",
+        r"--location": "bounded redirect following for retired routes",
+        r"--max-redirs\s+5\s": "a five-redirect ceiling for retired routes",
+        r"%\{http_code\}\\t%\{url_effective\}": (
+            "terminal retired-route status and effective URL capture"
+        ),
+        r'expected_origin="https://\$\{PROD_DOMAIN\}/"': (
+            "the canonical frontend same-origin boundary"
+        ),
+        r'expected_origin="https://\$\{API_DOMAIN\}/"': (
+            "the canonical API same-origin boundary"
+        ),
+        r'\[\s+-z\s+"\$expected_origin"\s+\]': (
+            "fail-closed unknown retired-route origin handling"
+        ),
+        r'\[\[\s+"\$effective_url"\s+!=\s+"\$\{expected_origin\}"\*\s+\]\]': (
+            "same-origin terminal redirect enforcement"
+        ),
         r'status"\s*!=\s*"404"': "404-only retired-route acceptance",
         r"all_retired=false": "failed-cycle retirement tracking",
         r"stable_retired_cycles=\$\(\(stable_retired_cycles \+ 1\)\)": (
@@ -1058,17 +1079,17 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         ),
     }
     for pattern, description in stable_retirement_patterns.items():
-        if not re.search(pattern, final_verification, re.MULTILINE | re.DOTALL):
+        if not re.search(pattern, retirement_verification, re.MULTILINE | re.DOTALL):
             errors.append(f"production CD omits {description}")
-    if final_verification.count("stable_retired_cycles=0") < 2:
+    if retirement_verification.count("stable_retired_cycles=0") < 2:
         errors.append(
             "production CD does not reset retired-route stability after a non-404 cycle"
         )
-    retired_status_position = final_verification.find('if [ "$status" != "404" ]')
-    retired_increment_position = final_verification.find(
+    retired_status_position = retirement_verification.find('if [ "$status" != "404" ]')
+    retired_increment_position = retirement_verification.find(
         "stable_retired_cycles=$((stable_retired_cycles + 1))"
     )
-    retired_reset_position = final_verification.rfind("stable_retired_cycles=0")
+    retired_reset_position = retirement_verification.rfind("stable_retired_cycles=0")
     if not (
         0
         <= retired_status_position
