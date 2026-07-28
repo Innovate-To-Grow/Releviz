@@ -9,6 +9,7 @@ on:
         type: string
 
 permissions:
+  actions: read
   checks: read
   contents: read
   deployments: write
@@ -332,48 +333,6 @@ jobs:
             echo "recovered_taint=$recovered_taint"
           } >>"$GITHUB_OUTPUT"
 
-      - name: Detect an existing CloudFront-only origin restriction
-        id: origin_state
-        run: |
-          set -euo pipefail
-          restriction="$(
-            terraform -chdir=infra/prod output -raw origin_restricted_to_cloudfront 2>/dev/null ||
-              true
-          )"
-          case "$restriction" in
-            true)
-              echo "preexisting=true" >>"$GITHUB_OUTPUT"
-              ;;
-            "" | false)
-              echo "preexisting=false" >>"$GITHUB_OUTPUT"
-              ;;
-            *)
-              echo "::error::Unexpected origin restriction state: ${restriction}"
-              exit 1
-              ;;
-          esac
-
-      - name: Detect an existing trusted CloudFront proxy chain
-        id: proxy_state
-        run: |
-          set -euo pipefail
-          trusted="$(
-            terraform -chdir=infra/prod output -raw trust_cloudfront_proxy_chain 2>/dev/null ||
-              true
-          )"
-          case "$trusted" in
-            true)
-              echo "preexisting=true" >>"$GITHUB_OUTPUT"
-              ;;
-            "" | false)
-              echo "preexisting=false" >>"$GITHUB_OUTPUT"
-              ;;
-            *)
-              echo "::error::Unexpected trusted proxy-chain state: ${trusted}"
-              exit 1
-              ;;
-          esac
-
       - name: Capture pre-release canonical Route53 alias
         id: apex_alias
         env:
@@ -437,12 +396,6 @@ jobs:
           if [ "${{ steps.domain_state.outputs.preexisting }}" != "true" ] &&
             [ "$routes_to_alb" != "true" ]; then
             echo "::error::The first Amplify cutover requires the canonical alias to target the managed ALB."
-            exit 1
-          fi
-          if [ "$routes_to_alb" = "true" ] &&
-            { [ "${{ steps.origin_state.outputs.preexisting }}" = "true" ] ||
-              [ "${{ steps.proxy_state.outputs.preexisting }}" = "true" ]; }; then
-            echo "::error::An ALB canonical alias requires public ingress and one-hop proxy trust."
             exit 1
           fi
           {
@@ -532,8 +485,6 @@ jobs:
       - name: Plan production infrastructure with current DNS state
         env:
           TF_VAR_enable_amplify_domain: ${{ steps.domain_state.outputs.preexisting }}
-          TF_VAR_restrict_origin_to_cloudfront: ${{ steps.origin_state.outputs.preexisting }}
-          TF_VAR_trust_cloudfront_proxy_chain: ${{ steps.proxy_state.outputs.preexisting }}
         run: terraform -chdir=infra/prod plan -input=false -out=production-base.tfplan
 
       - name: Guard live Amplify configuration before candidate smoke
@@ -622,15 +573,16 @@ jobs:
           exit 1
 
       - name: Run pre-Amplify backend smoke tests
-        if: ${{ steps.origin_state.outputs.preexisting != 'true' }}
         env:
           ORIGIN_DOMAIN: ${{ steps.terraform.outputs.origin_domain }}
         run: |
           set -euo pipefail
           for path in /api/health/live /api/health /admin/; do
             curl \
+              --connect-timeout 5 \
               --fail \
               --location \
+              --max-time 20 \
               --show-error \
               --retry 20 \
               --retry-all-errors \
@@ -679,39 +631,20 @@ jobs:
         id: previous_amplify_production
         env:
           AMPLIFY_DEFAULT_DOMAIN: ${{ steps.terraform.outputs.amplify_default_domain }}
-          AMPLIFY_APP_ID: ${{ steps.terraform.outputs.amplify_app_id }}
           CANONICAL_ROUTES_TO_ALB: ${{ steps.apex_alias.outputs.routes_to_alb }}
           DOMAIN_PREEXISTING: ${{ steps.domain_state.outputs.preexisting }}
           PRODUCTION_BRANCH: ${{ steps.terraform.outputs.production_branch }}
         run: |
           set -euo pipefail
-          previous_job_id="$(
-            aws amplify list-jobs \
-              --app-id "$AMPLIFY_APP_ID" \
-              --branch-name "$PRODUCTION_BRANCH" \
-              --max-results 50 \
-              --output json |
-              jq -r '
-                [
-                  (.jobSummaries // [])[]
-                  | select(.status == "SUCCEED")
-                ]
-                | sort_by(.endTime // .startTime // "")
-                | last
-                | .jobId // empty
-              '
-          )"
           previous_sha=""
           if [ "$DOMAIN_PREEXISTING" = "true" ] &&
             [ "$CANONICAL_ROUTES_TO_ALB" != "true" ]; then
-            if [ -z "$previous_job_id" ]; then
-              echo "::error::The live Amplify branch has no successful rollback job."
-              exit 1
-            fi
             production_url="https://${PRODUCTION_BRANCH}.${AMPLIFY_DEFAULT_DOMAIN}"
             previous_sha="$(
               curl \
+                --connect-timeout 5 \
                 --fail \
+                --max-time 20 \
                 --silent \
                 --show-error \
                 --retry 10 \
@@ -725,10 +658,165 @@ jobs:
               exit 1
             fi
           fi
+          echo "sha=$previous_sha" >>"$GITHUB_OUTPUT"
+
+      - name: Resolve retained Amplify rollback artifact
+        id: previous_amplify_artifact
+        if: >-
+          ${{ steps.domain_state.outputs.preexisting == 'true' &&
+              steps.apex_alias.outputs.routes_to_alb != 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIOUS_SHA: ${{ steps.previous_amplify_production.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$PREVIOUS_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::A valid live Amplify release SHA was not captured."
+            exit 1
+          fi
+          artifact_name="releviz-amplify-${PREVIOUS_SHA}"
+          artifact_pages="${RUNNER_TEMP}/amplify-rollback-artifact-pages.json"
+          artifact_candidates="${RUNNER_TEMP}/amplify-rollback-artifact-candidates.json"
+          verified_candidates="${RUNNER_TEMP}/amplify-rollback-artifact-verified.jsonl"
+          gh api \
+            --method GET \
+            --paginate \
+            --slurp \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=${artifact_name}&per_page=100" \
+            >"$artifact_pages"
+          jq -c \
+            --arg name "$artifact_name" \
+            --arg sha "$PREVIOUS_SHA" \
+            '[
+              .[]
+              | (.artifacts // [])[]
+              | select(.name == $name)
+              | select(.expired == false)
+              | select(.workflow_run.head_sha == $sha)
+              | select(.workflow_run.head_branch == "main")
+              | select(
+                  .workflow_run.repository_id
+                  == .workflow_run.head_repository_id
+                )
+              | {
+                  artifact_id: (.id | tostring),
+                  run_id: (.workflow_run.id | tostring),
+                  created_at
+                }
+            ]' "$artifact_pages" >"$artifact_candidates"
+          : >"$verified_candidates"
+          while IFS=$'\t' read -r artifact_id run_id created_at; do
+            run_file="${RUNNER_TEMP}/amplify-rollback-run-${run_id}.json"
+            gh api \
+              --method GET \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" >"$run_file"
+            if jq -e \
+              --arg repository "$GITHUB_REPOSITORY" \
+              --arg sha "$PREVIOUS_SHA" \
+              '
+                .head_sha == $sha
+                and .head_branch == "main"
+                and .path == ".github/workflows/deploy-prod.yml"
+                and .event == "workflow_dispatch"
+                and .status == "completed"
+                and .repository.full_name == $repository
+                and .head_repository.full_name == $repository
+              ' "$run_file" >/dev/null; then
+              jq -nc \
+                --arg artifact_id "$artifact_id" \
+                --arg run_id "$run_id" \
+                --arg created_at "$created_at" \
+                '{artifact_id: $artifact_id, run_id: $run_id, created_at: $created_at}' \
+                >>"$verified_candidates"
+            fi
+          done < <(
+            jq -r '.[] | [.artifact_id, .run_id, .created_at] | @tsv' \
+              "$artifact_candidates"
+          )
+          if [ ! -s "$verified_candidates" ]; then
+            echo "::error::No unexpired retained Amplify artifact for live release ${PREVIOUS_SHA} was produced by a completed trusted production workflow."
+            echo "::error::Do not mutate Amplify production without a verified rollback artifact; use the ECS fallback or rebuild the old SHA under review."
+            exit 1
+          fi
+          selected="$(
+            jq -sc 'sort_by(.created_at) | last' "$verified_candidates"
+          )"
           {
-            echo "job_id=$previous_job_id"
-            echo "sha=$previous_sha"
+            echo "artifact_id=$(jq -er .artifact_id <<<"$selected")"
+            echo "run_id=$(jq -er .run_id <<<"$selected")"
           } >>"$GITHUB_OUTPUT"
+
+      - name: Download retained Amplify rollback artifact
+        if: >-
+          ${{ steps.domain_state.outputs.preexisting == 'true' &&
+              steps.apex_alias.outputs.routes_to_alb != 'true' }}
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ steps.previous_amplify_artifact.outputs.artifact_id }}
+          path: ${{ runner.temp }}/amplify-rollback
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.previous_amplify_artifact.outputs.run_id }}
+          digest-mismatch: error
+
+      - name: Verify retained Amplify rollback artifact
+        id: verify_previous_amplify_artifact
+        if: >-
+          ${{ steps.domain_state.outputs.preexisting == 'true' &&
+              steps.apex_alias.outputs.routes_to_alb != 'true' }}
+        env:
+          PREVIOUS_SHA: ${{ steps.previous_amplify_production.outputs.sha }}
+          ROLLBACK_DIR: ${{ runner.temp }}/amplify-rollback
+        run: |
+          set -euo pipefail
+          expected_archive="releviz-amplify-${PREVIOUS_SHA}.zip"
+          expected_checksum="${expected_archive}.sha256"
+          archive="${ROLLBACK_DIR}/${expected_archive}"
+          checksum="${ROLLBACK_DIR}/${expected_checksum}"
+          mapfile -t retained_entries < <(
+            find "$ROLLBACK_DIR" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort
+          )
+          if [ "${#retained_entries[@]}" -ne 2 ] ||
+            [ "${retained_entries[0]:-}" != "$expected_archive" ] ||
+            [ "${retained_entries[1]:-}" != "$expected_checksum" ] ||
+            [ "$(find "$ROLLBACK_DIR" -mindepth 1 -maxdepth 1 -type f | wc -l)" -ne 2 ]; then
+            echo "::error::The retained artifact must contain exactly the expected regular ZIP and checksum files."
+            printf 'Found: %s\n' "${retained_entries[@]:-none}" >&2
+            exit 1
+          fi
+          checksum_line="$(cat "$checksum")"
+          if [ "$(wc -l <"$checksum")" -ne 1 ] ||
+            ! [[ "$checksum_line" =~ ^([0-9a-f]{64})[[:space:]]{2}(.+)$ ]] ||
+            [ "${BASH_REMATCH[2]:-}" != "$expected_archive" ]; then
+            echo "::error::The retained checksum has an invalid digest or filename."
+            exit 1
+          fi
+          (
+            cd "$ROLLBACK_DIR"
+            sha256sum --check --strict --status "$expected_checksum"
+          )
+          unzip -tq "$archive"
+          zip_entries="${RUNNER_TEMP}/amplify-rollback-zip-entries.txt"
+          zipinfo -1 "$archive" >"$zip_entries"
+          if grep -Eq '(^/|(^|/)\.\.(/|$)|\\)' "$zip_entries" ||
+            grep -q '^$' "$zip_entries"; then
+            echo "::error::The retained Amplify ZIP contains an unsafe path."
+            exit 1
+          fi
+          if [ "$(grep -cx 'release.json' "$zip_entries")" -ne 1 ]; then
+            echo "::error::The retained Amplify ZIP must contain exactly one root release.json."
+            exit 1
+          fi
+          unzip -p "$archive" release.json |
+            jq -e \
+              --arg sha "$PREVIOUS_SHA" \
+              'type == "object" and .sha == $sha and (keys | sort) == ["sha"]' \
+              >/dev/null
+          echo "archive=$archive" >>"$GITHUB_OUTPUT"
 
       - name: Deploy candidate Amplify branch
         id: candidate_deploy
@@ -747,8 +835,10 @@ jobs:
           candidate_url="https://${CANDIDATE_BRANCH}.${AMPLIFY_DEFAULT_DOMAIN}"
           for path in / /api/health/live /api/health /admin/; do
             curl \
+              --connect-timeout 5 \
               --fail \
               --location \
+              --max-time 20 \
               --show-error \
               --retry 20 \
               --retry-all-errors \
@@ -758,8 +848,10 @@ jobs:
           while IFS= read -r route; do
             for path in "/${route}" "/${route}/"; do
               curl \
+                --connect-timeout 5 \
                 --fail \
                 --location \
+                --max-time 20 \
                 --show-error \
                 --retry 20 \
                 --retry-all-errors \
@@ -770,8 +862,10 @@ jobs:
           while IFS= read -r legacy_route; do
             for path in "/${legacy_route}" "/${legacy_route}/" "/${legacy_route}/legacy"; do
               curl \
+                --connect-timeout 5 \
                 --fail \
                 --location \
+                --max-time 20 \
                 --show-error \
                 --retry 20 \
                 --retry-all-errors \
@@ -783,6 +877,8 @@ jobs:
           event_redirect_headers="${RUNNER_TEMP}/candidate-event-redirect.headers"
           event_redirect_status="$(
             curl \
+              --connect-timeout 5 \
+              --max-time 20 \
               --silent \
               --show-error \
               --dump-header "$event_redirect_headers" \
@@ -822,7 +918,9 @@ jobs:
             exit 1
           fi
           curl \
+            --connect-timeout 5 \
             --fail \
+            --max-time 20 \
             --show-error \
             --retry 20 \
             --retry-all-errors \
@@ -832,7 +930,13 @@ jobs:
           release_sha=""
           for attempt in $(seq 1 30); do
             release_sha="$(
-              curl --fail --silent --show-error "${candidate_url}/release.json" |
+              curl \
+                --connect-timeout 5 \
+                --fail \
+                --max-time 20 \
+                --silent \
+                --show-error \
+                "${candidate_url}/release.json" |
                 jq -er .sha 2>/dev/null ||
                 true
             )"
@@ -847,6 +951,8 @@ jobs:
           refresh_headers="${RUNNER_TEMP}/candidate-refresh.headers"
           refresh_status="$(
             curl \
+              --connect-timeout 5 \
+              --max-time 20 \
               --silent \
               --show-error \
               --request POST \
@@ -874,6 +980,8 @@ jobs:
             read -r method path <<<"$method_and_path"
             protected_status="$(
               curl \
+                --connect-timeout 5 \
+                --max-time 20 \
                 --silent \
                 --show-error \
                 --request "$method" \
@@ -895,7 +1003,9 @@ jobs:
           admin_cookies="${RUNNER_TEMP}/candidate-admin.cookies"
           admin_post_body="${RUNNER_TEMP}/candidate-admin-post.html"
           curl \
+            --connect-timeout 5 \
             --fail \
+            --max-time 20 \
             --silent \
             --show-error \
             --cookie-jar "$admin_cookies" \
@@ -916,6 +1026,8 @@ jobs:
           fi
           admin_post_status="$(
             curl \
+              --connect-timeout 5 \
+              --max-time 20 \
               --silent \
               --show-error \
               --cookie "$admin_cookies" \
@@ -939,6 +1051,57 @@ jobs:
             exit 1
           fi
 
+      - name: Revalidate Amplify production rollback point
+        if: >-
+          ${{ steps.domain_state.outputs.preexisting == 'true' &&
+              steps.apex_alias.outputs.routes_to_alb != 'true' }}
+        env:
+          AMPLIFY_APP_ID: ${{ steps.terraform.outputs.amplify_app_id }}
+          AMPLIFY_DEFAULT_DOMAIN: ${{ steps.terraform.outputs.amplify_default_domain }}
+          PREVIOUS_SHA: ${{ steps.previous_amplify_production.outputs.sha }}
+          PRODUCTION_BRANCH: ${{ steps.terraform.outputs.production_branch }}
+        run: |
+          set -euo pipefail
+          production_url="https://${PRODUCTION_BRANCH}.${AMPLIFY_DEFAULT_DOMAIN}"
+          current_sha="$(
+            curl \
+              --connect-timeout 5 \
+              --fail \
+              --max-time 20 \
+              --silent \
+              --show-error \
+              "${production_url}/release.json" |
+              jq -er .sha
+          )"
+          if [ "$current_sha" != "$PREVIOUS_SHA" ]; then
+            echo "::error::Amplify production changed after the rollback artifact was captured; expected ${PREVIOUS_SHA}, found ${current_sha}."
+            exit 1
+          fi
+          active_jobs="$(
+            aws amplify list-jobs \
+              --app-id "$AMPLIFY_APP_ID" \
+              --branch-name "$PRODUCTION_BRANCH" \
+              --max-results 50 \
+              --output json |
+              jq -c '
+                [
+                  (.jobSummaries // [])[]
+                  | select(
+                      .status == "CREATED"
+                      or .status == "PENDING"
+                      or .status == "PROVISIONING"
+                      or .status == "RUNNING"
+                      or .status == "CANCELLING"
+                    )
+                  | {jobId, status}
+                ]
+              '
+          )"
+          if [ "$(jq 'length' <<<"$active_jobs")" -ne 0 ]; then
+            echo "::error::Amplify production gained an active release job after preflight: ${active_jobs}"
+            exit 1
+          fi
+
       - name: Deploy production Amplify branch
         id: production_deploy
         run: |
@@ -956,8 +1119,10 @@ jobs:
           production_url="https://${PRODUCTION_BRANCH}.${AMPLIFY_DEFAULT_DOMAIN}"
           for path in / /api/health/live /api/health /admin/; do
             curl \
+              --connect-timeout 5 \
               --fail \
               --location \
+              --max-time 20 \
               --show-error \
               --retry 20 \
               --retry-all-errors \
@@ -967,8 +1132,10 @@ jobs:
           while IFS= read -r route; do
             for path in "/${route}" "/${route}/"; do
               curl \
+                --connect-timeout 5 \
                 --fail \
                 --location \
+                --max-time 20 \
                 --show-error \
                 --retry 20 \
                 --retry-all-errors \
@@ -981,7 +1148,9 @@ jobs:
               sed 's#^src/frontend/out##'
           )"
           curl \
+            --connect-timeout 5 \
             --fail \
+            --max-time 20 \
             --show-error \
             --retry 20 \
             --retry-all-errors \
@@ -990,7 +1159,13 @@ jobs:
           release_sha=""
           for attempt in $(seq 1 30); do
             release_sha="$(
-              curl --fail --silent --show-error "${production_url}/release.json" |
+              curl \
+                --connect-timeout 5 \
+                --fail \
+                --max-time 20 \
+                --silent \
+                --show-error \
+                "${production_url}/release.json" |
                 jq -er .sha 2>/dev/null ||
                 true
             )"
@@ -1031,8 +1206,6 @@ jobs:
       - name: Plan reviewed Amplify domain association
         env:
           TF_VAR_enable_amplify_domain: "true"
-          TF_VAR_restrict_origin_to_cloudfront: ${{ steps.origin_state.outputs.preexisting }}
-          TF_VAR_trust_cloudfront_proxy_chain: ${{ steps.proxy_state.outputs.preexisting }}
         run: |
           set -euo pipefail
           terraform -chdir=infra/prod plan -input=false -out=production-domain.tfplan
@@ -1169,8 +1342,10 @@ jobs:
           set -euo pipefail
           for path in / /api/health/live /api/health /admin/; do
             curl \
+              --connect-timeout 5 \
               --fail \
               --location \
+              --max-time 20 \
               --show-error \
               --retry 30 \
               --retry-all-errors \
@@ -1180,7 +1355,13 @@ jobs:
           release_sha=""
           for attempt in $(seq 1 30); do
             release_sha="$(
-              curl --fail --silent --show-error "https://${PROD_DOMAIN}/release.json" |
+              curl \
+                --connect-timeout 5 \
+                --fail \
+                --max-time 20 \
+                --silent \
+                --show-error \
+                "https://${PROD_DOMAIN}/release.json" |
                 jq -er .sha 2>/dev/null ||
                 true
             )"
@@ -1193,193 +1374,12 @@ jobs:
             exit 1
           fi
 
-      - name: Allow legacy Route53 alias caches to expire
-        if: ${{ steps.apex_alias.outputs.routes_to_alb == 'true' }}
-        run: |
-          set -euo pipefail
-          for interval in $(seq 1 12); do
-            echo "Waiting for the former ALB alias TTL; interval=${interval}/12"
-            sleep 10
-          done
-
-      - name: Plan CloudFront-only origin hardening
-        env:
-          TF_VAR_enable_amplify_domain: "true"
-          TF_VAR_restrict_origin_to_cloudfront: "true"
-          TF_VAR_trust_cloudfront_proxy_chain: ${{ steps.proxy_state.outputs.preexisting }}
-        run: terraform -chdir=infra/prod plan -input=false -out=production-harden-origin.tfplan
-
-      - name: Apply exact CloudFront-only origin hardening plan
-        run: terraform -chdir=infra/prod apply -input=false -auto-approve production-harden-origin.tfplan
-
-      - name: Verify production through the CloudFront-only origin
-        run: |
-          set -euo pipefail
-          for path in / /api/health/live /api/health /admin/; do
-            curl \
-              --fail \
-              --location \
-              --show-error \
-              --retry 20 \
-              --retry-all-errors \
-              --retry-delay 5 \
-              "https://${PROD_DOMAIN}${path}" >/dev/null
-          done
-
-      - name: Plan trusted CloudFront proxy chain
-        env:
-          TF_VAR_enable_amplify_domain: "true"
-          TF_VAR_restrict_origin_to_cloudfront: "true"
-          TF_VAR_trust_cloudfront_proxy_chain: "true"
-        run: terraform -chdir=infra/prod plan -input=false -out=production-trust-proxy.tfplan
-
-      - name: Apply exact trusted CloudFront proxy-chain plan
-        run: terraform -chdir=infra/prod apply -input=false -auto-approve production-trust-proxy.tfplan
-
-      - name: Wait for trusted-proxy backend rollout
-        run: |
-          aws ecs wait services-stable \
-            --cluster "${{ steps.terraform.outputs.cluster_name }}" \
-            --services "${{ steps.terraform.outputs.backend_service }}"
-
-      - name: Verify trusted-proxy backend target health
-        run: |
-          set -euo pipefail
-          target_group="$(
-            aws ecs describe-services \
-              --cluster "${{ steps.terraform.outputs.cluster_name }}" \
-              --services "${{ steps.terraform.outputs.backend_service }}" \
-              --query "services[0].loadBalancers[0].targetGroupArn" \
-              --output text
-          )"
-          for attempt in $(seq 1 30); do
-            health="$(aws elbv2 describe-target-health --target-group-arn "$target_group")"
-            if jq -e '
-              [.TargetHealthDescriptions[].TargetHealth.State] as $states
-              | ($states | length) > 0
-              and all($states[]; . == "healthy")
-            ' <<<"$health" >/dev/null; then
-              exit 0
-            fi
-            echo "Trusted-proxy backend health is converging; attempt=${attempt}/30"
-            jq -r '.TargetHealthDescriptions[].TargetHealth.State' <<<"$health"
-            sleep 10
-          done
-          echo "::error::Trusted-proxy backend targets did not become healthy."
-          exit 1
-
-      - name: Verify production through the trusted CloudFront proxy chain
-        run: |
-          set -euo pipefail
-          for path in / /api/health/live /api/health /admin/; do
-            curl \
-              --fail \
-              --location \
-              --show-error \
-              --retry 20 \
-              --retry-all-errors \
-              --retry-delay 5 \
-              "https://${PROD_DOMAIN}${path}" >/dev/null
-          done
-          release_sha=""
-          for attempt in $(seq 1 12); do
-            release_sha="$(
-              curl --fail --silent --show-error "https://${PROD_DOMAIN}/release.json" |
-                jq -er .sha 2>/dev/null ||
-                true
-            )"
-            if [ "$release_sha" = "$DEPLOY_SHA" ]; then break; fi
-            echo "Hardened release identity is converging; attempt=${attempt}/12"
-            sleep 5
-          done
-          if [ "$release_sha" != "$DEPLOY_SHA" ]; then
-            echo "::error::Hardened production release is ${release_sha}; expected ${DEPLOY_SHA}."
-            exit 1
-          fi
-
-      - name: Restore pre-release origin safety state after failure
-        id: restore_origin_safety
-        if: >-
-          ${{ always() &&
-              (failure() || cancelled()) &&
-              steps.domain_state.outcome == 'success' &&
-              steps.origin_state.outcome == 'success' &&
-              steps.proxy_state.outcome == 'success' &&
-              (steps.base_apply.outcome == 'success' ||
-               steps.base_apply.outcome == 'failure' ||
-               steps.base_apply.outcome == 'cancelled') }}
-        env:
-          PREEXISTING_DOMAIN: ${{ steps.domain_state.outputs.preexisting }}
-          PREEXISTING_ORIGIN_RESTRICTION: ${{ steps.origin_state.outputs.preexisting }}
-          PREEXISTING_PROXY_TRUST: ${{ steps.proxy_state.outputs.preexisting }}
-        run: |
-          set -euo pipefail
-          state_address='aws_amplify_domain_association.frontend[0]'
-          state_list="$(terraform -chdir=infra/prod state list)"
-          restore_domain="$PREEXISTING_DOMAIN"
-          if grep -q '^aws_amplify_domain_association\.frontend\[0\]$' <<<"$state_list"; then
-            instance_status="$(
-              terraform -chdir=infra/prod state pull |
-                jq -er '
-                  [
-                    .resources[]
-                    | select(
-                        .mode == "managed" and
-                        .type == "aws_amplify_domain_association" and
-                        .name == "frontend"
-                      )
-                    | .instances[]
-                    | select(.index_key == 0)
-                    | (.status // "ready")
-                  ]
-                  | if length == 1 then .[0]
-                    else error("expected exactly one Amplify domain instance")
-                    end
-                '
-            )"
-            if [ "$instance_status" = "tainted" ]; then
-              aws amplify get-domain-association \
-                --app-id "$TF_VAR_amplify_app_id" \
-                --domain-name "${PROD_DOMAIN%.}" \
-                --output json >/dev/null
-              terraform -chdir=infra/prod untaint "$state_address"
-              echo "::notice::Recovered the verified Amplify domain association from tainted Terraform state before safety restoration."
-            elif [ "$instance_status" != "ready" ]; then
-              echo "::error::Unexpected Amplify domain Terraform state: ${instance_status}"
-              exit 1
-            fi
-            restore_domain=true
-          fi
-          export TF_VAR_enable_amplify_domain="$restore_domain"
-          export TF_VAR_restrict_origin_to_cloudfront="$PREEXISTING_ORIGIN_RESTRICTION"
-          export TF_VAR_trust_cloudfront_proxy_chain="$PREEXISTING_PROXY_TRUST"
-          terraform -chdir=infra/prod plan -input=false -out=production-restore-origin.tfplan
-          terraform -chdir=infra/prod show -json production-restore-origin.tfplan |
-            jq -e '
-              all(
-                .resource_changes[]?;
-                (.change.actions | index("delete")) == null
-              )
-            ' >/dev/null
-          terraform -chdir=infra/prod apply \
-            -input=false \
-            -auto-approve \
-            production-restore-origin.tfplan
-          cluster_name="$(terraform -chdir=infra/prod output -raw ecs_cluster_name)"
-          backend_service="$(terraform -chdir=infra/prod output -raw backend_service_name)"
-          frontend_service="$(terraform -chdir=infra/prod output -raw frontend_service_name)"
-          aws ecs wait services-stable \
-            --cluster "$cluster_name" \
-            --services "$backend_service" "$frontend_service"
-          echo "::notice::Restored the pre-release origin restriction and proxy-trust state."
-
       - name: Restore pre-release canonical Route53 alias after failed first cutover
         id: restore_apex_alias
         if: >-
           ${{ always() &&
               (failure() || cancelled()) &&
               steps.apex_alias.outputs.routes_to_alb == 'true' &&
-              steps.restore_origin_safety.outcome == 'success' &&
               (steps.domain_apply.outcome == 'success' ||
                steps.domain_apply.outcome == 'failure' ||
                steps.domain_apply.outcome == 'cancelled') }}
@@ -1499,81 +1499,65 @@ jobs:
               steps.apex_alias.outputs.routes_to_alb != 'true' &&
               steps.domain_state.outputs.preexisting == 'true' &&
               steps.previous_amplify_production.outcome == 'success' &&
+              steps.verify_previous_amplify_artifact.outcome == 'success' &&
               steps.production_deploy.outputs.terminal_confirmed == 'true' &&
               steps.production_deploy.outcome != 'skipped' }}
         env:
           AMPLIFY_DEFAULT_DOMAIN: ${{ steps.terraform.outputs.amplify_default_domain }}
           AMPLIFY_APP_ID: ${{ steps.terraform.outputs.amplify_app_id }}
-          PREVIOUS_JOB_ID: ${{ steps.previous_amplify_production.outputs.job_id }}
           PREVIOUS_SHA: ${{ steps.previous_amplify_production.outputs.sha }}
           PRODUCTION_BRANCH: ${{ steps.terraform.outputs.production_branch }}
+          ROLLBACK_ARCHIVE: ${{ steps.verify_previous_amplify_artifact.outputs.archive }}
         run: |
           set -euo pipefail
-          if [ -z "$PREVIOUS_JOB_ID" ] || ! [[ "$PREVIOUS_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+          if ! [[ "$PREVIOUS_SHA" =~ ^[0-9a-f]{40}$ ]] ||
+            [ ! -f "$ROLLBACK_ARCHIVE" ]; then
             echo "::error::A valid Amplify rollback point was not captured."
             exit 1
           fi
-          rollback_job_id="$(
-            aws amplify start-job \
-              --app-id "$AMPLIFY_APP_ID" \
-              --branch-name "$PRODUCTION_BRANCH" \
-              --job-id "$PREVIOUS_JOB_ID" \
-              --job-type RETRY \
-              --query "jobSummary.jobId" \
-              --output text
-          )"
-          for attempt in $(seq 1 180); do
-            status="$(
-              aws amplify get-job \
-                --app-id "$AMPLIFY_APP_ID" \
-                --branch-name "$PRODUCTION_BRANCH" \
-                --job-id "$rollback_job_id" \
-                --query "job.summary.status" \
-                --output text
-            )"
-            case "$status" in
-              SUCCEED)
-                break
-                ;;
-              FAILED | CANCELLED)
-                echo "::error::Amplify rollback job ${rollback_job_id} ended ${status}."
-                exit 1
-                ;;
-              *)
-                echo "Amplify rollback status=${status}; attempt=${attempt}/180"
-                sleep 10
-                ;;
-            esac
-          done
-          status="$(
-            aws amplify get-job \
-              --app-id "$AMPLIFY_APP_ID" \
-              --branch-name "$PRODUCTION_BRANCH" \
-              --job-id "$rollback_job_id" \
-              --query "job.summary.status" \
-              --output text
-          )"
-          if [ "$status" != "SUCCEED" ]; then
-            echo "::error::Timed out rolling back Amplify production."
-            exit 1
-          fi
+          scripts/deploy/amplify-static-deploy.sh \
+            "$AMPLIFY_APP_ID" \
+            "$PRODUCTION_BRANCH" \
+            "$ROLLBACK_ARCHIVE"
           production_url="https://${PRODUCTION_BRANCH}.${AMPLIFY_DEFAULT_DOMAIN}"
-          release_sha=""
-          for attempt in $(seq 1 30); do
-            release_sha="$(
-              curl --fail --silent --show-error "${production_url}/release.json" |
-                jq -er .sha 2>/dev/null ||
-                true
-            )"
-            if [ "$release_sha" = "$PREVIOUS_SHA" ]; then break; fi
-            echo "Amplify rollback identity is converging; attempt=${attempt}/30"
-            sleep 5
+          for base_url in "$production_url" "https://${PROD_DOMAIN}"; do
+            for path in / /api/health/live /api/health /admin/; do
+              curl \
+                --connect-timeout 5 \
+                --fail \
+                --location \
+                --max-time 20 \
+                --show-error \
+                --retry 10 \
+                --retry-all-errors \
+                --retry-delay 3 \
+                "${base_url}${path}" >/dev/null
+            done
           done
-          if [ "$release_sha" != "$PREVIOUS_SHA" ]; then
-            echo "::error::Amplify rollback is ${release_sha}; expected ${PREVIOUS_SHA}."
-            exit 1
-          fi
-          echo "::notice::Restored Amplify production to ${PREVIOUS_SHA} with job ${rollback_job_id}."
+          for base_url in "$production_url" "https://${PROD_DOMAIN}"; do
+            release_sha=""
+            for attempt in $(seq 1 30); do
+              release_sha="$(
+                curl \
+                  --connect-timeout 5 \
+                  --fail \
+                  --max-time 20 \
+                  --silent \
+                  --show-error \
+                  "${base_url}/release.json" |
+                  jq -er .sha 2>/dev/null ||
+                  true
+              )"
+              if [ "$release_sha" = "$PREVIOUS_SHA" ]; then break; fi
+              echo "Amplify rollback identity is converging at ${base_url}; attempt=${attempt}/30"
+              sleep 5
+            done
+            if [ "$release_sha" != "$PREVIOUS_SHA" ]; then
+              echo "::error::Amplify rollback at ${base_url} is ${release_sha}; expected ${PREVIOUS_SHA}."
+              exit 1
+            fi
+          done
+          echo "::notice::Restored Amplify production to retained artifact ${PREVIOUS_SHA}."
 
       - name: Summarize immutable production release
         if: ${{ always() }}

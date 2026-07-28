@@ -3,9 +3,12 @@
 ## Safety Model
 
 The production frontend is a Next.js static export hosted by AWS Amplify. The backend and Django
-admin remain on ECS Fargate behind an ALB. Amplify serves the UI and reverse-proxies `/api`,
-`/authn`, `/admin`, and `/static` to the TLS-protected `origin.releviz.com` ALB hostname, preserving
-same-origin cookies and CSRF behavior.
+admin remain on private ECS Fargate tasks behind an internet-facing ALB. Amplify serves the UI and
+uses external HTTPS 200 rewrites for `/api`, `/authn`, `/admin`, and `/static` to the
+TLS-protected `origin.releviz.com` ALB hostname, preserving same-origin cookies and CSRF behavior.
+The ALB accepts public HTTPS because AWS does not document Amplify reverse-proxy egress as coming
+from a fixed source range. ECS tasks have no public IP and accept application traffic only from the
+ALB security group.
 
 The protected release workflow builds one ZIP for an exact Git SHA and deploys that same artifact
 to the Amplify `candidate` branch and then the `main` branch. Each stage must return the expected
@@ -21,26 +24,31 @@ prefix, while the saved record remains byte-for-byte structurally intact for com
 Terraform forgets the legacy alias state with `destroy = false`; it does not delete the live
 record. Only then does the workflow create the Amplify domain association. The authoritative
 cutover alias must exactly match the apex `dnsRecord` returned by Amplify; an arbitrary non-ALB
-target is rejected. After canonical traffic passes, a first hardening plan restricts ALB HTTPS
-ingress to the AWS-managed CloudFront origin-facing prefix list. A separate plan then rolls the
-backend to use the current CloudFront prefix-list CIDRs for right-to-left client-IP parsing, waits
-for ECS stability and target health, and runs final canonical smokes. The two-hop count remains a
-rollback compatibility value for an older backend image; the current backend trusts only the
-right-most forwarded hop that is actually inside the injected CloudFront CIDR allowlist.
+target is rejected. The ALB remains publicly reachable on HTTPS after cutover. It appends its
+actual requester to the right side of `X-Forwarded-For`, and production fixes
+`AUTH_TRUSTED_PROXY_COUNT=1` so the backend trusts only that one appended address. It does not trust
+an earlier browser address or any CIDR-based additional hop. For Amplify-proxied requests, the
+resulting safe client identity can therefore be an Amplify egress address shared by multiple users.
 
-If a later first-cutover stage fails, the compensation handler first restores public ALB ingress
-and the prior proxy-trust setting, then atomically UPSERTs the saved A-alias record and waits for
-the Route 53 change to reach `INSYNC`. It intentionally retains the Amplify domain association
-because Terraform protects that resource with `prevent_destroy`. A subsequent migration attempt
-updates the existing association to let Amplify reconcile its Route 53 record before canonical
-smokes. The workflow rechecks the saved ALB alias immediately before cutover and records the exact
-Amplify alias afterward; compensation refuses to overwrite an unrecognized concurrent DNS change.
-At the start of every later release, the authoritative alias must already match either that exact
-Amplify-reported target or the managed ALB fallback; any third target stops the workflow before
-Terraform or Amplify release mutations.
-Once Amplify is the pre-release canonical target, failures preserve DNS and instead retry the
-previous successful Amplify release. Later releases preserve the domain association, origin
-restriction, and proxy-trust state during their first plan instead of toggling any of them off.
+If a later first-cutover stage fails, the compensation handler atomically UPSERTs the saved A-alias
+record and waits for the Route 53 change to reach `INSYNC`. Public ALB HTTPS ingress and fixed
+one-hop proxy trust do not change during cutover, so they need no network-state compensation. The
+handler intentionally retains the Amplify domain association because Terraform protects that
+resource with `prevent_destroy`. A subsequent migration attempt updates the existing association
+to let Amplify reconcile its Route 53 record before canonical smokes. The workflow rechecks the
+saved ALB alias immediately before cutover and records the exact Amplify alias afterward;
+compensation refuses to overwrite an unrecognized concurrent DNS change. At the start of every
+later release, the authoritative alias must already match either that exact Amplify-reported target
+or the managed ALB fallback; any third target stops the workflow before Terraform or Amplify
+release mutations.
+
+Once Amplify is the pre-release canonical target, failures preserve DNS. If a new `main` deployment
+must be undone, the workflow retrieves the previous release's trusted GitHub Actions artifact,
+verifies its SHA256 and embedded `/release.json`, and republishes the ZIP with Amplify
+`CreateDeployment` and `StartDeployment`. It never retries completed job metadata: this manually
+deployed Amplify app is not connected to a repository provider, so a completed job ID is metadata
+rather than a durable rollback artifact. Later releases preserve the domain association and fixed
+public-origin/one-hop topology during their first plan.
 Because Amplify rewrite, header, cache, and production-branch settings are live app configuration,
 the base-plan guard rejects changes to them while the canonical alias points at Amplify. Such a
 change must use the documented ECS fallback so it can be applied before candidate verification
@@ -53,6 +61,24 @@ The former ECS frontend remains running as a hot migration fallback. Production 
 currently deployed immutable image tag and supplies that same tag to Terraform; it does not build,
 push, or roll that service. Remove this fallback only in a separately reviewed cleanup after the
 Amplify deployment has completed its agreed soak period.
+
+Each production run retains its Amplify ZIP and SHA256 file as a trusted GitHub Actions artifact
+for 90 days. That retention is the supported frontend artifact-rollback window. After expiration,
+an old Amplify job record cannot reconstruct the deployed bytes; recovery must use a separately
+retained, independently trusted copy or a reviewed roll-forward/source revert that passes current
+CI. Backend schema compatibility, RDS backup retention, and the ECS migration fallback have
+separate windows and do not extend this 90-day artifact guarantee.
+
+GitHub workflow concurrency prevents two normal production runs from racing, but it cannot lock an
+out-of-band Amplify console or API write. Limit routine Amplify write permissions to the production
+OIDC role and treat break-glass writes as an incident change. A lost runner or hard job timeout can
+also prevent an `always()` compensation step from executing; in that case, use the retained
+artifact from an audited operator session or the preserved ECS migration fallback.
+
+If a private origin becomes a requirement, implement it as a separate architecture migration. The
+preferred direction is self-managed CloudFront with a VPC origin and private ALB; API Gateway with
+a VPC Link is another option for the dynamic routes. The current Amplify external rewrite must
+remain on the documented public HTTPS boundary.
 
 Backend ECS keeps 100% healthy capacity during a rollout, allows 200% temporary capacity, and uses
 the deployment circuit breaker with automatic rollback. The workflow waits for service stability
@@ -88,8 +114,10 @@ before a migration release with meaningful data-shape risk.
 5. Configure every production variable listed in the README. Restrict the `Production` Environment
    to `main`, require a reviewer, and do not configure static AWS keys or an Amplify repository
    access token.
-6. Confirm `origin.releviz.com` is inside the selected Route53 zone. Terraform provisions its ALB
-   alias and ACM certificate. Do not create a second, manually managed origin hostname.
+6. Confirm `origin.releviz.com` is inside the selected Route53 zone. Terraform provisions its
+   public ALB alias and ACM certificate. Verify public HTTPS reaches only the ALB, while backend ECS
+   tasks have no public IP and allow application ingress only from the ALB security group. Do not
+   create a second, manually managed origin hostname.
 7. Before the first Amplify migration, verify that the existing ECS frontend task uses a
    40-character Git SHA tag in the configured `ECR_PROD_FRONTEND` repository. The migration fails
    closed if it cannot preserve this rollback target.
@@ -117,7 +145,9 @@ restore a verified backup into a new database and perform a controlled cutover.
    Next build, browser E2E, dependency audits, backend Docker scan, and Terraform tests.
 2. Record the active backend task-definition ARN and image digest.
 3. Record the active Amplify `main` job ID, its `/release.json` SHA, the authoritative apex A-alias
-   record, and the preserved ECS frontend task-definition ARN.
+   record, and the preserved ECS frontend task-definition ARN. Identify a trusted completed
+   production Actions run for the previous SHA whose artifact upload succeeded, and confirm that
+   artifact is still within the 90-day retention window.
 4. Review migrations with `showmigrations --plan`, run `migrate --check`, create a logical backup,
    and verify its checksum/archive listing.
 5. Confirm `/api/health/live`, `/api/health`, metrics, alarms, and the email dispatcher are healthy.
@@ -139,9 +169,9 @@ The workflow:
    `src/frontend/out`, verifies that its page set matches the reviewed Amplify route manifest, and
    retains the ZIP plus SHA256 file as a 90-day GitHub artifact;
 6. captures the exact canonical Route 53 A alias, then applies a base Terraform plan while
-   preserving the current domain-association, CloudFront-only-origin, and trusted-proxy states; if
-   Amplify is already canonical, it rejects any plan that would change the live app or production
-   branch or domain association before candidate smoke testing;
+   preserving the current domain association and the public-TLS-ALB/private-ECS boundary; if
+   Amplify is already canonical, it rejects any plan that would change the live app, production
+   branch, or domain association before candidate smoke testing;
 7. waits for ECS stability and backend target health;
 8. verifies that neither `candidate` nor `main` has a `CREATED`, `PENDING`, `PROVISIONING`,
    `RUNNING`, or `CANCELLING` job left by another or interrupted deployment;
@@ -154,22 +184,22 @@ The workflow:
     but missing from Terraform state), waits for both domain and update readiness, verifies the
     authoritative alias exactly matches Amplify's reported apex target, and smoke-tests
     `https://releviz.com`;
-12. on the first cutover, drains the former ALB alias TTL, removes public ALB HTTPS ingress, and
-    verifies canonical traffic while the backend still uses the previous compatibility setting;
-13. independently enables CIDR-aware CloudFront client-IP handling, waits for backend ECS
-    stability and target health, and runs final canonical smokes;
-14. if a first-cutover stage fails, restores the pre-release origin/proxy state before atomically
-    restoring and verifying the exact saved ALB alias; on later releases it leaves DNS on Amplify,
-    retries the previously successful Amplify `main` job, and verifies its recorded SHA.
+12. on the first cutover, keeps public ALB HTTPS ingress and fixed one-hop proxy trust unchanged,
+    and verifies canonical frontend, backend, and admin traffic;
+13. verifies backend ECS remains private, waits for ECS stability and target health, and runs final
+    canonical smokes;
+14. if a first-cutover stage fails, atomically restores and verifies the exact saved ALB alias; on
+    later releases it leaves DNS on Amplify, downloads and verifies the previous trusted 90-day
+    artifact, republishes it with `CreateDeployment` and `StartDeployment`, and verifies its
+    recorded SHA.
 
 The workflow never sets a legacy DNS-management flag to false or destroys the Amplify domain
 association. On the initial migration, this prevents the temporary apex-record deletion caused by
 the former two-apply DNS flow. If that migration is compensated, the retained association and ALB
 alias are an intentional retryable state: public ALB ingress and one-hop proxy trust remain active,
 and the next deployment updates the association before cutting DNS back to Amplify. On later
-releases, state and authoritative-alias detection prevent an existing association or origin
-restriction from being destroyed during the base apply and preserve the matching trusted-proxy
-setting.
+releases, state and authoritative-alias detection prevent an existing association from being
+destroyed during the base apply.
 
 For local validation only:
 
@@ -205,38 +235,58 @@ permanent-email-failure alarms through the rollback window.
 
 ## Roll Back the Amplify Frontend
 
-Prefer an Amplify-only rollback when the backend remains compatible. Identify the previous
-successful `main` job and verify its recorded release SHA:
+Prefer an Amplify-only rollback when the backend remains compatible. Select the exact previous SHA
+and its protected production workflow run. Trust the rollback artifact only when the run belongs
+to this repository and production workflow, is bound to that SHA on `main`, used a successful
+`CI Result`, and produced the exact unexpired `releviz-amplify-<sha>` artifact. Download it into an
+empty review directory:
 
 ```bash
-aws amplify list-jobs \
-  --app-id <app-id> \
-  --branch-name main \
-  --max-results 20
+gh run download <trusted-production-run-id> \
+  --repo Innovate-To-Grow/releviz \
+  --name releviz-amplify-<previous-sha> \
+  --dir <empty-review-directory>
 ```
 
-With incident approval, retry that exact job:
+Verify both retained files before any Amplify mutation:
 
 ```bash
-aws amplify start-job \
-  --app-id <app-id> \
-  --branch-name main \
-  --job-type RETRY \
-  --job-id <previous-successful-job-id> \
-  --job-reason "Approved production rollback"
+(
+  cd <empty-review-directory>
+  sha256sum --check releviz-amplify-<previous-sha>.zip.sha256
+)
+unzip -tq <empty-review-directory>/releviz-amplify-<previous-sha>.zip
+unzip -p <empty-review-directory>/releviz-amplify-<previous-sha>.zip release.json |
+  jq -e --arg sha "<previous-sha>" '.sha == $sha'
 ```
 
-Poll the new job with `aws amplify get-job`, then verify canonical `/release.json`, frontend,
-backend health, admin, and the affected user journey. Record both old and new job IDs. If retry is
-unavailable, download the retained `releviz-amplify-<sha>` workflow artifact, verify its SHA256 and
-contents, and use `scripts/deploy/amplify-static-deploy.sh <app-id> main <zip>` from an
-OIDC-authenticated, audited operator session.
+With incident approval, use the same verified ZIP for a candidate smoke and then for production
+from an OIDC-authenticated, audited operator session:
+
+```bash
+scripts/deploy/amplify-static-deploy.sh \
+  <app-id> candidate <empty-review-directory>/releviz-amplify-<previous-sha>.zip
+# Verify candidate frontend, /api/health/live, /api/health, and /admin/.
+scripts/deploy/amplify-static-deploy.sh \
+  <app-id> main <empty-review-directory>/releviz-amplify-<previous-sha>.zip
+```
+
+The helper creates a fresh Amplify deployment and starts that uploaded deployment. Poll the new job
+to terminal success, then verify canonical `/release.json`, frontend, backend health, admin, and the
+affected user journey. Record the trusted Actions run, artifact digest, prior release SHA, and both
+new deployment job IDs.
+
+GitHub retains this ZIP/SHA256 pair for 90 days. Once it expires, the previous Amplify job ID is
+not enough to reproduce the bytes for this repository-disconnected app. Do not rebuild an old ZIP
+ad hoc or accept an artifact from an untrusted run. Use a separately retained, independently
+verified copy if one exists; otherwise prepare a reviewed roll-forward or source revert, pass
+current CI, and deploy it as a new release.
 
 Do not point the apex directly back to ECS for an ordinary frontend regression. The preserved ECS
 frontend is an emergency migration fallback only. Using it requires an incident-reviewed sequence:
 
-1. set `restrict_origin_to_cloudfront=false` in a reviewed Terraform plan and verify both ECS
-   services and ALB target groups are healthy;
+1. verify the public TLS ALB, both ECS services, and both ALB target groups are healthy, and confirm
+   the ECS tasks remain private;
 2. preserve evidence for the current Amplify domain association and DNS records;
 3. disassociate the Amplify custom domain and atomically UPSERT the apex alias to the recorded ALB
    DNS name and hosted-zone ID;

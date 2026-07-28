@@ -64,6 +64,7 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
     source = active_path.read_text(encoding="utf-8")
     required_patterns = {
         r"workflow_dispatch:": "manual dispatch",
+        r"actions:\s*read": "GitHub Actions artifact read permission",
         r"id-token:\s*write": "OIDC permission",
         r"terraform_wrapper:\s*false": "raw Terraform output and exit semantics",
         r"CONFIRMATION.*DEPLOY|CONFIRMATION\"\s*!=\s*\"DEPLOY\"": "explicit confirmation",
@@ -79,19 +80,112 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         ),
         r"src/frontend/out": "static export artifact",
         r"AMPLIFY_ARTIFACT.*\.sha256": "a retained static-artifact checksum",
+        r"retention-days:\s*90": "a 90-day rollback artifact retention window",
         r"release\.json": "immutable frontend release identity",
         r"release_sha.*DEPLOY_SHA": "deployed frontend SHA verification",
         r"amplify-static-deploy\.sh": "manual Amplify deployment helper",
         r"Capture current Amplify production rollback point": (
             "a live Amplify rollback point"
         ),
+        r"Resolve retained Amplify rollback artifact": (
+            "a retained rollback-artifact resolver"
+        ),
+        r"releviz-amplify-(?:\$\{?)?PREVIOUS_SHA": (
+            "an exact previous-SHA rollback artifact name"
+        ),
+        r"actions/artifacts": "a repository artifact metadata lookup",
+        r"gh api[\s\S]{0,100}--method\s+GET": (
+            "an explicit read-only artifact API request"
+        ),
+        r"--paginate[\s\S]{0,100}--slurp": (
+            "complete paginated rollback artifact discovery"
+        ),
+        r"\.name\s*==\s*\$(?:name|artifact_name)": (
+            "exact rollback artifact-name matching"
+        ),
+        (
+            r"\.expired\s*==\s*false|"
+            r"select\(\s*\.expired\s*\|\s*not\s*\)|"
+            r"select\(\s*\(\.expired\s*//\s*true\)\s*==\s*false\s*\)"
+        ): "an unexpired rollback-artifact requirement",
+        (
+            r"\.workflow_run\.head_sha\s*==\s*\$(?:sha|previous_sha)|"
+            r"\$(?:sha|previous_sha)\s*==\s*\.workflow_run\.head_sha"
+        ): "rollback artifact head-SHA binding",
+        (
+            r"(?:\.workflow_run\.)?\.?head_branch\s*==\s*\"main\"|"
+            r"head_branch[\s\S]{0,100}\bmain\b"
+        ): "rollback artifact main-branch binding",
+        r"\.github/workflows/deploy-prod\.yml": (
+            "rollback artifact production-workflow binding"
+        ),
+        (
+            r"\.event\s*==\s*\"workflow_dispatch\"|"
+            r"workflow_dispatch[\s\S]{0,100}\.event"
+        ): "rollback artifact workflow-dispatch binding",
+        r"\.status\s*==\s*\"completed\"": ("a completed trusted rollback workflow run"),
+        (
+            r"\.head_repository\.full_name[\s\S]{0,120}GITHUB_REPOSITORY|"
+            r"GITHUB_REPOSITORY[\s\S]{0,120}\.head_repository\.full_name|"
+            r'--arg\s+repository\s+"\$GITHUB_REPOSITORY"'
+            r"[\s\S]{0,500}\.head_repository\.full_name\s*==\s*\$repository"
+        ): "rollback artifact source-repository binding",
+        r"artifact_id": "an immutable rollback artifact ID",
+        r"run_id": "the rollback artifact's workflow-run ID",
+        r"Download retained Amplify rollback artifact": (
+            "a retained rollback-artifact download"
+        ),
+        r"uses:\s*actions/download-artifact@v8": (
+            "the reviewed cross-run artifact downloader"
+        ),
+        r"artifact-ids:": "rollback download by immutable artifact ID",
+        r"github-token:": "authenticated cross-run artifact download",
+        r"repository:": "an exact rollback artifact repository",
+        r"run-id:": "an exact rollback artifact workflow run",
+        r"digest-mismatch:\s*error": "fail-closed GitHub artifact digest validation",
+        r"(?:RUNNER_TEMP|runner\.temp)[\s\S]{0,100}amplify-rollback": (
+            "an isolated rollback artifact download directory"
+        ),
+        r"Verify retained Amplify rollback artifact": (
+            "strict retained rollback-artifact verification"
+        ),
+        r"retained_entries[\s\S]{0,300}-ne\s+2": (
+            "an exact two-file retained artifact payload"
+        ),
+        r"\[0-9a-f\]\{64\}": "a strict rollback checksum digest format",
+        (
+            r"BASH_REMATCH\[[0-9]+\][\s\S]{0,150}expected_archive|"
+            r"checksum_(?:name|filename)[\s\S]{0,150}expected_archive"
+        ): "an exact rollback checksum filename",
+        r"sha256sum[^\n]*(?:--check|-c)[^\n]*--strict[^\n]*--status": (
+            "strict inner rollback ZIP checksum verification"
+        ),
+        r"unzip\s+-tq": "inner rollback ZIP integrity verification",
+        r"(?:zipinfo\s+-1|unzip\s+-Z1)": "inner rollback ZIP entry validation",
+        r"unsafe (?:path|ZIP entry)": "unsafe inner rollback ZIP path rejection",
+        r"grep\s+-cx\s+['\"]release\.json['\"][^\n]*-ne\s+1": (
+            "exactly one root rollback release manifest"
+        ),
+        (
+            r"unzip\s+-p[^\n]*release\.json[\s\S]{0,300}PREVIOUS_SHA|"
+            r"PREVIOUS_SHA[\s\S]{0,300}unzip\s+-p[^\n]*release\.json"
+        ): "inner rollback release-SHA verification",
         r"Roll back production Amplify branch after failed release": (
             "automatic rollback after any failed live release stage"
         ),
         (
             r"steps\.production_deploy\.outputs\.terminal_confirmed\s*==\s*'true'"
         ): "a confirmed-terminal current job before Amplify rollback",
-        r"--job-type RETRY": "an Amplify retry rollback",
+        (
+            r"Roll back production Amplify branch after failed release"
+            r"[\s\S]{0,1800}scripts/deploy/amplify-static-deploy\.sh"
+        ): "manual redeployment of the verified rollback artifact",
+        (
+            r'for\s+base_url\s+in\s+"\$production_url"\s+'
+            r'"https://\$\{PROD_DOMAIN\}"[\s\S]{0,1200}'
+            r'"\$\{base_url\}/release\.json"[\s\S]{0,500}'
+            r'"\$PREVIOUS_SHA"'
+        ): "rollback release identity checks on both default and production domains",
         r"Smoke candidate Amplify frontend and same-origin proxy": (
             "candidate same-origin proxy smoke tests"
         ),
@@ -138,8 +232,6 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         r"Recovered the verified Amplify domain association from tainted Terraform state": (
             "verified tainted-domain state recovery"
         ),
-        r"origin_restricted_to_cloudfront": "existing origin restriction detection",
-        r"trust_cloudfront_proxy_chain": "existing trusted proxy-chain detection",
         r"Capture pre-release canonical Route53 alias": (
             "an exact pre-cutover canonical alias capture"
         ),
@@ -168,9 +260,6 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         r"neither the managed ALB fallback nor Amplify's exact reported apex target": (
             "fail-closed pre-release canonical target validation"
         ),
-        r"An ALB canonical alias requires public ingress and one-hop proxy trust": (
-            "fallback DNS and ingress/proxy consistency validation"
-        ),
         r"Verify preserved canonical alias immediately before cutover": (
             "a pre-cutover DNS race guard"
         ),
@@ -178,21 +267,12 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         r"TF_VAR_enable_amplify_domain.*domain_state\.outputs\.preexisting": (
             "non-destructive initial domain state"
         ),
-        r"TF_VAR_restrict_origin_to_cloudfront.*origin_state\.outputs\.preexisting": (
-            "non-destructive initial origin restriction state"
-        ),
-        r"TF_VAR_trust_cloudfront_proxy_chain.*proxy_state\.outputs\.preexisting": (
-            "non-destructive initial trusted proxy-chain state"
-        ),
         r'TF_VAR_enable_amplify_domain:\s*"true"': "reviewed Amplify domain association",
         r"terraform -chdir=infra/prod show -json production-domain\.tfplan": (
             "machine-readable Amplify domain plan review"
         ),
         r'\.change\.actions \| index\("delete"\)\) == null': (
             "a no-destroy Amplify domain plan gate"
-        ),
-        r'TF_VAR_restrict_origin_to_cloudfront:\s*"true"': (
-            "reviewed CloudFront-only origin hardening"
         ),
         r"Wait for Amplify custom domain availability": "custom-domain readiness gate",
         r"Reconcile Amplify domain association for a migration retry": (
@@ -220,30 +300,8 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         ): "all non-terminal Amplify job-state guards",
         r"describe-target-health": "backend ALB target-health verification",
         r"Run canonical production smoke tests": "post-cutover smoke tests",
-        r"Allow legacy Route53 alias caches to expire": "a DNS cache drain before hardening",
-        r"Verify production through the CloudFront-only origin": (
-            "post-origin-restriction smoke tests"
-        ),
-        r"Plan trusted CloudFront proxy chain": "a separate trusted-proxy rollout",
-        r"Wait for trusted-proxy backend rollout": "a trusted-proxy ECS stability gate",
-        r"Verify trusted-proxy backend target health": (
-            "trusted-proxy backend health verification"
-        ),
-        r"Verify production through the trusted CloudFront proxy chain": (
-            "post-trusted-proxy smoke tests"
-        ),
-        r"Restore pre-release origin safety state after failure": (
-            "automatic infrastructure state restoration"
-        ),
-        r"production-restore-origin\.tfplan": "an exact infrastructure restoration plan",
-        r"terraform -chdir=infra/prod show -json production-restore-origin\.tfplan": (
-            "machine-readable origin-safety restoration plan review"
-        ),
         r"Restore pre-release canonical Route53 alias after failed first cutover": (
             "automatic first-cutover DNS compensation"
-        ),
-        r"restore_origin_safety\.outcome == 'success'": (
-            "origin safety restoration before DNS compensation"
         ),
         r"route53 change-resource-record-sets": "an atomic Route53 alias restoration",
         r'Action:\s*"UPSERT"': "a non-destructive canonical alias UPSERT",
@@ -273,14 +331,12 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         errors.append(
             "production CD omits a deployed static asset from candidate or production branch smokes"
         )
-    if source.count("terraform -chdir=infra/prod untaint") < 2:
+    if source.count("terraform -chdir=infra/prod untaint") < 1:
         errors.append(
-            "production CD omits verified tainted-domain recovery during detection or failure restoration"
+            "production CD omits verified tainted-domain recovery during detection"
         )
-    if source.count('.change.actions | index("delete")) == null') < 2:
-        errors.append(
-            "production CD omits a no-destroy gate for domain cutover or failure restoration"
-        )
+    if source.count('.change.actions | index("delete")) == null') < 1:
+        errors.append("production CD omits a no-destroy gate for domain cutover")
     if source.count("amplify-apex-target.sh") < 3:
         errors.append(
             "production CD must use the shared Amplify apex-target parser during "
@@ -296,6 +352,51 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         r"amplify delete-domain-association": (
             "a destructive automated Amplify domain disassociation"
         ),
+        r"amplify\s+start-job|--job-type\s+RETRY": (
+            "unsupported Amplify StartJob retry rollback"
+        ),
+        r"origin_restricted_to_cloudfront": (
+            "retired CloudFront origin-restriction state detection"
+        ),
+        r"trust_cloudfront_proxy_chain": (
+            "retired CloudFront proxy-chain state detection"
+        ),
+        r"TF_VAR_restrict_origin_to_cloudfront": (
+            "retired CloudFront origin-hardening input"
+        ),
+        r"TF_VAR_trust_cloudfront_proxy_chain": (
+            "retired CloudFront proxy-chain input"
+        ),
+        r"An ALB canonical alias requires public ingress and one-hop proxy trust": (
+            "retired CloudFront fallback state coupling"
+        ),
+        r"Allow legacy Route53 alias caches to expire": (
+            "retired CloudFront hardening delay"
+        ),
+        r"Plan CloudFront-only origin hardening": (
+            "retired CloudFront-only origin hardening"
+        ),
+        r"Verify production through the CloudFront-only origin": (
+            "retired CloudFront-only origin verification"
+        ),
+        r"Plan trusted CloudFront proxy chain": (
+            "retired CloudFront proxy-chain rollout"
+        ),
+        r"Wait for trusted-proxy backend rollout": (
+            "retired trusted-proxy backend rollout"
+        ),
+        r"Verify trusted-proxy backend target health": (
+            "retired trusted-proxy backend verification"
+        ),
+        r"Verify production through the trusted CloudFront proxy chain": (
+            "retired trusted CloudFront proxy verification"
+        ),
+        r"Restore pre-release origin safety state after failure": (
+            "retired CloudFront origin-safety restoration"
+        ),
+        r"production-restore-origin\.tfplan|steps\.restore_origin_safety": (
+            "retired CloudFront origin-safety restore state"
+        ),
         r"terraform [^\n]* state rm": "destructive automated Terraform state removal",
         r"terraform [^\n]* -replace": "an automated forced resource replacement",
         r"terraform [^\n]* taint": "automated resource tainting",
@@ -309,6 +410,9 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         "Guard live Amplify configuration before candidate smoke",
         "Fail closed when an Amplify release job is active",
         "Capture current Amplify production rollback point",
+        "Resolve retained Amplify rollback artifact",
+        "Download retained Amplify rollback artifact",
+        "Verify retained Amplify rollback artifact",
         "Deploy candidate Amplify branch",
         "Smoke candidate Amplify frontend and same-origin proxy",
         "Deploy production Amplify branch",
@@ -319,20 +423,14 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         "Wait for Amplify custom domain availability",
         "Verify Amplify canonical DNS cutover",
         "Run canonical production smoke tests",
-        "Plan CloudFront-only origin hardening",
-        "Verify production through the CloudFront-only origin",
-        "Plan trusted CloudFront proxy chain",
-        "Wait for trusted-proxy backend rollout",
-        "Verify production through the trusted CloudFront proxy chain",
-        "Restore pre-release origin safety state after failure",
         "Restore pre-release canonical Route53 alias after failed first cutover",
         "Roll back production Amplify branch after failed release",
     )
     positions = [source.find(marker) for marker in ordered_markers]
     if any(position < 0 for position in positions) or positions != sorted(positions):
         errors.append(
-            "production CD must verify candidate, production, custom-domain, and "
-            "origin-hardening stages in order"
+            "production CD must resolve and verify rollback artifacts before "
+            "candidate, production, and custom-domain stages"
         )
     return errors
 
@@ -349,6 +447,25 @@ def amplify_deploy_script_errors(root: Path = ROOT) -> list[str]:
     required_patterns = {
         r"amplify create-deployment": "create-deployment call",
         r"--upload-file": "presigned ZIP upload",
+        r"--connect-timeout": "a bounded presigned-upload connection",
+        r"--max-time": "a bounded presigned upload",
+        r"--retry-max-time": "a bounded presigned-upload retry window",
+        r"AMPLIFY_UPLOAD_CONNECT_TIMEOUT_SECONDS": (
+            "a configurable presigned-upload connection timeout"
+        ),
+        r"AMPLIFY_UPLOAD_MAX_TIME_SECONDS": (
+            "a configurable presigned-upload maximum time"
+        ),
+        r"AMPLIFY_UPLOAD_RETRY_MAX_TIME_SECONDS": (
+            "a configurable presigned-upload retry maximum time"
+        ),
+        r"helper_started_seconds=\$SECONDS": "an overall timeout clock from helper entry",
+        r"deadline=\$\(\(helper_started_seconds\s*\+": (
+            "an overall deadline derived from helper entry"
+        ),
+        r"upload maximum and retry time must fit within the overall timeout": (
+            "upload-timeout validation against the overall deadline"
+        ),
         r"amplify start-deployment": "start-deployment call",
         r"amplify get-job": "deployment status polling",
         r"amplify stop-job": "failed or interrupted deployment cancellation",
@@ -405,6 +522,58 @@ def production_alb_security_group_errors(terraform_source: str) -> list[str]:
         errors.append(
             "production Terraform omits ALB security-group destroy protection"
         )
+    ingress_blocks = re.findall(r"ingress\s*\{(?P<body>[^{}]*)\}", block)
+    public_https_patterns = (
+        r"from_port\s*=\s*443",
+        r"to_port\s*=\s*443",
+        r'protocol\s*=\s*"tcp"',
+        r'cidr_blocks\s*=\s*\[\s*"0\.0\.0\.0/0"\s*\]',
+    )
+    if not any(
+        all(re.search(pattern, ingress) for pattern in public_https_patterns)
+        for ingress in ingress_blocks
+    ):
+        errors.append("production Terraform omits public IPv4 HTTPS ingress on the ALB")
+    return errors
+
+
+def production_proxy_configuration_errors(terraform_source: str) -> list[str]:
+    """Reject the retired CloudFront-origin proxy model."""
+
+    errors: list[str] = []
+    trusted_proxy_counts = re.findall(
+        (
+            r'\{\s*name\s*=\s*"AUTH_TRUSTED_PROXY_COUNT"\s*,'
+            r'\s*value\s*=\s*"([^"]+)"\s*\}'
+        ),
+        terraform_source,
+    )
+    if trusted_proxy_counts != ["1"]:
+        errors.append(
+            "production Terraform must set AUTH_TRUSTED_PROXY_COUNT exactly once to 1"
+        )
+
+    forbidden_patterns = {
+        r"com\.amazonaws\.global\.cloudfront\.origin-facing": (
+            "the retired AWS-managed CloudFront origin prefix list"
+        ),
+        r"(?:var\.)?restrict_origin_to_cloudfront": (
+            "the retired CloudFront-only origin gate"
+        ),
+        r"(?:var\.)?trust_cloudfront_proxy_chain": (
+            "the retired trusted CloudFront proxy-chain gate"
+        ),
+        r"AUTH_TRUSTED_PROXY_CIDRS": ("the retired CloudFront CIDR runtime allowlist"),
+        r"AUTH_TRUSTED_PROXY_CIDR_HOPS": (
+            "the retired CIDR-verified proxy-hop configuration"
+        ),
+        r"cloudfront_origin_facing\.entries": (
+            "the retired CloudFront prefix-list CIDR expansion"
+        ),
+    }
+    for pattern, description in forbidden_patterns.items():
+        if re.search(pattern, terraform_source):
+            errors.append(f"production Terraform retains {description}")
     return errors
 
 
@@ -529,15 +698,10 @@ def deployment_contract_errors(root: Path = ROOT) -> list[str]:
             r"removed\s*\{[\s\S]*from\s*=\s*aws_route53_record\.app"
             r"[\s\S]*destroy\s*=\s*false"
         ): "non-destructive legacy apex-record state removal",
-        r"com\.amazonaws\.global\.cloudfront\.origin-facing": (
-            "the AWS-managed CloudFront origin prefix list"
-        ),
-        r"var\.restrict_origin_to_cloudfront": "a gated CloudFront-only origin",
-        r"var\.trust_cloudfront_proxy_chain": "a separately gated trusted proxy chain",
-        r"AUTH_TRUSTED_PROXY_COUNT": "trusted proxy-chain runtime configuration",
-        r"AUTH_TRUSTED_PROXY_CIDRS": "a CloudFront CIDR runtime allowlist",
-        r"AUTH_TRUSTED_PROXY_CIDR_HOPS": "CIDR-verified proxy-hop configuration",
-        r"cloudfront_origin_facing\.entries": "CloudFront prefix-list CIDR expansion",
+        (
+            r'\{\s*name\s*=\s*"AUTH_TRUSTED_PROXY_COUNT"\s*,'
+            r'\s*value\s*=\s*"1"\s*\}'
+        ): "one-hop public ALB proxy trust",
         r'xff_header_processing_mode\s*=\s*"append"': "explicit ALB XFF append mode",
         r"enable_xff_client_port\s*=\s*false": "port-free ALB XFF addresses",
         r"amplify-routes\.json": "a shared Amplify static route manifest",
@@ -553,6 +717,7 @@ def deployment_contract_errors(root: Path = ROOT) -> list[str]:
         if not re.search(pattern, production_terraform):
             errors.append(f"production Terraform omits {description}")
     errors.extend(production_alb_security_group_errors(production_terraform))
+    errors.extend(production_proxy_configuration_errors(production_terraform))
     errors.extend(production_amplify_custom_headers_errors(production_terraform))
 
     bootstrap_terraform = (root / BOOTSTRAP_TERRAFORM.relative_to(ROOT)).read_text(

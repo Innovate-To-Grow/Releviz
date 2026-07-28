@@ -293,7 +293,6 @@ locals {
           # service also authorizes the branch's jobs/* resource. Keep both
           # exact scopes so the preflight remains least-privilege and usable.
           "amplify:ListJobs",
-          "amplify:StartJob",
           "amplify:StopJob",
         ]
         Resource = local.production_amplify_job_arns
@@ -445,7 +444,6 @@ locals {
           "ec2:Describe*",
           "ec2:DetachInternetGateway",
           "ec2:DisassociateRouteTable",
-          "ec2:GetManagedPrefixListEntries",
           "ec2:ModifySubnetAttribute",
           "ec2:ModifyVpcAttribute",
           "ec2:ReleaseAddress",

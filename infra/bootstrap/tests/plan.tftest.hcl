@@ -74,20 +74,6 @@ run "bootstrap_plan" {
 
   assert {
     condition = (
-      contains(one([
-        for statement in jsondecode(local.production_deploy_policy).Statement :
-        statement.Action if statement.Sid == "ProductionNetwork"
-      ]), "ec2:GetManagedPrefixListEntries") &&
-      one([
-        for statement in jsondecode(local.production_deploy_policy).Statement :
-        statement.Resource if statement.Sid == "ProductionNetwork"
-      ]) == "*"
-    )
-    error_message = "The production role must read the entries in AWS-managed CloudFront prefix lists."
-  }
-
-  assert {
-    condition = (
       strcontains(local.production_deploy_policy, "secretsmanager:CreateSecret") &&
       strcontains(local.production_deploy_policy, "secretsmanager:TagResource") &&
       strcontains(local.production_deploy_policy, "arn:aws:secretsmanager:us-west-2:123456789012:secret:rds!db-*")
@@ -102,7 +88,6 @@ run "bootstrap_plan" {
       strcontains(local.production_deploy_policy, "elasticloadbalancing:RemoveListenerCertificates") &&
       strcontains(local.production_deploy_policy, "amplify:CreateDeployment") &&
       strcontains(local.production_deploy_policy, "amplify:StartDeployment") &&
-      strcontains(local.production_deploy_policy, "amplify:StartJob") &&
       strcontains(local.production_deploy_policy, "amplify:CreateDomainAssociation") &&
       strcontains(local.production_deploy_policy, "arn:aws:amplify:us-west-2:123456789012:apps/dsecure123/branches/candidate") &&
       strcontains(local.production_deploy_policy, "arn:aws:amplify:us-west-2:123456789012:apps/dsecure123/branches/main") &&
@@ -112,6 +97,7 @@ run "bootstrap_plan" {
       !strcontains(local.production_deploy_policy, "\"amplify:CreateBranch\"") &&
       !strcontains(local.production_deploy_policy, "\"amplify:TagResource\"") &&
       !strcontains(local.production_deploy_policy, "\"amplify:UntagResource\"") &&
+      !strcontains(local.production_deploy_policy, "\"amplify:StartJob\"") &&
       !strcontains(local.production_deploy_policy, "amplify:DeleteApp") &&
       !strcontains(local.production_deploy_policy, "amplify:DeleteBranch") &&
       !strcontains(local.production_deploy_policy, "amplify:DeleteDomainAssociation") &&
