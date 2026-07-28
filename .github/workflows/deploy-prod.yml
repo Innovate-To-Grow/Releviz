@@ -1852,26 +1852,38 @@ jobs:
                   .
                 end;
               def normalized_task:
-                del(.arn, .arn_without_revision, .id, .revision);
+                del(.arn, .arn_without_revision, .id, .revision)
+                | .ipc_mode = (.ipc_mode // "")
+                | .pid_mode = (.pid_mode // "")
+                | .task_role_arn = (.task_role_arn // "");
+              def named_entries_are_unique:
+                (map(.name) | length) == (map(.name) | unique | length);
               def normalized_backend_container:
                 fromjson
-                | .[0].environment |= map(
+                | .[0].environment |= (
+                    map(
                       if .name == "DJANGO_ALLOWED_HOSTS"
                         or .name == "ENABLE_LEGACY_API_PREFIX"
                       then .value = "__REVIEWED_FINAL_TRANSITION__"
                       else .
                       end
                     )
+                    | sort_by(.name)
+                  )
+                | .[0].secrets |= sort_by(.name)
                 ;
               def normalized_frontend_container:
                 fromjson
                 | .[0].image = "__REVIEWED_FINAL_IMAGE__"
-                | .[0].environment |= map(
+                | .[0].environment |= (
+                    map(
                         if .name == "BACKEND_URL"
                         then .value = "__REVIEWED_FINAL_TRANSITION__"
                         else .
                         end
                       )
+                    | sort_by(.name)
+                  )
                 ;
               def backend_final_values_are_safe:
                 (.change.before.container_definitions | fromjson) as $before_containers
@@ -1890,6 +1902,10 @@ jobs:
                   ) as $after_environment
                 | ($before_containers | length) == 1
                 and ($after_containers | length) == 1
+                and ($before_container.environment | named_entries_are_unique)
+                and ($after_container.environment | named_entries_are_unique)
+                and ($before_container.secrets | named_entries_are_unique)
+                and ($after_container.secrets | named_entries_are_unique)
                 and ($after_environment.ENABLE_LEGACY_API_PREFIX == "0")
                 and ($after_environment.BACKEND_URL == $api_url)
                 and (
@@ -1917,6 +1933,8 @@ jobs:
                   ) as $environment
                 | ($before_containers | length) == 1
                 and ($after_containers | length) == 1
+                and ($before_containers[0].environment | named_entries_are_unique)
+                and ($after_containers[0].environment | named_entries_are_unique)
                 and ($container.image == $frontend_image)
                 and ($environment.BACKEND_URL == $api_url);
               [
@@ -2058,6 +2076,67 @@ jobs:
               ' "$final_plan_json"
           )"
           if [ "$unexpected_changes" != "[]" ]; then
+            task_definition_diagnostics="$(
+              jq -c '
+                def prune_unknown:
+                  if type == "object" then
+                    with_entries(.value |= prune_unknown)
+                    | with_entries(
+                        select(
+                          .value != null
+                          and .value != false
+                          and .value != {}
+                          and .value != []
+                        )
+                      )
+                  elif type == "array" then
+                    map(prune_unknown)
+                    | map(
+                        select(
+                          . != null
+                          and . != false
+                          and . != {}
+                          and . != []
+                        )
+                      )
+                  else
+                    .
+                  end;
+                [
+                  .resource_changes[]?
+                  | select(
+                      .address == "aws_ecs_task_definition.backend"
+                      or .address == "aws_ecs_task_definition.frontend"
+                    )
+                  | (.change.before.container_definitions | fromjson) as $before
+                  | (.change.after.container_definitions | fromjson) as $after
+                  | {
+                      address,
+                      actions: .change.actions,
+                      before_environment_order: [$before[0].environment[]?.name],
+                      after_environment_order: [$after[0].environment[]?.name],
+                      before_secret_order: [$before[0].secrets[]?.name],
+                      after_secret_order: [$after[0].secrets[]?.name],
+                      before_optional_task_strings: {
+                        ipc_mode: .change.before.ipc_mode,
+                        pid_mode: .change.before.pid_mode,
+                        task_role_arn: .change.before.task_role_arn
+                      },
+                      after_optional_task_strings: {
+                        ipc_mode: .change.after.ipc_mode,
+                        pid_mode: .change.after.pid_mode,
+                        task_role_arn: .change.after.task_role_arn
+                      },
+                      remaining_after_unknown: (
+                        .change.after_unknown
+                        | del(.arn, .arn_without_revision, .id, .revision)
+                        | prune_unknown
+                      )
+                    }
+                ]
+              ' "$final_plan_json"
+            )"
+            echo "::error::Task-definition comparison diagnostics: ${task_definition_diagnostics}"
             echo "::error::Final topology plan contains changes outside the reviewed allowlist: ${unexpected_changes}"
             exit 1
           fi
