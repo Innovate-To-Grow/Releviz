@@ -1307,5 +1307,18 @@ test.describe("Releviz admin", () => {
       page.locator("#nav-sidebar-apps").getByRole("heading", { name: "Members & Authentication" })
     ).toBeVisible();
     await expect(page.locator('[data-admin-theme-choice="dark"]').first()).toBeAttached();
+
+    const sidebar = page.locator("#nav-sidebar-apps");
+    const activeSidebarLinks = sidebar.locator("a.active");
+
+    await sidebar.getByRole("link", { name: "AWS SES Providers" }).click();
+    await expect(page).toHaveURL(/\/admin\/messaging\/emailproviderconfig\/$/);
+    await expect(activeSidebarLinks).toHaveCount(1);
+    await expect(activeSidebarLinks).toHaveText("AWS SES Providers");
+
+    await sidebar.getByRole("link", { name: "Email Logs" }).click();
+    await expect(page).toHaveURL(/\/admin\/messaging\/emailmessagelog\/$/);
+    await expect(activeSidebarLinks).toHaveCount(1);
+    await expect(activeSidebarLinks).toHaveText("Email Logs");
   });
 });

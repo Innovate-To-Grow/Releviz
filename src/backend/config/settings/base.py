@@ -16,11 +16,11 @@ DEBUG = False
 ALLOWED_HOSTS: list[str] = []
 
 INSTALLED_APPS = [
-    "unfold",
+    "unfold.apps.BasicAppConfig",
     "unfold.contrib.filters",
     "unfold.contrib.forms",
     "apps.authn.apps.AuthnConfig",
-    "django.contrib.admin",
+    "apps.core.apps.RelevizAdminConfig",
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
@@ -358,6 +358,10 @@ UNFOLD = {
                     {
                         "title": "Emails & Phones",
                         "link": "/admin/authn/contactemail/",
+                        "active_paths": [
+                            "/admin/authn/contactemail/",
+                            "/admin/authn/contactphone/",
+                        ],
                         "permission": _can("authn"),
                     },
                     {
