@@ -1,6 +1,9 @@
+from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.contrib.staticfiles import finders
-from django.test import TestCase
+from django.test import RequestFactory, TestCase
+
+from apps.core.admin_site import RelevizAdminSite, select_current_sidebar_item
 
 
 class AdminThemeRenderingTests(TestCase):
@@ -42,6 +45,89 @@ class AdminThemeRenderingTests(TestCase):
         self.assertContains(response, "Site Settings")
         self.assertNotContains(response, "Innovate")
         self.assertNotContains(response, "I2G Home")
+
+    def test_admin_sidebar_selects_only_the_current_model(self):
+        admin_user = get_user_model().objects.create_superuser(
+            email="admin@example.com",
+            password="password123",
+        )
+        routes = [
+            ("/admin/scheduling/event/", "Events"),
+            ("/admin/scheduling/event/1/change/", "Events"),
+            ("/admin/scheduling/participant/", "Participants"),
+            ("/admin/scheduling/weight/", "Weights"),
+            ("/admin/scheduling/eventinvitation/", "Invitations"),
+            ("/admin/messaging/emailproviderconfig/", "AWS SES Providers"),
+            ("/admin/messaging/emailproviderconfig/add/", "AWS SES Providers"),
+            ("/admin/messaging/emailmessagelog/", "Email Logs"),
+            ("/admin/authn/member/", "Members"),
+            ("/admin/authn/contactemail/", "Emails & Phones"),
+            ("/admin/authn/contactphone/", "Emails & Phones"),
+            ("/admin/authn/emailauthchallenge/", "Login Challenges"),
+            ("/admin/auth/group/", "Groups"),
+            ("/admin/authn/rsakeypair/", "RSA Keypairs"),
+        ]
+
+        self.assertIsInstance(admin.site, RelevizAdminSite)
+
+        for path, expected_title in routes:
+            with self.subTest(path=path):
+                request = RequestFactory().get(path)
+                request.user = admin_user
+                navigation = admin.site.get_sidebar_list(request)
+                active_titles = [
+                    str(item["title"])
+                    for group in navigation
+                    for item in group["items"]
+                    if item.get("active")
+                ]
+
+                self.assertEqual(active_titles, [expected_title])
+
+    def test_admin_sidebar_selection_normalizes_custom_and_nested_items(self):
+        navigation = [
+            {
+                "items": [
+                    {"title": "No link", "link": None, "active": True},
+                    {"title": "Fragment", "link": "#details", "active": True},
+                    {
+                        "title": "Hidden",
+                        "link": "/admin/example/record/",
+                        "has_permission": False,
+                        "active": True,
+                    },
+                    {"title": "Record", "link": "/admin/example/record/", "active": True},
+                    {
+                        "title": "Example",
+                        "active_paths": "/admin/example/",
+                        "active": True,
+                    },
+                    {
+                        "title": "Parent",
+                        "link": "/admin/other/",
+                        "active": True,
+                        "items": [
+                            {
+                                "title": "Nested",
+                                "link": "/admin/other/nested/",
+                                "active": True,
+                            }
+                        ],
+                    },
+                ]
+            }
+        ]
+
+        select_current_sidebar_item(navigation, "/admin/example/record/")
+
+        active_titles = [
+            str(item["title"])
+            for group in navigation
+            for item in group["items"]
+            if item.get("active")
+        ]
+        self.assertEqual(active_titles, ["Record"])
+        self.assertFalse(navigation[0]["items"][-1]["items"][0]["active"])
 
     def test_admin_theme_static_assets_are_available(self):
         for path in [
