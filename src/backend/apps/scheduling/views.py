@@ -678,7 +678,12 @@ class WeightsView(APIView):
             )
 
         updated = event.weights.select_related("participant", "participant__member").all()
-        return Response({"weights": [api_weight(weight) for weight in updated]})
+        return Response(
+            {
+                "weights": [api_weight(weight) for weight in updated],
+                "results": build_event_results(event),
+            }
+        )
 
 
 class EventResultsView(APIView):

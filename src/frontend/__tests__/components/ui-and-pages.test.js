@@ -185,7 +185,7 @@ describe("small UI modules", () => {
     expect(rootMetadata.icons.icon[1].url).toBe("/brand/releviz-mark.png");
   });
 
-  test("ScheduleGrid paints mouse and touch cells and renders values/tooltips", () => {
+  test("ScheduleGrid paints stable pointer strokes and renders values/tooltips", () => {
     const painted = jest.fn();
     const schedule = Array(4).fill(0);
     schedule[1] = 1;
@@ -246,22 +246,43 @@ describe("small UI modules", () => {
       />
     );
     const cell = document.querySelector("[data-cell-idx='1']");
-    fireEvent.mouseDown(cell);
-    fireEvent.mouseMove(cell, { buttons: 1 });
+    const otherCell = document.querySelector("[data-cell-idx='2']");
     document.elementFromPoint.mockReturnValue(cell);
-    fireEvent.touchStart(cell);
-    fireEvent.touchMove(cell, { touches: [{ clientX: 1, clientY: 1 }] });
-    const callsAfterTouch = painted.mock.calls.length;
-    fireEvent.mouseDown(cell);
-    expect(painted).toHaveBeenCalledTimes(callsAfterTouch);
-    expect(painted).toHaveBeenCalled();
+    fireEvent.pointerDown(cell, { button: 0, pointerId: 7, pointerType: "pen" });
+    expect(painted).toHaveBeenCalledWith(1, expect.objectContaining({ phase: "start" }));
+    fireEvent.pointerMove(cell, {
+      clientX: 1,
+      clientY: 1,
+      pointerId: 7,
+      pointerType: "pen",
+    });
+    expect(painted).toHaveBeenCalledTimes(1);
+    document.elementFromPoint.mockReturnValue(otherCell);
+    fireEvent.pointerMove(cell, {
+      clientX: 2,
+      clientY: 2,
+      pointerId: 7,
+      pointerType: "pen",
+    });
+    expect(painted).toHaveBeenLastCalledWith(2, expect.objectContaining({ phase: "move" }));
+    fireEvent.pointerCancel(cell, { pointerId: 7, pointerType: "pen" });
+    fireEvent.pointerMove(cell, {
+      clientX: 1,
+      clientY: 1,
+      pointerId: 7,
+      pointerType: "pen",
+    });
+    expect(painted).toHaveBeenCalledTimes(2);
     expect(screen.getByText("Availability")).toBeInTheDocument();
     expect(document.querySelector("[data-cell-idx='1']")).toHaveAttribute(
       "title",
       expect.stringContaining("Ada: 1.00")
     );
     fireEvent.keyDown(cell, { key: "Enter" });
-    expect(painted).toHaveBeenCalledWith(1, expect.objectContaining({ type: "keydown" }));
+    expect(painted).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ phase: "keyboard", type: "keydown" })
+    );
   });
 
   test("ScheduleGrid supports read-only specific dates", () => {
@@ -306,12 +327,16 @@ describe("small UI modules", () => {
         onCellPaint={painted}
       />
     );
-    fireEvent.mouseDown(document.querySelector("[data-cell-idx='0']"));
+    fireEvent.pointerDown(document.querySelector("[data-cell-idx='0']"), {
+      button: 0,
+      pointerId: 1,
+      pointerType: "mouse",
+    });
     expect(painted).not.toHaveBeenCalled();
     expect(screen.getByText("2026-07-08")).toBeInTheDocument();
   });
 
-  test("ScheduleGrid defaults to all days and handles empty touch targets", () => {
+  test("ScheduleGrid defaults to all days and handles pointer movement off cells", () => {
     const painted = jest.fn();
     document.elementFromPoint = jest.fn().mockReturnValue(null);
     render(
@@ -337,9 +362,19 @@ describe("small UI modules", () => {
         onCellPaint={painted}
       />
     );
-    fireEvent.touchMove(document.querySelector("[data-cell-idx='0']"), {
-      touches: [{ clientX: 1, clientY: 1 }],
+    const emptyTargetCell = document.querySelector("[data-cell-idx='0']");
+    fireEvent.pointerDown(emptyTargetCell, {
+      button: 0,
+      pointerId: 2,
+      pointerType: "touch",
     });
+    fireEvent.pointerMove(emptyTargetCell, {
+      clientX: 1,
+      clientY: 1,
+      pointerId: 2,
+      pointerType: "touch",
+    });
+    expect(painted).toHaveBeenCalledTimes(1);
     expect(screen.getByText("Sun")).toBeInTheDocument();
   });
 
@@ -758,13 +793,19 @@ describe("app pages", () => {
     const firstLogin = render(<LoginPage />);
 
     await userEvent.click(screen.getByRole("button", { name: "Email code" }));
+    expect(screen.getByText("Email code is for existing verified accounts.")).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "Create an account with your profile details" })
+    ).toHaveAttribute("href", "/signup?next=%2Fevent%3Fcode%3DABC123");
     await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
     await userEvent.click(screen.getByRole("button", { name: "Send login code" }));
     await waitFor(() =>
       expect(requestEmailLoginCode).toHaveBeenCalledWith({ email: "ada@example.com" })
     );
     expect(
-      await screen.findByText("Verification code sent. Check your email.")
+      await screen.findByText(
+        "If an existing verified account uses this email, a login code will arrive shortly."
+      )
     ).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText("Verification code"), "123456");
     await userEvent.click(screen.getByRole("button", { name: "Log in" }));
@@ -794,7 +835,9 @@ describe("app pages", () => {
     await userEvent.click(screen.getAllByRole("button", { name: "Email code" }).at(-1));
     await userEvent.type(screen.getAllByLabelText("Email").at(-1), "ada@example.com");
     await userEvent.click(screen.getAllByRole("button", { name: "Send login code" }).at(-1));
-    await screen.findByText("Verification code sent. Check your email.");
+    await screen.findByText(
+      "If an existing verified account uses this email, a login code will arrive shortly."
+    );
     await userEvent.type(screen.getAllByLabelText("Verification code").at(-1), "000000");
     await userEvent.click(screen.getAllByRole("button", { name: "Log in" }).at(-1));
     expect(await screen.findByText("Unable to verify code.")).toBeInTheDocument();

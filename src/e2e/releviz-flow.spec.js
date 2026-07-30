@@ -113,7 +113,11 @@ async function loginWithEmailCode(page, email) {
   await page.getByRole("button", { name: "Email code" }).click();
   await page.getByLabel("Email").fill(email);
   await page.getByRole("button", { name: "Send login code" }).click();
-  await expect(page.getByText("Verification code sent. Check your email.")).toBeVisible();
+  await expect(
+    page.getByText(
+      "If an existing verified account uses this email, a login code will arrive shortly."
+    )
+  ).toBeVisible();
   const code = await latestVerificationCode(email, startedAt);
   await page.getByLabel("Verification code").fill(code);
   await page.getByRole("button", { name: "Log in" }).click();
@@ -816,6 +820,36 @@ test.describe("Releviz account and scheduling flow", () => {
     const registeredInvitationRow = page.getByText(participantEmail).locator("..");
     await expect(registeredInvitationRow.getByText("Submitted", { exact: true })).toBeVisible();
 
+    const weightAnalysis = page.locator("section.weight-analysis");
+    const weightedAvailableCell = weightAnalysis.locator(
+      `[data-cell-idx="${availableSlots[0].index}"]`
+    );
+    const participantInclude = weightAnalysis.getByRole("checkbox", {
+      name: "Include Pat Participant",
+    });
+    await expect(participantInclude).toBeVisible();
+    await expect(weightedAvailableCell).toHaveText("1");
+    let releaseWeightSave;
+    const delayedWeightSave = new Promise((resolve) => {
+      releaseWeightSave = resolve;
+    });
+    const weightRoute = /\/events\/weights\?code=.*/;
+    await page.route(weightRoute, async (route) => {
+      if (route.request().method() === "PUT") await delayedWeightSave;
+      await route.continue();
+    });
+    const weightRequest = page.waitForRequest(
+      (request) =>
+        request.method() === "PUT" && request.url().includes(`/events/weights?code=${eventCode}`)
+    );
+    await participantInclude.click();
+    await expect(weightedAvailableCell).toHaveText("0");
+    await expect(weightAnalysis.locator(".weight-save-state")).toContainText(/Unsaved|Saving/);
+    await weightRequest;
+    releaseWeightSave();
+    await expect(weightAnalysis.getByText("All weight changes saved.")).toBeVisible();
+    await page.unroute(weightRoute);
+
     const deniedWeights = await apiJson(
       request,
       "PUT",
@@ -849,6 +883,13 @@ test.describe("Releviz account and scheduling flow", () => {
         included: 1,
       })
     );
+    expect(savedWeight.payload.results.channels.inperson.weighted).toBeTruthy();
+    await page.reload();
+    await expect(page.getByText("Organizer Dashboard")).toBeVisible();
+    const persistedWeightCard = page
+      .locator("[data-participant-id]")
+      .filter({ hasText: "Pat Participant" });
+    await expect(persistedWeightCard.locator("output")).toHaveText("0.50");
 
     const groupUpdate = await apiJson(
       request,

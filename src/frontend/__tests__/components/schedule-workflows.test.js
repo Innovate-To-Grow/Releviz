@@ -276,6 +276,42 @@ describe("participant workflow", () => {
     expect(screen.getByText("Draft saved. Submit when you are ready.")).toBeInTheDocument();
   });
 
+  test("copies mixed-mode availability and autosaves the target channel", async () => {
+    joinEvent.mockResolvedValue({
+      participant: participant("mine", member.id, member.displayName, {
+        availabilityInperson: [1, 0.5],
+        availabilityVirtual: [0, 0],
+      }),
+    });
+    updateParticipant.mockResolvedValue({
+      participant: participant("mine", member.id, member.displayName, {
+        availabilityInperson: [1, 0.5],
+        availabilityVirtual: [1, 0.5],
+        version: 2,
+      }),
+    });
+
+    renderParticipant();
+    await screen.findByText("Alex");
+    await userEvent.click(screen.getByRole("button", { name: `Join as ${member.displayName}` }));
+    await screen.findByText(`Welcome, ${member.displayName}`);
+    await userEvent.click(screen.getByRole("button", { name: "Copy In-Person to Virtual" }));
+    expect(screen.getByTestId("grid-Virtual")).toHaveTextContent("1,0.5");
+
+    await waitFor(() =>
+      expect(updateParticipant).toHaveBeenCalledWith(
+        baseEvent.code,
+        "mine",
+        expect.objectContaining({
+          availabilityInperson: [1, 0.5],
+          availabilityVirtual: [1, 0.5],
+          submitted: 0,
+        }),
+        "token"
+      )
+    );
+  });
+
   test("shows authorized shared results and locks changes after finalization", async () => {
     fetchParticipants.mockResolvedValue({
       participants: [
@@ -387,7 +423,7 @@ describe("organizer workflow", () => {
       ],
     });
     fetchEventResults.mockResolvedValue({ results: sharedResults });
-    updateWeights.mockResolvedValue({});
+    updateWeights.mockResolvedValue({ results: sharedResults });
     updateParticipant.mockImplementation((code, id, payload) =>
       Promise.resolve({
         participant: {
@@ -407,6 +443,74 @@ describe("organizer workflow", () => {
       configurable: true,
       value: { randomUUID: jest.fn().mockReturnValue("request-key") },
     });
+  });
+
+  test("updates the weighted preview before the background save completes", async () => {
+    let resolveSave;
+    updateWeights.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveSave = resolve;
+        })
+    );
+
+    renderOrganizer();
+    expect(await screen.findByRole("heading", { name: "Weight Analysis" })).toBeInTheDocument();
+    const analysis = screen.getByRole("region", { name: "Weight Analysis" });
+    const preview = screen.getByTestId("grid-In-Person Availability");
+    await waitFor(() => expect(preview).toHaveTextContent("1,0.8333"));
+
+    fireEvent.change(within(analysis).getByRole("searchbox", { name: "Search weight controls" }), {
+      target: { value: "Alex" },
+    });
+    expect(within(analysis).getByText("Alex")).toBeInTheDocument();
+    await userEvent.click(within(analysis).getByRole("tab", { name: "Virtual" }));
+    expect(screen.getByTestId("grid-Virtual Availability")).toBeInTheDocument();
+    await userEvent.click(within(analysis).getByRole("tab", { name: "In person" }));
+
+    const slider = document.querySelector('md-slider[aria-label="Alex weight"]');
+    setCustomElementValue(slider, 1);
+    expect(preview).toHaveTextContent("1,0.75");
+    expect(screen.getByText("Unsaved weight changes.")).toBeInTheDocument();
+    expect(updateWeights).not.toHaveBeenCalled();
+
+    await waitFor(() => expect(updateWeights).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      resolveSave({
+        results: {
+          ...sharedResults,
+          recommendations: [
+            {
+              ...sharedResults.recommendations[0],
+              label: "Updated ranked time",
+            },
+          ],
+        },
+      });
+      await updateWeights.mock.results[0].value;
+    });
+
+    expect(await screen.findByText(/Updated ranked time/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("All weight changes saved.")).toBeInTheDocument());
+  });
+
+  test("retains failed weight edits and retries them", async () => {
+    updateWeights.mockRejectedValueOnce(new Error("Weight service unavailable"));
+
+    renderOrganizer();
+    await screen.findByRole("heading", { name: "Weight Analysis" });
+    await screen.findAllByText("Alex");
+    const includeAlex = screen.getByLabelText("Include Alex");
+    includeAlex.checked = false;
+    fireEvent.input(includeAlex);
+
+    expect(await screen.findByText("Weight service unavailable")).toBeInTheDocument();
+    expect(screen.getByTestId("grid-In-Person Availability")).toHaveTextContent("1,1");
+
+    updateWeights.mockResolvedValueOnce({ results: sharedResults });
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("All weight changes saved.")).toBeInTheDocument();
+    expect(updateWeights).toHaveBeenCalledTimes(2);
   });
 
   test("sends invitations/reminders and confirms a ranked final time", async () => {
@@ -519,16 +623,18 @@ describe("organizer workflow", () => {
         "token"
       )
     );
+    await waitFor(() => expect(fetchWeights).toHaveBeenCalledTimes(3));
+    await act(async () => {
+      await Promise.resolve();
+    });
 
-    await userEvent.click(screen.getByRole("button", { name: "Uncheck All" }));
-    await userEvent.click(screen.getByRole("button", { name: "Check All" }));
-    expect(updateWeights).toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Exclude all" }));
+    await waitFor(() => expect(updateWeights).toHaveBeenCalledTimes(1));
+    await userEvent.click(screen.getByRole("button", { name: "Include all" }));
+    await waitFor(() => expect(updateWeights).toHaveBeenCalledTimes(2));
 
-    const alexManagementName = screen
-      .getAllByText("Alex")
-      .find((element) => element.tagName === "SPAN");
-    let alexCard = alexManagementName.parentElement.parentElement.parentElement;
-    await userEvent.click(within(alexCard).getByLabelText("Required participant"));
+    const alexWeightCard = document.querySelector('[data-participant-id="alex"]');
+    await userEvent.click(within(alexWeightCard).getByLabelText("Required participant"));
     await waitFor(() =>
       expect(updateWeights).toHaveBeenCalledWith(
         baseEvent.code,
@@ -548,10 +654,7 @@ describe("organizer workflow", () => {
       )
     );
 
-    const updatedAlexManagementName = screen
-      .getAllByText("Alex")
-      .find((element) => element.tagName === "SPAN");
-    alexCard = updatedAlexManagementName.parentElement.parentElement.parentElement;
+    let alexCard = document.querySelector('[data-management-participant-id="alex"]');
     await userEvent.click(within(alexCard).getByTitle("Move down"));
     await waitFor(() =>
       expect(updateParticipant).toHaveBeenCalledWith(
@@ -562,10 +665,7 @@ describe("organizer workflow", () => {
       )
     );
 
-    const reorderedAlexManagementName = screen
-      .getAllByText("Alex")
-      .find((element) => element.tagName === "SPAN");
-    alexCard = reorderedAlexManagementName.parentElement.parentElement.parentElement;
+    alexCard = document.querySelector('[data-management-participant-id="alex"]');
     await userEvent.click(within(alexCard).getByRole("button", { name: "Hide" }));
     await waitFor(() =>
       expect(deleteParticipant).toHaveBeenCalledWith(baseEvent.code, "alex", "token")

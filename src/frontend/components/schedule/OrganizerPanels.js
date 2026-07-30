@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { GoVerified, GoUnverified } from "react-icons/go";
 import {
   MdArchive,
@@ -16,6 +17,7 @@ import {
 } from "react-icons/md";
 import AppButton from "@/components/ui/AppButton";
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
+import ScheduleChannelEditor from "@/components/schedule/ScheduleChannelEditor";
 import ScheduleGrid from "@/components/schedule/ScheduleGrid";
 import { zonedLocalDateTimeToIso } from "@/lib/time";
 import "@material/web/checkbox/checkbox.js";
@@ -538,6 +540,232 @@ export function InvitationsPanel({
   );
 }
 
+export function WeightAnalysisPanel({
+  event,
+  mode,
+  participants,
+  weights,
+  weightedInperson,
+  weightedVirtual,
+  inpersonDetails,
+  virtualDetails,
+  countedResponseTotal,
+  unansweredParticipantTotal,
+  excludedParticipantTotal,
+  totalWeight,
+  requiredConflictTotal,
+  saveState,
+  saveError,
+  disabled,
+  onCheckAll,
+  onIncludedChange,
+  onWeightChange,
+  onRequiredChange,
+  onRetry,
+}) {
+  const [activeChannel, setActiveChannel] = useState(mode === "virtual" ? "virtual" : "inperson");
+  const [query, setQuery] = useState("");
+  const visibleParticipants = query
+    ? participants.filter((participant) =>
+        participant.name.toLowerCase().includes(query.toLowerCase())
+      )
+    : participants;
+  const channel = mode === "mixed" ? activeChannel : mode;
+  const schedule = channel === "virtual" ? weightedVirtual : weightedInperson;
+  const participantDetails = channel === "virtual" ? virtualDetails : inpersonDetails;
+  const saveMessages = {
+    saved: "All weight changes saved.",
+    saving: "Saving weight changes…",
+    unsaved: "Unsaved weight changes.",
+    failed: saveError || "Weight changes could not be saved.",
+  };
+
+  return (
+    <section className="weight-analysis md-card" aria-labelledby="weight-analysis-title">
+      <div className="weight-analysis__heading">
+        <div>
+          <h3 id="weight-analysis-title">Weight Analysis</h3>
+          <p>
+            Adjust participant influence and watch the weighted availability values and colors
+            update immediately.
+          </p>
+        </div>
+        <div
+          className={`weight-save-state weight-save-state--${saveState}`}
+          role={saveState === "failed" ? "alert" : "status"}
+          aria-live="polite"
+        >
+          <span>{saveMessages[saveState] || saveMessages.saved}</span>
+          {saveState === "failed" && (
+            <AppButton variant="outlined" onClick={onRetry}>
+              Retry
+            </AppButton>
+          )}
+        </div>
+      </div>
+
+      {disabled && (
+        <p className="weight-analysis__locked" role="note">
+          Weight controls are locked while this event is {event.status}.
+        </p>
+      )}
+
+      <div className="weight-analysis__layout">
+        <div className="weight-analysis__controls">
+          <div className="weight-analysis__toolbar">
+            <input
+              type="search"
+              value={query}
+              onChange={(changeEvent) => setQuery(changeEvent.target.value)}
+              placeholder="Search participants"
+              aria-label="Search weight controls"
+            />
+            <div>
+              <AppButton
+                variant="outlined"
+                onClick={() => onCheckAll(true)}
+                disabled={disabled || participants.length === 0}
+              >
+                Include all
+              </AppButton>
+              <AppButton
+                variant="outlined"
+                onClick={() => onCheckAll(false)}
+                disabled={disabled || participants.length === 0}
+              >
+                Exclude all
+              </AppButton>
+            </div>
+          </div>
+
+          <div className="weight-analysis__participant-list">
+            {visibleParticipants.map((participant) => {
+              const participantWeight = weights[participant.id] || {
+                weight: 1,
+                included: 1,
+                required: 0,
+              };
+              const included = Boolean(participantWeight.included);
+              return (
+                <article
+                  className="weight-control"
+                  data-participant-id={participant.id}
+                  key={participant.id}
+                >
+                  <div className="weight-control__name">
+                    <label>
+                      <md-checkbox
+                        aria-label={`Include ${participant.name}`}
+                        checked={included}
+                        disabled={disabled}
+                        onInput={(inputEvent) =>
+                          onIncludedChange(participant.id, inputEvent.target.checked)
+                        }
+                      ></md-checkbox>
+                      <strong>{participant.name}</strong>
+                    </label>
+                    <span
+                      title={participant.submitted ? "Submitted" : "Not submitted"}
+                      aria-label={participant.submitted ? "Submitted" : "Not submitted"}
+                    >
+                      {participant.submitted ? (
+                        <GoVerified aria-hidden="true" />
+                      ) : (
+                        <GoUnverified aria-hidden="true" />
+                      )}
+                    </span>
+                  </div>
+                  <div className="weight-control__slider">
+                    <span>Weight</span>
+                    <md-slider
+                      aria-label={`${participant.name} weight`}
+                      min="0"
+                      max="1"
+                      step="0.01"
+                      value={participantWeight.weight}
+                      disabled={disabled || !included}
+                      onInput={(inputEvent) =>
+                        onWeightChange(participant.id, Number(inputEvent.target.value))
+                      }
+                    ></md-slider>
+                    <output aria-live="off">{Number(participantWeight.weight).toFixed(2)}</output>
+                  </div>
+                  <label className="weight-control__required">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(participantWeight.required)}
+                      disabled={disabled || !included}
+                      onChange={(changeEvent) =>
+                        onRequiredChange(participant.id, changeEvent.target.checked)
+                      }
+                    />
+                    Required participant
+                  </label>
+                </article>
+              );
+            })}
+            {participants.length === 0 && <p>No participants have joined this event yet.</p>}
+            {participants.length > 0 && visibleParticipants.length === 0 && (
+              <p>No participants match this search.</p>
+            )}
+          </div>
+        </div>
+
+        <div className="weight-analysis__preview">
+          <div className="weight-analysis__preview-card">
+            <div className="weight-analysis__preview-heading">
+              <div>
+                <h3>Group Availability</h3>
+                <p>
+                  Counted {countedResponseTotal}; awaiting {unansweredParticipantTotal}; excluded{" "}
+                  {excludedParticipantTotal}; total weight {totalWeight.toFixed(2)}.
+                  {requiredConflictTotal > 0
+                    ? ` ${requiredConflictTotal} slot(s) conflict with a required participant.`
+                    : ""}
+                </p>
+              </div>
+              {mode === "mixed" && (
+                <div className="schedule-channel-tabs" role="tablist" aria-label="Result channel">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={activeChannel === "inperson"}
+                    onClick={() => setActiveChannel("inperson")}
+                  >
+                    In person
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={activeChannel === "virtual"}
+                    onClick={() => setActiveChannel("virtual")}
+                  >
+                    Virtual
+                  </button>
+                </div>
+              )}
+            </div>
+            {event.location && <p className="weight-analysis__location">{event.location}</p>}
+            <ScheduleGrid
+              schedule={schedule}
+              slotGroups={event.slotGroups}
+              readOnly
+              showValues
+              label={
+                mode === "mixed"
+                  ? `${channel === "virtual" ? "Virtual" : "In-Person"} Availability`
+                  : "Availability"
+              }
+              participantDetails={participantDetails}
+              virtual={channel === "virtual"}
+            />
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export function OrganizerSchedulePanel({
   event,
   mode,
@@ -551,6 +779,7 @@ export function OrganizerSchedulePanel({
   onJoin,
   onInpersonPaint,
   onVirtualPaint,
+  onCopy,
   onSave,
 }) {
   return (
@@ -570,27 +799,16 @@ export function OrganizerSchedulePanel({
           <p style={{ margin: 0, color: "var(--md-sys-color-on-surface-variant)" }}>
             Editing as <strong>{participantName}</strong>. Click cells to toggle availability.
           </p>
-          {mode !== "virtual" && (
-            <ScheduleGrid
-              schedule={inperson}
-              slotGroups={event.slotGroups}
-              readOnly={!responsesOpen}
-              showValues={false}
-              onCellPaint={onInpersonPaint}
-              label={mode === "mixed" ? "In-Person" : undefined}
-            />
-          )}
-          {mode !== "inperson" && (
-            <ScheduleGrid
-              schedule={virtual}
-              slotGroups={event.slotGroups}
-              readOnly={!responsesOpen}
-              showValues={false}
-              onCellPaint={onVirtualPaint}
-              label={mode === "mixed" ? "Virtual" : undefined}
-              virtual
-            />
-          )}
+          <ScheduleChannelEditor
+            mode={mode}
+            slotGroups={event.slotGroups}
+            inperson={inperson}
+            virtual={virtual}
+            readOnly={!responsesOpen}
+            onInpersonPaint={onInpersonPaint}
+            onVirtualPaint={onVirtualPaint}
+            onCopy={onCopy}
+          />
           {!responsesOpen && (
             <p style={{ margin: 0, color: "var(--md-sys-color-error)" }}>
               Organizer availability is locked while this event is not open or its deadline has
@@ -612,16 +830,11 @@ export function ParticipantManagerPanel({
   filteredParticipants,
   groups,
   groupNames,
-  weights,
   searchQuery,
   setSearchQuery,
   showHidden,
   setShowHidden,
   hidingParticipantId,
-  onCheckAll,
-  onIncludedChange,
-  onWeightChange,
-  onRequiredChange,
   onGroupChange,
   onMoveParticipant,
   onHideParticipant,
@@ -640,22 +853,6 @@ export function ParticipantManagerPanel({
         }}
       >
         <h3 style={{ margin: 0, color: "var(--md-sys-color-on-surface)" }}>Participants</h3>
-        <div style={{ display: "flex", gap: "8px" }}>
-          <AppButton
-            variant="outlined"
-            onClick={() => onCheckAll(true)}
-            style={{ fontSize: "0.8rem" }}
-          >
-            Check All
-          </AppButton>
-          <AppButton
-            variant="outlined"
-            onClick={() => onCheckAll(false)}
-            style={{ fontSize: "0.8rem" }}
-          >
-            Uncheck All
-          </AppButton>
-        </div>
       </div>
 
       <md-outlined-text-field
@@ -680,14 +877,10 @@ export function ParticipantManagerPanel({
               </h4>
             )}
             {groups[groupName].map((participant) => {
-              const participantWeight = weights[participant.id] || {
-                weight: 1,
-                included: 1,
-                required: 0,
-              };
               return (
                 <div
                   key={participant.id}
+                  data-management-participant-id={participant.id}
                   style={{
                     display: "flex",
                     flexDirection: "column",
@@ -695,10 +888,7 @@ export function ParticipantManagerPanel({
                     padding: "16px",
                     border: "1px solid var(--md-sys-color-surface-variant)",
                     borderRadius: "12px",
-                    backgroundColor: participantWeight.included
-                      ? "var(--md-sys-color-surface-container-low)"
-                      : "var(--md-sys-color-surface)",
-                    opacity: participantWeight.included ? 1 : 0.5,
+                    backgroundColor: "var(--md-sys-color-surface-container-low)",
                     marginBottom: "8px",
                   }}
                 >
@@ -710,15 +900,9 @@ export function ParticipantManagerPanel({
                     }}
                   >
                     <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                      <md-checkbox
-                        checked={participantWeight.included ? true : undefined}
-                        onInput={(inputEvent) =>
-                          onIncludedChange(participant.id, inputEvent.target.checked)
-                        }
-                      ></md-checkbox>
-                      <span style={{ fontWeight: "600", fontSize: "1.1rem" }}>
+                      <strong style={{ fontWeight: "600", fontSize: "1.1rem" }}>
                         {participant.name}
-                      </span>
+                      </strong>
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
                       <span
@@ -776,63 +960,7 @@ export function ParticipantManagerPanel({
                     style={{
                       display: "flex",
                       alignItems: "center",
-                      gap: "16px",
-                      paddingLeft: "40px",
-                    }}
-                  >
-                    <span
-                      style={{
-                        fontSize: "0.9rem",
-                        color: "var(--md-sys-color-on-surface-variant)",
-                      }}
-                    >
-                      Weight
-                    </span>
-                    <md-slider
-                      min="0"
-                      max="1"
-                      step="0.01"
-                      value={participantWeight.weight}
-                      onInput={(inputEvent) =>
-                        onWeightChange(participant.id, Number(inputEvent.target.value))
-                      }
-                      style={{ flex: 1 }}
-                    ></md-slider>
-                    <span
-                      style={{
-                        minWidth: "36px",
-                        textAlign: "right",
-                        fontWeight: "500",
-                        color: "var(--md-sys-color-primary)",
-                      }}
-                    >
-                      {participantWeight.weight.toFixed(2)}
-                    </span>
-                  </div>
-                  <label
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
                       gap: "8px",
-                      paddingLeft: "40px",
-                      fontSize: "0.9rem",
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={Boolean(participantWeight.required)}
-                      onChange={(changeEvent) =>
-                        onRequiredChange(participant.id, changeEvent.target.checked)
-                      }
-                    />
-                    Required participant
-                  </label>
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "8px",
-                      paddingLeft: "40px",
                     }}
                   >
                     <span
@@ -939,150 +1067,52 @@ export function ParticipantManagerPanel({
   );
 }
 
-export function OrganizerResultsPanel({
-  event,
-  mode,
-  activeParticipants,
-  weights,
-  weightedInperson,
-  weightedVirtual,
-  inpersonDetails,
-  virtualDetails,
-  countedResponseTotal,
-  unansweredParticipantTotal,
-  excludedParticipantTotal,
-  totalWeight,
-  requiredConflictTotal,
-}) {
-  return (
-    <div style={{ flex: "2 1 700px", display: "flex", flexDirection: "column", gap: "24px" }}>
-      <div className="md-card" style={{ overflowX: "auto" }}>
-        <h3 style={{ margin: "0 0 4px 0", color: "var(--md-sys-color-on-surface)" }}>
-          Group Availability
-        </h3>
-        <p
-          style={{
-            margin: "0 0 12px 0",
-            fontSize: "0.9rem",
-            color: "var(--md-sys-color-on-surface-variant)",
-          }}
-        >
-          Counted {countedResponseTotal} submitted response(s); awaiting{" "}
-          {unansweredParticipantTotal}; excluded {excludedParticipantTotal}; total weight{" "}
-          {totalWeight.toFixed(2)}.
-          {requiredConflictTotal > 0
-            ? ` ${requiredConflictTotal} slot(s) conflict with a required participant.`
-            : ""}
-        </p>
-        {event.location && (
-          <p
-            style={{
-              margin: "0 0 16px 0",
-              fontSize: "0.9rem",
-              color: "var(--md-sys-color-on-surface-variant)",
-            }}
-          >
-            {event.location}
-          </p>
-        )}
-        <div style={{ display: "flex", gap: "24px", flexWrap: "wrap" }}>
-          {mode !== "virtual" && (
-            <div style={{ flex: "1 1 300px", minWidth: 0 }}>
-              <ScheduleGrid
-                schedule={weightedInperson}
-                slotGroups={event.slotGroups}
-                readOnly={true}
-                showValues={true}
-                label={mode === "mixed" ? "In-Person Availability" : "Availability"}
-                participantDetails={inpersonDetails}
-              />
-            </div>
-          )}
-          {mode !== "inperson" && (
-            <div style={{ flex: "1 1 300px", minWidth: 0 }}>
-              <ScheduleGrid
-                schedule={weightedVirtual}
-                slotGroups={event.slotGroups}
-                readOnly={true}
-                showValues={true}
-                label={mode === "mixed" ? "Virtual Availability" : "Availability"}
-                participantDetails={virtualDetails}
-                virtual
-              />
-            </div>
-          )}
-        </div>
-      </div>
+export function IndividualSchedulesPanel({ event, mode, activeParticipants, weights }) {
+  if (activeParticipants.length === 0) return null;
 
-      {activeParticipants.length > 0 && (
-        <div>
-          <h3 style={{ margin: "0 0 16px 0", color: "var(--md-sys-color-on-surface)" }}>
-            Individual Schedules
-          </h3>
-          <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
-            {activeParticipants.map((participant) => {
-              const participantWeight = weights[participant.id] || {
-                weight: 1,
-                included: 1,
-                required: 0,
-              };
-              return (
-                <div className="md-card" key={participant.id} style={{ overflowX: "auto" }}>
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      marginBottom: "16px",
-                    }}
-                  >
-                    <h4 style={{ margin: 0, fontSize: "1.2rem" }}>{participant.name}</h4>
-                    <div
-                      style={{
-                        fontSize: "0.9rem",
-                        color: "var(--md-sys-color-on-surface-variant)",
-                        backgroundColor: "var(--md-sys-color-surface-variant)",
-                        padding: "4px 8px",
-                        borderRadius: "16px",
-                      }}
-                    >
-                      Weight:{" "}
-                      <span style={{ fontWeight: "bold" }}>
-                        {participantWeight.weight.toFixed(2)}
-                      </span>
-                    </div>
-                  </div>
-                  <div style={{ display: "flex", gap: "24px", flexWrap: "wrap" }}>
-                    {mode !== "virtual" && (
-                      <div style={{ flex: "1 1 300px", minWidth: 0 }}>
-                        <ScheduleGrid
-                          schedule={participant.inpersonArray}
-                          slotGroups={event.slotGroups}
-                          readOnly={true}
-                          showValues={true}
-                          label={mode === "mixed" ? "In-Person" : "Availability"}
-                        />
-                      </div>
-                    )}
-                    {mode !== "inperson" && (
-                      <div style={{ flex: "1 1 300px", minWidth: 0 }}>
-                        <ScheduleGrid
-                          schedule={participant.virtualArray}
-                          slotGroups={event.slotGroups}
-                          readOnly={true}
-                          showValues={true}
-                          label={mode === "mixed" ? "Virtual" : "Availability"}
-                          virtual
-                        />
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-    </div>
+  return (
+    <details className="md-card individual-schedules" style={{ marginBottom: "24px" }}>
+      <summary>
+        Individual Schedules <span>({activeParticipants.length})</span>
+      </summary>
+      <div className="individual-schedules__list">
+        {activeParticipants.map((participant) => {
+          const participantWeight = weights[participant.id] || {
+            weight: 1,
+            included: 1,
+            required: 0,
+          };
+          return (
+            <article key={participant.id}>
+              <div className="individual-schedules__heading">
+                <h4>{participant.name}</h4>
+                <span>Weight: {Number(participantWeight.weight).toFixed(2)}</span>
+              </div>
+              <div className="individual-schedules__grids">
+                {mode !== "virtual" && (
+                  <ScheduleGrid
+                    schedule={participant.inpersonArray}
+                    slotGroups={event.slotGroups}
+                    readOnly
+                    showValues
+                    label={mode === "mixed" ? "In-Person" : "Availability"}
+                  />
+                )}
+                {mode !== "inperson" && (
+                  <ScheduleGrid
+                    schedule={participant.virtualArray}
+                    slotGroups={event.slotGroups}
+                    readOnly
+                    showValues
+                    label={mode === "mixed" ? "Virtual" : "Availability"}
+                    virtual
+                  />
+                )}
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </details>
   );
 }

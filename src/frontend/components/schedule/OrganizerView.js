@@ -1,16 +1,17 @@
 "use client";
 
-import { useState, useEffect, useContext, useCallback, useRef } from "react";
+import { useState, useEffect, useContext, useCallback, useMemo, useRef } from "react";
 import EventContext from "@/components/event/EventContext";
 import {
   FinalMeetingPanel,
+  IndividualSchedulesPanel,
   InvitationsPanel,
   LifecyclePanel,
   OrganizerHeader,
-  OrganizerResultsPanel,
   OrganizerSchedulePanel,
   ParticipantManagerPanel,
   RecommendationsPanel,
+  WeightAnalysisPanel,
 } from "@/components/schedule/OrganizerPanels";
 import {
   deleteParticipant,
@@ -32,6 +33,7 @@ import {
   updateEventLifecycle,
 } from "@/lib/api/events";
 import { formatIsoForDateTimeLocal, zonedLocalDateTimeToIso } from "@/lib/time";
+import { buildWeightedPreview } from "@/lib/weightedPreview";
 
 function OrganizerView() {
   const { event, setEvent, numSlots } = useContext(EventContext);
@@ -42,13 +44,18 @@ function OrganizerView() {
   const [weights, setWeights] = useState({}); // { participantId: { weight, included } }
   const [results, setResults] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [weightSaveState, setWeightSaveState] = useState("saved");
+  const [weightSaveError, setWeightSaveError] = useState("");
 
-  // Ref tracks latest weights synchronously to avoid stale closures in debounce
   const weightsRef = useRef({});
   useEffect(() => {
     weightsRef.current = weights;
   }, [weights]);
   const saveTimer = useRef(null);
+  const weightRevisionRef = useRef(0);
+  const weightSaveInFlightRef = useRef(false);
+  const queuedWeightSaveRef = useRef(null);
+  const flushWeightSaveRef = useRef(null);
   useEffect(() => {
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -63,6 +70,7 @@ function OrganizerView() {
   const [myInperson, setMyInperson] = useState([]);
   const [myVirtual, setMyVirtual] = useState([]);
   const [mySaving, setMySaving] = useState(false);
+  const myPaintValueRef = useRef({ inperson: 1, virtual: 1 });
   const [hidingParticipantId, setHidingParticipantId] = useState("");
   const [hideError, setHideError] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -169,7 +177,12 @@ function OrganizerView() {
             required: w.required,
           };
         });
+        weightsRef.current = map;
         setWeights(map);
+        queuedWeightSaveRef.current = null;
+        weightRevisionRef.current = 0;
+        setWeightSaveState("saved");
+        setWeightSaveError("");
         setInvitations(invitationsRes.invitations || []);
         setResults(resultsRes.results);
         if (finalizationRes) {
@@ -195,25 +208,80 @@ function OrganizerView() {
     }
   }, [event.code, event.finalMeeting, refreshKey, user?.id, getToken]);
 
-  const saveWeights = useCallback(
-    async (newWeights) => {
-      try {
-        const arr = Object.entries(newWeights).map(([participantId, w]) => ({
-          participantId,
-          weight: w.weight,
-          included: w.included,
-          required: w.required,
-        }));
-        const token = await getToken();
-        await updateWeights(event.code, arr, token);
-        const resultData = await fetchEventResults(event.code, token);
-        setResults(resultData.results);
-      } catch (err) {
-        console.error("Failed to save weights", err);
+  const flushWeightSave = useCallback(async () => {
+    if (weightSaveInFlightRef.current || !queuedWeightSaveRef.current) return;
+
+    const pending = queuedWeightSaveRef.current;
+    queuedWeightSaveRef.current = null;
+    weightSaveInFlightRef.current = true;
+    setWeightSaveState("saving");
+    setWeightSaveError("");
+
+    try {
+      const payload = Object.entries(pending.weights).map(([participantId, weight]) => ({
+        participantId,
+        weight: weight.weight,
+        included: weight.included,
+        required: weight.required,
+      }));
+      const token = await getToken();
+      const data = await updateWeights(event.code, payload, token);
+      if (pending.revision === weightRevisionRef.current) {
+        if (data.results) setResults(data.results);
+        setWeightSaveState("saved");
       }
-    },
-    [event.code, getToken]
-  );
+    } catch (err) {
+      if (pending.revision === weightRevisionRef.current) {
+        queuedWeightSaveRef.current = pending;
+        setWeightSaveState("failed");
+        setWeightSaveError(err.message || "Unable to save participant weights.");
+      }
+    } finally {
+      weightSaveInFlightRef.current = false;
+      if (
+        queuedWeightSaveRef.current &&
+        queuedWeightSaveRef.current.revision !== pending.revision
+      ) {
+        if (saveTimer.current) clearTimeout(saveTimer.current);
+        saveTimer.current = setTimeout(() => {
+          saveTimer.current = null;
+          flushWeightSaveRef.current?.();
+        }, 0);
+      }
+    }
+  }, [event.code, getToken]);
+
+  useEffect(() => {
+    flushWeightSaveRef.current = flushWeightSave;
+  }, [flushWeightSave]);
+
+  const queueWeightSave = useCallback((next, { immediate = false } = {}) => {
+    weightRevisionRef.current += 1;
+    queuedWeightSaveRef.current = {
+      revision: weightRevisionRef.current,
+      weights: next,
+    };
+    setWeightSaveState("unsaved");
+    setWeightSaveError("");
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(
+      () => {
+        saveTimer.current = null;
+        flushWeightSaveRef.current?.();
+      },
+      immediate ? 0 : 500
+    );
+  }, []);
+
+  useEffect(() => {
+    const handleBeforeUnload = (beforeUnloadEvent) => {
+      if (weightSaveState === "saved") return;
+      beforeUnloadEvent.preventDefault();
+      beforeUnloadEvent.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [weightSaveState]);
 
   const handleWeightChange = (participantId, val) => {
     const current = weightsRef.current[participantId] ?? {
@@ -224,9 +292,7 @@ function OrganizerView() {
     const next = { ...weightsRef.current, [participantId]: { ...current, weight: val } };
     weightsRef.current = next;
     setWeights(next);
-    // Debounce: only send API call 500ms after user stops dragging
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => saveWeights(weightsRef.current), 500);
+    queueWeightSave(next);
   };
 
   const handleIncludedChange = (participantId, val) => {
@@ -238,7 +304,7 @@ function OrganizerView() {
     const next = { ...weightsRef.current, [participantId]: { ...current, included: val ? 1 : 0 } };
     weightsRef.current = next;
     setWeights(next);
-    saveWeights(next); // checkbox fires once, save immediately
+    queueWeightSave(next, { immediate: true });
   };
 
   const handleRequiredChange = (participantId, val) => {
@@ -253,7 +319,18 @@ function OrganizerView() {
     };
     weightsRef.current = next;
     setWeights(next);
-    saveWeights(next);
+    queueWeightSave(next, { immediate: true });
+  };
+
+  const retryWeightSave = () => {
+    if (!queuedWeightSaveRef.current) return;
+    setWeightSaveState("unsaved");
+    setWeightSaveError("");
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      saveTimer.current = null;
+      flushWeightSaveRef.current?.();
+    }, 0);
   };
 
   const handleMyJoin = async () => {
@@ -272,20 +349,34 @@ function OrganizerView() {
     }
   };
 
-  const handleMyInpersonPaint = (idx) => {
+  const handleMyInpersonPaint = (idx, interaction) => {
     setMyInperson((prev) => {
+      const phase = interaction?.phase || "start";
+      if (phase === "start" || phase === "keyboard") {
+        myPaintValueRef.current.inperson = Number(prev[idx]) > 0 ? 0 : 1;
+      }
       const n = [...prev];
-      n[idx] = n[idx] === 1 ? 0 : 1;
+      n[idx] = myPaintValueRef.current.inperson;
       return n;
     });
   };
 
-  const handleMyVirtualPaint = (idx) => {
+  const handleMyVirtualPaint = (idx, interaction) => {
     setMyVirtual((prev) => {
+      const phase = interaction?.phase || "start";
+      if (phase === "start" || phase === "keyboard") {
+        myPaintValueRef.current.virtual = Number(prev[idx]) > 0 ? 0 : 1;
+      }
       const n = [...prev];
-      n[idx] = n[idx] === 1 ? 0 : 1;
+      n[idx] = myPaintValueRef.current.virtual;
       return n;
     });
+  };
+
+  const handleMyCopySchedule = (source, target) => {
+    const next = [...(source === "inperson" ? myInperson : myVirtual)];
+    if (target === "inperson") setMyInperson(next);
+    else setMyVirtual(next);
   };
 
   const handleMySave = async () => {
@@ -406,7 +497,7 @@ function OrganizerView() {
     });
     weightsRef.current = next;
     setWeights(next);
-    saveWeights(next);
+    queueWeightSave(next, { immediate: true });
   };
 
   const handleSendInvitations = async () => {
@@ -637,21 +728,32 @@ function OrganizerView() {
     return a.localeCompare(b);
   });
 
-  const weightedInperson = results?.channels?.inperson?.weighted ?? Array(numSlots).fill(0);
-  const weightedVirtual = results?.channels?.virtual?.weighted ?? Array(numSlots).fill(0);
+  const previewResults = useMemo(
+    () =>
+      buildWeightedPreview({
+        participants,
+        weights,
+        mode,
+        slotCount: numSlots,
+      }),
+    [mode, numSlots, participants, weights]
+  );
+  const weightedInperson = previewResults.channels?.inperson?.weighted ?? Array(numSlots).fill(0);
+  const weightedVirtual = previewResults.channels?.virtual?.weighted ?? Array(numSlots).fill(0);
   const recommendations = results?.recommendations ?? [];
   const recommendationBasis = results?.recommendationBasis ?? null;
   const submittedCount = activeParticipants.filter((p) => p.submitted).length;
-  const countedResponseTotal = results?.countedResponseTotal ?? 0;
-  const unansweredParticipantTotal = results?.unansweredParticipantTotal ?? 0;
-  const excludedParticipantTotal = results?.excludedParticipantTotal ?? 0;
-  const totalWeight = results?.calculationBasis?.weighted?.totalWeight ?? 0;
+  const countedResponseTotal = previewResults.countedResponseTotal;
+  const unansweredParticipantTotal = previewResults.unansweredParticipantTotal;
+  const excludedParticipantTotal = previewResults.excludedParticipantTotal;
+  const totalWeight = previewResults.calculationBasis.weighted.totalWeight;
   const requiredConflictTotal = Object.values(
-    results?.requiredParticipantConflicts?.channels || {}
+    previewResults.requiredParticipantConflicts.channels || {}
   ).reduce((total, conflicts) => total + conflicts.length, 0);
   const responseDeadlinePassed =
     event.responseDeadline && Date.now() >= new Date(event.responseDeadline).getTime();
   const responsesOpen = event.status === "open" && !responseDeadlinePassed;
+  const weightChangesDisabled = ["finalized", "archived"].includes(event.status);
 
   const inpersonDetails = activeParticipants
     .filter((p) => {
@@ -687,6 +789,30 @@ function OrganizerView() {
     <div className="page-pad" style={{ maxWidth: "1400px", margin: "0 auto" }}>
       <OrganizerHeader onRefresh={() => setRefreshKey((key) => key + 1)} />
 
+      <WeightAnalysisPanel
+        event={event}
+        mode={mode}
+        participants={activeParticipants}
+        weights={weights}
+        weightedInperson={weightedInperson}
+        weightedVirtual={weightedVirtual}
+        inpersonDetails={inpersonDetails}
+        virtualDetails={virtualDetails}
+        countedResponseTotal={countedResponseTotal}
+        unansweredParticipantTotal={unansweredParticipantTotal}
+        excludedParticipantTotal={excludedParticipantTotal}
+        totalWeight={totalWeight}
+        requiredConflictTotal={requiredConflictTotal}
+        saveState={weightSaveState}
+        saveError={weightSaveError}
+        disabled={weightChangesDisabled}
+        onCheckAll={handleCheckAll}
+        onIncludedChange={handleIncludedChange}
+        onWeightChange={handleWeightChange}
+        onRequiredChange={handleRequiredChange}
+        onRetry={retryWeightSave}
+      />
+
       <LifecyclePanel
         event={event}
         activeParticipantCount={activeParticipants.length}
@@ -715,39 +841,22 @@ function OrganizerView() {
         onSendReminders={handleSendReminders}
       />
 
-      <div className="two-pane" style={{ marginBottom: "24px" }}>
-        <div style={{ flex: "1 1 350px", display: "flex", flexDirection: "column", gap: "24px" }}>
-          <OrganizerSchedulePanel
-            event={event}
-            mode={mode}
-            user={user}
-            joined={myJoined}
-            participantName={myParticipantName}
-            inperson={myInperson}
-            virtual={myVirtual}
-            responsesOpen={responsesOpen}
-            saving={mySaving}
-            onJoin={handleMyJoin}
-            onInpersonPaint={handleMyInpersonPaint}
-            onVirtualPaint={handleMyVirtualPaint}
-            onSave={handleMySave}
-          />
-        </div>
-
-        <OrganizerResultsPanel
+      <div style={{ marginBottom: "24px" }}>
+        <OrganizerSchedulePanel
           event={event}
           mode={mode}
-          activeParticipants={activeParticipants}
-          weights={weights}
-          weightedInperson={weightedInperson}
-          weightedVirtual={weightedVirtual}
-          inpersonDetails={inpersonDetails}
-          virtualDetails={virtualDetails}
-          countedResponseTotal={countedResponseTotal}
-          unansweredParticipantTotal={unansweredParticipantTotal}
-          excludedParticipantTotal={excludedParticipantTotal}
-          totalWeight={totalWeight}
-          requiredConflictTotal={requiredConflictTotal}
+          user={user}
+          joined={myJoined}
+          participantName={myParticipantName}
+          inperson={myInperson}
+          virtual={myVirtual}
+          responsesOpen={responsesOpen}
+          saving={mySaving}
+          onJoin={handleMyJoin}
+          onInpersonPaint={handleMyInpersonPaint}
+          onVirtualPaint={handleMyVirtualPaint}
+          onCopy={handleMyCopySchedule}
+          onSave={handleMySave}
         />
       </div>
 
@@ -756,6 +865,13 @@ function OrganizerView() {
         recommendations={recommendations}
         recommendationBasis={recommendationBasis}
         onUseRecommendation={handleUseRecommendation}
+      />
+
+      <IndividualSchedulesPanel
+        event={event}
+        mode={mode}
+        activeParticipants={activeParticipants}
+        weights={weights}
       />
 
       <FinalMeetingPanel
@@ -786,16 +902,11 @@ function OrganizerView() {
         filteredParticipants={filteredParticipants}
         groups={groups}
         groupNames={groupNames}
-        weights={weights}
         searchQuery={searchQuery}
         setSearchQuery={setSearchQuery}
         showHidden={showHidden}
         setShowHidden={setShowHidden}
         hidingParticipantId={hidingParticipantId}
-        onCheckAll={handleCheckAll}
-        onIncludedChange={handleIncludedChange}
-        onWeightChange={handleWeightChange}
-        onRequiredChange={handleRequiredChange}
         onGroupChange={handleGroupChange}
         onMoveParticipant={handleMoveParticipant}
         onHideParticipant={handleHideParticipant}
