@@ -50,7 +50,9 @@ function LoginContent() {
       } else if (!codeSent) {
         await requestEmailLoginCode({ email });
         setCodeSent(true);
-        setStatus("Verification code sent. Check your email.");
+        setStatus(
+          "If an existing verified account uses this email, a login code will arrive shortly."
+        );
       } else {
         await verifyEmailLoginCode({ email, code });
         navigateTo(next);
@@ -100,6 +102,18 @@ function LoginContent() {
         {status && (
           <div className="auth-status" role="status" aria-live="polite">
             {status}
+          </div>
+        )}
+        {mode === "code" && (
+          <div className="auth-code-guidance">
+            <strong>Email code is for existing verified accounts.</strong>
+            <span>
+              New to Releviz?{" "}
+              <Link href={`/signup?next=${encodeURIComponent(next)}`}>
+                Create an account with your profile details
+              </Link>
+              .
+            </span>
           </div>
         )}
         <label>

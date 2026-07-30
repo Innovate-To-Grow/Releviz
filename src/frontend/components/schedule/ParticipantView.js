@@ -4,6 +4,7 @@ import { useState, useContext, useEffect, useRef, useCallback } from "react";
 import { MdLogin, MdRefresh, MdSend } from "react-icons/md";
 import AppButton from "@/components/ui/AppButton";
 import EventContext from "@/components/event/EventContext";
+import ScheduleChannelEditor from "@/components/schedule/ScheduleChannelEditor";
 import ScheduleGrid from "@/components/schedule/ScheduleGrid";
 import { useAuth } from "@/components/auth/AuthContext";
 import { fetchParticipants, joinEvent, updateParticipant } from "@/lib/api/participants";
@@ -39,7 +40,6 @@ function ParticipantView() {
   const [draftSaveError, setDraftSaveError] = useState("");
   const [saveConflict, setSaveConflict] = useState(null);
 
-  const paintModeRef = useRef(null);
   const participantIdRef = useRef(null);
   const participantVersionRef = useRef(null);
   const scheduleInpersonRef = useRef([]);
@@ -233,16 +233,11 @@ function ParticipantView() {
     }
   };
 
-  const makeCellPaintHandler = (channel) => (idx, e) => {
-    if (e.type === "mousedown") {
-      const current =
-        channel === "inperson" ? scheduleInpersonRef.current : scheduleVirtualRef.current;
-      paintModeRef.current = current[idx] > 0 ? "erase" : "paint";
-    }
-
+  const makeCellPaintHandler = (channel) => (idx) => {
     const scheduleRef = channel === "inperson" ? scheduleInpersonRef : scheduleVirtualRef;
+    if (Number(scheduleRef.current[idx]) === availabilityValue) return;
     const next = [...scheduleRef.current];
-    next[idx] = paintModeRef.current === "erase" ? 0 : availabilityValue;
+    next[idx] = availabilityValue;
     scheduleRef.current = next;
     if (channel === "inperson") setScheduleInperson(next);
     else setScheduleVirtual(next);
@@ -251,6 +246,20 @@ function ParticipantView() {
 
   const handleInpersonPaint = makeCellPaintHandler("inperson");
   const handleVirtualPaint = makeCellPaintHandler("virtual");
+
+  const handleCopySchedule = (source, target) => {
+    const sourceValues =
+      source === "inperson" ? scheduleInpersonRef.current : scheduleVirtualRef.current;
+    const next = [...sourceValues];
+    if (target === "inperson") {
+      scheduleInpersonRef.current = next;
+      setScheduleInperson(next);
+    } else {
+      scheduleVirtualRef.current = next;
+      setScheduleVirtual(next);
+    }
+    queueAutosave();
+  };
 
   const fillAllAvailability = (value) => {
     if (responseChangesDisabled) return;
@@ -520,27 +529,16 @@ function ParticipantView() {
               </div>
             </div>
 
-            {mode !== "virtual" && (
-              <ScheduleGrid
-                schedule={scheduleInperson}
-                slotGroups={event.slotGroups}
-                readOnly={responseChangesDisabled}
-                showValues={false}
-                onCellPaint={handleInpersonPaint}
-                label={mode === "mixed" ? "In-Person" : undefined}
-              />
-            )}
-            {mode !== "inperson" && (
-              <ScheduleGrid
-                schedule={scheduleVirtual}
-                slotGroups={event.slotGroups}
-                readOnly={responseChangesDisabled}
-                showValues={false}
-                onCellPaint={handleVirtualPaint}
-                label={mode === "mixed" ? "Virtual" : undefined}
-                virtual
-              />
-            )}
+            <ScheduleChannelEditor
+              mode={mode}
+              slotGroups={event.slotGroups}
+              inperson={scheduleInperson}
+              virtual={scheduleVirtual}
+              readOnly={responseChangesDisabled}
+              onInpersonPaint={handleInpersonPaint}
+              onVirtualPaint={handleVirtualPaint}
+              onCopy={handleCopySchedule}
+            />
 
             {draftSaveState !== "idle" && (
               <div

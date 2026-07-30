@@ -571,6 +571,11 @@ class AggregationPermissionApiTests(TestCase):
         )
         self.assertEqual(updated.status_code, 200)
         self.assertEqual(updated.data["weights"][0]["required"], 1)
+        self.assertEqual(
+            updated.data["results"]["calculationBasis"]["weighted"]["totalWeight"],
+            1.75,
+        )
+        self.assertIn("channels", updated.data["results"])
 
         preserved = self.client.put(
             f"/events/weights?code={self.event.code}",

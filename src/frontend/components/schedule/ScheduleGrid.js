@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { lerpColor, lerpVirtualColor } from "@/components/ui/ColorUtils";
 import { formatTime } from "@/lib/format";
 
@@ -24,21 +24,72 @@ function ScheduleGrid({
   virtual = false,
   participantDetails,
 }) {
-  const ignoreMouseUntilRef = useRef(0);
+  const strokeRef = useRef({
+    active: false,
+    pointerId: null,
+    pointerType: "",
+    visited: new Set(),
+  });
   const groups = Array.isArray(slotGroups) ? slotGroups : [];
   const maxRows = groups.reduce(
     (largest, group) => Math.max(largest, group?.slots?.length || 0),
     0
   );
 
-  const handlePaint = (index, event) => {
+  const finishStroke = useCallback(() => {
+    strokeRef.current = {
+      active: false,
+      pointerId: null,
+      pointerType: "",
+      visited: new Set(),
+    };
+  }, []);
+
+  useEffect(() => {
+    const finish = () => finishStroke();
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", finish);
+    window.addEventListener("blur", finish);
+    return () => {
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", finish);
+      window.removeEventListener("blur", finish);
+    };
+  }, [finishStroke]);
+
+  const paintCell = (index, event, phase) => {
     if (readOnly || !onCellPaint) return;
-    if (
-      event.type === "mousedown" ||
-      event.type === "keydown" ||
-      (event.type === "mousemove" && event.buttons === 1)
-    ) {
-      onCellPaint(index, event);
+    if (strokeRef.current.visited.has(index) && phase !== "keyboard") return;
+    if (phase !== "keyboard") strokeRef.current.visited.add(index);
+    onCellPaint(index, {
+      phase,
+      pointerType: event.pointerType || (phase === "keyboard" ? "keyboard" : "mouse"),
+      type: phase === "keyboard" ? "keydown" : phase === "start" ? "pointerdown" : "pointermove",
+    });
+  };
+
+  const startStroke = (index, event) => {
+    if (readOnly || !onCellPaint || event.button > 0) return;
+    event.preventDefault();
+    strokeRef.current = {
+      active: true,
+      pointerId: event.pointerId,
+      pointerType: event.pointerType || "mouse",
+      visited: new Set(),
+    };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    paintCell(index, event, "start");
+  };
+
+  const continueStroke = (event) => {
+    const stroke = strokeRef.current;
+    if (!stroke.active || stroke.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    const element = document.elementFromPoint?.(event.clientX, event.clientY);
+    const cell = element?.closest?.("[data-cell-idx]");
+    const targetIndex = cell?.dataset?.cellIdx;
+    if (targetIndex !== undefined) {
+      paintCell(Number(targetIndex), event, "move");
     }
   };
 
@@ -198,32 +249,15 @@ function ScheduleGrid({
                           aria-selected={readOnly ? undefined : value > 0}
                           data-cell-idx={index}
                           title={title}
-                          onMouseDown={(event) => {
-                            if (Date.now() < ignoreMouseUntilRef.current) return;
-                            handlePaint(index, event);
-                          }}
-                          onMouseMove={(event) => handlePaint(index, event)}
+                          onPointerDown={(event) => startStroke(index, event)}
+                          onPointerMove={continueStroke}
+                          onPointerUp={finishStroke}
+                          onPointerCancel={finishStroke}
+                          onLostPointerCapture={finishStroke}
                           onKeyDown={(event) => {
                             if (event.key === "Enter" || event.key === " ") {
                               event.preventDefault();
-                              handlePaint(index, { ...event, type: "keydown" });
-                            }
-                          }}
-                          onTouchStart={(event) => {
-                            event.preventDefault();
-                            ignoreMouseUntilRef.current = Date.now() + 750;
-                            handlePaint(index, { type: "mousedown" });
-                          }}
-                          onTouchMove={(event) => {
-                            event.preventDefault();
-                            const touch = event.touches[0];
-                            const element = document.elementFromPoint(touch.clientX, touch.clientY);
-                            const targetIndex = element?.dataset?.cellIdx;
-                            if (targetIndex !== undefined) {
-                              handlePaint(Number(targetIndex), {
-                                type: "mousemove",
-                                buttons: 1,
-                              });
+                              paintCell(index, event, "keyboard");
                             }
                           }}
                           style={{
