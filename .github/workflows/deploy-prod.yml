@@ -186,7 +186,7 @@ jobs:
           fi
 
       - name: Configure AWS credentials with OIDC
-        uses: aws-actions/configure-aws-credentials@v6
+        uses: aws-actions/configure-aws-credentials@v6.2.2
         with:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
           role-duration-seconds: 10800
