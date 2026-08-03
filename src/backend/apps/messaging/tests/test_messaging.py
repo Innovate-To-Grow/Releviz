@@ -9,6 +9,7 @@ from django.test import RequestFactory, TestCase, override_settings
 
 from apps.messaging.admin import EmailProviderConfigAdmin, EmailProviderConfigForm
 from apps.messaging.crypto import decrypt_secret, encrypt_secret
+from apps.messaging.email_templates import brand_site_url, render_branded_email
 from apps.messaging.models import EmailMessageLog, EmailProviderConfig
 from apps.messaging.services import (
     EmailAttachment,
@@ -20,6 +21,39 @@ from apps.messaging.services import (
 
 
 class MessagingTests(TestCase):
+    @override_settings(FRONTEND_URL="https://releviz.com")
+    def test_branded_email_template_uses_public_logo_and_escapes_content(self):
+        html = render_branded_email(
+            title="Branded message",
+            paragraphs=("Safe <script>alert('no')</script>",),
+            details=(("Event", "Planning & review"),),
+            code="123456",
+            cta_label="Open Releviz",
+            cta_url="https://releviz.com/dashboard",
+        )
+
+        self.assertEqual(brand_site_url(), "https://releviz.com")
+        self.assertIn('src="https://releviz.com/brand/releviz-logo.png"', html)
+        self.assertIn("123456", html)
+        self.assertIn("https://releviz.com/dashboard", html)
+        self.assertNotIn("<script>", html)
+        self.assertIn("&lt;script&gt;", html)
+
+    @override_settings(FRONTEND_URL="https://releviz.com")
+    def test_plain_email_automatically_receives_branded_html_fallback(self):
+        send_email_message(
+            subject="Fallback message",
+            body="Plain text remains available.",
+            recipients=["fallback@example.com"],
+            message_type=EmailMessageLog.MessageType.TEST,
+        )
+
+        message = mail.outbox[-1]
+        self.assertEqual(message.body, "Plain text remains available.")
+        self.assertEqual(message.alternatives[0].mimetype, "text/html")
+        self.assertIn("https://releviz.com/brand/releviz-logo.png", message.alternatives[0].content)
+        self.assertIn("Plain text remains available.", message.alternatives[0].content)
+
     def test_crypto_uses_raw_and_derived_keys_and_rejects_bad_tokens(self):
         raw_key = Fernet.generate_key().decode("ascii")
         with override_settings(FIELD_ENCRYPTION_KEY=raw_key):

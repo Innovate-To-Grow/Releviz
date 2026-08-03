@@ -22,7 +22,7 @@ Create an account or log in before creating an event. After creating, you'll be 
 Click **Copy Share Link** in the top-right corner to get a link like:
 
 ```
-https://yoursite.com/event?code=j9eaFNJH
+https://releviz.com/event?code=j9eaFNJH
 ```
 
 Send this to everyone who should participate. Everyone who opens the link logs in before viewing the event or submitting availability.

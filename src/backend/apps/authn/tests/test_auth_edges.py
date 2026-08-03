@@ -116,6 +116,10 @@ class AuthServiceAndModelTests(TestCase):
             sent_at + settings.AUTH_CHALLENGE_VERIFICATION_LIFETIME,
         )
         self.assertIn("Your Releviz verification code", mail.outbox[-1].body)
+        challenge_html = mail.outbox[-1].alternatives[0].content
+        self.assertIn("/brand/releviz-logo.png", challenge_html)
+        self.assertIn(issued.code, challenge_html)
+        self.assertIn("This code expires 10 minutes", challenge_html)
         self.assertIn("login -> member@example.com", str(issued.challenge))
 
         with self.assertRaisesMessage(Exception, "Invalid or expired verification code"):
@@ -257,6 +261,9 @@ class AuthServiceAndModelTests(TestCase):
         welcome = EmailMessageLog.objects.get(message_type=EmailMessageLog.MessageType.WELCOME)
         self.assertEqual(welcome.delivery_job, welcome_job)
         self.assertIn("Welcome to Releviz", mail.outbox[-1].subject)
+        welcome_html = mail.outbox[-1].alternatives[0].content
+        self.assertIn("/brand/releviz-logo.png", welcome_html)
+        self.assertIn("/dashboard", welcome_html)
 
         request = RequestFactory().post(
             "/authn/login/",
@@ -273,6 +280,10 @@ class AuthServiceAndModelTests(TestCase):
         self.assertIn("Method: password", alert_body)
         self.assertIn("IP address: 203.0.113.10", alert_body)
         self.assertIn("User agent: Browser/1.0", alert_body)
+        alert_html = mail.outbox[-1].alternatives[0].content
+        self.assertIn("New login to your account", alert_html)
+        self.assertIn("203.0.113.10", alert_html)
+        self.assertIn("/settings", alert_html)
 
         request = RequestFactory().post("/authn/login/", HTTP_USER_AGENT="A" * 200)
         self.assertTrue(send_login_alert(self.member, request=request, method="email code"))

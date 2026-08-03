@@ -15,6 +15,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from apps.messaging.crypto import decrypt_secret, encrypt_secret
+from apps.messaging.email_templates import render_branded_email
 from apps.messaging.models import EmailDeliveryJob, EmailMessageLog, EmailProviderConfig
 
 logger = logging.getLogger(__name__)
@@ -143,6 +144,13 @@ def send_email_message(
     clean_recipients = [recipient.strip().lower() for recipient in recipients if recipient.strip()]
     if not clean_recipients:
         raise EmailDeliveryError("At least one recipient is required.")
+
+    if not html_body:
+        html_body = render_branded_email(
+            title=_clean_header(subject),
+            preheader=_clean_header(subject),
+            paragraphs=(body,),
+        )
 
     config = provider_config or active_provider_config()
     from_email = (

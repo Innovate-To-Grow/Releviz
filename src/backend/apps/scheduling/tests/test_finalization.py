@@ -754,6 +754,10 @@ class FinalizationApiTests(TestCase):
         self.assertEqual(confirmed.data["event"]["status"], "finalized")
         self.assertEqual(confirmed.data["delivery"]["sent"], 1)
         self.assertEqual(len(mail.outbox), 1)
+        confirmation_html = mail.outbox[0].alternatives[0].content
+        self.assertIn("/brand/releviz-logo.png", confirmation_html)
+        self.assertIn("Meeting confirmed", confirmation_html)
+        self.assertIn("View event", confirmation_html)
         self.assertIn("METHOD:REQUEST", mail.outbox[0].attachments[0][1])
         self.assertEqual(
             EmailMessageLog.objects.get(
@@ -857,6 +861,9 @@ class FinalizationApiTests(TestCase):
         )
         self.assertEqual(cancellation.status, EmailDeliveryJob.Status.SENT)
         self.assertIn("METHOD:CANCEL", cancellation.attachments[0]["content"])
+        cancellation_html = mail.outbox[-1].alternatives[0].content
+        self.assertIn("Scheduling reopened", cancellation_html)
+        self.assertIn("View updated event", cancellation_html)
 
         self.event.refresh_from_db()
         reconfirmed = self.confirm(

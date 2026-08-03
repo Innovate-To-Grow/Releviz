@@ -37,8 +37,9 @@ from apps.authn.security import (
     request_user_agent,
     security_log_key,
 )
+from apps.messaging.email_templates import render_branded_email
 from apps.messaging.models import EmailDeliveryJob, EmailMessageLog
-from apps.messaging.services import dispatch_email_job, enqueue_email_job
+from apps.messaging.services import dispatch_email_job, enqueue_email_job, frontend_url
 
 logger = logging.getLogger("releviz.security")
 
@@ -555,6 +556,17 @@ def issue_email_challenge(
             body=(
                 f"Your Releviz verification code is {code}. It expires 10 minutes after delivery."
             ),
+            html_body=render_branded_email(
+                title="Your verification code",
+                preheader="Use this code to continue with Releviz.",
+                eyebrow="Account security",
+                paragraphs=("Enter this code to finish verifying your email address.",),
+                code=code,
+                notice=(
+                    "This code expires 10 minutes after delivery. If you did not request it, "
+                    "you can safely ignore this email."
+                ),
+            ),
             recipient=normalized_target,
             message_type=EmailMessageLog.MessageType.VERIFICATION,
             message_id=f"<auth-challenge-{challenge.pk}@releviz.local>",
@@ -584,6 +596,7 @@ def _enqueue_account_email(
     message_id: str,
     subject: str,
     body: str,
+    html_body: str,
     message_type: str,
     auth_session=None,
 ) -> bool:
@@ -594,6 +607,7 @@ def _enqueue_account_email(
         idempotency_key=idempotency_key,
         subject=subject,
         body=body,
+        html_body=html_body,
         recipient=recipient,
         message_type=message_type,
         message_id=message_id,
@@ -617,6 +631,17 @@ def send_registration_welcome(user) -> bool:
         message_id=f"<auth-welcome-{user.pk}@releviz.local>",
         subject="Welcome to Releviz",
         body=body,
+        html_body=render_branded_email(
+            title="Welcome to Releviz",
+            preheader="Your account is ready.",
+            greeting=f"Welcome, {user.display_name()}.",
+            paragraphs=(
+                "Your account is ready. You can now create events, invite participants, "
+                "and manage your scheduling dashboard.",
+            ),
+            cta_label="Open your dashboard",
+            cta_url=frontend_url("/dashboard"),
+        ),
         message_type=EmailMessageLog.MessageType.WELCOME,
     )
 
@@ -654,6 +679,22 @@ def send_login_alert(
         message_id=f"<auth-login-alert-{token_hash}@releviz.local>",
         subject="New login to your Releviz account",
         body=body,
+        html_body=render_branded_email(
+            title="New login to your account",
+            preheader="A new login was completed for your Releviz account.",
+            eyebrow="Account security",
+            paragraphs=("A new login was completed for your Releviz account.",),
+            details=(
+                ("Account", user.get_primary_contact_email()),
+                ("Time", login_time),
+                ("Method", method),
+                ("IP address", ip_address),
+                ("User agent", user_agent),
+            ),
+            cta_label="Review account settings",
+            cta_url=frontend_url("/settings"),
+            notice="If this was not you, change your password and contact support immediately.",
+        ),
         message_type=EmailMessageLog.MessageType.LOGIN_ALERT,
         auth_session=auth_session,
     )

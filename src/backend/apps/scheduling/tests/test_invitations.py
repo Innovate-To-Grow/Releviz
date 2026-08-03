@@ -140,6 +140,11 @@ class InvitationServiceTests(TestCase):
             f"&invitation={participant_invitation.access_token}",
             participant_email.body,
         )
+        invitation_html = participant_email.alternatives[0].content
+        self.assertIn("/brand/releviz-logo.png", invitation_html)
+        self.assertIn("Share your availability", invitation_html)
+        self.assertIn(f"&amp;invitation={participant_invitation.access_token}", invitation_html)
+        self.assertIn("Please respond", invitation_html)
         self.assertEqual(
             participant_email.attachments[0][0],
             "releviz-ABC123-availability.ics",
@@ -216,6 +221,9 @@ class InvitationServiceTests(TestCase):
             mail.outbox[-1].subject,
             "Reminder: share your availability for Plan; Comma, Back\\slash New",
         )
+        reminder_html = mail.outbox[-1].alternatives[0].content
+        self.assertIn("Availability reminder", reminder_html)
+        self.assertIn("Share your availability", reminder_html)
         self.assertTrue(
             all(
                 invitation.reminder_sent_at
