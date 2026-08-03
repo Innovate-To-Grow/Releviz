@@ -1,19 +1,23 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { GoVerified, GoUnverified } from "react-icons/go";
 import {
   MdArchive,
   MdArrowDownward,
   MdArrowUpward,
   MdDeleteOutline,
+  MdEditCalendar,
   MdEmail,
+  MdClose,
   MdLockOpen,
   MdLogin,
   MdNotificationsActive,
   MdOutlineLock,
+  MdPersonAdd,
   MdRefresh,
   MdSave,
+  MdSend,
 } from "react-icons/md";
 import AppButton from "@/components/ui/AppButton";
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
@@ -839,9 +843,33 @@ export function ParticipantManagerPanel({
   onMoveParticipant,
   onHideParticipant,
   onUnhideParticipant,
+  managedName,
+  setManagedName,
+  managedEmail,
+  setManagedEmail,
+  creatingManagedParticipant,
+  managedStatus,
+  managedError,
+  sendingParticipantId,
+  onCreateManagedParticipant,
+  onEditSchedule,
+  onSendParticipantInvitation,
 }) {
+  const accountAccess = (participant) =>
+    participant.accountAccess || participant.account_access || "full";
+  const invitationState = (participant) => {
+    if (participant.submitted) return "Submitted";
+    const state = String(
+      participant.invitationStatus || participant.invitation_status || "not_sent"
+    ).toLowerCase();
+    if (["opened", "accessed"].includes(state)) return "Opened";
+    if (["invited", "sent", "delivered", "accepted"].includes(state)) return "Invited";
+    if (state === "submitted") return "Submitted";
+    return "Not sent";
+  };
+
   return (
-    <div className="md-card">
+    <section className="md-card managed-participants" aria-labelledby="participant-manager-title">
       <div
         style={{
           display: "flex",
@@ -852,7 +880,53 @@ export function ParticipantManagerPanel({
           gap: "8px",
         }}
       >
-        <h3 style={{ margin: 0, color: "var(--md-sys-color-on-surface)" }}>Participants</h3>
+        <div>
+          <h3
+            id="participant-manager-title"
+            style={{ margin: 0, color: "var(--md-sys-color-on-surface)" }}
+          >
+            Participant Manager
+          </h3>
+          <p className="managed-participants__description">
+            Create a person first, then send their access link when you are ready.
+          </p>
+        </div>
+      </div>
+
+      <form className="managed-person-form" onSubmit={onCreateManagedParticipant}>
+        <label>
+          <span>Name</span>
+          <input
+            type="text"
+            value={managedName}
+            onChange={(changeEvent) => setManagedName(changeEvent.target.value)}
+            autoComplete="name"
+            maxLength={100}
+            required
+          />
+        </label>
+        <label>
+          <span>Email</span>
+          <input
+            type="email"
+            value={managedEmail}
+            onChange={(changeEvent) => setManagedEmail(changeEvent.target.value)}
+            autoComplete="email"
+            maxLength={254}
+            required
+          />
+        </label>
+        <AppButton
+          type="submit"
+          icon={<MdPersonAdd />}
+          disabled={creatingManagedParticipant || !managedName.trim() || !managedEmail.trim()}
+        >
+          {creatingManagedParticipant ? "Creating..." : "Create person"}
+        </AppButton>
+      </form>
+      <div className="managed-participants__feedback" aria-live="polite">
+        {managedStatus && <p className="managed-participants__success">{managedStatus}</p>}
+        {managedError && <p className="managed-participants__error">{managedError}</p>}
       </div>
 
       <md-outlined-text-field
@@ -900,9 +974,28 @@ export function ParticipantManagerPanel({
                     }}
                   >
                     <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                      <strong style={{ fontWeight: "600", fontSize: "1.1rem" }}>
-                        {participant.name}
-                      </strong>
+                      <div className="managed-participant__identity">
+                        <span>
+                          <strong style={{ fontWeight: "600", fontSize: "1.1rem" }}>
+                            {participant.name}
+                          </strong>
+                          <span
+                            className={`managed-badge managed-badge--${accountAccess(participant)}`}
+                          >
+                            {accountAccess(participant) === "temporary"
+                              ? "Temporary"
+                              : "Full access"}
+                          </span>
+                          <span className="managed-badge managed-badge--status">
+                            {invitationState(participant)}
+                          </span>
+                        </span>
+                        {(participant.email || participant.contactEmail) && (
+                          <span className="managed-participant__email">
+                            {participant.email || participant.contactEmail}
+                          </span>
+                        )}
+                      </div>
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
                       <span
@@ -988,6 +1081,34 @@ export function ParticipantManagerPanel({
                       }}
                     />
                   </div>
+                  {(participant.email || participant.contactEmail) && (
+                    <div className="managed-participant__actions">
+                      {(participant.canOrganizerEditAvailability ||
+                        participant.can_organizer_edit_availability) && (
+                        <AppButton
+                          variant="outlined"
+                          icon={<MdEditCalendar />}
+                          onClick={() => onEditSchedule(participant)}
+                        >
+                          Edit schedule
+                        </AppButton>
+                      )}
+                      <AppButton
+                        variant="outlined"
+                        icon={<MdSend />}
+                        onClick={() => onSendParticipantInvitation(participant)}
+                        disabled={sendingParticipantId === participant.id}
+                      >
+                        {sendingParticipantId === participant.id
+                          ? "Sending..."
+                          : `${invitationState(participant) === "Not sent" ? "Send" : "Resend"} ${
+                              accountAccess(participant) === "temporary"
+                                ? "access link"
+                                : "invitation"
+                            }`}
+                      </AppButton>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -1063,6 +1184,190 @@ export function ParticipantManagerPanel({
           No participants match this search.
         </p>
       )}
+    </section>
+  );
+}
+
+export function ManagedScheduleDrawer({
+  event,
+  mode,
+  participant,
+  participantName,
+  setParticipantName,
+  inperson,
+  virtual,
+  responsesOpen,
+  saving,
+  error,
+  status,
+  conflictParticipant,
+  onInpersonPaint,
+  onVirtualPaint,
+  onCopy,
+  onSaveDraft,
+  onSubmit,
+  onReloadLatest,
+  onClose,
+}) {
+  const closeButtonRef = useRef(null);
+  const drawerRef = useRef(null);
+  const restoreFocusRef = useRef(null);
+  const savingRef = useRef(saving);
+  const onCloseRef = useRef(onClose);
+  const participantId = participant?.id;
+
+  useEffect(() => {
+    savingRef.current = saving;
+  }, [saving]);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  useEffect(() => {
+    if (!participantId) return undefined;
+    restoreFocusRef.current = document.activeElement;
+    const previousBodyOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    closeButtonRef.current?.focus();
+    const handleKeyDown = (keyboardEvent) => {
+      if (keyboardEvent.key === "Escape" && !savingRef.current) {
+        onCloseRef.current();
+        return;
+      }
+      if (keyboardEvent.key !== "Tab") return;
+      const focusable = Array.from(
+        drawerRef.current?.querySelectorAll(
+          'button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+        ) || []
+      );
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (keyboardEvent.shiftKey && document.activeElement === first) {
+        keyboardEvent.preventDefault();
+        last.focus();
+      } else if (!keyboardEvent.shiftKey && document.activeElement === last) {
+        keyboardEvent.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = previousBodyOverflow;
+      restoreFocusRef.current?.focus?.();
+    };
+  }, [participantId]);
+
+  if (!participant) return null;
+
+  return (
+    <div className="managed-drawer-layer">
+      <button
+        type="button"
+        className="managed-drawer-backdrop"
+        aria-label="Close schedule editor"
+        onClick={onClose}
+        disabled={saving}
+      />
+      <aside
+        ref={drawerRef}
+        className="managed-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="managed-drawer-title"
+      >
+        <header className="managed-drawer__header">
+          <div>
+            <p>Temporary participant</p>
+            <h2 id="managed-drawer-title">Edit {participant.name}&apos;s schedule</h2>
+          </div>
+          <button
+            ref={closeButtonRef}
+            type="button"
+            className="managed-drawer__close"
+            aria-label="Close schedule editor"
+            onClick={onClose}
+            disabled={saving}
+          >
+            <MdClose aria-hidden="true" />
+          </button>
+        </header>
+
+        <div className="managed-drawer__body">
+          <label className="managed-drawer__name">
+            <span>Event display name</span>
+            <input
+              value={participantName}
+              onChange={(changeEvent) => setParticipantName(changeEvent.target.value)}
+              maxLength={100}
+              disabled={!responsesOpen || saving}
+            />
+          </label>
+          <p className="managed-drawer__hint">
+            You and this participant edit the same response. A version conflict will never be
+            silently overwritten.
+          </p>
+
+          <ScheduleChannelEditor
+            mode={mode}
+            slotGroups={event.slotGroups}
+            inperson={inperson}
+            virtual={virtual}
+            readOnly={!responsesOpen || saving || Boolean(conflictParticipant)}
+            onInpersonPaint={onInpersonPaint}
+            onVirtualPaint={onVirtualPaint}
+            onCopy={onCopy}
+          />
+
+          {!responsesOpen && (
+            <p className="managed-participants__error" role="note">
+              Availability is locked while this event is not open or its deadline has passed.
+            </p>
+          )}
+          {error && (
+            <div className="managed-drawer__error" role="alert">
+              <p>{error}</p>
+              {conflictParticipant && (
+                <AppButton variant="outlined" onClick={onReloadLatest}>
+                  Reload latest response
+                </AppButton>
+              )}
+            </div>
+          )}
+          {status && (
+            <p className="managed-drawer__status" role="status">
+              {status}
+            </p>
+          )}
+        </div>
+
+        <footer className="managed-drawer__footer">
+          <AppButton variant="outlined" onClick={onClose} disabled={saving}>
+            Cancel
+          </AppButton>
+          <AppButton
+            variant="outlined"
+            icon={<MdSave />}
+            onClick={onSaveDraft}
+            disabled={
+              saving || !responsesOpen || Boolean(conflictParticipant) || !participantName.trim()
+            }
+          >
+            {saving ? "Saving..." : "Save draft"}
+          </AppButton>
+          <AppButton
+            icon={<GoVerified />}
+            onClick={onSubmit}
+            disabled={
+              saving || !responsesOpen || Boolean(conflictParticipant) || !participantName.trim()
+            }
+          >
+            {saving ? "Saving..." : "Submit on behalf"}
+          </AppButton>
+        </footer>
+      </aside>
     </div>
   );
 }

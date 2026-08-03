@@ -93,9 +93,9 @@ export async function verifyLoginCode({ email, code }) {
   return parseAuthResponse(res);
 }
 
-export async function startRegistration(payload) {
+async function postRegistration(path, payload) {
   const securedPayload = await securePasswordPayload(payload, ["password", "password_confirm"]);
-  const res = await fetch(`${API_BASE}/authn/register/`, {
+  const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(securedPayload),
@@ -103,6 +103,17 @@ export async function startRegistration(payload) {
   });
   if (!res.ok) throw new Error(await extractError(res));
   return res.json();
+}
+
+export function startRegistration(payload) {
+  return postRegistration("/authn/register/", payload);
+}
+
+export function startTemporaryUpgradeRegistration(code, payload) {
+  return postRegistration(
+    `/events/temp-access/upgrade-registration?code=${encodeURIComponent(code)}`,
+    payload
+  );
 }
 
 export async function verifyRegistration({ email, code }) {

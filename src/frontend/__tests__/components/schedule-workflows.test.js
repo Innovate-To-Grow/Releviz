@@ -44,6 +44,7 @@ jest.mock("@/components/schedule/ScheduleGrid", () => ({
 }));
 
 jest.mock("@/lib/api/participants", () => ({
+  createManagedParticipant: jest.fn(),
   deleteParticipant: jest.fn(),
   fetchParticipants: jest.fn(),
   fetchParticipantsIncludeHidden: jest.fn(),
@@ -73,6 +74,7 @@ import EventContext from "@/components/event/EventContext";
 import OrganizerView from "@/components/schedule/OrganizerView";
 import ParticipantView from "@/components/schedule/ParticipantView";
 import {
+  createManagedParticipant,
   deleteParticipant,
   fetchParticipants,
   fetchParticipantsIncludeHidden,
@@ -692,6 +694,203 @@ describe("organizer workflow", () => {
         "token"
       )
     );
+  });
+
+  test("creates a temporary person without sending email, sends access, and edits the shared schedule", async () => {
+    const taylor = participant("taylor", "taylor-user", "Taylor Temp", {
+      accountAccess: "temporary",
+      email: "taylor@example.com",
+      invitationStatus: "not_sent",
+      canOrganizerEditAvailability: true,
+    });
+    createManagedParticipant.mockResolvedValue({ created: true, participant: taylor });
+    sendInvitations.mockResolvedValue({
+      invitations: [{ id: "invite-taylor", email: taylor.email, status: "invited" }],
+      recipientCount: 1,
+      delivery: { sent: 0, pending: 1 },
+    });
+    updateParticipant.mockImplementationOnce((code, id, payload) =>
+      Promise.resolve({
+        participant: {
+          ...taylor,
+          ...payload,
+          version: 2,
+        },
+      })
+    );
+
+    renderOrganizer();
+    await screen.findByRole("heading", { name: "Participant Manager" });
+    await userEvent.type(screen.getByLabelText("Name"), taylor.name);
+    await userEvent.type(screen.getByLabelText("Email"), taylor.email);
+    await userEvent.click(screen.getByRole("button", { name: "Create person" }));
+
+    await waitFor(() =>
+      expect(createManagedParticipant).toHaveBeenCalledWith(
+        baseEvent.code,
+        { name: taylor.name, email: taylor.email },
+        "token"
+      )
+    );
+    expect(screen.getByText(`${taylor.name} was created. No email was sent.`)).toBeInTheDocument();
+    const card = document.querySelector('[data-management-participant-id="taylor"]');
+    expect(within(card).getByText("Temporary")).toBeInTheDocument();
+    expect(within(card).getByText("Not sent")).toBeInTheDocument();
+
+    await userEvent.click(within(card).getByRole("button", { name: "Send access link" }));
+    expect(sendInvitations).toHaveBeenCalledWith(
+      baseEvent.code,
+      { emails: [taylor.email], message: "", idempotencyKey: "request-key" },
+      "token"
+    );
+    expect(
+      await screen.findByText(`Access link accepted for delivery to ${taylor.email}.`)
+    ).toBeInTheDocument();
+
+    await userEvent.click(within(card).getByRole("button", { name: "Edit schedule" }));
+    const drawer = screen.getByRole("dialog", { name: `Edit ${taylor.name}'s schedule` });
+    const closeDrawer = within(drawer).getByRole("button", { name: "Close schedule editor" });
+    const submitOnBehalf = within(drawer).getByRole("button", { name: "Submit on behalf" });
+    expect(closeDrawer).toHaveFocus();
+    expect(document.body.style.overflow).toBe("hidden");
+    submitOnBehalf.focus();
+    await userEvent.tab();
+    expect(closeDrawer).toHaveFocus();
+    await userEvent.tab({ shift: true });
+    expect(submitOnBehalf).toHaveFocus();
+    await userEvent.click(within(drawer).getByRole("button", { name: "Paint In-Person" }));
+    await userEvent.click(within(drawer).getByRole("button", { name: "Save draft" }));
+    await waitFor(() =>
+      expect(updateParticipant).toHaveBeenCalledWith(
+        baseEvent.code,
+        taylor.id,
+        {
+          name: taylor.name,
+          availabilityInperson: [1, 0],
+          availabilityVirtual: [0, 0],
+          submitted: 0,
+          expectedVersion: 1,
+        },
+        "token"
+      )
+    );
+    await waitFor(() => expect(fetchEventResults.mock.calls.length).toBeGreaterThanOrEqual(2));
+    expect(await within(drawer).findByText("Draft saved.")).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(document.body.style.overflow).toBe("");
+  });
+
+  test("asks before discarding unsaved managed-schedule changes", async () => {
+    const temp = participant("guarded-temp", "guarded-user", "Guarded Temp", {
+      accountAccess: "temporary",
+      email: "guarded@example.com",
+      invitationStatus: "opened",
+      canOrganizerEditAvailability: true,
+    });
+    fetchParticipantsIncludeHidden.mockResolvedValue({ participants: [mine, temp] });
+    const confirmDiscard = jest
+      .spyOn(window, "confirm")
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+
+    renderOrganizer();
+    await screen.findByRole("heading", { name: "Participant Manager" });
+    await screen.findAllByText(temp.name);
+    const card = document.querySelector('[data-management-participant-id="guarded-temp"]');
+    await userEvent.click(within(card).getByRole("button", { name: "Edit schedule" }));
+    let drawer = screen.getByRole("dialog");
+    await userEvent.click(within(drawer).getByRole("button", { name: "Paint In-Person" }));
+    await userEvent.click(within(drawer).getByRole("button", { name: "Close schedule editor" }));
+
+    expect(confirmDiscard).toHaveBeenCalledWith(
+      "Discard the unsaved changes to this participant's schedule?"
+    );
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    drawer = screen.getByRole("dialog");
+    await userEvent.click(within(drawer).getByRole("button", { name: "Close schedule editor" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    confirmDiscard.mockRestore();
+  });
+
+  test("keeps a managed person retryable when invitation delivery fails", async () => {
+    const retryable = participant("retryable", "retry-user", "Retry Person", {
+      accountAccess: "temporary",
+      email: "retry@example.com",
+      invitationStatus: "not_sent",
+      canOrganizerEditAvailability: true,
+    });
+    createManagedParticipant.mockResolvedValue({ created: true, participant: retryable });
+    sendInvitations.mockResolvedValue({
+      invitations: [{ id: "invite-retry", email: retryable.email, status: "invited" }],
+      recipientCount: 1,
+      delivery: { sent: 0, retry: 1, permanentFailure: 0 },
+    });
+
+    renderOrganizer();
+    await screen.findByRole("heading", { name: "Participant Manager" });
+    await userEvent.type(screen.getByLabelText("Name"), retryable.name);
+    await userEvent.type(screen.getByLabelText("Email"), retryable.email);
+    await userEvent.click(screen.getByRole("button", { name: "Create person" }));
+
+    expect(
+      await screen.findByText(`${retryable.name} was created. No email was sent.`)
+    ).toBeInTheDocument();
+    const card = document.querySelector('[data-management-participant-id="retryable"]');
+    await userEvent.click(within(card).getByRole("button", { name: "Send access link" }));
+    expect(
+      await screen.findByText(
+        `Access link was not delivered to ${retryable.email}. The person was kept and you can retry.`
+      )
+    ).toBeInTheDocument();
+    expect(within(card).getByText("Not sent")).toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: "Send access link" })).toBeInTheDocument();
+  });
+
+  test("requires reloading a version conflict and closes editing after a full-access upgrade", async () => {
+    const temp = participant("temp", "temp-user", "Temporary Teammate", {
+      accountAccess: "temporary",
+      email: "temp@example.com",
+      invitationStatus: "opened",
+      canOrganizerEditAvailability: true,
+    });
+    fetchParticipantsIncludeHidden.mockResolvedValue({ participants: [mine, temp] });
+    const latest = {
+      ...temp,
+      availabilityInperson: [0.5, 0],
+      availabilityVirtual: [0, 0.5],
+      version: 7,
+    };
+    updateParticipant
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Response version conflict"), {
+          status: 409,
+          participant: latest,
+        })
+      )
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Organizer editing is no longer allowed"), { status: 403 })
+      );
+
+    renderOrganizer();
+    await screen.findByRole("heading", { name: "Participant Manager" });
+    await screen.findAllByText(temp.name);
+    const card = document.querySelector('[data-management-participant-id="temp"]');
+    await userEvent.click(within(card).getByRole("button", { name: "Edit schedule" }));
+    let drawer = screen.getByRole("dialog");
+    await userEvent.click(within(drawer).getByRole("button", { name: "Save draft" }));
+    expect(
+      await within(drawer).findByText(/This response changed after you opened it/)
+    ).toBeInTheDocument();
+    await userEvent.click(within(drawer).getByRole("button", { name: "Reload latest response" }));
+    expect(within(drawer).getByTestId("grid-In-Person")).toHaveTextContent("0.5,0");
+
+    await userEvent.click(within(drawer).getByRole("button", { name: "Save draft" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(
+      screen.getByText(/now has full access, so organizer schedule editing is no longer allowed/)
+    ).toBeInTheDocument();
   });
 
   test("renders loading and empty recommendation states", async () => {

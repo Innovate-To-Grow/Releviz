@@ -146,7 +146,13 @@ class RegisterResendCodeView(PublicAuthView):
             .filter(email_address__iexact=email)
             .first()
         )
-        if contact is None or contact.member.is_active:
+        has_registration = bool(
+            contact
+            and contact.member.email_auth_challenges.filter(
+                purpose=EmailAuthChallenge.Purpose.REGISTER,
+            ).exists()
+        )
+        if contact is None or contact.verified or not has_registration:
             return Response(
                 {"message": "If registration is pending, a verification code has been sent."},
                 status=202,
@@ -192,7 +198,12 @@ class LoginRequestCodeView(PublicAuthView):
         generic_data = {"message": "If the account exists, a code has been sent."}
         contact = (
             ContactEmail.objects.select_related("member")
-            .filter(email_address__iexact=email, verified=True, member__is_active=True)
+            .filter(
+                email_address__iexact=email,
+                verified=True,
+                member__is_active=True,
+                member__access_level="full",
+            )
             .first()
         )
         if contact is None:
@@ -388,7 +399,12 @@ class PasswordResetRequestView(PublicAuthView):
         email = normalize_email(request.data.get("email", ""))
         contact = (
             ContactEmail.objects.select_related("member")
-            .filter(email_address__iexact=email, verified=True, member__is_active=True)
+            .filter(
+                email_address__iexact=email,
+                verified=True,
+                member__is_active=True,
+                member__access_level="full",
+            )
             .first()
         )
         if contact is not None:

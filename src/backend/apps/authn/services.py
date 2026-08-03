@@ -8,11 +8,12 @@ from datetime import UTC, datetime
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
+from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.hashers import check_password, make_password
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone
 from rest_framework import serializers
 from rest_framework_simplejwt.exceptions import TokenBackendError, TokenError
@@ -60,6 +61,7 @@ def user_payload(user) -> dict:
         "title": user.title,
         "imageUrl": user.profile_image or None,
         "isStaff": bool(user.is_staff),
+        "accessLevel": user.access_level,
     }
 
 
@@ -102,6 +104,8 @@ def issue_auth_session(
 ) -> IssuedAuthSession:
     if not user.is_active:
         raise serializers.ValidationError({"detail": "Account is inactive."})
+    if user.access_level != user.AccessLevel.FULL:
+        raise serializers.ValidationError({"detail": "Full account access is required."})
     now = timezone.now()
     session = AuthSession(
         member=user,
@@ -218,7 +222,7 @@ def rotate_auth_session(raw_refresh: str, *, request=None) -> IssuedAuthSession:
     ):
         raise TokenError("Refresh credential is no longer active.")
     user = session.member
-    if not user.is_active:
+    if not user.is_active or user.access_level != user.AccessLevel.FULL:
         raise TokenError("Account is inactive.")
     if api_settings.CHECK_REVOKE_TOKEN and refresh.get(
         api_settings.REVOKE_TOKEN_CLAIM
@@ -527,12 +531,16 @@ def issue_email_challenge(
     target_email: str,
     channel: str = EmailAuthChallenge.Channel.EMAIL,
     target_phone: str = "",
+    scope_key: str = "",
 ) -> IssuedChallenge:
     code = f"{secrets.randbelow(1_000_000):06d}"
+    normalized_scope = str(scope_key or "").strip()
     member = member.__class__.objects.select_for_update().get(pk=member.pk)
     pending_challenges = EmailAuthChallenge.objects.filter(
         member=member,
         purpose=purpose,
+        channel=channel,
+        scope_key=normalized_scope,
         status=EmailAuthChallenge.Status.PENDING,
     )
     pending_ids = list(pending_challenges.values_list("pk", flat=True))
@@ -545,6 +553,7 @@ def issue_email_challenge(
         channel=channel,
         target_email=normalized_target,
         target_phone=target_phone,
+        scope_key=normalized_scope,
         code_hash=make_password(code),
         expires_at=EmailAuthChallenge.default_expiry(),
     )
@@ -700,8 +709,16 @@ def send_login_alert(
     )
 
 
-def verify_email_challenge(*, email: str, code: str, purpose: str, consume: bool = True):
+def verify_email_challenge(
+    *,
+    email: str,
+    code: str,
+    purpose: str,
+    consume: bool = True,
+    scope_key: str = "",
+):
     normalized = normalize_email(email)
+    normalized_scope = str(scope_key or "").strip()
     error_message = ""
     with transaction.atomic():
         challenge = (
@@ -710,6 +727,7 @@ def verify_email_challenge(*, email: str, code: str, purpose: str, consume: bool
             .filter(
                 target_email__iexact=normalized,
                 purpose=purpose,
+                scope_key=normalized_scope,
                 status=EmailAuthChallenge.Status.PENDING,
             )
             .order_by("-created_at")
@@ -751,7 +769,7 @@ def verify_email_challenge(*, email: str, code: str, purpose: str, consume: bool
 
 
 @transaction.atomic
-def start_registration(data: dict):
+def start_registration(data: dict, *, _temporary_upgrade_member_id=None):
     email = normalize_email(data.get("email", ""))
     password = validate_password_pair(data)
     first_name = str(data.get("first_name") or data.get("firstName") or "").strip()
@@ -777,6 +795,29 @@ def start_registration(data: dict):
     )
     member = contact.member if contact else None
     Member = get_user_model()
+
+    authorized_temporary_upgrade = _temporary_upgrade_member_id is not None
+    if authorized_temporary_upgrade:
+        try:
+            authorized_member_id = uuid.UUID(str(_temporary_upgrade_member_id))
+        except (TypeError, ValueError, AttributeError):
+            authorized_member_id = None
+        if (
+            contact is None
+            or member is None
+            or member.pk != authorized_member_id
+            or member.access_level != member.AccessLevel.TEMPORARY
+        ):
+            raise serializers.ValidationError(
+                {"email": "Unable to register with this email address."}
+            )
+    elif member is not None and member.access_level == member.AccessLevel.TEMPORARY:
+        # Temporary identities may only be upgraded from a verified,
+        # event-scoped session. Keep this indistinguishable from every other
+        # unavailable registration address and reject before mutating the
+        # Member or replacing its pending registration challenge.
+        raise serializers.ValidationError({"email": "Unable to register with this email address."})
+
     if member is None:
         member = Member.objects.create_user(
             password=password,
@@ -788,12 +829,16 @@ def start_registration(data: dict):
             email=email,
         )
     else:
+        is_temporary = member.access_level == member.AccessLevel.TEMPORARY
         member.first_name = first_name
         member.last_name = last_name
         member.organization = organization
         member.title = title
         member.email = email
-        member.is_active = False
+        # A temporary member's event-scoped access must continue to work while
+        # full registration is awaiting verification. Ordinary login remains
+        # unavailable because its ContactEmail is still unverified.
+        member.is_active = True if is_temporary else False
         member.set_password(password)
         member.save()
 
@@ -824,16 +869,56 @@ def complete_registration(email: str, code: str):
         code=code,
         purpose=EmailAuthChallenge.Purpose.REGISTER,
     )
-    member = challenge.member
+    Member = get_user_model()
+    member = Member.objects.select_for_update().get(pk=challenge.member_id)
+    was_temporary = member.access_level == member.AccessLevel.TEMPORARY
     member.is_active = True
     member.email = normalize_email(email)
-    member.save(update_fields=["is_active", "email"])
+    member.access_level = member.AccessLevel.FULL
+    member.save(update_fields=["is_active", "email", "access_level"])
     ContactEmail.objects.filter(member=member, email_address__iexact=email).update(
         verified=True,
         email_type="primary",
     )
+    if was_temporary:
+        _complete_temporary_account_upgrade(member)
     send_registration_welcome(member)
     return member
+
+
+def _complete_temporary_account_upgrade(member) -> None:
+    """Preserve scheduling identity while granting normal account access."""
+
+    Participant = apps.get_model("scheduling", "Participant")
+    UserEvent = apps.get_model("scheduling", "UserEvent")
+    display_name = member.get_full_name().strip()[:100]
+    participations = Participant.objects.filter(member=member)
+    if display_name:
+        participations.update(
+            participant_name=display_name,
+            version=F("version") + 1,
+            updated_at=timezone.now(),
+        )
+    event_ids = participations.values_list("event_id", flat=True)
+    UserEvent.objects.bulk_create(
+        [UserEvent(member=member, event_id=event_id, role="participant") for event_id in event_ids],
+        ignore_conflicts=True,
+    )
+
+    try:
+        TemporaryEventSession = apps.get_model("scheduling", "TemporaryEventSession")
+    except LookupError:  # Supports rolling deployments before the scheduling migration lands.
+        TemporaryEventSession = None
+    if TemporaryEventSession is not None:
+        now = timezone.now()
+        TemporaryEventSession.objects.filter(
+            member=member,
+            revoked_at__isnull=True,
+        ).update(revoked_at=now, updated_at=now)
+    logger.info(
+        "temporary_account_upgraded",
+        extra={"member_id": str(member.pk), "participation_count": participations.count()},
+    )
 
 
 def login_with_password(email: str, password: str, request=None, *, require_staff: bool = False):

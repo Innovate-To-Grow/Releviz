@@ -38,12 +38,13 @@ class MemberAdmin(ModelAdmin):
     list_display = (
         "display_name",
         "primary_email",
+        "access_level",
         "organization",
         "is_active",
         "is_staff",
         "date_joined",
     )
-    list_filter = ("is_active", "is_staff", "is_superuser")
+    list_filter = ("access_level", "is_active", "is_staff", "is_superuser")
     search_fields = (
         "first_name",
         "last_name",
@@ -56,7 +57,17 @@ class MemberAdmin(ModelAdmin):
     fieldsets = (
         (
             "Identity",
-            {"fields": ("id", "first_name", "last_name", "email", "organization", "title")},
+            {
+                "fields": (
+                    "id",
+                    "first_name",
+                    "last_name",
+                    "email",
+                    "access_level",
+                    "organization",
+                    "title",
+                )
+            },
         ),
         (
             "Permissions",
@@ -103,13 +114,20 @@ class EmailAuthChallengeAdmin(ModelAdmin):
         "purpose",
         "target_email",
         "target_phone",
+        "scope_key",
         "member",
         "status",
         "expires_at",
         "created_at",
     )
     list_filter = ("purpose", "channel", "status")
-    search_fields = ("target_email", "target_phone", "member__first_name", "member__last_name")
+    search_fields = (
+        "target_email",
+        "target_phone",
+        "scope_key",
+        "member__first_name",
+        "member__last_name",
+    )
     readonly_fields = ("code_hash", "verification_token_hash")
 
 

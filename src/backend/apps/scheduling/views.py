@@ -2,6 +2,7 @@ import logging
 import uuid
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.db import DatabaseError, connection, transaction
 from django.http import HttpResponse
 from django.utils import timezone
@@ -9,14 +10,21 @@ from django.utils.cache import patch_cache_control, patch_vary_headers
 from django.utils.dateparse import parse_datetime
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.exceptions import Throttled
+from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.authn.models import ContactEmail
-from apps.authn.security import AuthRateThrottle, consume_request_rate_limit
+from apps.authn.security import (
+    AuthRateThrottle,
+    consume_request_rate_limit,
+    enforce_cookie_request_origin,
+)
+from apps.authn.services import start_registration
 from apps.messaging.models import EmailDeliveryRequest
 from apps.messaging.services import (
+    EmailDeliveryError,
     dispatch_email_job,
     email_delivery_summary,
 )
@@ -50,7 +58,9 @@ from apps.scheduling.permissions import (
 )
 from apps.scheduling.services import (
     EventEmailRequestError,
+    ManagedParticipantError,
     api_invitation,
+    create_or_reuse_managed_participant,
     enqueue_manual_reminders,
     final_meeting_ics,
     mark_invitation_for_member,
@@ -58,6 +68,13 @@ from apps.scheduling.services import (
     mark_invitation_response_withdrawn,
     split_invitation_emails,
     upsert_and_send_invitations,
+)
+from apps.scheduling.temp_access import (
+    clear_temporary_session_cookie,
+    request_temporary_access_code,
+    set_temporary_session_cookie,
+    temporary_session_from_request,
+    verify_temporary_access_code,
 )
 from apps.scheduling.utils import (
     api_event,
@@ -69,6 +86,14 @@ from apps.scheduling.utils import (
 )
 
 logger = logging.getLogger(__name__)
+security_logger = logging.getLogger("releviz.security")
+
+
+def current_member_access_level(member_id) -> str:
+    """Read committed account state without joining it into a row-lock query."""
+
+    Member = get_user_model()
+    return Member.objects.values_list("access_level", flat=True).get(pk=member_id)
 
 
 def private_response(data, *, status=200):
@@ -76,6 +101,39 @@ def private_response(data, *, status=200):
     patch_cache_control(response, private=True, no_store=True)
     patch_vary_headers(response, ["Authorization"])
     return response
+
+
+def temp_private_response(data=None, *, status=200):
+    response = Response(data, status=status)
+    patch_cache_control(response, private=True, no_store=True)
+    patch_vary_headers(response, ["Cookie", "Origin"])
+    return response
+
+
+def organizer_participant_payload(participant, event):
+    invitation = (
+        event.invitations.filter(member_id=participant.member_id).order_by("-created_at").first()
+    )
+    return api_participant(
+        participant,
+        organizer_private=True,
+        invitation=invitation,
+    )
+
+
+def temp_access_payload(session):
+    event = session.participant.event
+    can_view_results = can_view_event_results(event, session.member)
+    payload = {
+        "event": api_event(event),
+        "participant": api_participant(session.participant),
+        "email": session.member.get_primary_contact_email(),
+        "canViewResults": can_view_results,
+        "sessionExpiresAt": session.expires_at.isoformat(),
+    }
+    if can_view_results:
+        payload["results"] = build_event_results(event)
+    return payload
 
 
 def parse_aware_timestamp(value, label: str):
@@ -303,9 +361,28 @@ class ParticipantsView(APIView):
                 {"error": "You must join this event before viewing participants"},
                 status=403,
             )
-        return private_response(
-            {"participants": [api_participant(participant) for participant in participants]}
-        )
+        is_organizer = event.organizer_id == request.user.pk
+        if is_organizer:
+            invitations_by_member = {}
+            for invitation in event.invitations.select_related("member").order_by("-created_at"):
+                if invitation.member_id and invitation.member_id not in invitations_by_member:
+                    invitations_by_member[invitation.member_id] = invitation
+            participant_payloads = []
+            for participant in participants:
+                invitation = invitations_by_member.get(participant.member_id)
+                if invitation is None:
+                    participant_payloads.append(organizer_participant_payload(participant, event))
+                else:
+                    participant_payloads.append(
+                        api_participant(
+                            participant,
+                            organizer_private=True,
+                            invitation=invitation,
+                        )
+                    )
+        else:
+            participant_payloads = [api_participant(participant) for participant in participants]
+        return private_response({"participants": participant_payloads})
 
     @transaction.atomic
     def post(self, request):
@@ -348,6 +425,40 @@ class ParticipantsView(APIView):
         )
 
 
+class ManagedParticipantView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        code = str(request.query_params.get("code") or "").strip()
+        if not code:
+            return Response({"error": "code is required"}, status=400)
+        event = Event.objects.filter(code=code).first()
+        if event is None:
+            return Response({"error": "Event not found"}, status=404)
+        try:
+            result = create_or_reuse_managed_participant(
+                event=event,
+                organizer=request.user,
+                name=request.data.get("name"),
+                email=request.data.get("email"),
+            )
+        except ManagedParticipantError as exc:
+            return Response({"error": str(exc)}, status=exc.status_code)
+        participant = result["participant"]
+        return private_response(
+            {
+                "participant": api_participant(
+                    participant,
+                    organizer_private=True,
+                    invitation=result["invitation"],
+                ),
+                "created": result["participantCreated"],
+                "memberCreated": result["memberCreated"],
+            },
+            status=201 if result["participantCreated"] else 200,
+        )
+
+
 class ParticipantUpdateView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -363,7 +474,7 @@ class ParticipantUpdateView(APIView):
         event = Event.objects.select_for_update().filter(code=code).first()
         if event is None:
             return None, None, Response({"error": "Event not found"}, status=404)
-        participants = event.participants.select_related("event", "member").select_for_update()
+        participants = event.participants.select_related("event").select_for_update(of=("self",))
         participant = participants.filter(member_id=participant_id).first()
         if participant is None:
             return event, None, Response({"error": "Participant not found"}, status=404)
@@ -377,21 +488,62 @@ class ParticipantUpdateView(APIView):
 
         is_organizer = event.organizer_id == request.user.pk
         is_self = participant.member_id == request.user.pk
+        is_temporary = current_member_access_level(participant.member_id) == "temporary"
+        organizer_can_edit_response = is_organizer and is_temporary
         response_fields = {"availabilityInperson", "availabilityVirtual", "submitted"}
         is_response_mutation = any(field in request.data for field in response_fields)
-        if is_response_mutation and not is_self:
-            return Response(
-                {"error": "Only participants can change their own availability"},
-                status=403,
+        is_name_mutation = "name" in request.data
+        is_versioned_mutation = is_response_mutation or is_name_mutation
+
+        if is_organizer and not is_temporary and is_versioned_mutation:
+            security_logger.warning(
+                "organizer_participant_edit_denied",
+                extra={
+                    "event_id": str(event.pk),
+                    "organizer_id": str(request.user.pk),
+                    "member_id": str(participant.member_id),
+                    "account_access": "full",
+                },
             )
+
+        def response_participant_payload():
+            if is_organizer:
+                return organizer_participant_payload(participant, event)
+            return api_participant(participant)
+
+        if is_response_mutation and not (is_self or organizer_can_edit_response):
+            payload = {"error": "Only participants can change their own availability"}
+            if is_organizer:
+                payload = {
+                    "error": (
+                        "This participant has full access; the organizer can no longer "
+                        "change their availability."
+                    ),
+                    "participant": response_participant_payload(),
+                }
+            if is_organizer:
+                return private_response(payload, status=403)
+            return Response(payload, status=403)
+        if is_name_mutation and not organizer_can_edit_response:
+            payload = {"error": "Only the organizer can rename a temporary participant"}
+            if is_organizer:
+                payload["participant"] = response_participant_payload()
+                return private_response(payload, status=403)
+            return Response(payload, status=403)
         if not is_organizer and not is_self:
             return Response(
                 {"error": "You do not have permission to update this participant"}, status=403
             )
-        if is_response_mutation:
+        if "email" in request.data or "contactEmail" in request.data:
+            return Response(
+                {"error": "Participant email cannot be changed."},
+                status=400,
+            )
+        if is_versioned_mutation:
             write_error = response_write_error(event)
             if write_error:
                 return Response({"error": write_error}, status=409)
+        if is_response_mutation:
             weight = weight_for_participant(event, participant)
             if participant_is_excluded(participant, weight):
                 return Response(
@@ -414,6 +566,14 @@ class ParticipantUpdateView(APIView):
                     else "availability_virtual"
                 )
                 updates[target] = request.data[field]
+
+        if is_name_mutation:
+            name = str(request.data.get("name") or "").strip()
+            if not name:
+                return Response({"error": "Name is required"}, status=400)
+            if len(name) > 100:
+                return Response({"error": "Name too long (max 100)"}, status=400)
+            updates["participant_name"] = name
 
         if "submitted" in request.data:
             submitted = request.data["submitted"]
@@ -443,7 +603,7 @@ class ParticipantUpdateView(APIView):
                 return Response({"error": "sortOrder must be an integer or null"}, status=400)
 
         if not updates:
-            return private_response({"participant": api_participant(participant)})
+            return private_response({"participant": response_participant_payload()})
 
         def values_match():
             for key, value in updates.items():
@@ -472,21 +632,21 @@ class ParticipantUpdateView(APIView):
                     draft_saved=True,
                 )
 
-        if is_response_mutation:
+        if is_versioned_mutation:
             expected_version = request.data.get("expectedVersion")
             if isinstance(expected_version, bool) or not isinstance(expected_version, int):
                 return Response({"error": "expectedVersion is required"}, status=428)
             if participant.version != expected_version:
                 if values_match():
                     track_unchanged_response()
-                    return private_response({"participant": api_participant(participant)})
+                    return private_response({"participant": response_participant_payload()})
                 return private_response(
                     {
                         "error": (
                             "Your availability changed in another session. "
                             "Refresh before saving again."
                         ),
-                        "participant": api_participant(participant),
+                        "participant": response_participant_payload(),
                     },
                     status=409,
                 )
@@ -512,7 +672,7 @@ class ParticipantUpdateView(APIView):
                 timestamp_fields.append("first_draft_saved_at")
             if timestamp_fields:
                 participant.save(update_fields=[*timestamp_fields, "updated_at"])
-            return private_response({"participant": api_participant(participant)})
+            return private_response({"participant": response_participant_payload()})
 
         was_submitted = participant.submitted
         for key, value in updates.items():
@@ -551,7 +711,18 @@ class ParticipantUpdateView(APIView):
                     member=participant.member,
                     draft_saved=True,
                 )
-        return private_response({"participant": api_participant(participant)})
+        if organizer_can_edit_response and is_versioned_mutation:
+            security_logger.info(
+                "temporary_participant_organizer_updated",
+                extra={
+                    "event_id": str(event.pk),
+                    "organizer_id": str(request.user.pk),
+                    "member_id": str(participant.member_id),
+                    "participant_version": participant.version,
+                    "submitted": participant.submitted,
+                },
+            )
+        return private_response({"participant": response_participant_payload()})
 
     @transaction.atomic
     def delete(self, request):
@@ -733,6 +904,354 @@ class EventInvitationOpenView(APIView):
             mark_invitation_opened(event_code=code, access_token=access_token)
         response = Response(status=204)
         patch_cache_control(response, private=True, no_store=True)
+        return response
+
+
+class TemporaryAccessRequestCodeView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def post(self, request):
+        event_code = str(request.data.get("code") or "").strip()
+        invitation_token = str(request.data.get("invitationToken") or "").strip()
+        identity = f"{event_code}:{invitation_token}"
+        quota = consume_request_rate_limit(
+            "temp_access_code_request",
+            request,
+            identity,
+        )
+        if not quota.allowed:
+            raise Throttled(wait=quota.retry_after)
+        try:
+            request_temporary_access_code(
+                event_code=event_code,
+                access_token=invitation_token,
+            )
+        except Exception:
+            # Do not reveal whether the event, invitation, or temporary account
+            # exists. Operational failures remain visible in server logs.
+            logger.exception("temporary_access_code_request_failed")
+        return temp_private_response(
+            {"message": ("If this access link is valid, a verification code has been sent.")},
+            status=202,
+        )
+
+
+class TemporaryAccessVerifyView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def post(self, request):
+        # This response sets the event-scoped HttpOnly cookie, so apply the
+        # same login-CSRF protection used by every other cookie mutation.
+        enforce_cookie_request_origin(request)
+        event_code = str(request.data.get("code") or "").strip()
+        invitation_token = str(request.data.get("invitationToken") or "").strip()
+        verification_code = str(request.data.get("verificationCode") or "").strip()
+        identity = f"{event_code}:{invitation_token}"
+        quota = consume_request_rate_limit(
+            "temp_access_code_verify",
+            request,
+            identity,
+        )
+        if not quota.allowed:
+            raise Throttled(wait=quota.retry_after)
+        try:
+            credential = verify_temporary_access_code(
+                event_code=event_code,
+                access_token=invitation_token,
+                code=verification_code,
+                request=request,
+            )
+        except DRFValidationError:
+            credential = None
+        if credential is None:
+            return temp_private_response(
+                {"error": "Invalid or expired verification code."},
+                status=400,
+            )
+        response = temp_private_response(temp_access_payload(credential.session))
+        set_temporary_session_cookie(response, credential)
+        return response
+
+
+class TemporaryAccessSessionView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def get(self, request):
+        event_code = str(request.query_params.get("code") or "").strip()
+        if not event_code:
+            return temp_private_response({"error": "code is required"}, status=400)
+        session = temporary_session_from_request(request, event_code=event_code)
+        if session is None:
+            response = temp_private_response(
+                {"error": "Temporary event access is not active."},
+                status=401,
+            )
+            clear_temporary_session_cookie(response)
+            return response
+        return temp_private_response(temp_access_payload(session))
+
+
+class TemporaryAccessUpgradeRegistrationView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def post(self, request):
+        enforce_cookie_request_origin(request)
+        event_code = str(request.query_params.get("code") or "").strip()
+        if not event_code:
+            return temp_private_response({"error": "code is required"}, status=400)
+
+        session = temporary_session_from_request(request, event_code=event_code)
+        if session is None:
+            response = temp_private_response(
+                {"error": "Temporary event access is not active."},
+                status=401,
+            )
+            clear_temporary_session_cookie(response)
+            return response
+
+        quota = consume_request_rate_limit(
+            "register",
+            request,
+            str(session.member_id),
+        )
+        if not quota.allowed:
+            raise Throttled(wait=quota.retry_after)
+
+        contact = ContactEmail.objects.filter(
+            member_id=session.member_id,
+            email_type="primary",
+            verified=False,
+        ).first()
+        if contact is None:
+            security_logger.warning(
+                "temporary_upgrade_registration_identity_unavailable",
+                extra={
+                    "event_id": str(session.participant.event_id),
+                    "member_id": str(session.member_id),
+                    "temporary_session_id": str(session.pk),
+                },
+            )
+            return temp_private_response(
+                {"detail": "Unable to start registration."},
+                status=409,
+            )
+
+        registration_data = request.data.copy()
+        # The event-scoped session is the identity authority for an upgrade.
+        # Never trust an email supplied by the browser for this operation.
+        registration_data["email"] = contact.email_address
+        try:
+            member = start_registration(
+                registration_data,
+                _temporary_upgrade_member_id=session.member_id,
+            )
+        except DRFValidationError as exc:
+            return temp_private_response(exc.detail, status=400)
+        except EmailDeliveryError:
+            security_logger.warning(
+                "temporary_upgrade_registration_delivery_failed",
+                extra={
+                    "event_id": str(session.participant.event_id),
+                    "member_id": str(session.member_id),
+                    "temporary_session_id": str(session.pk),
+                },
+            )
+            return temp_private_response(
+                {"detail": "Unable to send the verification code."},
+                status=503,
+            )
+
+        if member.pk != session.member_id:
+            security_logger.error(
+                "temporary_upgrade_registration_identity_mismatch",
+                extra={
+                    "event_id": str(session.participant.event_id),
+                    "member_id": str(session.member_id),
+                    "temporary_session_id": str(session.pk),
+                },
+            )
+            raise RuntimeError("Temporary upgrade registration identity mismatch.")
+
+        security_logger.info(
+            "temporary_upgrade_registration_started",
+            extra={
+                "event_id": str(session.participant.event_id),
+                "member_id": str(session.member_id),
+                "temporary_session_id": str(session.pk),
+            },
+        )
+        return temp_private_response(
+            {"message": "Registration started. Check your email for a verification code."},
+            status=202,
+        )
+
+
+class TemporaryAccessParticipantView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    @transaction.atomic
+    def put(self, request):
+        enforce_cookie_request_origin(request)
+        event_code = str(request.query_params.get("code") or "").strip()
+        if not event_code:
+            return temp_private_response({"error": "code is required"}, status=400)
+        session = temporary_session_from_request(request, event_code=event_code)
+        if session is None:
+            response = temp_private_response(
+                {"error": "Temporary event access is not active."},
+                status=401,
+            )
+            clear_temporary_session_cookie(response)
+            return response
+
+        event = Event.objects.select_for_update().get(pk=session.participant.event_id)
+        participant = (
+            Participant.objects.select_for_update(of=("self",))
+            .select_related("event")
+            .get(pk=session.participant_id)
+        )
+        if current_member_access_level(participant.member_id) != "temporary":
+            session.revoke()
+            response = temp_private_response(
+                {"error": "This account now has full access. Sign in to continue."},
+                status=403,
+            )
+            clear_temporary_session_cookie(response)
+            return response
+        if "email" in request.data or "contactEmail" in request.data:
+            return temp_private_response(
+                {"error": "Participant email cannot be changed."},
+                status=400,
+            )
+        write_error = response_write_error(event)
+        if write_error:
+            return temp_private_response({"error": write_error}, status=409)
+        weight = weight_for_participant(event, participant)
+        if participant_is_excluded(participant, weight):
+            return temp_private_response(
+                {"error": "Excluded participants cannot change availability"},
+                status=403,
+            )
+
+        updates = {}
+        for field, label, target in (
+            (
+                "availabilityInperson",
+                "availabilityInperson",
+                "availability_inperson",
+            ),
+            (
+                "availabilityVirtual",
+                "availabilityVirtual",
+                "availability_virtual",
+            ),
+        ):
+            if field in request.data:
+                error = validate_availability(request.data[field], event, label)
+                if error:
+                    return temp_private_response({"error": error}, status=400)
+                updates[target] = request.data[field]
+        if "submitted" in request.data:
+            submitted = request.data["submitted"]
+            if submitted not in {0, 1}:
+                return temp_private_response(
+                    {"error": "submitted must be a boolean"},
+                    status=400,
+                )
+            updates["submitted"] = bool(submitted)
+        if not updates:
+            return temp_private_response({"participant": api_participant(participant)})
+
+        expected_version = request.data.get("expectedVersion")
+        if isinstance(expected_version, bool) or not isinstance(expected_version, int):
+            return temp_private_response(
+                {"error": "expectedVersion is required"},
+                status=428,
+            )
+        values_match = all(getattr(participant, key) == value for key, value in updates.items())
+        if participant.version != expected_version and not values_match:
+            return temp_private_response(
+                {
+                    "error": (
+                        "Your availability changed in another session. Reload before saving again."
+                    ),
+                    "participant": api_participant(participant),
+                },
+                status=409,
+            )
+        if values_match:
+            return temp_private_response({"participant": api_participant(participant)})
+
+        was_submitted = participant.submitted
+        for key, value in updates.items():
+            setattr(participant, key, value)
+        timestamp_fields = []
+        now = timezone.now()
+        if participant.submitted:
+            if participant.first_submitted_at is None:
+                participant.first_submitted_at = now
+                timestamp_fields.append("first_submitted_at")
+            participant.last_submitted_at = now
+            timestamp_fields.append("last_submitted_at")
+        elif participant.first_draft_saved_at is None:
+            participant.first_draft_saved_at = now
+            timestamp_fields.append("first_draft_saved_at")
+        participant.version += 1
+        participant.save(
+            update_fields=[*updates.keys(), *timestamp_fields, "version", "updated_at"]
+        )
+        if participant.submitted:
+            mark_invitation_for_member(
+                event=event,
+                member=participant.member,
+                submitted=True,
+            )
+        elif was_submitted:
+            mark_invitation_response_withdrawn(event=event, member=participant.member)
+        else:
+            mark_invitation_for_member(
+                event=event,
+                member=participant.member,
+                draft_saved=True,
+            )
+        security_logger.info(
+            "temporary_participant_response_updated",
+            extra={
+                "event_id": str(event.pk),
+                "member_id": str(participant.member_id),
+                "participant_version": participant.version,
+                "submitted": participant.submitted,
+            },
+        )
+        return temp_private_response({"participant": api_participant(participant)})
+
+
+class TemporaryAccessLogoutView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def post(self, request):
+        enforce_cookie_request_origin(request)
+        session = temporary_session_from_request(
+            request,
+            update_last_seen=False,
+        )
+        if session is not None:
+            session.revoke()
+            security_logger.info(
+                "temporary_event_session_revoked",
+                extra={
+                    "temporary_session_id": str(session.pk),
+                    "member_id": str(session.member_id),
+                },
+            )
+        response = temp_private_response(status=204)
+        clear_temporary_session_cookie(response)
         return response
 
 

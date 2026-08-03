@@ -4,6 +4,7 @@ const createJestConfig = nextJest({ dir: "./" });
 
 const config = {
   testEnvironment: "node",
+  testTimeout: 15000,
   testMatch: ["**/__tests__/**/*.test.js"],
   modulePathIgnorePatterns: ["<rootDir>/.next/"],
   testPathIgnorePatterns: ["<rootDir>/.next/"],

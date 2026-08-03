@@ -175,16 +175,16 @@ class InvitationServiceTests(TestCase):
             self.assertFalse(dispatch_email_job(job.pk)["attempted"])
         self.assertEqual(len(mail.outbox), 2)
 
-        deduplicated = upsert_and_send_invitations(
+        resent = upsert_and_send_invitations(
             event=self.event,
             emails=["manual@example.com", "participant@example.com"],
             invited_by=self.organizer,
             idempotency_key=uuid.uuid4(),
             message="Please respond",
         )
-        self.assertFalse(deduplicated["idempotent"])
-        self.assertEqual(deduplicated["createdJobCount"], 0)
-        self.assertEqual(EmailDeliveryJob.objects.count(), 2)
+        self.assertFalse(resent["idempotent"])
+        self.assertEqual(resent["createdJobCount"], 2)
+        self.assertEqual(EmailDeliveryJob.objects.count(), 4)
 
         changed = upsert_and_send_invitations(
             event=self.event,
@@ -194,7 +194,7 @@ class InvitationServiceTests(TestCase):
             message="Updated details",
         )
         self.assertEqual(changed["createdJobCount"], 1)
-        self.assertEqual(EmailDeliveryJob.objects.count(), 3)
+        self.assertEqual(EmailDeliveryJob.objects.count(), 5)
 
         with self.assertRaisesMessage(EventEmailRequestError, "different invitation details"):
             upsert_and_send_invitations(
@@ -204,6 +204,40 @@ class InvitationServiceTests(TestCase):
                 idempotency_key=key,
                 message="Changed",
             )
+
+    def test_sending_preserves_existing_pending_full_member_binding(self):
+        pending = create_member(
+            "pending-full@example.com",
+            "Pending",
+            "Full",
+            is_active=False,
+            contact_verified=False,
+        )
+        participant = Participant.objects.create(
+            event=self.event,
+            member=pending,
+            participant_name="Pending Full",
+        )
+        existing_invitation = EventInvitation.objects.create(
+            event=self.event,
+            email="pending-full@example.com",
+            member=pending,
+            invited_by=self.organizer,
+        )
+        self.assertEqual(participant.member_id, pending.pk)
+        self.assertEqual(existing_invitation.member_id, pending.pk)
+        self.assertIsNone(resolve_invited_member("pending-full@example.com"))
+
+        result = upsert_and_send_invitations(
+            event=self.event,
+            emails=["pending-full@example.com"],
+            invited_by=self.organizer,
+            idempotency_key=uuid.uuid4(),
+        )
+
+        invitation = result["invitations"][0]
+        self.assertEqual(invitation.member_id, pending.pk)
+        self.assertEqual(result["jobs"][0].recipient, "pending-full@example.com")
 
     def test_reminder_jobs_deduplicate_retries_and_new_deadline_cycles(self):
         for email in ["participant@example.com", "manual@example.com"]:
@@ -631,7 +665,7 @@ class InvitationApiTests(TestCase):
         )
         self.assertEqual(conflict.status_code, 409)
 
-        deduplicated = self.client.post(
+        resent = self.client.post(
             self.invitation_url(),
             request_payload(
                 ["manual@example.com", "participant@example.com"],
@@ -639,10 +673,10 @@ class InvitationApiTests(TestCase):
             ),
             format="json",
         )
-        self.assertEqual(deduplicated.status_code, 201)
-        self.assertEqual(deduplicated.data["enqueued"], 0)
-        self.assertEqual(deduplicated.data["deduplicated"], 2)
-        self.assertEqual(len(mail.outbox), 2)
+        self.assertEqual(resent.status_code, 201)
+        self.assertEqual(resent.data["enqueued"], 2)
+        self.assertEqual(resent.data["deduplicated"], 0)
+        self.assertEqual(len(mail.outbox), 4)
 
         with patch(
             "apps.messaging.services.EmailMultiAlternatives.send",

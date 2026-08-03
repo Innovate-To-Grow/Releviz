@@ -20,6 +20,20 @@ export async function joinEvent(code, token) {
   return res.json();
 }
 
+export async function createManagedParticipant(code, { name, email }, token) {
+  const res = await apiFetch(
+    `${API_BASE}/events/participants/managed?code=${encodeURIComponent(code)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, email }),
+    },
+    token
+  );
+  if (!res.ok) throw new Error(await extractError(res));
+  return res.json();
+}
+
 export async function updateParticipant(code, participantId, data, token) {
   const res = await apiFetch(
     `${API_BASE}/events/participants/update?code=${encodeURIComponent(code)}&participantId=${encodeURIComponent(participantId)}`,

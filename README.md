@@ -25,7 +25,9 @@ Click **Copy Share Link** in the top-right corner to get a link like:
 https://releviz.com/event?code=j9eaFNJH
 ```
 
-Send this to everyone who should participate. Everyone who opens the link logs in before viewing the event or submitting availability.
+Send this to everyone who should participate. Full-account participants sign in before viewing the
+event or submitting availability. Organizers can also create a temporary participant in Participant
+Manager and send that person's private email-code access link later.
 
 ### 3. Participants Fill In Availability
 
@@ -47,6 +49,8 @@ Access the organizer view from the account that created the event. The organizer
 
 - **Set their own availability** on the same grid
 - **Send email invitations and deadline reminders** with calendar attachments
+- **Create temporary participants without sending email**, then send or resend access on demand
+- **Co-edit a temporary participant's shared schedule** in a right-side drawer until they upgrade
 - **Adjust participant weights** (0.0-1.0) — higher weight means more influence on the group average
 - **Include/exclude participants** from the aggregate calculation
 - **Remove participants** from the event
@@ -188,6 +192,10 @@ cookies previously issued on the frontend hostname are host-scoped and are not t
 
 Availability uses backend-authored 15/30-minute slot groups with explicit timezone and DST
 semantics. See [`docs/scheduling-slots.md`](docs/scheduling-slots.md).
+
+Temporary/full identity rules, the restricted link session, shared versioned editing, upgrade, and
+rollback behavior are documented in
+[`docs/temporary-accounts.md`](docs/temporary-accounts.md).
 
 Email delivery is configured in Django admin under **Email Delivery**. Authentication messages,
 final notifications, invitations, and reminders use persisted retryable jobs. Add an active AWS SES

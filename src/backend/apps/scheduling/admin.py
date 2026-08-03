@@ -9,6 +9,7 @@ from apps.scheduling.models import (
     FinalizationRequest,
     FinalMeeting,
     Participant,
+    TemporaryEventSession,
     UserEvent,
     Weight,
 )
@@ -195,3 +196,36 @@ class UserEventAdmin(ModelAdmin):
     list_display = ("member", "event", "role", "created_at")
     list_filter = ("role",)
     search_fields = ("member__first_name", "member__last_name", "event__code", "event__name")
+
+
+@admin.register(TemporaryEventSession)
+class TemporaryEventSessionAdmin(ModelAdmin):
+    list_display = (
+        "member",
+        "participant",
+        "invitation",
+        "created_at",
+        "expires_at",
+        "last_seen_at",
+        "revoked_at",
+    )
+    list_filter = ("revoked_at", "expires_at")
+    search_fields = (
+        "member__email",
+        "participant__participant_name",
+        "participant__event__code",
+        "invitation__email",
+    )
+    readonly_fields = (
+        "member",
+        "participant",
+        "invitation",
+        "secret_hash",
+        "expires_at",
+        "last_seen_at",
+        "revoked_at",
+        "ip_address",
+        "user_agent",
+        "created_at",
+        "updated_at",
+    )

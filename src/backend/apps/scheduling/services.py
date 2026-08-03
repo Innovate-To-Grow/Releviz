@@ -8,6 +8,7 @@ from datetime import UTC, timedelta
 from zoneinfo import ZoneInfo
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db import transaction
@@ -17,13 +18,20 @@ from apps.authn.models import ContactEmail
 from apps.messaging.email_templates import render_branded_email
 from apps.messaging.models import EmailDeliveryJob, EmailDeliveryRequest, EmailMessageLog
 from apps.messaging.services import EmailAttachment, enqueue_email_job, frontend_url
-from apps.scheduling.lifecycle import event_configuration_write_error
-from apps.scheduling.models import Event, EventInvitation
+from apps.scheduling.lifecycle import event_configuration_write_error, response_write_error
+from apps.scheduling.models import Event, EventInvitation, Participant, UserEvent
+from apps.scheduling.utils import default_availability
 
 security_logger = logging.getLogger("releviz.security")
 
 
 class EventEmailRequestError(ValueError):
+    def __init__(self, message: str, *, status_code: int = 400):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class ManagedParticipantError(ValueError):
     def __init__(self, message: str, *, status_code: int = 400):
         super().__init__(message)
         self.status_code = status_code
@@ -52,10 +60,155 @@ def split_invitation_emails(value) -> tuple[list[str], list[str]]:
 def resolve_invited_member(email: str):
     contact = (
         ContactEmail.objects.select_related("member")
-        .filter(email_address__iexact=email, verified=True, member__is_active=True)
+        .filter(email_address__iexact=email, member__is_active=True)
         .first()
     )
-    return contact.member if contact else None
+    if contact is None:
+        return None
+    if contact.verified or getattr(contact.member, "access_level", "full") == "temporary":
+        return contact.member
+    return None
+
+
+@transaction.atomic
+def create_or_reuse_managed_participant(*, event: Event, organizer, name: str, email: str):
+    """Create an event participant without sending an invitation.
+
+    Email is the global identity key. Existing members are reused, while a new
+    identity is created as a passwordless, unverified temporary member.
+    """
+
+    event = Event.objects.select_for_update().get(pk=event.pk)
+    if event.organizer_id != organizer.pk:
+        raise ManagedParticipantError(
+            "Only the organizer can create managed participants.",
+            status_code=403,
+        )
+    write_error = None if event.status == Event.Status.DRAFT else response_write_error(event)
+    if write_error:
+        raise ManagedParticipantError(write_error, status_code=409)
+
+    normalized_name = str(name or "").strip()
+    normalized_email = str(email or "").strip().lower()
+    if not normalized_name:
+        raise ManagedParticipantError("Name is required.")
+    if len(normalized_name) > 100:
+        raise ManagedParticipantError("Name is too long (max 100).")
+    if len(normalized_email) > 254:
+        raise ManagedParticipantError("Email is too long (max 254).")
+    try:
+        validate_email(normalized_email)
+    except ValidationError as exc:
+        raise ManagedParticipantError("Enter a valid email address.") from exc
+
+    contact = (
+        ContactEmail.objects.select_for_update(of=("self",))
+        .select_related("member")
+        .filter(email_address__iexact=normalized_email)
+        .first()
+    )
+
+    def create_temporary_member():
+        Member = get_user_model()
+        candidate = Member(
+            email=normalized_email,
+            first_name=normalized_name,
+            is_active=True,
+            access_level="temporary",
+        )
+        candidate.set_unusable_password()
+        candidate.save()
+        return candidate
+
+    def claim_orphan_contact(orphan, candidate):
+        orphan.member = candidate
+        orphan.email_type = "primary"
+        orphan.verified = False
+        orphan.save(update_fields=["member", "email_type", "verified", "updated_at"])
+
+    member_created = False
+    if contact is None:
+        candidate = create_temporary_member()
+        contact, contact_created = ContactEmail.objects.get_or_create(
+            email_address=normalized_email,
+            defaults={
+                "member": candidate,
+                "email_type": "primary",
+                "verified": False,
+            },
+        )
+        if contact_created:
+            member = candidate
+            member_created = True
+        elif contact.member_id is None:
+            claim_orphan_contact(contact, candidate)
+            member = candidate
+            member_created = True
+        else:
+            member = contact.member
+            candidate.delete()
+    elif contact.member_id is None:
+        member = create_temporary_member()
+        claim_orphan_contact(contact, member)
+        member_created = True
+    else:
+        member = contact.member
+
+    if (
+        contact.member_id is not None
+        and getattr(member, "access_level", "full") == "full"
+        and not contact.verified
+    ):
+        raise ManagedParticipantError(
+            "Unable to create a participant with this email address.",
+            status_code=409,
+        )
+
+    participant, participant_created = Participant.objects.get_or_create(
+        event=event,
+        member=member,
+        defaults={
+            "participant_name": normalized_name,
+            "availability_inperson": default_availability(event),
+            "availability_virtual": default_availability(event),
+        },
+    )
+    UserEvent.objects.get_or_create(member=member, event=event, role="participant")
+    invitation, invitation_created = EventInvitation.objects.get_or_create(
+        event=event,
+        email=normalized_email,
+        defaults={
+            "member": member,
+            "invited_by": organizer,
+        },
+    )
+    invitation_updates = []
+    if invitation.member_id != member.pk:
+        invitation.member = member
+        invitation_updates.append("member")
+    if invitation.invited_by_id is None:
+        invitation.invited_by = organizer
+        invitation_updates.append("invited_by")
+    if invitation_updates:
+        invitation.save(update_fields=[*invitation_updates, "updated_at"])
+
+    security_logger.info(
+        "managed_participant_created" if participant_created else "managed_participant_reused",
+        extra={
+            "event_id": str(event.pk),
+            "organizer_id": str(organizer.pk),
+            "member_id": str(member.pk),
+            "member_created": member_created,
+            "invitation_created": invitation_created,
+            "account_access": getattr(member, "access_level", "full"),
+        },
+    )
+    return {
+        "participant": participant,
+        "invitation": invitation,
+        "participantCreated": participant_created,
+        "memberCreated": member_created,
+    }
 
 
 def api_invitation(invitation: EventInvitation) -> dict:
@@ -130,10 +283,10 @@ def _ics_content(lines: list[str]) -> str:
     )
 
 
-def response_deadline_ics(event: Event) -> EmailAttachment | None:
+def response_deadline_ics(event: Event, *, link: str = "") -> EmailAttachment | None:
     if not event.response_deadline:
         return None
-    link = frontend_url("/event", code=event.code)
+    link = link or frontend_url("/event", code=event.code)
     starts_at = event.response_deadline
     ends_at = starts_at + timedelta(minutes=15)
     alarm_hours = max(int(event.reminder_hours_before or 0), 0)
@@ -282,12 +435,26 @@ def final_cancellation_html_body(event: Event, meeting) -> str:
     )
 
 
+def invitation_link(invitation: EventInvitation) -> str:
+    member = invitation.member
+    path = (
+        "/temp-access"
+        if member is not None and getattr(member, "access_level", "full") == "temporary"
+        else "/event"
+    )
+    return frontend_url(
+        path,
+        code=invitation.event.code,
+        invitation=str(invitation.access_token),
+    )
+
+
 def invitation_body(invitation: EventInvitation, *, reminder: bool = False) -> str:
     event = invitation.event
-    link = frontend_url(
-        "/event",
-        code=event.code,
-        invitation=str(invitation.access_token),
+    link = invitation_link(invitation)
+    is_temporary = (
+        invitation.member is not None
+        and getattr(invitation.member, "access_level", "full") == "temporary"
     )
     greeting = "Reminder:" if reminder else "You are invited to share your availability."
     custom = (
@@ -300,22 +467,24 @@ def invitation_body(invitation: EventInvitation, *, reminder: bool = False) -> s
         if event.response_deadline
         else ""
     )
+    access_instruction = (
+        "Open the link and enter the six-digit code sent to this email address."
+        if is_temporary
+        else (
+            "Log in or create a Releviz account with this email address to fill out your schedule."
+        )
+    )
     return (
-        f"{greeting}\n\n"
-        f"Event: {event.name}\n"
-        f"Link: {link}"
-        f"{deadline}"
-        f"{custom}\n\n"
-        "Log in or create a Releviz account with this email address to fill out your schedule."
+        f"{greeting}\n\nEvent: {event.name}\nLink: {link}{deadline}{custom}\n\n{access_instruction}"
     )
 
 
 def invitation_html_body(invitation: EventInvitation, *, reminder: bool = False) -> str:
     event = invitation.event
-    link = frontend_url(
-        "/event",
-        code=event.code,
-        invitation=str(invitation.access_token),
+    link = invitation_link(invitation)
+    is_temporary = (
+        invitation.member is not None
+        and getattr(invitation.member, "access_level", "full") == "temporary"
     )
     details = [("Event", event.name)]
     if event.response_deadline:
@@ -336,10 +505,22 @@ def invitation_html_body(invitation: EventInvitation, *, reminder: bool = False)
         details=details,
         cta_label="Share your availability",
         cta_url=link,
-        notice=(
-            f"Message from the organizer:\n{invitation.custom_message}"
-            if invitation.custom_message
-            else ""
+        notice="\n\n".join(
+            item
+            for item in [
+                (
+                    "Open this private link and enter the six-digit code sent to this "
+                    "email address. The link only grants access to this event."
+                    if is_temporary
+                    else ""
+                ),
+                (
+                    f"Message from the organizer:\n{invitation.custom_message}"
+                    if invitation.custom_message
+                    else ""
+                ),
+            ]
+            if item
         ),
     )
 
@@ -384,7 +565,7 @@ def _event_email_parts(
     reminder: bool,
 ) -> tuple[str, str, str, list[EmailAttachment]]:
     event = invitation.event
-    attachment = response_deadline_ics(event)
+    attachment = response_deadline_ics(event, link=invitation_link(invitation))
     subject = (
         f"Reminder: share your availability for {event.name}"
         if reminder
@@ -398,7 +579,11 @@ def _event_email_parts(
     )
 
 
-def _enqueue_invitation_job(invitation: EventInvitation) -> tuple[EmailDeliveryJob, bool]:
+def _enqueue_invitation_job(
+    invitation: EventInvitation,
+    *,
+    request_key="",
+) -> tuple[EmailDeliveryJob, bool]:
     event = invitation.event
     subject, body, html_body, attachments = _event_email_parts(invitation, reminder=False)
     content_fingerprint = _email_content_fingerprint(
@@ -407,8 +592,11 @@ def _enqueue_invitation_job(invitation: EventInvitation) -> tuple[EmailDeliveryJ
         html_body=html_body,
         attachments=attachments,
     )
+    delivery_fingerprint = hashlib.sha256(
+        f"{content_fingerprint}:{request_key}".encode()
+    ).hexdigest()
     return enqueue_email_job(
-        idempotency_key=(f"invitation:{event.event_id}:{invitation.pk}:{content_fingerprint}"),
+        idempotency_key=(f"invitation:{event.event_id}:{invitation.pk}:{delivery_fingerprint}"),
         message_type=EmailMessageLog.MessageType.INVITATION,
         recipient=invitation.email,
         subject=subject,
@@ -417,7 +605,7 @@ def _enqueue_invitation_job(invitation: EventInvitation) -> tuple[EmailDeliveryJ
         attachments=attachments,
         message_id=(
             f"<invitation-{event.event_id}-{invitation.pk}-"
-            f"{content_fingerprint[:16]}@releviz.local>"
+            f"{delivery_fingerprint[:16]}@releviz.local>"
         ),
         event=event,
         invitation=invitation,
@@ -541,19 +729,70 @@ def upsert_and_send_invitations(
             f"An event can have at most {maximum} invitation recipients.",
         )
 
+    resolved_members = {email: resolve_invited_member(email) for email in emails}
+    temporary_member_ids = {
+        member.pk
+        for member in resolved_members.values()
+        if member is not None and getattr(member, "access_level", "full") == "temporary"
+    }
+    participant_member_ids = set(
+        Participant.objects.filter(
+            event=event,
+            member_id__in=temporary_member_ids,
+        ).values_list("member_id", flat=True)
+    )
+    for email, member in resolved_members.items():
+        if member is not None and member.pk in temporary_member_ids - participant_member_ids:
+            raise EventEmailRequestError(
+                (
+                    f"Temporary participant {email} must be added with Create person "
+                    "before sending an access link."
+                ),
+                status_code=409,
+            )
+
+    existing_invitations = {
+        invitation.email: invitation
+        for invitation in EventInvitation.objects.select_related("member").filter(
+            event=event,
+            email__in=emails,
+            member__isnull=False,
+        )
+    }
+    existing_invitation_member_ids = {
+        invitation.member_id for invitation in existing_invitations.values()
+    }
+    participant_member_ids.update(
+        Participant.objects.filter(
+            event=event,
+            member_id__in=existing_invitation_member_ids,
+        ).values_list("member_id", flat=True)
+    )
+
     jobs = []
     created_job_count = 0
     for email in emails:
+        member = resolved_members[email]
+        existing_invitation = existing_invitations.get(email)
+        if (
+            member is None
+            and existing_invitation is not None
+            and existing_invitation.member_id in participant_member_ids
+        ):
+            member = existing_invitation.member
         invitation, _ = EventInvitation.objects.update_or_create(
             event=event,
             email=email,
             defaults={
-                "member": resolve_invited_member(email),
+                "member": member,
                 "invited_by": invited_by,
                 "custom_message": message,
             },
         )
-        job, created = _enqueue_invitation_job(invitation)
+        job, created = _enqueue_invitation_job(
+            invitation,
+            request_key=str(idempotency_key),
+        )
         jobs.append(job)
         created_job_count += int(created)
 

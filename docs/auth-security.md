@@ -14,6 +14,13 @@ Releviz uses a short-lived bearer access token plus a server-tracked refresh ses
 The frontend removes the legacy `releviz.auth` value from both `localStorage` and `sessionStorage`.
 No refresh credential is returned in JSON or made available to frontend JavaScript.
 
+Temporary participants never receive either credential. Their browser gets a separate opaque
+`releviz_temp_event` cookie only after an invitation-link and email-code check. The cookie contains
+a temporary-session UUID plus a random secret, while PostgreSQL stores only the secret hash. It is
+`HttpOnly`, `SameSite=Lax`, `Secure` in production, scoped to `/events/temp-access/`, expires
+absolutely after seven days, and is bound to one member, participant, invitation, and event. It
+cannot authenticate Dashboard, event creation, profile, settings, or another event.
+
 Deploying the secure-session migration invalidates legacy access/refresh tokens because they do not
 contain a valid server-session UUID. Users with legacy credentials must sign in again.
 
@@ -71,6 +78,27 @@ member, removes contact records and authentication jobs/challenges, clears profi
 scrubs retained email recipients, and replaces participant/invitation identifiers while preserving
 referential integrity for retained scheduling records.
 
+## Temporary and Full Accounts
+
+Every `Member` is either `temporary` or `full`; the migration marks every pre-existing member as
+`full`. An organizer-created temporary identity is globally keyed by normalized email, has an
+unusable password and an unverified primary `ContactEmail`, and cannot use password login, ordinary
+email-code login, JWT access, or refresh sessions. Reusing the email in another event reuses the
+same Member UUID and scheduling identity. Existing `full` identities are reused only when the
+matched contact email is verified; an unverified full-account contact is rejected before any
+participant, event link, or invitation is written.
+
+Temporary event access uses a `TEMP_EVENT_ACCESS` email challenge scoped to both the event and
+invitation. Successful verification does not mark the contact address globally verified. Starting
+registration updates the same temporary member but leaves temporary access intact until the
+registration code succeeds. Public registration cannot take over a temporary identity by matching
+its email: the upgrade endpoint resolves the Member from the verified event-scoped cookie and passes
+that identity through an internal-only authorization path. Completion changes that Member in place
+to `full`, verifies its email, revokes every temporary-event session, preserves participants and
+weights, adds participant Dashboard links, and synchronizes the formal profile name to all of the
+member's event participant records. Organizer availability editing is rejected immediately after
+that transition.
+
 ## Cookie Request Protection
 
 Cookie-authenticated mutation endpoints validate `Origin` when it is present. Allowed origins come
@@ -101,6 +129,8 @@ Default production limits include:
 | registration            |       10/hour |                                             5/hour |
 | code request/resend     |       20/hour |                                             5/hour |
 | code verification       | 30/10 minutes |                                      10/10 minutes |
+| temp-link code request  |       20/hour |                                             5/hour |
+| temp-link verification  | 30/10 minutes |                                      10/10 minutes |
 | password login requests |  30/5 minutes |                                      15/15 minutes |
 | password-login failures |             — | 20/hour, plus 5 per identity/IP pair in 15 minutes |
 | refresh/logout          |    120/minute |                                                  — |
@@ -116,8 +146,9 @@ not only request count.
 
 Password authentication performs constant-work hashing for unknown and blocked identities.
 Verification challenges expire, have bounded attempts, permit only one pending challenge per
-member/purpose/channel, and cannot be replayed after use. Public registration, resend, login-code,
-and password-reset responses avoid confirming whether an account exists.
+member/purpose/channel/scope, and cannot be replayed after use. Public registration, resend,
+login-code, password-reset, and temporary-link code-request responses avoid confirming whether an
+account or invitation exists.
 
 ## Production Administrator Bootstrap
 
@@ -138,21 +169,25 @@ under-privileged identities fail closed instead of being silently promoted or re
 Invitation and reminder requests require a UUID idempotency key. Reusing a key with changed content
 returns a conflict. Per-recipient delivery jobs also use deterministic keys:
 
-- invitation jobs are keyed by event, invitation, and stable message/calendar content
+- invitation jobs are keyed by event, invitation, message/calendar content, and request UUID;
+  replaying the same request is safe while a new request intentionally sends or resends
 - reminder jobs are keyed by event, invitation, and response-deadline cycle
 
-This prevents duplicate delivery even if a client accidentally retries with a new request key.
+This prevents duplicate delivery when a client retries the same request. A fresh invitation request
+key is deliberately treated as an organizer-requested resend.
 
 ## Security Logging and Retention
 
-Structured `releviz.security` events cover session issue/rotation/recovery/revocation, password-login
-success/failure, request limits, cookie-origin rejection, idempotency conflicts, and invitation or
-reminder request creation.
+Structured `releviz.security` events cover session issue/rotation/recovery/revocation, temporary
+identity creation/reuse, temporary code requests and sessions, participant co-editing and upgrade,
+password-login success/failure, request limits, cookie-origin rejection, idempotency conflicts, and
+invitation or reminder request creation.
 
 The scheduled reminder command also removes:
 
 - stale rate-limit buckets after 7 days
 - expired or long-revoked session records after 30 days
+- expired or long-revoked temporary-event session records after 30 days
 - expired SimpleJWT outstanding-token records
 - stale undelivered authentication challenges and their pending delivery jobs
 
