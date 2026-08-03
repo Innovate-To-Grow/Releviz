@@ -6,14 +6,20 @@ updates:
       interval: monthly
       time: "09:00"
       timezone: Asia/Shanghai
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 5
     cooldown:
       default-days: 14
     groups:
-      npm-version-updates:
+      npm-compatible-updates:
         applies-to: version-updates
         patterns:
           - "*"
+        exclude-patterns:
+          - "eslint"
+          - "sharp"
+        update-types:
+          - "minor"
+          - "patch"
       npm-security-updates:
         applies-to: security-updates
         patterns:
@@ -25,14 +31,19 @@ updates:
       interval: monthly
       time: "09:00"
       timezone: Asia/Shanghai
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 5
     cooldown:
       default-days: 14
     groups:
-      pip-version-updates:
+      pip-compatible-updates:
         applies-to: version-updates
         patterns:
           - "*"
+        exclude-patterns:
+          - "django-unfold"
+        update-types:
+          - "minor"
+          - "patch"
       pip-security-updates:
         applies-to: security-updates
         patterns:
