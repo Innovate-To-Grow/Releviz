@@ -14,6 +14,7 @@ from apps.messaging.models import EmailMessageLog, EmailProviderConfig
 from apps.messaging.services import (
     EmailAttachment,
     EmailDeliveryError,
+    _message,
     active_provider_config,
     frontend_url,
     send_email_message,
@@ -53,6 +54,17 @@ class MessagingTests(TestCase):
         self.assertEqual(message.alternatives[0].mimetype, "text/html")
         self.assertIn("https://releviz.com/brand/releviz-logo.png", message.alternatives[0].content)
         self.assertIn("Plain text remains available.", message.alternatives[0].content)
+
+    def test_message_builder_supports_plain_text_only(self):
+        message = _message(
+            subject="Plain message",
+            body="Plain text only.",
+            recipients=["plain@example.com"],
+            from_email="no-reply@releviz.com",
+        )
+
+        self.assertEqual(message.body, "Plain text only.")
+        self.assertEqual(message.alternatives, [])
 
     def test_crypto_uses_raw_and_derived_keys_and_rejects_bad_tokens(self):
         raw_key = Fernet.generate_key().decode("ascii")

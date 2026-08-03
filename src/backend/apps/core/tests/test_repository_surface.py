@@ -39,6 +39,7 @@ RESOURCE_AUDIT_MANIFEST = [
     "src/backend/apps/core/templates/unfold/helpers/site_logo.html",
     "src/backend/apps/core/templates/unfold/helpers/theme_switch_dropdown.html",
     "src/backend/apps/core/templates/unfold/helpers/userlinks.html",
+    "src/backend/apps/messaging/templates/messaging/email/branded.html",
     "docker-compose.e2e.yml",
     "docs/auth-security.md",
     "docs/backup-restore.md",
