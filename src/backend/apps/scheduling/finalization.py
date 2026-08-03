@@ -15,7 +15,9 @@ from apps.scheduling.aggregation import classify_event_responses
 from apps.scheduling.models import Event, FinalizationRequest, FinalMeeting
 from apps.scheduling.services import (
     final_cancellation_body,
+    final_cancellation_html_body,
     final_confirmation_body,
+    final_confirmation_html_body,
     final_meeting_ics,
 )
 from apps.scheduling.slots import (
@@ -344,6 +346,7 @@ def enqueue_final_confirmation_jobs(
             recipient=recipient,
             subject=f"Confirmed: {event.name}",
             body=final_confirmation_body(event, meeting),
+            html_body=final_confirmation_html_body(event, meeting),
             attachments=[attachment],
             message_id=_message_id(
                 "final",
@@ -380,6 +383,7 @@ def enqueue_final_cancellation_jobs(
             recipient=recipient,
             subject=f"Scheduling reopened: {event.name}",
             body=final_cancellation_body(event, meeting),
+            html_body=final_cancellation_html_body(event, meeting),
             attachments=[attachment],
             message_id=_message_id(
                 "final-cancel",

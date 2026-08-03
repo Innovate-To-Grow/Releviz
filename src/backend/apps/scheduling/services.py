@@ -14,6 +14,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.authn.models import ContactEmail
+from apps.messaging.email_templates import render_branded_email
 from apps.messaging.models import EmailDeliveryJob, EmailDeliveryRequest, EmailMessageLog
 from apps.messaging.services import EmailAttachment, enqueue_email_job, frontend_url
 from apps.scheduling.lifecycle import event_configuration_write_error
@@ -237,11 +238,47 @@ def final_confirmation_body(event: Event, meeting) -> str:
     )
 
 
+def final_confirmation_html_body(event: Event, meeting) -> str:
+    starts_at = meeting.starts_at.astimezone(ZoneInfo(meeting.timezone))
+    ends_at = meeting.ends_at.astimezone(ZoneInfo(meeting.timezone))
+    return render_branded_email(
+        title="Meeting confirmed",
+        preheader=f"The final time for {event.name} is confirmed.",
+        eyebrow="Final schedule",
+        paragraphs=(f"The final meeting time for {event.name} is confirmed.",),
+        details=(
+            ("Starts", starts_at.isoformat()),
+            ("Ends", ends_at.isoformat()),
+            ("Timezone", meeting.timezone),
+            ("Method", meeting.channel),
+            ("Location", meeting.location),
+        ),
+        cta_label="View event",
+        cta_url=frontend_url("/event", code=event.code),
+        notice="A calendar invitation is attached to this email.",
+    )
+
+
 def final_cancellation_body(event: Event, meeting) -> str:
     return (
         f"Scheduling for {event.name} has reopened.\n\n"
         "The previously confirmed calendar invitation has been canceled. "
         f"Check the event for updates: {frontend_url('/event', code=event.code)}"
+    )
+
+
+def final_cancellation_html_body(event: Event, meeting) -> str:
+    return render_branded_email(
+        title="Scheduling reopened",
+        preheader=f"{event.name} is collecting availability again.",
+        eyebrow="Schedule update",
+        paragraphs=(
+            f"Scheduling for {event.name} has reopened.",
+            "The previously confirmed calendar invitation has been canceled. "
+            "Check the event for the latest options.",
+        ),
+        cta_label="View updated event",
+        cta_url=frontend_url("/event", code=event.code),
     )
 
 
@@ -273,6 +310,40 @@ def invitation_body(invitation: EventInvitation, *, reminder: bool = False) -> s
     )
 
 
+def invitation_html_body(invitation: EventInvitation, *, reminder: bool = False) -> str:
+    event = invitation.event
+    link = frontend_url(
+        "/event",
+        code=event.code,
+        invitation=str(invitation.access_token),
+    )
+    details = [("Event", event.name)]
+    if event.response_deadline:
+        details.append(("Respond by", event.response_deadline.isoformat()))
+    return render_branded_email(
+        title="Availability reminder" if reminder else "You're invited",
+        preheader=(
+            f"Please add your availability for {event.name}."
+            if reminder
+            else f"Share your availability for {event.name}."
+        ),
+        eyebrow="Reminder" if reminder else "Event invitation",
+        paragraphs=(
+            "The organizer is still waiting for your availability."
+            if reminder
+            else "Choose the times that work for you so the group can find the best option.",
+        ),
+        details=details,
+        cta_label="Share your availability",
+        cta_url=link,
+        notice=(
+            f"Message from the organizer:\n{invitation.custom_message}"
+            if invitation.custom_message
+            else ""
+        ),
+    )
+
+
 def _request_fingerprint(payload: dict) -> str:
     encoded = json.dumps(
         payload,
@@ -287,12 +358,14 @@ def _email_content_fingerprint(
     *,
     subject: str,
     body: str,
+    html_body: str,
     attachments: list[EmailAttachment],
 ) -> str:
     return _request_fingerprint(
         {
             "subject": subject,
             "body": body,
+            "htmlBody": html_body,
             "attachments": [
                 {
                     "filename": attachment.filename,
@@ -309,7 +382,7 @@ def _event_email_parts(
     invitation: EventInvitation,
     *,
     reminder: bool,
-) -> tuple[str, str, list[EmailAttachment]]:
+) -> tuple[str, str, str, list[EmailAttachment]]:
     event = invitation.event
     attachment = response_deadline_ics(event)
     subject = (
@@ -320,16 +393,18 @@ def _event_email_parts(
     return (
         subject,
         invitation_body(invitation, reminder=reminder),
+        invitation_html_body(invitation, reminder=reminder),
         [attachment] if attachment else [],
     )
 
 
 def _enqueue_invitation_job(invitation: EventInvitation) -> tuple[EmailDeliveryJob, bool]:
     event = invitation.event
-    subject, body, attachments = _event_email_parts(invitation, reminder=False)
+    subject, body, html_body, attachments = _event_email_parts(invitation, reminder=False)
     content_fingerprint = _email_content_fingerprint(
         subject=subject,
         body=body,
+        html_body=html_body,
         attachments=attachments,
     )
     return enqueue_email_job(
@@ -338,6 +413,7 @@ def _enqueue_invitation_job(invitation: EventInvitation) -> tuple[EmailDeliveryJ
         recipient=invitation.email,
         subject=subject,
         body=body,
+        html_body=html_body,
         attachments=attachments,
         message_id=(
             f"<invitation-{event.event_id}-{invitation.pk}-"
@@ -355,16 +431,28 @@ def _reminder_cycle(event: Event) -> str:
 
 def _enqueue_reminder_job(invitation: EventInvitation) -> tuple[EmailDeliveryJob, bool]:
     event = invitation.event
-    subject, body, attachments = _event_email_parts(invitation, reminder=True)
+    subject, body, html_body, attachments = _event_email_parts(invitation, reminder=True)
     cycle = _reminder_cycle(event)
+    content_fingerprint = _email_content_fingerprint(
+        subject=subject,
+        body=body,
+        html_body=html_body,
+        attachments=attachments,
+    )
     return enqueue_email_job(
-        idempotency_key=f"reminder:{event.event_id}:{invitation.pk}:{cycle}",
+        idempotency_key=(
+            f"reminder:{event.event_id}:{invitation.pk}:{cycle}:{content_fingerprint}"
+        ),
         message_type=EmailMessageLog.MessageType.REMINDER,
         recipient=invitation.email,
         subject=subject,
         body=body,
+        html_body=html_body,
         attachments=attachments,
-        message_id=f"<reminder-{event.event_id}-{invitation.pk}-{cycle}@releviz.local>",
+        message_id=(
+            f"<reminder-{event.event_id}-{invitation.pk}-{cycle}-"
+            f"{content_fingerprint[:16]}@releviz.local>"
+        ),
         event=event,
         invitation=invitation,
     )

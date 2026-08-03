@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <meta name="supported-color-schemes" content="light">
+    <title>{{ title }}</title>
+    <style>
+      @media only screen and (max-width: 620px) {
+        .email-shell { width: 100% !important; }
+        .email-card { padding: 28px 22px !important; }
+        .email-details-label,
+        .email-details-value { display: block !important; width: 100% !important; }
+        .email-details-label { padding-bottom: 4px !important; }
+        .email-details-value { padding-top: 0 !important; }
+      }
+    </style>
+  </head>
+  <body style="margin: 0; padding: 0; background: #f3f7fb; color: #172033; font-family: Arial, Helvetica, sans-serif;">
+    <div style="display: none; max-height: 0; overflow: hidden; opacity: 0; color: transparent;">
+      {{ preheader }}
+    </div>
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background: #f3f7fb;">
+      <tr>
+        <td align="center" style="padding: 32px 14px;">
+          <table class="email-shell" role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="width: 600px; max-width: 600px;">
+            <tr>
+              <td style="padding: 0 8px 20px;">
+                <a href="{{ site_url }}" style="text-decoration: none;">
+                  <img src="{{ logo_url }}" width="166" alt="Releviz" style="display: block; width: 166px; height: auto; border: 0;">
+                </a>
+              </td>
+            </tr>
+            <tr>
+              <td class="email-card" style="padding: 38px 40px; background: #ffffff; border: 1px solid #dce7f2; border-radius: 16px; box-shadow: 0 10px 30px rgba(15, 49, 86, 0.08);">
+                <p style="margin: 0 0 10px; color: #0878d1; font-size: 12px; font-weight: 700; letter-spacing: 1.3px; line-height: 18px; text-transform: uppercase;">{{ eyebrow }}</p>
+                <h1 style="margin: 0 0 22px; color: #10233f; font-size: 28px; font-weight: 700; letter-spacing: -0.4px; line-height: 36px;">{{ title }}</h1>
+
+                {% if greeting %}
+                  <p style="margin: 0 0 16px; color: #172033; font-size: 16px; line-height: 25px;">{{ greeting }}</p>
+                {% endif %}
+
+                {% for paragraph in paragraphs %}
+                  <p style="margin: 0 0 16px; color: #46566f; font-size: 15px; line-height: 24px;">{{ paragraph|linebreaksbr }}</p>
+                {% endfor %}
+
+                {% if code %}
+                  <div style="margin: 24px 0; padding: 20px; background: #edf6ff; border: 1px solid #b9ddfb; border-radius: 12px; color: #075fae; font-family: 'Courier New', Courier, monospace; font-size: 32px; font-weight: 700; letter-spacing: 8px; line-height: 40px; text-align: center;">{{ code }}</div>
+                {% endif %}
+
+                {% if details %}
+                  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin: 22px 0; background: #f8fafc; border: 1px solid #e3eaf2; border-radius: 12px;">
+                    {% for detail in details %}
+                      <tr>
+                        <td class="email-details-label" width="34%" valign="top" style="padding: 12px 8px 12px 16px; border-bottom: 1px solid #e3eaf2; color: #6a788c; font-size: 13px; font-weight: 700; line-height: 20px;">{{ detail.label }}</td>
+                        <td class="email-details-value" valign="top" style="padding: 12px 16px 12px 8px; border-bottom: 1px solid #e3eaf2; color: #172033; font-size: 14px; line-height: 20px; word-break: break-word;">{{ detail.value|linebreaksbr }}</td>
+                      </tr>
+                    {% endfor %}
+                  </table>
+                {% endif %}
+
+                {% if notice %}
+                  <div style="margin: 22px 0; padding: 14px 16px; background: #fff8e8; border-left: 4px solid #f5a524; border-radius: 8px; color: #695019; font-size: 14px; line-height: 22px;">{{ notice|linebreaksbr }}</div>
+                {% endif %}
+
+                {% if cta_label and cta_url %}
+                  <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: 26px 0 18px;">
+                    <tr>
+                      <td bgcolor="#0878d1" style="border-radius: 8px;">
+                        <a href="{{ cta_url }}" style="display: inline-block; padding: 13px 22px; color: #ffffff; font-size: 15px; font-weight: 700; line-height: 20px; text-decoration: none;">{{ cta_label }}</a>
+                      </td>
+                    </tr>
+                  </table>
+                  <p style="margin: 0; color: #7a8798; font-size: 12px; line-height: 19px; word-break: break-all;">If the button does not work, open this link:<br><a href="{{ cta_url }}" style="color: #0878d1;">{{ cta_url }}</a></p>
+                {% endif %}
+              </td>
+            </tr>
+            <tr>
+              <td align="center" style="padding: 22px 18px 0; color: #77869a; font-size: 12px; line-height: 19px;">
+                Releviz &middot; Find a time that works for everyone.<br>
+                <a href="{{ support_url }}" style="color: #0878d1; text-decoration: none;">Help &amp; support</a>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
