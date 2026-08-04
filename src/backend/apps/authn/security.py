@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from urllib.parse import urlsplit
 
+from django.apps import apps
 from django.conf import settings
 from django.db import transaction
 from django.db.models import Q
@@ -297,10 +298,16 @@ def prune_auth_security_state(*, now=None) -> dict:
         Q(expires_at__lt=session_cutoff)
         | Q(revoked_at__isnull=False, revoked_at__lt=session_cutoff)
     ).delete()[0]
+    TemporaryEventSession = apps.get_model("scheduling", "TemporaryEventSession")
+    deleted_temp_sessions = TemporaryEventSession.objects.filter(
+        Q(expires_at__lt=session_cutoff)
+        | Q(revoked_at__isnull=False, revoked_at__lt=session_cutoff)
+    ).delete()[0]
     deleted_tokens = OutstandingToken.objects.filter(expires_at__lte=now).delete()[0]
     return {
         "rateLimitBuckets": deleted_buckets,
         "sessions": deleted_sessions,
+        "temporaryEventSessions": deleted_temp_sessions,
         "outstandingTokens": deleted_tokens,
         "authChallenges": expired_challenges,
         "authEmailJobs": canceled_auth_jobs,

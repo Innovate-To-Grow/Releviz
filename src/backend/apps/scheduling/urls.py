@@ -17,7 +17,42 @@ urlpatterns = [
         views.ParticipantUpdateView.as_view(),
         name="api-participant-update",
     ),
+    path(
+        "events/participants/managed",
+        views.ManagedParticipantView.as_view(),
+        name="api-managed-participant",
+    ),
     path("events/participants", views.ParticipantsView.as_view(), name="api-participants"),
+    path(
+        "events/temp-access/request-code",
+        views.TemporaryAccessRequestCodeView.as_view(),
+        name="api-temp-access-request-code",
+    ),
+    path(
+        "events/temp-access/verify",
+        views.TemporaryAccessVerifyView.as_view(),
+        name="api-temp-access-verify",
+    ),
+    path(
+        "events/temp-access/session",
+        views.TemporaryAccessSessionView.as_view(),
+        name="api-temp-access-session",
+    ),
+    path(
+        "events/temp-access/upgrade-registration",
+        views.TemporaryAccessUpgradeRegistrationView.as_view(),
+        name="api-temp-access-upgrade-registration",
+    ),
+    path(
+        "events/temp-access/participant",
+        views.TemporaryAccessParticipantView.as_view(),
+        name="api-temp-access-participant",
+    ),
+    path(
+        "events/temp-access/logout",
+        views.TemporaryAccessLogoutView.as_view(),
+        name="api-temp-access-logout",
+    ),
     path(
         "events/invitations/open",
         views.EventInvitationOpenView.as_view(),

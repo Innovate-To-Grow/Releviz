@@ -24,6 +24,7 @@ import {
   requestLoginCode,
   revokeAuthSessions,
   startRegistration,
+  startTemporaryUpgradeRegistration,
   updateProfileApi,
   verifyLoginCode,
   verifyRegistration,
@@ -47,6 +48,7 @@ import {
   updateEventLifecycle,
 } from "@/lib/api/events";
 import {
+  createManagedParticipant,
   deleteParticipant,
   fetchParticipants,
   fetchParticipantsIncludeHidden,
@@ -262,6 +264,69 @@ describe("auth API helpers", () => {
     await expect(loginWithPassword({ email: "a@b.com", password: "pw" })).resolves.toEqual({
       message: "ok",
     });
+  });
+
+  test("starts a temporary upgrade registration without a client email", async () => {
+    global.fetch
+      .mockResolvedValueOnce(passwordKeyResponse())
+      .mockResolvedValueOnce(jsonResponse({ message: "started" }, { status: 202 }));
+
+    await expect(
+      startTemporaryUpgradeRegistration("A B", {
+        first_name: "Taylor",
+        password: "password123",
+        password_confirm: "password123",
+      })
+    ).resolves.toEqual({ message: "started" });
+
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      2,
+      "/events/temp-access/upgrade-registration?code=A%20B",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        body: JSON.stringify({
+          first_name: "Taylor",
+          password: "password123",
+          password_confirm: "password123",
+        }),
+      })
+    );
+    expect(JSON.parse(global.fetch.mock.calls[1][1].body)).not.toHaveProperty("email");
+  });
+
+  test("secures and resubmits registration details when verifying a mailbox claim", async () => {
+    global.fetch
+      .mockResolvedValueOnce(passwordKeyResponse())
+      .mockResolvedValueOnce(jsonResponse({ access: "verified", user: { id: "member" } }));
+
+    await verifyRegistration({
+      email: "temporary@example.com",
+      code: "123456",
+      temporaryUpgrade: false,
+      password: "password123",
+      password_confirm: "password123",
+      first_name: "Taylor",
+      last_name: "Temp",
+    });
+
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      2,
+      "/authn/register/verify-code/",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        body: JSON.stringify({
+          email: "temporary@example.com",
+          code: "123456",
+          temporaryUpgrade: false,
+          password: "password123",
+          password_confirm: "password123",
+          first_name: "Taylor",
+          last_name: "Temp",
+        }),
+      })
+    );
   });
 
   test("auth helpers throw extracted errors and update profile sessions", async () => {
@@ -651,6 +716,11 @@ describe("business API helpers", () => {
     await sendReminders("ABC 123", { idempotencyKey: "reminder-key" }, "tok");
     await fetchParticipants("ABC 123", "tok");
     await joinEvent("ABC 123", "tok");
+    await createManagedParticipant(
+      "ABC 123",
+      { name: "Temporary Person", email: "temp@example.com" },
+      "tok"
+    );
     await updateParticipant("ABC 123", "user 1", { submitted: 1 }, "tok");
     await fetchParticipantsIncludeHidden("ABC 123", "tok");
     await unhideParticipant("ABC 123", "user 1", "tok");
@@ -668,6 +738,13 @@ describe("business API helpers", () => {
     expect(urls).toContain("/dashboard/events");
     expect(urls).toContain("/events?code=ABC%20123");
     expect(urls).toContain("/events/duplicate?code=ABC%20123");
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/events/participants/managed?code=ABC%20123",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ name: "Temporary Person", email: "temp@example.com" }),
+      })
+    );
     expect(global.fetch).toHaveBeenCalledWith(
       "/events?code=ABC%20123",
       expect.objectContaining({
@@ -834,6 +911,7 @@ describe("business API helpers", () => {
         jsonResponse(
           {
             error: "Response version conflict",
+            errorCode: "organizer_edit_full_account",
             participant: { id: "participant-1", version: 4 },
           },
           { status: 409 }
@@ -846,21 +924,25 @@ describe("business API helpers", () => {
     await expect(updateParticipant("ABC", "participant-1", {}, "tok")).rejects.toMatchObject({
       message: "Response version conflict",
       status: 409,
+      errorCode: "organizer_edit_full_account",
       participant: { id: "participant-1", version: 4 },
     });
     await expect(updateParticipant("ABC", "participant-1", {}, "tok")).rejects.toMatchObject({
       message: "Responses are locked",
       status: 423,
+      errorCode: null,
       participant: null,
     });
     await expect(updateParticipant("ABC", "participant-1", {}, "tok")).rejects.toMatchObject({
       message: "Request failed",
       status: 400,
+      errorCode: null,
       participant: null,
     });
     await expect(updateParticipant("ABC", "participant-1", {}, "tok")).rejects.toMatchObject({
       message: "HTTP 502",
       status: 502,
+      errorCode: null,
       participant: null,
     });
   });

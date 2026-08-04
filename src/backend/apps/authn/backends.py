@@ -12,7 +12,11 @@ class EmailAuthBackend(ModelBackend):
 
         contact = (
             ContactEmail.objects.select_related("member")
-            .filter(email_address__iexact=identifier, verified=True)
+            .filter(
+                email_address__iexact=identifier,
+                verified=True,
+                member__access_level=get_user_model().AccessLevel.FULL,
+            )
             .first()
         )
         if contact is None:

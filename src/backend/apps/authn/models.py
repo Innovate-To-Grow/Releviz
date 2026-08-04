@@ -15,6 +15,10 @@ from apps.core.models import TimestampedModel
 
 
 class Member(AbstractUser):
+    class AccessLevel(models.TextChoices):
+        TEMPORARY = "temporary", "Temporary"
+        FULL = "full", "Full"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     username = None
     email = models.EmailField(blank=True, default="")
@@ -23,6 +27,13 @@ class Member(AbstractUser):
     title = models.CharField(max_length=255, blank=True, default="")
     profile_image = models.URLField(blank=True, default="")
     admin_apps = models.JSONField(default=list, blank=True)
+    access_level = models.CharField(
+        max_length=16,
+        choices=AccessLevel.choices,
+        default=AccessLevel.FULL,
+        db_default=AccessLevel.FULL,
+        db_index=True,
+    )
 
     USERNAME_FIELD = "id"
     REQUIRED_FIELDS: list[str] = []
@@ -156,6 +167,7 @@ class EmailAuthChallenge(TimestampedModel):
         ACCOUNT_DELETE = "account_delete", "Account Delete"
         CONTACT_EMAIL_VERIFY = "contact_email_verify", "Contact Email Verify"
         ADMIN_LOGIN = "admin_login", "Admin Login"
+        TEMP_EVENT_ACCESS = "temp_event_access", "Temporary Event Access"
 
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"
@@ -176,6 +188,7 @@ class EmailAuthChallenge(TimestampedModel):
     channel = models.CharField(max_length=8, choices=Channel.choices, default=Channel.EMAIL)
     target_email = models.EmailField(blank=True, default="")
     target_phone = models.CharField(max_length=20, blank=True, default="")
+    scope_key = models.CharField(max_length=255, blank=True, default="", db_default="")
     code_hash = models.CharField(max_length=255)
     verification_token_hash = models.CharField(max_length=255, blank=True, default="")
     expires_at = models.DateTimeField()
@@ -190,11 +203,15 @@ class EmailAuthChallenge(TimestampedModel):
         indexes = [
             models.Index(fields=["purpose", "target_email", "status"]),
             models.Index(fields=["member", "purpose", "status"]),
+            models.Index(
+                fields=["purpose", "scope_key", "status"],
+                name="authn_chal_scope_status_idx",
+            ),
             models.Index(fields=["expires_at"]),
         ]
         constraints = [
             models.UniqueConstraint(
-                fields=["member", "purpose", "channel"],
+                fields=["member", "purpose", "channel", "scope_key"],
                 condition=models.Q(status="pending"),
                 name="one_pending_auth_challenge",
             )

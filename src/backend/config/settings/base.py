@@ -115,6 +115,11 @@ AUTH_REFRESH_COOKIE_NAME = "releviz_refresh"
 AUTH_REFRESH_COOKIE_PATH = "/authn/"
 AUTH_REFRESH_COOKIE_SECURE = False
 AUTH_REFRESH_COOKIE_SAMESITE = "Lax"
+TEMP_EVENT_COOKIE_NAME = "releviz_temp_event"
+TEMP_EVENT_COOKIE_PATH = "/events/temp-access/"
+TEMP_EVENT_COOKIE_SECURE = False
+TEMP_EVENT_COOKIE_SAMESITE = "Lax"
+TEMP_EVENT_SESSION_LIFETIME = timedelta(days=7)
 ENABLE_LEGACY_API_PREFIX = False
 AUTH_REFRESH_RETRY_GRACE = timedelta(seconds=30)
 AUTH_SESSION_ABSOLUTE_LIFETIME = timedelta(days=30)
@@ -135,6 +140,14 @@ AUTH_RATE_LIMITS = {
         "identity": {"limit": 5, "window": 3600, "block": 3600},
     },
     "code_verify": {
+        "ip": {"limit": 30, "window": 600, "block": 900},
+        "identity": {"limit": 10, "window": 600, "block": 900},
+    },
+    "temp_access_code_request": {
+        "ip": {"limit": 20, "window": 3600, "block": 3600},
+        "identity": {"limit": 5, "window": 3600, "block": 3600},
+    },
+    "temp_access_code_verify": {
         "ip": {"limit": 30, "window": 600, "block": 900},
         "identity": {"limit": 10, "window": 600, "block": 900},
     },

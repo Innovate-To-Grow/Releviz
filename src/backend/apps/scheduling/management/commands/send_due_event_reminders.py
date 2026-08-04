@@ -33,6 +33,7 @@ class Command(BaseCommand):
             "Auth security cleanup: "
             f"rate_limit_buckets={pruned['rateLimitBuckets']} "
             f"sessions={pruned['sessions']} "
+            f"temporary_event_sessions={pruned['temporaryEventSessions']} "
             f"outstanding_tokens={pruned['outstandingTokens']} "
             f"auth_challenges={pruned['authChallenges']} "
             f"auth_email_jobs={pruned['authEmailJobs']}."

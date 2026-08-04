@@ -93,9 +93,9 @@ export async function verifyLoginCode({ email, code }) {
   return parseAuthResponse(res);
 }
 
-export async function startRegistration(payload) {
+async function postRegistration(path, payload) {
   const securedPayload = await securePasswordPayload(payload, ["password", "password_confirm"]);
-  const res = await fetch(`${API_BASE}/authn/register/`, {
+  const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(securedPayload),
@@ -105,11 +105,28 @@ export async function startRegistration(payload) {
   return res.json();
 }
 
-export async function verifyRegistration({ email, code }) {
+export function startRegistration(payload) {
+  return postRegistration("/authn/register/", payload);
+}
+
+export function startTemporaryUpgradeRegistration(code, payload) {
+  return postRegistration(
+    `/events/temp-access/upgrade-registration?code=${encodeURIComponent(code)}`,
+    payload
+  );
+}
+
+export async function verifyRegistration(payload) {
+  const passwordFields = ["password", "password_confirm"].filter((field) =>
+    Object.prototype.hasOwnProperty.call(payload, field)
+  );
+  const securedPayload = passwordFields.length
+    ? await securePasswordPayload(payload, passwordFields)
+    : payload;
   const res = await fetch(`${API_BASE}/authn/register/verify-code/`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, code }),
+    body: JSON.stringify(securedPayload),
     credentials: "include",
   });
   return parseAuthResponse(res);

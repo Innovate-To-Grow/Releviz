@@ -10,6 +10,11 @@ from apps.authn.models import AuthSession
 class SessionJWTAuthentication(JWTAuthentication):
     def get_user(self, validated_token):
         user = super().get_user(validated_token)
+        if user.access_level != user.AccessLevel.FULL:
+            raise AuthenticationFailed(
+                "Full account access is required.",
+                code="full_access_required",
+            )
         raw_session_id = validated_token.get("session_id")
         try:
             session_id = uuid.UUID(str(raw_session_id))

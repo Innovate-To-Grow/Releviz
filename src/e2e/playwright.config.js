@@ -7,6 +7,7 @@ const frontendUrl = process.env.FRONTEND_URL || "http://127.0.0.1:3100";
 const backendPort = new URL(backendUrl).port || "80";
 const frontendPort = new URL(frontendUrl).port || "80";
 const adminPassword = process.env.DJANGO_SUPERUSER_PASSWORD;
+const pythonBin = process.env.PYTHON_BIN || "python3";
 
 if (!adminPassword) {
   throw new Error("DJANGO_SUPERUSER_PASSWORD must be set before running Playwright.");
@@ -40,7 +41,7 @@ module.exports = defineConfig({
   },
   webServer: [
     {
-      command: `python3 src/backend/manage.py runserver 127.0.0.1:${backendPort} --settings=config.settings.e2e`,
+      command: `${JSON.stringify(pythonBin)} src/backend/manage.py runserver 127.0.0.1:${backendPort} --settings=config.settings.e2e`,
       cwd: rootDir,
       url: `${backendUrl}/health`,
       env: backendEnv,

@@ -10,6 +10,12 @@ Authentication challenge jobs are linked to the member and challenge. Login aler
 the member and issued server session. Welcome delivery is committed in the same transaction that
 activates registration.
 
+Creating a managed participant never creates a delivery job. The organizer explicitly sends or
+resends from Participant Manager. Temporary members receive `/temp-access` links; full members
+receive ordinary `/event` links. A provider failure leaves the participant and invitation intact
+with no sent timestamp, so the organizer can retry. Invitations without a completed first send are
+not eligible for manual reminders, scheduled reminders, or final-meeting notifications.
+
 ## Delivery States
 
 `EmailDeliveryJob` records are operator-visible in Django admin and use these states:
@@ -64,20 +70,26 @@ an already-expired code. Creating a replacement challenge expires the old challe
 pending, retrying, or processing job. The scheduled security cleanup also expires stale undelivered
 challenges and cancels their jobs.
 
+Temporary-link codes use the same delivery and ten-minute verification rules, with an additional
+scope containing the event and invitation. Verifying one invitation cannot satisfy another one and
+does not globally verify the temporary member's contact address.
+
 ## Idempotency and Duplicate Boundary
 
 Each recipient operation has one unique delivery-job key and one stable RFC `Message-ID`.
 
 - final messages are keyed by event, calendar sequence, operation, and recipient
-- invitations are keyed by event, invitation, and stable content
+- invitations are keyed by event, invitation, stable content, and request UUID; the same request
+  remains idempotent while a fresh UUID represents an intentional resend
 - reminders are keyed by event, invitation, and response-deadline cycle
 - verification jobs are keyed by challenge UUID
 - welcome jobs are keyed by member UUID
 - login alerts are keyed by the issued auth session or admin-session login event
 
 Invitation/reminder APIs also require UUID request keys. Reusing a request key with changed input is
-rejected, while a new request key still cannot create a duplicate per-recipient job. Calendar
-updates reuse the event UID and increment `SEQUENCE`.
+rejected. A fresh invitation request key intentionally creates a resend; reminders remain
+deduplicated by response-deadline cycle. Calendar updates reuse the event UID and increment
+`SEQUENCE`.
 
 Delivery is intentionally at least once. A provider may accept a message immediately before the
 application process dies, leaving the job reclaimable. A later attempt could therefore produce a
@@ -100,7 +112,9 @@ timezone, a stable UID, increasing sequence, organizer and recipient fields, and
 - final attempt transitions to `permanent_failure`
 - stale `processing` jobs recover after a simulated restart
 - duplicate enqueue and confirmation requests create no duplicate work
-- repeated invitation/reminder requests with the same or a new key create no duplicate work
+- repeated invitation/reminder requests with the same key create no duplicate work
+- a new invitation request key creates an explicit resend; a new reminder key in the same deadline
+  cycle remains deduplicated
 - invitation/reminder provider timeout leaves retryable persisted jobs
 - successful invitation/reminder delivery updates the corresponding delivery timestamp
 - invitation/reminder request and recipient bulk limits are enforced

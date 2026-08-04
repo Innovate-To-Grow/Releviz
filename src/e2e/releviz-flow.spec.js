@@ -9,6 +9,7 @@ const BACKEND_URL = process.env.BACKEND_URL || "http://127.0.0.1:4100";
 const EMAIL_FILE_PATH = process.env.EMAIL_FILE_PATH || "/tmp/releviz-e2e-mail";
 const ADMIN_EMAIL = process.env.DJANGO_SUPERUSER_EMAIL || "admin@releviz.local";
 const ADMIN_PASSWORD = process.env.DJANGO_SUPERUSER_PASSWORD;
+const PYTHON_BIN = process.env.PYTHON_BIN || "python3";
 
 if (!ADMIN_PASSWORD) {
   throw new Error("DJANGO_SUPERUSER_PASSWORD must be set before running Playwright.");
@@ -301,7 +302,7 @@ assert EmailDeliveryJob.objects.filter(event=event, message_type="final_cancella
 assert EmailMessageLog.objects.filter(event=event, message_type="final_confirmation", status="sent").count() >= 6
 assert EmailMessageLog.objects.filter(event=event, message_type="final_cancellation", status="sent").count() >= 3
 `;
-  execFileSync("python3", ["-c", script], {
+  execFileSync(PYTHON_BIN, ["-c", script], {
     cwd: ROOT,
     env: {
       ...process.env,
@@ -355,7 +356,7 @@ assert outstanding.exists()
 assert not outstanding.filter(blacklistedtoken__isnull=True).exists()
 assert BlacklistedToken.objects.filter(token__user=member).exists()
 `;
-  execFileSync("python3", ["-c", script], {
+  execFileSync(PYTHON_BIN, ["-c", script], {
     cwd: ROOT,
     env: {
       ...process.env,
@@ -405,7 +406,7 @@ duplication = EventDuplicationRequest.objects.get(source_event=event)
 assert duplication.source_version < event.version
 assert duplication.duplicate_event_id is None
 `;
-  execFileSync("python3", ["-c", script], {
+  execFileSync(PYTHON_BIN, ["-c", script], {
     cwd: ROOT,
     env: {
       ...process.env,
@@ -416,7 +417,405 @@ assert duplication.duplicate_event_id is None
   });
 }
 
+function temporaryAccountState(payload) {
+  const script = `
+import json
+import os
+import django
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.e2e")
+django.setup()
+
+from apps.authn.models import ContactEmail
+from apps.messaging.models import EmailDeliveryJob
+from apps.scheduling.models import Event, EventInvitation, Participant, TemporaryEventSession, UserEvent, Weight
+
+data = json.loads(${JSON.stringify(JSON.stringify(payload))})
+event = Event.objects.get(code=data["code"])
+contact = ContactEmail.objects.select_related("member").get(email_address=data["email"])
+member = contact.member
+participant = Participant.objects.get(event=event, member=member)
+invitation = EventInvitation.objects.get(event=event, email=data["email"])
+weight = Weight.objects.filter(event=event, participant=participant).first()
+sessions = TemporaryEventSession.objects.filter(member=member, participant=participant)
+
+print(json.dumps({
+    "memberId": str(member.pk),
+    "participantPk": str(participant.pk),
+    "participantCount": Participant.objects.filter(event=event, member=member).count(),
+    "participantName": participant.participant_name,
+    "participantVersion": participant.version,
+    "submitted": participant.submitted,
+    "availabilityInperson": participant.availability_inperson,
+    "accessLevel": member.access_level,
+    "contactVerified": contact.verified,
+    "hasUsablePassword": member.has_usable_password(),
+    "invitationMemberId": str(invitation.member_id),
+    "invitationFirstSent": invitation.first_sent_at is not None,
+    "invitationJobCount": EmailDeliveryJob.objects.filter(
+        event=event,
+        invitation=invitation,
+        message_type="invitation",
+    ).count(),
+    "weightPk": str(weight.pk) if weight else None,
+    "weightMemberId": str(weight.participant.member_id) if weight else None,
+    "weightValue": float(weight.weight) if weight else None,
+    "weightIncluded": weight.included if weight else None,
+    "userEventVisible": UserEvent.objects.filter(
+        event=event,
+        member=member,
+        role="participant",
+    ).exists(),
+    "tempSessionCount": sessions.count(),
+    "activeTempSessionCount": sessions.filter(revoked_at__isnull=True).count(),
+    "revokedTempSessionCount": sessions.filter(revoked_at__isnull=False).count(),
+}))
+`;
+  const output = execFileSync(PYTHON_BIN, ["-c", script], {
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      PYTHONPATH: path.join(ROOT, "src/backend"),
+      DJANGO_SETTINGS_MODULE: "config.settings.e2e",
+    },
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  return JSON.parse(output.trim());
+}
+
+function temporaryAccessPathFromEmail(body) {
+  const rawLink = body.match(/Link:\s*(https?:\/\/[^\s<]+)/i)?.[1];
+  if (!rawLink) throw new Error("No temporary access link found in invitation email");
+  const link = new URL(rawLink.replaceAll("&amp;", "&"));
+  return `${link.pathname}${link.search}`;
+}
+
 test.describe("Releviz account and scheduling flow", () => {
+  test("shares one temporary response, upgrades it in place, and removes organizer editing", async ({
+    browser,
+    browserName,
+    page,
+    request,
+  }) => {
+    test.skip(
+      browserName !== "chromium",
+      "The focused temporary-account journey runs once in Chromium to control suite time."
+    );
+    test.setTimeout(180_000);
+
+    const runId = `${Date.now()}-${Math.round(Math.random() * 100_000)}`;
+    const organizerEmail = `temp-organizer-${runId}@example.com`;
+    const temporaryEmail = `temporary-${runId}@example.com`;
+    const eventName = `Shared temporary schedule ${runId}`;
+
+    await registerAccount(page, organizerEmail, "Morgan", "Manager");
+    await page.getByRole("link", { name: "Create New Event" }).click();
+    await fillTextbox(page, "Event Name", eventName);
+    await page.getByRole("button", { name: "Create Event" }).click();
+    await page.waitForURL(/\/event\?code=/);
+    const eventCode = new URL(page.url()).searchParams.get("code");
+    expect(eventCode).toMatch(/^[A-Z0-9]+$/);
+    await expect(page.getByText("Organizer Dashboard")).toBeVisible();
+    const organizerSession = await readSession(page);
+    const openEvent = await apiJson(
+      request,
+      "GET",
+      `/events?code=${eventCode}`,
+      organizerSession.access
+    );
+    expect(openEvent.response.status()).toBe(200);
+    expect(openEvent.payload.event.status).toBe("open");
+
+    const manager = page.locator("section.managed-participants");
+    await manager.getByLabel("Name").fill("Temporary Taylor");
+    await manager.getByLabel("Email").fill(temporaryEmail);
+    await manager.getByRole("button", { name: "Create person" }).click();
+    await expect(
+      manager.getByText("Temporary Taylor was created. No email was sent.")
+    ).toBeVisible();
+
+    const createdParticipants = await apiJson(
+      request,
+      "GET",
+      `/events/participants?code=${eventCode}`,
+      organizerSession.access
+    );
+    expect(createdParticipants.response.status()).toBe(200);
+    const managedParticipant = createdParticipants.payload.participants.find(
+      (participant) => participant.email === temporaryEmail
+    );
+    expect(managedParticipant).toEqual(
+      expect.objectContaining({
+        accountAccess: "temporary",
+        canOrganizerEditAvailability: true,
+        invitationStatus: "not_sent",
+      })
+    );
+    const participantCard = page.locator(
+      `[data-management-participant-id="${managedParticipant.id}"]`
+    );
+    await expect(participantCard.getByText("Temporary", { exact: true })).toBeVisible();
+    await expect(participantCard.getByText("Not sent", { exact: true })).toBeVisible();
+
+    const createdState = temporaryAccountState({ code: eventCode, email: temporaryEmail });
+    expect(createdState).toEqual(
+      expect.objectContaining({
+        memberId: managedParticipant.id,
+        participantCount: 1,
+        accessLevel: "temporary",
+        contactVerified: false,
+        hasUsablePassword: false,
+        invitationFirstSent: false,
+        invitationJobCount: 0,
+        userEventVisible: true,
+        tempSessionCount: 0,
+      })
+    );
+
+    const savedWeight = await apiJson(
+      request,
+      "PUT",
+      `/events/weights?code=${eventCode}`,
+      organizerSession.access,
+      {
+        weights: [
+          {
+            participantId: managedParticipant.id,
+            weight: 0.5,
+            included: 1,
+            required: 0,
+          },
+        ],
+      }
+    );
+    expect(savedWeight.response.status()).toBe(200);
+
+    const invitationStartedAt = Date.now() - 1000;
+    await participantCard.getByRole("button", { name: "Send access link" }).click();
+    await expect(
+      manager.getByText(`Access link accepted for delivery to ${temporaryEmail}.`)
+    ).toBeVisible();
+    const invitationEmail = await latestEmailFor(temporaryEmail, invitationStartedAt, (body) =>
+      body.includes(`/temp-access?code=${eventCode}`)
+    );
+    const accessPath = temporaryAccessPathFromEmail(invitationEmail);
+    const sentState = temporaryAccountState({ code: eventCode, email: temporaryEmail });
+    expect(sentState.invitationFirstSent).toBe(true);
+    expect(sentState.invitationJobCount).toBe(1);
+
+    await participantCard.getByRole("button", { name: "Edit schedule" }).click();
+    const organizerDrawer = page.getByRole("dialog", {
+      name: "Edit Temporary Taylor's schedule",
+    });
+    await expect(organizerDrawer).toBeVisible();
+
+    const temporaryContext = await browser.newContext();
+    const temporaryPage = await temporaryContext.newPage();
+    const accessCodeStartedAt = Date.now() - 1000;
+    await temporaryPage.goto(accessPath);
+    await expect(temporaryPage.getByRole("heading", { name: "Check your email" })).toBeVisible();
+    const accessCode = await latestVerificationCode(temporaryEmail, accessCodeStartedAt);
+    await temporaryPage.getByLabel("Verification code").fill(accessCode);
+    await temporaryPage.getByRole("button", { name: "Verify and open schedule" }).click();
+    await expect(temporaryPage.getByRole("heading", { name: eventName })).toBeVisible();
+    await expect(temporaryPage.getByText("You are responding as Temporary Taylor")).toBeVisible();
+
+    await temporaryPage.getByRole("button", { name: "Apply to all" }).click();
+    await expect(temporaryPage.getByText("Saving draft…")).toBeVisible();
+    await expect(temporaryPage.getByText("Draft saved. Submit when you are ready.")).toBeVisible();
+
+    await organizerDrawer.getByRole("button", { name: "Save draft" }).click();
+    await expect(
+      organizerDrawer.getByText(/This response changed after you opened it/)
+    ).toBeVisible();
+    await organizerDrawer.getByRole("button", { name: "Reload latest response" }).click();
+    await expect(
+      organizerDrawer.getByText("Latest response loaded. Review it before saving.")
+    ).toBeVisible();
+    await organizerDrawer.locator('[data-cell-idx="0"]').first().click();
+    await organizerDrawer.getByRole("button", { name: "Submit on behalf" }).click();
+    await expect(organizerDrawer.getByText("Schedule submitted.")).toBeVisible();
+
+    const resultsBeforeUpgrade = await apiJson(
+      request,
+      "GET",
+      `/events/results?code=${eventCode}`,
+      organizerSession.access
+    );
+    expect(resultsBeforeUpgrade.response.status()).toBe(200);
+    expect(resultsBeforeUpgrade.payload.results.countedResponseTotal).toBe(1);
+    const beforeUpgrade = temporaryAccountState({ code: eventCode, email: temporaryEmail });
+    expect(beforeUpgrade).toEqual(
+      expect.objectContaining({
+        memberId: managedParticipant.id,
+        participantCount: 1,
+        submitted: true,
+        accessLevel: "temporary",
+        contactVerified: false,
+        userEventVisible: true,
+        tempSessionCount: 1,
+        activeTempSessionCount: 1,
+        revokedTempSessionCount: 0,
+        weightMemberId: managedParticipant.id,
+        weightValue: 0.5,
+        weightIncluded: true,
+      })
+    );
+
+    const upgradeStartedAt = Date.now() - 1000;
+    const upgradeLink = temporaryPage.getByRole("link", { name: "Upgrade to full access" });
+    await expect(upgradeLink).toHaveAttribute(
+      "href",
+      `/signup?upgrade=temporary&code=${eventCode}&next=%2Fevent%3Fcode%3D${eventCode}`
+    );
+    await upgradeLink.click();
+    await expect(temporaryPage).toHaveURL(/\/signup\?.*upgrade=temporary/);
+    expect(new URL(temporaryPage.url()).searchParams.has("email")).toBe(false);
+    expect(new URL(temporaryPage.url()).searchParams.has("lockedEmail")).toBe(false);
+    const lockedEmail = temporaryPage.getByLabel("Email");
+    await expect(lockedEmail).toHaveValue(temporaryEmail);
+    await expect(lockedEmail).toHaveJSProperty("readOnly", true);
+    await temporaryPage.getByLabel("First name").fill("Taylor");
+    await temporaryPage.getByLabel("Last name").fill("Upgraded");
+    await temporaryPage.getByLabel("Organization").fill("Releviz E2E");
+    await temporaryPage.getByLabel("Title").fill("Full participant");
+    await temporaryPage.getByLabel("Password", { exact: true }).fill("Password123!");
+    await temporaryPage.getByLabel("Confirm password").fill("Password123!");
+    await temporaryPage.getByRole("button", { name: "Send verification code" }).click();
+    await expect(temporaryPage.getByText("Enter the email verification code.")).toBeVisible();
+    const upgradeCode = await latestVerificationCode(temporaryEmail, upgradeStartedAt);
+    await temporaryPage.getByLabel("Verification code").fill(upgradeCode);
+    await temporaryPage.getByRole("button", { name: "Verify and continue" }).click();
+    await expect(temporaryPage).toHaveURL(new RegExp(`/event\\?code=${eventCode}$`));
+    const fullSession = await readSession(temporaryPage);
+    expect(fullSession.user.id).toBe(beforeUpgrade.memberId);
+    expect(fullSession.user.accessLevel).toBe("full");
+
+    const oldTemporarySession = await temporaryPage.evaluate(
+      async ({ backendUrl, code }) => {
+        const response = await fetch(`${backendUrl}/events/temp-access/session?code=${code}`, {
+          credentials: "include",
+        });
+        return { status: response.status, payload: await response.json() };
+      },
+      { backendUrl: BACKEND_URL, code: eventCode }
+    );
+    expect(oldTemporarySession).toEqual(
+      expect.objectContaining({
+        status: 403,
+        payload: expect.objectContaining({ errorCode: "temp_account_upgraded" }),
+      })
+    );
+    const clearedTemporarySessionStatus = await temporaryPage.evaluate(
+      async ({ backendUrl, code }) => {
+        const response = await fetch(`${backendUrl}/events/temp-access/session?code=${code}`, {
+          credentials: "include",
+        });
+        return response.status;
+      },
+      { backendUrl: BACKEND_URL, code: eventCode }
+    );
+    expect(clearedTemporarySessionStatus).toBe(401);
+
+    const fullDashboard = await apiJson(request, "GET", "/dashboard/events", fullSession.access);
+    expect(fullDashboard.response.status()).toBe(200);
+    expect(fullDashboard.payload.participating.map((event) => event.code)).toContain(eventCode);
+    const fullParticipantView = await apiJson(
+      request,
+      "GET",
+      `/events/participants?code=${eventCode}`,
+      fullSession.access
+    );
+    expect(fullParticipantView.response.status()).toBe(200);
+    expect(fullParticipantView.payload.participants).toHaveLength(1);
+    expect(fullParticipantView.payload.participants[0]).toEqual(
+      expect.objectContaining({
+        id: beforeUpgrade.memberId,
+        submitted: 1,
+        availabilityInperson: beforeUpgrade.availabilityInperson,
+      })
+    );
+
+    await organizerDrawer.getByRole("button", { name: "Save draft" }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(
+      manager.getByText(
+        "This participant now has full access, so organizer schedule editing is no longer allowed."
+      )
+    ).toBeVisible();
+    const fullAccessCard = page.locator(
+      `[data-management-participant-id="${beforeUpgrade.memberId}"]`
+    );
+    await expect(fullAccessCard.getByText("Full access", { exact: true })).toBeVisible();
+    await expect(fullAccessCard.getByRole("button", { name: "Edit schedule" })).toHaveCount(0);
+
+    const organizerParticipantsAfterUpgrade = await apiJson(
+      request,
+      "GET",
+      `/events/participants?code=${eventCode}`,
+      organizerSession.access
+    );
+    expect(organizerParticipantsAfterUpgrade.response.status()).toBe(200);
+    expect(organizerParticipantsAfterUpgrade.payload.participants).toHaveLength(1);
+    expect(organizerParticipantsAfterUpgrade.payload.participants[0]).toEqual(
+      expect.objectContaining({
+        id: beforeUpgrade.memberId,
+        accountAccess: "full",
+        canOrganizerEditAvailability: false,
+        submitted: 1,
+      })
+    );
+    const weightsAfterUpgrade = await apiJson(
+      request,
+      "GET",
+      `/events/weights?code=${eventCode}`,
+      organizerSession.access
+    );
+    expect(weightsAfterUpgrade.response.status()).toBe(200);
+    expect(weightsAfterUpgrade.payload.weights).toEqual([
+      expect.objectContaining({
+        participant_id: beforeUpgrade.memberId,
+        weight: 0.5,
+        included: 1,
+      }),
+    ]);
+    const resultsAfterUpgrade = await apiJson(
+      request,
+      "GET",
+      `/events/results?code=${eventCode}`,
+      organizerSession.access
+    );
+    expect(resultsAfterUpgrade.response.status()).toBe(200);
+    expect(resultsAfterUpgrade.payload.results.countedResponseTotal).toBe(1);
+
+    const afterUpgrade = temporaryAccountState({ code: eventCode, email: temporaryEmail });
+    expect(afterUpgrade).toEqual(
+      expect.objectContaining({
+        memberId: beforeUpgrade.memberId,
+        participantPk: beforeUpgrade.participantPk,
+        participantCount: 1,
+        submitted: true,
+        accessLevel: "full",
+        contactVerified: true,
+        hasUsablePassword: true,
+        invitationMemberId: beforeUpgrade.memberId,
+        weightPk: beforeUpgrade.weightPk,
+        weightMemberId: beforeUpgrade.memberId,
+        weightValue: 0.5,
+        weightIncluded: true,
+        userEventVisible: true,
+        tempSessionCount: 1,
+        activeTempSessionCount: 0,
+        revokedTempSessionCount: 1,
+      })
+    );
+    expect(afterUpgrade.participantName).toBe("Taylor Upgraded");
+    expect(afterUpgrade.availabilityInperson).toEqual(beforeUpgrade.availabilityInperson);
+
+    await temporaryContext.close();
+  });
+
   test("registers users, schedules an event, checks permissions, and persists to Postgres", async ({
     browser,
     page,
@@ -817,8 +1216,11 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(page.getByText(`E2E Planning ${runId}`)).toBeVisible();
     await page.goto(`/event?code=${eventCode}`);
     await expect(page.getByText("Organizer Dashboard")).toBeVisible();
-    const registeredInvitationRow = page.getByText(participantEmail).locator("..");
-    await expect(registeredInvitationRow.getByText("Submitted", { exact: true })).toBeVisible();
+    const registeredParticipantCard = page.locator(
+      `[data-management-participant-id="${participantSession.user.id}"]`
+    );
+    await expect(registeredParticipantCard.getByText(participantEmail, { exact: true })).toBeVisible();
+    await expect(registeredParticipantCard.getByText("Submitted", { exact: true })).toBeVisible();
 
     const weightAnalysis = page.locator("section.weight-analysis");
     const weightedAvailableCell = weightAnalysis.locator(
