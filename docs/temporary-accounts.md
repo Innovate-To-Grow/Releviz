@@ -15,7 +15,8 @@ The organizer uses `POST /events/invitations` to send or resend. Participant res
 organizer. Temporary rows have a schedule drawer; full-account rows never do. Organizer edits to a
 temporary participant's event name, availability, and submitted flag update the same Participant
 record used by the invitee and require `expectedVersion`. A stale write returns `409` with the
-latest Participant.
+latest Participant. Invitations whose first send has not completed are excluded from manual and
+scheduled reminders as well as final-meeting notifications.
 
 ## Temporary Recipient Flow
 
@@ -38,21 +39,26 @@ The registration page reads the email from the event-scoped temporary cookie ses
 locked. `POST /events/temp-access/upgrade-registration?code=...` validates that same session and
 request origin, applies registration rate limits by IP and Member, and supplies the Member's email
 server-side regardless of client input. If the session cannot be resolved, registration remains
-disabled. The public registration endpoint cannot select or mutate a temporary Member by supplying
-its email; only this server-bound, verified temporary-session flow may authorize the in-place
-upgrade.
+disabled. The public registration endpoint cannot mutate a temporary Member merely because its
+email was supplied. It may issue a separately scoped mailbox-claim code without changing the
+temporary identity; the caller must resubmit the registration details with that code, and only
+successful verification may authorize the in-place upgrade. This lets the real mailbox owner claim
+an address even if an organizer created it but never sent an event invitation.
 
-The ordinary registration verification endpoint then completes the challenge on the same Member
-UUID. Only successful verification changes the member to `full`; it also verifies the contact,
-revokes temporary sessions, preserves all participants and weights, adds existing events to
+The ordinary registration verification endpoint then completes the selected server-scoped
+challenge on the same Member UUID. Only successful verification changes the member to `full`; it
+also verifies the contact, revokes temporary sessions, expires temporary challenges, cancels queued
+temporary-link email work, preserves all participants and weights, adds existing events to
 Dashboard, and synchronizes the formal name to every event Participant. The organizer's next
 attempted co-edit is rejected with the latest full account state.
 
 The migrations are additive: `Member.access_level`, challenge scope/purpose, and
 `TemporaryEventSession`. Rolling application code back leaves temporary members as active accounts
 with unusable passwords and unverified contacts, so ordinary login remains unavailable and all
-scheduling records remain intact. Restoring temporary-link access requires redeploying the forward
-version.
+scheduling records remain intact. If the previous code completes an ordinary registration against a
+temporary identity during the rollback window, the forward version recognizes its verified contact
+and valid password on the next login, upgrades the same UUID, and runs the normal scheduling/session
+cleanup. Restoring temporary-link access itself requires redeploying the forward version.
 
 ## API Surface
 

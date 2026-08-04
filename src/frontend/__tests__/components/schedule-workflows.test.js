@@ -573,6 +573,12 @@ describe("organizer workflow", () => {
       },
       "token"
     );
+    const invitationsPanel = screen
+      .getByRole("heading", { name: "Email Invitations" })
+      .closest(".md-card");
+    expect(within(invitationsPanel).getByText("alex@example.com")).toBeInTheDocument();
+    expect(await within(invitationsPanel).findByText("new@example.com")).toBeInTheDocument();
+    expect(within(invitationsPanel).getByText("Awaiting reminder")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Send Reminders" }));
     expect(await screen.findByText("Sent 1 reminder(s).")).toBeInTheDocument();
@@ -758,6 +764,7 @@ describe("organizer workflow", () => {
     expect(closeDrawer).toHaveFocus();
     await userEvent.tab({ shift: true });
     expect(submitOnBehalf).toHaveFocus();
+    await userEvent.click(within(drawer).getByRole("button", { name: "If needed" }));
     await userEvent.click(within(drawer).getByRole("button", { name: "Paint In-Person" }));
     await userEvent.click(within(drawer).getByRole("button", { name: "Save draft" }));
     await waitFor(() =>
@@ -766,7 +773,7 @@ describe("organizer workflow", () => {
         taylor.id,
         {
           name: taylor.name,
-          availabilityInperson: [1, 0],
+          availabilityInperson: [0.5, 0],
           availabilityVirtual: [0, 0],
           submitted: 0,
           expectedVersion: 1,
@@ -848,6 +855,153 @@ describe("organizer workflow", () => {
     expect(within(card).getByRole("button", { name: "Send access link" })).toBeInTheDocument();
   });
 
+  test("isolates row sends, safely retries an ambiguous request, and preserves Opened", async () => {
+    const opened = participant("opened-temp", "opened-user", "Opened Temp", {
+      accountAccess: "temporary",
+      email: "opened@example.com",
+      invitationStatus: "opened",
+      canOrganizerEditAvailability: true,
+    });
+    const unsent = participant("unsent-temp", "unsent-user", "Unsent Temp", {
+      accountAccess: "temporary",
+      email: "unsent@example.com",
+      invitationStatus: "not_sent",
+      canOrganizerEditAvailability: true,
+    });
+    fetchParticipantsIncludeHidden.mockResolvedValue({ participants: [mine, opened, unsent] });
+    globalThis.crypto.randomUUID
+      .mockReset()
+      .mockReturnValueOnce("opened-request-1")
+      .mockReturnValueOnce("opened-request-2");
+
+    let rejectFirstSend;
+    const delivered = {
+      invitations: [
+        {
+          id: "invite-opened",
+          email: opened.email,
+          status: "opened",
+          statusLabel: "Opened",
+        },
+      ],
+      recipientCount: 1,
+      delivery: { sent: 1, pending: 0, retry: 0, permanentFailure: 0 },
+    };
+    sendInvitations
+      .mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            rejectFirstSend = reject;
+          })
+      )
+      .mockResolvedValueOnce(delivered)
+      .mockResolvedValueOnce(delivered);
+
+    renderOrganizer();
+    await screen.findByRole("heading", { name: "Participant Manager" });
+    await screen.findAllByText(opened.name);
+    await screen.findAllByText(unsent.name);
+    const openedCard = document.querySelector('[data-management-participant-id="opened-temp"]');
+    const unsentCard = document.querySelector('[data-management-participant-id="unsent-temp"]');
+    await userEvent.click(within(openedCard).getByRole("button", { name: "Resend access link" }));
+    await waitFor(() => expect(sendInvitations).toHaveBeenCalledTimes(1));
+    expect(within(openedCard).getByRole("button", { name: "Sending..." })).toBeDisabled();
+    expect(within(unsentCard).getByRole("button", { name: "Send access link" })).toBeEnabled();
+
+    await act(async () => {
+      rejectFirstSend(new Error("Connection lost after send"));
+      await Promise.resolve();
+    });
+    expect(
+      await screen.findByText(`Unable to send to ${opened.email}: Connection lost after send`)
+    ).toBeInTheDocument();
+    expect(within(openedCard).getByText("Opened")).toBeInTheDocument();
+
+    await userEvent.click(within(openedCard).getByRole("button", { name: "Resend access link" }));
+    await waitFor(() => expect(sendInvitations).toHaveBeenCalledTimes(2));
+    expect(sendInvitations.mock.calls[0][1].idempotencyKey).toBe("opened-request-1");
+    expect(sendInvitations.mock.calls[1][1].idempotencyKey).toBe("opened-request-1");
+    expect(await within(openedCard).findByText("Opened")).toBeInTheDocument();
+
+    await userEvent.click(within(openedCard).getByRole("button", { name: "Resend access link" }));
+    await waitFor(() => expect(sendInvitations).toHaveBeenCalledTimes(3));
+    expect(sendInvitations.mock.calls[2][1].idempotencyKey).toBe("opened-request-2");
+  });
+
+  test("retains a row request key for RETRY/PENDING and rotates after terminal delivery", async () => {
+    const opened = participant("delivery-temp", "delivery-user", "Delivery Temp", {
+      accountAccess: "temporary",
+      email: "delivery@example.com",
+      invitationStatus: "opened",
+      canOrganizerEditAvailability: true,
+    });
+    fetchParticipantsIncludeHidden.mockResolvedValue({ participants: [mine, opened] });
+    globalThis.crypto.randomUUID
+      .mockReset()
+      .mockReturnValueOnce("delivery-request-1")
+      .mockReturnValueOnce("delivery-request-2");
+
+    const invitation = {
+      invitations: [
+        {
+          id: "invite-delivery",
+          email: opened.email,
+          status: "opened",
+          statusLabel: "Opened",
+        },
+      ],
+      recipientCount: 1,
+    };
+    sendInvitations
+      .mockResolvedValueOnce({
+        ...invitation,
+        delivery: { sent: 0, pending: 0, processing: 0, retry: 1, permanentFailure: 0 },
+      })
+      .mockResolvedValueOnce({
+        ...invitation,
+        delivery: { sent: 0, pending: 1, processing: 0, retry: 0, permanentFailure: 0 },
+      })
+      .mockResolvedValueOnce({
+        ...invitation,
+        delivery: { sent: 0, pending: 0, processing: 0, retry: 0, permanentFailure: 1 },
+      })
+      .mockResolvedValueOnce({
+        ...invitation,
+        delivery: { sent: 1, pending: 0, processing: 0, retry: 0, permanentFailure: 0 },
+      });
+
+    renderOrganizer();
+    await screen.findByRole("heading", { name: "Participant Manager" });
+    await screen.findAllByText(opened.name);
+    const card = document.querySelector('[data-management-participant-id="delivery-temp"]');
+
+    await userEvent.click(within(card).getByRole("button", { name: "Resend access link" }));
+    await waitFor(() => expect(sendInvitations).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(within(card).getByRole("button", { name: "Resend access link" })).toBeEnabled()
+    );
+    await userEvent.click(within(card).getByRole("button", { name: "Resend access link" }));
+    await waitFor(() => expect(sendInvitations).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(within(card).getByRole("button", { name: "Resend access link" })).toBeEnabled()
+    );
+    await userEvent.click(within(card).getByRole("button", { name: "Resend access link" }));
+    await waitFor(() => expect(sendInvitations).toHaveBeenCalledTimes(3));
+    await waitFor(() =>
+      expect(within(card).getByRole("button", { name: "Resend access link" })).toBeEnabled()
+    );
+    await userEvent.click(within(card).getByRole("button", { name: "Resend access link" }));
+    await waitFor(() => expect(sendInvitations).toHaveBeenCalledTimes(4));
+
+    expect(sendInvitations.mock.calls.map((call) => call[1].idempotencyKey)).toEqual([
+      "delivery-request-1",
+      "delivery-request-1",
+      "delivery-request-1",
+      "delivery-request-2",
+    ]);
+    expect(within(card).getByText("Opened")).toBeInTheDocument();
+  });
+
   test("requires reloading a version conflict and closes editing after a full-access upgrade", async () => {
     const temp = participant("temp", "temp-user", "Temporary Teammate", {
       accountAccess: "temporary",
@@ -862,6 +1016,17 @@ describe("organizer workflow", () => {
       availabilityVirtual: [0, 0.5],
       version: 7,
     };
+    let resolveConflictResults;
+    fetchEventResults
+      .mockReset()
+      .mockResolvedValueOnce({ results: sharedResults })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveConflictResults = resolve;
+          })
+      )
+      .mockResolvedValue({ results: sharedResults });
     updateParticipant
       .mockRejectedValueOnce(
         Object.assign(new Error("Response version conflict"), {
@@ -870,7 +1035,16 @@ describe("organizer workflow", () => {
         })
       )
       .mockRejectedValueOnce(
-        Object.assign(new Error("Organizer editing is no longer allowed"), { status: 403 })
+        Object.assign(new Error("Excluded participants cannot change availability"), {
+          status: 403,
+          errorCode: "participant_excluded",
+        })
+      )
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Organizer editing is no longer allowed"), {
+          status: 403,
+          errorCode: "organizer_edit_full_account",
+        })
       );
 
     renderOrganizer();
@@ -883,8 +1057,20 @@ describe("organizer workflow", () => {
     expect(
       await within(drawer).findByText(/This response changed after you opened it/)
     ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Use recommendation 1" })).not.toBeInTheDocument();
+    expect(fetchEventResults).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      resolveConflictResults({ results: sharedResults });
+      await Promise.resolve();
+    });
     await userEvent.click(within(drawer).getByRole("button", { name: "Reload latest response" }));
     expect(within(drawer).getByTestId("grid-In-Person")).toHaveTextContent("0.5,0");
+
+    await userEvent.click(within(drawer).getByRole("button", { name: "Save draft" }));
+    expect(
+      await within(drawer).findByText("Excluded participants cannot change availability")
+    ).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
 
     await userEvent.click(within(drawer).getByRole("button", { name: "Save draft" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());

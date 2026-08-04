@@ -2,7 +2,7 @@ from datetime import timedelta
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -321,6 +321,61 @@ class TemporaryAccountCoverageTests(TestCase):
                     },
                     model_counts,
                 )
+
+    @override_settings(INVITATION_MAX_EVENT_RECIPIENTS=1)
+    def test_managed_participants_share_the_event_invitation_cap(self):
+        first = create_or_reuse_managed_participant(
+            event=self.event,
+            organizer=self.organizer,
+            name="First managed",
+            email="first-managed@example.com",
+        )
+
+        with self.assertRaises(ManagedParticipantError) as caught:
+            create_or_reuse_managed_participant(
+                event=self.event,
+                organizer=self.organizer,
+                name="Second managed",
+                email="second-managed@example.com",
+            )
+
+        self.assertEqual(caught.exception.status_code, 409)
+        self.assertIn("at most 1", str(caught.exception))
+        self.assertEqual(EventInvitation.objects.filter(event=self.event).count(), 1)
+        self.assertFalse(
+            ContactEmail.objects.filter(email_address="second-managed@example.com").exists()
+        )
+        duplicate = create_or_reuse_managed_participant(
+            event=self.event,
+            organizer=self.organizer,
+            name="Ignored duplicate name",
+            email="first-managed@example.com",
+        )
+        self.assertEqual(duplicate["participant"].pk, first["participant"].pk)
+
+    def test_inactive_identity_cannot_be_bound_as_a_managed_participant(self):
+        inactive = create_member(
+            "inactive-managed@example.com",
+            "Inactive",
+            "Member",
+            is_active=False,
+        )
+
+        with self.assertRaises(ManagedParticipantError) as caught:
+            create_or_reuse_managed_participant(
+                event=self.event,
+                organizer=self.organizer,
+                name="Inactive managed",
+                email="inactive-managed@example.com",
+            )
+
+        self.assertEqual(caught.exception.status_code, 409)
+        self.assertEqual(
+            str(caught.exception),
+            "Unable to create a participant with this email address.",
+        )
+        self.assertFalse(Participant.objects.filter(event=self.event, member=inactive).exists())
+        self.assertFalse(EventInvitation.objects.filter(event=self.event).exists())
 
     def test_existing_invitation_is_repaired_for_the_reused_member_and_organizer(self):
         target = create_member("target@example.com", "Target", "Member")

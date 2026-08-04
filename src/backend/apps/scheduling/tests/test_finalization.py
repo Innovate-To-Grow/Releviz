@@ -114,12 +114,14 @@ class FinalizationDomainTests(TestCase):
             event=self.event,
             email="manual@example.com",
             invited_by=self.organizer,
+            first_sent_at=timezone.now(),
         )
         EventInvitation.objects.create(
             event=self.event,
             email=hidden.member.email,
             member=hidden.member,
             invited_by=self.organizer,
+            first_sent_at=timezone.now(),
         )
 
     def test_attendance_review_recipient_rules_and_api_shapes(self):
@@ -176,6 +178,31 @@ class FinalizationDomainTests(TestCase):
         self.assertIn("[active]", str(meeting))
         request = FinalizationRequest.objects.get()
         self.assertIn(str(request.idempotency_key), str(request))
+
+    def test_unsent_managed_participant_is_excluded_from_final_notifications(self):
+        managed = create_member("managed-unsent@example.com", "Managed", "Unsent")
+        Participant.objects.create(
+            event=self.event,
+            member=managed,
+            participant_name=managed.display_name(),
+        )
+        invitation = EventInvitation.objects.create(
+            event=self.event,
+            email="managed-unsent@example.com",
+            member=managed,
+            invited_by=self.organizer,
+        )
+
+        self.assertNotIn(
+            "managed-unsent@example.com",
+            final_notification_recipients(self.event),
+        )
+        invitation.first_sent_at = timezone.now()
+        invitation.save(update_fields=["first_sent_at", "updated_at"])
+        self.assertIn(
+            "managed-unsent@example.com",
+            final_notification_recipients(self.event),
+        )
 
     def test_confirmation_idempotency_conflicts_reopen_and_reconfirmation(self):
         self.participant("available", [1, 1, 1, 1] + [0] * 8)
@@ -583,6 +610,7 @@ class FinalizationDomainTests(TestCase):
             event=self.event,
             email="calendar-attendee@example.com",
             invited_by=self.organizer,
+            first_sent_at=timezone.now(),
         )
         result = confirm_final_meeting(
             event_code=self.event.code,
@@ -661,6 +689,7 @@ class FinalizationApiTests(TestCase):
             member=self.participant,
             invited_by=self.organizer,
             status=EventInvitation.Status.SUBMITTED,
+            first_sent_at=timezone.now(),
         )
         self.payload = {
             "startsAt": "2026-07-20T09:00:00+00:00",

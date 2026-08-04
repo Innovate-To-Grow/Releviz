@@ -974,6 +974,19 @@ describe("app pages", () => {
     await waitFor(() => expect(signup).toHaveBeenCalled());
     await userEvent.type(await screen.findByLabelText("Verification code"), "123456");
     await userEvent.click(screen.getByRole("button", { name: "Verify and continue" }));
+    await waitFor(() =>
+      expect(verifySignup).toHaveBeenCalledWith({
+        email: "ada@example.com",
+        code: "123456",
+        temporaryUpgrade: false,
+        password: "password123",
+        password_confirm: "password123",
+        first_name: "Ada",
+        last_name: "Lovelace",
+        organization: "Releviz",
+        title: "Engineer",
+      })
+    );
     await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/dashboard"));
     await screen.findByRole("button", { name: "Verify and continue" });
 

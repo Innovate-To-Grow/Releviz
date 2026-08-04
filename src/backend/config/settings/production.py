@@ -64,6 +64,11 @@ CSRF_TRUSTED_ORIGINS = split_csv("CSRF_TRUSTED_ORIGINS")
 CORS_ALLOW_CREDENTIALS = True
 AUTH_REFRESH_COOKIE_SECURE = True
 TEMP_EVENT_COOKIE_SECURE = True
+# Candidate and production Amplify branches call the API from an explicitly
+# trusted cross-site origin. Origin validation still protects every
+# cookie-authenticated mutation, while SameSite=None allows those reviewed
+# deployments to send the event-scoped credential.
+TEMP_EVENT_COOKIE_SAMESITE = "None"
 ENABLE_LEGACY_API_PREFIX = os.environ.get("ENABLE_LEGACY_API_PREFIX", "0") == "1"
 AUTH_TRUSTED_PROXY_COUNT = int(os.environ.get("AUTH_TRUSTED_PROXY_COUNT", "1"))
 AUTH_TRUSTED_PROXY_CIDRS = split_csv("AUTH_TRUSTED_PROXY_CIDRS")

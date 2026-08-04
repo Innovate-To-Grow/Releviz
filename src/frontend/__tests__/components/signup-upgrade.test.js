@@ -91,6 +91,7 @@ describe("temporary-account upgrade registration", () => {
       expect(verifySignup).toHaveBeenCalledWith({
         email: "temp@example.com",
         code: "123456",
+        temporaryUpgrade: true,
       })
     );
   });

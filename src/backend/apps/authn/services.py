@@ -45,6 +45,10 @@ from apps.messaging.services import dispatch_email_job, enqueue_email_job, front
 logger = logging.getLogger("releviz.security")
 
 
+TEMP_MAILBOX_REGISTRATION_SCOPE = "temporary-mailbox-registration"
+TEMP_SESSION_REGISTRATION_SCOPE = "temporary-session-registration"
+
+
 def normalize_email(email: str) -> str:
     return str(email or "").strip().lower()
 
@@ -489,6 +493,32 @@ def validate_password_pair(data: dict, *, password_key: str = "password") -> str
     return password
 
 
+def _validated_registration_details(data: dict) -> dict:
+    password = validate_password_pair(data)
+    first_name = str(data.get("first_name") or data.get("firstName") or "").strip()
+    last_name = str(data.get("last_name") or data.get("lastName") or "").strip()
+    if not first_name:
+        raise serializers.ValidationError({"first_name": "First name is required."})
+    if not last_name:
+        raise serializers.ValidationError({"last_name": "Last name is required."})
+    return {
+        "password": password,
+        "first_name": first_name,
+        "last_name": last_name,
+        "organization": str(data.get("organization") or "").strip(),
+        "title": str(data.get("title") or "").strip(),
+    }
+
+
+def _apply_registration_details(member, details: dict, *, email: str) -> None:
+    member.first_name = details["first_name"]
+    member.last_name = details["last_name"]
+    member.organization = details["organization"]
+    member.title = details["title"]
+    member.email = email
+    member.set_password(details["password"])
+
+
 @dataclass
 class IssuedChallenge:
     challenge: EmailAuthChallenge
@@ -771,24 +801,9 @@ def verify_email_challenge(
 @transaction.atomic
 def start_registration(data: dict, *, _temporary_upgrade_member_id=None):
     email = normalize_email(data.get("email", ""))
-    password = validate_password_pair(data)
-    first_name = str(data.get("first_name") or data.get("firstName") or "").strip()
-    last_name = str(data.get("last_name") or data.get("lastName") or "").strip()
-    organization = str(data.get("organization") or "").strip()
-    title = str(data.get("title") or "").strip()
-
     if not email:
         raise serializers.ValidationError({"email": "Email is required."})
-    if not first_name:
-        raise serializers.ValidationError({"first_name": "First name is required."})
-    if not last_name:
-        raise serializers.ValidationError({"last_name": "Last name is required."})
-
-    verified_contact = ContactEmail.objects.filter(
-        email_address__iexact=email, verified=True
-    ).first()
-    if verified_contact:
-        raise serializers.ValidationError({"email": "Unable to register with this email address."})
+    details = _validated_registration_details(data)
 
     contact = (
         ContactEmail.objects.select_related("member").filter(email_address__iexact=email).first()
@@ -811,35 +826,44 @@ def start_registration(data: dict, *, _temporary_upgrade_member_id=None):
             raise serializers.ValidationError(
                 {"email": "Unable to register with this email address."}
             )
-    elif member is not None and member.access_level == member.AccessLevel.TEMPORARY:
-        # Temporary identities may only be upgraded from a verified,
-        # event-scoped session. Keep this indistinguishable from every other
-        # unavailable registration address and reject before mutating the
-        # Member or replacing its pending registration challenge.
+
+    is_temporary_mailbox_claim = bool(
+        not authorized_temporary_upgrade
+        and member is not None
+        and member.access_level == member.AccessLevel.TEMPORARY
+    )
+    if contact is not None and contact.verified and not is_temporary_mailbox_claim:
         raise serializers.ValidationError({"email": "Unable to register with this email address."})
+
+    # Possession of a public registration form is not evidence that the
+    # submitted profile or password belongs to a pre-created temporary
+    # identity. Stage those values only after the mailbox challenge succeeds.
+    if is_temporary_mailbox_claim:
+        issue_email_challenge(
+            member=member,
+            purpose=EmailAuthChallenge.Purpose.REGISTER,
+            target_email=email,
+            scope_key=TEMP_MAILBOX_REGISTRATION_SCOPE,
+        )
+        return member
 
     if member is None:
         member = Member.objects.create_user(
-            password=password,
-            first_name=first_name,
-            last_name=last_name,
-            organization=organization,
-            title=title,
+            password=details["password"],
+            first_name=details["first_name"],
+            last_name=details["last_name"],
+            organization=details["organization"],
+            title=details["title"],
             is_active=False,
             email=email,
         )
     else:
         is_temporary = member.access_level == member.AccessLevel.TEMPORARY
-        member.first_name = first_name
-        member.last_name = last_name
-        member.organization = organization
-        member.title = title
-        member.email = email
+        _apply_registration_details(member, details, email=email)
         # A temporary member's event-scoped access must continue to work while
         # full registration is awaiting verification. Ordinary login remains
         # unavailable because its ContactEmail is still unverified.
         member.is_active = True if is_temporary else False
-        member.set_password(password)
         member.save()
 
     if contact is None:
@@ -858,25 +882,72 @@ def start_registration(data: dict, *, _temporary_upgrade_member_id=None):
         member=member,
         purpose=EmailAuthChallenge.Purpose.REGISTER,
         target_email=email,
+        scope_key=(TEMP_SESSION_REGISTRATION_SCOPE if authorized_temporary_upgrade else ""),
     )
     return member
 
 
 @transaction.atomic
-def complete_registration(email: str, code: str):
+def complete_registration(
+    email: str,
+    code: str,
+    *,
+    registration_data: dict | None = None,
+    temporary_upgrade: bool = False,
+):
+    normalized_email = normalize_email(email)
+    contact = (
+        ContactEmail.objects.select_related("member")
+        .filter(email_address__iexact=normalized_email)
+        .first()
+    )
+    member_before_verification = contact.member if contact else None
+    is_temporary = bool(
+        member_before_verification is not None
+        and member_before_verification.access_level
+        == member_before_verification.AccessLevel.TEMPORARY
+    )
+    mailbox_details = None
+    scope_key = ""
+    if is_temporary:
+        if temporary_upgrade:
+            scope_key = TEMP_SESSION_REGISTRATION_SCOPE
+        else:
+            # Validate all profile and password fields before consuming the
+            # one-time code. Failed validation leaves the challenge reusable.
+            mailbox_details = _validated_registration_details(registration_data or {})
+            submitted_email = normalize_email((registration_data or {}).get("email", ""))
+            if submitted_email != normalized_email:
+                raise serializers.ValidationError(
+                    {"email": "Email does not match the verified mailbox."}
+                )
+            scope_key = TEMP_MAILBOX_REGISTRATION_SCOPE
+    elif temporary_upgrade:
+        # Selecting the event-upgrade scope makes a forged or stale flag fail
+        # with the same verification error as any other invalid challenge.
+        scope_key = TEMP_SESSION_REGISTRATION_SCOPE
+
     challenge = verify_email_challenge(
-        email=email,
+        email=normalized_email,
         code=code,
         purpose=EmailAuthChallenge.Purpose.REGISTER,
+        scope_key=scope_key,
     )
     Member = get_user_model()
     member = Member.objects.select_for_update().get(pk=challenge.member_id)
     was_temporary = member.access_level == member.AccessLevel.TEMPORARY
+    if mailbox_details is not None:
+        if not was_temporary:
+            raise serializers.ValidationError({"code": "Invalid or expired verification code."})
+        _apply_registration_details(member, mailbox_details, email=normalized_email)
     member.is_active = True
-    member.email = normalize_email(email)
+    member.email = normalized_email
     member.access_level = member.AccessLevel.FULL
-    member.save(update_fields=["is_active", "email", "access_level"])
-    ContactEmail.objects.filter(member=member, email_address__iexact=email).update(
+    update_fields = ["is_active", "email", "access_level"]
+    if mailbox_details is not None:
+        update_fields.extend(["first_name", "last_name", "organization", "title", "password"])
+    member.save(update_fields=update_fields)
+    ContactEmail.objects.filter(member=member, email_address__iexact=normalized_email).update(
         verified=True,
         email_type="primary",
     )
@@ -905,20 +976,97 @@ def _complete_temporary_account_upgrade(member) -> None:
         ignore_conflicts=True,
     )
 
+    now = timezone.now()
+    pending_challenges = EmailAuthChallenge.objects.filter(
+        member=member,
+        purpose__in=[
+            EmailAuthChallenge.Purpose.REGISTER,
+            EmailAuthChallenge.Purpose.TEMP_EVENT_ACCESS,
+        ],
+        status=EmailAuthChallenge.Status.PENDING,
+    )
+    pending_challenge_ids = list(pending_challenges.values_list("pk", flat=True))
+    pending_challenges.update(status=EmailAuthChallenge.Status.EXPIRED, updated_at=now)
+    canceled_auth_jobs = _cancel_auth_challenge_jobs(
+        pending_challenge_ids,
+        "Temporary account was upgraded to full access.",
+    )
+
+    canceled_event_jobs = EmailDeliveryJob.objects.filter(
+        invitation__member=member,
+        message_type__in=[
+            EmailMessageLog.MessageType.INVITATION,
+            EmailMessageLog.MessageType.REMINDER,
+        ],
+        status__in=[
+            EmailDeliveryJob.Status.PENDING,
+            EmailDeliveryJob.Status.PROCESSING,
+            EmailDeliveryJob.Status.RETRY,
+        ],
+    ).update(
+        status=EmailDeliveryJob.Status.CANCELED,
+        last_error="Temporary account was upgraded to full access.",
+        locked_at=None,
+        lock_token=None,
+        updated_at=now,
+    )
+
     try:
         TemporaryEventSession = apps.get_model("scheduling", "TemporaryEventSession")
     except LookupError:  # Supports rolling deployments before the scheduling migration lands.
         TemporaryEventSession = None
     if TemporaryEventSession is not None:
-        now = timezone.now()
-        TemporaryEventSession.objects.filter(
+        revoked_session_count = TemporaryEventSession.objects.filter(
             member=member,
             revoked_at__isnull=True,
         ).update(revoked_at=now, updated_at=now)
+    else:
+        revoked_session_count = 0
     logger.info(
         "temporary_account_upgraded",
-        extra={"member_id": str(member.pk), "participation_count": participations.count()},
+        extra={
+            "member_id": str(member.pk),
+            "participation_count": participations.count(),
+            "expired_challenge_count": len(pending_challenge_ids),
+            "canceled_auth_job_count": canceled_auth_jobs,
+            "canceled_event_job_count": canceled_event_jobs,
+            "revoked_session_count": revoked_session_count,
+        },
     )
+
+
+@transaction.atomic
+def _recover_rollback_temporary_password_account(email: str, password: str):
+    """Promote an account that old application code accidentally left temporary."""
+
+    contact = (
+        ContactEmail.objects.select_for_update()
+        .filter(
+            email_address__iexact=email,
+            email_type="primary",
+            verified=True,
+            member__is_active=True,
+            member__access_level=get_user_model().AccessLevel.TEMPORARY,
+        )
+        .first()
+    )
+    if contact is None:
+        return None, False
+    Member = get_user_model()
+    member = Member.objects.select_for_update().get(pk=contact.member_id)
+    if not member.check_password(password):
+        # The real password hash already supplied constant-work verification;
+        # do not fall through to the backend and perform a second dummy hash.
+        return None, True
+    member.access_level = member.AccessLevel.FULL
+    member.email = normalize_email(contact.email_address)
+    member.save(update_fields=["access_level", "email"])
+    _complete_temporary_account_upgrade(member)
+    logger.warning(
+        "temporary_account_rollback_login_recovered",
+        extra={"member_id": str(member.pk)},
+    )
+    return member, True
 
 
 def login_with_password(email: str, password: str, request=None, *, require_staff: bool = False):
@@ -926,7 +1074,16 @@ def login_with_password(email: str, password: str, request=None, *, require_staf
     if request is not None and not password_login_allowed(normalized, request).allowed:
         get_user_model()().set_password(password)
         raise serializers.ValidationError({"detail": "Invalid email or password."})
-    user = authenticate(request=request, username=normalized, password=password)
+    user = None
+    if not require_staff:
+        user, recovery_candidate = _recover_rollback_temporary_password_account(
+            normalized,
+            password,
+        )
+    else:
+        recovery_candidate = False
+    if not recovery_candidate:
+        user = authenticate(request=request, username=normalized, password=password)
     if user is None or (require_staff and not user.is_staff):
         if request is not None:
             record_password_login_failure(normalized, request)

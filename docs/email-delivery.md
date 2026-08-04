@@ -13,7 +13,8 @@ activates registration.
 Creating a managed participant never creates a delivery job. The organizer explicitly sends or
 resends from Participant Manager. Temporary members receive `/temp-access` links; full members
 receive ordinary `/event` links. A provider failure leaves the participant and invitation intact
-with no sent timestamp, so the organizer can retry.
+with no sent timestamp, so the organizer can retry. Invitations without a completed first send are
+not eligible for manual reminders, scheduled reminders, or final-meeting notifications.
 
 ## Delivery States
 

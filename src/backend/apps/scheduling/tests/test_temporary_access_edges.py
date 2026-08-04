@@ -26,7 +26,9 @@ from apps.scheduling.models import (
 from apps.scheduling.services import ManagedParticipantError
 from apps.scheduling.temp_access import (
     _invitation_and_participant,
+    temporary_access_rate_identity,
     temporary_session_from_request,
+    temporary_session_member_has_full_access,
     verify_temporary_access_code,
 )
 
@@ -91,6 +93,22 @@ class TemporaryAccessEdgeFixture(TestCase):
 
 
 class TemporaryAccessServiceEdgeTests(TemporaryAccessEdgeFixture):
+    def test_rate_limit_identity_canonicalizes_equivalent_event_link_tokens(self):
+        token = self.invitation.access_token
+        canonical = temporary_access_rate_identity(self.event.code, token)
+        self.assertEqual(
+            canonical,
+            temporary_access_rate_identity(self.event.code.lower(), f"{{{token}}}"),
+        )
+        self.assertEqual(
+            canonical,
+            temporary_access_rate_identity(f" {self.event.code} ", token.hex.upper()),
+        )
+        self.assertEqual(
+            temporary_access_rate_identity(self.event.code, " NOT-A-UUID "),
+            temporary_access_rate_identity(self.event.code.lower(), "not-a-uuid"),
+        )
+
     def test_invitation_lookup_rejects_malformed_tokens_and_missing_participants(self):
         self.assertEqual(
             _invitation_and_participant(event_code=self.event.code, access_token=[]), (None, None)
@@ -145,9 +163,11 @@ class TemporaryAccessServiceEdgeTests(TemporaryAccessEdgeFixture):
         cookie_name = settings.TEMP_EVENT_COOKIE_NAME
         malformed = SimpleNamespace(COOKIES={cookie_name: "not-a-uuid.secret"})
         self.assertIsNone(temporary_session_from_request(malformed))
+        self.assertFalse(temporary_session_member_has_full_access(malformed))
 
         unknown = SimpleNamespace(COOKIES={cookie_name: f"{uuid.uuid4()}.secret"})
         self.assertIsNone(temporary_session_from_request(unknown))
+        self.assertFalse(temporary_session_member_has_full_access(unknown))
 
         self.temporary.access_level = "full"
         self.temporary.save(update_fields=["access_level"])
@@ -199,6 +219,22 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
         self.assertEqual(denied.status_code, 403)
         self.assertEqual(denied.data["error"], "Organizer only")
 
+        quota_denied = RateLimitDecision(allowed=False, retry_after=9)
+        with (
+            patch(
+                "apps.scheduling.views.consume_request_rate_limit",
+                return_value=quota_denied,
+            ),
+            patch("apps.scheduling.views.create_or_reuse_managed_participant") as create,
+        ):
+            throttled = client.post(
+                f"/events/participants/managed?code={self.event.code}",
+                {"name": "New person", "email": "new-person@example.com"},
+                format="json",
+            )
+        self.assertEqual(throttled.status_code, 429)
+        create.assert_not_called()
+
     def test_regular_participant_rename_permissions_and_temporary_name_validation(self):
         full = create_member("rename-full@example.com", "Full", "Person")
         full_participant = Participant.objects.create(
@@ -224,6 +260,10 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
             format="json",
         )
         self.assertEqual(organizer_denied.status_code, 403)
+        self.assertEqual(
+            organizer_denied.data["errorCode"],
+            "organizer_edit_full_account",
+        )
         self.assertEqual(organizer_denied.data["participant"]["accountAccess"], "full")
 
         endpoint = (
@@ -298,10 +338,20 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
         self.assertEqual(validation_error.status_code, 400)
         self.assertEqual(validation_error.data["error"], "Invalid or expired verification code.")
 
-        with patch("apps.scheduling.views.verify_temporary_access_code", return_value=None):
+        with (
+            patch("apps.scheduling.views.verify_temporary_access_code", return_value=None),
+            patch("apps.scheduling.views.security_logger.warning") as warning,
+        ):
             invalid = client.post("/events/temp-access/verify", payload, format="json")
         self.assertEqual(invalid.status_code, 400)
         self.assertEqual(invalid.data, validation_error.data)
+        self.assertEqual(warning.call_args.args[0], "temporary_access_code_verification_failed")
+        self.assertIn("auth_key", warning.call_args.kwargs["extra"])
+        self.assertEqual(
+            warning.call_args.kwargs["extra"]["auth_scope"],
+            "temp_access_code_verify",
+        )
+        self.assertIn("ip_address", warning.call_args.kwargs["extra"])
 
     def test_session_endpoint_requires_event_scope_and_hides_results_without_permission(self):
         client = self.temp_client()
@@ -433,7 +483,11 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
 
         verified = client.post(
             "/authn/register/verify-code/",
-            {"email": "edge-temp@example.com", "code": latest_code()},
+            {
+                "email": "edge-temp@example.com",
+                "code": latest_code(),
+                "temporaryUpgrade": True,
+            },
             format="json",
         )
         self.assertEqual(verified.status_code, 200, verified.data)
@@ -521,6 +575,7 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
             **origin,
         )
         self.assertEqual(no_session.status_code, 401)
+        self.assertEqual(no_session.data["errorCode"], "temp_session_inactive")
 
         immutable = self.temp_client().put(
             f"/events/temp-access/participant?code={self.event.code}",
@@ -548,6 +603,7 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
                 HTTP_ORIGIN="http://testserver",
             )
         self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.data["errorCode"], "temp_account_upgraded")
         self.session.refresh_from_db()
         self.assertIsNotNone(self.session.revoked_at)
 
@@ -568,6 +624,7 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
             **origin,
         )
         self.assertEqual(excluded.status_code, 403)
+        self.assertEqual(excluded.data["errorCode"], "participant_excluded")
         Weight.objects.all().delete()
 
         invalid_availability = client.put(
@@ -593,6 +650,7 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
             **origin,
         )
         self.assertEqual(missing_version.status_code, 428)
+        self.assertEqual(missing_version.data["errorCode"], "participant_version_required")
         boolean_version = client.put(
             endpoint,
             {"availabilityInperson": [1, 0], "expectedVersion": True},
@@ -609,6 +667,26 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
         self.assertEqual(idempotent.status_code, 200)
         self.participant.refresh_from_db()
         self.assertEqual(self.participant.version, 1)
+
+        conflict = client.put(
+            endpoint,
+            {"availabilityInperson": [1, 0], "expectedVersion": 999},
+            format="json",
+            **origin,
+        )
+        self.assertEqual(conflict.status_code, 409)
+        self.assertEqual(conflict.data["errorCode"], "participant_version_conflict")
+
+        self.event.status = Event.Status.CLOSED
+        self.event.save(update_fields=["status", "updated_at"])
+        locked = client.put(
+            endpoint,
+            {"availabilityInperson": [1, 0], "expectedVersion": 1},
+            format="json",
+            **origin,
+        )
+        self.assertEqual(locked.status_code, 409)
+        self.assertEqual(locked.data["errorCode"], "event_responses_locked")
 
     def test_participant_endpoint_records_submit_withdraw_and_first_draft_transitions(self):
         endpoint = f"/events/temp-access/participant?code={self.event.code}"

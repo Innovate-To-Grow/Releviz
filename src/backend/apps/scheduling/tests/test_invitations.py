@@ -245,6 +245,7 @@ class InvitationServiceTests(TestCase):
                 event=self.event,
                 email=email,
                 invited_by=self.organizer,
+                first_sent_at=timezone.now(),
             )
 
         self.assertEqual(send_event_reminders(self.event, force=False), 2)
@@ -285,6 +286,7 @@ class InvitationServiceTests(TestCase):
             event=no_deadline,
             email="no-deadline@example.com",
             invited_by=self.organizer,
+            first_sent_at=timezone.now(),
         )
         result = enqueue_manual_reminders(
             event=no_deadline,
@@ -293,6 +295,28 @@ class InvitationServiceTests(TestCase):
         )
         self.assertEqual(result["createdJobCount"], 1)
         self.assertEqual(result["jobs"][0].attachments, [])
+
+    def test_unsent_managed_invitation_is_not_selected_for_reminders(self):
+        invitation = EventInvitation.objects.create(
+            event=self.event,
+            email="managed-unsent@example.com",
+            invited_by=self.organizer,
+        )
+
+        self.assertEqual(send_event_reminders(self.event), 0)
+        manual = enqueue_manual_reminders(
+            event=self.event,
+            requested_by=self.organizer,
+            idempotency_key=uuid.uuid4(),
+        )
+        self.assertEqual(manual["request"].recipient_count, 0)
+        self.assertEqual(manual["createdJobCount"], 0)
+        self.assertFalse(EmailDeliveryJob.objects.filter(invitation=invitation).exists())
+
+        invitation.first_sent_at = timezone.now()
+        invitation.last_sent_at = invitation.first_sent_at
+        invitation.save(update_fields=["first_sent_at", "last_sent_at", "updated_at"])
+        self.assertEqual(send_event_reminders(self.event), 1)
 
     def test_service_authorization_caps_and_lifecycle_are_enforced(self):
         other = create_member("other@example.com")
@@ -314,6 +338,7 @@ class InvitationServiceTests(TestCase):
             event=self.event,
             email="existing@example.com",
             invited_by=self.organizer,
+            first_sent_at=timezone.now(),
         )
         with override_settings(INVITATION_MAX_EVENT_RECIPIENTS=1):
             with self.assertRaisesMessage(EventEmailRequestError, "at most 1"):
@@ -328,6 +353,7 @@ class InvitationServiceTests(TestCase):
             event=self.event,
             email="second@example.com",
             invited_by=self.organizer,
+            first_sent_at=timezone.now(),
         )
         with override_settings(REMINDER_MAX_RECIPIENTS=1):
             with self.assertRaisesMessage(EventEmailRequestError, "at most 1"):
@@ -359,6 +385,7 @@ class InvitationServiceTests(TestCase):
             email="participant@example.com",
             member=self.participant,
             invited_by=self.organizer,
+            first_sent_at=timezone.now(),
         )
         later = Event.objects.create(
             code="LATER",
@@ -374,6 +401,7 @@ class InvitationServiceTests(TestCase):
             event=later,
             email="later@example.com",
             invited_by=self.organizer,
+            first_sent_at=timezone.now(),
         )
 
         self.assertEqual(send_due_event_reminders(window_minutes=20), 1)
@@ -823,6 +851,7 @@ class InvitationApiTests(TestCase):
             event=self.event,
             email="pending@example.com",
             invited_by=self.organizer,
+            first_sent_at=timezone.now(),
         )
         second_key = uuid.uuid4()
         reminder = self.client.post(
@@ -856,6 +885,7 @@ class InvitationApiTests(TestCase):
             event=self.event,
             email="failed@example.com",
             invited_by=self.organizer,
+            first_sent_at=timezone.now(),
         )
         with patch(
             "apps.messaging.services.EmailMultiAlternatives.send",
@@ -888,6 +918,7 @@ class InvitationApiTests(TestCase):
             event=self.event,
             email="existing@example.com",
             invited_by=self.organizer,
+            first_sent_at=timezone.now(),
         )
         with override_settings(INVITATION_MAX_EVENT_RECIPIENTS=1):
             capped = self.client.post(
@@ -901,6 +932,7 @@ class InvitationApiTests(TestCase):
             event=self.event,
             email="second@example.com",
             invited_by=self.organizer,
+            first_sent_at=timezone.now(),
         )
         with override_settings(REMINDER_MAX_RECIPIENTS=1):
             capped = self.client.post(

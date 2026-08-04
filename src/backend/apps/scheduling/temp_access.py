@@ -30,6 +30,18 @@ def invitation_challenge_scope(invitation: EventInvitation) -> str:
     return f"temp-event:{invitation.event_id}:invitation:{invitation.pk}"
 
 
+def temporary_access_rate_identity(event_code: str, access_token) -> str:
+    """Canonicalize equivalent link tokens before applying request quotas."""
+
+    normalized_code = str(event_code or "").strip().upper()
+    raw_token = str(access_token or "").strip()
+    try:
+        normalized_token = str(uuid.UUID(raw_token))
+    except (TypeError, ValueError, AttributeError):
+        normalized_token = f"invalid:{security_log_key(raw_token.lower())}"
+    return f"{normalized_code}:{normalized_token}"
+
+
 def _invitation_and_participant(*, event_code: str, access_token):
     try:
         token = uuid.UUID(str(access_token or ""))
@@ -199,6 +211,43 @@ def temporary_session_from_request(
         session.last_seen_at = timezone.now()
         session.save(update_fields=["last_seen_at", "updated_at"])
     return session
+
+
+def temporary_session_member_has_full_access(request, *, event_code: str = "") -> bool:
+    """Recognize a valid old temp cookie after its member has been upgraded."""
+
+    cookie_value = str(request.COOKIES.get(settings.TEMP_EVENT_COOKIE_NAME, "") or "")
+    session_id, separator, raw_secret = cookie_value.partition(".")
+    if not separator or not raw_secret:
+        return False
+    try:
+        parsed_session_id = uuid.UUID(session_id)
+    except (TypeError, ValueError, AttributeError):
+        return False
+    session = (
+        TemporaryEventSession.objects.select_related(
+            "member",
+            "participant__event",
+            "invitation",
+        )
+        .filter(pk=parsed_session_id)
+        .first()
+    )
+    if session is None:
+        return False
+    relationship_valid = (
+        session.member_id == session.participant.member_id
+        and session.invitation.member_id == session.member_id
+        and session.invitation.event_id == session.participant.event_id
+    )
+    event_matches = not event_code or session.participant.event.code == event_code
+    supplied_hash = hashlib.sha256(raw_secret.encode()).hexdigest()
+    return bool(
+        relationship_valid
+        and event_matches
+        and hmac.compare_digest(session.secret_hash, supplied_hash)
+        and getattr(session.member, "access_level", "full") == "full"
+    )
 
 
 def set_temporary_session_cookie(response, credential: TemporarySessionCredential) -> None:

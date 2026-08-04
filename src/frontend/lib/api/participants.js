@@ -52,6 +52,7 @@ export async function updateParticipant(code, participantId, data, token) {
     );
     error.status = res.status;
     error.participant = payload?.participant || null;
+    error.errorCode = payload?.errorCode ?? payload?.code ?? null;
     throw error;
   }
   return res.json();

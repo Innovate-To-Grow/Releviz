@@ -295,6 +295,40 @@ describe("auth API helpers", () => {
     expect(JSON.parse(global.fetch.mock.calls[1][1].body)).not.toHaveProperty("email");
   });
 
+  test("secures and resubmits registration details when verifying a mailbox claim", async () => {
+    global.fetch
+      .mockResolvedValueOnce(passwordKeyResponse())
+      .mockResolvedValueOnce(jsonResponse({ access: "verified", user: { id: "member" } }));
+
+    await verifyRegistration({
+      email: "temporary@example.com",
+      code: "123456",
+      temporaryUpgrade: false,
+      password: "password123",
+      password_confirm: "password123",
+      first_name: "Taylor",
+      last_name: "Temp",
+    });
+
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      2,
+      "/authn/register/verify-code/",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        body: JSON.stringify({
+          email: "temporary@example.com",
+          code: "123456",
+          temporaryUpgrade: false,
+          password: "password123",
+          password_confirm: "password123",
+          first_name: "Taylor",
+          last_name: "Temp",
+        }),
+      })
+    );
+  });
+
   test("auth helpers throw extracted errors and update profile sessions", async () => {
     writeAuthSession({ access: "a", user: { id: "old" } });
     global.fetch
@@ -877,6 +911,7 @@ describe("business API helpers", () => {
         jsonResponse(
           {
             error: "Response version conflict",
+            errorCode: "organizer_edit_full_account",
             participant: { id: "participant-1", version: 4 },
           },
           { status: 409 }
@@ -889,21 +924,25 @@ describe("business API helpers", () => {
     await expect(updateParticipant("ABC", "participant-1", {}, "tok")).rejects.toMatchObject({
       message: "Response version conflict",
       status: 409,
+      errorCode: "organizer_edit_full_account",
       participant: { id: "participant-1", version: 4 },
     });
     await expect(updateParticipant("ABC", "participant-1", {}, "tok")).rejects.toMatchObject({
       message: "Responses are locked",
       status: 423,
+      errorCode: null,
       participant: null,
     });
     await expect(updateParticipant("ABC", "participant-1", {}, "tok")).rejects.toMatchObject({
       message: "Request failed",
       status: 400,
+      errorCode: null,
       participant: null,
     });
     await expect(updateParticipant("ABC", "participant-1", {}, "tok")).rejects.toMatchObject({
       message: "HTTP 502",
       status: 502,
+      errorCode: null,
       participant: null,
     });
   });

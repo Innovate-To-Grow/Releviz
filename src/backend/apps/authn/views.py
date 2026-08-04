@@ -118,7 +118,10 @@ class RegisterView(PublicAuthView):
         except Exception as exc:  # noqa: BLE001
             return validation_error_response(exc)
         return Response(
-            {"message": "Registration started. Check your email for a verification code."},
+            {
+                "message": "Registration started. Check your email for a verification code.",
+                "requiresRegistrationDetailsOnVerify": True,
+            },
             status=status.HTTP_202_ACCEPTED,
         )
 
@@ -127,9 +130,15 @@ class RegisterVerifyCodeView(PublicAuthView):
     auth_rate_scope = "code_verify"
 
     def post(self, request):
+        temporary_upgrade = request.data.get("temporaryUpgrade", False)
+        if not isinstance(temporary_upgrade, bool):
+            return Response({"temporaryUpgrade": "Must be a boolean."}, status=400)
         try:
             user = complete_registration(
-                request.data.get("email", ""), request.data.get("code", "")
+                request.data.get("email", ""),
+                request.data.get("code", ""),
+                registration_data=request.data,
+                temporary_upgrade=temporary_upgrade,
             )
         except Exception as exc:  # noqa: BLE001
             return validation_error_response(exc)
@@ -146,13 +155,22 @@ class RegisterResendCodeView(PublicAuthView):
             .filter(email_address__iexact=email)
             .first()
         )
-        has_registration = bool(
-            contact
-            and contact.member.email_auth_challenges.filter(
+        pending_challenge = (
+            contact.member.email_auth_challenges.filter(
                 purpose=EmailAuthChallenge.Purpose.REGISTER,
-            ).exists()
+                status=EmailAuthChallenge.Status.PENDING,
+            )
+            .order_by("-created_at")
+            .first()
+            if contact
+            else None
         )
-        if contact is None or contact.verified or not has_registration:
+        verified_full_account = bool(
+            contact
+            and contact.verified
+            and contact.member.access_level == contact.member.AccessLevel.FULL
+        )
+        if contact is None or verified_full_account or pending_challenge is None:
             return Response(
                 {"message": "If registration is pending, a verification code has been sent."},
                 status=202,
@@ -161,6 +179,7 @@ class RegisterResendCodeView(PublicAuthView):
             member=contact.member,
             purpose=EmailAuthChallenge.Purpose.REGISTER,
             target_email=email,
+            scope_key=pending_challenge.scope_key,
         )
         data = {"message": "If registration is pending, a verification code has been sent."}
         return Response(maybe_debug_code(data, issued), status=202)

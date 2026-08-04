@@ -82,11 +82,23 @@ describe("temporary access API", () => {
   test("preserves the latest participant on an optimistic concurrency error", async () => {
     const latest = { id: "person-1", version: 7 };
     fetch.mockResolvedValueOnce(
-      jsonResponse({ error: "Version conflict", participant: latest }, { status: 409 })
+      jsonResponse(
+        {
+          error: "Version conflict",
+          errorCode: "participant_version_conflict",
+          participant: latest,
+        },
+        { status: 409 }
+      )
     );
 
     await expect(
       updateTempAccessParticipant("ABC123", { submitted: 0, expectedVersion: 6 })
-    ).rejects.toMatchObject({ status: 409, participant: latest, message: "Version conflict" });
+    ).rejects.toMatchObject({
+      status: 409,
+      errorCode: "participant_version_conflict",
+      participant: latest,
+      message: "Version conflict",
+    });
   });
 });

@@ -106,7 +106,14 @@ function session(overrides = {}) {
 
 describe("temporary event access page", () => {
   beforeEach(() => {
+    jest.useRealTimers();
     jest.clearAllMocks();
+    fetchTempAccessSession.mockReset();
+    logoutTempAccess.mockReset();
+    requestTempAccessCode.mockReset();
+    updateTempAccessParticipant.mockReset();
+    verifyTempAccess.mockReset();
+    navigateTo.mockReset();
     window.sessionStorage.clear();
     window.history.replaceState({}, "", "/temp-access");
     searchParams = new URLSearchParams("code=ABC123");
@@ -122,6 +129,10 @@ describe("temporary event access page", () => {
         version: 2,
       }),
     }));
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
   });
 
   test("restores a restricted session and builds an email-free server-bound upgrade link", async () => {
@@ -146,9 +157,6 @@ describe("temporary event access page", () => {
   test("strips the invitation token, requests a code, and verifies access", async () => {
     searchParams = new URLSearchParams("code=ABC123&invitation=secret-link-token");
     window.history.replaceState({}, "", "/temp-access?code=ABC123&invitation=secret-link-token");
-    fetchTempAccessSession.mockRejectedValueOnce(
-      Object.assign(new Error("No session"), { status: 401 })
-    );
 
     render(<TempAccessClient />);
 
@@ -175,9 +183,38 @@ describe("temporary event access page", () => {
     expect(window.sessionStorage.getItem("releviz.temp-access.invitation:ABC123")).toBeNull();
   });
 
+  test("lets an explicit invitation override an existing same-event cookie session", async () => {
+    searchParams = new URLSearchParams("code=ABC123&invitation=invite-for-a-different-person");
+    window.history.replaceState(
+      {},
+      "",
+      "/temp-access?code=ABC123&invitation=invite-for-a-different-person"
+    );
+    fetchTempAccessSession.mockResolvedValue(
+      session({ participant: participant({ name: "Previous browser user" }) })
+    );
+
+    render(<TempAccessClient />);
+
+    expect(await screen.findByRole("heading", { name: "Check your email" })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(requestTempAccessCode).toHaveBeenCalledWith({
+        code: "ABC123",
+        invitationToken: "invite-for-a-different-person",
+      })
+    );
+    expect(fetchTempAccessSession).not.toHaveBeenCalled();
+    expect(
+      screen.queryByText("You are responding as Previous browser user")
+    ).not.toBeInTheDocument();
+  });
+
   test("autosaves with a version and requires an explicit reload after a conflict", async () => {
     jest.useFakeTimers();
     const conflict = participant({ availabilityInperson: [1, 1], version: 9 });
+    fetchTempAccessSession
+      .mockResolvedValueOnce(session())
+      .mockResolvedValueOnce(session({ participant: conflict }));
     updateTempAccessParticipant.mockRejectedValueOnce(
       Object.assign(new Error("Version conflict"), {
         status: 409,
@@ -205,9 +242,132 @@ describe("temporary event access page", () => {
     expect(screen.getByRole("button", { name: "Paint in-person" })).toBeDisabled();
 
     fireEvent.click(screen.getByRole("button", { name: "Reload latest response" }));
-    expect(screen.getByTestId("schedule-editor")).toHaveTextContent("1,1");
+    await waitFor(() => expect(screen.getByTestId("schedule-editor")).toHaveTextContent("1,1"));
     expect(screen.getByRole("button", { name: "Paint in-person" })).not.toBeDisabled();
-    jest.useRealTimers();
+  });
+
+  test("refreshes permission-derived results when reloading a shared-response conflict", async () => {
+    jest.useFakeTimers();
+    const visibleResults = {
+      countedResponseTotal: 1,
+      unansweredParticipantTotal: 0,
+      channels: { inperson: { unweighted: [1, 1] } },
+    };
+    const latestDraft = participant({
+      availabilityInperson: [0.5, 0],
+      submitted: false,
+      version: 9,
+    });
+    fetchTempAccessSession
+      .mockResolvedValueOnce(
+        session({
+          participant: participant({ submitted: true }),
+          canViewResults: true,
+          results: visibleResults,
+        })
+      )
+      .mockResolvedValueOnce(
+        session({ participant: latestDraft, canViewResults: false, results: null })
+      );
+    updateTempAccessParticipant.mockRejectedValueOnce(
+      Object.assign(new Error("Version conflict"), {
+        status: 409,
+        participant: latestDraft,
+      })
+    );
+
+    render(<TempAccessClient />);
+    expect(await screen.findByRole("heading", { name: "Group availability" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Paint in-person" }));
+    await act(async () => {
+      jest.advanceTimersByTime(701);
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByText(/schedule changed somewhere else/i)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Group availability" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Reload latest response" }));
+
+    await waitFor(() => expect(fetchTempAccessSession).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByTestId("schedule-editor")).toHaveTextContent("0.5,0"));
+    expect(screen.queryByRole("heading", { name: "Group availability" })).not.toBeInTheDocument();
+  });
+
+  test.each(["closed", "archived"])(
+    "reloads and locks the schedule when the event is remotely %s",
+    async (status) => {
+      jest.useFakeTimers();
+      fetchTempAccessSession
+        .mockResolvedValueOnce(session())
+        .mockResolvedValueOnce(session({ event: { ...event, status } }));
+      updateTempAccessParticipant.mockRejectedValueOnce(
+        Object.assign(new Error(`Responses are locked while this event is ${status}.`), {
+          status: 409,
+        })
+      );
+
+      render(<TempAccessClient />);
+      expect(await screen.findByRole("heading", { name: "Design review" })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Paint in-person" }));
+      await act(async () => {
+        jest.advanceTimersByTime(701);
+        await Promise.resolve();
+      });
+
+      await waitFor(() => expect(fetchTempAccessSession).toHaveBeenCalledTimes(2));
+      expect(
+        (await screen.findAllByText(`Responses are locked while this event is ${status}.`)).length
+      ).toBeGreaterThan(0);
+      expect(screen.getByRole("button", { name: "Paint in-person" })).toBeDisabled();
+      expect(screen.queryByRole("button", { name: "Retry save" })).not.toBeInTheDocument();
+    }
+  );
+
+  test("locks an excluded response instead of retrying a server-denied write", async () => {
+    jest.useFakeTimers();
+    fetchTempAccessSession.mockResolvedValueOnce(session()).mockResolvedValueOnce(session());
+    updateTempAccessParticipant.mockRejectedValueOnce(
+      Object.assign(new Error("Excluded participants cannot change availability"), { status: 403 })
+    );
+
+    render(<TempAccessClient />);
+    expect(await screen.findByRole("heading", { name: "Design review" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Paint in-person" }));
+    await act(async () => {
+      jest.advanceTimersByTime(701);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(fetchTempAccessSession).toHaveBeenCalledTimes(2));
+    expect(
+      (await screen.findAllByText("Excluded participants cannot change availability")).length
+    ).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Paint in-person" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Retry save" })).not.toBeInTheDocument();
+  });
+
+  test("exits temporary access when the account upgrades in another session", async () => {
+    jest.useFakeTimers();
+    updateTempAccessParticipant.mockRejectedValueOnce(
+      Object.assign(new Error("This account now has full access. Sign in to continue."), {
+        status: 403,
+        errorCode: "temp_account_upgraded",
+      })
+    );
+
+    render(<TempAccessClient />);
+    expect(await screen.findByRole("heading", { name: "Design review" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Paint in-person" }));
+    await act(async () => {
+      jest.advanceTimersByTime(701);
+      await Promise.resolve();
+    });
+
+    expect(
+      await screen.findByRole("heading", { name: "Temporary access ended" })
+    ).toBeInTheDocument();
+    expect(screen.getByText(/account now has full access/i)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Design review" })).not.toBeInTheDocument();
   });
 
   test("submits the shared response and signs out of only the temporary session", async () => {
@@ -225,6 +385,20 @@ describe("temporary event access page", () => {
     await userEvent.click(screen.getByRole("button", { name: "Sign out" }));
     await waitFor(() => expect(logoutTempAccess).toHaveBeenCalledWith("ABC123"));
     expect(await screen.findByRole("heading", { name: "You are signed out" })).toBeInTheDocument();
+  });
+
+  test("does not claim sign-out when the server cannot revoke the temporary session", async () => {
+    logoutTempAccess.mockRejectedValueOnce(new Error("Network unavailable"));
+    render(<TempAccessClient />);
+    expect(await screen.findByRole("heading", { name: "Design review" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Sign out" }));
+
+    expect(
+      await screen.findByText(/sign out could not be confirmed.*session may still be active/i)
+    ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Design review" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "You are signed out" })).not.toBeInTheDocument();
   });
 
   test("flushes a pending autosave before navigating to full-account upgrade", async () => {

@@ -18,8 +18,10 @@ from rest_framework.views import APIView
 from apps.authn.models import ContactEmail
 from apps.authn.security import (
     AuthRateThrottle,
+    client_ip,
     consume_request_rate_limit,
     enforce_cookie_request_origin,
+    security_log_key,
 )
 from apps.authn.services import start_registration
 from apps.messaging.models import EmailDeliveryRequest
@@ -73,7 +75,9 @@ from apps.scheduling.temp_access import (
     clear_temporary_session_cookie,
     request_temporary_access_code,
     set_temporary_session_cookie,
+    temporary_access_rate_identity,
     temporary_session_from_request,
+    temporary_session_member_has_full_access,
     verify_temporary_access_code,
 )
 from apps.scheduling.utils import (
@@ -108,6 +112,18 @@ def temp_private_response(data=None, *, status=200):
     patch_cache_control(response, private=True, no_store=True)
     patch_vary_headers(response, ["Cookie", "Origin"])
     return response
+
+
+def log_temporary_session_denied(request, *, event_code: str, operation: str) -> None:
+    security_logger.warning(
+        "temporary_event_session_denied",
+        extra={
+            "auth_key": security_log_key(str(event_code or "").strip().upper()),
+            "auth_scope": "temp_event_session",
+            "ip_address": client_ip(request),
+            "operation": operation,
+        },
+    )
 
 
 def organizer_participant_payload(participant, event):
@@ -427,6 +443,12 @@ class ParticipantsView(APIView):
 
 class ManagedParticipantView(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_classes = [AuthRateThrottle]
+    auth_rate_scope = "invitation_request"
+    auth_rate_methods = {"POST"}
+
+    def get_auth_rate_identity(self, request):
+        return str(request.user.pk)
 
     def post(self, request):
         code = str(request.query_params.get("code") or "").strip()
@@ -435,6 +457,19 @@ class ManagedParticipantView(APIView):
         event = Event.objects.filter(code=code).first()
         if event is None:
             return Response({"error": "Event not found"}, status=404)
+        normalized_email = str(request.data.get("email") or "").strip().lower()
+        if (
+            normalized_email
+            and not event.invitations.filter(email__iexact=normalized_email).exists()
+        ):
+            quota = consume_request_rate_limit(
+                "invitation_recipient",
+                request,
+                str(request.user.pk),
+                cost=1,
+            )
+            if not quota.allowed:
+                raise Throttled(wait=quota.retry_after)
         try:
             result = create_or_reuse_managed_participant(
                 event=event,
@@ -512,42 +547,66 @@ class ParticipantUpdateView(APIView):
             return api_participant(participant)
 
         if is_response_mutation and not (is_self or organizer_can_edit_response):
-            payload = {"error": "Only participants can change their own availability"}
+            payload = {
+                "error": "Only participants can change their own availability",
+                "errorCode": "participant_update_forbidden",
+            }
             if is_organizer:
                 payload = {
                     "error": (
                         "This participant has full access; the organizer can no longer "
                         "change their availability."
                     ),
+                    "errorCode": "organizer_edit_full_account",
                     "participant": response_participant_payload(),
                 }
             if is_organizer:
                 return private_response(payload, status=403)
             return Response(payload, status=403)
         if is_name_mutation and not organizer_can_edit_response:
-            payload = {"error": "Only the organizer can rename a temporary participant"}
+            payload = {
+                "error": "Only the organizer can rename a temporary participant",
+                "errorCode": "participant_update_forbidden",
+            }
             if is_organizer:
+                payload["errorCode"] = "organizer_edit_full_account"
                 payload["participant"] = response_participant_payload()
                 return private_response(payload, status=403)
             return Response(payload, status=403)
         if not is_organizer and not is_self:
             return Response(
-                {"error": "You do not have permission to update this participant"}, status=403
+                {
+                    "error": "You do not have permission to update this participant",
+                    "errorCode": "participant_update_forbidden",
+                },
+                status=403,
             )
         if "email" in request.data or "contactEmail" in request.data:
             return Response(
-                {"error": "Participant email cannot be changed."},
+                {
+                    "error": "Participant email cannot be changed.",
+                    "errorCode": "participant_email_immutable",
+                },
                 status=400,
             )
         if is_versioned_mutation:
             write_error = response_write_error(event)
             if write_error:
-                return Response({"error": write_error}, status=409)
+                return Response(
+                    {
+                        "error": write_error,
+                        "errorCode": "participant_response_locked",
+                    },
+                    status=409,
+                )
         if is_response_mutation:
             weight = weight_for_participant(event, participant)
             if participant_is_excluded(participant, weight):
                 return Response(
-                    {"error": "Excluded participants cannot change availability"},
+                    {
+                        "error": "Excluded participants cannot change availability",
+                        "errorCode": "participant_excluded",
+                    },
                     status=403,
                 )
 
@@ -584,14 +643,22 @@ class ParticipantUpdateView(APIView):
         if "groupName" in request.data:
             if not is_organizer:
                 return Response(
-                    {"error": "Only the organizer can update participant groups"}, status=403
+                    {
+                        "error": "Only the organizer can update participant groups",
+                        "errorCode": "participant_update_forbidden",
+                    },
+                    status=403,
                 )
             updates["group_name"] = request.data.get("groupName") or None
 
         if "sortOrder" in request.data:
             if not is_organizer:
                 return Response(
-                    {"error": "Only the organizer can reorder participants"}, status=403
+                    {
+                        "error": "Only the organizer can reorder participants",
+                        "errorCode": "participant_update_forbidden",
+                    },
+                    status=403,
                 )
             try:
                 updates["sort_order"] = (
@@ -635,7 +702,13 @@ class ParticipantUpdateView(APIView):
         if is_versioned_mutation:
             expected_version = request.data.get("expectedVersion")
             if isinstance(expected_version, bool) or not isinstance(expected_version, int):
-                return Response({"error": "expectedVersion is required"}, status=428)
+                return Response(
+                    {
+                        "error": "expectedVersion is required",
+                        "errorCode": "participant_version_required",
+                    },
+                    status=428,
+                )
             if participant.version != expected_version:
                 if values_match():
                     track_unchanged_response()
@@ -646,6 +719,7 @@ class ParticipantUpdateView(APIView):
                             "Your availability changed in another session. "
                             "Refresh before saving again."
                         ),
+                        "errorCode": "participant_version_conflict",
                         "participant": response_participant_payload(),
                     },
                     status=409,
@@ -914,7 +988,7 @@ class TemporaryAccessRequestCodeView(APIView):
     def post(self, request):
         event_code = str(request.data.get("code") or "").strip()
         invitation_token = str(request.data.get("invitationToken") or "").strip()
-        identity = f"{event_code}:{invitation_token}"
+        identity = temporary_access_rate_identity(event_code, invitation_token)
         quota = consume_request_rate_limit(
             "temp_access_code_request",
             request,
@@ -948,7 +1022,7 @@ class TemporaryAccessVerifyView(APIView):
         event_code = str(request.data.get("code") or "").strip()
         invitation_token = str(request.data.get("invitationToken") or "").strip()
         verification_code = str(request.data.get("verificationCode") or "").strip()
-        identity = f"{event_code}:{invitation_token}"
+        identity = temporary_access_rate_identity(event_code, invitation_token)
         quota = consume_request_rate_limit(
             "temp_access_code_verify",
             request,
@@ -966,6 +1040,14 @@ class TemporaryAccessVerifyView(APIView):
         except DRFValidationError:
             credential = None
         if credential is None:
+            security_logger.warning(
+                "temporary_access_code_verification_failed",
+                extra={
+                    "auth_key": security_log_key(identity),
+                    "auth_scope": "temp_access_code_verify",
+                    "ip_address": client_ip(request),
+                },
+            )
             return temp_private_response(
                 {"error": "Invalid or expired verification code."},
                 status=400,
@@ -985,9 +1067,27 @@ class TemporaryAccessSessionView(APIView):
             return temp_private_response({"error": "code is required"}, status=400)
         session = temporary_session_from_request(request, event_code=event_code)
         if session is None:
+            log_temporary_session_denied(
+                request,
+                event_code=event_code,
+                operation="read_session",
+            )
+            account_upgraded = temporary_session_member_has_full_access(
+                request,
+                event_code=event_code,
+            )
             response = temp_private_response(
-                {"error": "Temporary event access is not active."},
-                status=401,
+                {
+                    "error": (
+                        "This account now has full access. Sign in to continue."
+                        if account_upgraded
+                        else "Temporary event access is not active."
+                    ),
+                    "errorCode": (
+                        "temp_account_upgraded" if account_upgraded else "temp_session_inactive"
+                    ),
+                },
+                status=403 if account_upgraded else 401,
             )
             clear_temporary_session_cookie(response)
             return response
@@ -1006,9 +1106,27 @@ class TemporaryAccessUpgradeRegistrationView(APIView):
 
         session = temporary_session_from_request(request, event_code=event_code)
         if session is None:
+            log_temporary_session_denied(
+                request,
+                event_code=event_code,
+                operation="start_upgrade",
+            )
+            account_upgraded = temporary_session_member_has_full_access(
+                request,
+                event_code=event_code,
+            )
             response = temp_private_response(
-                {"error": "Temporary event access is not active."},
-                status=401,
+                {
+                    "error": (
+                        "This account now has full access. Sign in to continue."
+                        if account_upgraded
+                        else "Temporary event access is not active."
+                    ),
+                    "errorCode": (
+                        "temp_account_upgraded" if account_upgraded else "temp_session_inactive"
+                    ),
+                },
+                status=403 if account_upgraded else 401,
             )
             clear_temporary_session_cookie(response)
             return response
@@ -1085,7 +1203,10 @@ class TemporaryAccessUpgradeRegistrationView(APIView):
             },
         )
         return temp_private_response(
-            {"message": "Registration started. Check your email for a verification code."},
+            {
+                "message": "Registration started. Check your email for a verification code.",
+                "requiresRegistrationDetailsOnVerify": True,
+            },
             status=202,
         )
 
@@ -1102,9 +1223,27 @@ class TemporaryAccessParticipantView(APIView):
             return temp_private_response({"error": "code is required"}, status=400)
         session = temporary_session_from_request(request, event_code=event_code)
         if session is None:
+            log_temporary_session_denied(
+                request,
+                event_code=event_code,
+                operation="update_participant",
+            )
+            account_upgraded = temporary_session_member_has_full_access(
+                request,
+                event_code=event_code,
+            )
             response = temp_private_response(
-                {"error": "Temporary event access is not active."},
-                status=401,
+                {
+                    "error": (
+                        "This account now has full access. Sign in to continue."
+                        if account_upgraded
+                        else "Temporary event access is not active."
+                    ),
+                    "errorCode": (
+                        "temp_account_upgraded" if account_upgraded else "temp_session_inactive"
+                    ),
+                },
+                status=403 if account_upgraded else 401,
             )
             clear_temporary_session_cookie(response)
             return response
@@ -1118,23 +1257,38 @@ class TemporaryAccessParticipantView(APIView):
         if current_member_access_level(participant.member_id) != "temporary":
             session.revoke()
             response = temp_private_response(
-                {"error": "This account now has full access. Sign in to continue."},
+                {
+                    "error": "This account now has full access. Sign in to continue.",
+                    "errorCode": "temp_account_upgraded",
+                },
                 status=403,
             )
             clear_temporary_session_cookie(response)
             return response
         if "email" in request.data or "contactEmail" in request.data:
             return temp_private_response(
-                {"error": "Participant email cannot be changed."},
+                {
+                    "error": "Participant email cannot be changed.",
+                    "errorCode": "participant_email_immutable",
+                },
                 status=400,
             )
         write_error = response_write_error(event)
         if write_error:
-            return temp_private_response({"error": write_error}, status=409)
+            return temp_private_response(
+                {
+                    "error": write_error,
+                    "errorCode": "event_responses_locked",
+                },
+                status=409,
+            )
         weight = weight_for_participant(event, participant)
         if participant_is_excluded(participant, weight):
             return temp_private_response(
-                {"error": "Excluded participants cannot change availability"},
+                {
+                    "error": "Excluded participants cannot change availability",
+                    "errorCode": "participant_excluded",
+                },
                 status=403,
             )
 
@@ -1170,7 +1324,10 @@ class TemporaryAccessParticipantView(APIView):
         expected_version = request.data.get("expectedVersion")
         if isinstance(expected_version, bool) or not isinstance(expected_version, int):
             return temp_private_response(
-                {"error": "expectedVersion is required"},
+                {
+                    "error": "expectedVersion is required",
+                    "errorCode": "participant_version_required",
+                },
                 status=428,
             )
         values_match = all(getattr(participant, key) == value for key, value in updates.items())
@@ -1180,6 +1337,7 @@ class TemporaryAccessParticipantView(APIView):
                     "error": (
                         "Your availability changed in another session. Reload before saving again."
                     ),
+                    "errorCode": "participant_version_conflict",
                     "participant": api_participant(participant),
                 },
                 status=409,
@@ -1388,7 +1546,11 @@ class EventRemindersView(APIView):
             return Response({"error": "idempotencyKey must be a UUID"}, status=400)
 
         recipient_count = (
-            event.invitations.exclude(status="submitted").count() if event.reminders_enabled else 0
+            event.invitations.filter(first_sent_at__isnull=False)
+            .exclude(status="submitted")
+            .count()
+            if event.reminders_enabled
+            else 0
         )
         is_replay = EmailDeliveryRequest.objects.filter(
             event=event,

@@ -51,6 +51,28 @@ function schedulesMatch(left = [], right = []) {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
+function mergeInvitationRecords(current = [], incoming = []) {
+  const merged = [...current];
+  incoming.forEach((invitation) => {
+    const email = String(invitation?.email || "").toLowerCase();
+    const index = merged.findIndex(
+      (candidate) =>
+        (invitation?.id && candidate?.id === invitation.id) ||
+        (email && String(candidate?.email || "").toLowerCase() === email)
+    );
+    if (index >= 0) merged[index] = { ...merged[index], ...invitation };
+    else merged.push(invitation);
+  });
+  return merged;
+}
+
+function invitationStatusAfterSend(participant) {
+  const current = String(
+    participant.invitationStatus || participant.invitation_status || "not_sent"
+  ).toLowerCase();
+  return current === "not_sent" ? "invited" : current;
+}
+
 function OrganizerView() {
   const { event, setEvent, numSlots } = useContext(EventContext);
   const { user, loading: authLoading, getToken } = useAuth();
@@ -96,7 +118,9 @@ function OrganizerView() {
   const [creatingManagedParticipant, setCreatingManagedParticipant] = useState(false);
   const [managedStatus, setManagedStatus] = useState("");
   const [managedError, setManagedError] = useState("");
-  const [sendingParticipantId, setSendingParticipantId] = useState("");
+  const [sendingParticipantIds, setSendingParticipantIds] = useState(() => new Set());
+  const participantInvitationPendingRef = useRef(new Set());
+  const participantInvitationRequestKeysRef = useRef(new Map());
   const [managedParticipant, setManagedParticipant] = useState(null);
   const [managedParticipantName, setManagedParticipantName] = useState("");
   const [managedParticipantVersion, setManagedParticipantVersion] = useState(null);
@@ -106,7 +130,7 @@ function OrganizerView() {
   const [managedEditorError, setManagedEditorError] = useState("");
   const [managedEditorStatus, setManagedEditorStatus] = useState("");
   const [managedConflictParticipant, setManagedConflictParticipant] = useState(null);
-  const managedPaintValueRef = useRef({ inperson: 1, virtual: 1 });
+  const [managedAvailabilityValue, setManagedAvailabilityValue] = useState(1);
   const [invitations, setInvitations] = useState([]);
   const [inviteEmails, setInviteEmails] = useState("");
   const [inviteMessage, setInviteMessage] = useState("");
@@ -514,21 +538,40 @@ function OrganizerView() {
 
   const handleSendParticipantInvitation = async (participant) => {
     const email = participant.email || participant.contactEmail;
-    if (!email) return;
-    setSendingParticipantId(participant.id);
+    if (!email || participantInvitationPendingRef.current.has(participant.id)) return;
+    participantInvitationPendingRef.current.add(participant.id);
+    setSendingParticipantIds((current) => new Set(current).add(participant.id));
     setManagedStatus("");
     setManagedError("");
+    let idempotencyKey = participantInvitationRequestKeysRef.current.get(participant.id);
+    if (!idempotencyKey) {
+      idempotencyKey = crypto.randomUUID();
+      participantInvitationRequestKeysRef.current.set(participant.id, idempotencyKey);
+    }
     try {
       const token = await getToken();
       const data = await sendInvitations(
         event.code,
-        { emails: [email], message: "", idempotencyKey: crypto.randomUUID() },
+        { emails: [email], message: "", idempotencyKey },
         token
       );
-      if (data.invitations) setInvitations(data.invitations);
+      const delivery = data.delivery || {};
+      const deliveryWaiting =
+        Number(delivery.pending || 0) +
+        Number(delivery.processing || 0) +
+        Number(delivery.retry || 0);
+      const deliveryTerminal =
+        deliveryWaiting === 0 &&
+        (Number(delivery.sent || 0) > 0 || Number(delivery.permanentFailure || 0) > 0);
+      if (deliveryTerminal) {
+        participantInvitationRequestKeysRef.current.delete(participant.id);
+      }
+      if (data.invitations) {
+        setInvitations((current) => mergeInvitationRecords(current, data.invitations));
+      }
       const temporary = (participant.accountAccess || participant.account_access) === "temporary";
       const deliveryFailed =
-        Number(data.delivery?.retry || 0) > 0 || Number(data.delivery?.permanentFailure || 0) > 0;
+        Number(delivery.retry || 0) > 0 || Number(delivery.permanentFailure || 0) > 0;
       if (deliveryFailed) {
         setManagedError(
           `${temporary ? "Access link" : "Invitation"} was not delivered to ${email}. ` +
@@ -538,7 +581,10 @@ function OrganizerView() {
         setParticipants((current) =>
           current.map((currentParticipant) =>
             currentParticipant.id === participant.id
-              ? { ...currentParticipant, invitationStatus: "invited" }
+              ? {
+                  ...currentParticipant,
+                  invitationStatus: invitationStatusAfterSend(currentParticipant),
+                }
               : currentParticipant
           )
         );
@@ -549,37 +595,35 @@ function OrganizerView() {
     } catch (err) {
       setManagedError(`Unable to send to ${email}: ${err.message}`);
     } finally {
-      setSendingParticipantId("");
+      participantInvitationPendingRef.current.delete(participant.id);
+      setSendingParticipantIds((current) => {
+        const next = new Set(current);
+        next.delete(participant.id);
+        return next;
+      });
     }
   };
 
   const handleOpenManagedEditor = (participant) => {
     applyManagedEditorParticipant(participant);
+    setManagedAvailabilityValue(1);
     setManagedConflictParticipant(null);
     setManagedEditorError("");
     setManagedEditorStatus("");
   };
 
-  const handleManagedInpersonPaint = (index, interaction) => {
+  const handleManagedInpersonPaint = (index) => {
     setManagedInperson((current) => {
-      const phase = interaction?.phase || "start";
-      if (phase === "start" || phase === "keyboard") {
-        managedPaintValueRef.current.inperson = Number(current[index]) > 0 ? 0 : 1;
-      }
       const next = [...current];
-      next[index] = managedPaintValueRef.current.inperson;
+      next[index] = managedAvailabilityValue;
       return next;
     });
   };
 
-  const handleManagedVirtualPaint = (index, interaction) => {
+  const handleManagedVirtualPaint = (index) => {
     setManagedVirtual((current) => {
-      const phase = interaction?.phase || "start";
-      if (phase === "start" || phase === "keyboard") {
-        managedPaintValueRef.current.virtual = Number(current[index]) > 0 ? 0 : 1;
-      }
       const next = [...current];
-      next[index] = managedPaintValueRef.current.virtual;
+      next[index] = managedAvailabilityValue;
       return next;
     });
   };
@@ -613,8 +657,6 @@ function OrganizerView() {
       setParticipants((current) =>
         current.map((item) => (item.id === updated.id ? updated : item))
       );
-      // Recommendations are server-ranked and must never remain based on the
-      // response version that was just replaced.
       setResults(null);
       try {
         const latestResults = await fetchEventResults(event.code, token);
@@ -625,12 +667,27 @@ function OrganizerView() {
       setManagedEditorStatus(submitted ? "Schedule submitted." : "Draft saved.");
       setManagedConflictParticipant(null);
     } catch (err) {
-      if (err.status === 409 && err.participant) {
-        setManagedConflictParticipant(hydrateParticipant(err.participant, numSlots));
-        setManagedEditorError(
-          "This response changed after you opened it. Reload the latest response before editing again."
-        );
-      } else if (err.status === 403) {
+      if (err.status === 409) {
+        if (err.participant) {
+          setManagedConflictParticipant(hydrateParticipant(err.participant, numSlots));
+          setManagedEditorError(
+            "This response changed after you opened it. Reload the latest response before editing again."
+          );
+        } else {
+          setManagedEditorError(err.message || "The response could not be saved.");
+        }
+        setResults(null);
+        try {
+          const token = await getToken();
+          const latestResults = await fetchEventResults(event.code, token);
+          setResults(latestResults.results);
+        } catch {
+          setRefreshKey((key) => key + 1);
+        }
+      } else if (
+        err.status === 403 &&
+        (err.errorCode || err.code) === "organizer_edit_full_account"
+      ) {
         closeManagedEditor();
         setManagedError(
           "This participant now has full access, so organizer schedule editing is no longer allowed."
@@ -778,7 +835,7 @@ function OrganizerView() {
         },
         token
       );
-      setInvitations(data.invitations || []);
+      setInvitations((current) => mergeInvitationRecords(current, data.invitations || []));
       setInviteEmails("");
       inviteRequestRef.current = { fingerprint: "", idempotencyKey: "" };
       const delivery = data.delivery || {};
@@ -1169,7 +1226,7 @@ function OrganizerView() {
         creatingManagedParticipant={creatingManagedParticipant}
         managedStatus={managedStatus}
         managedError={managedError}
-        sendingParticipantId={sendingParticipantId}
+        sendingParticipantIds={sendingParticipantIds}
         onCreateManagedParticipant={handleCreateManagedParticipant}
         onEditSchedule={handleOpenManagedEditor}
         onSendParticipantInvitation={handleSendParticipantInvitation}
@@ -1195,6 +1252,8 @@ function OrganizerView() {
         setParticipantName={setManagedParticipantName}
         inperson={managedInperson}
         virtual={managedVirtual}
+        availabilityValue={managedAvailabilityValue}
+        onAvailabilityValueChange={setManagedAvailabilityValue}
         responsesOpen={responsesOpen}
         saving={managedSaving}
         error={managedEditorError}

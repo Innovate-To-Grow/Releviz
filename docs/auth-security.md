@@ -17,9 +17,12 @@ No refresh credential is returned in JSON or made available to frontend JavaScri
 Temporary participants never receive either credential. Their browser gets a separate opaque
 `releviz_temp_event` cookie only after an invitation-link and email-code check. The cookie contains
 a temporary-session UUID plus a random secret, while PostgreSQL stores only the secret hash. It is
-`HttpOnly`, `SameSite=Lax`, `Secure` in production, scoped to `/events/temp-access/`, expires
-absolutely after seven days, and is bound to one member, participant, invitation, and event. It
-cannot authenticate Dashboard, event creation, profile, settings, or another event.
+`HttpOnly`, `Secure` in production, scoped to `/events/temp-access/`, expires absolutely after seven
+days, and is bound to one member, participant, invitation, and event. Production uses
+`SameSite=None` for this cookie because the explicitly trusted Amplify candidate and production
+branches call the API cross-site; local and same-site environments default to `SameSite=Lax`.
+Origin validation remains mandatory for every cookie-authenticated mutation. The credential cannot
+authenticate Dashboard, event creation, profile, settings, or another event.
 
 Deploying the secure-session migration invalidates legacy access/refresh tokens because they do not
 contain a valid server-session UUID. Users with legacy credentials must sign in again.
@@ -89,15 +92,17 @@ matched contact email is verified; an unverified full-account contact is rejecte
 participant, event link, or invitation is written.
 
 Temporary event access uses a `TEMP_EVENT_ACCESS` email challenge scoped to both the event and
-invitation. Successful verification does not mark the contact address globally verified. Starting
-registration updates the same temporary member but leaves temporary access intact until the
-registration code succeeds. Public registration cannot take over a temporary identity by matching
-its email: the upgrade endpoint resolves the Member from the verified event-scoped cookie and passes
-that identity through an internal-only authorization path. Completion changes that Member in place
-to `full`, verifies its email, revokes every temporary-event session, preserves participants and
-weights, adds participant Dashboard links, and synchronizes the formal profile name to all of the
-member's event participant records. Organizer availability editing is rejected immediately after
-that transition.
+invitation. Successful verification does not mark the contact address globally verified. The
+event-session upgrade endpoint resolves the Member from the verified event-scoped cookie and uses a
+dedicated registration scope. A mailbox owner may also start ordinary registration for an address
+that an organizer previously reserved: the start step issues a separately scoped registration code
+without changing the temporary Member, password, profile, or contact verification state. The client
+resubmits the registration details only with that code, and the server applies them after successful
+mailbox proof. Completion changes the same Member UUID in place to `full`, verifies its email,
+revokes temporary sessions and pending temporary-access work, preserves participants and weights,
+adds participant Dashboard links, and synchronizes the formal profile name to all of the member's
+event participant records. Organizer availability editing is rejected immediately after that
+transition.
 
 ## Cookie Request Protection
 

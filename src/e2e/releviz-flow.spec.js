@@ -692,7 +692,22 @@ test.describe("Releviz account and scheduling flow", () => {
     expect(fullSession.user.id).toBe(beforeUpgrade.memberId);
     expect(fullSession.user.accessLevel).toBe("full");
 
-    const oldTemporarySessionStatus = await temporaryPage.evaluate(
+    const oldTemporarySession = await temporaryPage.evaluate(
+      async ({ backendUrl, code }) => {
+        const response = await fetch(`${backendUrl}/events/temp-access/session?code=${code}`, {
+          credentials: "include",
+        });
+        return { status: response.status, payload: await response.json() };
+      },
+      { backendUrl: BACKEND_URL, code: eventCode }
+    );
+    expect(oldTemporarySession).toEqual(
+      expect.objectContaining({
+        status: 403,
+        payload: expect.objectContaining({ errorCode: "temp_account_upgraded" }),
+      })
+    );
+    const clearedTemporarySessionStatus = await temporaryPage.evaluate(
       async ({ backendUrl, code }) => {
         const response = await fetch(`${backendUrl}/events/temp-access/session?code=${code}`, {
           credentials: "include",
@@ -701,7 +716,7 @@ test.describe("Releviz account and scheduling flow", () => {
       },
       { backendUrl: BACKEND_URL, code: eventCode }
     );
-    expect(oldTemporarySessionStatus).toBe(401);
+    expect(clearedTemporarySessionStatus).toBe(401);
 
     const fullDashboard = await apiJson(request, "GET", "/dashboard/events", fullSession.access);
     expect(fullDashboard.response.status()).toBe(200);
@@ -1201,8 +1216,11 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(page.getByText(`E2E Planning ${runId}`)).toBeVisible();
     await page.goto(`/event?code=${eventCode}`);
     await expect(page.getByText("Organizer Dashboard")).toBeVisible();
-    const registeredInvitationRow = page.getByText(participantEmail).locator("..");
-    await expect(registeredInvitationRow.getByText("Submitted", { exact: true })).toBeVisible();
+    const registeredParticipantCard = page.locator(
+      `[data-management-participant-id="${participantSession.user.id}"]`
+    );
+    await expect(registeredParticipantCard.getByText(participantEmail, { exact: true })).toBeVisible();
+    await expect(registeredParticipantCard.getByText("Submitted", { exact: true })).toBeVisible();
 
     const weightAnalysis = page.locator("section.weight-analysis");
     const weightedAvailableCell = weightAnalysis.locator(

@@ -270,13 +270,27 @@ def final_notification_recipients(event: Event) -> list[str]:
     hidden_member_ids = set(
         event.participants.filter(hidden=True).values_list("member_id", flat=True)
     )
+    sent_invitations = event.invitations.filter(first_sent_at__isnull=False)
+    sent_member_ids = set(
+        sent_invitations.exclude(member_id__isnull=True).values_list("member_id", flat=True)
+    )
+    unsent_only_member_ids = (
+        set(
+            event.invitations.filter(first_sent_at__isnull=True)
+            .exclude(member_id__isnull=True)
+            .values_list("member_id", flat=True)
+        )
+        - sent_member_ids
+    )
     recipients = {
         invitation.email.strip().lower()
-        for invitation in event.invitations.all()
+        for invitation in sent_invitations
         if not invitation.member_id or invitation.member_id not in hidden_member_ids
     }
     participant_member_ids = list(
-        event.participants.filter(hidden=False).values_list("member_id", flat=True)
+        event.participants.filter(hidden=False)
+        .exclude(member_id__in=unsent_only_member_ids)
+        .values_list("member_id", flat=True)
     )
     recipients.update(
         email.strip().lower()

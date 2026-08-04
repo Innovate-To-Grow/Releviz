@@ -116,11 +116,17 @@ export function startTemporaryUpgradeRegistration(code, payload) {
   );
 }
 
-export async function verifyRegistration({ email, code }) {
+export async function verifyRegistration(payload) {
+  const passwordFields = ["password", "password_confirm"].filter((field) =>
+    Object.prototype.hasOwnProperty.call(payload, field)
+  );
+  const securedPayload = passwordFields.length
+    ? await securePasswordPayload(payload, passwordFields)
+    : payload;
   const res = await fetch(`${API_BASE}/authn/register/verify-code/`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, code }),
+    body: JSON.stringify(securedPayload),
     credentials: "include",
   });
   return parseAuthResponse(res);

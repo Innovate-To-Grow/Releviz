@@ -157,6 +157,7 @@ class TemporaryParticipantAccessTests(TestCase):
             format="json",
         )
         self.assertEqual(denied.status_code, 403)
+        self.assertEqual(denied.data["errorCode"], "organizer_edit_full_account")
         self.assertEqual(denied.data["participant"]["accountAccess"], "full")
 
     def test_temporary_and_full_members_receive_the_correct_manual_links_and_resends(self):

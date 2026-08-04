@@ -101,6 +101,17 @@ def create_or_reuse_managed_participant(*, event: Event, organizer, name: str, e
     except ValidationError as exc:
         raise ManagedParticipantError("Enter a valid email address.") from exc
 
+    invitation_exists = event.invitations.filter(email__iexact=normalized_email).exists()
+    if (
+        not invitation_exists
+        and event.invitations.count() >= settings.INVITATION_MAX_EVENT_RECIPIENTS
+    ):
+        raise ManagedParticipantError(
+            f"An event can have at most {settings.INVITATION_MAX_EVENT_RECIPIENTS} "
+            "invitation recipients.",
+            status_code=409,
+        )
+
     contact = (
         ContactEmail.objects.select_for_update(of=("self",))
         .select_related("member")
@@ -153,6 +164,12 @@ def create_or_reuse_managed_participant(*, event: Event, organizer, name: str, e
         member_created = True
     else:
         member = contact.member
+
+    if not member.is_active:
+        raise ManagedParticipantError(
+            "Unable to create a participant with this email address.",
+            status_code=409,
+        )
 
     if (
         contact.member_id is not None
@@ -868,7 +885,8 @@ def enqueue_manual_reminders(
         return _request_result(previous, event=event, idempotent=True)
 
     invitations = list(
-        event.invitations.exclude(status=EventInvitation.Status.SUBMITTED)
+        event.invitations.filter(first_sent_at__isnull=False)
+        .exclude(status=EventInvitation.Status.SUBMITTED)
         .select_related("event")
         .order_by("email")
     )
@@ -1025,7 +1043,9 @@ def send_event_reminders(event: Event, *, force: bool = False) -> int:
     if not event.reminders_enabled:
         return 0
     event = Event.objects.select_for_update().get(pk=event.pk)
-    invitations = event.invitations.exclude(status=EventInvitation.Status.SUBMITTED)
+    invitations = event.invitations.filter(first_sent_at__isnull=False).exclude(
+        status=EventInvitation.Status.SUBMITTED
+    )
     if not force:
         invitations = invitations.filter(reminder_sent_at__isnull=True)
     count = 0

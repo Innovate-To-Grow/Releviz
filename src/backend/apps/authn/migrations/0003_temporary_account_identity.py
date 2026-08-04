@@ -1,6 +1,33 @@
 from django.db import migrations, models
 
 
+def expire_duplicate_pending_challenges_for_rollback(apps, schema_editor):
+    """Restore the pre-scope uniqueness invariant before reversing the migration."""
+
+    EmailAuthChallenge = apps.get_model("authn", "EmailAuthChallenge")
+    database_alias = schema_editor.connection.alias
+    pending = (
+        EmailAuthChallenge.objects.using(database_alias)
+        .filter(status="pending")
+        .order_by("member_id", "purpose", "channel", "-created_at", "-pk")
+        .values_list("pk", "member_id", "purpose", "channel")
+    )
+
+    seen = set()
+    duplicate_ids = []
+    for challenge_id, member_id, purpose, channel in pending.iterator():
+        identity = (member_id, purpose, channel)
+        if identity in seen:
+            duplicate_ids.append(challenge_id)
+        else:
+            seen.add(identity)
+
+    if duplicate_ids:
+        EmailAuthChallenge.objects.using(database_alias).filter(pk__in=duplicate_ids).update(
+            status="expired"
+        )
+
+
 class Migration(migrations.Migration):
     dependencies = [
         ("authn", "0002_secure_auth_sessions"),
@@ -26,6 +53,10 @@ class Migration(migrations.Migration):
         migrations.RemoveConstraint(
             model_name="emailauthchallenge",
             name="one_pending_auth_challenge",
+        ),
+        migrations.RunPython(
+            migrations.RunPython.noop,
+            expire_duplicate_pending_challenges_for_rollback,
         ),
         migrations.AlterField(
             model_name="emailauthchallenge",

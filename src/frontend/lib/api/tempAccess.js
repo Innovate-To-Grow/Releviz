@@ -22,6 +22,7 @@ async function tempAccessFetch(path, options = {}) {
     );
     error.status = response.status;
     error.participant = payload?.participant || null;
+    error.errorCode = payload?.errorCode ?? payload?.code ?? null;
     throw error;
   }
 

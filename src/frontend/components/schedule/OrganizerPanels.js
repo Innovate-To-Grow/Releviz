@@ -850,7 +850,7 @@ export function ParticipantManagerPanel({
   creatingManagedParticipant,
   managedStatus,
   managedError,
-  sendingParticipantId,
+  sendingParticipantIds = new Set(),
   onCreateManagedParticipant,
   onEditSchedule,
   onSendParticipantInvitation,
@@ -999,12 +999,12 @@ export function ParticipantManagerPanel({
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
                       <span
+                        aria-hidden="true"
                         style={{
                           color: participant.submitted
                             ? "var(--md-sys-color-primary)"
                             : "var(--md-sys-color-outline)",
                         }}
-                        title={participant.submitted ? "Submitted" : "Not submitted"}
                       >
                         {participant.submitted ? (
                           <GoVerified size={20} />
@@ -1097,9 +1097,9 @@ export function ParticipantManagerPanel({
                         variant="outlined"
                         icon={<MdSend />}
                         onClick={() => onSendParticipantInvitation(participant)}
-                        disabled={sendingParticipantId === participant.id}
+                        disabled={sendingParticipantIds.has(participant.id)}
                       >
-                        {sendingParticipantId === participant.id
+                        {sendingParticipantIds.has(participant.id)
                           ? "Sending..."
                           : `${invitationState(participant) === "Not sent" ? "Send" : "Resend"} ${
                               accountAccess(participant) === "temporary"
@@ -1196,6 +1196,8 @@ export function ManagedScheduleDrawer({
   setParticipantName,
   inperson,
   virtual,
+  availabilityValue,
+  onAvailabilityValueChange,
   responsesOpen,
   saving,
   error,
@@ -1309,6 +1311,31 @@ export function ManagedScheduleDrawer({
             You and this participant edit the same response. A version conflict will never be
             silently overwritten.
           </p>
+
+          <div>
+            <p className="managed-drawer__hint">Mark times as</p>
+            <div
+              role="group"
+              aria-label="Availability status"
+              style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "8px" }}
+            >
+              {[
+                { label: "Busy", value: 0 },
+                { label: "If needed", value: 0.5 },
+                { label: "Available", value: 1 },
+              ].map((choice) => (
+                <AppButton
+                  key={choice.value}
+                  variant={availabilityValue === choice.value ? "filled" : "outlined"}
+                  aria-pressed={availabilityValue === choice.value}
+                  disabled={!responsesOpen || saving || Boolean(conflictParticipant)}
+                  onClick={() => onAvailabilityValueChange(choice.value)}
+                >
+                  {choice.label}
+                </AppButton>
+              ))}
+            </div>
+          </div>
 
           <ScheduleChannelEditor
             mode={mode}

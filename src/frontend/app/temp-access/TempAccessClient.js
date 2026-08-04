@@ -114,6 +114,9 @@ export default function TempAccessClient() {
   const [draftSaveState, setDraftSaveState] = useState("idle");
   const [draftSaveError, setDraftSaveError] = useState("");
   const [saveConflict, setSaveConflict] = useState(null);
+  const [conflictReloadPending, setConflictReloadPending] = useState(false);
+  const [serverWriteLock, setServerWriteLock] = useState("");
+  const [sessionEndMessage, setSessionEndMessage] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [logoutPending, setLogoutPending] = useState(false);
@@ -149,6 +152,7 @@ export default function TempAccessClient() {
       setDraftSaveState(participant.submitted ? "submitted" : "saved");
       setDraftSaveError("");
       setSaveConflict(null);
+      setConflictReloadPending(false);
       setAccess((current) => (current ? { ...current, participant } : current));
     },
     [access?.event]
@@ -174,9 +178,76 @@ export default function TempAccessClient() {
     setDraftSaveState(next.participant.submitted ? "submitted" : "saved");
     setDraftSaveError("");
     setSaveConflict(null);
+    setConflictReloadPending(false);
+    setServerWriteLock("");
+    setSessionEndMessage("");
     setAccess(next);
     setPhase("access");
   }, []);
+
+  const endTemporaryAccess = useCallback((message) => {
+    if (autosaveTimerRef.current) {
+      window.clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+    resultsRefreshRevisionRef.current += 1;
+    draftDirtyRef.current = false;
+    autosavePendingRef.current = false;
+    draftSaveStateRef.current = "idle";
+    setAccess(null);
+    setDraftSaveState("idle");
+    setDraftSaveError("");
+    setSaveConflict(null);
+    setConflictReloadPending(false);
+    setServerWriteLock("");
+    setSessionEndMessage(message);
+    setPhase("session-ended");
+  }, []);
+
+  const reconcileRejectedWrite = useCallback(
+    async (error) => {
+      const accountUpgraded =
+        error.status === 403 &&
+        (error.errorCode === "temp_account_upgraded" ||
+          (!error.errorCode && /full access/i.test(error.message || "")));
+      if (error.status === 401 || accountUpgraded) {
+        endTemporaryAccess(
+          accountUpgraded
+            ? "This account now has full access. Sign in with the full account to continue."
+            : "This temporary session has expired. Reopen the invitation email to verify again."
+        );
+        return;
+      }
+
+      // A lifecycle or exclusion denial is authoritative even if refreshing the
+      // latest payload fails. Lock first so the page cannot keep queuing writes.
+      resultsRefreshRevisionRef.current += 1;
+      setAccess((current) =>
+        current ? { ...current, canViewResults: false, results: null } : current
+      );
+      setServerWriteLock(error.message || "This response can no longer be changed.");
+
+      try {
+        const payload = await fetchTempAccessSession(eventCode);
+        applyAccessPayload(payload);
+        setServerWriteLock(error.message || "This response can no longer be changed.");
+        return;
+      } catch (sessionError) {
+        if (sessionError.status === 401 || sessionError.status === 403) {
+          endTemporaryAccess(
+            error.status === 403
+              ? "This temporary access is no longer active. Sign in with the full account or reopen the invitation email."
+              : "This temporary session has expired. Reopen the invitation email to verify again."
+          );
+          return;
+        }
+      }
+
+      setDraftSaveState("failed");
+      setDraftSaveError(error.message || "This response can no longer be changed.");
+    },
+    [applyAccessPayload, endTemporaryAccess, eventCode]
+  );
 
   const refreshResultsAfterDraft = useCallback(async () => {
     const revision = resultsRefreshRevisionRef.current + 1;
@@ -241,6 +312,19 @@ export default function TempAccessClient() {
     }
     let active = true;
     async function start() {
+      // An explicit (or just-stored) invitation represents an identity choice.
+      // Never let an older same-event cookie silently replace that identity.
+      if (token) {
+        setInvitationToken(token);
+        setPhase("code");
+        const requestKey = `${eventCode}:${token}`;
+        if (requestStartedRef.current !== requestKey) {
+          requestStartedRef.current = requestKey;
+          await sendCode(token, { automatic: true });
+        }
+        return;
+      }
+
       try {
         const payload = await fetchTempAccessSession(eventCode);
         if (!active) return;
@@ -252,18 +336,7 @@ export default function TempAccessClient() {
         if (!active) return;
       }
 
-      if (!token) {
-        setPhase("unavailable");
-        return;
-      }
-
-      setInvitationToken(token);
-      setPhase("code");
-      const requestKey = `${eventCode}:${token}`;
-      if (requestStartedRef.current !== requestKey) {
-        requestStartedRef.current = requestKey;
-        await sendCode(token, { automatic: true });
-      }
+      setPhase("unavailable");
     }
     void start();
     return () => {
@@ -292,7 +365,10 @@ export default function TempAccessClient() {
   }, [access?.event?.responseDeadline]);
 
   const responseChangesDisabled =
-    !access?.event || access.event.status !== "open" || responseDeadlinePassed;
+    !access?.event ||
+    access.event.status !== "open" ||
+    responseDeadlinePassed ||
+    Boolean(serverWriteLock);
 
   const runAutosave = useCallback(async () => {
     if (autosaveInFlightRef.current) {
@@ -344,14 +420,20 @@ export default function TempAccessClient() {
         draftDirtyRef.current = true;
         setDraftSaveState("failed");
         if (error.status === 409 && error.participant) {
+          resultsRefreshRevisionRef.current += 1;
+          setAccess((current) =>
+            current ? { ...current, canViewResults: false, results: null } : current
+          );
           setSaveConflict(error.participant);
           setDraftSaveError(
             "This schedule changed somewhere else. Reload the latest response before editing again."
           );
-        } else if (error.status === 401) {
-          setDraftSaveError(
-            "This temporary session has expired. Reopen your access link to continue."
-          );
+        } else if (
+          error.status === 401 ||
+          error.status === 403 ||
+          (error.status === 409 && !error.participant)
+        ) {
+          await reconcileRejectedWrite(error);
         } else {
           setDraftSaveError(error.message || "Draft autosave failed.");
         }
@@ -368,7 +450,7 @@ export default function TempAccessClient() {
       }, 0);
     }
     return saved;
-  }, [eventCode, refreshResultsAfterDraft, responseChangesDisabled]);
+  }, [eventCode, reconcileRejectedWrite, refreshResultsAfterDraft, responseChangesDisabled]);
 
   useEffect(() => {
     autosaveRunnerRef.current = runAutosave;
@@ -498,6 +580,33 @@ export default function TempAccessClient() {
     queueAutosave();
   };
 
+  const reloadLatestResponse = async () => {
+    if (!saveConflict || conflictReloadPending) return;
+    const conflictParticipant = saveConflict;
+    setConflictReloadPending(true);
+    try {
+      applyAccessPayload(await fetchTempAccessSession(eventCode));
+    } catch (error) {
+      if (error.status === 401 || error.status === 403) {
+        endTemporaryAccess(
+          "This temporary access is no longer active. Reopen the invitation email or sign in with the full account."
+        );
+        return;
+      }
+
+      // The conflict payload is still the latest version returned by the
+      // rejected write. Use it as a safe fallback, but never retain cached
+      // permission-derived results when their refresh could not be verified.
+      resultsRefreshRevisionRef.current += 1;
+      setAccess((current) =>
+        current ? { ...current, canViewResults: false, results: null } : current
+      );
+      applyParticipant(conflictParticipant, access?.event);
+    } finally {
+      setConflictReloadPending(false);
+    }
+  };
+
   const submitSchedule = async () => {
     setIsSubmitting(true);
     setSubmitError("");
@@ -521,13 +630,25 @@ export default function TempAccessClient() {
       }
     } catch (error) {
       if (error.status === 409 && error.participant) {
+        resultsRefreshRevisionRef.current += 1;
+        setAccess((current) =>
+          current ? { ...current, canViewResults: false, results: null } : current
+        );
         setSaveConflict(error.participant);
         setDraftSaveState("failed");
         setDraftSaveError(
           "This schedule changed somewhere else. Reload the latest response before submitting."
         );
+      } else if (
+        error.status === 401 ||
+        error.status === 403 ||
+        (error.status === 409 && !error.participant)
+      ) {
+        await reconcileRejectedWrite(error);
       }
-      setSubmitError(error.message || "Failed to submit availability.");
+      if (![401, 403].includes(error.status)) {
+        setSubmitError(error.message || "Failed to submit availability.");
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -548,13 +669,16 @@ export default function TempAccessClient() {
     try {
       await logoutTempAccess(eventCode);
     } catch {
-      // Clearing the local view is safe even if the server session already expired.
-    } finally {
-      forgetInvitation(eventCode);
-      setAccess(null);
-      setPhase("logged-out");
+      setSubmitError(
+        "Sign out could not be confirmed. This temporary session may still be active; try again before leaving this device."
+      );
       setLogoutPending(false);
+      return;
     }
+    forgetInvitation(eventCode);
+    setAccess(null);
+    setPhase("logged-out");
+    setLogoutPending(false);
   };
 
   if (!eventCode) {
@@ -570,14 +694,22 @@ export default function TempAccessClient() {
     return <CenteredStatus title="Opening event access…" />;
   }
 
-  if (phase === "unavailable" || phase === "logged-out") {
+  if (phase === "unavailable" || phase === "logged-out" || phase === "session-ended") {
     return (
       <CenteredStatus
-        title={phase === "logged-out" ? "You are signed out" : "Access link required"}
+        title={
+          phase === "logged-out"
+            ? "You are signed out"
+            : phase === "session-ended"
+              ? "Temporary access ended"
+              : "Access link required"
+        }
         message={
           phase === "logged-out"
             ? "Reopen the invitation email whenever you need to access this event again."
-            : "Open the temporary access link in your invitation email. The link only works for its event."
+            : phase === "session-ended"
+              ? sessionEndMessage
+              : "Open the temporary access link in your invitation email. The link only works for its event."
         }
       />
     );
@@ -788,23 +920,26 @@ export default function TempAccessClient() {
                     <AppButton
                       variant="outlined"
                       icon={<MdRefresh />}
-                      onClick={() => applyParticipant(saveConflict, event)}
+                      disabled={conflictReloadPending}
+                      onClick={() => void reloadLatestResponse()}
                     >
-                      Reload latest response
+                      {conflictReloadPending ? "Reloading…" : "Reload latest response"}
                     </AppButton>
-                  ) : (
+                  ) : !responseChangesDisabled ? (
                     <AppButton variant="outlined" onClick={() => void runAutosave()}>
                       Retry save
                     </AppButton>
-                  ))}
+                  ) : null)}
               </div>
             )}
 
             {responseChangesDisabled && (
               <p className={styles.fieldError} role="status">
-                {event.status !== "open"
-                  ? `Responses are locked while this event is ${event.status}.`
-                  : "The response deadline has passed."}
+                {serverWriteLock
+                  ? serverWriteLock
+                  : event.status !== "open"
+                    ? `Responses are locked while this event is ${event.status}.`
+                    : "The response deadline has passed."}
               </p>
             )}
             {submitError && (

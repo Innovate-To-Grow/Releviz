@@ -136,7 +136,22 @@ function SignupContent() {
     setError("");
     setLoading(true);
     try {
-      await verifySignup({ email: registrationEmail, code: form.code });
+      const verification = {
+        email: registrationEmail,
+        code: form.code,
+        temporaryUpgrade: upgradeMode,
+      };
+      if (!upgradeMode) {
+        Object.assign(verification, {
+          password: form.password,
+          password_confirm: form.passwordConfirm,
+          first_name: form.firstName,
+          last_name: form.lastName,
+          organization: form.organization,
+          title: form.title,
+        });
+      }
+      await verifySignup(verification);
       navigateTo(next);
     } catch (err) {
       setError(err.message || "Unable to verify code.");

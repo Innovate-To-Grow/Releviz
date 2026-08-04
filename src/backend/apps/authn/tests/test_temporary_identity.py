@@ -1,4 +1,5 @@
 from datetime import timedelta
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.apps import apps as django_apps
@@ -15,6 +16,8 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from apps.authn.authentication import SessionJWTAuthentication
 from apps.authn.models import ContactEmail, EmailAuthChallenge
 from apps.authn.services import (
+    TEMP_MAILBOX_REGISTRATION_SCOPE,
+    TEMP_SESSION_REGISTRATION_SCOPE,
     _complete_temporary_account_upgrade,
     complete_registration,
     issue_auth_session,
@@ -25,6 +28,7 @@ from apps.authn.services import (
 )
 from apps.authn.tests.helpers import create_member
 from apps.authn.tests.test_auth_edges import latest_code
+from apps.messaging.models import EmailDeliveryJob, EmailMessageLog
 from apps.scheduling.models import (
     Event,
     EventInvitation,
@@ -126,7 +130,7 @@ class TemporaryIdentityTests(TestCase):
             ).exists()
         )
 
-    def test_public_registration_cannot_mutate_or_replace_a_temporary_identity(self):
+    def test_public_registration_stages_temporary_identity_changes_until_mailbox_proof(self):
         member = self.create_temporary_member()
         member.set_password("original-password-123")
         member.save(update_fields=["password"])
@@ -155,8 +159,8 @@ class TemporaryIdentityTests(TestCase):
             format="json",
         )
 
-        self.assertEqual(response.status_code, 400)
-        self.assertNotIn("temporary", response.content.decode().lower())
+        self.assertEqual(response.status_code, 202)
+        self.assertTrue(response.data["requiresRegistrationDetailsOnVerify"])
         member.refresh_from_db()
         existing.refresh_from_db()
         self.assertEqual(member.first_name, "Temporary")
@@ -167,7 +171,7 @@ class TemporaryIdentityTests(TestCase):
                 member=member,
                 purpose=EmailAuthChallenge.Purpose.REGISTER,
             ).count(),
-            1,
+            2,
         )
         self.assertEqual(
             {
@@ -178,6 +182,12 @@ class TemporaryIdentityTests(TestCase):
             },
             original_challenge,
         )
+        mailbox_challenge = EmailAuthChallenge.objects.get(
+            member=member,
+            purpose=EmailAuthChallenge.Purpose.REGISTER,
+            scope_key=TEMP_MAILBOX_REGISTRATION_SCOPE,
+        )
+        self.assertEqual(mailbox_challenge.status, EmailAuthChallenge.Status.PENDING)
 
     def test_temporary_upgrade_authorization_must_match_the_contact_member(self):
         member = self.create_temporary_member()
@@ -248,7 +258,14 @@ class TemporaryIdentityTests(TestCase):
         self.assertFalse(UserEvent.objects.filter(member=member).exists())
         log_info.assert_called_once_with(
             "temporary_account_upgraded",
-            extra={"member_id": str(member.pk), "participation_count": 0},
+            extra={
+                "member_id": str(member.pk),
+                "participation_count": 0,
+                "expired_challenge_count": 0,
+                "canceled_auth_job_count": 0,
+                "canceled_event_job_count": 0,
+                "revoked_session_count": 0,
+            },
         )
 
     def test_registration_upgrades_same_member_and_preserves_scheduling_identity(self):
@@ -296,7 +313,17 @@ class TemporaryIdentityTests(TestCase):
         temp_session.refresh_from_db()
         self.assertIsNone(temp_session.revoked_at)
 
-        completed = complete_registration("temporary@example.com", latest_code())
+        challenge = EmailAuthChallenge.objects.get(
+            member=member,
+            purpose=EmailAuthChallenge.Purpose.REGISTER,
+            status=EmailAuthChallenge.Status.PENDING,
+        )
+        self.assertEqual(challenge.scope_key, TEMP_SESSION_REGISTRATION_SCOPE)
+        completed = complete_registration(
+            "temporary@example.com",
+            latest_code(),
+            temporary_upgrade=True,
+        )
         self.assertEqual(completed.pk, original_id)
         self.assertEqual(completed.access_level, self.Member.AccessLevel.FULL)
         self.assertTrue(ContactEmail.objects.get(member=completed).verified)
@@ -317,6 +344,245 @@ class TemporaryIdentityTests(TestCase):
             login_with_password("temporary@example.com", "password123").pk,
             original_id,
         )
+
+    def test_mailbox_claim_recovers_inactive_unverified_rollback_identity(self):
+        member = self.create_temporary_member("rollback-mailbox@example.com")
+        member.is_active = False
+        member.first_name = "Legacy"
+        member.last_name = "Temporary"
+        member.save(update_fields=["is_active", "first_name", "last_name"])
+        original_id = member.pk
+        original_password = member.password
+        registration = {
+            "email": "rollback-mailbox@example.com",
+            "password": "recovered-password-123",
+            "password_confirm": "recovered-password-123",
+            "first_name": "Recovered",
+            "last_name": "Owner",
+            "organization": "Mailbox Org",
+            "title": "Coordinator",
+        }
+
+        started = self.client.post("/authn/register/", registration, format="json")
+        self.assertEqual(started.status_code, 202, started.data)
+        code = latest_code()
+        member.refresh_from_db()
+        self.assertEqual(member.pk, original_id)
+        self.assertFalse(member.is_active)
+        self.assertEqual(member.first_name, "Legacy")
+        self.assertEqual(member.password, original_password)
+
+        invalid_details = self.client.post(
+            "/authn/register/verify-code/",
+            {
+                "email": registration["email"],
+                "code": code,
+                "temporaryUpgrade": False,
+            },
+            format="json",
+        )
+        self.assertEqual(invalid_details.status_code, 400)
+        challenge = EmailAuthChallenge.objects.get(
+            member=member,
+            purpose=EmailAuthChallenge.Purpose.REGISTER,
+            scope_key=TEMP_MAILBOX_REGISTRATION_SCOPE,
+        )
+        self.assertEqual(challenge.status, EmailAuthChallenge.Status.PENDING)
+
+        invalid_flag = self.client.post(
+            "/authn/register/verify-code/",
+            {
+                **registration,
+                "code": code,
+                "temporaryUpgrade": "false",
+            },
+            format="json",
+        )
+        self.assertEqual(invalid_flag.status_code, 400)
+        self.assertIn("temporaryUpgrade", invalid_flag.data)
+
+        completed = self.client.post(
+            "/authn/register/verify-code/",
+            {
+                **registration,
+                "code": code,
+                "temporaryUpgrade": False,
+            },
+            format="json",
+        )
+        self.assertEqual(completed.status_code, 200, completed.data)
+        member.refresh_from_db()
+        self.assertEqual(member.pk, original_id)
+        self.assertEqual(member.access_level, self.Member.AccessLevel.FULL)
+        self.assertTrue(member.is_active)
+        self.assertTrue(member.check_password("recovered-password-123"))
+        self.assertEqual(member.get_full_name(), "Recovered Owner")
+        self.assertTrue(ContactEmail.objects.get(member=member).verified)
+
+    def test_registration_scope_flag_and_mailbox_details_cannot_be_crossed(self):
+        member = self.create_temporary_member("scope-crossing@example.com")
+        registration = {
+            "email": "scope-crossing@example.com",
+            "password": "scope-password-123",
+            "password_confirm": "scope-password-123",
+            "first_name": "Scope",
+            "last_name": "Owner",
+        }
+        start_registration(registration)
+        code = latest_code()
+
+        with self.assertRaises(serializers.ValidationError):
+            complete_registration(
+                registration["email"],
+                code,
+                registration_data={**registration, "email": "other@example.com"},
+            )
+        with self.assertRaises(serializers.ValidationError):
+            complete_registration(
+                registration["email"],
+                code,
+                registration_data=registration,
+                temporary_upgrade=True,
+            )
+        with self.assertRaises(serializers.ValidationError):
+            complete_registration(
+                self.organizer.email,
+                "123456",
+                temporary_upgrade=True,
+            )
+
+        member.refresh_from_db()
+        self.assertEqual(member.access_level, self.Member.AccessLevel.TEMPORARY)
+        self.assertEqual(
+            EmailAuthChallenge.objects.get(
+                member=member,
+                scope_key=TEMP_MAILBOX_REGISTRATION_SCOPE,
+            ).status,
+            EmailAuthChallenge.Status.PENDING,
+        )
+
+    def test_mailbox_completion_rechecks_temporary_state_under_lock(self):
+        member = self.create_temporary_member("mailbox-race@example.com")
+        registration = {
+            "email": "mailbox-race@example.com",
+            "password": "race-password-123",
+            "password_confirm": "race-password-123",
+            "first_name": "Race",
+            "last_name": "Owner",
+        }
+
+        def upgrade_before_member_lock(**_kwargs):
+            self.Member.objects.filter(pk=member.pk).update(
+                access_level=self.Member.AccessLevel.FULL
+            )
+            return SimpleNamespace(member_id=member.pk)
+
+        with (
+            patch(
+                "apps.authn.services.verify_email_challenge",
+                side_effect=upgrade_before_member_lock,
+            ),
+            self.assertRaises(serializers.ValidationError),
+        ):
+            complete_registration(
+                registration["email"],
+                "123456",
+                registration_data=registration,
+            )
+
+        member.refresh_from_db()
+        self.assertEqual(member.access_level, self.Member.AccessLevel.TEMPORARY)
+
+    def test_password_login_recovers_verified_rollback_identity_and_upgrade_invariants(self):
+        member = self.create_temporary_member("rollback-login@example.com")
+        member.set_password("rollback-password-123")
+        member.save(update_fields=["password"])
+        ContactEmail.objects.filter(member=member).update(verified=True)
+        event = Event.objects.create(
+            code="ROLLBACKLOGIN",
+            name="Rollback login",
+            organizer=self.organizer,
+        )
+        participant = Participant.objects.create(
+            event=event,
+            member=member,
+            participant_name="Old display name",
+        )
+        invitation = EventInvitation.objects.create(
+            event=event,
+            email="rollback-login@example.com",
+            member=member,
+            invited_by=self.organizer,
+        )
+        temp_session = TemporaryEventSession.objects.create(
+            member=member,
+            participant=participant,
+            invitation=invitation,
+            secret_hash="b" * 64,
+            expires_at=timezone.now() + timedelta(days=7),
+        )
+        issued = issue_email_challenge(
+            member=member,
+            purpose=EmailAuthChallenge.Purpose.TEMP_EVENT_ACCESS,
+            target_email="rollback-login@example.com",
+            scope_key="rollback-event-access",
+        )
+        invitation_job = EmailDeliveryJob.objects.create(
+            idempotency_key="rollback-login-invitation",
+            message_type=EmailMessageLog.MessageType.INVITATION,
+            recipient="rollback-login@example.com",
+            subject="Pending invitation",
+            body="Pending invitation",
+            message_id="<rollback-login-invitation@releviz.local>",
+            event=event,
+            invitation=invitation,
+            status=EmailDeliveryJob.Status.RETRY,
+        )
+        original_id = member.pk
+
+        recovered = login_with_password(
+            "ROLLBACK-LOGIN@example.com",
+            "rollback-password-123",
+        )
+
+        self.assertEqual(recovered.pk, original_id)
+        recovered.refresh_from_db()
+        self.assertEqual(recovered.access_level, self.Member.AccessLevel.FULL)
+        self.assertEqual(recovered.email, "rollback-login@example.com")
+        self.assertTrue(
+            UserEvent.objects.filter(
+                member=recovered,
+                event=event,
+                role="participant",
+            ).exists()
+        )
+        participant.refresh_from_db()
+        self.assertEqual(participant.member_id, original_id)
+        self.assertEqual(participant.participant_name, "Temporary Person")
+        temp_session.refresh_from_db()
+        self.assertIsNotNone(temp_session.revoked_at)
+        issued.challenge.refresh_from_db()
+        issued.delivery_job.refresh_from_db()
+        invitation_job.refresh_from_db()
+        self.assertEqual(issued.challenge.status, EmailAuthChallenge.Status.EXPIRED)
+        self.assertEqual(issued.delivery_job.status, EmailDeliveryJob.Status.CANCELED)
+        self.assertEqual(invitation_job.status, EmailDeliveryJob.Status.CANCELED)
+
+    def test_invalid_password_does_not_recover_verified_temporary_identity(self):
+        member = self.create_temporary_member("rollback-invalid@example.com")
+        member.set_password("rollback-password-123")
+        member.save(update_fields=["password"])
+        ContactEmail.objects.filter(member=member).update(verified=True)
+
+        with (
+            patch("apps.authn.services.authenticate") as backend_authenticate,
+            self.assertRaises(serializers.ValidationError),
+        ):
+            login_with_password("rollback-invalid@example.com", "wrong-password")
+
+        backend_authenticate.assert_not_called()
+        member.refresh_from_db()
+        self.assertEqual(member.access_level, self.Member.AccessLevel.TEMPORARY)
 
 
 class TemporaryIdentityRollbackCompatibilityTests(TransactionTestCase):
@@ -348,3 +614,50 @@ class TemporaryIdentityRollbackCompatibilityTests(TransactionTestCase):
         challenge = EmailAuthChallenge.objects.get(pk=old_challenge.pk)
         self.assertEqual(member.access_level, member.AccessLevel.FULL)
         self.assertEqual(challenge.scope_key, "")
+
+
+class TemporaryIdentityReverseMigrationTests(TransactionTestCase):
+    migrate_from = ("authn", "0003_temporary_account_identity")
+    migrate_to = ("authn", "0002_secure_auth_sessions")
+
+    def setUp(self):
+        super().setUp()
+        executor = MigrationExecutor(connection)
+        executor.migrate([self.migrate_from])
+        apps = executor.loader.project_state([self.migrate_from]).apps
+        Member = apps.get_model("authn", "Member")
+        EmailAuthChallenge = apps.get_model("authn", "EmailAuthChallenge")
+
+        member = Member.objects.create(
+            email="reverse-migration@example.com",
+            password="!",
+            is_active=True,
+            access_level="temporary",
+        )
+        challenge_values = {
+            "member_id": member.pk,
+            "purpose": "login",
+            "channel": "email",
+            "target_email": "reverse-migration@example.com",
+            "code_hash": "legacy-code-hash",
+            "expires_at": timezone.now() + timedelta(minutes=10),
+            "status": "pending",
+        }
+        EmailAuthChallenge.objects.create(scope_key="event-a:invitation-a", **challenge_values)
+        EmailAuthChallenge.objects.create(scope_key="event-b:invitation-b", **challenge_values)
+
+        self.executor = MigrationExecutor(connection)
+        self.executor.migrate([self.migrate_to])
+
+    def tearDown(self):
+        executor = MigrationExecutor(connection)
+        executor.migrate(executor.loader.graph.leaf_nodes())
+        super().tearDown()
+
+    def test_reverse_migration_expires_duplicate_pending_scopes(self):
+        apps = self.executor.loader.project_state([self.migrate_to]).apps
+        EmailAuthChallenge = apps.get_model("authn", "EmailAuthChallenge")
+        challenges = EmailAuthChallenge.objects.filter(target_email="reverse-migration@example.com")
+
+        self.assertEqual(challenges.filter(status="pending").count(), 1)
+        self.assertEqual(challenges.filter(status="expired").count(), 1)

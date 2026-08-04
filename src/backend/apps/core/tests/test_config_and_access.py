@@ -169,6 +169,8 @@ class SettingsImportTests(SimpleTestCase):
         self.assertTrue(module.SECURE_HSTS_INCLUDE_SUBDOMAINS)
         self.assertTrue(module.SECURE_HSTS_PRELOAD)
         self.assertTrue(module.USE_SES_EMAIL_PROVIDER)
+        self.assertTrue(module.TEMP_EVENT_COOKIE_SECURE)
+        self.assertEqual(module.TEMP_EVENT_COOKIE_SAMESITE, "None")
         self.assertEqual(module.METRICS_BEARER_TOKEN, "test-metrics-token")
         self.assertEqual(module.FEEDBACK_SUBMISSION_RETENTION.days, 365)
         self.assertTrue(module.ENABLE_LEGACY_API_PREFIX)
