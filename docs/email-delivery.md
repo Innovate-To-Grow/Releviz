@@ -6,6 +6,12 @@ Final-meeting confirmations/cancellations, invitations, reminders, authenticatio
 welcome messages, login alerts, and password-reset codes use a transactional outbox. The relevant
 domain change and delivery job are committed before any provider call occurs.
 
+Event launch, invitation, reminder, final confirmation, and final cancellation endpoints only
+enqueue durable jobs and return `202 Accepted`. They do not call the provider in the request. This
+keeps a 1,000-recipient operation bounded by one database transaction rather than 1,000 network
+round trips. Authentication messages retain their security-specific immediate-attempt behavior,
+while every failed attempt remains durable.
+
 Authentication challenge jobs are linked to the member and challenge. Login alerts are linked to
 the member and issued server session. Welcome delivery is committed in the same transaction that
 activates registration.
@@ -34,20 +40,21 @@ after a process restart.
 
 ## Dispatch Procedures
 
-Application APIs attempt newly committed jobs immediately after commit. A provider failure does not
-roll back the accepted domain operation or alter a public non-enumerating account response; the job
-remains persisted for retry.
-
-Dispatch all due jobs manually:
+Run a continuous worker anywhere the API accepts event-delivery requests:
 
 ```bash
-python src/backend/manage.py dispatch_email_jobs --limit=100 \
+python3 src/backend/manage.py dispatch_email_jobs --watch --limit=1000 \
+  --concurrency=10 --rate-limit=10 --poll-interval=1 \
   --settings=config.settings.production
 ```
 
-The existing scheduled reminder command also dispatches up to 100 due jobs, so the deployed
-15-minute reminder schedule creates due reminder jobs and recovers all pending delivery work without
-a separate in-memory queue:
+`--concurrency` is bounded to 1–64 and `--rate-limit` to 0–1,000 per second. The rate is shared by
+the command's worker threads; when several processes run, budget their combined rate. The command
+handles `SIGINT`/`SIGTERM` and stops gracefully after the active bounded batch. A one-shot invocation
+without `--watch` remains available for maintenance.
+
+The scheduled reminder command creates due reminder jobs and attempts one legacy safety-net batch of 100. Keep the continuous dispatcher running for 1,000-recipient drain and general recovery; do not
+depend on request threads for provider delivery:
 
 ```bash
 python src/backend/manage.py send_due_event_reminders --window-minutes=20 \
@@ -56,7 +63,9 @@ python src/backend/manage.py send_due_event_reminders --window-minutes=20 \
 
 Inspect job status, attempts, next-attempt time, last error, event, invitation, member, challenge,
 and session in Django admin under `Messaging > Email delivery jobs`. Request-level invitation and
-reminder keys and recipient counts are under `Messaging > Email delivery requests`.
+reminder/final keys and recipient counts are under `Messaging > Email delivery requests`. Organizers
+can read `GET /events/delivery-requests/{id}` and retry only permanent failures with
+`POST /events/delivery-requests/{id}`; both progress and retry operate on durable recipient jobs.
 
 ## Authentication-Code Safety
 
@@ -91,6 +100,10 @@ rejected. A fresh invitation request key intentionally creates a resend; reminde
 deduplicated by response-deadline cycle. Calendar updates reuse the event UID and increment
 `SEQUENCE`.
 
+An event request may contain up to 1,000 recipients. At 10 provider calls per second, an error-free
+worker can hand 1,000 jobs to the provider in about 100 seconds; the release threshold is 15 minutes
+in the designated simulator/environment. Provider acceptance is not inbox delivery.
+
 Delivery is intentionally at least once. A provider may accept a message immediately before the
 application process dies, leaving the job reclaimable. A later attempt could therefore produce a
 duplicate provider delivery, although the stable `Message-ID` gives receiving systems a deduplication
@@ -101,7 +114,9 @@ claimed.
 
 Final attachments use CRLF line endings, RFC line folding, UTC `DTSTART`/`DTEND`, the event IANA
 timezone, a stable UID, increasing sequence, organizer and recipient fields, and `REQUEST` or
-`CANCEL` method/status semantics.
+`CANCEL` method/status semantics. Final notification recipients must still be on the roster and must
+have a successful initial invitation. The organizer can download the current iCalendar payload from
+`GET /events/finalization/calendar?code=...` without sending email.
 
 ## Verified Automated Scenarios
 

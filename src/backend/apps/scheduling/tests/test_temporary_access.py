@@ -11,12 +11,14 @@ from rest_framework.test import APIClient
 from apps.authn.models import ContactEmail, EmailAuthChallenge
 from apps.authn.tests.helpers import create_member, token_for
 from apps.messaging.models import EmailDeliveryJob, EmailDeliveryRequest
+from apps.messaging.services import dispatch_email_job
 from apps.scheduling.models import (
     Event,
     EventInvitation,
     Participant,
     TemporaryEventSession,
 )
+from apps.scheduling.result_snapshots import recompute_event_results
 
 
 class TemporaryParticipantAccessTests(TestCase):
@@ -29,6 +31,9 @@ class TemporaryParticipantAccessTests(TestCase):
             code="TEMP123",
             name="Shared planning",
             organizer=self.organizer,
+            status=Event.Status.OPEN,
+            access_mode="open_link",
+            opened_at=timezone.now(),
             days=[1],
             start_minutes=9 * 60,
             end_minutes=10 * 60,
@@ -166,19 +171,25 @@ class TemporaryParticipantAccessTests(TestCase):
         self.create_managed()
         self.create_managed(name="Full Member", email="full@example.com")
         first = self.send_invitation()
-        self.assertEqual(first.status_code, 201, first.data)
+        self.assertEqual(first.status_code, 202, first.data)
         self.assertEqual(first.data["enqueued"], 1)
+        self.assertEqual(first.data["delivery"]["pending"], 1)
+        self.assertEqual(len(mail.outbox), 0)
+        managed_job = EmailDeliveryJob.objects.get(recipient="managed@example.com")
+        dispatch_email_job(managed_job.pk)
         self.assertIn("/temp-access?code=TEMP123", mail.outbox[-1].body)
         self.assertIn("six-digit code", mail.outbox[-1].body)
         self.assertIn("/temp-access?code=TEMP123", mail.outbox[-1].attachments[0][1])
 
         full = self.send_invitation("full@example.com")
-        self.assertEqual(full.status_code, 201)
+        self.assertEqual(full.status_code, 202)
+        full_job = EmailDeliveryJob.objects.get(recipient="full@example.com")
+        dispatch_email_job(full_job.pk)
         self.assertIn("/event?code=TEMP123", mail.outbox[-1].body)
         self.assertNotIn("/temp-access", mail.outbox[-1].body)
 
         resent = self.send_invitation()
-        self.assertEqual(resent.status_code, 201)
+        self.assertEqual(resent.status_code, 202)
         self.assertEqual(resent.data["enqueued"], 1)
         self.assertEqual(
             EmailDeliveryJob.objects.filter(recipient="managed@example.com").count(),
@@ -191,6 +202,9 @@ class TemporaryParticipantAccessTests(TestCase):
             code="OTHER456",
             name="Other organizer event",
             organizer=self.organizer,
+            status=Event.Status.OPEN,
+            access_mode="open_link",
+            opened_at=timezone.now(),
             days=[2],
             start_minutes=9 * 60,
             end_minutes=10 * 60,
@@ -219,7 +233,8 @@ class TemporaryParticipantAccessTests(TestCase):
         created = self.create_managed()
         participant_id = created.data["participant"]["id"]
         sent = self.send_invitation()
-        self.assertEqual(sent.status_code, 201)
+        self.assertEqual(sent.status_code, 202)
+        dispatch_email_job(EmailDeliveryJob.objects.get(recipient="managed@example.com").pk)
         invalid = APIClient().post(
             "/events/temp-access/request-code",
             {"code": "UNKNOWN", "invitationToken": str(uuid.uuid4())},
@@ -325,6 +340,7 @@ class TemporaryParticipantAccessTests(TestCase):
         self.event.status = Event.Status.OPEN
         self.event.save(update_fields=["status", "updated_at"])
 
+        recompute_event_results(self.event.pk)
         restored = temp_client.get(f"/events/temp-access/session?code={self.event.code}")
         self.assertTrue(restored.data["canViewResults"])
         self.assertIn("results", restored.data)
@@ -375,7 +391,10 @@ class TemporaryParticipantAccessTests(TestCase):
         self.assertEqual(joined.status_code, 201)
         visible = viewer_client.get(f"/events/participants?code={self.event.code}")
         self.assertEqual(visible.status_code, 200)
-        self.assertIn(str(managed.member_id), [item["id"] for item in visible.data["participants"]])
+        self.assertEqual(
+            [item["id"] for item in visible.data["participants"]],
+            [str(viewer.pk)],
+        )
         for item in visible.data["participants"]:
             self.assertNotIn("email", item)
             self.assertNotIn("accountAccess", item)

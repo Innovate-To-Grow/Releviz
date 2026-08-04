@@ -196,6 +196,8 @@ class EmailDeliveryRequest(TimestampedModel):
     class Operation(models.TextChoices):
         INVITATION = "invitation", "Invitation"
         REMINDER = "reminder", "Reminder"
+        FINAL_CONFIRMATION = "final_confirmation", "Final confirmation"
+        FINAL_CANCELLATION = "final_cancellation", "Final cancellation"
 
     event = models.ForeignKey(
         "scheduling.Event",
@@ -208,7 +210,7 @@ class EmailDeliveryRequest(TimestampedModel):
         null=True,
         related_name="email_delivery_requests",
     )
-    operation = models.CharField(max_length=16, choices=Operation.choices)
+    operation = models.CharField(max_length=24, choices=Operation.choices)
     idempotency_key = models.UUIDField()
     request_fingerprint = models.CharField(max_length=64)
     recipient_count = models.PositiveIntegerField(default=0)

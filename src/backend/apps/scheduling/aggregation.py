@@ -57,13 +57,11 @@ def classify_event_responses(event) -> dict:
 
     for participant in participants:
         weight = weights.get(participant.pk)
-        required = bool(weight.required) if weight is not None else False
         if participant.hidden:
             excluded.append(
                 {
                     "participant": participant,
                     "reason": "hidden",
-                    "required": required,
                 }
             )
             continue
@@ -72,7 +70,6 @@ def classify_event_responses(event) -> dict:
                 {
                     "participant": participant,
                     "reason": "organizerExcluded",
-                    "required": required,
                 }
             )
             continue
@@ -80,7 +77,6 @@ def classify_event_responses(event) -> dict:
             unanswered.append(
                 {
                     "participant": participant,
-                    "required": required,
                 }
             )
             continue
@@ -90,7 +86,6 @@ def classify_event_responses(event) -> dict:
                 {
                     "participant": participant,
                     "reason": "invalidResponse",
-                    "required": required,
                 }
             )
             continue
@@ -99,7 +94,6 @@ def classify_event_responses(event) -> dict:
                 "participant": participant,
                 "availability": availability,
                 "weight": float(weight.weight) if weight is not None else 1.0,
-                "required": required,
             }
         )
 
@@ -124,14 +118,12 @@ def build_event_results(event, *, now=None) -> dict:
 
     unweighted_totals = {channel: [0.0] * slot_count for channel in channels}
     weighted_totals = {channel: [0.0] * slot_count for channel in channels}
-    required_conflicts = {channel: [0] * slot_count for channel in channels}
     total_weight = 0.0
     weighted_participant_total = 0
 
     for entry in counted:
         availability = entry["availability"]
         weight_value = entry["weight"]
-        required = entry["required"]
         if weight_value > 0:
             total_weight += weight_value
             weighted_participant_total += 1
@@ -140,8 +132,6 @@ def build_event_results(event, *, now=None) -> dict:
                 unweighted_totals[channel][index] += value
                 if weight_value > 0:
                     weighted_totals[channel][index] += value * weight_value
-                if required and value <= 0:
-                    required_conflicts[channel][index] += 1
 
     counted_total = len(counted)
     channel_results = {}
@@ -176,23 +166,6 @@ def build_event_results(event, *, now=None) -> dict:
             "weighted": {
                 "participantTotal": weighted_participant_total,
                 "totalWeight": round(total_weight, 4),
-            },
-        },
-        "requiredParticipantConflicts": {
-            "unansweredRequiredParticipantTotal": sum(
-                int(entry["required"]) for entry in unanswered
-            ),
-            "excludedRequiredParticipantTotal": sum(int(entry["required"]) for entry in excluded),
-            "channels": {
-                channel: [
-                    {
-                        "slotIndex": index,
-                        "requiredParticipantTotal": conflict_total,
-                    }
-                    for index, conflict_total in enumerate(required_conflicts[channel])
-                    if conflict_total
-                ]
-                for channel in channels
             },
         },
         "channels": channel_results,

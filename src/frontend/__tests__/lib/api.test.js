@@ -35,7 +35,9 @@ import {
   confirmFinalMeeting,
   createEvent,
   deleteEvent,
+  downloadFinalCalendar,
   duplicateEvent,
+  fetchDeliveryRequest,
   fetchEvent,
   fetchEventResults,
   fetchFinalization,
@@ -44,19 +46,32 @@ import {
   previewFinalMeeting,
   sendInvitations,
   sendReminders,
+  launchEvent,
+  retryDeliveryRequest,
   updateEvent,
   updateEventLifecycle,
 } from "@/lib/api/events";
 import {
+  cancelRosterImport,
+  commitRosterImport,
+  configureRosterImport,
+  createRosterImport,
+  fetchRoster,
+  fetchRosterImportRows,
+  fetchRosterSchedule,
+  patchRosterBulk,
+  patchRosterParticipant,
+} from "@/lib/api/roster";
+import {
   createManagedParticipant,
   deleteParticipant,
+  fetchCurrentParticipant,
   fetchParticipants,
   fetchParticipantsIncludeHidden,
   joinEvent,
   unhideParticipant,
   updateParticipant,
 } from "@/lib/api/participants";
-import { fetchWeights, updateWeights } from "@/lib/api/weights";
 
 function jsonResponse(body, init = {}) {
   const status = init.status || 200;
@@ -714,7 +729,58 @@ describe("business API helpers", () => {
       "tok"
     );
     await sendReminders("ABC 123", { idempotencyKey: "reminder-key" }, "tok");
+    await launchEvent(
+      "ABC 123",
+      {
+        expectedVersion: 3,
+        idempotencyKey: "launch-key",
+        selection: { participantIds: ["participant 1"] },
+      },
+      "tok"
+    );
+    await fetchDeliveryRequest("delivery 1", "tok");
+    await retryDeliveryRequest("delivery 1", "tok");
+    await createRosterImport("ABC 123", { pastedText: "name\temail\nAda\tada@example.com" }, "tok");
+    await configureRosterImport(
+      "ABC 123",
+      "import 1",
+      { worksheet: "Sheet 1", columnMapping: { name: "name", email: "email" } },
+      "tok"
+    );
+    await fetchRosterImportRows("ABC 123", "import 1", { page: 2, pageSize: 25 }, "tok");
+    await commitRosterImport(
+      "ABC 123",
+      "import 1",
+      { mode: "merge", idempotencyKey: "import-key" },
+      "tok"
+    );
+    await cancelRosterImport("ABC 123", "import 1", "tok");
+    await fetchRoster(
+      "ABC 123",
+      { page: 2, pageSize: 100, search: "Ada", group: "Faculty", submitted: true },
+      "tok"
+    );
+    await fetchRosterSchedule("ABC 123", "participant 1", "tok");
+    await patchRosterParticipant(
+      "ABC 123",
+      "participant 1",
+      { weight: 0.5, expectedVersion: 2 },
+      "tok"
+    );
+    await patchRosterBulk(
+      "ABC 123",
+      {
+        group: "Faculty",
+        updates: { included: false },
+        idempotencyKey: "bulk-key",
+      },
+      "tok"
+    );
     await fetchParticipants("ABC 123", "tok");
+    await expect(fetchCurrentParticipant("ABC 123", "tok")).resolves.toEqual({
+      participant: null,
+      scheduleDataIncluded: false,
+    });
     await joinEvent("ABC 123", "tok");
     await createManagedParticipant(
       "ABC 123",
@@ -725,8 +791,6 @@ describe("business API helpers", () => {
     await fetchParticipantsIncludeHidden("ABC 123", "tok");
     await unhideParticipant("ABC 123", "user 1", "tok");
     await deleteParticipant("ABC 123", "user 1", "tok");
-    await fetchWeights("ABC 123", "tok");
-    await updateWeights("ABC 123", [{ participantId: "user 1", weight: 1 }], "tok");
     await submitFeedback({
       category: "problem",
       message: "Something failed",
@@ -793,6 +857,30 @@ describe("business API helpers", () => {
       })
     );
     expect(urls).toContain("/events/reminders?code=ABC%20123");
+    expect(urls).toContain("/events/launch?code=ABC%20123");
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/events/launch?code=ABC%20123",
+      expect.objectContaining({
+        body: JSON.stringify({
+          expectedVersion: 3,
+          idempotencyKey: "launch-key",
+          selection: { participantIds: ["participant 1"] },
+        }),
+      })
+    );
+    expect(urls).toContain("/events/delivery-requests/delivery%201");
+    expect(urls).toContain("/events/roster-imports?code=ABC%20123");
+    expect(urls).toContain("/events/roster-imports/import%201?code=ABC%20123");
+    expect(urls).toContain(
+      "/events/roster-imports/import%201/rows?code=ABC+123&page=2&pageSize=25"
+    );
+    expect(urls).toContain("/events/roster-imports/import%201/commit?code=ABC%20123");
+    expect(urls).toContain(
+      "/events/roster?code=ABC+123&page=2&pageSize=100&search=Ada&group=Faculty&submitted=true"
+    );
+    expect(urls).toContain("/events/roster/participant%201/schedule?code=ABC%20123");
+    expect(urls).toContain("/events/roster/participant%201?code=ABC%20123");
+    expect(urls).toContain("/events/roster/bulk?code=ABC%20123");
     expect(global.fetch).toHaveBeenCalledWith(
       "/events/invitations?code=ABC%20123",
       expect.objectContaining({
@@ -848,20 +936,50 @@ describe("business API helpers", () => {
       sendInvitations("BAD", { emails: [], idempotencyKey: "invite-key" })
     ).rejects.toThrow("nope");
     await expect(sendReminders("BAD", { idempotencyKey: "reminder-key" })).rejects.toThrow("nope");
+    await expect(launchEvent("BAD", {})).rejects.toThrow("nope");
+    await expect(fetchDeliveryRequest("bad-request")).rejects.toThrow("nope");
+    await expect(retryDeliveryRequest("bad-request")).rejects.toThrow("nope");
+    await expect(createRosterImport("BAD", { pastedText: "bad" })).rejects.toThrow("nope");
+    await expect(configureRosterImport("BAD", "import", {})).rejects.toThrow("nope");
+    await expect(fetchRosterImportRows("BAD", "import")).rejects.toThrow("nope");
+    await expect(commitRosterImport("BAD", "import", {})).rejects.toThrow("nope");
+    await expect(cancelRosterImport("BAD", "import")).rejects.toThrow("nope");
+    await expect(fetchRoster("BAD")).rejects.toThrow("nope");
+    await expect(fetchRosterSchedule("BAD", "participant")).rejects.toThrow("nope");
+    await expect(patchRosterParticipant("BAD", "participant", {})).rejects.toThrow("nope");
+    await expect(patchRosterBulk("BAD", {})).rejects.toThrow("nope");
     await expect(fetchParticipants("BAD")).rejects.toThrow("nope");
+    await expect(fetchCurrentParticipant("BAD")).rejects.toThrow("nope");
     await expect(joinEvent("BAD")).rejects.toThrow("nope");
     await expect(updateParticipant("BAD", "p", {})).rejects.toThrow("nope");
     await expect(fetchParticipantsIncludeHidden("BAD")).rejects.toThrow("nope");
     await expect(unhideParticipant("BAD", "p")).rejects.toThrow("nope");
     await expect(deleteParticipant("BAD", "p")).rejects.toThrow("nope");
-    await expect(fetchWeights("BAD")).rejects.toThrow("nope");
-    await expect(updateWeights("BAD", [])).rejects.toThrow("nope");
     await expect(
       submitFeedback({
         category: "problem",
         message: "Failed",
       })
     ).rejects.toThrow("nope");
+  });
+
+  test("downloads the authenticated final calendar with the server filename", async () => {
+    const blob = new Blob(["BEGIN:VCALENDAR"]);
+    global.fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: jest.fn().mockReturnValue('attachment; filename="planning.ics"') },
+      blob: jest.fn().mockResolvedValue(blob),
+    });
+
+    await expect(downloadFinalCalendar("ABC 123", "tok")).resolves.toEqual({
+      blob,
+      filename: "planning.ics",
+    });
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/events/finalization/calendar?code=ABC%20123",
+      expect.objectContaining({ headers: { Authorization: "Bearer tok" } })
+    );
   });
 
   test("event mutations expose structured conflicts and HTTP fallbacks", async () => {

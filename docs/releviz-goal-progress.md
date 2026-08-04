@@ -2,6 +2,11 @@
 
 Last updated: 2026-07-16 20:57 UTC
 
+> Historical evidence snapshot: this document records the pre-roster-scale candidate and its exact
+> test/build outputs. It is not current acceptance evidence for the 1,000-person, continuous-duration,
+> no-`required` release. That release assumes a new empty database; use the current README,
+> `roster-imports.md`, `worker-runbook.md`, and `performance-benchmarks.md` for its contract.
+
 ## Current Phase
 
 Final engineering validation and external-validation handoff.

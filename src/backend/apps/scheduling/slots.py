@@ -269,7 +269,67 @@ def build_event_slot_groups(event) -> tuple[EventSlotGroup, ...]:
 
 
 def event_slot_count(event) -> int:
-    return sum(len(group.slots) for group in build_event_slot_groups(event))
+    """Count slots without materializing the full API slot geometry.
+
+    Availability writes validate two channel arrays. Building every
+    ``EventSlot`` for each validation made a 1,000-slot submission spend most
+    of its time formatting timezone-aware API data. Counting only needs the
+    number of selected groups and, for dated events, each group's UTC
+    boundaries so DST folds and gaps remain authoritative.
+    """
+
+    validate_minute_configuration(event)
+    duration = event_window_duration_minutes(event)
+
+    if event.day_selection_type == "days_of_week":
+        selected_days = sorted(set(event.days or []))
+        if not selected_days or any(
+            isinstance(day, bool) or not isinstance(day, int) or day < 0 or day > 6
+            for day in selected_days
+        ):
+            raise SlotConfigurationError("A weekly event must contain valid days 0-6.")
+        slot_count = len(selected_days) * (duration // event.slot_minutes)
+    elif event.day_selection_type == "specific_dates":
+        configured_dates = event.specific_dates
+        if not isinstance(configured_dates, list) or not configured_dates:
+            raise SlotConfigurationError("A specific-date event must contain at least one date.")
+
+        zone = ZoneInfo(event.timezone)
+        slot_seconds = event.slot_minutes * 60
+        slot_count = 0
+        for raw_date in configured_dates:
+            try:
+                base_date = date.fromisoformat(raw_date)
+            except (TypeError, ValueError) as exc:
+                raise SlotConfigurationError("specificDates must contain valid ISO dates.") from exc
+            end_date = base_date + timedelta(days=int(event.spans_next_day))
+            start_naive = datetime.combine(base_date, datetime.min.time()) + timedelta(
+                minutes=event.start_minutes
+            )
+            end_naive = datetime.combine(end_date, datetime.min.time()) + timedelta(
+                minutes=event.end_minutes
+            )
+            starts_at = _resolve_boundary(start_naive, zone, is_start=True).astimezone(UTC)
+            ends_at = _resolve_boundary(end_naive, zone, is_start=False).astimezone(UTC)
+            if ends_at <= starts_at:
+                raise SlotConfigurationError(
+                    f"The event window on {raw_date} does not contain any real elapsed time."
+                )
+            elapsed_seconds = int((ends_at - starts_at).total_seconds())
+            if elapsed_seconds % slot_seconds:
+                raise SlotConfigurationError(
+                    f"The event window on {raw_date} cannot be divided into "
+                    f"{event.slot_minutes}-minute slots."
+                )
+            slot_count += elapsed_seconds // slot_seconds
+    else:
+        raise SlotConfigurationError("Invalid daySelectionType.")
+
+    if slot_count > MAX_EVENT_SLOTS:
+        raise SlotConfigurationError(
+            f"An event may contain at most {MAX_EVENT_SLOTS} availability slots."
+        )
+    return slot_count
 
 
 def api_slot_groups(event) -> list[dict]:

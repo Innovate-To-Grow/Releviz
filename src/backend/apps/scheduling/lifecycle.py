@@ -7,11 +7,7 @@ from apps.scheduling.models import Event
 LEGAL_TRANSITIONS = {
     Event.Status.DRAFT: {Event.Status.OPEN, Event.Status.ARCHIVED},
     Event.Status.OPEN: {Event.Status.CLOSED, Event.Status.ARCHIVED},
-    Event.Status.FINALIZED: {
-        Event.Status.OPEN,
-        Event.Status.CLOSED,
-        Event.Status.ARCHIVED,
-    },
+    Event.Status.FINALIZED: {Event.Status.OPEN},
     Event.Status.CLOSED: {Event.Status.OPEN, Event.Status.ARCHIVED},
     Event.Status.ARCHIVED: {Event.Status.OPEN},
 }

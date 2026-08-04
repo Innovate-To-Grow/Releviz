@@ -33,6 +33,9 @@ export async function createEvent(
     timezone,
     remindersEnabled,
     reminderHoursBefore,
+    accessMode = "invite_only",
+    meetingDurationMinutes = 30,
+    status = "draft",
   },
   token
 ) {
@@ -56,6 +59,9 @@ export async function createEvent(
         timezone,
         remindersEnabled,
         reminderHoursBefore,
+        accessMode,
+        meetingDurationMinutes,
+        status,
       }),
     },
     token
@@ -224,4 +230,53 @@ export async function sendReminders(code, { idempotencyKey }, token) {
   );
   if (!res.ok) throw new Error(await extractError(res));
   return res.json();
+}
+
+export async function launchEvent(code, { expectedVersion, idempotencyKey, selection }, token) {
+  const res = await apiFetch(
+    `${API_BASE}/events/launch?code=${encodeURIComponent(code)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expectedVersion, idempotencyKey, selection }),
+    },
+    token
+  );
+  if (!res.ok) throw await eventMutationError(res);
+  return res.json();
+}
+
+export async function fetchDeliveryRequest(requestId, token) {
+  const res = await apiFetch(
+    `${API_BASE}/events/delivery-requests/${encodeURIComponent(requestId)}`,
+    {},
+    token
+  );
+  if (!res.ok) throw new Error(await extractError(res));
+  return res.json();
+}
+
+export async function retryDeliveryRequest(requestId, token) {
+  const res = await apiFetch(
+    `${API_BASE}/events/delivery-requests/${encodeURIComponent(requestId)}`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
+    token
+  );
+  if (!res.ok) throw new Error(await extractError(res));
+  return res.json();
+}
+
+export async function downloadFinalCalendar(code, token) {
+  const res = await apiFetch(
+    `${API_BASE}/events/finalization/calendar?code=${encodeURIComponent(code)}`,
+    {},
+    token
+  );
+  if (!res.ok) throw new Error(await extractError(res));
+  const disposition = res.headers?.get?.("content-disposition") || "";
+  const filenameMatch = disposition.match(/filename="?([^";]+)"?/i);
+  return {
+    blob: await res.blob(),
+    filename: filenameMatch?.[1] || `${code}.ics`,
+  };
 }

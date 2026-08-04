@@ -6,6 +6,7 @@ from django.apps import apps as django_apps
 from django.contrib.auth import get_user_model
 from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
+from django.db.models.query import QuerySet
 from django.test import TestCase, TransactionTestCase
 from django.utils import timezone
 from rest_framework import serializers
@@ -19,6 +20,7 @@ from apps.authn.services import (
     TEMP_MAILBOX_REGISTRATION_SCOPE,
     TEMP_SESSION_REGISTRATION_SCOPE,
     _complete_temporary_account_upgrade,
+    _recover_rollback_temporary_password_account,
     complete_registration,
     issue_auth_session,
     issue_email_challenge,
@@ -583,6 +585,68 @@ class TemporaryIdentityTests(TestCase):
         backend_authenticate.assert_not_called()
         member.refresh_from_db()
         self.assertEqual(member.access_level, self.Member.AccessLevel.TEMPORARY)
+
+    def test_rollback_password_recovery_rechecks_member_state_after_lock(self):
+        member = self.create_temporary_member("rollback-member-race@example.com")
+        member.set_password("rollback-password-123")
+        member.save(update_fields=["password"])
+        ContactEmail.objects.filter(member=member).update(verified=True)
+        original_first = QuerySet.first
+        race_applied = False
+
+        def upgrade_after_contact_reference(queryset):
+            nonlocal race_applied
+            result = original_first(queryset)
+            if queryset.model is ContactEmail and isinstance(result, dict) and not race_applied:
+                self.Member.objects.filter(pk=member.pk).update(
+                    access_level=self.Member.AccessLevel.FULL
+                )
+                race_applied = True
+            return result
+
+        with patch.object(QuerySet, "first", new=upgrade_after_contact_reference):
+            recovered, recovery_candidate = _recover_rollback_temporary_password_account(
+                "rollback-member-race@example.com",
+                "rollback-password-123",
+            )
+
+        self.assertTrue(race_applied)
+        self.assertIsNone(recovered)
+        self.assertFalse(recovery_candidate)
+        member.refresh_from_db()
+        self.assertEqual(member.access_level, self.Member.AccessLevel.FULL)
+
+    def test_rollback_password_recovery_rechecks_contact_state_after_lock(self):
+        member = self.create_temporary_member("rollback-contact-race@example.com")
+        member.set_password("rollback-password-123")
+        member.save(update_fields=["password"])
+        contact = ContactEmail.objects.get(member=member)
+        contact.verified = True
+        contact.save(update_fields=["verified", "updated_at"])
+        original_first = QuerySet.first
+        race_applied = False
+
+        def unverify_after_member_lock(queryset):
+            nonlocal race_applied
+            result = original_first(queryset)
+            if queryset.model is self.Member and result == member and not race_applied:
+                ContactEmail.objects.filter(pk=contact.pk).update(verified=False)
+                race_applied = True
+            return result
+
+        with patch.object(QuerySet, "first", new=unverify_after_member_lock):
+            recovered, recovery_candidate = _recover_rollback_temporary_password_account(
+                "rollback-contact-race@example.com",
+                "rollback-password-123",
+            )
+
+        self.assertTrue(race_applied)
+        self.assertIsNone(recovered)
+        self.assertFalse(recovery_candidate)
+        member.refresh_from_db()
+        contact.refresh_from_db()
+        self.assertEqual(member.access_level, self.Member.AccessLevel.TEMPORARY)
+        self.assertFalse(contact.verified)
 
 
 class TemporaryIdentityRollbackCompatibilityTests(TransactionTestCase):

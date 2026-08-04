@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from django.db import transaction
 from django.utils import timezone
 
-from apps.authn.models import ContactEmail
-from apps.messaging.models import EmailDeliveryJob, EmailMessageLog
+from apps.messaging.models import EmailDeliveryJob, EmailDeliveryRequest, EmailMessageLog
 from apps.messaging.services import enqueue_email_job
 from apps.scheduling.aggregation import classify_event_responses
 from apps.scheduling.models import Event, FinalizationRequest, FinalMeeting
@@ -180,6 +180,13 @@ def normalize_final_time(
     else:
         slot_indices = _weekly_slot_indices(event, starts_at, ends_at, zone)
 
+    expected_duration = int(getattr(event, "meeting_duration_minutes", event.slot_minutes))
+    actual_duration = int((ends_at - starts_at).total_seconds() // 60)
+    if actual_duration != expected_duration:
+        raise FinalizationError(
+            f"The final meeting must be exactly {expected_duration} minutes long."
+        )
+
     normalized_location = str(location or "").strip()
     if not normalized_location:
         normalized_location = event.location.strip() or (
@@ -217,7 +224,6 @@ def build_attendance_review(event: Event, normalized: dict) -> dict:
                 "participantId": str(entry["participant"].member_id),
                 "name": entry["participant"].participant_name,
                 "status": status,
-                "required": entry["required"],
                 "minimumAvailability": min(values),
             }
         )
@@ -226,7 +232,6 @@ def build_attendance_review(event: Event, normalized: dict) -> dict:
         {
             "participantId": str(entry["participant"].member_id),
             "name": entry["participant"].participant_name,
-            "required": entry["required"],
         }
         for entry in classified["unanswered"]
     ]
@@ -234,7 +239,6 @@ def build_attendance_review(event: Event, normalized: dict) -> dict:
         {
             "participantId": str(entry["participant"].member_id),
             "name": entry["participant"].participant_name,
-            "required": entry["required"],
             "reason": entry["reason"],
         }
         for entry in classified["excluded"]
@@ -254,12 +258,6 @@ def build_attendance_review(event: Event, normalized: dict) -> dict:
         ),
         "unansweredParticipantTotal": len(unanswered),
         "excludedParticipantTotal": len(excluded),
-        "requiredConflictTotal": sum(
-            participant["required"] and participant["status"] != "available"
-            for participant in participants
-        )
-        + sum(entry["required"] for entry in unanswered)
-        + sum(entry["required"] for entry in excluded),
         "participants": participants,
         "unansweredParticipants": unanswered,
         "excludedParticipants": excluded,
@@ -267,40 +265,15 @@ def build_attendance_review(event: Event, normalized: dict) -> dict:
 
 
 def final_notification_recipients(event: Event) -> list[str]:
-    hidden_member_ids = set(
-        event.participants.filter(hidden=True).values_list("member_id", flat=True)
+    active_member_ids = event.participants.filter(hidden=False).values_list(
+        "member_id",
+        flat=True,
     )
-    sent_invitations = event.invitations.filter(first_sent_at__isnull=False)
-    sent_member_ids = set(
-        sent_invitations.exclude(member_id__isnull=True).values_list("member_id", flat=True)
-    )
-    unsent_only_member_ids = (
-        set(
-            event.invitations.filter(first_sent_at__isnull=True)
-            .exclude(member_id__isnull=True)
-            .values_list("member_id", flat=True)
-        )
-        - sent_member_ids
-    )
-    recipients = {
-        invitation.email.strip().lower()
-        for invitation in sent_invitations
-        if not invitation.member_id or invitation.member_id not in hidden_member_ids
-    }
-    participant_member_ids = list(
-        event.participants.filter(hidden=False)
-        .exclude(member_id__in=unsent_only_member_ids)
-        .values_list("member_id", flat=True)
-    )
-    recipients.update(
-        email.strip().lower()
-        for email in ContactEmail.objects.filter(
-            member_id__in=participant_member_ids,
-            verified=True,
-        ).values_list("email_address", flat=True)
-        if email
-    )
-    return sorted(recipient for recipient in recipients if recipient)
+    recipients = event.invitations.filter(
+        member_id__in=active_member_ids,
+        first_sent_at__isnull=False,
+    ).values_list("email", flat=True)
+    return sorted({email.strip().lower() for email in recipients if email})
 
 
 def _request_fingerprint(event: Event, normalized: dict) -> str:
@@ -411,6 +384,75 @@ def enqueue_final_cancellation_jobs(
     return jobs
 
 
+def _ensure_final_delivery_request(
+    *,
+    event: Event,
+    requested_by,
+    operation: str,
+    idempotency_key,
+    request_fingerprint: str,
+    jobs: list[EmailDeliveryJob],
+    created_job_count: int,
+) -> EmailDeliveryRequest:
+    request_record, created = EmailDeliveryRequest.objects.get_or_create(
+        event=event,
+        operation=operation,
+        idempotency_key=idempotency_key,
+        defaults={
+            "requested_by": requested_by,
+            "request_fingerprint": request_fingerprint,
+            "recipient_count": len(jobs),
+            "created_job_count": created_job_count,
+        },
+    )
+    if not created and request_record.request_fingerprint != request_fingerprint:
+        raise FinalizationError(
+            "This delivery request key was already used with different details.",
+            status_code=409,
+        )
+    if jobs:
+        request_record.jobs.add(*jobs)
+    return request_record
+
+
+def _confirmation_jobs(event: Event, sequence: int) -> list[EmailDeliveryJob]:
+    prefix = f"final-confirmation:{event.event_id}:{sequence}:"
+    return list(event.email_delivery_jobs.filter(idempotency_key__startswith=prefix))
+
+
+def _stabilize_pre_final_delivery_jobs(event: Event, *, now) -> None:
+    """Prevent an availability invite from crossing the finalization barrier."""
+
+    jobs = list(
+        event.email_delivery_jobs.select_for_update()
+        .filter(
+            message_type__in=[
+                EmailMessageLog.MessageType.INVITATION,
+                EmailMessageLog.MessageType.REMINDER,
+            ]
+        )
+        .order_by("pk")
+    )
+    if any(job.status == EmailDeliveryJob.Status.PROCESSING for job in jobs):
+        raise FinalizationError(
+            "Wait for in-progress invitations and reminders to finish before finalizing.",
+            status_code=409,
+        )
+    cancelable_ids = [
+        job.pk
+        for job in jobs
+        if job.status in {EmailDeliveryJob.Status.PENDING, EmailDeliveryJob.Status.RETRY}
+    ]
+    if cancelable_ids:
+        EmailDeliveryJob.objects.filter(pk__in=cancelable_ids).update(
+            status=EmailDeliveryJob.Status.CANCELED,
+            last_error="The event was finalized before this message was delivered.",
+            locked_at=None,
+            lock_token=None,
+            updated_at=now,
+        )
+
+
 @transaction.atomic
 def confirm_final_meeting(
     *,
@@ -438,6 +480,11 @@ def confirm_final_meeting(
             "Only the organizer can confirm a final meeting time.",
             status_code=403,
         )
+    # Finalization is a barrier for in-flight response writes. Response paths
+    # lock only their own participant row, so this waits for those commits and
+    # then prevents a response from landing after the meeting is confirmed.
+    list(event.participants.select_for_update().order_by("pk").values_list("pk", flat=True))
+    _stabilize_pre_final_delivery_jobs(event, now=current_time)
 
     normalized = normalize_final_time(
         event,
@@ -463,11 +510,22 @@ def confirm_final_meeting(
                 "This confirmation was superseded after the event was reopened.",
                 status_code=409,
             )
+        jobs = _confirmation_jobs(event, previous_request.meeting_sequence)
+        delivery_request = _ensure_final_delivery_request(
+            event=event,
+            requested_by=organizer,
+            operation=EmailDeliveryRequest.Operation.FINAL_CONFIRMATION,
+            idempotency_key=idempotency_key,
+            request_fingerprint=fingerprint,
+            jobs=jobs,
+            created_job_count=0,
+        )
         return {
             "event": event,
             "meeting": previous_request.final_meeting,
             "review": previous_request.final_meeting.attendance_snapshot,
             "jobs": [],
+            "deliveryRequest": delivery_request,
             "idempotent": True,
         }
 
@@ -482,11 +540,22 @@ def confirm_final_meeting(
                 meeting_sequence=meeting.calendar_sequence,
                 resulting_event_version=event.version,
             )
+            jobs = _confirmation_jobs(event, meeting.calendar_sequence)
+            delivery_request = _ensure_final_delivery_request(
+                event=event,
+                requested_by=organizer,
+                operation=EmailDeliveryRequest.Operation.FINAL_CONFIRMATION,
+                idempotency_key=idempotency_key,
+                request_fingerprint=fingerprint,
+                jobs=jobs,
+                created_job_count=0,
+            )
             return {
                 "event": event,
                 "meeting": meeting,
                 "review": meeting.attendance_snapshot,
                 "jobs": [],
+                "deliveryRequest": delivery_request,
                 "idempotent": True,
             }
         raise FinalizationError(
@@ -559,6 +628,15 @@ def confirm_final_meeting(
         meeting,
         final_notification_recipients(event),
     )
+    delivery_request = _ensure_final_delivery_request(
+        event=event,
+        requested_by=organizer,
+        operation=EmailDeliveryRequest.Operation.FINAL_CONFIRMATION,
+        idempotency_key=idempotency_key,
+        request_fingerprint=fingerprint,
+        jobs=jobs,
+        created_job_count=len(jobs),
+    )
     FinalizationRequest.objects.create(
         event=event,
         final_meeting=meeting,
@@ -572,6 +650,7 @@ def confirm_final_meeting(
         "meeting": meeting,
         "review": review,
         "jobs": jobs,
+        "deliveryRequest": delivery_request,
         "idempotent": False,
     }
 
@@ -583,15 +662,44 @@ def cancel_active_final_meeting(event: Event, *, now=None) -> list[EmailDelivery
         return []
     previous_sequence = meeting.calendar_sequence
     prefix = f"final-confirmation:{event.event_id}:{previous_sequence}:"
-    recipients = list(
-        event.email_delivery_jobs.filter(idempotency_key__startswith=prefix)
+    confirmation_jobs = list(
+        event.email_delivery_jobs.select_for_update()
+        .filter(idempotency_key__startswith=prefix)
         .order_by("recipient")
-        .values_list("recipient", flat=True)
     )
-    if not recipients:
-        recipients = final_notification_recipients(event)
+    current_time = now or timezone.now()
+    cancelable_ids = [
+        job.pk
+        for job in confirmation_jobs
+        if job.status in {EmailDeliveryJob.Status.PENDING, EmailDeliveryJob.Status.RETRY}
+    ]
+    if cancelable_ids:
+        EmailDeliveryJob.objects.filter(pk__in=cancelable_ids).update(
+            status=EmailDeliveryJob.Status.CANCELED,
+            last_error="The confirmed meeting was canceled before delivery.",
+            locked_at=None,
+            lock_token=None,
+            updated_at=current_time,
+        )
+    processing_jobs = [
+        job for job in confirmation_jobs if job.status == EmailDeliveryJob.Status.PROCESSING
+    ]
+    for job in processing_jobs:
+        # The provider call may already be in flight. Do not retry it after this
+        # attempt, and queue a CANCEL that the worker holds until it is terminal.
+        job.max_attempts = max(1, job.attempt_count)
+        job.updated_at = current_time
+    if processing_jobs:
+        EmailDeliveryJob.objects.bulk_update(processing_jobs, ["max_attempts", "updated_at"])
+    recipients = sorted(
+        {
+            job.recipient
+            for job in confirmation_jobs
+            if job.status in {EmailDeliveryJob.Status.SENT, EmailDeliveryJob.Status.PROCESSING}
+        }
+    )
     meeting.active = False
-    meeting.canceled_at = now or timezone.now()
+    meeting.canceled_at = current_time
     meeting.calendar_sequence += 1
     meeting.save(
         update_fields=[
@@ -601,7 +709,31 @@ def cancel_active_final_meeting(event: Event, *, now=None) -> list[EmailDelivery
             "updated_at",
         ]
     )
-    return enqueue_final_cancellation_jobs(event, meeting, recipients)
+    jobs = enqueue_final_cancellation_jobs(event, meeting, recipients)
+    request_fingerprint = hashlib.sha256(
+        json.dumps(
+            {
+                "meetingSequence": meeting.calendar_sequence,
+                "recipients": recipients,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    request_key = uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        f"releviz:final-cancellation:{event.event_id}:{meeting.calendar_sequence}",
+    )
+    _ensure_final_delivery_request(
+        event=event,
+        requested_by=event.organizer,
+        operation=EmailDeliveryRequest.Operation.FINAL_CANCELLATION,
+        idempotency_key=request_key,
+        request_fingerprint=request_fingerprint,
+        jobs=jobs,
+        created_job_count=len(jobs),
+    )
+    return jobs
 
 
 def final_delivery_summary(event: Event, meeting: FinalMeeting) -> dict:

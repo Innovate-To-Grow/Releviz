@@ -10,13 +10,23 @@ records. Otherwise it creates an active `temporary` Member with an unusable pass
 primary contact, then creates or reuses the event's single Participant, Dashboard link, and unsent
 invitation. No email is sent by this operation.
 
-The organizer uses `POST /events/invitations` to send or resend. Participant responses expose email,
-`accountAccess`, normalized invitation state, and `canOrganizerEditAvailability` only to the
-organizer. Temporary rows have a schedule drawer; full-account rows never do. Organizer edits to a
-temporary participant's event name, availability, and submitted flag update the same Participant
-record used by the invitee and require `expectedVersion`. A stale write returns `409` with the
-latest Participant. Invitations whose first send has not completed are excluded from manual and
-scheduled reminders as well as final-meeting notifications.
+Roster import uses the same identity boundary in bulk. New lowercased email keys create temporary
+identities; verified full identities are reused; an unverified full contact is not claimable. See
+[`roster-imports.md`](roster-imports.md).
+
+Publishing a draft with `POST /events/launch` queues its selected invitations; later explicit
+send/resend uses `POST /events/invitations`. Both return `202` after durable jobs are committed.
+Participant summaries expose email, `accountAccess`, normalized invitation state, and
+`canOrganizerEditAvailability` only to the organizer. Temporary rows have an on-demand schedule
+drawer; full-account rows never do.
+
+Organizer edits to a temporary participant's event name, availability, and submitted flag update
+the same Participant record used by the invitee and require `expectedVersion`. They are allowed
+while the event is draft, open, or closed and no active final meeting exists, even after the
+participant response deadline. Every changed response records actor, organizer source, participant
+version, and draft/submit/withdraw action. A stale write returns `409` with the latest Participant.
+Invitations whose first send has not completed are excluded from reminders and final-meeting
+notifications.
 
 ## Temporary Recipient Flow
 
@@ -29,7 +39,8 @@ available to this cookie.
 
 Cookie-authenticated writes validate the request origin. Event state, deadline, exclusion, schedule
 shape, and version checks are identical to ordinary participant writes. The server never merges two
-stale drafts or silently chooses the last writer.
+stale drafts or silently chooses the last writer. Unlike the organizer proxy exception, a temporary
+recipient cannot submit after the response deadline.
 
 ## Upgrade and Rollback
 
@@ -50,7 +61,8 @@ challenge on the same Member UUID. Only successful verification changes the memb
 also verifies the contact, revokes temporary sessions, expires temporary challenges, cancels queued
 temporary-link email work, preserves all participants and weights, adds existing events to
 Dashboard, and synchronizes the formal name to every event Participant. The organizer's next
-attempted co-edit is rejected with the latest full account state.
+attempted co-edit is rejected with the latest full account state, including when upgrade and proxy
+edit race.
 
 The migrations are additive: `Member.access_level`, challenge scope/purpose, and
 `TemporaryEventSession`. Rolling application code back leaves temporary members as active accounts
@@ -60,9 +72,15 @@ temporary identity during the rollback window, the forward version recognizes it
 and valid password on the next login, upgrades the same UUID, and runs the normal scheduling/session
 cleanup. Restoring temporary-link access itself requires redeploying the forward version.
 
+Those migration notes describe the identity feature's behavior. The 1,000-person roster-scale
+release itself uses a newly initialized database and does not carry old accounts, events, or
+temporary sessions forward.
+
 ## API Surface
 
 - `POST /events/participants/managed?code=`
+- `GET /events/roster/{participantId}/schedule?code=`
+- `POST /events/launch?code=`
 - `POST /events/invitations?code=`
 - `POST /events/temp-access/request-code`
 - `POST /events/temp-access/verify`

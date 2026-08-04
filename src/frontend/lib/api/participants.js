@@ -10,6 +10,14 @@ export async function fetchParticipants(code, token) {
   return res.json();
 }
 
+export async function fetchCurrentParticipant(code, token) {
+  const data = await fetchParticipants(code, token);
+  return {
+    participant: data.participants?.[0] || null,
+    scheduleDataIncluded: Boolean(data.scheduleDataIncluded),
+  };
+}
+
 export async function joinEvent(code, token) {
   const res = await apiFetch(
     `${API_BASE}/events/participants?code=${encodeURIComponent(code)}`,

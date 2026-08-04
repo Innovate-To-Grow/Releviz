@@ -1,73 +1,95 @@
 # Releviz
 
-A group meeting planning app with weighted availability and real-time aggregation. Create an event, share the link, and find the best time for everyone.
+A large-group meeting planner with roster import, weighted two-channel availability, continuous-time
+recommendations, durable invitations, and versioned aggregate snapshots. One event supports up to
+1,000 people and 1,000 authoritative time slots.
 
 ![Releviz Screenshot](Screenshoot.png)
 
 ## How to Use
 
-### 1. Create an Event
+### 1. Create a Draft
 
 Go to the home page and fill out the event form:
 
 - **Event Name** — give your meeting a title
-- **Meeting Type** — In-Person (requires a location) or Virtual
+- **Meeting Type** — In-Person (requires a location), Virtual, or Mixed
 - **Time Range** — set 15- or 30-minute slots; an earlier end time creates an overnight window
+- **Meeting Duration** — 15–480 minutes, aligned to the slot size and contained in one time group
 - **Days** — pick which days of the week are options (defaults to Mon-Fri)
+- **Access** — Invite only (default) or Open link
 
-Create an account or log in before creating an event. After creating, you'll be redirected to the organizer view.
+Create an account or log in before creating an event. New events remain drafts until the organizer
+publishes them.
 
-### 2. Share the Link
+### 2. Import and Publish the Roster
 
-Click **Copy Share Link** in the top-right corner to get a link like:
+The Roster tab accepts `.xlsx`, `.csv`, or pasted CSV/TSV. Map the required `name` and `email`
+columns and optional `group`, `weight`, and `included` columns, preview and correct rows, then commit
+as:
 
-```
-https://releviz.com/event?code=j9eaFNJH
-```
+- **Merge** — add/update people while preserving existing schedules and delivery history.
+- **Rebuild** — type the event code to replace the event roster and return it to draft.
 
-Send this to everyone who should participate. Full-account participants sign in before viewing the
-event or submitting availability. Organizers can also create a temporary participant in Participant
-Manager and send that person's private email-code access link later.
+Publishing atomically changes the event from draft to open and queues invitations. The HTTP request
+returns as soon as durable jobs are committed; the Roster tab shows provider-handoff progress and
+allows retrying failed recipients.
+
+Invite-only links are visible only to the organizer, existing participants, temporary recipients
+using their event-scoped code flow, or full accounts whose verified email matches an invitation.
+Open-link events retain code-based joining, subject to the 1,000-person cap.
 
 ### 3. Participants Fill In Availability
 
 Each participant:
 
 1. Signs in and clicks **Join**
-2. Uses the **Availability Slider** to pick a level (0 = Busy, 1 = Free, with 0.25 steps)
+2. Uses the **Availability Slider** to pick a level (0 = Busy, 0.5 = Maybe, 1 = Free)
 3. Clicks, drags, touches, or uses the keyboard on the **schedule grid** to paint 15- or 30-minute
    slots with that availability level
 4. Clicks **Submit Schedule** when done
 
 The grid uses color coding: red (busy) -> yellow (partial) -> green (free).
 
-After submitting, participants can see the **Group Availability** table showing aggregated scores, plus each person's **Individual Schedule** below it.
+Depending on the event's visibility setting, participants can see the latest published group
+snapshot. While a newer response is being calculated, the UI labels the result as refreshing and
+shows the previous snapshot's generation time.
 
 ### 4. Organizer Dashboard
 
-Access the organizer view from the account that created the event. The organizer can:
+Access the organizer view from the account that created the event. It is split into Overview,
+Roster, Results, and Finalize. The organizer can:
 
-- **Set their own availability** on the same grid
-- **Send email invitations and deadline reminders** with calendar attachments
-- **Create temporary participants without sending email**, then send or resend access on demand
-- **Co-edit a temporary participant's shared schedule** in a right-side drawer until they upgrade
-- **Adjust participant weights** (0.0-1.0) — higher weight means more influence on the group average
-- **Include/exclude participants** from the aggregate calculation
-- **Remove participants** from the event
-- **View the weighted group average** in real time, updated as weights change
+- search/filter a server-paginated roster (50 rows by default, 100 maximum);
+- load one person's schedule only when its edit drawer opens;
+- co-edit a temporary participant in draft/open/closed even after the participant deadline, until
+  that identity upgrades to a verified full account;
+- apply group/filter/selection weight and included changes, then override an individual;
+- view the top ten meeting-duration candidates ranked by weighted availability, unweighted
+  availability, fully available count, and configured-time order;
+- finalize one authoritative continuous interval, queue stable-UID iCalendar `REQUEST`/`CANCEL`
+  notifications, and download the calendar file.
 
-The weighted average formula: for each time slot, `sum(availability * weight) / sum(weights)` across all included participants.
+For a multi-slot meeting, each person's candidate score is their minimum availability across the
+whole interval. The weighted score is `sum(person_score * weight) / sum(positive weights)` across
+included submitted people. Weight zero still contributes to the unweighted score. There are no
+required/mandatory participants.
 
 ## Tech Stack
 
 | Layer          | Technology                                                                               |
 | -------------- | ---------------------------------------------------------------------------------------- |
 | Frontend       | [Next.js 16](https://nextjs.org/) static export + React 19 + Material Web components     |
-| Backend        | [Django 5](https://www.djangoproject.com/) + DRF + SimpleJWT                             |
+| Backend        | [Django 6](https://www.djangoproject.com/) + DRF + SimpleJWT                             |
 | Database       | PostgreSQL/RDS in deployed environments; SQLite for local development                    |
 | Infrastructure | AWS Amplify frontend; `api.releviz.com` on a public TLS ALB; private ECS Fargate backend |
 | IaC            | Terraform (versioned encrypted S3 state with native lock files)                          |
 | CI/CD          | GitHub Actions (required CI and protected manual Amplify/ECS production CD)              |
+
+The 1,000-person roster-scale release assumes a newly initialized database. Existing accounts,
+events, feedback, email providers, and queued work are not migrated or restored across this release;
+there is no historical-data compatibility layer. This code change does not itself deploy an
+environment, apply Terraform, or validate real SES delivery.
 
 ## Project Structure
 
@@ -83,6 +105,7 @@ releviz-monorepo/
   scripts/
     quality-gate.sh # Full lint + test + build for both workspaces
     deploy/         # Bounded manual Amplify artifact deployment helper
+    performance/    # Pure aggregation and guarded PostgreSQL/HTTP scale tools
   .github/workflows/
     ci.yml          # Parallel CI for both workspaces
     deploy-prod.yml # Protected, operator-confirmed production release
@@ -90,9 +113,13 @@ releviz-monorepo/
 
 ## Local Development
 
+Use Python 3.12 or newer (Django 6 and the locked backend environment require it). Activate the
+backend virtual environment before running commands that use `python3`.
+
 ```bash
 npm install          # install all workspace dependencies
 python3 -m pip install -r src/backend/requirements/local.txt
+python3 src/backend/manage.py migrate --settings=config.settings.local
 npm run dev          # start backend (4000) + frontend (3000)
 npm run dev:backend  # backend only
 npm run dev:frontend # frontend only
@@ -102,6 +129,17 @@ The frontend calls the Django service directly. Local development defaults to
 `http://localhost:4000`; override `NEXT_PUBLIC_API_BASE_URL` when the backend uses another origin.
 Business endpoints do not have an `/api` prefix, so the local readiness endpoint is
 `http://localhost:4000/health`.
+
+Run the coalescing result worker and durable email worker in separate terminals when exercising
+organizer results or delivery flows:
+
+```bash
+python3 src/backend/manage.py recompute_event_results --watch --poll-interval=1 \
+  --settings=config.settings.local
+python3 src/backend/manage.py dispatch_email_jobs --watch --limit=1000 \
+  --concurrency=10 --rate-limit=10 --poll-interval=1 \
+  --settings=config.settings.local
+```
 
 Run checks:
 
@@ -191,21 +229,31 @@ cookies previously issued on the frontend hostname are host-scoped and are not t
 `api.releviz.com`.
 
 Availability uses backend-authored 15/30-minute slot groups with explicit timezone and DST
-semantics. See [`docs/scheduling-slots.md`](docs/scheduling-slots.md).
+semantics, and continuous recommendations use the configured meeting duration. See
+[`docs/scheduling-slots.md`](docs/scheduling-slots.md).
+
+The roster source format, preview/merge/rebuild flow, duplicate rules, and paginated roster APIs are
+documented in [`docs/roster-imports.md`](docs/roster-imports.md).
 
 Temporary/full identity rules, the restricted link session, shared versioned editing, upgrade, and
 rollback behavior are documented in
 [`docs/temporary-accounts.md`](docs/temporary-accounts.md).
 
 Email delivery is configured in Django admin under **Email Delivery**. Authentication messages,
-final notifications, invitations, and reminders use persisted retryable jobs. Add an active AWS SES
-provider with region, sender email, IAM access key id, and IAM secret access key. Provider secrets
-and queued authentication content are encrypted in the database and are not stored in Terraform or
-GitHub secrets. SES identities/domains and IAM permissions must already be configured in AWS.
+final notifications, invitations, and reminders use persisted retryable jobs. Event launch,
+invitation, reminder, and finalization requests return `202` after enqueueing; the email worker
+performs provider calls. Add an active AWS SES provider with region, sender email, IAM access key id,
+and IAM secret access key. Provider secrets and queued authentication content are encrypted in the
+database and are not stored in Terraform or GitHub secrets. SES identities/domains and IAM
+permissions must already be configured in AWS.
+See [`docs/email-delivery.md`](docs/email-delivery.md) and
+[`docs/worker-runbook.md`](docs/worker-runbook.md).
 
 Operational procedures and product evidence definitions:
 
 - [`docs/observability.md`](docs/observability.md)
+- [`docs/worker-runbook.md`](docs/worker-runbook.md)
+- [`docs/performance-benchmarks.md`](docs/performance-benchmarks.md)
 - [`docs/product-analytics.md`](docs/product-analytics.md)
 - [`docs/backup-restore.md`](docs/backup-restore.md)
 - [`docs/deployment-rollback.md`](docs/deployment-rollback.md)

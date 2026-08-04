@@ -72,11 +72,13 @@ function CreateEvent({ operation = "create" }) {
   const [startTime, setStartTime] = useState("09:00");
   const [endTime, setEndTime] = useState("17:00");
   const [slotMinutes, setSlotMinutes] = useState(30);
+  const [meetingDurationMinutes, setMeetingDurationMinutes] = useState(30);
   const [selectedDays, setSelectedDays] = useState([1, 2, 3, 4, 5]);
   const [daySelectionType, setDaySelectionType] = useState("days_of_week");
   const [specificDates, setSpecificDates] = useState([]);
   const [dateInput, setDateInput] = useState("");
   const [participantViewPermission, setParticipantViewPermission] = useState("own_only");
+  const [accessMode, setAccessMode] = useState("invite_only");
   const [eventTimezone, setEventTimezone] = useState("UTC");
   const [responseDeadline, setResponseDeadline] = useState("");
   const [remindersEnabled, setRemindersEnabled] = useState(true);
@@ -126,10 +128,12 @@ function CreateEvent({ operation = "create" }) {
         setStartTime(event.startTime || "09:00");
         setEndTime(event.endTime || "17:00");
         setSlotMinutes(event.slotMinutes || 30);
+        setMeetingDurationMinutes(event.meetingDurationMinutes || event.slotMinutes || 30);
         setSelectedDays(event.days || []);
         setDaySelectionType(event.daySelectionType || "days_of_week");
         setSpecificDates(event.specificDates || []);
         setParticipantViewPermission(event.participantViewPermission || "own_only");
+        setAccessMode(event.accessMode || "invite_only");
         setEventTimezone(event.timezone || "UTC");
         setResponseDeadline(
           event.responseDeadline
@@ -170,9 +174,23 @@ function CreateEvent({ operation = "create" }) {
     };
     const startMinutes = toMinutes(startTime);
     const endMinutes = toMinutes(endTime);
+    const windowMinutes =
+      endMinutes > startMinutes ? endMinutes - startMinutes : 24 * 60 - startMinutes + endMinutes;
     if (startMinutes === endMinutes) errors.push("Start and end times must be different");
     if (startMinutes % slotMinutes || endMinutes % slotMinutes) {
       errors.push(`Times must align to ${slotMinutes}-minute slots`);
+    }
+    if (
+      meetingDurationMinutes < 15 ||
+      meetingDurationMinutes > 480 ||
+      meetingDurationMinutes % slotMinutes !== 0
+    ) {
+      errors.push(
+        `Meeting duration must be 15–480 minutes and align to ${slotMinutes}-minute slots`
+      );
+    }
+    if (startMinutes !== endMinutes && meetingDurationMinutes > windowMinutes) {
+      errors.push("Meeting duration must fit within the configured daily time window");
     }
     if (daySelectionType === "days_of_week" && selectedDays.length === 0) {
       errors.push("Select at least one day");
@@ -197,6 +215,8 @@ function CreateEvent({ operation = "create" }) {
         mode,
         location: location.trim(),
         participantViewPermission,
+        accessMode,
+        meetingDurationMinutes,
         daySelectionType,
         responseDeadline: responseDeadline
           ? zonedLocalDateTimeToIso(responseDeadline, eventTimezone.trim())
@@ -204,6 +224,7 @@ function CreateEvent({ operation = "create" }) {
         timezone: eventTimezone.trim(),
         remindersEnabled,
         reminderHoursBefore,
+        ...(!editing ? { status: "draft" } : {}),
         ...(daySelectionType === "specific_dates"
           ? { specificDates: [...specificDates].sort() }
           : {}),
@@ -617,6 +638,35 @@ function CreateEvent({ operation = "create" }) {
                     <option value={30}>30 minutes</option>
                   </select>
                 </label>
+                <label>
+                  <LabelRow>Meeting Duration</LabelRow>
+                  <input
+                    aria-label="Meeting Duration"
+                    type="number"
+                    min="15"
+                    max="480"
+                    step="15"
+                    value={meetingDurationMinutes}
+                    onChange={(event) => setMeetingDurationMinutes(Number(event.target.value))}
+                    style={{
+                      width: "100%",
+                      padding: "10px",
+                      borderRadius: "8px",
+                      border: "1px solid var(--md-sys-color-outline)",
+                      boxSizing: "border-box",
+                      background: "var(--md-sys-color-surface)",
+                    }}
+                  />
+                  <p
+                    style={{
+                      margin: "6px 0 0",
+                      color: "var(--md-sys-color-on-surface-variant)",
+                      fontSize: "0.8rem",
+                    }}
+                  >
+                    Recommendations cover this full duration, not just a single slot.
+                  </p>
+                </label>
                 <p
                   style={{
                     margin: "-8px 0 0",
@@ -638,6 +688,34 @@ function CreateEvent({ operation = "create" }) {
                 >
                   Response settings
                 </h3>
+                <div>
+                  <LabelRow>Event Access</LabelRow>
+                  <select
+                    aria-label="Event Access"
+                    value={accessMode}
+                    onChange={(event) => setAccessMode(event.target.value)}
+                    style={{
+                      width: "100%",
+                      padding: "10px",
+                      borderRadius: "8px",
+                      border: "1px solid var(--md-sys-color-outline)",
+                      boxSizing: "border-box",
+                      background: "var(--md-sys-color-surface)",
+                    }}
+                  >
+                    <option value="invite_only">Invite only</option>
+                    <option value="open_link">Anyone with the event code</option>
+                  </select>
+                  <p
+                    style={{
+                      margin: "6px 0 0",
+                      color: "var(--md-sys-color-on-surface-variant)",
+                      fontSize: "0.8rem",
+                    }}
+                  >
+                    Invite-only events restrict access to roster members and the organizer.
+                  </p>
+                </div>
                 <div>
                   <LabelRow>Participant View</LabelRow>
                   <md-outlined-select

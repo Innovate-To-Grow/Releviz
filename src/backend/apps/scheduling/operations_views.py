@@ -1,0 +1,358 @@
+import hashlib
+import json
+import uuid
+
+from django.db import transaction
+from django.db.models import Count, Q
+from django.utils import timezone
+from django.utils.cache import patch_cache_control, patch_vary_headers
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from apps.messaging.models import EmailDeliveryJob, EmailDeliveryRequest, EmailMessageLog
+from apps.scheduling.lifecycle import LifecycleError, transition_event
+from apps.scheduling.models import Event, FinalMeeting
+from apps.scheduling.services import EventEmailRequestError, upsert_and_send_invitations
+from apps.scheduling.utils import api_event
+
+
+def _private(data, *, status=200):
+    response = Response(data, status=status)
+    patch_cache_control(response, private=True, no_store=True)
+    patch_vary_headers(response, ["Authorization"])
+    return response
+
+
+def _request_payload(request_record: EmailDeliveryRequest) -> dict:
+    status_counts = {
+        row["status"]: row["total"]
+        for row in request_record.jobs.values("status").annotate(total=Count("pk"))
+    }
+    delivery = {
+        "total": sum(status_counts.values()),
+        "pending": status_counts.get(EmailDeliveryJob.Status.PENDING, 0),
+        "processing": status_counts.get(EmailDeliveryJob.Status.PROCESSING, 0),
+        "retry": status_counts.get(EmailDeliveryJob.Status.RETRY, 0),
+        "sent": status_counts.get(EmailDeliveryJob.Status.SENT, 0),
+        "permanentFailure": status_counts.get(
+            EmailDeliveryJob.Status.PERMANENT_FAILURE,
+            0,
+        ),
+        "canceled": status_counts.get(EmailDeliveryJob.Status.CANCELED, 0),
+    }
+    return {
+        "id": str(request_record.pk),
+        "operation": request_record.operation,
+        "recipientCount": request_record.recipient_count,
+        "enqueued": request_record.created_job_count,
+        "createdAt": request_record.created_at.isoformat(),
+        "updatedAt": request_record.updated_at.isoformat(),
+        "delivery": delivery,
+    }
+
+
+def _calendar_job_sequence(job: EmailDeliveryJob, *, prefix: str, event: Event) -> int | None:
+    parts = job.idempotency_key.split(":")
+    if len(parts) != 4 or parts[0] != prefix or parts[1] != str(event.event_id):
+        return None
+    try:
+        return int(parts[2])
+    except ValueError:
+        return None
+
+
+def _retryable_job_ids(
+    *,
+    event: Event,
+    delivery_request: EmailDeliveryRequest,
+    jobs: list[EmailDeliveryJob],
+) -> tuple[list, list]:
+    eligible = []
+    obsolete = []
+    operation = delivery_request.operation
+    if operation in {
+        EmailDeliveryRequest.Operation.INVITATION,
+        EmailDeliveryRequest.Operation.REMINDER,
+    }:
+        active_member_ids = set(
+            event.participants.filter(hidden=False).values_list("member_id", flat=True)
+        )
+        expected_type = (
+            EmailMessageLog.MessageType.INVITATION
+            if operation == EmailDeliveryRequest.Operation.INVITATION
+            else EmailMessageLog.MessageType.REMINDER
+        )
+        for job in jobs:
+            invitation = job.invitation
+            is_current = bool(
+                event.status == Event.Status.OPEN
+                and job.message_type == expected_type
+                and invitation is not None
+                and invitation.event_id == event.pk
+                and invitation.member_id in active_member_ids
+            )
+            (eligible if is_current else obsolete).append(job.pk)
+        return eligible, obsolete
+
+    meeting = FinalMeeting.objects.select_for_update().filter(event=event).first()
+    if operation == EmailDeliveryRequest.Operation.FINAL_CONFIRMATION:
+        expected_type = EmailMessageLog.MessageType.FINAL_CONFIRMATION
+        prefix = "final-confirmation"
+        meeting_is_current = bool(meeting is not None and meeting.active)
+    else:
+        expected_type = EmailMessageLog.MessageType.FINAL_CANCELLATION
+        prefix = "final-cancellation"
+        meeting_is_current = bool(meeting is not None and not meeting.active)
+    for job in jobs:
+        sequence = _calendar_job_sequence(job, prefix=prefix, event=event)
+        is_current = bool(
+            meeting_is_current
+            and job.message_type == expected_type
+            and sequence == meeting.calendar_sequence
+        )
+        (eligible if is_current else obsolete).append(job.pk)
+    return eligible, obsolete
+
+
+class EventLaunchView(APIView):
+    """Atomically open a draft event and enqueue its selected invitations."""
+
+    permission_classes = [IsAuthenticated]
+
+    @transaction.atomic
+    def post(self, request):
+        code = str(request.query_params.get("code") or "").strip()
+        if not code:
+            return Response({"error": "code is required"}, status=400)
+        try:
+            idempotency_key = uuid.UUID(str(request.data.get("idempotencyKey") or ""))
+        except (TypeError, ValueError, AttributeError):
+            return Response({"error": "idempotencyKey must be a UUID"}, status=400)
+
+        event = Event.objects.select_for_update().filter(code=code).first()
+        if event is None:
+            return Response({"error": "Event not found"}, status=404)
+        if event.organizer_id != request.user.pk:
+            return Response({"error": "Only the organizer can publish this event"}, status=403)
+
+        active_participants = event.participants.filter(hidden=False)
+        active_member_ids = active_participants.values_list("member_id", flat=True)
+        invitations = event.invitations.filter(member_id__in=active_member_ids)
+        selection = (
+            {"allEligible": True}
+            if "selection" not in request.data or request.data.get("selection") is None
+            else request.data.get("selection")
+        )
+        if not isinstance(selection, dict):
+            return Response({"error": "selection must be an object"}, status=400)
+        participant_ids = selection.get("participantIds")
+        if participant_ids is not None:
+            if not isinstance(participant_ids, list) or len(participant_ids) > 1000:
+                return Response(
+                    {"error": "selection.participantIds must contain at most 1000 IDs"},
+                    status=400,
+                )
+            try:
+                participant_ids = [uuid.UUID(str(value)) for value in participant_ids]
+            except (TypeError, ValueError, AttributeError):
+                return Response(
+                    {"error": "selection.participantIds contains an invalid ID"},
+                    status=400,
+                )
+            selected_member_ids = active_participants.filter(
+                Q(pk__in=participant_ids) | Q(member_id__in=participant_ids)
+            ).values_list("member_id", flat=True)
+            invitations = invitations.filter(member_id__in=selected_member_ids)
+        elif not selection.get("allEligible", False):
+            return Response(
+                {"error": "Select all eligible participants or provide participantIds"},
+                status=400,
+            )
+
+        excluded_ids = selection.get("excludedParticipantIds") or []
+        if not isinstance(excluded_ids, list) or len(excluded_ids) > 1000:
+            return Response(
+                {"error": "selection.excludedParticipantIds must be an array"},
+                status=400,
+            )
+        if excluded_ids:
+            try:
+                excluded_ids = [uuid.UUID(str(value)) for value in excluded_ids]
+            except (TypeError, ValueError, AttributeError):
+                return Response(
+                    {"error": "selection.excludedParticipantIds contains an invalid ID"},
+                    status=400,
+                )
+            excluded_member_ids = active_participants.filter(
+                Q(pk__in=excluded_ids) | Q(member_id__in=excluded_ids)
+            ).values_list("member_id", flat=True)
+            invitations = invitations.exclude(member_id__in=excluded_member_ids)
+        emails = list(invitations.order_by("email").values_list("email", flat=True))
+        if not emails and event.access_mode != "open_link":
+            return Response({"error": "Select at least one roster participant"}, status=400)
+        message = str(request.data.get("message") or "").strip()
+
+        replay = EmailDeliveryRequest.objects.filter(
+            event=event,
+            operation=EmailDeliveryRequest.Operation.INVITATION,
+            idempotency_key=idempotency_key,
+        ).first()
+        if replay is not None:
+            replay_fingerprint = hashlib.sha256(
+                json.dumps(
+                    {"emails": sorted(emails), "message": message},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest()
+            if replay.request_fingerprint != replay_fingerprint:
+                return Response(
+                    {"error": "This idempotency key was used with a different launch."},
+                    status=409,
+                )
+            return _private(
+                {
+                    "event": api_event(event),
+                    "deliveryRequest": _request_payload(replay),
+                    "idempotent": True,
+                },
+                status=202,
+            )
+
+        expected_version = request.data.get("expectedVersion")
+        if isinstance(expected_version, bool) or not isinstance(expected_version, int):
+            return Response({"error": "expectedVersion is required"}, status=428)
+        if event.version != expected_version:
+            return _private(
+                {
+                    "error": "The event changed. Reload it before publishing.",
+                    "event": api_event(event),
+                },
+                status=409,
+            )
+        if event.status != Event.Status.DRAFT:
+            return Response({"error": "Only a draft event can be published"}, status=409)
+
+        try:
+            changed_fields = transition_event(
+                event,
+                Event.Status.OPEN,
+                response_deadline=event.response_deadline,
+                now=timezone.now(),
+            )
+        except LifecycleError as exc:
+            return Response({"error": str(exc)}, status=400)
+        event.save(update_fields=changed_fields)
+
+        try:
+            result = upsert_and_send_invitations(
+                event=event,
+                emails=emails,
+                invited_by=request.user,
+                idempotency_key=idempotency_key,
+                message=message,
+                hydrate_result=False,
+            )
+        except EventEmailRequestError as exc:
+            transaction.set_rollback(True)
+            return Response({"error": str(exc)}, status=exc.status_code)
+
+        return _private(
+            {
+                "event": api_event(event),
+                "deliveryRequest": _request_payload(result["request"]),
+                "idempotent": result["idempotent"],
+            },
+            status=202,
+        )
+
+
+class DeliveryRequestView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def _request(self, request, request_id):
+        delivery_request = (
+            EmailDeliveryRequest.objects.select_related("event").filter(pk=request_id).first()
+        )
+        if delivery_request is None:
+            return None, Response({"error": "Delivery request not found"}, status=404)
+        if delivery_request.event.organizer_id != request.user.pk:
+            return None, Response({"error": "Delivery request not found"}, status=404)
+        return delivery_request, None
+
+    def get(self, request, request_id):
+        delivery_request, error = self._request(request, request_id)
+        if error:
+            return error
+        return _private({"deliveryRequest": _request_payload(delivery_request)})
+
+    @transaction.atomic
+    def post(self, request, request_id):
+        request_ref = EmailDeliveryRequest.objects.filter(pk=request_id).values("event_id").first()
+        if request_ref is None:
+            return Response({"error": "Delivery request not found"}, status=404)
+        event = Event.objects.select_for_update().filter(pk=request_ref["event_id"]).first()
+        delivery_request = (
+            EmailDeliveryRequest.objects.select_for_update()
+            .filter(pk=request_id, event=event)
+            .first()
+        )
+        if delivery_request is None or event.organizer_id != request.user.pk:
+            return Response({"error": "Delivery request not found"}, status=404)
+        retryable = list(
+            delivery_request.jobs.select_for_update(of=("self",))
+            .select_related("invitation")
+            .filter(
+                status=EmailDeliveryJob.Status.PERMANENT_FAILURE,
+            )
+            .order_by("pk")
+        )
+        eligible_ids, obsolete_ids = _retryable_job_ids(
+            event=event,
+            delivery_request=delivery_request,
+            jobs=retryable,
+        )
+        current_time = timezone.now()
+        canceled = 0
+        if obsolete_ids:
+            canceled = EmailDeliveryJob.objects.filter(pk__in=obsolete_ids).update(
+                status=EmailDeliveryJob.Status.CANCELED,
+                last_error="This delivery request was superseded by the event's current state.",
+                locked_at=None,
+                lock_token=None,
+                updated_at=current_time,
+            )
+        retried = 0
+        if eligible_ids:
+            retried = EmailDeliveryJob.objects.filter(pk__in=eligible_ids).update(
+                status=EmailDeliveryJob.Status.PENDING,
+                attempt_count=0,
+                next_attempt_at=current_time,
+                last_error="",
+                locked_at=None,
+                lock_token=None,
+                updated_at=current_time,
+            )
+        delivery_request.updated_at = timezone.now()
+        delivery_request.save(update_fields=["updated_at"])
+        delivery_request._prefetched_objects_cache = {}
+        if obsolete_ids and not eligible_ids:
+            return _private(
+                {
+                    "error": "This delivery request is no longer current for the event.",
+                    "deliveryRequest": _request_payload(delivery_request),
+                    "retried": 0,
+                    "canceled": canceled,
+                },
+                status=409,
+            )
+        return _private(
+            {
+                "deliveryRequest": _request_payload(delivery_request),
+                "retried": retried,
+                "canceled": canceled,
+            },
+            status=202,
+        )

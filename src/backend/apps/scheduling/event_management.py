@@ -24,6 +24,7 @@ from apps.scheduling.models import (
     Participant,
     UserEvent,
 )
+from apps.scheduling.result_snapshots import ensure_result_snapshot
 from apps.scheduling.slots import (
     MAX_SPECIFIC_DATES,
     SlotConfigurationError,
@@ -52,6 +53,8 @@ CONFIGURATION_FIELDS = (
     "timezone",
     "reminders_enabled",
     "reminder_hours_before",
+    "access_mode",
+    "meeting_duration_minutes",
 )
 GEOMETRY_FIELDS = {
     "start_minutes",
@@ -62,6 +65,10 @@ GEOMETRY_FIELDS = {
     "day_selection_type",
     "specific_dates",
     "timezone",
+}
+RESULT_FIELDS = GEOMETRY_FIELDS | {
+    "mode",
+    "meeting_duration_minutes",
 }
 
 
@@ -133,7 +140,11 @@ def parse_event_configuration(data, *, existing=None) -> dict:
     spans_next_day = end_minutes < start_minutes
 
     slot_minutes = _value(data, "slotMinutes", existing, "slot_minutes", 30)
-    if isinstance(slot_minutes, bool) or not isinstance(slot_minutes, int):
+    if (
+        isinstance(slot_minutes, bool)
+        or not isinstance(slot_minutes, int)
+        or slot_minutes not in {15, 30}
+    ):
         raise EventManagementError("slotMinutes must be 15 or 30.")
 
     mode = str(_value(data, "mode", existing, "mode", "inperson") or "inperson")
@@ -256,6 +267,30 @@ def parse_event_configuration(data, *, existing=None) -> dict:
     if reminder_hours_before < 0 or reminder_hours_before > 720:
         raise EventManagementError("reminderHoursBefore must be between 0 and 720")
 
+    access_mode = str(
+        _value(data, "accessMode", existing, "access_mode", "invite_only") or "invite_only"
+    )
+    if access_mode not in {"invite_only", "open_link"}:
+        raise EventManagementError("accessMode must be 'invite_only' or 'open_link'")
+
+    meeting_duration_minutes = _value(
+        data,
+        "meetingDurationMinutes",
+        existing,
+        "meeting_duration_minutes",
+        30,
+    )
+    if isinstance(meeting_duration_minutes, bool):
+        raise EventManagementError("meetingDurationMinutes must be an integer")
+    try:
+        meeting_duration_minutes = int(meeting_duration_minutes)
+    except (TypeError, ValueError) as exc:
+        raise EventManagementError("meetingDurationMinutes must be an integer") from exc
+    if meeting_duration_minutes < 15 or meeting_duration_minutes > 480:
+        raise EventManagementError("meetingDurationMinutes must be between 15 and 480")
+    if meeting_duration_minutes % slot_minutes:
+        raise EventManagementError("meetingDurationMinutes must be a multiple of slotMinutes")
+
     candidate = Event(
         start_minutes=start_minutes,
         end_minutes=end_minutes,
@@ -267,9 +302,12 @@ def parse_event_configuration(data, *, existing=None) -> dict:
         timezone=event_timezone,
     )
     try:
-        build_event_slot_groups(candidate)
+        slot_groups = build_event_slot_groups(candidate)
     except SlotConfigurationError as exc:
         raise EventManagementError(str(exc)) from exc
+    required_slots = meeting_duration_minutes // slot_minutes
+    if not any(len(group.slots) >= required_slots for group in slot_groups):
+        raise EventManagementError("meetingDurationMinutes does not fit within any configured day")
 
     return {
         "name": name,
@@ -287,6 +325,8 @@ def parse_event_configuration(data, *, existing=None) -> dict:
         "timezone": event_timezone,
         "reminders_enabled": reminders_enabled,
         "reminder_hours_before": reminder_hours_before,
+        "access_mode": access_mode,
+        "meeting_duration_minutes": meeting_duration_minutes,
     }
 
 
@@ -326,13 +366,15 @@ def _insert_event(*, organizer, configuration, status, now) -> Event:
         code = _unique_event_code()
         try:
             with transaction.atomic():
-                return Event.objects.create(
+                event = Event.objects.create(
                     code=code,
                     organizer=organizer,
                     status=status,
                     opened_at=now if status == Event.Status.OPEN else None,
                     **configuration,
                 )
+                ensure_result_snapshot(event)
+                return event
         except IntegrityError:
             continue
     raise EventManagementError("Failed to generate unique code", status_code=500)
@@ -341,16 +383,10 @@ def _insert_event(*, organizer, configuration, status, now) -> Event:
 @transaction.atomic
 def create_event(*, organizer, data) -> Event:
     configuration = parse_event_configuration(data)
-    initial_status = data.get("status") or Event.Status.OPEN
-    if initial_status not in {Event.Status.DRAFT, Event.Status.OPEN}:
-        raise EventManagementError("New events must be draft or open")
+    initial_status = data.get("status") or Event.Status.DRAFT
+    if initial_status != Event.Status.DRAFT:
+        raise EventManagementError("New events must start as draft; publish them with launch.")
     current_time = timezone.now()
-    if (
-        initial_status == Event.Status.OPEN
-        and configuration["response_deadline"] is not None
-        and current_time >= configuration["response_deadline"]
-    ):
-        raise EventManagementError("An open event must have a future response deadline")
     event = _insert_event(
         organizer=organizer,
         configuration=configuration,
@@ -428,7 +464,13 @@ def update_event(*, organizer, code, data) -> EventUpdateResult:
     for field in changed_fields:
         setattr(event, field, configuration[field])
     event.version += 1
-    event.save(update_fields=[*changed_fields, "version", "updated_at"])
+    update_fields = [*changed_fields, "version", "updated_at"]
+    if RESULT_FIELDS.intersection(changed_fields):
+        event.results_revision += 1
+        update_fields.append("results_revision")
+    event.save(update_fields=update_fields)
+    if RESULT_FIELDS.intersection(changed_fields):
+        ensure_result_snapshot(event)
 
     responses_reset = 0
     if participants:

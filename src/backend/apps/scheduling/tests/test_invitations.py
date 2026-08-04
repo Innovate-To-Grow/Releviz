@@ -500,6 +500,8 @@ class InvitationApiTests(TestCase):
             start_minutes=9 * 60,
             end_minutes=10 * 60,
             response_deadline=timezone.now() + timedelta(hours=24),
+            status=Event.Status.OPEN,
+            access_mode="open_link",
         )
 
     def authenticate(self, member):
@@ -667,9 +669,10 @@ class InvitationApiTests(TestCase):
             message="Join",
         )
         sent = self.client.post(self.invitation_url(), payload, format="json")
-        self.assertEqual(sent.status_code, 201)
+        self.assertEqual(sent.status_code, 202)
         self.assertFalse(sent.data["idempotent"])
-        self.assertEqual(sent.data["delivery"]["sent"], 2)
+        self.assertEqual(sent.data["delivery"]["pending"], 2)
+        self.assertEqual(sent.data["delivery"]["sent"], 0)
         self.assertEqual(sent.data["enqueued"], 2)
         self.assertEqual(sent.data["deduplicated"], 0)
         self.assertEqual(len(sent.data["invitations"]), 2)
@@ -681,10 +684,10 @@ class InvitationApiTests(TestCase):
         self.assertEqual(len(listed.data["invitations"]), 2)
 
         replay = self.client.post(self.invitation_url(), payload, format="json")
-        self.assertEqual(replay.status_code, 200)
+        self.assertEqual(replay.status_code, 202)
         self.assertTrue(replay.data["idempotent"])
         self.assertEqual(EmailDeliveryJob.objects.count(), 2)
-        self.assertEqual(len(mail.outbox), 2)
+        self.assertEqual(len(mail.outbox), 0)
 
         conflict = self.client.post(
             self.invitation_url(),
@@ -701,29 +704,35 @@ class InvitationApiTests(TestCase):
             ),
             format="json",
         )
-        self.assertEqual(resent.status_code, 201)
+        self.assertEqual(resent.status_code, 202)
         self.assertEqual(resent.data["enqueued"], 2)
         self.assertEqual(resent.data["deduplicated"], 0)
-        self.assertEqual(len(mail.outbox), 4)
+        self.assertEqual(len(mail.outbox), 0)
 
+        failed = self.client.post(
+            self.invitation_url(),
+            request_payload(["again@example.com"]),
+            format="json",
+        )
+        self.assertEqual(failed.status_code, 202)
+        self.assertEqual(failed.data["delivery"]["pending"], 1)
+        retry_job = EmailDeliveryJob.objects.get(recipient="again@example.com")
+        self.assertEqual(retry_job.status, EmailDeliveryJob.Status.PENDING)
         with patch(
             "apps.messaging.services.EmailMultiAlternatives.send",
             side_effect=TimeoutError("provider timeout"),
         ):
-            failed = self.client.post(
-                self.invitation_url(),
-                request_payload(["again@example.com"]),
-                format="json",
-            )
-        self.assertEqual(failed.status_code, 201)
-        self.assertEqual(failed.data["delivery"]["retry"], 1)
-        retry_job = EmailDeliveryJob.objects.get(recipient="again@example.com")
+            dispatch_email_job(retry_job.pk)
+        retry_job.refresh_from_db()
         self.assertEqual(retry_job.status, EmailDeliveryJob.Status.RETRY)
         self.assertIsNone(EventInvitation.objects.get(email="again@example.com").last_sent_at)
 
         retry_job.next_attempt_at = timezone.now()
         retry_job.save(update_fields=["next_attempt_at", "updated_at"])
-        self.assertEqual(dispatch_due_email_jobs(limit=10)["sent"], 1)
+        self.assertEqual(
+            dispatch_email_job(retry_job.pk)["status"],
+            EmailDeliveryJob.Status.SENT,
+        )
         self.assertIsNotNone(EventInvitation.objects.get(email="again@example.com").last_sent_at)
 
     def test_join_submit_and_reminder_api_replay_and_failure(self):
@@ -843,7 +852,7 @@ class InvitationApiTests(TestCase):
             {"idempotencyKey": str(key)},
             format="json",
         )
-        self.assertEqual(reminder.status_code, 200)
+        self.assertEqual(reminder.status_code, 202)
         self.assertEqual(reminder.data["sent"], 0)
         self.assertEqual(reminder.data["recipientCount"], 0)
 
@@ -859,18 +868,21 @@ class InvitationApiTests(TestCase):
             {"idempotencyKey": str(second_key)},
             format="json",
         )
-        self.assertEqual(reminder.data["sent"], 1)
+        self.assertEqual(reminder.status_code, 202)
+        self.assertEqual(reminder.data["sent"], 0)
+        self.assertEqual(reminder.data["delivery"]["pending"], 1)
         self.assertEqual(reminder.data["enqueued"], 1)
         pending.refresh_from_db()
-        self.assertIsNotNone(pending.reminder_sent_at)
+        self.assertIsNone(pending.reminder_sent_at)
 
         replay = self.client.post(
             self.reminder_url(),
             {"idempotencyKey": str(second_key)},
             format="json",
         )
+        self.assertEqual(replay.status_code, 202)
         self.assertTrue(replay.data["idempotent"])
-        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(len(mail.outbox), 0)
 
         deduplicated = self.client.post(
             self.reminder_url(),
@@ -879,7 +891,7 @@ class InvitationApiTests(TestCase):
         )
         self.assertEqual(deduplicated.data["enqueued"], 0)
         self.assertEqual(deduplicated.data["deduplicated"], 1)
-        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(len(mail.outbox), 0)
 
         failed_invitation = EventInvitation.objects.create(
             event=self.event,
@@ -887,18 +899,24 @@ class InvitationApiTests(TestCase):
             invited_by=self.organizer,
             first_sent_at=timezone.now(),
         )
+        failed = self.client.post(
+            self.reminder_url(),
+            {"idempotencyKey": str(uuid.uuid4())},
+            format="json",
+        )
+        self.assertEqual(failed.status_code, 202)
+        self.assertEqual(failed.data["delivery"]["pending"], 2)
+        failed_job = EmailDeliveryJob.objects.filter(
+            recipient="failed@example.com",
+            message_type=EmailMessageLog.MessageType.REMINDER,
+        ).get()
         with patch(
             "apps.messaging.services.EmailMultiAlternatives.send",
             side_effect=TimeoutError("provider timeout"),
         ):
-            failed = self.client.post(
-                self.reminder_url(),
-                {"idempotencyKey": str(uuid.uuid4())},
-                format="json",
-            )
-        self.assertEqual(failed.status_code, 200)
-        self.assertEqual(failed.data["delivery"]["retry"], 1)
-        self.assertEqual(failed.data["delivery"]["sent"], 1)
+            dispatch_email_job(failed_job.pk)
+        failed_job.refresh_from_db()
+        self.assertEqual(failed_job.status, EmailDeliveryJob.Status.RETRY)
         failed_invitation.refresh_from_db()
         self.assertIsNone(failed_invitation.reminder_sent_at)
 
@@ -1000,7 +1018,7 @@ class InvitationApiTests(TestCase):
                 request_payload(["blocked@example.com"]),
                 format="json",
             )
-        self.assertEqual(first.status_code, 201)
+        self.assertEqual(first.status_code, 202)
         self.assertEqual(blocked.status_code, 429)
 
     def test_disabled_reminders_create_an_auditable_empty_request(self):
@@ -1012,7 +1030,7 @@ class InvitationApiTests(TestCase):
             {"idempotencyKey": str(uuid.uuid4())},
             format="json",
         )
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 202)
         self.assertEqual(response.data["recipientCount"], 0)
         request_record = EmailDeliveryRequest.objects.get()
         self.assertEqual(request_record.recipient_count, 0)

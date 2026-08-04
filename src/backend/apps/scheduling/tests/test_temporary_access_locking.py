@@ -11,7 +11,13 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.authn.tests.helpers import create_member
-from apps.scheduling.models import Event, EventInvitation, Participant, TemporaryEventSession
+from apps.scheduling.models import (
+    Event,
+    EventInvitation,
+    Participant,
+    ScheduleEditRecord,
+    TemporaryEventSession,
+)
 
 
 @skipUnless(connection.vendor == "postgresql", "PostgreSQL row-lock behavior")
@@ -32,6 +38,8 @@ class TemporaryScheduleLockOrderTests(TransactionTestCase):
             code="TMPLOCK1",
             name="Temporary lock order",
             organizer=self.organizer,
+            status=Event.Status.OPEN,
+            opened_at=timezone.now(),
             days=[1],
             start_minutes=9 * 60,
             end_minutes=10 * 60,
@@ -118,3 +126,6 @@ class TemporaryScheduleLockOrderTests(TransactionTestCase):
         self.assertEqual(response.status_code, 200, response.data)
         self.participant.refresh_from_db()
         self.assertEqual(self.participant.availability_virtual, [1, 0])
+        edit = ScheduleEditRecord.objects.get(participant=self.participant)
+        self.assertIsNone(edit.actor)
+        self.assertEqual(edit.actor_identifier, self.temporary.pk)

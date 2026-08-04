@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.test import RequestFactory, TestCase
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError as DRFValidationError
@@ -21,6 +22,7 @@ from apps.scheduling.models import (
     EventInvitation,
     Participant,
     TemporaryEventSession,
+    UserEvent,
     Weight,
 )
 from apps.scheduling.services import ManagedParticipantError
@@ -49,6 +51,9 @@ class TemporaryAccessEdgeFixture(TestCase):
             code="TEDGE123",
             name="Temporary access edge cases",
             organizer=self.organizer,
+            status=Event.Status.OPEN,
+            access_mode="open_link",
+            opened_at=timezone.now(),
             days=[1],
             start_minutes=9 * 60,
             end_minutes=10 * 60,
@@ -180,7 +185,7 @@ class TemporaryAccessServiceEdgeTests(TemporaryAccessEdgeFixture):
 class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
     def test_organizer_participant_listing_uses_invitation_private_metadata(self):
         full = create_member("edge-full@example.com", "Full", "Person")
-        Participant.objects.create(
+        full_participant = Participant.objects.create(
             event=self.event,
             member=full,
             participant_name="Full Person",
@@ -190,9 +195,10 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
         response = self.organizer_client().get(f"/events/participants?code={self.event.code}")
         self.assertEqual(response.status_code, 200)
         by_id = {item["id"]: item for item in response.data["participants"]}
-        self.assertEqual(by_id[str(self.temporary.pk)]["invitationStatus"], "invited")
-        self.assertEqual(by_id[str(self.temporary.pk)]["email"], "edge-temp@example.com")
-        self.assertEqual(by_id[str(full.pk)]["accountAccess"], "full")
+        self.assertEqual(by_id[str(self.participant.pk)]["invitationStatus"], "invited")
+        self.assertEqual(by_id[str(self.participant.pk)]["email"], "edge-temp@example.com")
+        self.assertEqual(by_id[str(full_participant.pk)]["accountAccess"], "full")
+        self.assertFalse(response.data["scheduleDataIncluded"])
 
     def test_managed_participant_endpoint_validates_scope_and_service_errors(self):
         client = self.organizer_client()
@@ -234,6 +240,37 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
             )
         self.assertEqual(throttled.status_code, 429)
         create.assert_not_called()
+
+    def test_managed_participant_creation_rolls_back_when_result_dirty_marking_fails(self):
+        client = self.organizer_client()
+        email = "managed-atomicity@example.com"
+        Member = get_user_model()
+        baseline_member_count = Member.objects.count()
+        baseline_participant_count = self.event.participants.count()
+        baseline_user_event_count = UserEvent.objects.filter(event=self.event).count()
+
+        with (
+            patch(
+                "apps.scheduling.views.mark_event_results_dirty",
+                side_effect=RuntimeError("result invalidation failed"),
+            ) as mark_dirty,
+            self.assertRaisesMessage(RuntimeError, "result invalidation failed"),
+        ):
+            client.post(
+                f"/events/participants/managed?code={self.event.code}",
+                {"name": "Managed Atomicity", "email": email},
+                format="json",
+            )
+
+        mark_dirty.assert_called_once()
+        self.assertEqual(Member.objects.count(), baseline_member_count)
+        self.assertEqual(self.event.participants.count(), baseline_participant_count)
+        self.assertEqual(
+            UserEvent.objects.filter(event=self.event).count(),
+            baseline_user_event_count,
+        )
+        self.assertFalse(ContactEmail.objects.filter(email_address=email).exists())
+        self.assertFalse(self.event.invitations.filter(email=email).exists())
 
     def test_regular_participant_rename_permissions_and_temporary_name_validation(self):
         full = create_member("rename-full@example.com", "Full", "Person")
