@@ -1039,21 +1039,44 @@ def _complete_temporary_account_upgrade(member) -> None:
 def _recover_rollback_temporary_password_account(email: str, password: str):
     """Promote an account that old application code accidentally left temporary."""
 
-    contact = (
-        ContactEmail.objects.select_for_update()
-        .filter(
+    contact_ref = (
+        ContactEmail.objects.filter(
             email_address__iexact=email,
             email_type="primary",
             verified=True,
             member__is_active=True,
             member__access_level=get_user_model().AccessLevel.TEMPORARY,
         )
+        .values("pk", "member_id")
+        .first()
+    )
+    if contact_ref is None:
+        return None, False
+    Member = get_user_model()
+    member = (
+        Member.objects.select_for_update()
+        .filter(
+            pk=contact_ref["member_id"],
+            is_active=True,
+            access_level=Member.AccessLevel.TEMPORARY,
+        )
+        .first()
+    )
+    if member is None:
+        return None, False
+    contact = (
+        ContactEmail.objects.select_for_update()
+        .filter(
+            pk=contact_ref["pk"],
+            member=member,
+            email_address__iexact=email,
+            email_type="primary",
+            verified=True,
+        )
         .first()
     )
     if contact is None:
         return None, False
-    Member = get_user_model()
-    member = Member.objects.select_for_update().get(pk=contact.member_id)
     if not member.check_password(password):
         # The real password hash already supplied constant-work verification;
         # do not fall through to the backend and perform a second dummy hash.

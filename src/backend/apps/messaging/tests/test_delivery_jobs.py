@@ -1,6 +1,7 @@
 import uuid
 from datetime import timedelta
 from io import StringIO
+from threading import Event as StopEvent
 from unittest.mock import patch
 
 from django.core import mail
@@ -16,6 +17,8 @@ from apps.messaging.models import EmailDeliveryJob, EmailMessageLog
 from apps.messaging.services import (
     EmailAttachment,
     EmailDeliveryError,
+    _DispatchRateLimiter,
+    _safe_log_each,
     dispatch_due_email_jobs,
     dispatch_email_job,
     email_delivery_summary,
@@ -56,6 +59,23 @@ class EmailDeliveryJobTests(TestCase):
             invitation=invitation,
             max_attempts=max_attempts,
         )
+
+    def test_message_log_failure_is_isolated_from_delivery_state(self):
+        with (
+            patch(
+                "apps.messaging.services._log_each",
+                side_effect=RuntimeError("message log unavailable"),
+            ),
+            self.assertLogs("apps.messaging.services", level="ERROR") as logs,
+        ):
+            _safe_log_each(
+                recipients=["recipient@example.com"],
+                subject="Subject",
+                message_type=EmailMessageLog.MessageType.INVITATION,
+                status=EmailMessageLog.Status.FAILED,
+            )
+
+        self.assertTrue(any("email_message_log_failed" in line for line in logs.output))
 
     def test_enqueue_is_idempotent_and_preserves_stable_content(self):
         key = "same-key"
@@ -193,6 +213,101 @@ class EmailDeliveryJobTests(TestCase):
             {"attempted": False, "status": EmailDeliveryJob.Status.PROCESSING},
         )
 
+    def test_final_cancellation_dependencies_and_exhausted_claims_are_safe(self):
+        recipient = "calendar-dependency@example.com"
+        event_id = self.event.event_id
+        now = timezone.now()
+        predecessor, _created = enqueue_email_job(
+            idempotency_key=f"final-confirmation:{event_id}:0:{recipient}",
+            message_type=EmailMessageLog.MessageType.FINAL_CONFIRMATION,
+            recipient=recipient,
+            subject="Confirmed",
+            body="request",
+            message_id="<dependency-confirmation@releviz.local>",
+            event=self.event,
+        )
+        predecessor.status = EmailDeliveryJob.Status.PROCESSING
+        predecessor.attempt_count = 1
+        predecessor.locked_at = now
+        predecessor.lock_token = uuid.uuid4()
+        predecessor.save(
+            update_fields=[
+                "status",
+                "attempt_count",
+                "locked_at",
+                "lock_token",
+                "updated_at",
+            ]
+        )
+        cancellation, _created = enqueue_email_job(
+            idempotency_key=f"final-cancellation:{event_id}:1:{recipient}",
+            message_type=EmailMessageLog.MessageType.FINAL_CANCELLATION,
+            recipient=recipient,
+            subject="Canceled",
+            body="cancel",
+            message_id="<dependency-cancellation@releviz.local>",
+            event=self.event,
+        )
+
+        waiting = dispatch_email_job(cancellation.pk, now=now)
+        self.assertEqual(waiting["attempted"], False)
+        cancellation.refresh_from_db()
+        self.assertEqual(cancellation.status, EmailDeliveryJob.Status.PENDING)
+        self.assertEqual(cancellation.next_attempt_at, now + timedelta(seconds=5))
+
+        predecessor.status = EmailDeliveryJob.Status.RETRY
+        predecessor.save(update_fields=["status", "updated_at"])
+        canceled = dispatch_email_job(cancellation.pk, now=now + timedelta(seconds=5))
+        self.assertEqual(canceled, {"attempted": False, "status": "canceled"})
+        cancellation.refresh_from_db()
+        self.assertIn("preceding calendar request", cancellation.last_error)
+
+        for key in (
+            "final-cancellation:malformed",
+            f"final-cancellation:{event_id}:not-a-sequence:recipient@example.com",
+        ):
+            malformed, _created = enqueue_email_job(
+                idempotency_key=key,
+                message_type=EmailMessageLog.MessageType.FINAL_CANCELLATION,
+                recipient=f"malformed-{uuid.uuid4()}@example.com",
+                subject="Malformed dependency",
+                body="cancel",
+                message_id=f"<{uuid.uuid4()}@releviz.local>",
+                event=self.event,
+            )
+            self.assertEqual(
+                dispatch_email_job(malformed.pk)["status"],
+                EmailDeliveryJob.Status.SENT,
+            )
+
+        missing, _created = enqueue_email_job(
+            idempotency_key=(f"final-cancellation:{event_id}:1:missing-predecessor@example.com"),
+            message_type=EmailMessageLog.MessageType.FINAL_CANCELLATION,
+            recipient="missing-predecessor@example.com",
+            subject="Missing dependency",
+            body="cancel",
+            message_id="<missing-dependency@releviz.local>",
+            event=self.event,
+        )
+        self.assertEqual(dispatch_email_job(missing.pk)["status"], "canceled")
+
+        for position, last_error in enumerate(("", "previous failure")):
+            exhausted, _created = self.enqueue(
+                recipient=f"exhausted-{position}@example.com",
+                max_attempts=1,
+            )
+            exhausted.attempt_count = exhausted.max_attempts
+            exhausted.last_error = last_error
+            exhausted.save(update_fields=["attempt_count", "last_error", "updated_at"])
+            result = dispatch_email_job(exhausted.pk)
+            self.assertEqual(result["attempted"], False)
+            self.assertEqual(result["status"], EmailDeliveryJob.Status.PERMANENT_FAILURE)
+            exhausted.refresh_from_db()
+            self.assertEqual(
+                exhausted.last_error,
+                last_error or "Maximum delivery attempts reached.",
+            )
+
     def test_timeout_retry_success_and_permanent_failure(self):
         retry_job, _ = self.enqueue(recipient="retry@example.com", max_attempts=2)
         now = timezone.now() + timedelta(seconds=1)
@@ -235,6 +350,29 @@ class EmailDeliveryJobTests(TestCase):
                 "status": EmailDeliveryJob.Status.PERMANENT_FAILURE,
             },
         )
+
+    def test_unexpected_dispatch_exception_is_persisted_and_does_not_escape(self):
+        job, _created = self.enqueue(recipient="unexpected@example.com", max_attempts=2)
+        now = timezone.now() + timedelta(seconds=1)
+
+        with (
+            patch(
+                "apps.messaging.services.send_email_message",
+                side_effect=RuntimeError("unexpected provider failure"),
+            ),
+            self.assertLogs("apps.messaging.services", level="ERROR") as logs,
+        ):
+            result = dispatch_email_job(job.pk, now=now)
+
+        self.assertEqual(result, {"attempted": True, "status": EmailDeliveryJob.Status.RETRY})
+        job.refresh_from_db()
+        self.assertEqual(job.status, EmailDeliveryJob.Status.RETRY)
+        self.assertEqual(job.attempt_count, 1)
+        self.assertEqual(job.next_attempt_at, now + timedelta(minutes=1))
+        self.assertEqual(job.last_error, "unexpected provider failure")
+        self.assertIsNone(job.lock_token)
+        self.assertIsNone(job.locked_at)
+        self.assertTrue(any("email_delivery_unexpected_failure" in line for line in logs.output))
 
     def test_lock_token_change_prevents_stale_worker_from_finishing(self):
         success_job, _ = self.enqueue(recipient="success-lock@example.com")
@@ -328,6 +466,37 @@ class EmailDeliveryJobTests(TestCase):
         self.assertTrue(EmailDeliveryJob.objects.filter(pk=pending.pk).exists())
         self.assertTrue(EmailDeliveryJob.objects.filter(pk=processing_race.pk).exists())
 
+    def test_due_dispatch_isolates_an_unhandled_job_and_continues(self):
+        first, _created = self.enqueue(recipient="poisoned@example.com")
+        second, _created = self.enqueue(recipient="healthy-after-poison@example.com")
+
+        with (
+            patch(
+                "apps.messaging.services.dispatch_email_job",
+                side_effect=[
+                    RuntimeError("poisoned job"),
+                    {"attempted": True, "status": EmailDeliveryJob.Status.SENT},
+                ],
+            ) as dispatch,
+            self.assertLogs("apps.messaging.services", level="ERROR") as logs,
+        ):
+            summary = dispatch_due_email_jobs(limit=2)
+
+        self.assertEqual(dispatch.call_count, 2)
+        self.assertEqual(
+            summary,
+            {
+                "attempted": 1,
+                "sent": 1,
+                "retry": 0,
+                "permanentFailure": 0,
+                "canceled": 0,
+            },
+        )
+        self.assertTrue(any("email_delivery_job_unhandled" in line for line in logs.output))
+        self.assertTrue(EmailDeliveryJob.objects.filter(pk=first.pk).exists())
+        self.assertTrue(EmailDeliveryJob.objects.filter(pk=second.pk).exists())
+
     def test_dispatch_command_validates_limit_and_processes_restart_pending_job(self):
         self.enqueue(recipient="restart@example.com")
         output = StringIO()
@@ -337,6 +506,79 @@ class EmailDeliveryJobTests(TestCase):
             call_command("dispatch_email_jobs", "--limit=0")
         with self.assertRaises(CommandError):
             call_command("dispatch_email_jobs", "--limit=1001")
+
+    def test_dispatch_supports_concurrency_rate_limiting_and_graceful_watch_stop(self):
+        for position in range(3):
+            self.enqueue(recipient=f"parallel-{position}@example.com")
+        with (
+            patch(
+                "apps.messaging.services.dispatch_email_job",
+                return_value={"attempted": True, "status": EmailDeliveryJob.Status.SENT},
+            ) as dispatch,
+            patch.object(_DispatchRateLimiter, "wait", return_value=True) as wait,
+        ):
+            summary = dispatch_due_email_jobs(
+                limit=10,
+                concurrency=2,
+                rate_limit_per_second=20,
+            )
+        self.assertEqual(summary["attempted"], 3)
+        self.assertEqual(summary["sent"], 3)
+        self.assertEqual(dispatch.call_count, 3)
+        self.assertEqual(wait.call_count, 3)
+
+        with self.assertRaisesMessage(ValueError, "concurrency"):
+            dispatch_due_email_jobs(concurrency=0)
+        with self.assertRaisesMessage(ValueError, "rate_limit_per_second"):
+            dispatch_due_email_jobs(rate_limit_per_second=0)
+
+        stop_event = StopEvent()
+        stop_event.set()
+        self.assertFalse(_DispatchRateLimiter(None).wait(stop_event))
+        self.assertFalse(_DispatchRateLimiter(2).wait(stop_event))
+        stopped = dispatch_due_email_jobs(limit=10, stop_event=stop_event)
+        self.assertEqual(stopped["attempted"], 0)
+        with (
+            patch("apps.messaging.services.time.monotonic", side_effect=[5.0, 5.0]),
+            patch("apps.messaging.services.time.sleep") as sleep,
+        ):
+            limiter = _DispatchRateLimiter(2)
+            self.assertTrue(limiter.wait())
+            self.assertTrue(limiter.wait())
+        sleep.assert_called_once_with(0.5)
+
+        command_summary = {
+            "attempted": 0,
+            "sent": 0,
+            "retry": 0,
+            "permanentFailure": 0,
+            "canceled": 0,
+        }
+
+        def stop_after_batch(**kwargs):
+            kwargs["stop_event"].set()
+            return command_summary
+
+        output = StringIO()
+        with patch(
+            "apps.messaging.management.commands.dispatch_email_jobs.dispatch_due_email_jobs",
+            side_effect=stop_after_batch,
+        ):
+            call_command(
+                "dispatch_email_jobs",
+                "--watch",
+                "--poll-interval=0.1",
+                "--concurrency=2",
+                "--rate-limit=20",
+                stdout=output,
+            )
+        self.assertIn("attempted=0", output.getvalue())
+
+        for argument in ("--concurrency=0", "--concurrency=65", "--rate-limit=-1"):
+            with self.subTest(argument=argument), self.assertRaises(CommandError):
+                call_command("dispatch_email_jobs", argument)
+        with self.assertRaises(CommandError):
+            call_command("dispatch_email_jobs", "--poll-interval=0")
 
     def test_auth_challenge_jobs_cancel_when_inactive_or_expired(self):
         inactive = issue_email_challenge(

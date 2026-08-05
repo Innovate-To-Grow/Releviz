@@ -110,13 +110,20 @@ class LifecycleDomainTests(TestCase):
         )
 
         finalized = self.event(code="WASFINAL", status=Event.Status.FINALIZED)
+        with self.assertRaisesMessage(LifecycleError, "Cannot transition"):
+            transition_event(
+                finalized,
+                Event.Status.CLOSED,
+                response_deadline=None,
+                now=self.now,
+            )
         transition_event(
             finalized,
-            Event.Status.CLOSED,
-            response_deadline=None,
+            Event.Status.OPEN,
+            response_deadline=future,
             now=self.now,
         )
-        self.assertEqual(finalized.status, Event.Status.CLOSED)
+        self.assertEqual(finalized.status, Event.Status.OPEN)
 
         with self.assertRaisesMessage(LifecycleError, "Invalid event status"):
             transition_event(draft, "unknown", response_deadline=future, now=self.now)
@@ -155,6 +162,7 @@ class LifecycleApiTests(TestCase):
             name="Lifecycle",
             organizer=self.organizer,
             status=Event.Status.OPEN,
+            access_mode="open_link",
             start_minutes=9 * 60,
             end_minutes=10 * 60,
             days=[1],
@@ -200,8 +208,8 @@ class LifecycleApiTests(TestCase):
             {"name": "Open", "status": "open"},
             format="json",
         )
-        self.assertEqual(open_event.status_code, 201)
-        self.assertIsNotNone(open_event.data["event"]["openedAt"])
+        self.assertEqual(open_event.status_code, 400)
+        self.assertIn("start as draft", open_event.data["error"])
         naive_future = (timezone.now() + timedelta(days=1)).replace(tzinfo=None)
         naive_deadline = self.client.post(
             "/events",
@@ -220,6 +228,7 @@ class LifecycleApiTests(TestCase):
             "/events",
             {
                 "name": "Past",
+                "status": "open",
                 "responseDeadline": (timezone.now() - timedelta(minutes=1)).isoformat(),
             },
             format="json",

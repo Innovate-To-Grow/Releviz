@@ -20,6 +20,7 @@ from apps.scheduling.permissions import (
     visible_participants_for_user,
     weight_for_participant,
 )
+from apps.scheduling.result_snapshots import recompute_event_results
 
 
 class AggregationDomainTests(TestCase):
@@ -33,6 +34,7 @@ class AggregationDomainTests(TestCase):
             start_minutes=9 * 60,
             end_minutes=9 * 60 + 15,
             slot_minutes=15,
+            meeting_duration_minutes=15,
             day_selection_type="specific_dates",
             specific_dates=["2026-07-20", "2026-07-21"],
         )
@@ -58,7 +60,7 @@ class AggregationDomainTests(TestCase):
         )
 
     def test_official_results_exclude_unsubmitted_hidden_excluded_and_invalid_responses(self):
-        required = self.add_participant(
+        weighted = self.add_participant(
             "required@example.com",
             inperson=(1, 0),
             virtual=(0.5, 1),
@@ -92,15 +94,13 @@ class AggregationDomainTests(TestCase):
         )
         Weight.objects.create(
             event=self.event,
-            participant=required,
+            participant=weighted,
             weight=0.5,
-            required=True,
         )
         Weight.objects.create(event=self.event, participant=other, weight=1.0)
         Weight.objects.create(
             event=self.event,
             participant=unanswered,
-            required=True,
         )
         Weight.objects.create(
             event=self.event,
@@ -111,12 +111,10 @@ class AggregationDomainTests(TestCase):
             event=self.event,
             participant=excluded,
             included=False,
-            required=True,
         )
         Weight.objects.create(
             event=self.event,
             participant=invalid,
-            required=True,
         )
 
         results = build_event_results(
@@ -140,33 +138,22 @@ class AggregationDomainTests(TestCase):
         self.assertEqual(results["channels"]["inperson"]["weighted"], [0.3333, 0.6667])
         self.assertEqual(results["channels"]["virtual"]["unweighted"], [0.75, 0.75])
         self.assertEqual(results["channels"]["virtual"]["weighted"], [0.8333, 0.6667])
-        self.assertEqual(
-            results["requiredParticipantConflicts"],
-            {
-                "unansweredRequiredParticipantTotal": 1,
-                "excludedRequiredParticipantTotal": 2,
-                "channels": {
-                    "inperson": [{"slotIndex": 1, "requiredParticipantTotal": 1}],
-                    "virtual": [],
-                },
-            },
-        )
+        self.assertNotIn("requiredParticipantConflicts", results)
         self.assertEqual(
             [
                 (
                     recommendation["rank"],
                     recommendation["channel"],
                     recommendation["slotIndex"],
-                    recommendation["requiredParticipantConflictTotal"],
                     recommendation["weightedAvailability"],
                 )
                 for recommendation in results["recommendations"]
             ],
             [
-                (1, "virtual", 0, 3, 0.8333),
-                (2, "virtual", 1, 3, 0.6667),
-                (3, "inperson", 0, 3, 0.3333),
-                (4, "inperson", 1, 4, 0.6667),
+                (1, "virtual", 0, 0.8333),
+                (2, "virtual", 1, 0.6667),
+                (3, "inperson", 1, 0.6667),
+                (4, "inperson", 0, 0.3333),
             ],
         )
         self.assertEqual(
@@ -174,6 +161,9 @@ class AggregationDomainTests(TestCase):
             {
                 "channel": "virtual",
                 "slotIndex": 0,
+                "endSlotIndex": 0,
+                "slotIndices": [0],
+                "durationMinutes": 15,
                 "groupKey": "date:2026-07-20",
                 "groupLabel": "2026-07-20",
                 "weekday": None,
@@ -190,14 +180,13 @@ class AggregationDomainTests(TestCase):
                 "fullyAvailableParticipantTotal": 1,
                 "partiallyAvailableParticipantTotal": 1,
                 "unavailableParticipantTotal": 0,
-                "requiredParticipantConflictTotal": 3,
                 "rank": 1,
             },
         )
         self.assertEqual(results["recommendationBasis"]["status"], "ready")
         self.assertEqual(
             results["recommendationBasis"]["order"][0],
-            "fewestRequiredParticipantConflicts",
+            "highestWeightedAvailability",
         )
 
     def test_channel_parsing_validity_and_empty_or_zero_weight_results(self):
@@ -450,6 +439,7 @@ class AggregationPermissionApiTests(TestCase):
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token_for(member)}")
 
     def test_direct_api_access_and_result_visibility_matrix(self):
+        recompute_event_results(self.event.pk)
         self.assertEqual(self.client.get("/events/results").status_code, 401)
 
         self.authenticate(self.unrelated)
@@ -478,8 +468,12 @@ class AggregationPermissionApiTests(TestCase):
         self.authenticate(self.organizer)
         organizer_list = self.client.get(f"/events/participants?code={self.event.code}")
         self.assertEqual(len(organizer_list.data["participants"]), 3)
+        invalid_page = self.client.get(f"/events/participants?code={self.event.code}&page=0")
+        self.assertEqual(invalid_page.status_code, 400)
         organizer_results = self.client.get(f"/events/results?code={self.event.code}")
         self.assertEqual(organizer_results.status_code, 200)
+        self.assertEqual(organizer_results.data["status"], "fresh")
+        self.assertEqual(organizer_results.data["computedRevision"], 1)
         self.assertEqual(organizer_results.data["results"]["countedResponseTotal"], 2)
         self.assertEqual(organizer_results.data["results"]["unansweredParticipantTotal"], 1)
         self.assertEqual(
@@ -504,8 +498,8 @@ class AggregationPermissionApiTests(TestCase):
         self.authenticate(self.first)
         after_submit = self.client.get(f"/events/participants?code={self.event.code}")
         self.assertEqual(
-            {participant["id"] for participant in after_submit.data["participants"]},
-            {str(self.first.pk), str(self.second.pk)},
+            [participant["id"] for participant in after_submit.data["participants"]],
+            [str(self.first.pk)],
         )
         self.assertEqual(
             self.client.get(f"/events/results?code={self.event.code}").status_code,
@@ -517,8 +511,8 @@ class AggregationPermissionApiTests(TestCase):
         self.authenticate(self.unsubmitted)
         realtime = self.client.get(f"/events/participants?code={self.event.code}")
         self.assertEqual(
-            {participant["id"] for participant in realtime.data["participants"]},
-            {str(self.first.pk), str(self.second.pk), str(self.unsubmitted.pk)},
+            [participant["id"] for participant in realtime.data["participants"]],
+            [str(self.unsubmitted.pk)],
         )
         self.assertEqual(
             self.client.get(f"/events/results?code={self.event.code}").status_code,
@@ -539,7 +533,7 @@ class AggregationPermissionApiTests(TestCase):
         self.assertEqual(self.client.get("/events/results").status_code, 400)
         self.assertEqual(self.client.get("/events/results?code=NOPE").status_code, 404)
 
-    def test_canonical_permission_and_required_weight_api(self):
+    def test_canonical_permission_and_weight_api(self):
         self.authenticate(self.organizer)
         created = self.client.post(
             "/events",
@@ -555,7 +549,7 @@ class AggregationPermissionApiTests(TestCase):
             "all_after_submit",
         )
 
-        updated = self.client.put(
+        legacy = self.client.put(
             f"/events/weights?code={self.event.code}",
             {
                 "weights": [
@@ -563,37 +557,46 @@ class AggregationPermissionApiTests(TestCase):
                         "participantId": str(self.first.pk),
                         "weight": 0.75,
                         "included": 1,
-                        "required": 1,
                     }
                 ]
             },
             format="json",
         )
+        self.assertEqual(legacy.status_code, 405)
+
+        updated = self.client.patch(
+            f"/events/roster/{self.first_participant.pk}?code={self.event.code}",
+            {
+                "expectedVersion": self.first_participant.version,
+                "weight": 0.75,
+                "included": True,
+            },
+            format="json",
+        )
         self.assertEqual(updated.status_code, 200)
-        self.assertEqual(updated.data["weights"][0]["required"], 1)
+        self.assertEqual(updated.data["participant"]["weight"], 0.75)
+        self.assertNotIn("required", updated.data["participant"])
+        recompute_event_results(self.event.pk)
+        results = self.client.get(f"/events/results?code={self.event.code}")
         self.assertEqual(
-            updated.data["results"]["calculationBasis"]["weighted"]["totalWeight"],
+            results.data["results"]["calculationBasis"]["weighted"]["totalWeight"],
             1.75,
         )
-        self.assertIn("channels", updated.data["results"])
+        self.assertIn("channels", results.data["results"])
 
-        preserved = self.client.put(
-            f"/events/weights?code={self.event.code}",
-            {"weights": [{"participantId": str(self.first.pk)}]},
+        self.first_participant.refresh_from_db()
+        preserved = self.client.patch(
+            f"/events/roster/{self.first_participant.pk}?code={self.event.code}",
+            {"expectedVersion": self.first_participant.version},
             format="json",
         )
         self.assertEqual(preserved.status_code, 200)
-        self.assertEqual(preserved.data["weights"][0]["weight"], 0.75)
-        self.assertEqual(preserved.data["weights"][0]["required"], 1)
+        self.assertEqual(preserved.data["participant"]["weight"], 0.75)
+        self.assertNotIn("required", preserved.data["participant"])
 
-        for entry in [
-            "invalid",
-            {"participantId": str(self.first.pk), "required": 2},
-        ]:
-            with self.subTest(entry=entry):
-                response = self.client.put(
-                    f"/events/weights?code={self.event.code}",
-                    {"weights": [entry]},
-                    format="json",
-                )
-                self.assertEqual(response.status_code, 400)
+        invalid = self.client.patch(
+            f"/events/roster/{self.first_participant.pk}?code={self.event.code}",
+            {"expectedVersion": self.first_participant.version, "weight": 2},
+            format="json",
+        )
+        self.assertEqual(invalid.status_code, 400)

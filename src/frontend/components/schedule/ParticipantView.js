@@ -7,7 +7,7 @@ import EventContext from "@/components/event/EventContext";
 import ScheduleChannelEditor from "@/components/schedule/ScheduleChannelEditor";
 import ScheduleGrid from "@/components/schedule/ScheduleGrid";
 import { useAuth } from "@/components/auth/AuthContext";
-import { fetchParticipants, joinEvent, updateParticipant } from "@/lib/api/participants";
+import { fetchCurrentParticipant, joinEvent, updateParticipant } from "@/lib/api/participants";
 import { fetchEventResults } from "@/lib/api/events";
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
 
@@ -16,6 +16,18 @@ const AVAILABILITY_CHOICES = [
   { label: "If needed", value: 0.5 },
   { label: "Available", value: 1 },
 ];
+
+function resultEnvelope(data) {
+  if (!data) return { status: "unavailable", results: null };
+  if (data.status) return data;
+  return {
+    status: "fresh",
+    requestedRevision: data.results?.revision,
+    computedRevision: data.results?.revision,
+    generatedAt: data.results?.generatedAt,
+    results: data.results || null,
+  };
+}
 
 function ParticipantView() {
   const { event, numSlots } = useContext(EventContext);
@@ -30,9 +42,10 @@ function ParticipantView() {
   const [availabilityValue, setAvailabilityValue] = useState(1);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
-  const [preJoinParticipants, setPreJoinParticipants] = useState([]);
-  const [participants, setParticipants] = useState([]);
-  const [results, setResults] = useState(null);
+  const [resultSnapshot, setResultSnapshot] = useState({
+    status: "unavailable",
+    results: null,
+  });
   const [refreshKey, setRefreshKey] = useState(0);
   const [joinError, setJoinError] = useState("");
   const [submitError, setSubmitError] = useState("");
@@ -179,44 +192,52 @@ function ParticipantView() {
 
   useEffect(() => {
     if (!event?.code || !user?.id) return;
+    let active = true;
 
-    async function load() {
+    async function loadCurrentParticipant() {
       try {
         const token = await getToken();
-        const data = await fetchParticipants(event.code, token);
-        const parsed = data.participants.map((participant) => ({
-          ...participant,
-          inpersonArray: participant.availabilityInperson.map(Number),
-          virtualArray: participant.availabilityVirtual.map(Number),
-        }));
-
-        setParticipants(parsed);
-        setPreJoinParticipants(
-          parsed.map((participant) => ({
-            id: participant.id,
-            name: participant.name,
-            submitted: !!participant.submitted,
-          }))
-        );
-
-        const mine = parsed.find((participant) => participant.user_id === user.id);
-        if (mine) {
-          applyParticipantResponse(mine);
-        }
-        try {
-          const resultData = await fetchEventResults(event.code, token);
-          setResults(resultData.results);
-        } catch {
-          setResults(null);
-        }
+        const data = await fetchCurrentParticipant(event.code, token);
+        if (!active) return;
+        if (data.participant) applyParticipantResponse(data.participant);
       } catch {
-        setParticipants([]);
-        setResults(null);
+        // A person who has not joined yet has no current participant response.
       }
     }
-    load();
+
+    const timer = setTimeout(loadCurrentParticipant, 0);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
   }, [event?.code, user?.id, refreshKey, getToken, applyParticipantResponse]);
 
+  const loadResults = useCallback(async () => {
+    if (!event.code || viewPermission === "own_only") {
+      setResultSnapshot({ status: "unavailable", results: null });
+      return;
+    }
+    try {
+      const token = await getToken();
+      const data = await fetchEventResults(event.code, token);
+      setResultSnapshot(resultEnvelope(data));
+    } catch {
+      setResultSnapshot({ status: "unavailable", results: null });
+    }
+  }, [event.code, getToken, viewPermission]);
+
+  useEffect(() => {
+    const timer = setTimeout(loadResults, 0);
+    return () => clearTimeout(timer);
+  }, [loadResults, refreshKey]);
+
+  useEffect(() => {
+    if (resultSnapshot.status !== "refreshing") return undefined;
+    const timer = setInterval(loadResults, 2000);
+    return () => clearInterval(timer);
+  }, [loadResults, resultSnapshot.status]);
+
+  const results = resultSnapshot.results;
   const avgInperson = results?.channels?.inperson?.unweighted ?? Array(numSlots).fill(0);
   const avgVirtual = results?.channels?.virtual?.unweighted ?? Array(numSlots).fill(0);
 
@@ -355,58 +376,6 @@ function ParticipantView() {
           </div>
 
           <EventDetailsGrid event={event} />
-
-          <div
-            style={{
-              border: "1px solid var(--md-sys-color-surface-variant)",
-              borderRadius: "12px",
-              padding: "12px",
-              background: "var(--md-sys-color-surface)",
-            }}
-          >
-            <p style={{ margin: 0, fontWeight: 600 }}>
-              Participants ({preJoinParticipants.length})
-            </p>
-            {preJoinParticipants.length > 0 ? (
-              <div style={{ marginTop: "10px", display: "flex", flexWrap: "wrap", gap: "8px" }}>
-                {preJoinParticipants.map((participant) => (
-                  <span
-                    key={participant.id}
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: "6px",
-                      padding: "4px 10px",
-                      borderRadius: "999px",
-                      border: "1px solid var(--md-sys-color-outline)",
-                      fontSize: "0.85rem",
-                    }}
-                  >
-                    <span
-                      style={{
-                        color: participant.submitted
-                          ? "var(--md-sys-color-primary)"
-                          : "var(--md-sys-color-outline)",
-                      }}
-                    >
-                      {participant.submitted ? "●" : "○"}
-                    </span>
-                    {participant.name}
-                  </span>
-                ))}
-              </div>
-            ) : (
-              <p
-                style={{
-                  margin: "8px 0 0 0",
-                  color: "var(--md-sys-color-on-surface-variant)",
-                  fontSize: "0.9rem",
-                }}
-              >
-                No participants yet.
-              </p>
-            )}
-          </div>
 
           {joinError && (
             <p style={{ color: "var(--md-sys-color-error)", margin: 0, fontSize: "0.9rem" }}>
@@ -623,6 +592,19 @@ function ParticipantView() {
               gap: "24px",
             }}
           >
+            {resultSnapshot.status === "refreshing" && (
+              <div className="md-card" role="status">
+                Group availability is updating for revision{" "}
+                {resultSnapshot.requestedRevision ?? event.resultsRevision ?? "latest"}.
+                {results ? " Showing the last completed snapshot meanwhile." : ""}
+              </div>
+            )}
+            {resultSnapshot.status === "failed" && (
+              <div className="md-card" role="alert">
+                Group availability could not be refreshed yet.
+                {results ? " Showing the last completed snapshot." : ""}
+              </div>
+            )}
             {results ? (
               <div className="md-card" style={{ overflowX: "auto" }}>
                 <h3 style={{ margin: "0 0 8px 0", color: "var(--md-sys-color-on-surface)" }}>
@@ -670,48 +652,6 @@ function ParticipantView() {
                 <p style={{ margin: 0, color: "var(--md-sys-color-on-surface-variant)" }}>
                   Submit a valid schedule before shared results become available.
                 </p>
-              </div>
-            )}
-
-            {results && viewPermission !== "own_only" && participants.length > 0 && (
-              <div>
-                <h3 style={{ margin: "0 0 16px 0", color: "var(--md-sys-color-on-surface)" }}>
-                  Individual Schedules
-                </h3>
-                <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
-                  {participants.map((participant) => (
-                    <div className="md-card" key={participant.id} style={{ overflowX: "auto" }}>
-                      <h4 style={{ margin: "0 0 16px 0", fontSize: "1.2rem" }}>
-                        {participant.name}
-                      </h4>
-                      <div style={{ display: "flex", gap: "24px", flexWrap: "wrap" }}>
-                        {mode !== "virtual" && (
-                          <div style={{ flex: "1 1 300px", minWidth: 0 }}>
-                            <ScheduleGrid
-                              schedule={participant.inpersonArray}
-                              slotGroups={event.slotGroups}
-                              readOnly={true}
-                              showValues={true}
-                              label={mode === "mixed" ? "In-Person" : "Availability"}
-                            />
-                          </div>
-                        )}
-                        {mode !== "inperson" && (
-                          <div style={{ flex: "1 1 300px", minWidth: 0 }}>
-                            <ScheduleGrid
-                              schedule={participant.virtualArray}
-                              slotGroups={event.slotGroups}
-                              readOnly={true}
-                              showValues={true}
-                              label={mode === "mixed" ? "Virtual" : "Availability"}
-                              virtual
-                            />
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
               </div>
             )}
           </div>

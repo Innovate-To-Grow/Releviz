@@ -37,6 +37,9 @@ def api_event(event, *, include_slot_groups=True) -> dict:
         "timezone": event.timezone,
         "remindersEnabled": event.reminders_enabled,
         "reminderHoursBefore": event.reminder_hours_before,
+        "accessMode": getattr(event, "access_mode", "invite_only"),
+        "meetingDurationMinutes": getattr(event, "meeting_duration_minutes", event.slot_minutes),
+        "resultsRevision": getattr(event, "results_revision", 1),
         "status": event.status,
         "version": event.version,
         "openedAt": event.opened_at.isoformat() if event.opened_at else None,
@@ -148,7 +151,6 @@ def api_weight(weight) -> dict:
         "participant_name": weight.participant.participant_name,
         "weight": float(weight.weight),
         "included": 1 if weight.included else 0,
-        "required": 1 if weight.required else 0,
     }
 
 

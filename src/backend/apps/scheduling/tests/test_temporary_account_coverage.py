@@ -109,6 +109,29 @@ class TemporaryAccountCoverageTests(TestCase):
                 self.assertEqual(caught.exception.status_code, status_code)
                 self.assertEqual(str(caught.exception), message)
 
+    @override_settings(EVENT_MAX_PARTICIPANTS=1)
+    def test_managed_participant_enforces_the_event_participant_limit(self):
+        existing = create_member("managed-cap-existing@example.com")
+        Participant.objects.create(
+            event=self.event,
+            member=existing,
+            participant_name="Existing",
+            availability_inperson=default_availability(self.event),
+            availability_virtual=default_availability(self.event),
+        )
+
+        with self.assertRaisesMessage(ManagedParticipantError, "at most 1 participants") as caught:
+            create_or_reuse_managed_participant(
+                event=self.event,
+                organizer=self.organizer,
+                name="Over capacity",
+                email="managed-over-capacity@example.com",
+            )
+        self.assertEqual(caught.exception.status_code, 409)
+        self.assertFalse(
+            ContactEmail.objects.filter(email_address="managed-over-capacity@example.com").exists()
+        )
+
     def test_existing_orphan_contact_is_safely_claimed_by_a_new_temporary_member(self):
         email = "direct-orphan@example.com"
         contact = ContactEmail.objects.create(

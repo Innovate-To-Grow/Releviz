@@ -1,5 +1,10 @@
 # Real-User Validation Plan
 
+The application-code release does not create or deploy a university pilot environment. Execute this
+plan only after a separate environment, privacy, and operations review. Small user sessions validate
+usability; they do not replace the 1,000-person PostgreSQL benchmarks in
+[`performance-benchmarks.md`](performance-benchmarks.md).
+
 ## Objective and Status
 
 This plan tests whether target users can complete the organizer and participant lifecycle without
@@ -29,13 +34,19 @@ in separate scenarios, but each role/session must begin without product instruct
 
 Provide only the goal, not UI instructions:
 
-1. Create a 30-minute event spanning at least two dates in a stated timezone.
+1. Create an event spanning at least two dates in a stated timezone and choose its continuous meeting
+   duration and access mode.
 2. Set a response deadline, location/method, and participant-view privacy.
-3. Invite at least two provided test participants.
-4. Identify invitation progress and send a reminder to an eligible participant.
-5. Interpret the result basis and select a ranked meeting recommendation.
-6. Review attendance/conflicts, confirm the final time, and verify the calendar notification.
-7. Edit or duplicate an event and then archive/delete the designated test event.
+3. Import the provided CSV/XLSX roster, map columns, resolve one intentional duplicate conflict, and
+   commit the preview.
+4. Publish the draft, identify invitation progress, and send a reminder to an eligible participant.
+5. Open one temporary participant schedule for proxy entry and identify why a verified full account
+   is not editable.
+6. Apply a group weight/included update, override one person, and interpret the refreshed result
+   basis.
+7. Select a continuous recommendation, review attendance, confirm the final time, and download its
+   calendar file.
+8. Reopen/cancel the final meeting, then archive/delete the designated test event.
 
 ## Unmoderated Participant Tasks
 

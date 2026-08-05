@@ -6,9 +6,14 @@ from apps.scheduling.models import (
     EventDeletionRecord,
     EventDuplicationRequest,
     EventInvitation,
+    EventResultSnapshot,
     FinalizationRequest,
     FinalMeeting,
     Participant,
+    RosterImportBatch,
+    RosterImportReceipt,
+    RosterImportRow,
+    ScheduleEditRecord,
     TemporaryEventSession,
     UserEvent,
     Weight,
@@ -27,6 +32,9 @@ class EventAdmin(ModelAdmin):
         "start_minutes",
         "end_minutes",
         "slot_minutes",
+        "meeting_duration_minutes",
+        "access_mode",
+        "results_revision",
         "response_deadline",
         "created_at",
     )
@@ -36,6 +44,7 @@ class EventAdmin(ModelAdmin):
         "timezone",
         "participant_view_permission",
         "day_selection_type",
+        "access_mode",
         "reminders_enabled",
     )
     search_fields = ("code", "name", "organizer__first_name", "organizer__last_name")
@@ -132,9 +141,53 @@ class EventInvitationAdmin(ModelAdmin):
 
 @admin.register(Weight)
 class WeightAdmin(ModelAdmin):
-    list_display = ("event", "participant", "weight", "included", "required")
-    list_filter = ("included", "required")
+    list_display = ("event", "participant", "weight", "included")
+    list_filter = ("included",)
     search_fields = ("event__code", "participant__participant_name")
+
+
+@admin.register(RosterImportBatch)
+class RosterImportBatchAdmin(ModelAdmin):
+    list_display = ("event", "source_type", "status", "created_by", "expires_at", "created_at")
+    list_filter = ("source_type", "status")
+    search_fields = ("event__code", "source_label")
+
+
+@admin.register(RosterImportRow)
+class RosterImportRowAdmin(ModelAdmin):
+    list_display = ("batch", "worksheet", "row_number", "selected", "duplicate_status")
+    list_filter = ("selected", "duplicate_status")
+    search_fields = ("batch__event__code", "name", "email")
+
+
+@admin.register(RosterImportReceipt)
+class RosterImportReceiptAdmin(ModelAdmin):
+    list_display = ("event", "mode", "imported_count", "committed_by", "committed_at")
+    list_filter = ("mode",)
+    search_fields = ("event__code", "idempotency_key")
+    exclude = ("request_fingerprint",)
+
+
+@admin.register(ScheduleEditRecord)
+class ScheduleEditRecordAdmin(ModelAdmin):
+    list_display = (
+        "event",
+        "participant",
+        "source",
+        "action",
+        "actor",
+        "actor_identifier",
+        "created_at",
+    )
+    list_filter = ("source", "action")
+    search_fields = ("event__code", "participant__participant_name", "actor__email")
+
+
+@admin.register(EventResultSnapshot)
+class EventResultSnapshotAdmin(ModelAdmin):
+    list_display = ("event", "status", "requested_revision", "computed_revision", "completed_at")
+    list_filter = ("status",)
+    search_fields = ("event__code",)
 
 
 @admin.register(FinalMeeting)

@@ -1,3 +1,4 @@
+import uuid
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -36,11 +37,26 @@ class RelevizApiTests(TestCase):
                 "days": [1, 2],
                 "mode": "mixed",
                 "location": "Room 1",
+                "status": "draft",
+                "accessMode": "open_link",
             },
             format="json",
         )
         self.assertEqual(res.status_code, 201)
-        return res.data["event"]["code"]
+        event = res.data["event"]
+        self.assertEqual(event["status"], "draft")
+        launched = self.client.post(
+            f"/events/launch?code={event['code']}",
+            {
+                "expectedVersion": event["version"],
+                "idempotencyKey": str(uuid.uuid4()),
+            },
+            format="json",
+        )
+        self.assertEqual(launched.status_code, 202, launched.data)
+        self.assertEqual(launched.data["event"]["status"], "open")
+        self.assertEqual(launched.data["deliveryRequest"]["recipientCount"], 0)
+        return event["code"]
 
     def test_missing_auth_returns_401(self):
         res = self.client.get("/dashboard/events")
@@ -98,7 +114,7 @@ class RelevizApiTests(TestCase):
             },
             format="json",
         )
-        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.status_code, 405)
 
         res = self.client.delete(
             f"/events/participants/update?code={code}&participantId={self.participant.pk}"
@@ -111,17 +127,18 @@ class RelevizApiTests(TestCase):
         self.client.post(f"/events/participants?code={code}", {}, format="json")
 
         self.authenticate(self.organizer)
-        res = self.client.put(
-            f"/events/weights?code={code}",
+        participant = Participant.objects.get(event__code=code, member=self.participant)
+        res = self.client.patch(
+            f"/events/roster/{participant.pk}?code={code}",
             {
-                "weights": [
-                    {"participantId": str(self.participant.pk), "weight": 0.5, "included": 1}
-                ]
+                "expectedVersion": participant.version,
+                "weight": 0.5,
+                "included": True,
             },
             format="json",
         )
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(res.data["weights"][0]["weight"], 0.5)
+        self.assertEqual(res.data["participant"]["weight"], 0.5)
 
         res = self.client.delete(
             f"/events/participants/update?code={code}&participantId={self.participant.pk}"
@@ -463,13 +480,13 @@ class RelevizApiTests(TestCase):
         self.authenticate(self.organizer)
         self.assertEqual(
             self.client.put("/events/weights", {"weights": []}, format="json").status_code,
-            400,
+            405,
         )
         self.assertEqual(
             self.client.put(
                 "/events/weights?code=NOPE", {"weights": []}, format="json"
             ).status_code,
-            404,
+            405,
         )
         for payload in [
             {"weights": "bad"},
@@ -481,11 +498,16 @@ class RelevizApiTests(TestCase):
         ]:
             with self.subTest(payload=payload):
                 response = self.client.put(f"/events/weights?code={code}", payload, format="json")
-                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.status_code, 405)
 
-        response = self.client.put(
-            f"/events/weights?code={code}",
-            {"weights": [{"id": str(self.participant.pk), "weight": 0.75, "included": 0}]},
+        participant = Participant.objects.get(event__code=code, member=self.participant)
+        response = self.client.patch(
+            f"/events/roster/{participant.pk}?code={code}",
+            {
+                "expectedVersion": participant.version,
+                "weight": 0.75,
+                "included": False,
+            },
             format="json",
         )
         self.assertEqual(response.status_code, 200)

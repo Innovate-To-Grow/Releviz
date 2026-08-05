@@ -10,7 +10,8 @@ from rest_framework.test import APIClient
 
 from apps.authn.models import ContactEmail
 from apps.authn.tests.helpers import create_member, token_for
-from apps.messaging.models import EmailDeliveryJob, EmailMessageLog
+from apps.messaging.models import EmailDeliveryJob, EmailDeliveryRequest, EmailMessageLog
+from apps.messaging.services import dispatch_email_job
 from apps.scheduling.finalization import (
     FinalizationError,
     build_attendance_review,
@@ -52,6 +53,7 @@ class FinalizationDomainTests(TestCase):
             start_minutes=9 * 60,
             end_minutes=12 * 60,
             slot_minutes=30,
+            meeting_duration_minutes=120,
             day_selection_type="specific_dates",
             specific_dates=["2026-07-20", "2026-07-21"],
             status=Event.Status.OPEN,
@@ -66,7 +68,6 @@ class FinalizationDomainTests(TestCase):
         *,
         submitted=True,
         hidden=False,
-        required=False,
         included=True,
     ):
         member = create_member(f"{label}@example.com", label.title(), "Person")
@@ -79,13 +80,19 @@ class FinalizationDomainTests(TestCase):
             submitted=submitted,
             hidden=hidden,
         )
-        if required or not included:
+        if not included:
             Weight.objects.create(
                 event=self.event,
                 participant=participant,
-                required=required,
                 included=included,
             )
+        EventInvitation.objects.create(
+            event=self.event,
+            email=member.email,
+            member=member,
+            invited_by=self.organizer,
+            first_sent_at=timezone.now(),
+        )
         self.members[label] = member
         return participant
 
@@ -100,26 +107,18 @@ class FinalizationDomainTests(TestCase):
 
     def seed_responses(self):
         self.participant("available", [1, 1, 1, 1] + [0] * 8)
-        self.participant("partial", [1, 1, 0.5, 0.5] + [0] * 8, required=True)
+        self.participant("partial", [1, 1, 0.5, 0.5] + [0] * 8)
         self.participant("unavailable", [0] * 12)
-        self.participant("unanswered", [0] * 12, submitted=False, required=True)
-        hidden = self.participant("hidden", [1, 1, 1, 1] + [0] * 8, hidden=True)
+        self.participant("unanswered", [0] * 12, submitted=False)
+        self.participant("hidden", [1, 1, 1, 1] + [0] * 8, hidden=True)
         self.participant(
             "excluded",
             [1, 1, 1, 1] + [0] * 8,
-            required=True,
             included=False,
         )
         EventInvitation.objects.create(
             event=self.event,
             email="manual@example.com",
-            invited_by=self.organizer,
-            first_sent_at=timezone.now(),
-        )
-        EventInvitation.objects.create(
-            event=self.event,
-            email=hidden.member.email,
-            member=hidden.member,
             invited_by=self.organizer,
             first_sent_at=timezone.now(),
         )
@@ -136,7 +135,7 @@ class FinalizationDomainTests(TestCase):
         self.assertEqual(review["unavailableParticipantTotal"], 1)
         self.assertEqual(review["unansweredParticipantTotal"], 1)
         self.assertEqual(review["excludedParticipantTotal"], 2)
-        self.assertEqual(review["requiredConflictTotal"], 3)
+        self.assertNotIn("requiredConflictTotal", review)
         self.assertEqual(
             [participant["status"] for participant in review["participants"]],
             ["available", "partial", "unavailable"],
@@ -146,7 +145,6 @@ class FinalizationDomainTests(TestCase):
             [
                 "available@example.com",
                 "excluded@example.com",
-                "manual@example.com",
                 "partial@example.com",
                 "unanswered@example.com",
                 "unavailable@example.com",
@@ -164,7 +162,7 @@ class FinalizationDomainTests(TestCase):
             location="",
         )
         self.assertFalse(result["idempotent"])
-        self.assertEqual(len(result["jobs"]), 6)
+        self.assertEqual(len(result["jobs"]), 5)
         self.event.refresh_from_db()
         meeting = FinalMeeting.objects.get(event=self.event)
         self.assertEqual(self.event.status, Event.Status.FINALIZED)
@@ -172,7 +170,7 @@ class FinalizationDomainTests(TestCase):
         self.assertEqual(meeting.location, "Room 101")
         self.assertTrue(meeting.active)
         self.assertEqual(FinalizationRequest.objects.count(), 1)
-        self.assertEqual(final_delivery_summary(self.event, meeting)["pending"], 6)
+        self.assertEqual(final_delivery_summary(self.event, meeting)["pending"], 5)
         self.assertEqual(api_event(self.event)["finalMeeting"]["calendarSequence"], 0)
         self.assertIn("attendance", api_final_meeting(meeting, include_attendance=True))
         self.assertIn("[active]", str(meeting))
@@ -250,9 +248,9 @@ class FinalizationDomainTests(TestCase):
                 expected_version=1,
                 idempotency_key=key,
                 starts_at=normalized["starts_at"],
-                ends_at=normalized["ends_at"] + timedelta(hours=1),
+                ends_at=normalized["ends_at"],
                 channel="inperson",
-                location="Room 101",
+                location="Different Room",
             )
         with self.assertRaisesMessage(FinalizationError, "Reopen the event"):
             confirm_final_meeting(
@@ -266,6 +264,12 @@ class FinalizationDomainTests(TestCase):
                 location="Room 101",
             )
 
+        EmailDeliveryJob.objects.filter(
+            message_type=EmailMessageLog.MessageType.FINAL_CONFIRMATION
+        ).update(
+            status=EmailDeliveryJob.Status.SENT,
+            sent_at=timezone.now(),
+        )
         self.event.refresh_from_db()
         jobs = cancel_active_final_meeting(self.event)
         meeting = first["meeting"]
@@ -308,6 +312,173 @@ class FinalizationDomainTests(TestCase):
             reconfirmed["meeting"].calendar_uid,
             first["meeting"].calendar_uid,
         )
+
+    def test_cancel_before_pending_confirmation_delivery_sends_no_calendar_cancel(self):
+        self.participant("pending", [1, 1, 1, 1] + [0] * 8)
+        normalized = self.normalized()
+        confirmed = confirm_final_meeting(
+            event_code=self.event.code,
+            organizer=self.organizer,
+            expected_version=self.event.version,
+            idempotency_key=uuid.uuid4(),
+            starts_at=normalized["starts_at"],
+            ends_at=normalized["ends_at"],
+            channel="inperson",
+            location="Room 101",
+        )
+        confirmation = confirmed["jobs"][0]
+        self.assertEqual(confirmation.status, EmailDeliveryJob.Status.PENDING)
+
+        self.event.refresh_from_db()
+        self.assertEqual(cancel_active_final_meeting(self.event), [])
+        confirmation.refresh_from_db()
+        self.assertEqual(confirmation.status, EmailDeliveryJob.Status.CANCELED)
+        self.assertIn("before delivery", confirmation.last_error)
+        cancellation_request = EmailDeliveryRequest.objects.get(
+            event=self.event,
+            operation=EmailDeliveryRequest.Operation.FINAL_CANCELLATION,
+        )
+        self.assertEqual(cancellation_request.recipient_count, 0)
+        self.assertEqual(cancellation_request.jobs.count(), 0)
+
+    def test_cancel_while_confirmation_is_processing_bounds_retry_and_queues_cancel(self):
+        self.participant("processing", [1, 1, 1, 1] + [0] * 8)
+        normalized = self.normalized()
+        confirmed = confirm_final_meeting(
+            event_code=self.event.code,
+            organizer=self.organizer,
+            expected_version=self.event.version,
+            idempotency_key=uuid.uuid4(),
+            starts_at=normalized["starts_at"],
+            ends_at=normalized["ends_at"],
+            channel="inperson",
+            location="Room 101",
+        )
+        confirmation = confirmed["jobs"][0]
+        confirmation.status = EmailDeliveryJob.Status.PROCESSING
+        confirmation.attempt_count = 1
+        confirmation.locked_at = timezone.now()
+        confirmation.lock_token = uuid.uuid4()
+        confirmation.save(
+            update_fields=[
+                "status",
+                "attempt_count",
+                "locked_at",
+                "lock_token",
+                "updated_at",
+            ]
+        )
+
+        self.event.refresh_from_db()
+        cancellations = cancel_active_final_meeting(self.event)
+        self.assertEqual(len(cancellations), 1)
+        confirmation.refresh_from_db()
+        self.assertEqual(confirmation.max_attempts, 1)
+        self.assertEqual(cancellations[0].status, EmailDeliveryJob.Status.PENDING)
+        self.assertIn("METHOD:CANCEL", cancellations[0].attachments[0]["content"])
+
+    def test_confirmation_rejects_processing_response_mail_then_cancels_queued_mail(self):
+        participant = self.participant("mail-barrier", [1, 1, 1, 1] + [0] * 8)
+        invitation = EventInvitation.objects.get(
+            event=self.event,
+            member=participant.member,
+        )
+        pending = EmailDeliveryJob.objects.create(
+            idempotency_key="finalize-pending-invitation",
+            message_type=EmailMessageLog.MessageType.INVITATION,
+            recipient=invitation.email,
+            subject="Pending invitation",
+            body="Pending invitation",
+            message_id="<finalize-pending-invitation@releviz.local>",
+            event=self.event,
+            invitation=invitation,
+        )
+        retry = EmailDeliveryJob.objects.create(
+            idempotency_key="finalize-retry-reminder",
+            message_type=EmailMessageLog.MessageType.REMINDER,
+            recipient=invitation.email,
+            subject="Retry reminder",
+            body="Retry reminder",
+            message_id="<finalize-retry-reminder@releviz.local>",
+            event=self.event,
+            invitation=invitation,
+            status=EmailDeliveryJob.Status.RETRY,
+            locked_at=timezone.now(),
+            lock_token=uuid.uuid4(),
+        )
+        processing_token = uuid.uuid4()
+        processing = EmailDeliveryJob.objects.create(
+            idempotency_key="finalize-processing-reminder",
+            message_type=EmailMessageLog.MessageType.REMINDER,
+            recipient=invitation.email,
+            subject="Processing reminder",
+            body="Processing reminder",
+            message_id="<finalize-processing-reminder@releviz.local>",
+            event=self.event,
+            invitation=invitation,
+            status=EmailDeliveryJob.Status.PROCESSING,
+            attempt_count=1,
+            locked_at=timezone.now(),
+            lock_token=processing_token,
+        )
+        normalized = self.normalized()
+
+        with self.assertRaisesMessage(FinalizationError, "in-progress invitations") as caught:
+            confirm_final_meeting(
+                event_code=self.event.code,
+                organizer=self.organizer,
+                expected_version=self.event.version,
+                idempotency_key=uuid.uuid4(),
+                starts_at=normalized["starts_at"],
+                ends_at=normalized["ends_at"],
+                channel="inperson",
+                location="Room 101",
+            )
+        self.assertEqual(caught.exception.status_code, 409)
+        self.event.refresh_from_db()
+        pending.refresh_from_db()
+        retry.refresh_from_db()
+        processing.refresh_from_db()
+        self.assertEqual(self.event.status, Event.Status.OPEN)
+        self.assertFalse(FinalMeeting.objects.filter(event=self.event).exists())
+        self.assertEqual(pending.status, EmailDeliveryJob.Status.PENDING)
+        self.assertEqual(retry.status, EmailDeliveryJob.Status.RETRY)
+        self.assertEqual(processing.status, EmailDeliveryJob.Status.PROCESSING)
+        self.assertEqual(processing.lock_token, processing_token)
+
+        processing.status = EmailDeliveryJob.Status.SENT
+        processing.sent_at = timezone.now()
+        processing.locked_at = None
+        processing.lock_token = None
+        processing.save(
+            update_fields=[
+                "status",
+                "sent_at",
+                "locked_at",
+                "lock_token",
+                "updated_at",
+            ]
+        )
+        confirmed = confirm_final_meeting(
+            event_code=self.event.code,
+            organizer=self.organizer,
+            expected_version=self.event.version,
+            idempotency_key=uuid.uuid4(),
+            starts_at=normalized["starts_at"],
+            ends_at=normalized["ends_at"],
+            channel="inperson",
+            location="Room 101",
+        )
+        self.assertFalse(confirmed["idempotent"])
+        pending.refresh_from_db()
+        retry.refresh_from_db()
+        processing.refresh_from_db()
+        self.assertEqual(pending.status, EmailDeliveryJob.Status.CANCELED)
+        self.assertEqual(retry.status, EmailDeliveryJob.Status.CANCELED)
+        self.assertIsNone(retry.locked_at)
+        self.assertIsNone(retry.lock_token)
+        self.assertIn("finalized before", retry.last_error)
+        self.assertEqual(processing.status, EmailDeliveryJob.Status.SENT)
 
     def test_confirmation_permissions_versions_and_statuses(self):
         normalized = self.normalized()
@@ -418,6 +589,7 @@ class FinalizationDomainTests(TestCase):
             start_minutes=9 * 60,
             end_minutes=11 * 60,
             slot_minutes=30,
+            meeting_duration_minutes=60,
         )
         with self.assertRaisesMessage(FinalizationError, "not enabled"):
             normalize_final_time(
@@ -447,6 +619,7 @@ class FinalizationDomainTests(TestCase):
             end_minutes=0,
             slot_minutes=30,
             spans_next_day=True,
+            meeting_duration_minutes=60,
         )
         normalized_midnight = normalize_final_time(
             midnight,
@@ -468,6 +641,7 @@ class FinalizationDomainTests(TestCase):
             end_minutes=2 * 60,
             slot_minutes=30,
             spans_next_day=True,
+            meeting_duration_minutes=60,
         )
         overnight_result = normalize_final_time(
             overnight,
@@ -488,6 +662,7 @@ class FinalizationDomainTests(TestCase):
             start_minutes=1 * 60,
             end_minutes=4 * 60,
             slot_minutes=30,
+            meeting_duration_minutes=60,
         )
         spring_groups = build_event_slot_groups(spring)
         self.assertEqual(len(spring_groups[0].slots), 4)
@@ -519,6 +694,7 @@ class FinalizationDomainTests(TestCase):
             start_minutes=0,
             end_minutes=3 * 60,
             slot_minutes=30,
+            meeting_duration_minutes=60,
         )
         fall_slots = build_event_slot_groups(fall)[0].slots
         self.assertEqual(len(fall_slots), 8)
@@ -542,6 +718,7 @@ class FinalizationDomainTests(TestCase):
             start_minutes=60,
             end_minutes=4 * 60,
             slot_minutes=30,
+            meeting_duration_minutes=60,
         )
         with self.assertRaisesMessage(FinalizationError, "nonexistent local slot"):
             normalize_final_time(
@@ -561,6 +738,7 @@ class FinalizationDomainTests(TestCase):
             start_minutes=0,
             end_minutes=3 * 60,
             slot_minutes=30,
+            meeting_duration_minutes=120,
         )
         with self.assertRaisesMessage(FinalizationError, "ambiguous local slot"):
             normalize_final_time(
@@ -601,14 +779,23 @@ class FinalizationDomainTests(TestCase):
             confirmed_at=timezone.now(),
         )
         fallback_jobs = cancel_active_final_meeting(fallback_event)
-        self.assertEqual([job.recipient for job in fallback_jobs], [fallback_participant.email])
+        self.assertEqual(fallback_jobs, [])
 
     @override_settings(FRONTEND_URL="https://app.example.com")
     def test_calendar_content_is_stable_and_timezone_explicit(self):
         normalized = self.normalized()
+        calendar_attendee = create_member("calendar-attendee@example.com")
+        Participant.objects.create(
+            event=self.event,
+            member=calendar_attendee,
+            participant_name="Calendar Attendee",
+            availability_inperson=stored([0] * 12),
+            availability_virtual=stored([0] * 12),
+        )
         EventInvitation.objects.create(
             event=self.event,
             email="calendar-attendee@example.com",
+            member=calendar_attendee,
             invited_by=self.organizer,
             first_sent_at=timezone.now(),
         )
@@ -670,6 +857,7 @@ class FinalizationApiTests(TestCase):
             start_minutes=9 * 60,
             end_minutes=12 * 60,
             slot_minutes=30,
+            meeting_duration_minutes=120,
             day_selection_type="specific_dates",
             specific_dates=["2026-07-20"],
             status=Event.Status.OPEN,
@@ -778,10 +966,14 @@ class FinalizationApiTests(TestCase):
         self.assertEqual(self.confirm(endsAt=None).status_code, 400)
 
         confirmed = self.confirm()
-        self.assertEqual(confirmed.status_code, 200)
+        self.assertEqual(confirmed.status_code, 202)
         self.assertFalse(confirmed.data["idempotent"])
         self.assertEqual(confirmed.data["event"]["status"], "finalized")
-        self.assertEqual(confirmed.data["delivery"]["sent"], 1)
+        self.assertEqual(confirmed.data["delivery"]["pending"], 1)
+        self.assertEqual(confirmed.data["delivery"]["sent"], 0)
+        confirmation_job = EmailDeliveryJob.objects.get()
+        self.assertEqual(confirmation_job.status, EmailDeliveryJob.Status.PENDING)
+        dispatch_email_job(confirmation_job.pk)
         self.assertEqual(len(mail.outbox), 1)
         confirmation_html = mail.outbox[0].alternatives[0].content
         self.assertIn("/brand/releviz-logo.png", confirmation_html)
@@ -798,27 +990,29 @@ class FinalizationApiTests(TestCase):
         self.event.refresh_from_db()
         key = str(FinalizationRequest.objects.first().idempotency_key)
         repeated = self.confirm(expectedVersion=1, idempotencyKey=key)
-        self.assertEqual(repeated.status_code, 200)
+        self.assertEqual(repeated.status_code, 202)
         self.assertTrue(repeated.data["idempotent"])
         self.assertEqual(EmailDeliveryJob.objects.count(), 1)
 
         changed = self.confirm(
             expectedVersion=self.event.version,
             startsAt="2026-07-20T10:00:00+00:00",
-            endsAt="2026-07-20T11:00:00+00:00",
+            endsAt="2026-07-20T12:00:00+00:00",
         )
         self.assertEqual(changed.status_code, 409)
 
     def test_finalization_survives_provider_failure_and_locks_configuration(self):
         self.authenticate(self.organizer)
+        confirmed = self.confirm()
+        self.assertEqual(confirmed.status_code, 202)
+        self.assertEqual(confirmed.data["delivery"]["pending"], 1)
+        job = EmailDeliveryJob.objects.get()
         with patch(
             "apps.messaging.services.EmailMultiAlternatives.send",
             side_effect=TimeoutError("provider timeout"),
         ):
-            confirmed = self.confirm()
-        self.assertEqual(confirmed.status_code, 200)
-        self.assertEqual(confirmed.data["delivery"]["retry"], 1)
-        job = EmailDeliveryJob.objects.get()
+            dispatch_email_job(job.pk)
+        job.refresh_from_db()
         self.assertEqual(job.status, EmailDeliveryJob.Status.RETRY)
         self.assertIn("provider timeout", job.last_error)
 
@@ -845,7 +1039,7 @@ class FinalizationApiTests(TestCase):
                 {"weights": []},
                 format="json",
             ).status_code,
-            409,
+            405,
         )
         self.assertEqual(
             self.client.post(
@@ -869,6 +1063,12 @@ class FinalizationApiTests(TestCase):
         confirmed = self.confirm()
         uid = confirmed.data["finalMeeting"]["calendarUid"]
         finalized_version = confirmed.data["event"]["version"]
+        EmailDeliveryJob.objects.filter(
+            message_type=EmailMessageLog.MessageType.FINAL_CONFIRMATION
+        ).update(
+            status=EmailDeliveryJob.Status.SENT,
+            sent_at=timezone.now(),
+        )
         with self.captureOnCommitCallbacks(execute=True):
             reopened = self.client.put(
                 f"/events/lifecycle?code={self.event.code}",
@@ -879,7 +1079,7 @@ class FinalizationApiTests(TestCase):
                 },
                 format="json",
             )
-        self.assertEqual(reopened.status_code, 200)
+        self.assertEqual(reopened.status_code, 202)
         self.assertEqual(reopened.data["event"]["status"], "open")
         self.assertIsNone(reopened.data["event"]["finalMeeting"])
         meeting = FinalMeeting.objects.get(event=self.event)
@@ -888,8 +1088,9 @@ class FinalizationApiTests(TestCase):
         cancellation = EmailDeliveryJob.objects.get(
             message_type=EmailMessageLog.MessageType.FINAL_CANCELLATION
         )
-        self.assertEqual(cancellation.status, EmailDeliveryJob.Status.SENT)
+        self.assertEqual(cancellation.status, EmailDeliveryJob.Status.PENDING)
         self.assertIn("METHOD:CANCEL", cancellation.attachments[0]["content"])
+        dispatch_email_job(cancellation.pk)
         cancellation_html = mail.outbox[-1].alternatives[0].content
         self.assertIn("Scheduling reopened", cancellation_html)
         self.assertIn("View updated event", cancellation_html)
@@ -898,9 +1099,9 @@ class FinalizationApiTests(TestCase):
         reconfirmed = self.confirm(
             expectedVersion=self.event.version,
             startsAt="2026-07-20T10:00:00+00:00",
-            endsAt="2026-07-20T11:00:00+00:00",
+            endsAt="2026-07-20T12:00:00+00:00",
         )
-        self.assertEqual(reconfirmed.status_code, 200)
+        self.assertEqual(reconfirmed.status_code, 202)
         self.assertEqual(reconfirmed.data["finalMeeting"]["calendarUid"], uid)
         self.assertEqual(reconfirmed.data["finalMeeting"]["calendarSequence"], 2)
 

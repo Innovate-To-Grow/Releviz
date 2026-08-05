@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import timedelta
 from email.utils import make_msgid
+from threading import Lock
 from urllib.parse import urlencode
 
 from django.conf import settings
 from django.core.mail import EmailMultiAlternatives
-from django.db import transaction
+from django.db import close_old_connections, transaction
 from django.db.models import Q
 from django.utils import timezone
 
@@ -127,6 +130,19 @@ def _log_each(
     )
 
 
+def _safe_log_each(**kwargs) -> None:
+    try:
+        _log_each(**kwargs)
+    except Exception:  # noqa: BLE001 - delivery state remains authoritative
+        logger.exception(
+            "email_message_log_failed",
+            extra={
+                "message_type": kwargs.get("message_type"),
+                "recipient_count": len(kwargs.get("recipients") or []),
+            },
+        )
+
+
 def send_email_message(
     *,
     subject: str,
@@ -182,7 +198,7 @@ def send_email_message(
             provider_message_id = ""
     except Exception as exc:  # noqa: BLE001
         error = str(exc)
-        _log_each(
+        _safe_log_each(
             recipients=clean_recipients,
             subject=subject,
             message_type=message_type,
@@ -196,7 +212,7 @@ def send_email_message(
             raise
         raise EmailDeliveryError(error) from exc
 
-    _log_each(
+    _safe_log_each(
         recipients=clean_recipients,
         subject=subject,
         message_type=message_type,
@@ -305,6 +321,30 @@ def _delivery_content(job: EmailDeliveryJob) -> tuple[str, str]:
     return body, html_body
 
 
+def _final_cancellation_predecessor(job: EmailDeliveryJob):
+    if job.message_type != EmailMessageLog.MessageType.FINAL_CANCELLATION or job.event_id is None:
+        return None, False
+    parts = job.idempotency_key.split(":")
+    if len(parts) != 4 or parts[0] != "final-cancellation":
+        return None, False
+    try:
+        confirmation_sequence = int(parts[2]) - 1
+    except ValueError:
+        return None, False
+    prefix = f"final-confirmation:{parts[1]}:{confirmation_sequence}:"
+    predecessor = (
+        EmailDeliveryJob.objects.filter(
+            event_id=job.event_id,
+            recipient=job.recipient,
+            message_type=EmailMessageLog.MessageType.FINAL_CONFIRMATION,
+            idempotency_key__startswith=prefix,
+        )
+        .order_by("-created_at")
+        .first()
+    )
+    return predecessor, True
+
+
 def _claim_email_job(job_id, *, now) -> tuple[EmailDeliveryJob | None, uuid.UUID | None]:
     stale_before = now - timedelta(minutes=15)
     with transaction.atomic():
@@ -315,6 +355,26 @@ def _claim_email_job(job_id, *, now) -> tuple[EmailDeliveryJob | None, uuid.UUID
             EmailDeliveryJob.Status.CANCELED,
         }:
             return job, None
+        predecessor, has_dependency = _final_cancellation_predecessor(job)
+        if has_dependency:
+            if predecessor is not None and predecessor.status == EmailDeliveryJob.Status.PROCESSING:
+                job.next_attempt_at = now + timedelta(seconds=5)
+                job.save(update_fields=["next_attempt_at", "updated_at"])
+                return job, None
+            if predecessor is None or predecessor.status != EmailDeliveryJob.Status.SENT:
+                job.status = EmailDeliveryJob.Status.CANCELED
+                job.last_error = "The preceding calendar request was not delivered."
+                job.reset_lock()
+                job.save(
+                    update_fields=[
+                        "status",
+                        "last_error",
+                        "locked_at",
+                        "lock_token",
+                        "updated_at",
+                    ]
+                )
+                return job, None
         if job.auth_challenge_id:
             from apps.authn.models import EmailAuthChallenge
 
@@ -355,6 +415,20 @@ def _claim_email_job(job_id, *, now) -> tuple[EmailDeliveryJob | None, uuid.UUID
         )
         if not is_due and not is_stale:
             return job, None
+        if job.attempt_count >= job.max_attempts:
+            job.status = EmailDeliveryJob.Status.PERMANENT_FAILURE
+            job.last_error = job.last_error or "Maximum delivery attempts reached."
+            job.reset_lock()
+            job.save(
+                update_fields=[
+                    "status",
+                    "last_error",
+                    "locked_at",
+                    "lock_token",
+                    "updated_at",
+                ]
+            )
+            return job, None
         token = job.new_lock_token()
         job.status = EmailDeliveryJob.Status.PROCESSING
         job.attempt_count += 1
@@ -394,7 +468,8 @@ def dispatch_email_job(job_id, *, now=None) -> dict:
             message_id=job.message_id,
             delivery_job=job,
         )
-    except EmailDeliveryError as exc:
+    except Exception as exc:  # noqa: BLE001 - isolate every durable job attempt
+        completion_time = now or timezone.now()
         with transaction.atomic():
             claimed = EmailDeliveryJob.objects.select_for_update().get(pk=job.pk)
             if claimed.lock_token != token:
@@ -405,7 +480,7 @@ def dispatch_email_job(job_id, *, now=None) -> dict:
                 claimed.status = EmailDeliveryJob.Status.PERMANENT_FAILURE
             else:
                 claimed.status = EmailDeliveryJob.Status.RETRY
-                claimed.next_attempt_at = current_time + timedelta(
+                claimed.next_attempt_at = completion_time + timedelta(
                     minutes=2 ** (claimed.attempt_count - 1)
                 )
             claimed.save(
@@ -418,8 +493,11 @@ def dispatch_email_job(job_id, *, now=None) -> dict:
                     "updated_at",
                 ]
             )
-        logger.warning(
-            "email_delivery_failed",
+        log_failure = logger.warning if isinstance(exc, EmailDeliveryError) else logger.exception
+        log_failure(
+            "email_delivery_failed"
+            if isinstance(exc, EmailDeliveryError)
+            else "email_delivery_unexpected_failure",
             extra={
                 "delivery_job_id": str(job.pk),
                 "event_id": str(job.event_id) if job.event_id else None,
@@ -431,12 +509,13 @@ def dispatch_email_job(job_id, *, now=None) -> dict:
         )
         return {"attempted": True, "status": claimed.status}
 
+    completion_time = now or timezone.now()
     with transaction.atomic():
         claimed = EmailDeliveryJob.objects.select_for_update().get(pk=job.pk)
         if claimed.lock_token != token:
             return {"attempted": True, "status": claimed.status}
         claimed.status = EmailDeliveryJob.Status.SENT
-        claimed.sent_at = current_time
+        claimed.sent_at = completion_time
         claimed.provider_message_id = provider_message_id
         claimed.last_error = ""
         claimed.reset_lock()
@@ -458,9 +537,9 @@ def dispatch_email_job(job_id, *, now=None) -> dict:
                 pk=claimed.auth_challenge_id,
                 status=EmailAuthChallenge.Status.PENDING,
             ).update(
-                expires_at=current_time + settings.AUTH_CHALLENGE_VERIFICATION_LIFETIME,
-                last_sent_at=current_time,
-                updated_at=current_time,
+                expires_at=completion_time + settings.AUTH_CHALLENGE_VERIFICATION_LIFETIME,
+                last_sent_at=completion_time,
+                updated_at=completion_time,
             )
         if claimed.invitation_id:
             from apps.scheduling.models import EventInvitation
@@ -470,17 +549,17 @@ def dispatch_email_job(job_id, *, now=None) -> dict:
                     pk=claimed.invitation_id,
                     first_sent_at__isnull=True,
                 ).update(
-                    first_sent_at=current_time,
-                    updated_at=current_time,
+                    first_sent_at=completion_time,
+                    updated_at=completion_time,
                 )
                 EventInvitation.objects.filter(pk=claimed.invitation_id).update(
-                    last_sent_at=current_time,
-                    updated_at=current_time,
+                    last_sent_at=completion_time,
+                    updated_at=completion_time,
                 )
             elif claimed.message_type == EmailMessageLog.MessageType.REMINDER:
                 EventInvitation.objects.filter(pk=claimed.invitation_id).update(
-                    reminder_sent_at=current_time,
-                    updated_at=current_time,
+                    reminder_sent_at=completion_time,
+                    updated_at=completion_time,
                 )
     logger.info(
         "email_delivery_sent",
@@ -512,7 +591,65 @@ def email_delivery_summary(jobs) -> dict:
     }
 
 
-def dispatch_due_email_jobs(*, limit: int = 100, now=None) -> dict:
+class _DispatchRateLimiter:
+    def __init__(self, rate_per_second: float | None):
+        self.interval = 1 / rate_per_second if rate_per_second else 0.0
+        self.next_start = 0.0
+        self.lock = Lock()
+
+    def wait(self, stop_event=None) -> bool:
+        if not self.interval:
+            return not (stop_event is not None and stop_event.is_set())
+        with self.lock:
+            current = time.monotonic()
+            scheduled = max(current, self.next_start)
+            self.next_start = scheduled + self.interval
+        delay = max(0.0, scheduled - current)
+        if stop_event is not None:
+            return not stop_event.wait(delay)
+        if delay:
+            time.sleep(delay)
+        return True
+
+
+def _dispatch_email_worker(
+    job_id,
+    *,
+    now,
+    limiter,
+    stop_event=None,
+    manage_connections: bool = True,
+) -> dict:
+    if not limiter.wait(stop_event):
+        return {"attempted": False, "status": "stopped"}
+    if manage_connections:
+        close_old_connections()
+    try:
+        try:
+            return dispatch_email_job(job_id, now=now)
+        except Exception:  # noqa: BLE001 - one poisoned job must not stop the worker
+            logger.exception(
+                "email_delivery_job_unhandled",
+                extra={"delivery_job_id": str(job_id)},
+            )
+            return {"attempted": False, "status": "error"}
+    finally:
+        if manage_connections:
+            close_old_connections()
+
+
+def dispatch_due_email_jobs(
+    *,
+    limit: int = 100,
+    now=None,
+    concurrency: int = 1,
+    rate_limit_per_second: float | None = None,
+    stop_event=None,
+) -> dict:
+    if concurrency < 1:
+        raise ValueError("concurrency must be at least 1")
+    if rate_limit_per_second is not None and rate_limit_per_second <= 0:
+        raise ValueError("rate_limit_per_second must be positive")
     current_time = now or timezone.now()
     stale_before = current_time - timedelta(minutes=15)
     job_ids = list(
@@ -543,17 +680,43 @@ def dispatch_due_email_jobs(*, limit: int = 100, now=None) -> dict:
         "permanentFailure": 0,
         "canceled": 0,
     }
-    for job_id in job_ids:
-        result = dispatch_email_job(job_id, now=current_time)
-        if result["status"] == EmailDeliveryJob.Status.CANCELED:
-            summary["canceled"] += 1
-        if not result["attempted"]:
-            continue
-        summary["attempted"] += 1
-        if result["status"] == EmailDeliveryJob.Status.SENT:
-            summary["sent"] += 1
-        elif result["status"] == EmailDeliveryJob.Status.RETRY:
-            summary["retry"] += 1
-        elif result["status"] == EmailDeliveryJob.Status.PERMANENT_FAILURE:
-            summary["permanentFailure"] += 1
+    limiter = _DispatchRateLimiter(rate_limit_per_second)
+    if concurrency == 1:
+        results = (
+            _dispatch_email_worker(
+                job_id,
+                now=now,
+                limiter=limiter,
+                stop_event=stop_event,
+                manage_connections=False,
+            )
+            for job_id in job_ids
+        )
+    else:
+        executor = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="email-job")
+        results = executor.map(
+            lambda job_id: _dispatch_email_worker(
+                job_id,
+                now=now,
+                limiter=limiter,
+                stop_event=stop_event,
+            ),
+            job_ids,
+        )
+    try:
+        for result in results:
+            if result["status"] == EmailDeliveryJob.Status.CANCELED:
+                summary["canceled"] += 1
+            if not result["attempted"]:
+                continue
+            summary["attempted"] += 1
+            if result["status"] == EmailDeliveryJob.Status.SENT:
+                summary["sent"] += 1
+            elif result["status"] == EmailDeliveryJob.Status.RETRY:
+                summary["retry"] += 1
+            elif result["status"] == EmailDeliveryJob.Status.PERMANENT_FAILURE:
+                summary["permanentFailure"] += 1
+    finally:
+        if concurrency > 1:
+            executor.shutdown(wait=True, cancel_futures=True)
     return summary

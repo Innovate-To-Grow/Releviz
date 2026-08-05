@@ -354,6 +354,12 @@ describe("organizer event management UI", () => {
 
     const nameField = document.querySelector('md-outlined-text-field[label="Event Name"]');
     setCustomElementValue(nameField, "Created event");
+    fireEvent.change(screen.getByLabelText("Event Access"), {
+      target: { value: "open_link" },
+    });
+    fireEvent.change(screen.getByLabelText("Meeting Duration"), {
+      target: { value: "60" },
+    });
     fireEvent.submit(screen.getByRole("button", { name: "Create Event" }).closest("form"));
     await waitFor(() => expect(createEvent).toHaveBeenCalled());
     expect(createEvent.mock.calls[0][0]).toEqual(
@@ -362,6 +368,9 @@ describe("organizer event management UI", () => {
         startTime: "09:00",
         endTime: "17:00",
         slotMinutes: 30,
+        accessMode: "open_link",
+        meetingDurationMinutes: 60,
+        status: "draft",
       })
     );
     expect(replace).toHaveBeenCalledWith("/event?code=CREATED1");

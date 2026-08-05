@@ -167,16 +167,16 @@ AUTH_RATE_LIMITS = {
         "identity": {"limit": 20, "window": 3600, "block": 3600},
     },
     "invitation_recipient": {
-        "ip": {"limit": 1000, "window": 86400, "block": 3600},
-        "identity": {"limit": 500, "window": 86400, "block": 3600},
+        "ip": {"limit": 2000, "window": 86400, "block": 3600},
+        "identity": {"limit": 1000, "window": 86400, "block": 3600},
     },
     "reminder_request": {
         "ip": {"limit": 30, "window": 3600, "block": 3600},
         "identity": {"limit": 10, "window": 3600, "block": 3600},
     },
     "reminder_recipient": {
-        "ip": {"limit": 1000, "window": 86400, "block": 3600},
-        "identity": {"limit": 500, "window": 86400, "block": 3600},
+        "ip": {"limit": 2000, "window": 86400, "block": 3600},
+        "identity": {"limit": 1000, "window": 86400, "block": 3600},
     },
     "feedback": {
         "ip": {"limit": 20, "window": 3600, "block": 3600},
@@ -189,15 +189,32 @@ AUTH_FAILURE_LIMITS = {
         "identity": {"limit": 20, "window": 3600, "block": 1800},
     }
 }
-INVITATION_MAX_BATCH_SIZE = 100
-INVITATION_MAX_EVENT_RECIPIENTS = 500
-REMINDER_MAX_RECIPIENTS = 500
+EVENT_MAX_PARTICIPANTS = 1000
+INVITATION_MAX_BATCH_SIZE = 1000
+INVITATION_MAX_EVENT_RECIPIENTS = 1000
+REMINDER_MAX_RECIPIENTS = 1000
+ROSTER_IMPORT_MAX_FILE_BYTES = 5 * 1024 * 1024
+ROSTER_IMPORT_MAX_UNCOMPRESSED_BYTES = 25 * 1024 * 1024
+ROSTER_IMPORT_MAX_COLUMNS = 50
+ROSTER_IMPORT_MAX_ROWS = 1000
+ROSTER_IMPORT_PREVIEW_LIFETIME = timedelta(hours=24)
+RESULT_SNAPSHOT_LOCK_TIMEOUT_SECONDS = int(
+    os.environ.get("RESULT_SNAPSHOT_LOCK_TIMEOUT_SECONDS", "60")
+)
+RESULT_FAILURE_RETRY_DELAY_SECONDS = int(os.environ.get("RESULT_FAILURE_RETRY_DELAY_SECONDS", "30"))
+EMAIL_WORKER_BATCH_SIZE = int(os.environ.get("EMAIL_WORKER_BATCH_SIZE", "100"))
+EMAIL_WORKER_CONCURRENCY = int(os.environ.get("EMAIL_WORKER_CONCURRENCY", "10"))
+EMAIL_WORKER_RATE_PER_SECOND = float(os.environ.get("EMAIL_WORKER_RATE_PER_SECOND", "10"))
+EMAIL_WORKER_POLL_SECONDS = float(os.environ.get("EMAIL_WORKER_POLL_SECONDS", "1"))
+RESULT_WORKER_BATCH_SIZE = int(os.environ.get("RESULT_WORKER_BATCH_SIZE", "100"))
+RESULT_WORKER_POLL_SECONDS = float(os.environ.get("RESULT_WORKER_POLL_SECONDS", "1"))
 
 REQUIRE_ENCRYPTED_PASSWORDS = False
 FRONTEND_URL = ""
 BACKEND_URL = ""
 CORS_ALLOW_CREDENTIALS = True
 DATA_UPLOAD_MAX_NUMBER_FIELDS = 100000
+DATA_UPLOAD_MAX_MEMORY_SIZE = ROSTER_IMPORT_MAX_UNCOMPRESSED_BYTES + 1024 * 1024
 FIELD_ENCRYPTION_KEY = os.environ.get("DJANGO_FIELD_ENCRYPTION_KEY", "")
 USE_SES_EMAIL_PROVIDER = False
 DEFAULT_FROM_EMAIL = "noreply@releviz.local"

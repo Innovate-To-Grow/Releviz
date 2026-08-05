@@ -165,6 +165,14 @@ def create_or_reuse_managed_participant(*, event: Event, organizer, name: str, e
     else:
         member = contact.member
 
+    participant_exists = event.participants.filter(member=member).exists()
+    participant_limit = getattr(settings, "EVENT_MAX_PARTICIPANTS", 1000)
+    if not participant_exists and event.participants.count() >= participant_limit:
+        raise ManagedParticipantError(
+            f"An event can have at most {participant_limit} participants.",
+            status_code=409,
+        )
+
     if not member.is_active:
         raise ManagedParticipantError(
             "Unable to create a participant with this email address.",
@@ -668,21 +676,24 @@ def _request_result(
     *,
     event: Event,
     idempotent: bool,
+    hydrate: bool = True,
 ) -> dict:
-    jobs = list(
-        request_record.jobs.select_related("invitation").order_by("recipient", "created_at")
-    )
-    invitation_ids = request_record.jobs.exclude(invitation_id__isnull=True).values_list(
-        "invitation_id",
-        flat=True,
-    )
+    jobs = []
+    invitations = []
+    if hydrate:
+        jobs = list(
+            request_record.jobs.select_related("invitation").order_by("recipient", "created_at")
+        )
+        invitation_ids = request_record.jobs.exclude(invitation_id__isnull=True).values_list(
+            "invitation_id",
+            flat=True,
+        )
+        invitations = list(EventInvitation.objects.filter(pk__in=invitation_ids).order_by("email"))
     return {
         "event": event,
         "request": request_record,
         "jobs": jobs,
-        "invitations": list(
-            EventInvitation.objects.filter(pk__in=invitation_ids).order_by("email")
-        ),
+        "invitations": invitations,
         "createdJobCount": request_record.created_job_count,
         "idempotent": idempotent,
     }
@@ -696,6 +707,7 @@ def upsert_and_send_invitations(
     invited_by,
     idempotency_key,
     message: str = "",
+    hydrate_result: bool = True,
 ) -> dict:
     event = Event.objects.select_for_update().get(pk=event.pk)
     if event.organizer_id != invited_by.pk:
@@ -713,15 +725,14 @@ def upsert_and_send_invitations(
             "message": message,
         }
     )
-    previous = (
-        EmailDeliveryRequest.objects.filter(
-            event=event,
-            operation=EmailDeliveryRequest.Operation.INVITATION,
-            idempotency_key=idempotency_key,
-        )
-        .prefetch_related("jobs__invitation")
-        .first()
+    previous_query = EmailDeliveryRequest.objects.filter(
+        event=event,
+        operation=EmailDeliveryRequest.Operation.INVITATION,
+        idempotency_key=idempotency_key,
     )
+    if hydrate_result:
+        previous_query = previous_query.prefetch_related("jobs__invitation")
+    previous = previous_query.first()
     if previous is not None:
         if previous.request_fingerprint != fingerprint:
             security_logger.warning(
@@ -736,7 +747,12 @@ def upsert_and_send_invitations(
                 "This idempotency key was already used with different invitation details.",
                 status_code=409,
             )
-        return _request_result(previous, event=event, idempotent=True)
+        return _request_result(
+            previous,
+            event=event,
+            idempotent=True,
+            hydrate=hydrate_result,
+        )
 
     existing_emails = set(event.invitations.values_list("email", flat=True))
     new_recipient_count = len(set(emails) - existing_emails)
@@ -833,7 +849,12 @@ def upsert_and_send_invitations(
             "created_job_count": created_job_count,
         },
     )
-    return _request_result(request_record, event=event, idempotent=False)
+    return _request_result(
+        request_record,
+        event=event,
+        idempotent=False,
+        hydrate=hydrate_result,
+    )
 
 
 @transaction.atomic

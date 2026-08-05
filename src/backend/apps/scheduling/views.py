@@ -27,10 +27,9 @@ from apps.authn.services import start_registration
 from apps.messaging.models import EmailDeliveryRequest
 from apps.messaging.services import (
     EmailDeliveryError,
-    dispatch_email_job,
     email_delivery_summary,
 )
-from apps.scheduling.aggregation import build_event_results, participant_is_excluded
+from apps.scheduling.aggregation import participant_is_excluded
 from apps.scheduling.event_management import (
     EventManagementError,
     create_event,
@@ -52,12 +51,20 @@ from apps.scheduling.lifecycle import (
     response_write_error,
     transition_event,
 )
-from apps.scheduling.models import Event, Participant, UserEvent, Weight
+from apps.scheduling.models import Event, Participant, ScheduleEditRecord, UserEvent
 from apps.scheduling.permissions import (
+    can_access_event,
+    can_join_event,
     can_view_event_results,
     visible_participants_for_user,
     weight_for_participant,
 )
+from apps.scheduling.result_snapshots import (
+    mark_event_results_dirty,
+    request_event_results_recompute,
+    serialize_result_snapshot,
+)
+from apps.scheduling.roster_imports import RosterImportError
 from apps.scheduling.services import (
     EventEmailRequestError,
     ManagedParticipantError,
@@ -148,8 +155,44 @@ def temp_access_payload(session):
         "sessionExpiresAt": session.expires_at.isoformat(),
     }
     if can_view_results:
-        payload["results"] = build_event_results(event)
+        snapshot = serialize_result_snapshot(event)
+        payload["resultSnapshot"] = snapshot
+        payload["results"] = snapshot["results"]
     return payload
+
+
+def organizer_response_write_error(event) -> str | None:
+    """Organizers may fill temporary schedules outside the participant deadline."""
+
+    if event.status not in {
+        Event.Status.DRAFT,
+        Event.Status.OPEN,
+        Event.Status.CLOSED,
+    }:
+        return f"Organizer-entered responses cannot change while the event is {event.status}."
+    if hasattr(event, "final_meeting") and event.final_meeting.active:
+        return "Reopen the event before changing an organizer-entered response."
+    return None
+
+
+def record_schedule_edit(*, event, participant, actor, source, was_submitted: bool) -> None:
+    if participant.submitted:
+        action = ScheduleEditRecord.Action.SUBMIT
+    elif was_submitted:
+        action = ScheduleEditRecord.Action.WITHDRAW
+    else:
+        action = ScheduleEditRecord.Action.DRAFT
+    actor_identifier = getattr(actor, "pk", None)
+    actor_reference = None if getattr(actor, "access_level", None) == "temporary" else actor
+    ScheduleEditRecord.objects.create(
+        event=event,
+        participant=participant,
+        actor=actor_reference,
+        actor_identifier=actor_identifier,
+        source=source,
+        action=action,
+        participant_version=participant.version,
+    )
 
 
 def parse_aware_timestamp(value, label: str):
@@ -210,7 +253,9 @@ class EventsView(APIView):
         event = Event.objects.select_related("final_meeting").filter(code=code).first()
         if event is None:
             return Response({"error": "Event not found"}, status=404)
-        return Response({"event": api_event(event)})
+        if not can_access_event(event, request.user):
+            return Response({"error": "Event not found"}, status=404)
+        return private_response({"event": api_event(event)})
 
     def post(self, request):
         try:
@@ -331,6 +376,11 @@ class EventLifecycleView(APIView):
                 status=409,
             )
 
+        if target_status != event.status and target_status != Event.Status.OPEN:
+            # Wait for in-flight participant writes before closing or archiving.
+            # Response writes lock only their own Participant row at scale.
+            list(event.participants.select_for_update().order_by("pk").values_list("pk", flat=True))
+
         try:
             changed_fields = transition_event(
                 event,
@@ -342,15 +392,27 @@ class EventLifecycleView(APIView):
         if changed_fields:
             event.save(update_fields=changed_fields)
         cancellation_jobs = []
+        cancellation_request = None
         if target_status == Event.Status.OPEN and "status" in changed_fields:
             cancellation_jobs = cancel_active_final_meeting(event)
-        if cancellation_jobs:
-            job_ids = [job.pk for job in cancellation_jobs]
-            transaction.on_commit(
-                lambda: [dispatch_email_job(job_id) for job_id in job_ids],
-                robust=True,
+            cancellation_request = (
+                EmailDeliveryRequest.objects.filter(
+                    event=event,
+                    operation=EmailDeliveryRequest.Operation.FINAL_CANCELLATION,
+                )
+                .order_by("-created_at")
+                .first()
             )
-        return private_response({"event": api_event(event)})
+        return private_response(
+            {
+                "event": api_event(event),
+                "cancellationEnqueued": len(cancellation_jobs),
+                "cancellationDeliveryRequestId": (
+                    str(cancellation_request.pk) if cancellation_request else None
+                ),
+            },
+            status=202 if cancellation_request else 200,
+        )
 
 
 class ParticipantsView(APIView):
@@ -379,26 +441,54 @@ class ParticipantsView(APIView):
             )
         is_organizer = event.organizer_id == request.user.pk
         if is_organizer:
-            invitations_by_member = {}
-            for invitation in event.invitations.select_related("member").order_by("-created_at"):
-                if invitation.member_id and invitation.member_id not in invitations_by_member:
-                    invitations_by_member[invitation.member_id] = invitation
-            participant_payloads = []
-            for participant in participants:
-                invitation = invitations_by_member.get(participant.member_id)
-                if invitation is None:
-                    participant_payloads.append(organizer_participant_payload(participant, event))
-                else:
-                    participant_payloads.append(
-                        api_participant(
-                            participant,
-                            organizer_private=True,
-                            invitation=invitation,
-                        )
-                    )
-        else:
-            participant_payloads = [api_participant(participant) for participant in participants]
-        return private_response({"participants": participant_payloads})
+            from apps.scheduling.roster_views import (
+                _apply_roster_filters,
+                _page_payload,
+                _pagination,
+                _participant_summary,
+                _roster_queryset,
+            )
+
+            try:
+                page, page_size = _pagination(request)
+                roster = _roster_queryset(event)
+                if not include_hidden:
+                    roster = roster.filter(hidden=False)
+                roster = _apply_roster_filters(roster, request.query_params)
+            except RosterImportError as exc:
+                return Response({"error": str(exc)}, status=exc.status_code)
+            total = roster.count()
+            offset = (page - 1) * page_size
+            return private_response(
+                {
+                    "participants": [
+                        _participant_summary(participant)
+                        for participant in roster[offset : offset + page_size]
+                    ],
+                    "pagination": _page_payload(
+                        page=page,
+                        page_size=page_size,
+                        total=total,
+                    ),
+                    "scheduleDataIncluded": False,
+                }
+            )
+        own_participant = next(
+            (
+                participant
+                for participant in participants
+                if participant.member_id == request.user.pk
+            ),
+            None,
+        )
+        return private_response(
+            {
+                "participants": (
+                    [api_participant(own_participant)] if own_participant is not None else []
+                ),
+                "scheduleDataIncluded": own_participant is not None,
+            }
+        )
 
     @transaction.atomic
     def post(self, request):
@@ -408,9 +498,24 @@ class ParticipantsView(APIView):
         event = Event.objects.select_for_update().filter(code=code).first()
         if event is None:
             return Response({"error": "Event not found"}, status=404)
+        if not can_join_event(event, request.user):
+            return Response(
+                {"error": "This event is limited to invited participants"},
+                status=403,
+            )
         write_error = response_write_error(event)
         if write_error:
             return Response({"error": write_error}, status=409)
+
+        participant_limit = getattr(settings, "EVENT_MAX_PARTICIPANTS", 1000)
+        if (
+            not event.participants.filter(member=request.user).exists()
+            and event.participants.count() >= participant_limit
+        ):
+            return Response(
+                {"error": f"This event can have at most {participant_limit} participants"},
+                status=409,
+            )
 
         name = request.user.display_name().strip()
         if not name:
@@ -434,6 +539,8 @@ class ParticipantsView(APIView):
         if event.organizer_id != request.user.pk:
             UserEvent.objects.get_or_create(member=request.user, event=event, role="participant")
         mark_invitation_for_member(event=event, member=request.user)
+        if created:
+            mark_event_results_dirty(event)
 
         return Response(
             {"participant": api_participant(participant)},
@@ -450,6 +557,7 @@ class ManagedParticipantView(APIView):
     def get_auth_rate_identity(self, request):
         return str(request.user.pk)
 
+    @transaction.atomic
     def post(self, request):
         code = str(request.query_params.get("code") or "").strip()
         if not code:
@@ -480,6 +588,8 @@ class ManagedParticipantView(APIView):
         except ManagedParticipantError as exc:
             return Response({"error": str(exc)}, status=exc.status_code)
         participant = result["participant"]
+        if result["participantCreated"]:
+            mark_event_results_dirty(event)
         return private_response(
             {
                 "participant": api_participant(
@@ -506,13 +616,19 @@ class ParticipantUpdateView(APIView):
                 None,
                 Response({"error": "code and participantId are required"}, status=400),
             )
-        event = Event.objects.select_for_update().filter(code=code).first()
+        event = Event.objects.filter(code=code).first()
         if event is None:
             return None, None, Response({"error": "Event not found"}, status=404)
-        participants = event.participants.select_related("event").select_for_update(of=("self",))
-        participant = participants.filter(member_id=participant_id).first()
+        participant = event.participants.filter(member_id=participant_id).first()
         if participant is None:
             return event, None, Response({"error": "Participant not found"}, status=404)
+        # Serialize with account upgrades and schedule reconfiguration through
+        # the participation row, while avoiding the shared Event row hot spot.
+        participant = Participant.objects.select_for_update(of=("self",)).get(pk=participant.pk)
+        event = Event.objects.get(pk=participant.event_id)
+        member = get_user_model().objects.get(pk=participant.member_id)
+        participant.event = event
+        participant.member = member
         return event, participant, None
 
     @transaction.atomic
@@ -523,7 +639,7 @@ class ParticipantUpdateView(APIView):
 
         is_organizer = event.organizer_id == request.user.pk
         is_self = participant.member_id == request.user.pk
-        is_temporary = current_member_access_level(participant.member_id) == "temporary"
+        is_temporary = participant.member.access_level == "temporary"
         organizer_can_edit_response = is_organizer and is_temporary
         response_fields = {"availabilityInperson", "availabilityVirtual", "submitted"}
         is_response_mutation = any(field in request.data for field in response_fields)
@@ -590,7 +706,11 @@ class ParticipantUpdateView(APIView):
                 status=400,
             )
         if is_versioned_mutation:
-            write_error = response_write_error(event)
+            write_error = (
+                organizer_response_write_error(event)
+                if organizer_can_edit_response
+                else response_write_error(event)
+            )
             if write_error:
                 return Response(
                     {
@@ -796,6 +916,19 @@ class ParticipantUpdateView(APIView):
                     "submitted": participant.submitted,
                 },
             )
+        if is_response_mutation:
+            record_schedule_edit(
+                event=event,
+                participant=participant,
+                actor=request.user,
+                source=(
+                    ScheduleEditRecord.Source.ORGANIZER
+                    if organizer_can_edit_response
+                    else ScheduleEditRecord.Source.SELF
+                ),
+                was_submitted=was_submitted,
+            )
+            request_event_results_recompute(event)
         return private_response({"participant": response_participant_payload()})
 
     @transaction.atomic
@@ -811,6 +944,7 @@ class ParticipantUpdateView(APIView):
         participant.hidden = True
         participant.version += 1
         participant.save(update_fields=["hidden", "version", "updated_at"])
+        request_event_results_recompute(event)
         return Response({"success": True})
 
 
@@ -841,6 +975,7 @@ class ParticipantUnhideView(APIView):
         participant.hidden = False
         participant.version += 1
         participant.save(update_fields=["hidden", "version", "updated_at"])
+        request_event_results_recompute(event)
         return Response({"participant": api_participant(participant)})
 
 
@@ -857,77 +992,17 @@ class WeightsView(APIView):
         if event.organizer_id != request.user.pk:
             return Response({"error": "Only the organizer can view weights"}, status=403)
         weights = event.weights.select_related("participant", "participant__member").all()
-        return Response({"weights": [api_weight(weight) for weight in weights]})
+        return private_response({"weights": [api_weight(weight) for weight in weights]})
 
-    @transaction.atomic
     def put(self, request):
-        code = request.query_params.get("code", "")
-        if not code:
-            return Response({"error": "code is required"}, status=400)
-        event = Event.objects.select_for_update().filter(code=code).first()
-        if event is None:
-            return Response({"error": "Event not found"}, status=404)
-        if event.organizer_id != request.user.pk:
-            return Response({"error": "Only the organizer can update weights"}, status=403)
-        write_error = event_configuration_write_error(event)
-        if write_error:
-            return Response({"error": write_error}, status=409)
-
-        weights = request.data.get("weights")
-        if not isinstance(weights, list):
-            return Response({"error": "weights must be an array"}, status=400)
-
-        participants = list(event.participants.all())
-        participant_map = {str(participant.member_id): participant for participant in participants}
-        existing_weights = {
-            weight.participant_id: weight
-            for weight in event.weights.filter(participant__in=participants)
-        }
-        for item in weights:
-            if not isinstance(item, dict):
-                return Response({"error": "Invalid weight entry"}, status=400)
-            participant_id = item.get("participantId", item.get("id"))
-            participant = participant_map.get(str(participant_id))
-            if participant is None:
-                return Response({"error": f"Participant '{participant_id}' not found"}, status=400)
-            existing = existing_weights.get(participant.pk)
-            try:
-                weight_value = float(
-                    item.get("weight", existing.weight if existing is not None else 1.0)
-                )
-            except (TypeError, ValueError):
-                return Response({"error": "Invalid weight entry"}, status=400)
-            included = item.get(
-                "included",
-                int(existing.included) if existing is not None else 1,
-            )
-            required = item.get(
-                "required",
-                int(existing.required) if existing is not None else 0,
-            )
-            if (
-                weight_value < 0
-                or weight_value > 1
-                or included not in {0, 1}
-                or required not in {0, 1}
-            ):
-                return Response({"error": "Invalid weight entry"}, status=400)
-            Weight.objects.update_or_create(
-                event=event,
-                participant=participant,
-                defaults={
-                    "weight": weight_value,
-                    "included": bool(included),
-                    "required": bool(required),
-                },
-            )
-
-        updated = event.weights.select_related("participant", "participant__member").all()
         return Response(
             {
-                "weights": [api_weight(weight) for weight in updated],
-                "results": build_event_results(event),
-            }
+                "error": (
+                    "Bulk weight replacement was removed. Use PATCH /events/roster/{id} "
+                    "or PATCH /events/roster/bulk."
+                )
+            },
+            status=405,
         )
 
 
@@ -946,7 +1021,7 @@ class EventResultsView(APIView):
                 {"error": "You do not have permission to view event results"},
                 status=403,
             )
-        return private_response({"results": build_event_results(event)})
+        return private_response(serialize_result_snapshot(event))
 
 
 class DashboardEventsView(APIView):
@@ -1248,12 +1323,11 @@ class TemporaryAccessParticipantView(APIView):
             clear_temporary_session_cookie(response)
             return response
 
-        event = Event.objects.select_for_update().get(pk=session.participant.event_id)
-        participant = (
-            Participant.objects.select_for_update(of=("self",))
-            .select_related("event")
-            .get(pk=session.participant_id)
+        participant = Participant.objects.select_for_update(of=("self",)).get(
+            pk=session.participant_id
         )
+        event = Event.objects.get(pk=participant.event_id)
+        participant.event = event
         if current_member_access_level(participant.member_id) != "temporary":
             session.revoke()
             response = temp_private_response(
@@ -1377,6 +1451,14 @@ class TemporaryAccessParticipantView(APIView):
                 member=participant.member,
                 draft_saved=True,
             )
+        record_schedule_edit(
+            event=event,
+            participant=participant,
+            actor=session.member,
+            source=ScheduleEditRecord.Source.SELF,
+            was_submitted=was_submitted,
+        )
+        request_event_results_recompute(event)
         security_logger.info(
             "temporary_participant_response_updated",
             extra={
@@ -1441,12 +1523,19 @@ class EventInvitationsView(APIView):
         if error:
             return error
         invitations = event.invitations.select_related("member").all()
-        return Response({"invitations": [api_invitation(invitation) for invitation in invitations]})
+        return private_response(
+            {"invitations": [api_invitation(invitation) for invitation in invitations]}
+        )
 
     def post(self, request):
         event, error = self._event_for_organizer(request)
         if error:
             return error
+        if event.status == Event.Status.DRAFT:
+            return Response(
+                {"error": "Publish the draft event to send its first invitations"},
+                status=409,
+            )
         write_error = event_configuration_write_error(event)
         if write_error:
             return Response({"error": write_error}, status=409)
@@ -1499,11 +1588,6 @@ class EventInvitationsView(APIView):
         except EventEmailRequestError as exc:
             return Response({"error": str(exc)}, status=exc.status_code)
 
-        for job in result["jobs"]:
-            dispatch_email_job(job.pk)
-            job.refresh_from_db()
-        for invitation in result["invitations"]:
-            invitation.refresh_from_db()
         delivery = email_delivery_summary(result["jobs"])
         recipient_count = result["request"].recipient_count
         return Response(
@@ -1514,8 +1598,9 @@ class EventInvitationsView(APIView):
                 "enqueued": result["createdJobCount"],
                 "deduplicated": recipient_count - result["createdJobCount"],
                 "idempotent": result["idempotent"],
+                "deliveryRequestId": str(result["request"].pk),
             },
-            status=200 if result["idempotent"] else 201,
+            status=202,
         )
 
 
@@ -1576,9 +1661,6 @@ class EventRemindersView(APIView):
         except EventEmailRequestError as exc:
             return Response({"error": str(exc)}, status=exc.status_code)
 
-        for job in result["jobs"]:
-            dispatch_email_job(job.pk)
-            job.refresh_from_db()
         delivery = email_delivery_summary(result["jobs"])
         recipient_count = result["request"].recipient_count
         return Response(
@@ -1589,7 +1671,9 @@ class EventRemindersView(APIView):
                 "enqueued": result["createdJobCount"],
                 "deduplicated": recipient_count - result["createdJobCount"],
                 "idempotent": result["idempotent"],
-            }
+                "deliveryRequestId": str(result["request"].pk),
+            },
+            status=202,
         )
 
 
@@ -1702,8 +1786,6 @@ class EventFinalizationView(APIView):
         except FinalizationError as exc:
             return private_response({"error": str(exc)}, status=exc.status_code)
 
-        for job in result["jobs"]:
-            dispatch_email_job(job.pk)
         result["event"].refresh_from_db()
         result["meeting"].refresh_from_db()
         return private_response(
@@ -1714,8 +1796,10 @@ class EventFinalizationView(APIView):
                     include_attendance=True,
                 ),
                 "delivery": final_delivery_summary(result["event"], result["meeting"]),
+                "deliveryRequestId": str(result["deliveryRequest"].pk),
                 "idempotent": result["idempotent"],
-            }
+            },
+            status=202,
         )
 
 
