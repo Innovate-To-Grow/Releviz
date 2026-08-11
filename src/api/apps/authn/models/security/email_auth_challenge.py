@@ -22,6 +22,7 @@ class EmailAuthChallenge(ProjectControlModel):
         ACCOUNT_DELETE = "account_delete", "Account Delete"
         CONTACT_EMAIL_VERIFY = "contact_email_verify", "Contact Email Verify"
         ADMIN_LOGIN = "admin_login", "Admin Login"
+        TEMP_EVENT_ACCESS = "temp_event_access", "Temp Event Access"
 
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"

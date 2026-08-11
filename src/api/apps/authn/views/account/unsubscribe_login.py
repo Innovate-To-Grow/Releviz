@@ -16,17 +16,14 @@ from apps.authn.services.account.unsubscribe import (
     UnsubscribeLoginTokenInvalid,
     get_member_from_unsubscribe_token,
 )
-from apps.mail.services.tokens.notifications import send_subscription_confirmation
-
 logger = logging.getLogger(__name__)
 
 
 def _send_unsubscribe_confirmation(member, event_token):
     """Best-effort confirmation email after unsubscribe."""
-    send_subscription_confirmation(
-        member=member,
-        action="unsubscribe",
-        event_token=event_token,
+    logger.info(
+        "Unsubscribe confirmation email skipped (mail service not available).",
+        extra={"member_id": str(member.pk), "event_token": event_token},
     )
 
 

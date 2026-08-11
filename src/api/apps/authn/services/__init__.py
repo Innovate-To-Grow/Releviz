@@ -38,11 +38,13 @@ from .email.challenges import (
     consume_verification_token,
     issue_email_challenge,
     mark_challenge_verified,
+    verify_email_challenge,
     verify_email_code,
     verify_email_code_and_mint_token,
     verify_email_code_for_purposes,
 )
 from .members.create import CreateMemberService
+from .members.register import start_registration
 from .members.import_ import (
     ImportResult,
     generate_template_excel,
@@ -60,6 +62,7 @@ from .security import (
 
 __all__ = [
     "CreateMemberService",
+    "start_registration",
     "import_members_from_excel",
     "generate_template_excel",
     "ImportResult",
@@ -82,6 +85,7 @@ __all__ = [
     "get_pending_registration_member",
     "registration_email_conflicts",
     "issue_email_challenge",
+    "verify_email_challenge",
     "verify_email_code",
     "verify_email_code_and_mint_token",
     "verify_email_code_for_purposes",

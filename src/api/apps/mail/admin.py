@@ -113,7 +113,6 @@ class EmailDeliveryJobAdmin(ModelAdmin):
         "invitation",
         "member",
         "auth_challenge",
-        "auth_session",
         "status",
         "attempt_count",
         "max_attempts",

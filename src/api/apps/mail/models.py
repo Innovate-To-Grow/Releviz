@@ -139,13 +139,7 @@ class EmailDeliveryJob(TimestampedModel):
         blank=True,
         related_name="delivery_job",
     )
-    auth_session = models.OneToOneField(
-        "authn.AuthSession",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="login_alert_delivery_job",
-    )
+    # auth_session field removed — authn.AuthSession model no longer exists
     invitation = models.ForeignKey(
         "scheduling.EventInvitation",
         on_delete=models.SET_NULL,

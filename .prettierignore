@@ -1,7 +1,0 @@
-.next
-node_modules
-data
-public
-package-lock.json
-infra
-src/web/.next

@@ -268,7 +268,6 @@ def enqueue_email_job(
     invitation=None,
     member=None,
     auth_challenge=None,
-    auth_session=None,
     html_body: str = "",
     attachments: list[EmailAttachment] | None = None,
     max_attempts: int = 5,
@@ -294,7 +293,6 @@ def enqueue_email_job(
         "invitation": invitation,
         "member": member,
         "auth_challenge": auth_challenge,
-        "auth_session": auth_session,
         "max_attempts": max_attempts,
     }
     job, created = EmailDeliveryJob.objects.get_or_create(

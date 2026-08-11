@@ -37,6 +37,26 @@ class AuthChallengeDeliveryError(AuthChallengeError):
     """Raised when the SES send fails."""
 
 
+def verify_email_challenge(
+    *,
+    email: str,
+    code: str,
+    purpose: str,
+    consume: bool = True,
+    scope_key: str = "",
+):
+    """Verify an email challenge code — backward-compatible with the old flat-services API.
+
+    ``scope_key`` is accepted for compatibility but not used; the model
+    no longer carries a scope-key column.
+    """
+    return verify_email_code(
+        purpose=purpose,
+        target_email=email,
+        code=code,
+    )
+
+
 def _random_code() -> str:
     return f"{secrets.randbelow(1_000_000):06d}"
 
@@ -57,6 +77,7 @@ __all__ = [
     "mark_challenge_verified",
     "MAX_CHALLENGES_PER_HOUR",
     "RESEND_COOLDOWN",
+    "verify_email_challenge",
     "verify_email_code",
     "verify_email_code_and_mint_token",
     "verify_email_code_for_purposes",
