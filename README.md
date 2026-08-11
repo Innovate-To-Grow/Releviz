@@ -221,23 +221,20 @@ Authentication is handled by the Django backend using email/password accounts, e
 codes, short-lived in-memory JWT access credentials, an `HttpOnly` refresh cookie bound to a
 revocable server session, browser-side public-key encryption when required by the deployment,
 account recovery and session controls. Django admin is served directly at
-`https://api.releviz.com/admin/`; it is not a frontend route. See
-[`docs/auth-security.md`](docs/auth-security.md).
+`https://api.releviz.com/admin/`; it is not a frontend route.
 
 The first production switch to the API hostname can require users to sign in again. Refresh
 cookies previously issued on the frontend hostname are host-scoped and are not transferred to
 `api.releviz.com`.
 
 Availability uses backend-authored 15/30-minute slot groups with explicit timezone and DST
-semantics, and continuous recommendations use the configured meeting duration. See
-[`docs/scheduling-slots.md`](docs/scheduling-slots.md).
+semantics, and continuous recommendations use the configured meeting duration.
 
-The roster source format, preview/merge/rebuild flow, duplicate rules, and paginated roster APIs are
-documented in [`docs/roster-imports.md`](docs/roster-imports.md).
+The roster source format, preview/merge/rebuild flow, duplicate rules, and paginated roster APIs
+are implemented in the scheduling app.
 
 Temporary/full identity rules, the restricted link session, shared versioned editing, upgrade, and
-rollback behavior are documented in
-[`docs/temporary-accounts.md`](docs/temporary-accounts.md).
+rollback behavior are enforced by the authn app.
 
 Email delivery is configured in Django admin under **Email Delivery**. Authentication messages,
 final notifications, invitations, and reminders use persisted retryable jobs. Event launch,
@@ -246,18 +243,6 @@ performs provider calls. Add an active AWS SES provider with region, sender emai
 and IAM secret access key. Provider secrets and queued authentication content are encrypted in the
 database and are not stored in Terraform or GitHub secrets. SES identities/domains and IAM
 permissions must already be configured in AWS.
-See [`docs/email-delivery.md`](docs/email-delivery.md) and
-[`docs/worker-runbook.md`](docs/worker-runbook.md).
-
-Operational procedures and product evidence definitions:
-
-- [`docs/observability.md`](docs/observability.md)
-- [`docs/worker-runbook.md`](docs/worker-runbook.md)
-- [`docs/performance-benchmarks.md`](docs/performance-benchmarks.md)
-- [`docs/product-analytics.md`](docs/product-analytics.md)
-- [`docs/backup-restore.md`](docs/backup-restore.md)
-- [`docs/deployment-rollback.md`](docs/deployment-rollback.md)
-- [`docs/real-user-validation-plan.md`](docs/real-user-validation-plan.md)
 
 ## Docker
 
@@ -315,8 +300,7 @@ artifacts for 90 days; after that boundary, an old Amplify job record alone is n
 release artifact, so recovery requires a reviewed roll-forward or revert that passes current CI.
 The first cutover also snapshots the exact Route 53 ALB alias so it can atomically restore that
 alias if migration fails. The protected Amplify domain association remains available for a safe
-retry. Review
-[`docs/deployment-rollback.md`](docs/deployment-rollback.md) before every live release.
+retry. Review the deployment procedures before every live release.
 
 Keeping the API load balancer private requires a separately reviewed architecture migration. The
 preferred direction is API Gateway with a VPC Link, or another documented private ingress design.

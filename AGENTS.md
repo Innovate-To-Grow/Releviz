@@ -80,7 +80,7 @@ python3 src/backend/manage.py dispatch_email_jobs --watch --limit=1000 \
 
 Launch, invitation, reminder, and final-notification endpoints only commit durable jobs and return
 `202`; they must not wait for a provider call. Authentication emails retain their own security
-delivery behavior. See `docs/worker-runbook.md` and `docs/email-delivery.md`.
+delivery behavior.
 
 ### Frontend
 
@@ -136,8 +136,7 @@ python3 scripts/performance/run_http_scale_scenario.py \
 ```
 
 The HTTP fixture tool refuses remote/non-performance PostgreSQL targets by default and writes a
-mode-`0600` short-lived token manifest outside the repository. Never commit that manifest. See
-`docs/performance-benchmarks.md` for the complete setup and acceptance interpretation.
+mode-`0600` short-lived token manifest outside the repository. Never commit that manifest.
 
 ## Infrastructure boundary
 
