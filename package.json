@@ -26,7 +26,7 @@
     "test:coverage": "npm --workspace=releviz-api run test:coverage && npm --workspace=releviz-web run test:coverage && npm run test:audit",
     "test:db": "bash scripts/run-db-tests.sh",
     "test:e2e": "bash scripts/run-e2e.sh",
-    "test:audit": "python3 scripts/audit-test-surface.py",
+    "test:audit": "python3 scripts/ci/audit-test-surface.py",
     "quality-gate": "bash scripts/quality-gate.sh"
   }
 }

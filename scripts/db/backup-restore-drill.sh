@@ -42,11 +42,11 @@ trap cleanup EXIT
     --settings=config.settings.e2e >"$source_manifest"
 )
 
-"$root_dir/scripts/postgres-backup.sh" "$backup_path"
+"$root_dir/scripts/db/postgres-backup.sh" "$backup_path"
 
 ALLOW_DATABASE_RESTORE=1 \
   RESTORE_DATABASE="$restore_database" \
-  "$root_dir/scripts/postgres-restore.sh" "$backup_path"
+  "$root_dir/scripts/db/postgres-restore.sh" "$backup_path"
 
 (
   cd "$root_dir"

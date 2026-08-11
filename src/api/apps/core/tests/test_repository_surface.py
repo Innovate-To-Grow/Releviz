@@ -99,7 +99,8 @@ RESOURCE_AUDIT_MANIFEST = [
     "package-lock.json",
     "package.json",
     "scripts/quality-gate.sh",
-    "scripts/backup-restore-drill.sh",
+    "scripts/db/backup-restore-drill.sh",
+    "scripts/ci/audit-test-surface.py",
     "scripts/ci/check_bundle_size.py",
     "scripts/ci/check_npm_licenses.py",
     "scripts/ci/plan_django_tests.py",
@@ -111,14 +112,14 @@ RESOURCE_AUDIT_MANIFEST = [
     "scripts/ci/validate_tool_versions.py",
     "scripts/deploy/amplify-apex-target.sh",
     "scripts/deploy/amplify-static-deploy.sh",
-    "scripts/docker-build-frontend.sh",
-    "scripts/ecs-service-rollout.sh",
-    "scripts/postgres-backup.sh",
-    "scripts/postgres-restore.sh",
+    "scripts/deploy/docker-build-frontend.sh",
+    "scripts/deploy/ecs-service-rollout.sh",
+    "scripts/db/postgres-backup.sh",
+    "scripts/db/postgres-restore.sh",
     "scripts/run-db-tests.sh",
     "scripts/run-e2e.sh",
-    "scripts/terraform-check.sh",
-    "scripts/wait-for-postgres.sh",
+    "scripts/ci/terraform-check.sh",
+    "scripts/db/wait-for-postgres.sh",
 ]
 
 
@@ -166,10 +167,10 @@ class RepositorySurfaceTests(SimpleTestCase):
             frontend_dockerfile,
         )
 
-        restore = (ROOT / "scripts/postgres-restore.sh").read_text(encoding="utf-8")
-        drill = (ROOT / "scripts/backup-restore-drill.sh").read_text(encoding="utf-8")
-        rollout = (ROOT / "scripts/ecs-service-rollout.sh").read_text(encoding="utf-8")
-        frontend_build = (ROOT / "scripts/docker-build-frontend.sh").read_text(encoding="utf-8")
+        restore = (ROOT / "scripts/db/postgres-restore.sh").read_text(encoding="utf-8")
+        drill = (ROOT / "scripts/db/backup-restore-drill.sh").read_text(encoding="utf-8")
+        rollout = (ROOT / "scripts/deploy/ecs-service-rollout.sh").read_text(encoding="utf-8")
+        frontend_build = (ROOT / "scripts/deploy/docker-build-frontend.sh").read_text(encoding="utf-8")
         self.assertIn("ALLOW_DATABASE_RESTORE", restore)
         self.assertIn("sha256sum --check", restore)
         self.assertIn("database_manifest", drill)

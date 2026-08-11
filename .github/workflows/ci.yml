@@ -141,7 +141,7 @@ jobs:
           if match '^(src/api/|scripts/|\.github/|\.pre-commit-config\.yaml|package(-lock)?\.json|docker-compose\.e2e\.yml)'; then backend=true; fi
           if match '^(src/api/|src/web/|src/e2e/|scripts/|\.github/|\.pre-commit-config\.yaml|package(-lock)?\.json|docker-compose\.e2e\.yml)'; then frontend=true; fi
           if match '^(src/api/|src/web/|src/e2e/|scripts/|\.github/|package(-lock)?\.json|docker-compose\.e2e\.yml)'; then e2e=true; fi
-          if match '^(infra/|scripts/terraform-check\.sh|\.github/|\.pre-commit-config\.yaml)'; then infra=true; fi
+          if match '^(infra/|scripts/ci/terraform-check\.sh|\.github/|\.pre-commit-config\.yaml)'; then infra=true; fi
           {
             echo "backend=$backend"
             echo "frontend=$frontend"
@@ -1027,7 +1027,7 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
 
       - name: Check Terraform configuration and tests
-        run: scripts/terraform-check.sh
+        run: scripts/ci/terraform-check.sh
 
   repository-audit:
     name: Repository Resource Audit
@@ -1044,7 +1044,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Audit tracked resources
-        run: python scripts/audit-test-surface.py
+        run: python scripts/ci/audit-test-surface.py
 
   backend-docker-build:
     name: Backend Docker Build and Scan

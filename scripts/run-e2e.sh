@@ -26,7 +26,7 @@ if [ "${E2E_SKIP_DOCKER:-0}" != "1" ]; then
   trap 'docker compose -f docker-compose.e2e.yml down -v' EXIT
 fi
 
-scripts/wait-for-postgres.sh
+scripts/db/wait-for-postgres.sh
 python3 src/api/manage.py migrate --noinput --settings=config.settings.e2e
 python3 src/api/manage.py ensure_default_admin --yes --settings=config.settings.e2e
 npm --workspace=releviz-web run build

@@ -254,7 +254,7 @@ docker run --rm -p 4000:4000 \
   releviz-api:local
 
 # Frontend development/migration-fallback image (production traffic uses Amplify)
-scripts/docker-build-frontend.sh releviz-web:local
+scripts/deploy/docker-build-frontend.sh releviz-web:local
 docker run --rm -p 3000:3000 releviz-web:local
 ```
 

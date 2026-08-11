@@ -102,11 +102,11 @@ const RESOURCE_AUDIT_MANIFEST = [
   "scripts/ci/validate_tool_versions.py",
   "scripts/deploy/amplify-apex-target.sh",
   "scripts/deploy/amplify-static-deploy.sh",
-  "scripts/docker-build-frontend.sh",
+  "scripts/deploy/docker-build-frontend.sh",
   "scripts/run-db-tests.sh",
   "scripts/run-e2e.sh",
-  "scripts/terraform-check.sh",
-  "scripts/wait-for-postgres.sh",
+  "scripts/ci/terraform-check.sh",
+  "scripts/db/wait-for-postgres.sh",
 ];
 
 test.describe("repository resource audit", () => {

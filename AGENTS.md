@@ -126,11 +126,11 @@ and Docker images.
 The local performance tools are intentionally separate from the normal test suite:
 
 ```bash
-python3 scripts/performance/benchmark_aggregation.py --runs 3 \
+python3 scripts/perf/benchmark_aggregation.py --runs 3 \
   --assert-p95-seconds 10
-python3 scripts/performance/prepare_scale_scenario.py --event-code PERF1000 \
+python3 scripts/perf/prepare_scale_scenario.py --event-code PERF1000 \
   --confirm-code PERF1000
-python3 scripts/performance/run_http_scale_scenario.py \
+python3 scripts/perf/run_http_scale_scenario.py \
   --manifest /tmp/releviz-perf1000-manifest.json \
   --event-code PERF1000 --confirm-code PERF1000
 ```
