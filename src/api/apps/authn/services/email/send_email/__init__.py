@@ -14,7 +14,7 @@ from .senders import (
     send_notification_email,
     send_verification_email,
 )
-from .transport import _load_config, _send_via_ses
+from .transport import _send_via_ses
 
 __all__ = [
     "send_admin_invitation_email",

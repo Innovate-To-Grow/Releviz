@@ -20,11 +20,9 @@ def send_notification_email(
 ) -> bool:
     import apps.authn.services.email.send_email as email_api
 
-    config = email_api._load_config()
     html_body = render_to_string(template, context)
 
     send_kwargs = {
-        "config": config,
         "recipient": recipient,
         "subject": subject,
         "html_body": html_body,
@@ -47,7 +45,6 @@ def send_notification_email(
 def send_admin_invitation_email(*, invitation, request=None):
     import apps.authn.services.email.send_email as email_api
 
-    config = email_api._load_config()
     subject = "You're invited to join Innovate to Grow Admin"
     html_body = render_to_string(
         "authn/email/admin_invitation.html",
@@ -61,7 +58,6 @@ def send_admin_invitation_email(*, invitation, request=None):
     )
 
     if email_api._send_via_ses(
-        config=config,
         recipient=invitation.email,
         subject=subject,
         html_body=html_body,
@@ -83,7 +79,6 @@ def send_verification_email(
 ):
     import apps.authn.services.email.send_email as email_api
 
-    config = email_api._load_config()
     subject = PURPOSE_SUBJECTS.get(
         purpose,
         "Your verification code - Innovate to Grow",
@@ -98,7 +93,6 @@ def send_verification_email(
     )
 
     if email_api._send_via_ses(
-        config=config,
         recipient=recipient,
         subject=subject,
         html_body=html_body,

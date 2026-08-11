@@ -18,25 +18,13 @@ from apps.core.services.aws.provider_outcomes import (
 )
 
 
-def _fake_config(**overrides):
-    """Return a mock EmailServiceConfig with sensible defaults."""
-    defaults = {
-        "ses_configured": False,
-        "ses_from_email": "test@example.com",
-        "ses_from_name": "Test",
-        "source_address": "Test <test@example.com>",
-    }
-    defaults.update(overrides)
-    config = MagicMock(**defaults)
-    return config
-
-
 class SendViaSesTests(TestCase):
     """Tests for the SES sending path."""
 
-    def test_returns_false_when_not_configured(self):
-        config = _fake_config(ses_configured=False)
-        result = _send_via_ses(config=config, recipient="a@b.com", subject="Hi", html_body="<p>Hi</p>")
+    def test_returns_false_when_source_address_is_empty(self):
+        result = _send_via_ses(
+            source_address="", recipient="a@b.com", subject="Hi", html_body="<p>Hi</p>"
+        )
         self.assertFalse(result)
 
     @patch("apps.authn.services.email.send_email.transport.resolve_aws_credentials")
@@ -44,9 +32,15 @@ class SendViaSesTests(TestCase):
     def test_returns_true_on_success(self, mock_boto3, mock_resolve):
         from apps.core.services.aws.credentials import AwsCredentials
 
-        mock_resolve.return_value = AwsCredentials(access_key_id="k", secret_access_key="s", region="us-west-2")
-        config = _fake_config(ses_configured=True)
-        result = _send_via_ses(config=config, recipient="a@b.com", subject="Hi", html_body="<p>Hi</p>")
+        mock_resolve.return_value = AwsCredentials(
+            access_key_id="k", secret_access_key="s", region="us-west-2"
+        )
+        result = _send_via_ses(
+            source_address="Test <test@example.com>",
+            recipient="a@b.com",
+            subject="Hi",
+            html_body="<p>Hi</p>",
+        )
         self.assertTrue(result)
         mock_boto3.client.return_value.send_email.assert_called_once()
         self.assertEqual(
@@ -61,12 +55,18 @@ class SendViaSesTests(TestCase):
 
         from apps.core.services.aws.credentials import AwsCredentials
 
-        mock_resolve.return_value = AwsCredentials(access_key_id="k", secret_access_key="s", region="us-west-2")
+        mock_resolve.return_value = AwsCredentials(
+            access_key_id="k", secret_access_key="s", region="us-west-2"
+        )
         mock_boto3.client.return_value.send_email.side_effect = ClientError(
             {"Error": {"Code": "MessageRejected", "Message": "boom"}}, "SendEmail"
         )
-        config = _fake_config(ses_configured=True)
-        result = _send_via_ses(config=config, recipient="a@b.com", subject="Hi", html_body="<p>Hi</p>")
+        result = _send_via_ses(
+            source_address="Test <test@example.com>",
+            recipient="a@b.com",
+            subject="Hi",
+            html_body="<p>Hi</p>",
+        )
         self.assertFalse(result)
 
     @patch("apps.authn.services.email.send_email.transport.resolve_aws_credentials")
@@ -76,16 +76,17 @@ class SendViaSesTests(TestCase):
 
         from apps.core.services.aws.credentials import AwsCredentials
 
-        mock_resolve.return_value = AwsCredentials(access_key_id="k", secret_access_key="s", region="us-west-2")
+        mock_resolve.return_value = AwsCredentials(
+            access_key_id="k", secret_access_key="s", region="us-west-2"
+        )
         mock_boto3.client.return_value.send_email.side_effect = ClientError(
             {"Error": {"Code": "ThrottlingException", "Message": "secret detail"}},
             "SendEmail",
         )
-        config = _fake_config(ses_configured=True)
 
         with self.assertRaises(ProviderDeliveryError) as raised:
             _send_via_ses(
-                config=config,
+                source_address="Test <test@example.com>",
                 recipient="a@b.com",
                 subject="Hi",
                 html_body="<p>Hi</p>",
@@ -170,35 +171,21 @@ class SendVerificationEmailTests(TestCase):
         self.assertNotIn("Continue Registration", html)
         self.assertNotIn("Sign In to Your Account", html)
 
-    @patch("apps.authn.services.email.send_email._send_via_ses", return_value=True)
-    @patch("apps.authn.services.email.send_email._load_config")
-    def test_ses_success_completes(self, mock_config, mock_ses):
-        mock_config.return_value = _fake_config(ses_configured=True)
+    @patch("apps.authn.services.email.send_email.senders._send_via_ses", return_value=True)
+    def test_ses_success_completes(self, mock_ses):
         send_verification_email(recipient="a@b.com", code="123456", purpose="admin_login")
         mock_ses.assert_called_once()
 
-    @patch("apps.authn.services.email.send_email._send_via_ses", return_value=False)
-    @patch("apps.authn.services.email.send_email._load_config")
-    def test_ses_failure_raises_without_smtp_fallback(self, mock_config, mock_ses):
-        mock_config.return_value = _fake_config(ses_configured=True)
-        with self.assertRaises(RuntimeError):
-            send_verification_email(recipient="a@b.com", code="123456", purpose="admin_login")
-        mock_ses.assert_called_once()
-
-    @patch("apps.authn.services.email.send_email._send_via_ses", return_value=False)
-    @patch("apps.authn.services.email.send_email._load_config")
-    def test_ses_not_configured_raises_without_smtp_fallback(self, mock_config, mock_ses):
-        mock_config.return_value = _fake_config(ses_configured=False)
+    @patch("apps.authn.services.email.send_email.senders._send_via_ses", return_value=False)
+    def test_ses_failure_raises(self, mock_ses):
         with self.assertRaises(RuntimeError):
             send_verification_email(recipient="a@b.com", code="123456", purpose="admin_login")
         mock_ses.assert_called_once()
 
 
 class SendNotificationEmailTests(TestCase):
-    @patch("apps.authn.services.email.send_email._send_via_ses", return_value=True)
-    @patch("apps.authn.services.email.send_email._load_config")
-    def test_notification_sent_via_ses(self, mock_config, mock_ses):
-        mock_config.return_value = _fake_config(ses_configured=True)
+    @patch("apps.authn.services.email.send_email.senders._send_via_ses", return_value=True)
+    def test_notification_sent_via_ses(self, mock_ses):
         send_notification_email(
             recipient="owner@example.com",
             subject="Security notice",
@@ -207,10 +194,8 @@ class SendNotificationEmailTests(TestCase):
         )
         mock_ses.assert_called_once()
 
-    @patch("apps.authn.services.email.send_email._send_via_ses", return_value=False)
-    @patch("apps.authn.services.email.send_email._load_config")
-    def test_notification_logs_when_send_fails(self, mock_config, mock_ses):
-        mock_config.return_value = _fake_config(ses_configured=False)
+    @patch("apps.authn.services.email.send_email.senders._send_via_ses", return_value=False)
+    def test_notification_logs_when_send_fails(self, mock_ses):
         # Should NOT raise — notification failures are swallowed (logged).
         send_notification_email(
             recipient="owner@example.com",
@@ -227,8 +212,12 @@ class SendViaSesCredentialErrorTests(TestCase):
         from apps.core.services.aws.credentials import AwsCredentialsError
 
         mock_resolve.side_effect = AwsCredentialsError("no creds")
-        config = _fake_config(ses_configured=True)
-        result = _send_via_ses(config=config, recipient="a@b.com", subject="Hi", html_body="<p>Hi</p>")
+        result = _send_via_ses(
+            source_address="Test <test@example.com>",
+            recipient="a@b.com",
+            subject="Hi",
+            html_body="<p>Hi</p>",
+        )
         self.assertFalse(result)
 
 
@@ -245,10 +234,8 @@ class SendAdminInvitationEmailTests(TestCase):
         invitation.get_role_display.return_value = "Admin"
         return invitation
 
-    @patch("apps.authn.services.email.send_email._send_via_ses", return_value=False)
-    @patch("apps.authn.services.email.send_email._load_config")
-    def test_ses_failure_raises(self, mock_config, mock_ses):
-        mock_config.return_value = _fake_config(ses_configured=False)
+    @patch("apps.authn.services.email.send_email.senders._send_via_ses", return_value=False)
+    def test_ses_failure_raises(self, mock_ses):
         invitation = self._invitation()
 
         with self.assertRaises(RuntimeError):
@@ -256,11 +243,8 @@ class SendAdminInvitationEmailTests(TestCase):
 
         mock_ses.assert_called_once()
 
-    @patch("apps.authn.services.email.send_email._send_via_ses", return_value=True)
-    @patch("apps.authn.services.email.send_email._load_config")
-    def test_ses_success_sends_invitation(self, mock_config, mock_ses):
-        mock_config.return_value = _fake_config(ses_configured=True)
-
+    @patch("apps.authn.services.email.send_email.senders._send_via_ses", return_value=True)
+    def test_ses_success_sends_invitation(self, mock_ses):
         send_admin_invitation_email(invitation=self._invitation())
 
         mock_ses.assert_called_once()

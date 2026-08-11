@@ -25,10 +25,6 @@ from .registrations import (  # noqa: F401 - register admin
     LogEntryAdmin,
     SiteMaintenanceControlAdmin,
 )
-from .service_credentials import (  # noqa: F401 - register admin
-    GmailAccessAccountAdmin,
-    GoogleCredentialConfigAdmin,
-)
 
 __all__ = [
     # Base classes

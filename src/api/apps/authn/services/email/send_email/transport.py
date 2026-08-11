@@ -11,23 +11,19 @@ from apps.core.services.aws.provider_outcomes import (
 
 logger = logging.getLogger(__name__)
 
-
-def _load_config():
-    from apps.core.models import EmailServiceConfig
-
-    return EmailServiceConfig.load()
+DEFAULT_SOURCE_ADDRESS = "Innovate to Grow <i2g@g.ucmerced.edu>"
 
 
 def _send_via_ses(
     *,
-    config,
     recipient: str,
     subject: str,
     html_body: str,
+    source_address: str = DEFAULT_SOURCE_ADDRESS,
     before_provider_call=None,
     raise_provider_errors: bool = False,
 ) -> bool:
-    if not config.ses_configured:
+    if not source_address:
         return False
     try:
         import apps.authn.services.email.send_email as email_api
@@ -48,7 +44,7 @@ def _send_via_ses(
                 "Body": {"Html": {"Charset": "UTF-8", "Data": html_body}},
                 "Subject": {"Charset": "UTF-8", "Data": subject},
             },
-            Source=config.source_address,
+            Source=source_address,
         )
         return True
     except AwsCredentialsError:
