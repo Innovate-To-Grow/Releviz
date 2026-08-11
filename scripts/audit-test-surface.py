@@ -40,8 +40,8 @@ AUDITED_NAMES = {
     "pyproject.toml",
 }
 REFERENCE_FILES = [
-    "src/backend/apps/core/tests/test_admin_theme.py",
-    "src/backend/apps/core/tests/test_repository_surface.py",
+    "src/api/apps/core/tests/test_admin_theme.py",
+    "src/api/apps/core/tests/test_repository_surface.py",
     "src/e2e/repository-surface.spec.js",
 ]
 LOCAL_ONLY_FILES = {"AGENTS.md"}
@@ -69,10 +69,10 @@ def should_audit(path: str) -> bool:
             "node_modules/",
             "coverage/",
             "htmlcov/",
-            "src/frontend/.next/",
-            "src/frontend/coverage/",
-            "src/frontend/playwright-report/",
-            "src/frontend/test-results/",
+            "src/web/.next/",
+            "src/web/coverage/",
+            "src/web/playwright-report/",
+            "src/web/test-results/",
             "src/e2e/playwright-report/",
             "src/e2e/test-results/",
             "playwright-report/",

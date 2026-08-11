@@ -1,5 +1,5 @@
 {
-  "name": "releviz-backend",
+  "name": "releviz-api",
   "version": "0.1.0",
   "private": true,
   "scripts": {

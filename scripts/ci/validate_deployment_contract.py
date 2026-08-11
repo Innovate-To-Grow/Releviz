@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-PRODUCTION_SETTINGS = ROOT / "src/backend/config/settings/production.py"
+PRODUCTION_SETTINGS = ROOT / "src/api/config/settings/production.py"
 BOOTSTRAP_TERRAFORM = ROOT / "infra/bootstrap/main.tf"
 TERRAFORM_ENVIRONMENTS = {
     "production": ROOT / "infra/prod/main.tf",
@@ -135,12 +135,12 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         r"amplify update-app[\s\S]{0,160}--custom-headers": (
             "an explicit Amplify custom-header update"
         ),
-        r"npm ci --workspace=releviz-frontend": "locked frontend dependency install",
+        r"npm ci --workspace=releviz-web": "locked frontend dependency install",
         r"run build:amplify": "Amplify static frontend build",
         r"validate_amplify_static_export\.py": (
             "Amplify static route and asset validation"
         ),
-        r"src/frontend/out": "static export artifact",
+        r"src/web/out": "static export artifact",
         r"AMPLIFY_ARTIFACT.*\.sha256": "a retained static-artifact checksum",
         r"retention-days:\s*90": "a 90-day rollback artifact retention window",
         r"release\.json": "immutable frontend release identity",
@@ -258,7 +258,7 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         r"event/\?code=AMPLIFYSMOKE": (
             "query-preserving trailing-slash route verification"
         ),
-        r"src/frontend/out/_next/static": "a deployed static-asset smoke test",
+        r"src/web/out/_next/static": "a deployed static-asset smoke test",
         r"PUT /authn/profile": "a direct protected PUT smoke test",
         r"DELETE /authn/sessions": "a direct protected DELETE smoke test",
         r"Access-Control-Request-Method:\s*PUT": (
@@ -1403,7 +1403,7 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         errors.append(
             "production CD omits all exported routes from candidate or production branch smokes"
         )
-    if source.count("find src/frontend/out/_next/static") < 2:
+    if source.count("find src/web/out/_next/static") < 2:
         errors.append(
             "production CD omits a deployed static asset from candidate or production branch smokes"
         )

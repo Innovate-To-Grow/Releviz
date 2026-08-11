@@ -10,24 +10,24 @@ Backend commands require Python 3.12 or newer; activate the backend virtual envi
 
 ```bash
 npm install
-python3 -m pip install -r src/backend/requirements/local.txt
+python3 -m pip install -r src/api/requirements/local.txt
 
 npm run dev                              # Django :4000 + Next.js :3000
-npm run dev:backend                      # Django only
-npm run dev:frontend                     # Next.js only
+npm run dev:api                      # Django only
+npm run dev:web                     # Next.js only
 
-npm --workspace=releviz-backend run lint
-npm --workspace=releviz-backend run format:check
-npm --workspace=releviz-backend run test
-npm --workspace=releviz-frontend run lint
-npm --workspace=releviz-frontend run format:check
-npm --workspace=releviz-frontend run test
-npm --workspace=releviz-frontend run build
+npm --workspace=releviz-api run lint
+npm --workspace=releviz-api run format:check
+npm --workspace=releviz-api run test
+npm --workspace=releviz-web run lint
+npm --workspace=releviz-web run format:check
+npm --workspace=releviz-web run test
+npm --workspace=releviz-web run build
 
 npm run test:db                          # PostgreSQL suite (Docker by default)
 npm run test:e2e                         # Chromium, Firefox, and WebKit
 npm run quality-gate                     # complete local gate
-python3 src/backend/manage.py makemigrations --check --dry-run \
+python3 src/api/manage.py makemigrations --check --dry-run \
   --settings=config.settings.test
 ```
 
@@ -35,9 +35,9 @@ python3 src/backend/manage.py makemigrations --check --dry-run \
 
 The npm workspaces live under `src/`:
 
-- `src/backend/` — Django 6, Django REST Framework, SimpleJWT, PostgreSQL in deployed/test-db
+- `src/api/` — Django 6, Django REST Framework, SimpleJWT, PostgreSQL in deployed/test-db
   environments, and SQLite for ordinary local development.
-- `src/frontend/` — Next.js 16 App Router, React 19, Material Web, and a production static export.
+- `src/web/` — Next.js 16 App Router, React 19, Material Web, and a production static export.
 - `src/e2e/` — Playwright coverage for the real browser workflow.
 
 Business routes have no `/api` prefix. The backend is mounted directly at paths such as `/events`,
@@ -71,9 +71,9 @@ Important scheduling modules:
 Long-running local workers:
 
 ```bash
-python3 src/backend/manage.py recompute_event_results --watch --poll-interval=1 \
+python3 src/api/manage.py recompute_event_results --watch --poll-interval=1 \
   --settings=config.settings.local
-python3 src/backend/manage.py dispatch_email_jobs --watch --limit=1000 \
+python3 src/api/manage.py dispatch_email_jobs --watch --limit=1000 \
   --concurrency=10 --rate-limit=10 --poll-interval=1 \
   --settings=config.settings.local
 ```
@@ -84,8 +84,8 @@ delivery behavior.
 
 ### Frontend
 
-The App Router pages live in `src/frontend/app/`. Client UI and API helpers are in
-`src/frontend/components/` and `src/frontend/lib/api/`.
+The App Router pages live in `src/web/app/`. Client UI and API helpers are in
+`src/web/components/` and `src/web/lib/api/`.
 
 The organizer surface is split into Overview, Roster, Results, and Finalize. Roster data is
 server-paginated (50 by default, 100 maximum); do not restore an all-participant schedule grid.

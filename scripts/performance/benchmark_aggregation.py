@@ -4,7 +4,7 @@
 The default fixture is the release acceptance shape: 1,000 submitted people,
 1,000 authoritative slots, mixed (in-person + virtual) mode, and a 60-minute
 meeting duration.  It deliberately imports the scheduling slot builder and
-recommendation implementation from ``src/backend`` so this is not a toy
+recommendation implementation from ``src/api`` so this is not a toy
 replacement for the application algorithm.
 """
 

@@ -41,7 +41,7 @@ module.exports = defineConfig({
   },
   webServer: [
     {
-      command: `${JSON.stringify(pythonBin)} src/backend/manage.py runserver 127.0.0.1:${backendPort} --settings=config.settings.e2e`,
+      command: `${JSON.stringify(pythonBin)} src/api/manage.py runserver 127.0.0.1:${backendPort} --settings=config.settings.e2e`,
       cwd: rootDir,
       url: `${backendUrl}/health`,
       env: backendEnv,
@@ -49,7 +49,7 @@ module.exports = defineConfig({
       timeout: 60_000,
     },
     {
-      command: `npm --workspace=releviz-frontend run start -- --hostname 127.0.0.1 --port ${frontendPort}`,
+      command: `npm --workspace=releviz-web run start -- --hostname 127.0.0.1 --port ${frontendPort}`,
       cwd: rootDir,
       url: frontendUrl,
       env: {

@@ -46,7 +46,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
           cache-dependency-path: |
-            src/backend/requirements/*.txt
+            src/api/requirements/*.txt
             .pre-commit-config.yaml
 
       - name: Install preflight tools
@@ -138,9 +138,9 @@ jobs:
           frontend=false
           e2e=false
           infra=false
-          if match '^(src/backend/|scripts/|\.github/|\.pre-commit-config\.yaml|package(-lock)?\.json|docker-compose\.e2e\.yml)'; then backend=true; fi
-          if match '^(src/backend/|src/frontend/|src/e2e/|scripts/|\.github/|\.pre-commit-config\.yaml|package(-lock)?\.json|docker-compose\.e2e\.yml)'; then frontend=true; fi
-          if match '^(src/backend/|src/frontend/|src/e2e/|scripts/|\.github/|package(-lock)?\.json|docker-compose\.e2e\.yml)'; then e2e=true; fi
+          if match '^(src/api/|scripts/|\.github/|\.pre-commit-config\.yaml|package(-lock)?\.json|docker-compose\.e2e\.yml)'; then backend=true; fi
+          if match '^(src/api/|src/web/|src/e2e/|scripts/|\.github/|\.pre-commit-config\.yaml|package(-lock)?\.json|docker-compose\.e2e\.yml)'; then frontend=true; fi
+          if match '^(src/api/|src/web/|src/e2e/|scripts/|\.github/|package(-lock)?\.json|docker-compose\.e2e\.yml)'; then e2e=true; fi
           if match '^(infra/|scripts/terraform-check\.sh|\.github/|\.pre-commit-config\.yaml)'; then infra=true; fi
           {
             echo "backend=$backend"
@@ -164,16 +164,16 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: src/backend/requirements/local.txt
+          cache-dependency-path: src/api/requirements/local.txt
 
       - name: Install backend dependencies
-        run: python -m pip install -r src/backend/requirements/local.txt
+        run: python -m pip install -r src/api/requirements/local.txt
 
       - name: Check Python formatting
-        run: ruff format --check src/backend scripts/ci
+        run: ruff format --check src/api scripts/ci
 
       - name: Run Python lint
-        run: ruff check src/backend scripts/ci
+        run: ruff check src/api scripts/ci
 
   backend-full-coverage:
     name: Backend - Lint & Test (100% Coverage)
@@ -183,7 +183,7 @@ jobs:
     if: ${{ needs.changes.outputs.backend == 'true' }}
     defaults:
       run:
-        working-directory: src/backend
+        working-directory: src/api
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -193,7 +193,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: src/backend/requirements/local.txt
+          cache-dependency-path: src/api/requirements/local.txt
 
       - name: Install backend dependencies
         run: python -m pip install -r requirements/local.txt "coverage[toml]==${COVERAGE_VERSION}"
@@ -239,8 +239,8 @@ jobs:
         with:
           name: backend-coverage
           path: |
-            src/backend/coverage.xml
-            src/backend/coverage.json
+            src/api/coverage.xml
+            src/api/coverage.json
           if-no-files-found: warn
 
   backend-db-migration:
@@ -265,7 +265,7 @@ jobs:
           --health-retries 20
     defaults:
       run:
-        working-directory: src/backend
+        working-directory: src/api
     env:
       DB_HOST: 127.0.0.1
       DB_PORT: 5432
@@ -282,7 +282,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: src/backend/requirements/local.txt
+          cache-dependency-path: src/api/requirements/local.txt
 
       - name: Install backend dependencies
         run: python -m pip install -r requirements/local.txt
@@ -304,7 +304,7 @@ jobs:
     if: ${{ needs.changes.outputs.backend == 'true' }}
     defaults:
       run:
-        working-directory: src/backend
+        working-directory: src/api
     env:
       DJANGO_SECRET_KEY: ci-production-smoke-secret-key-with-enough-entropy-for-deploy-checks-2026
       DJANGO_FIELD_ENCRYPTION_KEY: ci-field-encryption-key-with-enough-entropy-2026
@@ -330,7 +330,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: src/backend/requirements/local.txt
+          cache-dependency-path: src/api/requirements/local.txt
 
       - name: Install backend dependencies
         run: python -m pip install -r requirements/local.txt
@@ -417,7 +417,7 @@ jobs:
           --health-retries 20
     defaults:
       run:
-        working-directory: src/backend
+        working-directory: src/api
     env:
       DB_HOST: 127.0.0.1
       DB_PORT: 5432
@@ -434,7 +434,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: src/backend/requirements/local.txt
+          cache-dependency-path: src/api/requirements/local.txt
 
       - name: Install backend dependencies
         run: python -m pip install -r requirements/local.txt "coverage[toml]==${COVERAGE_VERSION}"
@@ -486,8 +486,8 @@ jobs:
         with:
           name: backend-coverage-${{ matrix.app }}
           path: |
-            src/backend/coverage-${{ matrix.app }}.xml
-            src/backend/coverage-${{ matrix.app }}.json
+            src/api/coverage-${{ matrix.app }}.xml
+            src/api/coverage-${{ matrix.app }}.json
           if-no-files-found: warn
 
   frontend-lint:
@@ -508,13 +508,13 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Install frontend dependencies
-        run: npm ci --workspace=releviz-frontend
+        run: npm ci --workspace=releviz-web
 
       - name: Check frontend formatting
-        run: npm --workspace=releviz-frontend run format:check
+        run: npm --workspace=releviz-web run format:check
 
       - name: Run ESLint
-        run: npm --workspace=releviz-frontend run lint
+        run: npm --workspace=releviz-web run lint
 
   frontend-unit-coverage:
     name: Frontend Unit Test Coverage
@@ -534,24 +534,24 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Install frontend dependencies
-        run: npm ci --workspace=releviz-frontend
+        run: npm ci --workspace=releviz-web
 
       - name: Run frontend tests with coverage
-        run: npm --workspace=releviz-frontend run test:coverage -- --runInBand
+        run: npm --workspace=releviz-web run test:coverage -- --runInBand
         env:
           NODE_OPTIONS: --max-old-space-size=4096
 
       - name: Summarize frontend coverage
         if: ${{ always() }}
         run: |
-          if [ ! -f src/frontend/coverage/coverage-summary.json ]; then
+          if [ ! -f src/web/coverage/coverage-summary.json ]; then
             echo "::warning::Frontend coverage summary was not generated."
             exit 0
           fi
           node - <<'NODE'
           const fs = require("node:fs");
           const summary = JSON.parse(
-            fs.readFileSync("src/frontend/coverage/coverage-summary.json", "utf8"),
+            fs.readFileSync("src/web/coverage/coverage-summary.json", "utf8"),
           ).total;
           const rows = [
             ["Statements", summary.statements],
@@ -580,7 +580,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: frontend-coverage
-          path: src/frontend/coverage
+          path: src/web/coverage
           if-no-files-found: warn
 
   frontend-build:
@@ -601,10 +601,10 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Install frontend dependencies
-        run: npm ci --workspace=releviz-frontend
+        run: npm ci --workspace=releviz-web
 
       - name: Build frontend for CI and E2E
-        run: npm --workspace=releviz-frontend run build
+        run: npm --workspace=releviz-web run build
         env:
           NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:4100
 
@@ -614,9 +614,9 @@ jobs:
         with:
           name: frontend-next-ci
           path: |
-            src/frontend/.next
-            !src/frontend/.next/cache
-            !src/frontend/.next/standalone
+            src/web/.next
+            !src/web/.next/cache
+            !src/web/.next/standalone
           include-hidden-files: true
           if-no-files-found: warn
 
@@ -638,19 +638,19 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Install frontend dependencies
-        run: npm ci --workspace=releviz-frontend
+        run: npm ci --workspace=releviz-web
 
       - name: Build static Amplify artifact
         env:
           NEXT_PUBLIC_API_BASE_URL: https://api.releviz.com
         run: |
           set -euo pipefail
-          npm --workspace=releviz-frontend run build:amplify
+          npm --workspace=releviz-web run build:amplify
           python3 scripts/ci/validate_amplify_static_export.py \
-            --out src/frontend/out \
-            --manifest src/frontend/amplify-routes.json
+            --out src/web/out \
+            --manifest src/web/amplify-routes.json
           server_only="$(
-            find src/frontend/out -type f \
+            find src/web/out -type f \
               \( -name 'server.js' -o -name '*.nft.json' \) \
               -print
           )"
@@ -665,7 +665,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: frontend-amplify-static
-          path: src/frontend/out
+          path: src/web/out
           if-no-files-found: error
 
   frontend-bundle-size:
@@ -682,10 +682,10 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: frontend-next-ci
-          path: src/frontend/.next
+          path: src/web/.next
 
       - name: Enforce frontend bundle budgets
-        run: python3 scripts/ci/check_bundle_size.py src/frontend/.next/static
+        run: python3 scripts/ci/check_bundle_size.py src/web/.next/static
 
   frontend-security-audit:
     name: Frontend npm Audit
@@ -705,7 +705,7 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Install frontend dependencies
-        run: npm ci --workspace=releviz-frontend
+        run: npm ci --workspace=releviz-web
 
       - name: Audit npm dependencies
         run: npm audit --audit-level=low
@@ -844,7 +844,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: src/backend/requirements/production.txt
+          cache-dependency-path: src/api/requirements/production.txt
 
       - name: Install pip-audit
         run: pip install "pip-audit[cyclonedx]==${PIP_AUDIT_VERSION}"
@@ -853,7 +853,7 @@ jobs:
         run: |
           set -o pipefail
           python -m pip_audit \
-            --requirement src/backend/requirements/production.txt \
+            --requirement src/api/requirements/production.txt \
             --progress-spinner off \
             --format columns \
             | tee "$GITHUB_STEP_SUMMARY"
@@ -886,8 +886,8 @@ jobs:
         run: |
           set -euo pipefail
           targets=()
-          if [ "$RUN_BACKEND" = "true" ]; then targets+=(src/backend); fi
-          if [ "$RUN_FRONTEND" = "true" ]; then targets+=(src/frontend); fi
+          if [ "$RUN_BACKEND" = "true" ]; then targets+=(src/api); fi
+          if [ "$RUN_FRONTEND" = "true" ]; then targets+=(src/web); fi
           semgrep scan \
             --config p/default \
             --config p/python \
@@ -955,7 +955,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: src/backend/requirements/production.txt
+          cache-dependency-path: src/api/requirements/production.txt
 
       - name: Install Python SBOM tools
         run: pip install "pip-audit[cyclonedx]==${PIP_AUDIT_VERSION}"
@@ -963,7 +963,7 @@ jobs:
       - name: Generate Python SBOM
         run: |
           python -m pip_audit \
-            --requirement src/backend/requirements/production.txt \
+            --requirement src/api/requirements/production.txt \
             --progress-spinner off \
             --format cyclonedx-json \
             --output python-sbom.cdx.json \
@@ -1062,7 +1062,7 @@ jobs:
       - name: Lint backend Dockerfile
         uses: hadolint/hadolint-action@2332a7b74a6de0dda2e2221d575162eba76ba5e5 # v3.3.0
         with:
-          dockerfile: src/backend/Dockerfile
+          dockerfile: src/api/Dockerfile
           failure-threshold: error
 
       - name: Set up Docker Buildx
@@ -1071,10 +1071,10 @@ jobs:
       - name: Build backend image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
-          context: src/backend
+          context: src/api
           pull: true
           load: true
-          tags: releviz-backend-ci:${{ github.sha }}
+          tags: releviz-api-ci:${{ github.sha }}
           cache-from: type=gha,scope=backend
           cache-to: type=gha,mode=max,scope=backend
 
@@ -1090,7 +1090,7 @@ jobs:
         env:
           TRIVY_CACHE_DIR: ${{ github.workspace }}/.cache/trivy
         with:
-          image-ref: releviz-backend-ci:${{ github.sha }}
+          image-ref: releviz-api-ci:${{ github.sha }}
           format: sarif
           output: trivy-backend.sarif
           severity: CRITICAL,HIGH
@@ -1129,7 +1129,7 @@ jobs:
       - name: Lint frontend Dockerfile
         uses: hadolint/hadolint-action@2332a7b74a6de0dda2e2221d575162eba76ba5e5 # v3.3.0
         with:
-          dockerfile: src/frontend/Dockerfile
+          dockerfile: src/web/Dockerfile
           failure-threshold: error
 
       - name: Set up Docker Buildx
@@ -1138,10 +1138,10 @@ jobs:
       - name: Build frontend image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
-          context: src/frontend
+          context: src/web
           pull: true
           load: true
-          tags: releviz-frontend-ci:${{ github.sha }}
+          tags: releviz-web-ci:${{ github.sha }}
           cache-from: type=gha,scope=frontend
           cache-to: type=gha,mode=max,scope=frontend
 
@@ -1157,7 +1157,7 @@ jobs:
         env:
           TRIVY_CACHE_DIR: ${{ github.workspace }}/.cache/trivy
         with:
-          image-ref: releviz-frontend-ci:${{ github.sha }}
+          image-ref: releviz-web-ci:${{ github.sha }}
           format: sarif
           output: trivy-frontend.sarif
           severity: CRITICAL,HIGH
@@ -1345,7 +1345,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: src/backend/requirements/local.txt
+          cache-dependency-path: src/api/requirements/local.txt
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
@@ -1355,16 +1355,16 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Install backend dependencies
-        run: python -m pip install -r src/backend/requirements/local.txt
+        run: python -m pip install -r src/api/requirements/local.txt
 
       - name: Install frontend dependencies
-        run: npm ci --workspace=releviz-frontend
+        run: npm ci --workspace=releviz-web
 
       - name: Download CI frontend build
         uses: actions/download-artifact@v8
         with:
           name: frontend-next-ci
-          path: src/frontend/.next
+          path: src/web/.next
 
       - name: Resolve Playwright version
         id: playwright-version
@@ -1401,8 +1401,8 @@ jobs:
         run: |
           rm -rf "$EMAIL_FILE_PATH"
           mkdir -p "$EMAIL_FILE_PATH"
-          python src/backend/manage.py migrate --noinput --settings=config.settings.e2e
-          python src/backend/manage.py ensure_default_admin --yes --settings=config.settings.e2e
+          python src/api/manage.py migrate --noinput --settings=config.settings.e2e
+          python src/api/manage.py ensure_default_admin --yes --settings=config.settings.e2e
 
       - name: Run Playwright tests
         env:
@@ -1459,7 +1459,7 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Install frontend dependencies
-        run: npm ci --workspace=releviz-frontend
+        run: npm ci --workspace=releviz-web
 
       - name: Download blob reports
         continue-on-error: true

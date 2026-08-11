@@ -96,8 +96,8 @@ environment, apply Terraform, or validate real SES delivery.
 ```
 releviz-monorepo/
   src/
-    frontend/       # Next.js 16 — statically exported UI, no API routes
-    backend/        # Django — API server, account auth, admin
+    web/            # Next.js 16 — statically exported UI, no API routes
+    api/            # Django — API server, account auth, admin
     e2e/            # Playwright browser tests
   infra/
     prod/           # Amplify frontend, public TLS ALB, private HA ECS backend, RDS, DNS, and monitoring
@@ -118,11 +118,11 @@ backend virtual environment before running commands that use `python3`.
 
 ```bash
 npm install          # install all workspace dependencies
-python3 -m pip install -r src/backend/requirements/local.txt
-python3 src/backend/manage.py migrate --settings=config.settings.local
+python3 -m pip install -r src/api/requirements/local.txt
+python3 src/api/manage.py migrate --settings=config.settings.local
 npm run dev          # start backend (4000) + frontend (3000)
-npm run dev:backend  # backend only
-npm run dev:frontend # frontend only
+npm run dev:api  # backend only
+npm run dev:web # frontend only
 ```
 
 The frontend calls the Django service directly. Local development defaults to
@@ -134,9 +134,9 @@ Run the coalescing result worker and durable email worker in separate terminals 
 organizer results or delivery flows:
 
 ```bash
-python3 src/backend/manage.py recompute_event_results --watch --poll-interval=1 \
+python3 src/api/manage.py recompute_event_results --watch --poll-interval=1 \
   --settings=config.settings.local
-python3 src/backend/manage.py dispatch_email_jobs --watch --limit=1000 \
+python3 src/api/manage.py dispatch_email_jobs --watch --limit=1000 \
   --concurrency=10 --rate-limit=10 --poll-interval=1 \
   --settings=config.settings.local
 ```
@@ -144,13 +144,13 @@ python3 src/backend/manage.py dispatch_email_jobs --watch --limit=1000 \
 Run checks:
 
 ```bash
-npm --workspace=releviz-backend run lint
-npm --workspace=releviz-frontend run lint
-python src/backend/manage.py test --settings=config.settings.test
-npm --workspace=releviz-backend run test
-npm --workspace=releviz-frontend run test
-npm --workspace=releviz-frontend run build
-npm --workspace=releviz-frontend run build:amplify
+npm --workspace=releviz-api run lint
+npm --workspace=releviz-web run lint
+python src/api/manage.py test --settings=config.settings.test
+npm --workspace=releviz-api run test
+npm --workspace=releviz-web run test
+npm --workspace=releviz-web run build
+npm --workspace=releviz-web run build:amplify
 npm run quality-gate               # all of the above
 ```
 
@@ -207,7 +207,7 @@ branch protection always receives the same required check.
 
 - `NEXT_PUBLIC_API_BASE_URL` — API origin; defaults to `https://api.releviz.com` in production and
   `http://localhost:4000` in local development
-- `AMPLIFY_STATIC_EXPORT` — set by `build:amplify` to produce `src/frontend/out`; do not set for the
+- `AMPLIFY_STATIC_EXPORT` — set by `build:amplify` to produce `src/web/out`; do not set for the
   local standalone Next server
 
 Production builds set `NEXT_PUBLIC_API_BASE_URL=https://api.releviz.com`. Amplify serves only the
@@ -248,14 +248,14 @@ permissions must already be configured in AWS.
 
 ```bash
 # Backend
-docker build -t releviz-backend:local ./src/backend
+docker build -t releviz-api:local ./src/api
 docker run --rm -p 4000:4000 \
   -e DJANGO_SETTINGS_MODULE=config.settings.local \
-  releviz-backend:local
+  releviz-api:local
 
 # Frontend development/migration-fallback image (production traffic uses Amplify)
-scripts/docker-build-frontend.sh releviz-frontend:local
-docker run --rm -p 3000:3000 releviz-frontend:local
+scripts/docker-build-frontend.sh releviz-web:local
+docker run --rm -p 3000:3000 releviz-web:local
 ```
 
 ## Deployment
@@ -265,14 +265,14 @@ docker run --rm -p 3000:3000 releviz-frontend:local
 Production CD is a protected manual workflow on `main`. It requires the exact confirmation
 `DEPLOY`, verifies that the selected immutable commit passed `CI Result`, assumes the production
 AWS role through GitHub OIDC, builds and pushes SHA-tagged backend and ECS-fallback frontend
-images, and creates one SHA-identified static ZIP from `src/frontend/out`. The workflow manually
+images, and creates one SHA-identified static ZIP from `src/web/out`. The workflow manually
 deploys that exact ZIP to an Amplify `candidate` branch, verifies the frontend plus the direct
 `https://api.releviz.com` CORS/auth/admin boundary, promotes the same ZIP to Amplify `main`, and
 only then associates `releviz.com`. The reviewed infrastructure plan preserves the public TLS ALB
 and private ECS boundary and keeps the backend on a fixed one-hop ALB trust model. The Amplify app
 is not connected to GitHub and does not use a PAT or an auto-build webhook.
 
-The static build must match `src/frontend/amplify-routes.json`. Candidate smoke tests exercise
+The static build must match `src/web/amplify-routes.json`. Candidate smoke tests exercise
 clean and trailing-slash routes, deployed JavaScript, query-preserving redirects, credentialed
 CORS, protected non-GET auth requests, and a cookie/CSRF Django admin POST directly on the API
 hostname. During the first API-subdomain cutover only, the workflow temporarily preserves the old

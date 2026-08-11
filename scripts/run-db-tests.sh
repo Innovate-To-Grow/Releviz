@@ -14,4 +14,4 @@ if [ "${DB_TEST_SKIP_DOCKER:-0}" != "1" ]; then
 fi
 
 scripts/wait-for-postgres.sh
-npm --workspace=releviz-backend run test:db
+npm --workspace=releviz-api run test:db

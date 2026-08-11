@@ -27,7 +27,7 @@ if [ "${E2E_SKIP_DOCKER:-0}" != "1" ]; then
 fi
 
 scripts/wait-for-postgres.sh
-python3 src/backend/manage.py migrate --noinput --settings=config.settings.e2e
-python3 src/backend/manage.py ensure_default_admin --yes --settings=config.settings.e2e
-npm --workspace=releviz-frontend run build
-npm exec --workspace=releviz-frontend -- playwright test --config=../e2e/playwright.config.js
+python3 src/api/manage.py migrate --noinput --settings=config.settings.e2e
+python3 src/api/manage.py ensure_default_admin --yes --settings=config.settings.e2e
+npm --workspace=releviz-web run build
+npm exec --workspace=releviz-web -- playwright test --config=../e2e/playwright.config.js

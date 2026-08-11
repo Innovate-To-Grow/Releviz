@@ -106,7 +106,7 @@ SIMPLE_JWT = {
     "USER_ID_CLAIM": "member_uuid",
     "ALGORITHM": "HS256",
     "AUDIENCE": "releviz-api",
-    "ISSUER": "releviz-backend",
+    "ISSUER": "releviz-api",
     "JTI_CLAIM": "jti",
     "CHECK_REVOKE_TOKEN": True,
 }

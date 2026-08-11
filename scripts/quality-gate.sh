@@ -2,31 +2,31 @@
 set -euo pipefail
 
 echo "=== Backend: lint ==="
-npm --workspace=releviz-backend run lint
+npm --workspace=releviz-api run lint
 
 echo "=== Backend: format check ==="
-npm --workspace=releviz-backend run format:check
+npm --workspace=releviz-api run format:check
 
 echo "=== Backend: 100% coverage ==="
-npm --workspace=releviz-backend run test:coverage
+npm --workspace=releviz-api run test:coverage
 
 echo "=== Frontend: lint ==="
-npm --workspace=releviz-frontend run lint
+npm --workspace=releviz-web run lint
 
 echo "=== Frontend: format check ==="
-npm --workspace=releviz-frontend run format:check
+npm --workspace=releviz-web run format:check
 
 echo "=== Frontend: core-inclusive coverage ==="
-npm --workspace=releviz-frontend run test:coverage
+npm --workspace=releviz-web run test:coverage
 
 echo "=== Frontend: build ==="
-npm --workspace=releviz-frontend run build
+npm --workspace=releviz-web run build
 
 echo "=== Frontend: Amplify static export ==="
-npm --workspace=releviz-frontend run build:amplify
+npm --workspace=releviz-web run build:amplify
 python3 scripts/ci/validate_amplify_static_export.py \
-  --out src/frontend/out \
-  --manifest src/frontend/amplify-routes.json
+  --out src/web/out \
+  --manifest src/web/amplify-routes.json
 
 echo "=== Repository: resource audit ==="
 npm run test:audit
