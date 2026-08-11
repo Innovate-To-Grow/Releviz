@@ -148,7 +148,7 @@ class AccountEmailCodeViewEdgeTests(APITestCase):
     @patch("apps.authn.services.email.send_email.send_verification_email")
     def test_change_password_request_without_email_selects_verified_email(self, _mock_send):
         # An empty payload is now valid: the backend auto-selects the verification
-        # channel (the member's verified email here), mirroring the phone-only SMS path.
+        # channel (the member's verified email here).
         resp = self.client.post("/authn/change-password/request-code/", {}, format="json")
         self.assertEqual(resp.status_code, 202)
         self.assertEqual(resp.data["channel"], "email")

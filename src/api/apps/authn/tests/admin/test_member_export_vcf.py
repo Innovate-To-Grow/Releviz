@@ -7,7 +7,7 @@ from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.test import TestCase, override_settings
 
-from apps.authn.models import ContactEmail, ContactPhone
+from apps.authn.models import ContactEmail
 from apps.authn.services.members.export_vcf import CRLF, MAX_LINE_OCTETS, _fold
 
 Member = get_user_model()
@@ -71,11 +71,6 @@ class MemberVCardExportActionTest(TestCase):
             email_type="secondary",
             verified=False,
         )
-        ContactPhone.objects.create(
-            member=member,
-            phone_number="2095551234",
-            region="1-US",
-        )
 
         resp = self._run_export([member.pk])
 
@@ -96,7 +91,6 @@ class MemberVCardExportActionTest(TestCase):
         self.assertIn("TITLE:Engineer", body)
         self.assertIn("EMAIL;TYPE=INTERNET,PREF:jane.primary@example.com", body)
         self.assertIn("EMAIL;TYPE=INTERNET:jane.secondary@example.com", body)
-        self.assertIn("TEL;TYPE=CELL:+12095551234", body)
         self.assertIn(f"UID:urn:uuid:{member.id}", body)
         # CRLF line endings
         self.assertIn("\r\n", body)

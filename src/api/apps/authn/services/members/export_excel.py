@@ -35,7 +35,7 @@ def export_members_to_excel(queryset) -> bytes:
         "is_active",
         "is_staff",
         "date_joined",
-    ).prefetch_related("contact_emails", "contact_phones")
+    ).prefetch_related("contact_emails")
 
     wb = Workbook(write_only=True)
     ws = wb.create_sheet("Members")
@@ -57,9 +57,6 @@ def export_members_to_excel(queryset) -> bytes:
         ("Secondary Email", 30),
         ("Secondary Verified", 18),
         ("Secondary Subscribed", 20),
-        ("Phone Number", 18),
-        ("Phone Subscribed", 18),
-        ("Phone Verified", 18),
     ]
 
     # Set column widths before appending rows
@@ -84,13 +81,11 @@ def export_members_to_excel(queryset) -> bytes:
     # Write data rows — plain values, no per-cell styling for performance
     for member in queryset:
         contact_emails = member.contact_emails.all()
-        contact_phones = member.contact_phones.all()
 
         primary = next((ce for ce in contact_emails if ce.email_type == "primary"), None)
         secondary = next((ce for ce in contact_emails if ce.email_type == "secondary"), None)
-        phone = next(iter(contact_phones), None)
 
-        # Member-controlled text (name/title/org/email/phone) is neutralized so
+        # Member-controlled text (name/title/org/email) is neutralized so
         # a value like ``=HYPERLINK(...)`` is not written as a live formula that
         # executes when a staffer opens the export (CSV/formula injection).
         ws.append(
@@ -110,9 +105,6 @@ def export_members_to_excel(queryset) -> bytes:
                 safe_sheet_value(secondary.email_address) if secondary else "",
                 "Yes" if secondary and secondary.verified else "No",
                 "Yes" if secondary and secondary.subscribe else "No",
-                safe_sheet_value(phone.to_e164()) if phone else "",
-                "Yes" if phone and phone.subscribe else "No",
-                "Yes" if phone and phone.verified else "No",
             ]
         )
 

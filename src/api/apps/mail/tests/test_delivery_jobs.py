@@ -12,7 +12,7 @@ from django.utils import timezone
 from apps.authn.models import EmailAuthChallenge
 from apps.authn.services import issue_email_challenge
 from apps.authn.tests.helpers import create_member
-from apps.mail.crypto import decrypt_secret
+from apps.core.services.aws.crypto import decrypt_secret
 from apps.mail.models import EmailDeliveryJob, EmailMessageLog
 from apps.mail.services import (
     EmailAttachment,

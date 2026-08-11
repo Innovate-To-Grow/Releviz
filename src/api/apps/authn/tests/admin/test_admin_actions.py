@@ -14,14 +14,12 @@ from django.core.exceptions import PermissionDenied
 from django.test import RequestFactory, TestCase, override_settings
 
 from apps.authn.admin.members.contact.email import ContactEmailAdmin, ContactEmailAdminForm
-from apps.authn.admin.members.contact.phone import ContactPhoneAdmin
 from apps.authn.admin.members.invitation import AdminInvitationAdmin
 from apps.authn.admin.members.member import MemberAdmin
 from apps.authn.admin.security import RSAKeypairAdmin
 from apps.authn.models import (
     AdminInvitation,
     ContactEmail,
-    ContactPhone,
     RSAKeypair,
 )
 
@@ -345,72 +343,6 @@ class ContactEmailAdminTests(_AdminTestBase):
         self.assertEqual(self.email.email_type, "primary")
         self.assertEqual(secondary.email_type, "secondary")
         self.assertIn("Select exactly one email to make primary.", self._messages(request))
-
-
-class ContactPhoneAdminTests(_AdminTestBase):
-    def setUp(self):
-        super().setUp()
-        self.model_admin = ContactPhoneAdmin(ContactPhone, self.site)
-        self.member = Member.objects.create_user(password="t", first_name="C", last_name="P")
-        self.phone = ContactPhone.objects.create(member=self.member, phone_number="2095551234", region="1-US")
-
-    def test_get_formatted_number(self):
-        result = self.model_admin.get_formatted_number(self.phone)
-        self.assertTrue(result)
-
-    def test_mark_verified(self):
-        request = _request(self.rf, self.admin_user)
-        self.model_admin.mark_verified(request, ContactPhone.objects.filter(pk=self.phone.pk))
-        self.phone.refresh_from_db()
-        self.assertTrue(self.phone.verified)
-        self.assertIn("1 phone(s) marked as verified.", self._messages(request))
-
-    def test_mark_unverified(self):
-        self.phone.verified = True
-        self.phone.save(update_fields=["verified"])
-        request = _request(self.rf, self.admin_user)
-        self.model_admin.mark_unverified(request, ContactPhone.objects.filter(pk=self.phone.pk))
-        self.phone.refresh_from_db()
-        self.assertFalse(self.phone.verified)
-        self.assertIn("1 phone(s) marked as unverified.", self._messages(request))
-
-    def test_normalize_all_phones_redirects_to_preview(self):
-        request = _request(self.rf, self.admin_user)
-        response = self.model_admin.normalize_all_phones(request, ContactPhone.objects.all())
-        self.assertEqual(response.status_code, 302)
-        self.assertIn("normalize-phones-preview", response.url)
-
-    def test_normalize_preview_view(self):
-        # store a number that needs normalization (E.164 with country code)
-        ContactPhone.objects.create(member=self.member, phone_number="+12095559999", region="1-US")
-        request = _request(self.rf, self.admin_user)
-        response = self.model_admin._normalize_preview_view(request)
-        self.assertEqual(response.status_code, 200)
-
-    def test_normalize_apply_view_get_redirects(self):
-        request = _request(self.rf, self.admin_user)
-        response = self.model_admin._normalize_apply_view(request)
-        self.assertEqual(response.status_code, 302)
-        self.assertIn("normalize-phones-preview", response.url)
-
-    def test_normalize_apply_view_post_applies(self):
-        ContactPhone.objects.create(member=self.member, phone_number="+12095559999", region="1-US")
-        request = _request(self.rf, self.admin_user, method="post")
-        response = self.model_admin._normalize_apply_view(request)
-        self.assertEqual(response.status_code, 302)
-        self.assertIn("contactphone", response.url)
-        self.assertTrue(self._messages(request))
-
-    def test_normalize_apply_view_handles_exception(self):
-        request = _request(self.rf, self.admin_user, method="post")
-        with patch(
-            "apps.authn.admin.members.contact.phone.apply_phone_changes",
-            side_effect=RuntimeError("boom"),
-        ):
-            response = self.model_admin._normalize_apply_view(request)
-        self.assertEqual(response.status_code, 302)
-        self.assertIn("normalize-phones-preview", response.url)
-        self.assertTrue(any("Failed to apply" in m for m in self._messages(request)))
 
 
 class RSAKeypairAdminTests(_AdminTestBase):

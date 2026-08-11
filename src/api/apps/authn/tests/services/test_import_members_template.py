@@ -7,7 +7,6 @@ from django.test import TestCase
 from django.utils import timezone
 
 from apps.authn.services.members.import_.parsing import (
-    clean_phone,
     generate_random_password,
     normalize_header,
     parse_boolean,
@@ -35,7 +34,6 @@ class GenerateTemplateExcelTests(TestCase):
         members_sheet = workbook["Members"]
         header_values = [cell.value for cell in members_sheet[1]]
         self.assertIn("Primary Email", header_values)
-        self.assertIn("Phone Number", header_values)
 
         # Example row populated on row 2
         example_first = members_sheet.cell(row=2, column=1).value
@@ -88,24 +86,6 @@ class ParsingHelperTests(TestCase):
     def test_parse_date_unrecognized_returns_none(self):
         self.assertIsNone(parse_date("not-a-date"))
 
-    def test_clean_phone_none(self):
-        self.assertIsNone(clean_phone(None))
-
-    def test_clean_phone_empty(self):
-        self.assertIsNone(clean_phone("   "))
-
-    def test_clean_phone_strips_trailing_dot_zero(self):
-        self.assertEqual(clean_phone("12095551234.0"), "+12095551234")
-
-    def test_clean_phone_no_digits_returns_none(self):
-        self.assertIsNone(clean_phone("abc"))
-
-    def test_clean_phone_with_plus(self):
-        self.assertEqual(clean_phone("+1 (209) 555-1234"), "+12095551234")
-
-    def test_clean_phone_without_plus(self):
-        self.assertEqual(clean_phone("2095551234"), "+2095551234")
-
     def test_parse_row_full(self):
         row = parse_row(
             5,
@@ -117,7 +97,6 @@ class ParsingHelperTests(TestCase):
                 "is_active": "yes",
                 "is_staff": "no",
                 "when_started": "2024-01-15",
-                "phone_number": "+12095551234",
             },
         )
         self.assertEqual(row["row"], 5)
@@ -125,7 +104,6 @@ class ParsingHelperTests(TestCase):
         self.assertEqual(row["first_name"], "Ada")
         self.assertTrue(row["is_active"])
         self.assertFalse(row["is_staff"])
-        self.assertEqual(row["phone_number"], "+12095551234")
 
     def test_parse_row_minimal_defaults(self):
         row = parse_row(2, {})
@@ -133,4 +111,3 @@ class ParsingHelperTests(TestCase):
         self.assertEqual(row["first_name"], "")
         self.assertIsNone(row["is_active"])
         self.assertIsNone(row["is_staff"])
-        self.assertIsNone(row["phone_number"])

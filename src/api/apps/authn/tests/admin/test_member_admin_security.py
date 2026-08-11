@@ -200,10 +200,6 @@ class PrivilegeFieldPostTests(TestCase):
             "contact_emails-INITIAL_FORMS": "0",
             "contact_emails-MIN_NUM_FORMS": "0",
             "contact_emails-MAX_NUM_FORMS": "1000",
-            "contact_phones-TOTAL_FORMS": "0",
-            "contact_phones-INITIAL_FORMS": "0",
-            "contact_phones-MIN_NUM_FORMS": "0",
-            "contact_phones-MAX_NUM_FORMS": "1000",
             "_save": "Save",
         }
         self.client.post(url, data)

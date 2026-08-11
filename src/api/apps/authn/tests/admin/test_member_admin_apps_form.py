@@ -218,7 +218,7 @@ class MemberAdminChangePageTests(TestCase):
         parser.feed(resp.content.decode())
 
         # No inline rows for this round-trip.
-        for prefix in ("contact_emails", "contact_phones"):
+        for prefix in ("contact_emails",):
             fields.setdefault(f"{prefix}-TOTAL_FORMS", "0")
             fields.setdefault(f"{prefix}-INITIAL_FORMS", "0")
             fields.setdefault(f"{prefix}-MIN_NUM_FORMS", "0")

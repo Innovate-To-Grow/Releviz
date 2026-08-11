@@ -34,34 +34,6 @@ class ContactEmailSerializerValidateMethodTests(SimpleTestCase):
 
 
 # ---------------------------------------------------------------------------
-# serializers/contact_phones/__init__.py:43,66,85
-# ---------------------------------------------------------------------------
-class ContactPhoneSerializerValidationTests(SimpleTestCase):
-    def test_blank_phone_number_rejected(self):
-        """contact_phones:43 — phone normalizing to empty raises 'required'."""
-        from apps.authn.serializers.contacts.phones import ContactPhoneCreateSerializer
-
-        with self.assertRaises(serializers.ValidationError) as ctx:
-            ContactPhoneCreateSerializer().validate_phone_number("()- .")
-        self.assertIn("required", str(ctx.exception))
-
-    def test_invalid_region_rejected(self):
-        """contact_phones:66 — region not in valid set raises 'Invalid region'."""
-        from apps.authn.serializers.contacts.phones import ContactPhoneCreateSerializer
-
-        with self.assertRaises(serializers.ValidationError) as ctx:
-            ContactPhoneCreateSerializer().validate_region("not-a-real-region")
-        self.assertIn("Invalid region", str(ctx.exception))
-
-    def test_verify_code_rejects_non_six_digit(self):
-        """contact_phones:85 — non 6-digit code rejected."""
-        from apps.authn.serializers.contacts.phones import ContactPhoneVerifyCodeSerializer
-
-        with self.assertRaises(serializers.ValidationError):
-            ContactPhoneVerifyCodeSerializer().validate_code("12ab56")
-
-
-# ---------------------------------------------------------------------------
 # serializers/profile.py:70-71
 # ---------------------------------------------------------------------------
 class ProfileSerializerImageErrorTests(TestCase):

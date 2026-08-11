@@ -6,7 +6,7 @@ from unfold.admin import TabularInline
 
 from apps.core.utils.access import user_can_access_app
 
-from ...models import ContactEmail, ContactPhone, Member
+from ...models import ContactEmail, Member
 
 PRIMARY_EMAIL_INLINE_EDIT_ERROR = (
     "The current primary email's address and type cannot be edited directly. "
@@ -178,12 +178,3 @@ class ContactEmailInline(StaffPermissionInlineMixin, UUIDInlineMixin, TabularInl
         return formset_class
 
 
-class ContactPhoneInline(StaffPermissionInlineMixin, UUIDInlineMixin, TabularInline):
-    """Inline admin for contact phone records."""
-
-    model = ContactPhone
-    extra = 0
-    verbose_name = "Contact Phone"
-    verbose_name_plural = "Contact Phones"
-    fields = ("phone_number", "region", "verified", "subscribe", "created_at")
-    readonly_fields = ("created_at",)

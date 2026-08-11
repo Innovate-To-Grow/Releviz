@@ -3,7 +3,7 @@
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
-from apps.authn.models import ContactEmail, ContactPhone
+from apps.authn.models import ContactEmail
 from apps.authn.services.members.import_.operations import update_single_member
 
 Member = get_user_model()
@@ -26,9 +26,6 @@ def _parsed(**overrides):
         "secondary_email": None,
         "secondary_verified": False,
         "secondary_subscribed": False,
-        "phone_number": None,
-        "phone_subscribed": False,
-        "phone_verified": False,
     }
     base.update(overrides)
     return base
@@ -52,7 +49,7 @@ class UpdateSingleMemberTests(TestCase):
             is_active=True,
             is_staff=True,
         )
-        update_single_member(self.member, parsed, claimed_contact_emails=set(), claimed_phones=set())
+        update_single_member(self.member, parsed, claimed_contact_emails=set())
         self.member.refresh_from_db()
         self.assertEqual(self.member.middle_name, "Quincy")
         self.assertEqual(self.member.title, "Engineer")
@@ -62,7 +59,7 @@ class UpdateSingleMemberTests(TestCase):
     def test_primary_email_updated_when_not_claimed(self):
         # Empty claimed set -> takes the "update existing primary contact" branch (lines 63-68).
         parsed = _parsed(primary_verified=True, primary_subscribed=False)
-        update_single_member(self.member, parsed, claimed_contact_emails=set(), claimed_phones=set())
+        update_single_member(self.member, parsed, claimed_contact_emails=set())
         self.primary.refresh_from_db()
         self.assertTrue(self.primary.verified)
         self.assertFalse(self.primary.subscribe)
@@ -71,7 +68,7 @@ class UpdateSingleMemberTests(TestCase):
         # Member with no primary contact -> create branch (lines 70-76).
         bare = Member.objects.create_user(password="StrongPass123!", first_name="No", last_name="Email")
         parsed = _parsed(primary_email="fresh@example.com")
-        update_single_member(bare, parsed, claimed_contact_emails=set(), claimed_phones=set())
+        update_single_member(bare, parsed, claimed_contact_emails=set())
         self.assertTrue(ContactEmail.objects.filter(member=bare, email_type="primary").exists())
 
     def test_secondary_email_existing_updated(self):
@@ -80,14 +77,12 @@ class UpdateSingleMemberTests(TestCase):
             member=self.member, email_address="sec@example.com", email_type="other", verified=False
         )
         parsed = _parsed(secondary_email="sec@example.com", secondary_verified=True)
-        update_single_member(self.member, parsed, claimed_contact_emails=set(), claimed_phones=set())
+        update_single_member(self.member, parsed, claimed_contact_emails=set())
         sec = ContactEmail.objects.get(member=self.member, email_address="sec@example.com")
         self.assertEqual(sec.email_type, "secondary")
         self.assertTrue(sec.verified)
 
-    def test_phone_existing_updated(self):
-        ContactPhone.objects.create(member=self.member, phone_number="2095550000", region="1-US")
-        parsed = _parsed(phone_number="+12095559999")
-        update_single_member(self.member, parsed, claimed_contact_emails=set(), claimed_phones=set())
-        phone = ContactPhone.objects.get(member=self.member)
-        self.assertEqual(phone.phone_number, "2095559999")
+    def test_update_single_member_returns_member(self):
+        parsed = _parsed()
+        result = update_single_member(self.member, parsed, claimed_contact_emails=set())
+        self.assertEqual(result, self.member)

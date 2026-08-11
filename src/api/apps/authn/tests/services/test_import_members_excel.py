@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from django.test import TestCase
 
-from apps.authn.models import ContactEmail, ContactPhone, Member
+from apps.authn.models import ContactEmail, Member
 from apps.authn.services.members.import_ import import_members_from_excel
 
 try:
@@ -36,7 +36,6 @@ class ImportMembersExcelTests(TestCase):
             "First Name",
             "Last Name",
             "Secondary Email",
-            "Phone Number",
             "Organization",
         ]
         return self._build_workbook(rows, headers=headers)
@@ -170,10 +169,10 @@ class ImportMembersExcelTests(TestCase):
         self.assertEqual(result.skipped_count, 1)
         self.assertIn("Row 2: Missing first name", result.errors)
 
-    def test_creates_member_with_emails_and_phone(self):
+    def test_creates_member_with_emails(self):
         workbook = self._build_full_workbook(
             [
-                ["main@example.com", "Ada", "Lovelace", "alt@example.com", "+12095551234", "Acme"],
+                ["main@example.com", "Ada", "Lovelace", "alt@example.com", "Acme"],
             ]
         )
         result = import_members_from_excel(workbook)
@@ -181,7 +180,6 @@ class ImportMembersExcelTests(TestCase):
         self.assertEqual(result.created_count, 1)
         self.assertTrue(ContactEmail.objects.filter(email_address="main@example.com").exists())
         self.assertTrue(ContactEmail.objects.filter(email_address="alt@example.com").exists())
-        self.assertTrue(ContactPhone.objects.filter(phone_number="2095551234").exists())
 
     def test_exception_during_create_sets_failure(self):
         workbook = self._build_workbook([["boom@example.com", "Ada", "Lovelace", "Acme"]])
@@ -196,14 +194,14 @@ class ImportMembersExcelTests(TestCase):
 
     # ── Update path (operations.py) ──────────────────────
 
-    def test_update_existing_updates_contacts_and_phone(self):
+    def test_update_existing_updates_contacts(self):
         member = Member.objects.create_user(password="StrongPass123!", first_name="Old", last_name="Name")
         ContactEmail.objects.create(
             member=member, email_address="upd@example.com", email_type="primary", verified=False, subscribe=False
         )
         workbook = self._build_full_workbook(
             [
-                ["upd@example.com", "New", "Name", "second@example.com", "+12095559999", "NewOrg"],
+                ["upd@example.com", "New", "Name", "second@example.com", "NewOrg"],
             ]
         )
         result = import_members_from_excel(workbook, update_existing=True)
@@ -213,7 +211,6 @@ class ImportMembersExcelTests(TestCase):
         self.assertEqual(member.first_name, "New")
         self.assertEqual(member.organization, "NewOrg")
         self.assertTrue(ContactEmail.objects.filter(member=member, email_type="secondary").exists())
-        self.assertTrue(ContactPhone.objects.filter(member=member, phone_number="2095559999").exists())
 
     def test_update_existing_member_permission_callback_denies_update(self):
         member = Member.objects.create_user(password="StrongPass123!", first_name="Old", last_name="Name")
@@ -222,7 +219,7 @@ class ImportMembersExcelTests(TestCase):
         )
         workbook = self._build_full_workbook(
             [
-                ["denied@example.com", "New", "Name", "attacker@example.net", "+12095559999", "NewOrg"],
+                ["denied@example.com", "New", "Name", "attacker@example.net", "NewOrg"],
             ]
         )
 
@@ -236,7 +233,7 @@ class ImportMembersExcelTests(TestCase):
         self.assertFalse(ContactEmail.objects.filter(member=member, email_address="attacker@example.net").exists())
         self.assertTrue(any("permission" in error for error in result.errors))
 
-    def test_update_existing_replaces_phone_and_clears_secondary(self):
+    def test_update_existing_clears_secondary(self):
         member = Member.objects.create_user(password="StrongPass123!", first_name="Old", last_name="Name")
         ContactEmail.objects.create(
             member=member, email_address="repl@example.com", email_type="primary", verified=True
@@ -244,11 +241,10 @@ class ImportMembersExcelTests(TestCase):
         ContactEmail.objects.create(
             member=member, email_address="oldsec@example.com", email_type="secondary", verified=True
         )
-        ContactPhone.objects.create(member=member, phone_number="2095550000", region="1-US")
-        # Import with no secondary email and a new phone -> secondary deleted, phone replaced
+        # Import with no secondary email -> secondary deleted
         workbook = self._build_full_workbook(
             [
-                ["repl@example.com", "New", "Name", "", "+12095557777", "Org"],
+                ["repl@example.com", "New", "Name", "", "Org"],
             ]
         )
         result = import_members_from_excel(workbook, update_existing=True)
@@ -256,8 +252,6 @@ class ImportMembersExcelTests(TestCase):
         self.assertTrue(result.success)
         self.assertEqual(result.updated_count, 1)
         self.assertFalse(ContactEmail.objects.filter(member=member, email_type="secondary").exists())
-        self.assertTrue(ContactPhone.objects.filter(member=member, phone_number="2095557777").exists())
-        self.assertFalse(ContactPhone.objects.filter(member=member, phone_number="2095550000").exists())
 
     def test_update_existing_member_not_resolved_is_skipped(self):
         # The primary ContactEmail exists (so the row is routed to update), but the

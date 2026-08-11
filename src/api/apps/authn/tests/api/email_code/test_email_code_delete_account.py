@@ -4,7 +4,7 @@ from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from rest_framework.test import APITestCase
 
-from apps.authn.models import ContactEmail, ContactPhone
+from apps.authn.models import ContactEmail
 from apps.event.models import EventRegistration
 from apps.event.tests.helpers import make_event, make_ticket
 
@@ -27,12 +27,6 @@ class EmailCodeDeleteAccountTests(APITestCase):
             member=self.member,
             email_address="delete-me@example.com",
             email_type="primary",
-            verified=True,
-        )
-        self.phone = ContactPhone.objects.create(
-            member=self.member,
-            phone_number="5551234567",
-            region="1-US",
             verified=True,
         )
         event = make_event()
@@ -77,7 +71,6 @@ class EmailCodeDeleteAccountTests(APITestCase):
 
         self.assertFalse(Member.objects.filter(pk=self.member.pk).exists())
         self.assertFalse(ContactEmail.objects.filter(pk=self.primary_email.pk).exists())
-        self.assertFalse(ContactPhone.objects.filter(pk=self.phone.pk).exists())
         self.assertFalse(EventRegistration.objects.filter(pk=self.registration.pk).exists())
 
     def test_confirm_delete_account_rejects_other_users_token(self, _mock_code, _mock_send):

@@ -29,7 +29,7 @@ def export_members_to_vcard(queryset) -> bytes:
         "organization",
         "title",
         "profile_image",
-    ).prefetch_related("contact_emails", "contact_phones")
+    ).prefetch_related("contact_emails")
 
     cards: list[str] = []
     for member in queryset:
@@ -45,7 +45,6 @@ def _build_vcard(member) -> str:
     contact_emails = list(member.contact_emails.all())
     primary_email = next((ce for ce in contact_emails if ce.email_type == "primary"), None)
     secondary_email = next((ce for ce in contact_emails if ce.email_type == "secondary"), None)
-    phone = next(iter(member.contact_phones.all()), None)
 
     first = (member.first_name or "").strip()
     middle = (member.middle_name or "").strip()
@@ -68,14 +67,6 @@ def _build_vcard(member) -> str:
         lines.append(_fold(f"EMAIL;TYPE=INTERNET,PREF:{_escape(primary_email.email_address)}"))
     if secondary_email and secondary_email.email_address:
         lines.append(_fold(f"EMAIL;TYPE=INTERNET:{_escape(secondary_email.email_address)}"))
-
-    if phone:
-        try:
-            tel = phone.to_e164()
-        except Exception:
-            tel = ""
-        if tel:
-            lines.append(_fold(f"TEL;TYPE=CELL:{_escape(tel)}"))
 
     photo_b64, photo_type = _profile_image(member.profile_image)
     if photo_b64:

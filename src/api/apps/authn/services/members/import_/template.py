@@ -28,9 +28,6 @@ def generate_template_excel() -> bytes:
         ("secondary_email", "Secondary Email", 30),
         ("secondary_verified", "Secondary Verified", 18),
         ("secondary_subscribed", "Secondary Subscribed", 20),
-        ("phone_number", "Phone Number", 18),
-        ("phone_subscribed", "Phone Subscribed", 18),
-        ("phone_verified", "Phone Verified", 18),
         ("organization", "Organization (optional)", 25),
     ]
     _apply_headers(worksheet, headers)
@@ -84,9 +81,6 @@ def _apply_example_row(worksheet):
         "john.d@gmail.com",
         "FALSE",
         "FALSE",
-        "+12095551234",
-        "TRUE",
-        "FALSE",
         "UC Merced",
     ]
     for column, value in enumerate(example_data, 1):
@@ -111,9 +105,6 @@ def _apply_instruction_sheet(workbook):
         ("Secondary Email", "Secondary/alternate email address (optional)"),
         ("Secondary Verified", "Whether the secondary email is verified (TRUE/FALSE)"),
         ("Secondary Subscribed", "Whether the secondary email is subscribed (TRUE/FALSE)"),
-        ("Phone Number", "Phone number in E.164 format, e.g. +12095551234 (optional)"),
-        ("Phone Subscribed", "Whether the phone is subscribed (TRUE/FALSE)"),
-        ("Phone Verified", "Whether the phone is verified (TRUE/FALSE)"),
         ("Organization (optional)", "Organization or company name"),
         ("", ""),
         ("Notes", ""),

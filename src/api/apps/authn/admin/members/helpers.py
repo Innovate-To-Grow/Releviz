@@ -10,10 +10,6 @@ def get_primary_email_display(member):
     return member.get_primary_email() or "-"
 
 
-def get_primary_phone_display(member):
-    return member.get_primary_phone() or "-"
-
-
 def get_full_name_display(member):
     return member.get_full_name() or "-"
 
@@ -22,7 +18,7 @@ def normalize_inline_uuid_none_values(request):
     if request.method != "POST":
         return
 
-    inline_prefixes = ("contact_emails-", "contact_phones-")
+    inline_prefixes = ("contact_emails-",)
     uuid_suffixes = ("-id", "-member")
     post_data = request.POST
     original_mutable = getattr(post_data, "_mutable", None)

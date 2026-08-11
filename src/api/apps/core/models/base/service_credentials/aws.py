@@ -1,15 +1,16 @@
 from django.db import models, transaction
 
+from apps.core.services.aws.crypto import decrypt_secret, encrypt_secret
+
 
 class AWSCredentialConfig(models.Model):
     """
     Unified AWS configuration.
 
-    Stores the IAM access key, AWS region, and the SNS SMS origination
-    phone number used by SES (email), SNS (SMS phone verification), and
-    Bedrock (System Intelligence). All three services share the same
-    region. Multiple configs can exist but only one may be active at a
-    time. Managed via Django admin under Site Settings.
+    Stores the IAM access key and AWS region used by SES (email) and
+    Bedrock (System Intelligence). Both services share the same region.
+    Multiple configs can exist but only one may be active at a time.
+    Managed via Django admin under Site Settings.
     """
 
     name = models.CharField(
@@ -29,34 +30,20 @@ class AWSCredentialConfig(models.Model):
         blank=True,
         default="",
         verbose_name="Access Key ID",
-        help_text="AWS IAM access key ID (starts with AKIA…). Shared by SES, SNS, and Bedrock.",
+        help_text="AWS IAM access key ID (starts with AKIA…). Shared by SES and Bedrock.",
     )
-    secret_access_key = models.CharField(
-        max_length=256,
+    encrypted_secret_access_key = models.TextField(
         blank=True,
         default="",
-        verbose_name="Secret Access Key",
+        verbose_name="Encrypted Secret Access Key",
+        help_text="AWS IAM secret access key, encrypted at rest with Fernet.",
     )
     default_region = models.CharField(
         max_length=32,
         blank=True,
         default="us-west-2",
         verbose_name="AWS Region",
-        help_text="AWS region used by SES, SNS, and Bedrock.",
-    )
-    sms_from_number = models.CharField(
-        max_length=20,
-        blank=True,
-        default="",
-        verbose_name="SMS Origination Number",
-        help_text="SNS-registered origination number in E.164 format (e.g. +12065551234).",
-    )
-    sms_message_template = models.CharField(
-        max_length=320,
-        blank=True,
-        default="",
-        verbose_name="SMS OTP Message Template",
-        help_text="SMS body template. Must include {code}. Leave blank for the default message.",
+        help_text="AWS region used by SES and Bedrock.",
     )
 
     updated_at = models.DateTimeField(auto_now=True)
@@ -89,6 +76,17 @@ class AWSCredentialConfig(models.Model):
         else:
             super().save(*args, **kwargs)
 
+    def set_secret_access_key(self, value: str) -> None:
+        """Encrypt and store the AWS secret access key."""
+        if value:
+            self.encrypted_secret_access_key = encrypt_secret(value)
+        else:
+            self.encrypted_secret_access_key = ""
+
+    def get_secret_access_key(self) -> str:
+        """Decrypt and return the AWS secret access key."""
+        return decrypt_secret(self.encrypted_secret_access_key)
+
     @classmethod
     def load(cls):
         """Load the active config.
@@ -109,41 +107,8 @@ class AWSCredentialConfig(models.Model):
 
     @property
     def is_configured(self) -> bool:
-        return bool(self.access_key_id and self.secret_access_key)
+        return bool(self.access_key_id and self.get_secret_access_key())
 
     @property
     def ses_configured(self) -> bool:
         return self.is_configured
-
-    @property
-    def sns_configured(self) -> bool:
-        """SMS is ready when credentials exist and an origination number is available.
-
-        The number is taken from ``sms_from_number`` when set (manual override),
-        otherwise auto-detected from AWS End User Messaging (DescribePhoneNumbers, cached).
-        """
-        if not self.is_configured:
-            return False
-        if self.sms_from_number:
-            return True
-        from apps.core.services.aws import sms as sms_service
-
-        return sms_service.origination_number_available()
-
-    def resolved_sms_from_number(self) -> str:
-        """The origination number to send from: manual override, else auto-detected."""
-        if self.sms_from_number:
-            return self.sms_from_number
-        if not self.is_configured:
-            return ""
-        from apps.core.services.aws import sms as sms_service
-
-        return sms_service.resolve_origination_number() or ""
-
-    def render_sms_otp_message(self, code: str) -> str:
-        template = self.sms_message_template.strip() or (
-            "Your Innovate to Grow verification code is {code}. It expires in 10 minutes."
-        )
-        if "{code}" not in template:
-            raise ValueError("SMS OTP message template must include {code}.")
-        return template.format(code=code)

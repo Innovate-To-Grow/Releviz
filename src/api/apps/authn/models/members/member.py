@@ -117,33 +117,3 @@ class Member(AbstractUser, ProjectControlModel):
         if prefetched is not None:
             return prefetched
         return self.contact_emails.filter(email_type="primary").order_by("created_at").first()
-
-    def _primary_phone_from_prefetch(self):
-        """Return the primary ContactPhone from the prefetch cache, or None if not prefetched.
-
-        Mirrors :meth:`_primary_contact_from_prefetch`: verified phones sort first
-        (``-verified``), then earliest ``created_at``.
-        """
-        cache = getattr(self, "_prefetched_objects_cache", None)
-        if not cache or "contact_phones" not in cache:
-            return None
-        phones = list(cache["contact_phones"])
-        if not phones:
-            return None
-        phones.sort(key=lambda p: (-p.verified, p.created_at))
-        return phones[0]
-
-    def get_primary_phone(self) -> str:
-        """Return the member's primary phone in E.164, or empty string.
-
-        ContactPhone has no ``phone_type`` (unlike ContactEmail), so pick
-        deterministically: verified phones sort first (``-verified``), then the
-        earliest within that group — i.e. the earliest verified phone, else the
-        earliest phone overall. When ``contact_phones`` is prefetched the result
-        is computed in-process with zero extra queries.
-        """
-        prefetched = self._primary_phone_from_prefetch()
-        if prefetched is not None:
-            return prefetched.to_e164()
-        contact = self.contact_phones.order_by("-verified", "created_at").first()
-        return contact.to_e164() if contact else ""

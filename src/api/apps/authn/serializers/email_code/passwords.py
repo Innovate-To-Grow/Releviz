@@ -12,19 +12,14 @@ from apps.authn.constants import RECOVERY_CHANNEL_UNAVAILABLE, VERIFICATION_CONF
 from apps.authn.services import (
     AuthChallengeInvalid,
     NoRecoveryChannelError,
-    PhoneVerificationError,
-    PhoneVerificationInvalid,
-    PhoneVerificationThrottled,
     consume_verification_token,
     delete_member_account,
     get_member_auth_emails,
     issue_email_challenge,
     normalize_email,
-    request_sms_password_code,
     resolve_login_identifier,
     select_recovery_channel,
     verify_email_code_and_mint_token,
-    verify_sms_password_code_and_mint,
 )
 
 from ..helpers import decrypt_password_pair
@@ -39,11 +34,11 @@ def _identifier_value(data: dict) -> str:
 
 
 class PasswordResetRequestSerializer(serializers.Serializer):
-    """Request a password-reset code by email or phone (enumeration-safe).
+    """Request a password-reset code by email (enumeration-safe).
 
-    Accepts ``identifier`` (an email address or a phone number); ``email`` is kept
-    as a backward-compatible alias. The response is identical whether or not an
-    account exists, and the channel follows the identifier the caller supplied.
+    Accepts ``identifier`` (an email address); ``email`` is kept as a
+    backward-compatible alias. The response is identical whether or not an
+    account exists, and the channel is always email.
     """
 
     identifier = serializers.CharField(required=False, allow_blank=True)
@@ -51,31 +46,15 @@ class PasswordResetRequestSerializer(serializers.Serializer):
 
     def save(self):
         # Always return an opaque ID so response shape cannot reveal whether the
-        # identifier resolved. For an eligible SMS account it is replaced with
-        # the durable challenge ID; email/unknown identifiers receive a decoy.
+        # identifier resolved.
         challenge_id = str(uuid.uuid4())
         resolved = resolve_login_identifier(_identifier_value(self.validated_data), require_active=True)
         if resolved is not None:
-            if resolved.via == "email":
-                issue_email_challenge(
-                    member=resolved.member,
-                    purpose=PURPOSE.PASSWORD_RESET,
-                    target_email=resolved.email,
-                )
-            else:
-                try:
-                    issued_challenge_id = request_sms_password_code(
-                        member=resolved.member,
-                        e164=resolved.e164,
-                        purpose=PURPOSE.PASSWORD_RESET,
-                    )
-                    if issued_challenge_id:
-                        challenge_id = issued_challenge_id
-                except PhoneVerificationError:
-                    # Stay enumeration-safe on this public endpoint: never surface
-                    # per-number SMS send state. The generic response is returned
-                    # regardless; the per-number send cap is the backstop.
-                    logger.warning("Password-reset SMS send failed", exc_info=True)
+            issue_email_challenge(
+                member=resolved.member,
+                purpose=PURPOSE.PASSWORD_RESET,
+                target_email=resolved.email,
+            )
         return {
             "message": "If an eligible account exists, a verification code has been sent.",
             "challenge_id": challenge_id,
@@ -83,7 +62,7 @@ class PasswordResetRequestSerializer(serializers.Serializer):
 
 
 class PasswordResetVerifySerializer(serializers.Serializer):
-    """Verify a password-reset code (email or SMS) and mint a verification token."""
+    """Verify a password-reset code and mint a verification token."""
 
     identifier = serializers.CharField(required=False, allow_blank=True)
     email = serializers.CharField(required=False, allow_blank=True)
@@ -95,27 +74,15 @@ class PasswordResetVerifySerializer(serializers.Serializer):
         if resolved is None:
             raise serializers.ValidationError({"detail": VERIFICATION_INVALID})
 
-        if resolved.via == "email":
-            try:
-                _, attrs["verification_token"] = verify_email_code_and_mint_token(
-                    purpose=PURPOSE.PASSWORD_RESET,
-                    target_email=resolved.email,
-                    code=attrs["code"],
-                    member=resolved.member,
-                )
-            except AuthChallengeInvalid:
-                raise serializers.ValidationError({"detail": VERIFICATION_INVALID}) from None
-        else:
-            try:
-                attrs["verification_token"] = verify_sms_password_code_and_mint(
-                    member=resolved.member,
-                    purpose=PURPOSE.PASSWORD_RESET,
-                    e164=resolved.e164,
-                    code=attrs["code"],
-                    challenge_id=attrs.get("challenge_id"),
-                )
-            except (PhoneVerificationInvalid, PhoneVerificationThrottled):
-                raise serializers.ValidationError({"detail": VERIFICATION_INVALID}) from None
+        try:
+            _, attrs["verification_token"] = verify_email_code_and_mint_token(
+                purpose=PURPOSE.PASSWORD_RESET,
+                target_email=resolved.email,
+                code=attrs["code"],
+                member=resolved.member,
+            )
+        except AuthChallengeInvalid:
+            raise serializers.ValidationError({"detail": VERIFICATION_INVALID}) from None
         return attrs
 
     def save(self):
@@ -163,9 +130,9 @@ class ChangePasswordCodeRequestSerializer(serializers.Serializer):
     """Request a password-create/change verification code.
 
     The verification channel is chosen by ``select_recovery_channel`` (verified
-    primary email -> any verified email -> verified phone via SMS). ``email`` is
-    optional and only used to disambiguate when the member has several verified
-    emails (legacy clients echo it); it must be one of the member's verified emails.
+    primary email -> any verified email). ``email`` is optional and only used to
+    disambiguate when the member has several verified emails (legacy clients
+    echo it); it must be one of the member's verified emails.
     """
 
     email = serializers.EmailField(required=False, allow_blank=True)
@@ -184,40 +151,25 @@ class ChangePasswordCodeRequestSerializer(serializers.Serializer):
     def save(self):
         member = self.context["request"].user
         selected = self.validated_data["selected"]
-        if selected.channel == "email":
-            issue_email_challenge(
-                member=member,
-                purpose=PURPOSE.PASSWORD_CHANGE,
-                target_email=selected.target_email,
-            )
-        else:
-            challenge_id = request_sms_password_code(
-                member=member,
-                e164=selected.e164,
-                purpose=PURPOSE.PASSWORD_CHANGE,
-            )
-        payload = {
+        issue_email_challenge(
+            member=member,
+            purpose=PURPOSE.PASSWORD_CHANGE,
+            target_email=selected.target_email,
+        )
+        return {
             "message": "Verification code sent.",
-            "channel": selected.channel,
             "destination": selected.masked_destination,
         }
-        if selected.channel == "sms":
-            payload["challenge_id"] = challenge_id
-        return payload
 
 
 class ChangePasswordCodeVerifySerializer(serializers.Serializer):
-    """Verify a password-change code (email or SMS) and mint a verification token.
+    """Verify a password-change code and mint a verification token.
 
-    The channel is re-derived deterministically from member state, so the same
-    channel chosen at request time is used here; ``email`` disambiguates the email
-    case for members with several verified emails.
+    ``email`` disambiguates the email case for members with several verified emails.
     """
 
     email = serializers.EmailField(required=False, allow_blank=True)
     code = serializers.CharField(required=True, min_length=6, max_length=6)
-    channel = serializers.ChoiceField(choices=["email", "sms"], required=False)
-    challenge_id = serializers.UUIDField(required=False)
 
     def validate(self, attrs: dict) -> dict:
         member = self.context["request"].user
@@ -227,42 +179,22 @@ class ChangePasswordCodeVerifySerializer(serializers.Serializer):
         except NoRecoveryChannelError:
             raise serializers.ValidationError({"detail": RECOVERY_CHANNEL_UNAVAILABLE}) from None
 
-        client_channel = attrs.get("channel")
-        if client_channel and client_channel != selected.channel:
-            raise serializers.ValidationError(
-                {"detail": "Your contact methods changed since the code was sent. Please request a new code."}
+        try:
+            _, attrs["verification_token"] = verify_email_code_and_mint_token(
+                purpose=PURPOSE.PASSWORD_CHANGE,
+                target_email=selected.target_email,
+                code=attrs["code"],
+                member=member,
             )
+        except AuthChallengeInvalid:
+            raise serializers.ValidationError({"detail": VERIFICATION_INVALID}) from None
 
-        if selected.channel == "email":
-            try:
-                _, attrs["verification_token"] = verify_email_code_and_mint_token(
-                    purpose=PURPOSE.PASSWORD_CHANGE,
-                    target_email=selected.target_email,
-                    code=attrs["code"],
-                    member=member,
-                )
-            except AuthChallengeInvalid:
-                raise serializers.ValidationError({"detail": VERIFICATION_INVALID}) from None
-        else:
-            try:
-                attrs["verification_token"] = verify_sms_password_code_and_mint(
-                    member=member,
-                    purpose=PURPOSE.PASSWORD_CHANGE,
-                    e164=selected.e164,
-                    code=attrs["code"],
-                    challenge_id=attrs.get("challenge_id"),
-                )
-            except (PhoneVerificationInvalid, PhoneVerificationThrottled):
-                raise serializers.ValidationError({"detail": VERIFICATION_INVALID}) from None
-
-        attrs["channel"] = selected.channel
         return attrs
 
     def save(self):
         return {
             "message": "Verification code accepted.",
             "verification_token": self.validated_data["verification_token"],
-            "channel": self.validated_data["channel"],
         }
 
 

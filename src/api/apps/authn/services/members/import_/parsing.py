@@ -47,17 +47,6 @@ HEADER_MAP = {
     "secondary_expired": "secondary_expired",
     "secondary bounced": "secondary_bounced",
     "secondary_bounced": "secondary_bounced",
-    "phone number": "phone_number",
-    "phone_number": "phone_number",
-    "phone": "phone_number",
-    "phone number subscribed": "phone_subscribed",
-    "phone_number_subscribed": "phone_subscribed",
-    "phone subscribed": "phone_subscribed",
-    "phone_subscribed": "phone_subscribed",
-    "phone number verified": "phone_verified",
-    "phone_number_verified": "phone_verified",
-    "phone verified": "phone_verified",
-    "phone_verified": "phone_verified",
     "organization": "organization",
     "organization (optional)": "organization",
     "company": "organization",
@@ -111,25 +100,6 @@ def parse_date(value):
     return None
 
 
-def clean_phone(value) -> str | None:
-    if value is None:
-        return None
-    stripped = str(value).strip()
-    if not stripped:
-        return None
-    # Remove trailing ".0" from Excel numeric conversion
-    if stripped.endswith(".0"):
-        stripped = stripped[:-2]
-    # Strip non-digit characters except leading +
-    digits_only = "".join(c for c in stripped if c.isdigit())
-    if not digits_only:
-        return None
-    # Normalize to E.164 format (preserve leading +)
-    if stripped.startswith("+"):
-        return f"+{digits_only}"
-    return f"+{digits_only}"
-
-
 def parse_row(row_num: int, row_data: dict) -> dict:
     primary_email = str(row_data.get("primary_email", "")).strip() if row_data.get("primary_email") else None
     secondary_email = str(row_data.get("secondary_email", "")).strip() if row_data.get("secondary_email") else None
@@ -149,7 +119,4 @@ def parse_row(row_num: int, row_data: dict) -> dict:
         "secondary_email": secondary_email,
         "secondary_verified": parse_boolean(row_data.get("secondary_verified")),
         "secondary_subscribed": parse_boolean(row_data.get("secondary_subscribed")),
-        "phone_number": clean_phone(row_data.get("phone_number")),
-        "phone_subscribed": parse_boolean(row_data.get("phone_subscribed")),
-        "phone_verified": parse_boolean(row_data.get("phone_verified")),
     }

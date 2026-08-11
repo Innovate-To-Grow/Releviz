@@ -62,7 +62,7 @@ class AdminSidebarNavigationTest(SimpleTestCase):
         item_titles = {item["title"] for item in members_section["items"]}
 
         self.assertIn("Members", item_titles)
-        self.assertIn("Emails & Phones", item_titles)
+        self.assertIn("Emails", item_titles)
         self.assertIn("Login Challenges", item_titles)
 
     def test_email_delivery_navigation_includes_providers_and_logs(self):
@@ -132,14 +132,13 @@ class AdminSidebarNavigationTest(SimpleTestCase):
 
         self.assertEqual(
             members_tab["models"],
-            ["authn.member", "authn.contactemail", "authn.contactphone"],
+            ["authn.member", "authn.contactemail"],
         )
         self.assertEqual(
             members_tab["items"],
             [
                 {"title": "Members", "link": "/admin/authn/member/"},
                 {"title": "Emails", "link": "/admin/authn/contactemail/"},
-                {"title": "Phones", "link": "/admin/authn/contactphone/"},
             ],
         )
 

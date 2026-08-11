@@ -13,8 +13,7 @@ try:
 except ImportError:  # pragma: no cover - guarded at runtime
     load_workbook = None
 
-from apps.authn.models import ContactEmail, ContactPhone, Member
-from apps.authn.services.contacts.contact_phones import infer_region_from_e164, normalize_to_national
+from apps.authn.models import ContactEmail, Member
 
 from .operations import bulk_update_members
 from .parsing import generate_random_password, normalize_header, parse_row
@@ -69,14 +68,11 @@ def import_members_from_excel(
             return result
 
         existing_emails = {email.lower() for email in ContactEmail.objects.values_list("email_address", flat=True)}
-        existing_phones = set(ContactPhone.objects.values_list("phone_number", flat=True))
         hashed_pw = make_password(default_password or generate_random_password())
         members_to_create: list[Member] = []
         emails_to_create: list[ContactEmail] = []
-        phones_to_create: list[ContactPhone] = []
         rows_to_update: list[dict] = []
         claimed_contact_emails: set[str] = set(existing_emails)
-        claimed_phones: set[str] = set(existing_phones)
         now = timezone.now()
 
         for parsed in parsed_rows:
@@ -114,7 +110,7 @@ def import_members_from_excel(
             members_to_create.append(member)
             existing_emails.add(email_key)
             _append_contact_records(
-                member, parsed, emails_to_create, phones_to_create, claimed_contact_emails, claimed_phones
+                member, parsed, emails_to_create, claimed_contact_emails
             )
             result.created_count += 1
 
@@ -127,8 +123,6 @@ def import_members_from_excel(
                 Member.objects.bulk_create(members_to_create, batch_size=BATCH_SIZE)
             if emails_to_create:
                 ContactEmail.objects.bulk_create(emails_to_create, batch_size=BATCH_SIZE)
-            if phones_to_create:
-                ContactPhone.objects.bulk_create(phones_to_create, batch_size=BATCH_SIZE)
     except Exception as exc:  # noqa: BLE001
         result.success = False
         result.created_count = 0
@@ -136,15 +130,14 @@ def import_members_from_excel(
         return result
 
     if rows_to_update:
-        # Rebuild claimed sets from actual DB state after successful create
+        # Rebuild claimed set from actual DB state after successful create
         claimed_contact_emails = {e.lower() for e in ContactEmail.objects.values_list("email_address", flat=True)}
-        claimed_phones = set(ContactPhone.objects.values_list("phone_number", flat=True))
-        bulk_update_members(rows_to_update, result, claimed_contact_emails, claimed_phones, update_member_allowed)
+        bulk_update_members(rows_to_update, result, claimed_contact_emails, update_member_allowed)
 
     return result
 
 
-def _append_contact_records(member, parsed, emails_to_create, phones_to_create, claimed_contact_emails, claimed_phones):
+def _append_contact_records(member, parsed, emails_to_create, claimed_contact_emails):
     email_key = parsed["primary_email"].lower()
     if email_key not in claimed_contact_emails:
         emails_to_create.append(
@@ -171,18 +164,3 @@ def _append_contact_records(member, parsed, emails_to_create, phones_to_create, 
                 )
             )
             claimed_contact_emails.add(secondary_key)
-
-    if parsed["phone_number"]:
-        region = infer_region_from_e164(parsed["phone_number"])
-        national = normalize_to_national(parsed["phone_number"], region)
-        if national not in claimed_phones:
-            phones_to_create.append(
-                ContactPhone(
-                    member=member,
-                    phone_number=national,
-                    region=region,
-                    subscribe=parsed["phone_subscribed"],
-                    verified=parsed["phone_verified"],
-                )
-            )
-            claimed_phones.add(national)

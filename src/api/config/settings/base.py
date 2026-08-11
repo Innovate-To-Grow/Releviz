@@ -6,8 +6,8 @@ from pathlib import Path
 
 from django.templatetags.static import static
 
-from apps.core.access import user_can_access_app
-from apps.core.error_tracking import initialize_error_tracking
+from apps.core.utils.access import user_can_access_app
+from apps.core.utils.error_tracking import initialize_error_tracking
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 
@@ -20,7 +20,6 @@ INSTALLED_APPS = [
     "unfold.contrib.filters",
     "unfold.contrib.forms",
     "apps.authn.apps.AuthnConfig",
-    "apps.core.apps.RelevizAdminConfig",
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
@@ -226,12 +225,12 @@ LOGGING = {
     "disable_existing_loggers": False,
     "filters": {
         "request_context": {
-            "()": "apps.core.logging.RequestContextFilter",
+            "()": "apps.core.utils.logging.RequestContextFilter",
         }
     },
     "formatters": {
         "json": {
-            "()": "apps.core.logging.JsonFormatter",
+            "()": "apps.core.utils.logging.JsonFormatter",
         }
     },
     "handlers": {
@@ -308,11 +307,10 @@ UNFOLD = {
             ],
         },
         {
-            "models": ["authn.member", "authn.contactemail", "authn.contactphone"],
+            "models": ["authn.member", "authn.contactemail"],
             "items": [
                 {"title": "Members", "link": "/admin/authn/member/"},
                 {"title": "Emails", "link": "/admin/authn/contactemail/"},
-                {"title": "Phones", "link": "/admin/authn/contactphone/"},
             ],
         },
         {
@@ -386,11 +384,10 @@ UNFOLD = {
                         "permission": _can("authn"),
                     },
                     {
-                        "title": "Emails & Phones",
+                        "title": "Emails",
                         "link": "/admin/authn/contactemail/",
                         "active_paths": [
                             "/admin/authn/contactemail/",
-                            "/admin/authn/contactphone/",
                         ],
                         "permission": _can("authn"),
                     },

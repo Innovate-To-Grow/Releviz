@@ -247,10 +247,6 @@ class ContactEmailInlinePrimaryFormsetTests(TestCase):
             "contact_emails-1-email_type": "primary",
             "contact_emails-1-verified": "on",
             "contact_emails-1-subscribe": "on",
-            "contact_phones-TOTAL_FORMS": "0",
-            "contact_phones-INITIAL_FORMS": "0",
-            "contact_phones-MIN_NUM_FORMS": "0",
-            "contact_phones-MAX_NUM_FORMS": "1000",
             "_save": "Save",
         }
         resp = self.client.post("/admin/authn/member/add/", data)

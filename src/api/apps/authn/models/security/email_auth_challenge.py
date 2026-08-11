@@ -29,10 +29,6 @@ class EmailAuthChallenge(ProjectControlModel):
         CONSUMED = "consumed", "Consumed"
         EXPIRED = "expired", "Expired"
 
-    class Channel(models.TextChoices):
-        EMAIL = "email", "Email"
-        SMS = "sms", "SMS"
-
     member = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -42,28 +38,16 @@ class EmailAuthChallenge(ProjectControlModel):
         max_length=32,
         choices=Purpose.choices,
     )
-    channel = models.CharField(
-        max_length=8,
-        choices=Channel.choices,
-        default=Channel.EMAIL,
-        help_text="Delivery channel the verification code was sent through.",
-    )
     target_email = models.EmailField(
         blank=True,
         default="",
-        help_text="Email address where the verification code was sent (email channel).",
-    )
-    target_phone = models.CharField(
-        max_length=20,
-        blank=True,
-        default="",
-        help_text="E.164 phone number where the verification code was sent (SMS channel).",
+        help_text="Email address where the verification code was sent.",
     )
     code_hash = models.CharField(
         max_length=255,
         blank=True,
         default="",
-        help_text="Hashed verification code. Blank for SMS-channel rows, whose code lives in the OTP cache.",
+        help_text="Hashed verification code.",
     )
     verification_token_hash = models.CharField(
         max_length=255,
@@ -101,8 +85,7 @@ class EmailAuthChallenge(ProjectControlModel):
         ]
 
     def __str__(self):
-        target = self.target_phone if self.channel == self.Channel.SMS else self.target_email
-        return f"{self.get_purpose_display()} -> {target} [{self.status}]"
+        return f"{self.get_purpose_display()} -> {self.target_email} [{self.status}]"
 
     @property
     def is_expired(self) -> bool:

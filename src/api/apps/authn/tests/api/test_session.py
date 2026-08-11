@@ -1,7 +1,7 @@
 from django.contrib.auth import get_user_model
 from rest_framework.test import APITestCase
 
-from apps.authn.models import ContactEmail, ContactPhone
+from apps.authn.models import ContactEmail
 
 Member = get_user_model()
 
@@ -27,12 +27,6 @@ class SessionViewTests(APITestCase):
             email_type="primary",
             verified=True,
         )
-        ContactPhone.objects.create(
-            member=member,
-            phone_number="2025550123",
-            region="1-US",
-            verified=True,
-        )
         self.client.force_authenticate(member)
 
         response = self.client.get(SESSION_URL)
@@ -41,7 +35,6 @@ class SessionViewTests(APITestCase):
         self.assertEqual(response.data["user"]["member_uuid"], str(member.pk))
         self.assertEqual(response.data["user"]["email"], primary.email_address)
         self.assertTrue(response.data["user"]["email_verified"])
-        self.assertEqual(response.data["user"]["phone"], "+12025550123")
         self.assertFalse(response.data["requires_profile_completion"])
         self.assertEqual(response.data["next_step"], "account")
 

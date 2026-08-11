@@ -4,10 +4,10 @@ Authn app models export.
 Aggregates commonly used models so callers can import from `authn.models`.
 """
 
-from .contact import ContactEmail, ContactPhone
+from .contact import ContactEmail
 
 from .members import AdminInvitation, Member
-from .security import EmailAuthChallenge, ImpersonationToken, PhoneVerificationChallenge, RSAKeypair
+from .security import EmailAuthChallenge, ImpersonationToken, RSAKeypair
 
 __all__ = [
     # Members
@@ -15,11 +15,8 @@ __all__ = [
     "AdminInvitation",
     # Contact
     "ContactEmail",
-    "ContactPhone",
     # Security
     "EmailAuthChallenge",
     "ImpersonationToken",
-    "PhoneVerificationChallenge",
     "RSAKeypair",
-
 ]

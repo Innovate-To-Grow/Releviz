@@ -6,7 +6,7 @@ from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from rest_framework.test import APITestCase
 
-from apps.authn.models import ContactEmail, ContactPhone
+from apps.authn.models import ContactEmail
 
 Member = get_user_model()
 
@@ -19,10 +19,7 @@ class FirstEmailPrimaryTests(APITestCase):
     # noinspection PyPep8Naming,PyAttributeOutsideInit
     def setUp(self):
         cache.clear()
-        self.member = Member.objects.create_user(is_active=True, first_name="Pat", last_name="Phone")
-        self.member.set_unusable_password()
-        self.member.save()
-        ContactPhone.objects.create(member=self.member, phone_number="2095551234", region="1-US", verified=True)
+        self.member = Member.objects.create_user(password="StrongPass123!", is_active=True, first_name="Pat", last_name="Member")
         self.client.force_authenticate(user=self.member)
 
     def test_first_email_is_assigned_primary_and_not_marked_verified(self, _mock_code, _mock_send):

@@ -3,7 +3,7 @@ from .common import prop, tool_spec
 DEFINITIONS = [
     tool_spec(
         "run_custom_query",
-        "Run a flexible database query against any allowed model. Available models: Member, ContactEmail, ContactPhone, Event, EventRegistration, Ticket, CheckIn, CheckInRecord, Project, Semester, EmailCampaign, RecipientLog, CMSPage, CMSBlock, NewsArticle, NewsFeedSource, PageView, Menu. Filters use Django ORM lookup syntax (e.g. name__icontains, date__gte).",
+        "Run a flexible database query against any allowed model. Available models: Member, ContactEmail, Event, EventRegistration, Ticket, CheckIn, CheckInRecord, Project, Semester, EmailCampaign, RecipientLog, CMSPage, CMSBlock, NewsArticle, NewsFeedSource, PageView, Menu. Filters use Django ORM lookup syntax (e.g. name__icontains, date__gte).",
         {
             "model": prop("string", "Model name (e.g. Member, Event)"),
             "filters": prop(

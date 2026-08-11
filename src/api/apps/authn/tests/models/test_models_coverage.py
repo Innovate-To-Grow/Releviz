@@ -6,7 +6,6 @@ from django.test import TestCase
 
 from apps.authn.models import (
     ContactEmail,
-    ContactPhone,
     ImpersonationToken,
     RSAKeypair,
 )
@@ -50,43 +49,6 @@ class ContactEmailModelTests(TestCase):
             member=member, email_address="s@example.com", email_type="primary", subscribe=True, verified=True
         )
         text = str(email)
-        self.assertIn("Subscribed", text)
-        self.assertIn("Verified", text)
-
-
-class ContactPhoneModelTests(TestCase):
-    def test_clean_rejects_same_member_duplicate(self):
-        member = _member()
-        ContactPhone.objects.create(member=member, phone_number="2095551234", region="1-US")
-        dup = ContactPhone(member=member, phone_number="2095551234", region="1-US")
-        with self.assertRaises(ValidationError) as ctx:
-            dup.clean()
-        self.assertIn("already has this phone number", str(ctx.exception))
-
-    def test_clean_rejects_other_member_duplicate(self):
-        m1 = _member()
-        m2 = _member(first="C", last="D")
-        ContactPhone.objects.create(member=m1, phone_number="2095551234", region="1-US")
-        dup = ContactPhone(member=m2, phone_number="2095551234", region="1-US")
-        with self.assertRaises(ValidationError) as ctx:
-            dup.clean()
-        self.assertIn("already assigned to another member", str(ctx.exception))
-
-    def test_to_e164(self):
-        phone = ContactPhone(phone_number="2095551234", region="1-US")
-        self.assertEqual(phone.to_e164(), "+12095551234")
-
-    def test_get_formatted_number_us_10_digits(self):
-        phone = ContactPhone(phone_number="2095551234", region="1-US")
-        self.assertEqual(phone.get_formatted_number(), "(209)555-1234")
-
-    def test_get_formatted_number_non_us_returns_raw(self):
-        phone = ContactPhone(phone_number="13800138000", region="86")
-        self.assertEqual(phone.get_formatted_number(), "13800138000")
-
-    def test_str_includes_flags(self):
-        phone = ContactPhone(phone_number="2095551234", region="1-US", subscribe=True, verified=True)
-        text = str(phone)
         self.assertIn("Subscribed", text)
         self.assertIn("Verified", text)
 

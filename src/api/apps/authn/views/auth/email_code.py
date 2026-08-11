@@ -10,7 +10,6 @@ from apps.authn.models.security import EmailAuthChallenge
 from apps.authn.security.throttles import (
     EmailCodeRequestThrottle,
     EmailCodeVerifyThrottle,
-    PhoneAuthCodeRequestThrottle,
 )
 from apps.authn.serializers import (
     LoginCodeRequestSerializer,
@@ -125,16 +124,6 @@ class PasswordResetRequestView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
     throttle_classes = [EmailCodeRequestThrottle]
-
-    def get_throttles(self):
-        # A phone identifier triggers an SMS send, so bound it with the stricter
-        # per-IP SMS throttle instead of the looser email-code throttle. The channel
-        # is inferred from the identifier before the view body runs.
-        data = self.request.data if isinstance(self.request.data, dict) else {}
-        identifier = str(data.get("identifier") or data.get("email") or "")
-        if identifier and "@" not in identifier and any(ch.isdigit() for ch in identifier):
-            return [PhoneAuthCodeRequestThrottle()]
-        return [EmailCodeRequestThrottle()]
 
     # noinspection PyMethodMayBeStatic
     def post(self, request):

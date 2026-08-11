@@ -7,8 +7,7 @@ from collections.abc import Callable
 from django.db import transaction
 from django.db.models.functions import Lower
 
-from apps.authn.models import ContactEmail, ContactPhone
-from apps.authn.services.contacts.contact_phones import infer_region_from_e164, normalize_to_national
+from apps.authn.models import ContactEmail
 
 from .types import ImportResult
 
@@ -17,7 +16,6 @@ def bulk_update_members(
     rows: list[dict],
     result: ImportResult,
     claimed_contact_emails: set[str],
-    claimed_phones: set[str],
     update_member_allowed: Callable[[object], bool] | None = None,
 ):
     emails = [row["primary_email"] for row in rows]
@@ -39,14 +37,14 @@ def bulk_update_members(
             continue
         try:
             with transaction.atomic():
-                update_single_member(member, parsed, claimed_contact_emails, claimed_phones)
+                update_single_member(member, parsed, claimed_contact_emails)
             result.updated_count += 1
         except Exception as exc:  # noqa: BLE001
             result.skipped_count += 1
             result.errors.append(f"Row {parsed['row']}: {exc}")
 
 
-def update_single_member(member, parsed, claimed_contact_emails, claimed_phones):
+def update_single_member(member, parsed, claimed_contact_emails):
     if parsed["first_name"]:
         member.first_name = parsed["first_name"]
     if parsed["last_name"]:
@@ -114,26 +112,3 @@ def update_single_member(member, parsed, claimed_contact_emails, claimed_phones)
             claimed_contact_emails.add(secondary_key)
     else:
         member.contact_emails.filter(email_type="secondary").delete()
-
-    if parsed["phone_number"]:
-        region = infer_region_from_e164(parsed["phone_number"])
-        national = normalize_to_national(parsed["phone_number"], region)
-        if national not in claimed_phones:
-            existing_phone = member.contact_phones.first()
-            if existing_phone:
-                existing_phone.phone_number = national
-                existing_phone.region = region
-                existing_phone.subscribe = parsed["phone_subscribed"]
-                existing_phone.verified = parsed["phone_verified"]
-                existing_phone.save()
-            else:
-                ContactPhone.objects.create(
-                    member=member,
-                    phone_number=national,
-                    region=region,
-                    subscribe=parsed["phone_subscribed"],
-                    verified=parsed["phone_verified"],
-                )
-            claimed_phones.add(national)
-    else:
-        member.contact_phones.all().delete()

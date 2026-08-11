@@ -17,7 +17,7 @@ from django.db import close_old_connections, transaction
 from django.db.models import Q
 from django.utils import timezone
 
-from apps.mail.crypto import decrypt_secret, encrypt_secret
+from apps.core.services.aws.crypto import decrypt_secret, encrypt_secret
 from apps.mail.email_templates import render_branded_email
 from apps.mail.models import EmailDeliveryJob, EmailMessageLog, EmailProviderConfig
 
@@ -77,10 +77,19 @@ def _message(
     return message
 
 
-def _send_with_ses(message: EmailMultiAlternatives, config: EmailProviderConfig) -> str:
-    secret = config.get_secret_access_key()
-    if not config.aws_access_key_id or not secret:
-        raise EmailDeliveryError("AWS SES access key and secret access key are required.")
+def _send_with_ses(message: EmailMultiAlternatives) -> str:
+    from apps.core.services.aws.credentials import (
+        AwsCredentialsError,
+        resolve_aws_credentials,
+    )
+
+    try:
+        creds = resolve_aws_credentials("ses")
+    except AwsCredentialsError as exc:
+        raise EmailDeliveryError(
+            "AWS SES credentials are not configured. Add an active AWS Credential Config first."
+        ) from exc
+
     try:
         import boto3
     except ImportError as exc:  # pragma: no cover - dependency is installed in supported envs
@@ -88,9 +97,9 @@ def _send_with_ses(message: EmailMultiAlternatives, config: EmailProviderConfig)
 
     client = boto3.client(
         "ses",
-        region_name=config.aws_region,
-        aws_access_key_id=config.aws_access_key_id,
-        aws_secret_access_key=secret,
+        region_name=creds.region,
+        aws_access_key_id=creds.access_key_id,
+        aws_secret_access_key=creds.secret_access_key,
     )
     response = client.send_raw_email(
         Source=message.from_email,
@@ -190,7 +199,7 @@ def send_email_message(
         if getattr(settings, "USE_SES_EMAIL_PROVIDER", False):
             if config is None:
                 raise EmailDeliveryError("No active AWS SES email provider is configured.")
-            provider_message_id = _send_with_ses(message, config)
+            provider_message_id = _send_with_ses(message)
         else:
             sent_count = message.send(fail_silently=False)
             if sent_count == 0:

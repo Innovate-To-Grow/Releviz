@@ -3,14 +3,12 @@ Member admin configuration.
 """
 
 import logging
-import re
 import uuid
 
 from django.conf import settings
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 from django.core.exceptions import PermissionDenied
-from django.db.models import Q
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import path
 from django.utils.translation import gettext_lazy as _
@@ -29,11 +27,10 @@ from .helpers import (
     export_members_vcard_response,
     get_full_name_display,
     get_primary_email_display,
-    get_primary_phone_display,
     import_excel_view,
     normalize_inline_uuid_none_values,
 )
-from .inlines import ContactEmailInline, ContactPhoneInline
+from .inlines import ContactEmailInline
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +41,7 @@ class MemberAdmin(BaseModelAdmin, UserAdmin):
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)
-        return qs.prefetch_related("contact_emails", "contact_phones")
+        return qs.prefetch_related("contact_emails")
 
     form = MemberChangeForm
     add_form = MemberCreationForm
@@ -55,7 +52,6 @@ class MemberAdmin(BaseModelAdmin, UserAdmin):
     list_display = (
         "get_full_name_display",
         "get_primary_email_display",
-        "get_primary_phone_display",
         "organization",
         "is_active",
         "is_staff",
@@ -94,7 +90,7 @@ class MemberAdmin(BaseModelAdmin, UserAdmin):
         (_("Personal Info"), {"fields": ("first_name", "middle_name", "last_name", "organization", "title")}),
         (_("Member Status"), {"fields": ("is_active",)}),
     )
-    inlines = [ContactEmailInline, ContactPhoneInline]
+    inlines = [ContactEmailInline]
     change_list_template = "admin/authn/member/change_list.html"
     actions = [
         "activate_members",
@@ -107,10 +103,6 @@ class MemberAdmin(BaseModelAdmin, UserAdmin):
     @admin.display(description="Primary Email")
     def get_primary_email_display(self, obj):
         return get_primary_email_display(obj)
-
-    @admin.display(description="Primary Phone")
-    def get_primary_phone_display(self, obj):
-        return get_primary_phone_display(obj)
 
     @admin.display(description="Full Name")
     def get_full_name_display(self, obj):
@@ -183,29 +175,8 @@ class MemberAdmin(BaseModelAdmin, UserAdmin):
         return readonly
 
     def get_search_results(self, request, queryset, search_term):
-        """Extend the default search (email/name/id/...) with phone-number matching.
-
-        Phones are stored as national digits via ``ContactPhone.phone_number``, so the
-        query is reduced to digits and an 11-digit ``1XXXXXXXXXX`` is also tried as the
-        national ``XXXXXXXXXX`` — letting ``+1 555 123 4567``, ``15551234567``,
-        ``5551234567``, and partials like ``555123`` / ``1234567`` all find the same
-        member. Phone matches are taken from the same base queryset so list filters
-        still apply, and ``may_have_duplicates`` makes the changelist de-duplicate
-        members that own several matching phones.
-        """
-        base = queryset
-        queryset, may_have_duplicates = super().get_search_results(request, base, search_term)
-
-        digits = re.sub(r"\D", "", search_term or "")
-        if digits:
-            national = digits[1:] if len(digits) == 11 and digits.startswith("1") else digits
-            phone_q = Q(contact_phones__phone_number__icontains=national)
-            if national != digits:
-                phone_q |= Q(contact_phones__phone_number__icontains=digits)
-            queryset |= base.filter(phone_q)
-            may_have_duplicates = True
-
-        return queryset, may_have_duplicates
+        """Run the default search (email/name/id/...)."""
+        return super().get_search_results(request, queryset, search_term)
 
     def change_view(self, request, object_id, form_url="", extra_context=None):
         extra_context = extra_context or {}

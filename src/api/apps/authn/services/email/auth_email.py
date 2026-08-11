@@ -25,9 +25,7 @@ class ResolvedAuthEmail:
 @dataclass(frozen=True)
 class ResolvedLoginIdentifier:
     member: Member
-    via: str  # "email" | "phone"
-    email: str = ""  # normalized verified email (via == "email")
-    e164: str = ""  # E.164 of the matched verified phone (via == "phone")
+    email: str = ""  # normalized verified email
 
 
 def normalize_email(email: str) -> str:
@@ -49,13 +47,10 @@ def resolve_auth_email(email: str, *, require_active: bool = True) -> ResolvedAu
 
 
 def resolve_login_identifier(identifier: str, *, require_active: bool = False) -> ResolvedLoginIdentifier | None:
-    """Resolve a login identifier (email or phone) to a member.
+    """Resolve a login identifier (email) to a member.
 
-    Email-first: an ``@``-containing identifier resolves through a verified
-    ``ContactEmail`` (preserving existing behavior). Otherwise the digits are
-    normalized across the supported phone regions and matched against a
-    *verified* ``ContactPhone``. Only verified contacts resolve — an unverified
-    email or phone is never a valid login/recovery channel.
+    Only verified contacts resolve — an unverified email is never a valid
+    login/recovery channel.
     """
     identifier = (identifier or "").strip()
     if not identifier:
@@ -65,25 +60,7 @@ def resolve_login_identifier(identifier: str, *, require_active: bool = False) -
         resolved = resolve_auth_email(identifier, require_active=require_active)
         if resolved is None:
             return None
-        return ResolvedLoginIdentifier(member=resolved.member, via="email", email=resolved.delivery_email)
-
-    # Phone path: normalize to the stored national digits and match a verified phone.
-    from apps.authn.models import ContactPhone
-    from apps.authn.models.contact.phone_regions import PHONE_REGION_CHOICES
-    from apps.authn.services.contacts.contact_phones import normalize_to_national
-
-    if not re.search(r"\d", identifier):
-        return None
-
-    seen: set[str] = set()
-    for region, _label in PHONE_REGION_CHOICES:
-        national = normalize_to_national(identifier, region)
-        if not national or national in seen:
-            continue
-        seen.add(national)
-        contact = ContactPhone.objects.select_related("member").filter(phone_number=national, verified=True).first()
-        if contact and contact.member and (contact.member.is_active or not require_active):
-            return ResolvedLoginIdentifier(member=contact.member, via="phone", e164=contact.to_e164())
+        return ResolvedLoginIdentifier(member=resolved.member, email=resolved.delivery_email)
 
     return None
 

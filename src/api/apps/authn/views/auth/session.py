@@ -17,7 +17,6 @@ class SessionView(APIView):
         user = dict(ProfileSerializer(instance=member).data)
         user.update(
             {
-                "phone": member.get_primary_phone(),
                 "is_staff": member.is_staff,
             }
         )

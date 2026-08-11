@@ -1,1 +1,1 @@
-"""Contact-info CRUD serializers (emails, phones)."""
+"""Contact-info CRUD serializers (emails)."""

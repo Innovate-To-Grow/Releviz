@@ -83,15 +83,11 @@ class ExportVcfHelperTests(TestCase):
         card = _build_vcard(member)
         self.assertIn("noname@example.com", card)
 
-    def test__build_vcard_phone_e164_failure_omits_tel(self):
-        from apps.authn.models import ContactPhone
-
+    def test__build_vcard_omits_tel_when_no_phone_present(self):
         member = _member()
         ContactEmail.objects.create(member=member, email_address="p@example.com", email_type="primary", verified=True)
-        ContactPhone.objects.create(member=member, phone_number="2095551234", region="1-US")
         member.refresh_from_db()
-        with patch.object(ContactPhone, "to_e164", side_effect=RuntimeError("bad region")):
-            card = _build_vcard(member)
+        card = _build_vcard(member)
         self.assertNotIn("TEL", card)
 
 

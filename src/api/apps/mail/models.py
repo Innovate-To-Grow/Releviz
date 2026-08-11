@@ -5,17 +5,28 @@ from django.db import models
 from django.utils import timezone
 
 from apps.core.models import TimestampedModel
-from apps.mail.crypto import decrypt_secret, encrypt_secret
 
 
 class EmailProviderConfig(TimestampedModel):
-    name = models.CharField(max_length=120, default="AWS SES")
+    """Email sender identity configuration.
+
+    AWS IAM credentials are managed by the shared AWSCredentialConfig
+    model (core). This model only holds email-specific fields: the
+    verified sender address (from_email) and optional reply-to address.
+    """
+
+    name = models.CharField(max_length=120, default="Default")
     is_active = models.BooleanField(default=True)
-    aws_region = models.CharField(max_length=64, default="us-west-2")
-    from_email = models.EmailField()
-    reply_to_email = models.EmailField(blank=True, default="")
-    aws_access_key_id = models.CharField(max_length=255)
-    encrypted_secret_access_key = models.TextField(blank=True, default="")
+    from_email = models.EmailField(
+        verbose_name="From Email",
+        help_text="Verified SES sender address (e.g. noreply@example.com).",
+    )
+    reply_to_email = models.EmailField(
+        blank=True,
+        default="",
+        verbose_name="Reply-To Email",
+        help_text="Optional reply-to address for outgoing emails.",
+    )
     last_tested_at = models.DateTimeField(null=True, blank=True)
     last_error = models.TextField(blank=True, default="")
 
@@ -29,16 +40,9 @@ class EmailProviderConfig(TimestampedModel):
                 is_active=False
             )
 
-    def set_secret_access_key(self, value: str):
-        if value:
-            self.encrypted_secret_access_key = encrypt_secret(value)
-
-    def get_secret_access_key(self) -> str:
-        return decrypt_secret(self.encrypted_secret_access_key)
-
     def __str__(self) -> str:
         state = "active" if self.is_active else "inactive"
-        return f"{self.name} ({self.aws_region}, {state})"
+        return f"{self.name} ({self.from_email}, {state})"
 
 
 class EmailMessageLog(TimestampedModel):

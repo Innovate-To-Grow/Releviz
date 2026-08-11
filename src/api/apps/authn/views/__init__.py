@@ -10,12 +10,6 @@ from .account.contact_emails import (
     ContactEmailRequestVerificationView,
     ContactEmailVerifyCodeView,
 )
-from .account.contact_phones import (
-    ContactPhoneDetailView,
-    ContactPhoneListCreateView,
-    ContactPhoneRequestVerificationView,
-    ContactPhoneVerifyCodeView,
-)
 from .account.email_code import (
     AccountEmailsView,
     ChangePasswordCodeConfirmView,
@@ -44,10 +38,6 @@ from .auth.email_code import (
 )
 from .auth.login import LoginView
 from .auth.logout import LogoutView
-from .auth.phone_code import (
-    PhoneAuthRequestCodeView,
-    PhoneAuthVerifyCodeView,
-)
 from .auth.public_key import PublicKeyView
 from .auth.register import RegisterView
 from .auth.session import SessionView
@@ -64,8 +54,6 @@ __all__ = [
     "EmailAuthVerifyCodeView",
     "LoginCodeRequestView",
     "LoginCodeVerifyView",
-    "PhoneAuthRequestCodeView",
-    "PhoneAuthVerifyCodeView",
     "ProfileView",
     "AccountEmailsView",
     "ChangePasswordView",
@@ -84,10 +72,6 @@ __all__ = [
     "ContactEmailRequestVerificationView",
     "ContactEmailVerifyCodeView",
     "ContactEmailMakePrimaryView",
-    "ContactPhoneListCreateView",
-    "ContactPhoneDetailView",
-    "ContactPhoneRequestVerificationView",
-    "ContactPhoneVerifyCodeView",
     "PublicTokenRefreshView",
     "AcceptInvitationView",
     "AdminLoginView",

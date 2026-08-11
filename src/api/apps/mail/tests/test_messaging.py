@@ -8,7 +8,6 @@ from django.core import mail
 from django.test import RequestFactory, TestCase, override_settings
 
 from apps.mail.admin import EmailProviderConfigAdmin, EmailProviderConfigForm
-from apps.mail.crypto import decrypt_secret, encrypt_secret
 from apps.mail.email_templates import brand_site_url, render_branded_email
 from apps.mail.models import EmailMessageLog, EmailProviderConfig
 from apps.mail.services import (
@@ -67,6 +66,8 @@ class MessagingTests(TestCase):
         self.assertEqual(message.alternatives, [])
 
     def test_crypto_uses_raw_and_derived_keys_and_rejects_bad_tokens(self):
+        from apps.core.services.aws.crypto import decrypt_secret, encrypt_secret
+
         raw_key = Fernet.generate_key().decode("ascii")
         with override_settings(FIELD_ENCRYPTION_KEY=raw_key):
             encrypted = encrypt_secret("ses-secret")
@@ -83,58 +84,35 @@ class MessagingTests(TestCase):
         first = EmailProviderConfig.objects.create(
             name="First",
             from_email="first@example.com",
-            aws_access_key_id="AKIAFIRST",
         )
-        first.set_secret_access_key("first-secret")
-        first.save()
         second = EmailProviderConfig.objects.create(
             name="Second",
             from_email="second@example.com",
-            aws_access_key_id="AKIASECOND",
         )
         inactive = EmailProviderConfig.objects.create(
             name="Inactive",
             is_active=False,
             from_email="inactive@example.com",
-            aws_access_key_id="AKIAINACTIVE",
         )
         first.refresh_from_db()
         self.assertFalse(first.is_active)
         self.assertIn("inactive", str(inactive))
         self.assertEqual(active_provider_config(), second)
         self.assertIn("active", str(second))
-        self.assertEqual(first.get_secret_access_key(), "first-secret")
 
         form = EmailProviderConfigForm(
             data={
                 "name": "Updated",
                 "is_active": "on",
-                "aws_region": "us-east-1",
                 "from_email": "updated@example.com",
                 "reply_to_email": "reply@example.com",
-                "aws_access_key_id": "AKIAUPDATED",
-                "secret_access_key": "updated-secret",
             },
             instance=second,
         )
         self.assertTrue(form.is_valid(), form.errors)
         updated = form.save()
-        self.assertEqual(updated.get_secret_access_key(), "updated-secret")
-
-        blank_secret = EmailProviderConfigForm(
-            data={
-                "name": "Updated",
-                "is_active": "on",
-                "aws_region": "us-east-1",
-                "from_email": "updated@example.com",
-                "reply_to_email": "",
-                "aws_access_key_id": "AKIAUPDATED",
-                "secret_access_key": "",
-            },
-            instance=updated,
-        )
-        self.assertTrue(blank_secret.is_valid(), blank_secret.errors)
-        self.assertEqual(blank_secret.save(commit=False).get_secret_access_key(), "updated-secret")
+        self.assertEqual(updated.from_email, "updated@example.com")
+        self.assertEqual(updated.reply_to_email, "reply@example.com")
 
     def test_frontend_url_and_django_backend_delivery_with_logs(self):
         with override_settings(FRONTEND_URL="", BACKEND_URL=""):
@@ -198,27 +176,34 @@ class MessagingTests(TestCase):
         )
 
     def test_ses_provider_success_and_configuration_errors(self):
+        from apps.core.services.aws.credentials import AwsCredentials
+
         config = EmailProviderConfig.objects.create(
             from_email="sender@example.com",
             reply_to_email="reply@example.com",
-            aws_region="us-east-2",
-            aws_access_key_id="AKIASES",
         )
-        config.set_secret_access_key("secret")
-        config.save()
 
+        mock_creds = AwsCredentials(
+            access_key_id="AKIASES",
+            secret_access_key="secret",
+            region="us-east-2",
+        )
         with override_settings(USE_SES_EMAIL_PROVIDER=True):
             ses_client = Mock()
             ses_client.send_raw_email.return_value = {"MessageId": "ses-123"}
             fake_boto3 = SimpleNamespace(client=Mock(return_value=ses_client))
             with patch.dict(sys.modules, {"boto3": fake_boto3}):
-                message_id = send_email_message(
-                    subject="SES",
-                    body="Body",
-                    recipients=["ses@example.com"],
-                    message_type=EmailMessageLog.MessageType.TEST,
-                    provider_config=config,
-                )
+                with patch(
+                    "apps.mail.services.resolve_aws_credentials",
+                    return_value=mock_creds,
+                ):
+                    message_id = send_email_message(
+                        subject="SES",
+                        body="Body",
+                        recipients=["ses@example.com"],
+                        message_type=EmailMessageLog.MessageType.TEST,
+                        provider_config=config,
+                    )
         self.assertEqual(message_id, "ses-123")
         fake_boto3.client.assert_called_once_with(
             "ses",
@@ -231,47 +216,75 @@ class MessagingTests(TestCase):
             "ses-123",
         )
 
-        config.encrypted_secret_access_key = ""
-        config.save(update_fields=["encrypted_secret_access_key", "updated_at"])
-        with override_settings(USE_SES_EMAIL_PROVIDER=True):
-            with self.assertRaisesMessage(EmailDeliveryError, "access key and secret"):
-                send_email_message(
-                    subject="Bad SES",
-                    body="Body",
-                    recipients=["bad-ses@example.com"],
-                    message_type=EmailMessageLog.MessageType.TEST,
-                    provider_config=config,
-                )
+        # Test credential error when resolve_aws_credentials raises
+        from apps.core.services.aws.credentials import AwsCredentialsError
 
+        with override_settings(USE_SES_EMAIL_PROVIDER=True):
+            with patch(
+                "apps.mail.services.resolve_aws_credentials",
+                side_effect=AwsCredentialsError("not configured"),
+            ):
+                with self.assertRaisesMessage(
+                    EmailDeliveryError, "AWS SES credentials are not configured"
+                ):
+                    send_email_message(
+                        subject="Bad SES",
+                        body="Body",
+                        recipients=["bad-ses@example.com"],
+                        message_type=EmailMessageLog.MessageType.TEST,
+                        provider_config=config,
+                    )
+
+        # Test no active email provider config
         EmailProviderConfig.objects.update(is_active=False)
         with override_settings(USE_SES_EMAIL_PROVIDER=True):
-            with self.assertRaisesMessage(EmailDeliveryError, "No active AWS SES"):
-                send_email_message(
-                    subject="No config",
-                    body="Body",
-                    recipients=["missing-config@example.com"],
-                    message_type=EmailMessageLog.MessageType.TEST,
-                )
+            with patch(
+                "apps.mail.services.resolve_aws_credentials",
+                return_value=mock_creds,
+            ):
+                with self.assertRaisesMessage(
+                    EmailDeliveryError, "No active AWS SES email provider"
+                ):
+                    send_email_message(
+                        subject="No config",
+                        body="Body",
+                        recipients=["missing-config@example.com"],
+                        message_type=EmailMessageLog.MessageType.TEST,
+                    )
 
     def test_admin_action_updates_test_status(self):
+        from apps.core.services.aws.credentials import AwsCredentials
+
         config = EmailProviderConfig.objects.create(
             from_email="sender@example.com",
-            aws_access_key_id="AKIASES",
         )
         request = RequestFactory().post("/admin/mail/emailproviderconfig/")
         model_admin = EmailProviderConfigAdmin(EmailProviderConfig, AdminSite())
 
-        with patch.object(model_admin, "message_user") as message_user:
-            model_admin.send_test_email(request, EmailProviderConfig.objects.filter(pk=config.pk))
+        mock_creds = AwsCredentials(
+            access_key_id="AKIASES",
+            secret_access_key="secret",
+            region="us-east-2",
+        )
+        with patch(
+            "apps.mail.services.resolve_aws_credentials",
+            return_value=mock_creds,
+        ):
+            with patch.object(model_admin, "message_user") as message_user:
+                model_admin.send_test_email(request, EmailProviderConfig.objects.filter(pk=config.pk))
         config.refresh_from_db()
         self.assertIsNotNone(config.last_tested_at)
         self.assertEqual(config.last_error, "")
         message_user.assert_called_once()
 
         with patch(
-            "apps.mail.admin.send_email_message",
-            side_effect=EmailDeliveryError("bad credentials"),
+            "apps.mail.services.resolve_aws_credentials",
+            return_value=mock_creds,
         ):
-            model_admin.send_test_email(request, EmailProviderConfig.objects.filter(pk=config.pk))
+            with patch(
+                "apps.mail.admin.send_email_message",
+                side_effect=EmailDeliveryError("bad credentials"),
+            ):
+                model_admin.send_test_email(request, EmailProviderConfig.objects.filter(pk=config.pk))
         config.refresh_from_db()
         self.assertEqual(config.last_error, "bad credentials")

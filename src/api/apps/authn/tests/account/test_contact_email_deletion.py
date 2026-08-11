@@ -7,7 +7,7 @@ from django.core.cache import cache
 from rest_framework.test import APITestCase
 
 from apps.authn.constants import LAST_RECOVERY_CONTACT_DELETE_FAILED
-from apps.authn.models import ContactEmail, ContactPhone
+from apps.authn.models import ContactEmail
 
 Member = get_user_model()
 
@@ -24,18 +24,6 @@ class EmailDeletionPolicyTests(APITestCase):
         cache.clear()
         self.member = Member.objects.create_user(is_active=True, first_name="Del", last_name="Eter")
         self.client.force_authenticate(user=self.member)
-
-    def _verified_phone(self):
-        return ContactPhone.objects.create(member=self.member, phone_number="2095551234", region="1-US", verified=True)
-
-    def test_delete_only_email_allowed_when_verified_phone_remains(self, _mock_code, _mock_send):
-        self._verified_phone()
-        email = ContactEmail.objects.create(
-            member=self.member, email_address="only@example.com", email_type="primary", verified=True
-        )
-        response = self.client.delete(_url(email.id))
-        self.assertEqual(response.status_code, 204)
-        self.assertFalse(ContactEmail.objects.filter(member=self.member).exists())
 
     def test_cannot_delete_last_verified_contact(self, _mock_code, _mock_send):
         email = ContactEmail.objects.create(
@@ -58,27 +46,10 @@ class EmailDeletionPolicyTests(APITestCase):
         secondary.refresh_from_db()
         self.assertEqual(secondary.email_type, "primary")
 
-    def test_deleting_primary_prefers_verified_email_for_promotion(self, _mock_code, _mock_send):
-        self._verified_phone()
-        primary = ContactEmail.objects.create(
-            member=self.member, email_address="primary@example.com", email_type="primary", verified=True
-        )
-        ContactEmail.objects.create(
-            member=self.member, email_address="unverified@example.com", email_type="other", verified=False
-        )
-        verified_other = ContactEmail.objects.create(
-            member=self.member, email_address="verified@example.com", email_type="secondary", verified=True
-        )
-        response = self.client.delete(_url(primary.id))
-        self.assertEqual(response.status_code, 204)
-        verified_other.refresh_from_db()
-        self.assertEqual(verified_other.email_type, "primary")
-
     def test_unverified_email_is_always_deletable(self, _mock_code, _mock_send):
         ContactEmail.objects.create(
             member=self.member, email_address="primary@example.com", email_type="primary", verified=True
         )
-        self._verified_phone()
         unverified = ContactEmail.objects.create(
             member=self.member, email_address="unverified@example.com", email_type="other", verified=False
         )

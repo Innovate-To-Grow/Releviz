@@ -16,10 +16,6 @@ from .views import (
     ContactEmailMakePrimaryView,
     ContactEmailRequestVerificationView,
     ContactEmailVerifyCodeView,
-    ContactPhoneDetailView,
-    ContactPhoneListCreateView,
-    ContactPhoneRequestVerificationView,
-    ContactPhoneVerifyCodeView,
     DeleteAccountCodeConfirmView,
     DeleteAccountCodeRequestView,
     DeleteAccountCodeVerifyView,
@@ -33,8 +29,6 @@ from .views import (
     PasswordResetConfirmView,
     PasswordResetRequestView,
     PasswordResetVerifyView,
-    PhoneAuthRequestCodeView,
-    PhoneAuthVerifyCodeView,
     ProfileView,
     PublicKeyView,
     PublicTokenRefreshView,
@@ -54,9 +48,6 @@ urlpatterns = [
     # Unified email auth
     path("email-auth/request-code/", EmailAuthRequestCodeView.as_view(), name="email-auth-request-code"),
     path("email-auth/verify-code/", EmailAuthVerifyCodeView.as_view(), name="email-auth-verify-code"),
-    # Unified phone auth (passwordless SMS code)
-    path("phone-auth/request-code/", PhoneAuthRequestCodeView.as_view(), name="phone-auth-request-code"),
-    path("phone-auth/verify-code/", PhoneAuthVerifyCodeView.as_view(), name="phone-auth-verify-code"),
     # Registration
     path("register/", RegisterView.as_view(), name="register"),
     path("register/verify-code/", RegisterVerifyCodeView.as_view(), name="register-verify-code"),
@@ -103,19 +94,6 @@ urlpatterns = [
         "contact-emails/<uuid:pk>/make-primary/",
         ContactEmailMakePrimaryView.as_view(),
         name="contact-email-make-primary",
-    ),
-    # Contact Phones (authenticated)
-    path("contact-phones/", ContactPhoneListCreateView.as_view(), name="contact-phone-list-create"),
-    path("contact-phones/<uuid:pk>/", ContactPhoneDetailView.as_view(), name="contact-phone-detail"),
-    path(
-        "contact-phones/<uuid:pk>/request-verification/",
-        ContactPhoneRequestVerificationView.as_view(),
-        name="contact-phone-request-verification",
-    ),
-    path(
-        "contact-phones/<uuid:pk>/verify-code/",
-        ContactPhoneVerifyCodeView.as_view(),
-        name="contact-phone-verify-code",
     ),
     # Admin invitation acceptance (public)
     path("invite/<str:token>/", AcceptInvitationView.as_view(), name="accept-invitation"),

@@ -20,7 +20,7 @@ def get_client(aws_config=None):
         "bedrock-runtime",
         region_name=aws_config.region,
         aws_access_key_id=aws_config.access_key_id,
-        aws_secret_access_key=aws_config.secret_access_key,
+        aws_secret_access_key=aws_config.get_secret_access_key(),
     )
 
 
@@ -31,7 +31,7 @@ def get_management_client(aws_config=None):
         "bedrock",
         region_name=aws_config.region,
         aws_access_key_id=aws_config.access_key_id,
-        aws_secret_access_key=aws_config.secret_access_key,
+        aws_secret_access_key=aws_config.get_secret_access_key(),
     )
 
 
@@ -47,5 +47,5 @@ def get_cloudwatch_client(aws_config=None):
         "cloudwatch",
         region_name=aws_config.region,
         aws_access_key_id=aws_config.access_key_id,
-        aws_secret_access_key=aws_config.secret_access_key,
+        aws_secret_access_key=aws_config.get_secret_access_key(),
     )

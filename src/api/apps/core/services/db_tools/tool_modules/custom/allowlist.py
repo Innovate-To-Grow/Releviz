@@ -1,7 +1,6 @@
 MODEL_MAP = {
     "Member": ("authn", "Member"),
     "ContactEmail": ("authn", "ContactEmail"),
-    "ContactPhone": ("authn", "ContactPhone"),
     "Event": ("event", "Event"),
     "EventRegistration": ("event", "EventRegistration"),
     "Ticket": ("event", "Ticket"),
@@ -31,7 +30,6 @@ ALLOWED_QUERY_FIELDS = {
         "updated_at",
     },
     "ContactEmail": {"id", "email_address", "email_type", "verified", "subscribe", "created_at", "updated_at"},
-    "ContactPhone": {"id", "phone_number", "phone_type", "verified", "created_at", "updated_at"},
     "Event": {
         "id",
         "name",

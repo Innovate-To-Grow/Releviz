@@ -5,8 +5,6 @@ from .throttles import (
     EmailCodeUserRequestThrottle,
     EmailCodeVerifyThrottle,
     LoginRateThrottle,
-    PhoneAuthCodeRequestThrottle,
-    PhoneCodeRequestThrottle,
 )
 
 __all__ = [
@@ -16,6 +14,4 @@ __all__ = [
     "EmailCodeUserRequestThrottle",
     "EmailCodeVerifyThrottle",
     "LoginRateThrottle",
-    "PhoneAuthCodeRequestThrottle",
-    "PhoneCodeRequestThrottle",
 ]

@@ -12,7 +12,6 @@ from apps.authn.constants import VERIFICATION_LINK_INVALID
 from apps.authn.security.throttles import (
     EmailCodeUserRequestThrottle,
     EmailCodeVerifyThrottle,
-    PhoneCodeRequestThrottle,
 )
 from apps.authn.serializers import (
     AccountEmailsSerializer,
@@ -39,10 +38,8 @@ class AccountEmailsView(APIView):
 
 class ChangePasswordCodeRequestView(APIView):
     permission_classes = [IsAuthenticated]
-    # Per-user caps on both the email send budget and the SMS send budget — the
-    # channel isn't known until the serializer runs, so apply both (equal 5/min
-    # scopes). The SMS service also enforces a per-number hourly send cap.
-    throttle_classes = [EmailCodeUserRequestThrottle, PhoneCodeRequestThrottle]
+    # Per-user cap on the email send budget.
+    throttle_classes = [EmailCodeUserRequestThrottle]
 
     # noinspection PyMethodMayBeStatic
     def post(self, request):

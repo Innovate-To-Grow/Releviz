@@ -39,6 +39,6 @@ def resolve_aws_credentials(service: str = "default") -> AwsCredentials:
 
     return AwsCredentials(
         access_key_id=aws.access_key_id,
-        secret_access_key=aws.secret_access_key,
+        secret_access_key=aws.get_secret_access_key(),
         region=aws.region,
     )

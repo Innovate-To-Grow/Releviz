@@ -5,7 +5,6 @@ from django.http import HttpResponseRedirect
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 from unfold.decorators import action, display
-from unfold.widgets import UnfoldAdminPasswordToggleWidget
 
 from apps.core.models import AWSCredentialConfig
 
@@ -14,18 +13,29 @@ from .test_send_mixin import TestSendViewsMixin
 
 
 class AWSCredentialConfigForm(forms.ModelForm):
+    secret_access_key = forms.CharField(
+        required=False,
+        widget=forms.PasswordInput(render_value=False),
+        help_text="Leave blank to keep the existing AWS secret access key.",
+    )
+
     class Meta:
         model = AWSCredentialConfig
         fields = (
             "name",
             "is_active",
             "access_key_id",
-            "secret_access_key",
             "default_region",
+            "secret_access_key",
         )
-        widgets = {
-            "secret_access_key": UnfoldAdminPasswordToggleWidget(attrs={}, render_value=True),
-        }
+
+    def save(self, commit=True):
+        instance = super().save(commit=False)
+        instance.set_secret_access_key(self.cleaned_data.get("secret_access_key", ""))
+        if commit:
+            instance.save()
+            self.save_m2m()
+        return instance
 
 
 def _clear_usage_dashboard_cache():
@@ -48,7 +58,7 @@ class AWSCredentialConfigAdmin(TestSendViewsMixin, BaseModelAdmin):
     search_fields = ("name", "access_key_id")
     ordering = ("-is_active", "-updated_at")
     actions_detail = ["activate_this_config", "test_bedrock_api"]
-    actions_list = ["test_email_list", "test_sms_list"]
+    actions_list = ["test_email_list"]
 
     fieldsets = (
         (
@@ -62,9 +72,9 @@ class AWSCredentialConfigAdmin(TestSendViewsMixin, BaseModelAdmin):
                 "description": "Shared IAM access key and AWS region used by AWS-backed services.",
             },
         ),
-        (_("Info"), {"fields": ("updated_at",)}),
+        (_("Info"), {"fields": ("encrypted_secret_access_key", "updated_at")}),
     )
-    readonly_fields = ("updated_at",)
+    readonly_fields = ("encrypted_secret_access_key", "updated_at")
 
     @display(description="Status", label=True)
     def status_badge(self, obj):
@@ -122,7 +132,7 @@ class AWSCredentialConfigAdmin(TestSendViewsMixin, BaseModelAdmin):
                 "bedrock-runtime",
                 region_name=obj.default_region or "us-west-2",
                 aws_access_key_id=obj.access_key_id,
-                aws_secret_access_key=obj.secret_access_key,
+                aws_secret_access_key=obj.get_secret_access_key(),
             )
             resp = client.converse(
                 modelId=model_id,
