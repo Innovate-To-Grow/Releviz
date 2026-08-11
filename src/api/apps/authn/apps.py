@@ -4,3 +4,8 @@ from django.apps import AppConfig
 class AuthnConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
     name = "apps.authn"
+    label = "authn"
+
+    # noinspection PyMethodMayBeStatic
+    def ready(self):
+        pass

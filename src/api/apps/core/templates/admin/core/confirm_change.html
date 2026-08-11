@@ -1,0 +1,104 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block title %}{{ title }}{% endblock %}
+{% block content_title %}<h1>{{ title }}</h1>{% endblock %}
+
+{% block content %}
+<div style="max-width:640px">
+    <!-- Warning banner -->
+    <div class="mb-6 rounded-default border border-yellow-300 bg-yellow-50 p-4 dark:border-yellow-700 dark:bg-yellow-900/20">
+        <div class="flex items-start gap-3">
+            <span class="material-symbols-outlined text-yellow-600 dark:text-yellow-400 !text-[22px] mt-0.5">warning</span>
+            <div>
+                <p class="text-sm font-semibold text-yellow-800 dark:text-yellow-300">
+                    You are about to {{ action_label|lower }} {{ model_name }}: <strong>{{ object_repr }}</strong>
+                </p>
+                <p class="text-xs text-yellow-700 dark:text-yellow-400 mt-1">
+                    Please review the changes below and type the confirmation word to proceed.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Change diff table -->
+    <div class="mb-6 rounded-default border border-base-200 dark:border-base-700 overflow-hidden">
+        <div class="bg-base-50 dark:bg-base-800 px-4 py-2 border-b border-base-200 dark:border-base-700 flex items-center gap-2">
+            <span class="material-symbols-outlined !text-[16px] text-base-400">difference</span>
+            <span class="text-xs font-medium text-base-400">Change Details</span>
+        </div>
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="border-b border-base-200 dark:border-base-700 bg-base-50 dark:bg-base-800">
+                    <th class="text-left px-4 py-2 font-medium text-base-600 dark:text-base-300">Field</th>
+                    {% if action_type == "change" %}
+                        <th class="text-left px-4 py-2 font-medium text-base-600 dark:text-base-300">Old Value</th>
+                        <th class="text-left px-4 py-2 font-medium text-base-600 dark:text-base-300">New Value</th>
+                    {% elif action_type == "add" %}
+                        <th class="text-left px-4 py-2 font-medium text-base-600 dark:text-base-300">Value</th>
+                    {% else %}
+                        <th class="text-left px-4 py-2 font-medium text-base-600 dark:text-base-300">Current Value</th>
+                    {% endif %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in diff %}
+                <tr class="border-b border-base-100 dark:border-base-800 last:border-0">
+                    <td class="px-4 py-2 font-medium text-base-700 dark:text-base-300">{{ item.label }}</td>
+                    {% if action_type == "change" %}
+                        <td class="px-4 py-2 text-red-600 dark:text-red-400">{{ item.old_value }}</td>
+                        <td class="px-4 py-2 text-green-600 dark:text-green-400">{{ item.new_value }}</td>
+                    {% elif action_type == "add" %}
+                        <td class="px-4 py-2 text-green-600 dark:text-green-400">{{ item.new_value }}</td>
+                    {% else %}
+                        <td class="px-4 py-2 text-base-600 dark:text-base-400">{{ item.value }}</td>
+                    {% endif %}
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="3" class="px-4 py-2 text-base-400 text-center">No field changes detected.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Confirmation form -->
+    <form method="post" id="confirm-change-form">
+        {% csrf_token %}
+        <input type="hidden" name="token" value="{{ token }}">
+        <div class="mb-4">
+            <label for="confirm-input" class="block text-sm font-medium text-base-700 dark:text-base-300 mb-2">
+                Type <strong>"{{ confirmation_word }}"</strong> to confirm:
+            </label>
+            <input type="text" id="confirm-input" name="confirmation_word" autocomplete="off"
+                   class="w-full border border-base-300 dark:border-base-600 rounded-md px-3 py-2 text-sm bg-white dark:bg-base-800 text-base-900 dark:text-base-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                   placeholder="Type confirmation word here">
+        </div>
+        <div class="flex gap-3">
+            <button type="submit" id="confirm-btn" disabled
+                    class="bg-red-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-red-700 inline-flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+                <span class="material-symbols-outlined !text-[18px]">check_circle</span>
+                Confirm {{ action_label }}
+            </button>
+            <a href="{{ cancel_url }}"
+               class="border border-base-300 dark:border-base-600 px-4 py-2 rounded-md text-sm font-medium hover:bg-base-50 dark:hover:bg-base-900 inline-flex items-center gap-2">
+                <span class="material-symbols-outlined !text-[18px]">close</span>
+                Cancel
+            </a>
+        </div>
+    </form>
+</div>
+
+{{ confirmation_word|json_script:"confirmation-word-data" }}
+<script nonce="{{ request.csp_nonce }}">
+(function() {
+    const input = document.getElementById('confirm-input');
+    const btn = document.getElementById('confirm-btn');
+    const expected = JSON.parse(document.getElementById('confirmation-word-data').textContent);
+    input.addEventListener('input', function() {
+        btn.disabled = input.value.trim().toLowerCase() !== expected.toLowerCase();
+    });
+})();
+</script>
+{% endblock %}

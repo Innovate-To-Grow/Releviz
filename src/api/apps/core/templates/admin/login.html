@@ -13,21 +13,38 @@
 {% endblock %}
 
 {% block title %}
-    {{ title|default:_("Log in") }} | {{ site_title|default:_("Releviz Admin") }}
+    {{ title }} | {{ site_title }}
 {% endblock %}
 
 {% block content %}
     <div class="login-box">
         <div class="login-header">
             <div class="login-title-wrap">
-                <span class="login-subtitle">{% translate "Sign in with password" %}</span>
-                <span class="login-title">{{ site_title|default:_('Releviz Admin') }}</span>
+                {% if step == "code" %}
+                    <span class="login-subtitle">{% translate "Enter verification code" %}</span>
+                {% elif step == "password" %}
+                    <span class="login-subtitle">{% translate "Sign in with password" %}</span>
+                {% else %}
+                    <span class="login-subtitle">{% translate "Welcome back to" %}</span>
+                {% endif %}
+                <span class="login-title">{{ site_title|default:_('Django site admin') }}</span>
             </div>
-            <img src="{% static 'images/releviz-mark.png' %}" alt="Releviz" class="login-logo">
+            <img src="{% static 'images/i2glogo.png' %}" alt="Innovate To Grow" class="login-logo">
         </div>
 
         {% include "unfold/helpers/messages.html" %}
 
+        {# Display message (info) #}
+        {% if message %}
+            <div class="login-message login-message--info">{{ message }}</div>
+        {% endif %}
+
+        {# Display error #}
+        {% if error %}
+            <div class="login-message login-message--error">{{ error }}</div>
+        {% endif %}
+
+        {# Display form errors #}
         {% if form.errors or form.non_field_errors %}
             <div class="flex flex-col gap-4 mb-4 *:mb-0">
                 {% for field in form %}
@@ -41,41 +58,175 @@
             </div>
         {% endif %}
 
-        <form action="{{ request.get_full_path }}" method="post" id="login-form">
-            {% csrf_token %}
+        {% if last_admin_user %}
+            <div class="login-last-admin" aria-label="{% translate 'Last signed in admin' %}">
+                <div class="login-last-admin__label">{% translate "Last signed in" %}</div>
+                <div class="login-last-admin__name">{{ last_admin_user.name }}</div>
+                {% if last_admin_user.organization %}
+                    <div class="login-last-admin__meta">{{ last_admin_user.organization }}</div>
+                {% endif %}
+            </div>
+        {% endif %}
 
-            <div class="mb-4">
-                <label for="id_email" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    {% translate "Email" %}
-                </label>
-                <input type="email"
-                       name="email"
-                       id="id_email"
-                       placeholder="{% translate 'Email' %}"
-                       autofocus
-                       required
-                       autocomplete="email"
-                       {% if form.email.value %}value="{{ form.email.value }}"{% endif %}>
+        {% if step == "code" %}
+            {# ── Step 2: Verification code ── #}
+            <p class="login-email-hint">
+                {% if hide_email %}
+                    {% blocktranslate trimmed with name=code_recipient_name %}
+                        We sent a 6-digit code to {{ name }}.
+                    {% endblocktranslate %}
+                {% else %}
+                    {% translate "We sent a 6-digit code to" %} <strong>{{ email }}</strong>
+                {% endif %}
+            </p>
+
+            <form action="{{ request.get_full_path }}" method="post" id="login-form">
+                {% csrf_token %}
+
+                <div class="mb-4">
+                    <label for="id_code" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        {{ form.code.label }}
+                    </label>
+                    <input type="text"
+                           name="code"
+                           id="id_code"
+                           class="code-input"
+                           maxlength="6"
+                           minlength="6"
+                           inputmode="numeric"
+                           pattern="[0-9]{6}"
+                           autocomplete="one-time-code"
+                           placeholder="000000"
+                           autofocus
+                           required>
+                </div>
+
+                <div class="flex flex-col gap-3">
+                    {% component "unfold/components/button.html" with submit=1 variant="primary" class="submit-row w-full" %}
+                        {% translate 'Verify and sign in' %}
+                    {% endcomponent %}
+                </div>
+            </form>
+
+            <div class="login-links">
+                <a href="{{ different_email_url }}">{% translate "Use a different email" %}</a>
+                <form action="{{ request.get_full_path }}" method="post" class="login-links__form">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="resend">
+                    <button type="submit">{% translate "Resend code" %}</button>
+                </form>
             </div>
 
-            <div class="mb-4">
-                <label for="id_password" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    {% translate "Password" %}
-                </label>
-                <input type="password"
-                       name="password"
-                       id="id_password"
-                       placeholder="{% translate 'Password' %}"
-                       required
-                       autocomplete="current-password">
-                <input type="hidden" name="next" value="{{ next }}">
-            </div>
+        {% elif last_admin_user %}
+            {# ── Remembered admin: password or email-code login without showing email ── #}
+            <form action="{{ request.get_full_path }}" method="post" id="login-form">
+                {% csrf_token %}
+                <input type="hidden" name="mode" value="password">
+                <input type="hidden" name="remembered_admin" value="1">
 
-            <div class="flex flex-col gap-3">
+                <div class="mb-4">
+                    <label for="id_password" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        {% translate "Password" %}
+                    </label>
+                    <input type="password"
+                           name="password"
+                           id="id_password"
+                           placeholder="{% translate 'Password' %}"
+                           required
+                           autofocus
+                           autocomplete="current-password">
+                </div>
+
+                <div class="flex flex-col gap-3">
+                    {% component "unfold/components/button.html" with submit=1 variant="primary" class="submit-row w-full" %}
+                        {% translate 'Sign In' %}
+                    {% endcomponent %}
+                </div>
+            </form>
+
+            <form action="{{ request.get_full_path }}" method="post" class="login-remembered-code-form">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="remembered_code">
                 {% component "unfold/components/button.html" with submit=1 variant="primary" class="submit-row w-full" %}
-                    {% translate 'Sign In' %}
+                    {% translate "Send verification code instead" %}
                 {% endcomponent %}
+            </form>
+
+            <div class="login-links" style="justify-content: center;">
+                <a href="{{ different_email_url }}">{% translate "Use a different email" %}</a>
             </div>
-        </form>
+
+        {% elif step == "password" %}
+            {# ── Password login ── #}
+            <form action="{{ request.get_full_path }}" method="post" id="login-form">
+                {% csrf_token %}
+                <input type="hidden" name="mode" value="password">
+
+                <div class="mb-4">
+                    <label for="id_email" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        {% translate "Email" %}
+                    </label>
+                    <input type="email"
+                           name="email"
+                           id="id_email"
+                           placeholder="{% translate 'Email' %}"
+                           autofocus
+                           required
+                           autocomplete="email"
+                           {% if form.email.value %}value="{{ form.email.value }}"{% endif %}>
+                </div>
+
+                <div class="mb-4">
+                    <label for="id_password" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        {% translate "Password" %}
+                    </label>
+                    <input type="password"
+                           name="password"
+                           id="id_password"
+                           placeholder="{% translate 'Password' %}"
+                           required
+                           autocomplete="current-password">
+                </div>
+
+                <div class="flex flex-col gap-3">
+                    {% component "unfold/components/button.html" with submit=1 variant="primary" class="submit-row w-full" %}
+                        {% translate 'Sign In' %}
+                    {% endcomponent %}
+                </div>
+            </form>
+
+            <div class="login-links" style="justify-content: center;">
+                <a href="{{ email_code_mode_url }}">{% translate "Sign in with email code instead" %}</a>
+            </div>
+
+        {% else %}
+            {# ── Step 1: Email entry ── #}
+            <form action="{{ request.get_full_path }}" method="post" id="login-form">
+                {% csrf_token %}
+
+                <div class="mb-4">
+                    <label for="id_email" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        {{ form.email.label }}
+                    </label>
+                    <input type="email"
+                           name="email"
+                           id="id_email"
+                           placeholder="{% translate 'Email' %}"
+                           autofocus
+                           required
+                           {% if form.email.value %}value="{{ form.email.value }}"{% endif %}>
+                </div>
+
+                <div class="flex flex-col gap-3">
+                    {% component "unfold/components/button.html" with submit=1 variant="primary" class="submit-row w-full" %}
+                        {% translate 'Send verification code' %}
+                    {% endcomponent %}
+                </div>
+            </form>
+
+            <div class="login-links" style="justify-content: center;">
+                <a href="{{ password_mode_url }}">{% translate "Sign in with password instead" %}</a>
+            </div>
+        {% endif %}
     </div>
 {% endblock %}

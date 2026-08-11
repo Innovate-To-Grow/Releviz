@@ -9,11 +9,13 @@ import {
   loginWithPassword,
   logoutApi,
   requestLoginCode,
+  requestUnifiedEmailAuthCode,
   revokeAuthSessions,
   startRegistration,
   updateProfileApi,
   verifyLoginCode,
   verifyRegistration,
+  verifyUnifiedEmailAuthCode,
 } from "@/lib/api/auth";
 import {
   clearAuthSession,
@@ -88,6 +90,16 @@ export function AuthProvider({ children }) {
     return data;
   }, []);
 
+  const requestEmailAuthCode = useCallback(async (payload) => {
+    return requestUnifiedEmailAuthCode(payload);
+  }, []);
+
+  const verifyEmailAuthCode = useCallback(async (payload) => {
+    const data = await verifyUnifiedEmailAuthCode(payload);
+    setSession(readAuthSession());
+    return data;
+  }, []);
+
   const signup = useCallback(async (payload) => {
     return startRegistration(payload);
   }, []);
@@ -152,9 +164,13 @@ export function AuthProvider({ children }) {
     () => ({
       user: session?.user || null,
       loading,
+      nextStep: session?.nextStep || null,
+      requiresProfileCompletion: session?.requiresProfileCompletion || false,
       login,
       requestEmailLoginCode,
       verifyEmailLoginCode,
+      requestEmailAuthCode,
+      verifyEmailAuthCode,
       signup,
       verifySignup,
       logout,
@@ -173,6 +189,8 @@ export function AuthProvider({ children }) {
       login,
       requestEmailLoginCode,
       verifyEmailLoginCode,
+      requestEmailAuthCode,
+      verifyEmailAuthCode,
       signup,
       verifySignup,
       logout,

@@ -16,7 +16,7 @@ from apps.authn.security import RateLimitDecision
 from apps.authn.services import start_registration
 from apps.authn.tests.helpers import create_member, token_for
 from apps.authn.tests.test_auth_edges import latest_code
-from apps.messaging.services import EmailDeliveryError
+from apps.mail.services import EmailDeliveryError
 from apps.scheduling.models import (
     Event,
     EventInvitation,

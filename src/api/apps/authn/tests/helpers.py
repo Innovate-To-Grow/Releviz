@@ -1,34 +1,25 @@
-from django.contrib.auth import get_user_model
+"""
+Test helpers for creating members with ContactEmail records.
+"""
 
-from apps.authn.models import ContactEmail
-from apps.authn.services import issue_auth_session
+from apps.authn.models import ContactEmail, Member
 
 
-def create_member(
-    email: str,
-    first_name: str = "Test",
-    last_name: str = "User",
-    password: str = "password123",
-    **extra_fields,
-):
-    Member = get_user_model()
-    contact_verified = extra_fields.pop("contact_verified", True)
+def create_test_member(email, password="testpass123", **kwargs):
+    """
+    Create a Member with a primary ContactEmail record.
+    Member.email is left blank; the email is stored in ContactEmail.
+    """
     member = Member.objects.create_user(
         password=password,
-        first_name=first_name,
-        last_name=last_name,
-        email=email,
-        is_active=extra_fields.pop("is_active", True),
-        **extra_fields,
+        **kwargs,
     )
     ContactEmail.objects.create(
         member=member,
         email_address=email,
         email_type="primary",
-        verified=contact_verified,
+        verified=True,
     )
+    # Store the email on the instance for convenience in tests
+    member._test_email = email
     return member
-
-
-def token_for(member) -> str:
-    return issue_auth_session(member).payload["access"]

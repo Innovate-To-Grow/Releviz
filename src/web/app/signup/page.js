@@ -141,18 +141,12 @@ function SignupContent() {
         code: form.code,
         temporaryUpgrade: upgradeMode,
       };
-      if (!upgradeMode) {
-        Object.assign(verification, {
-          password: form.password,
-          password_confirm: form.passwordConfirm,
-          first_name: form.firstName,
-          last_name: form.lastName,
-          organization: form.organization,
-          title: form.title,
-        });
+      const data = await verifySignup(verification);
+      if (data?.requires_profile_completion || data?.next_step === "complete_profile") {
+        navigateTo("/settings?complete_profile=1");
+      } else {
+        navigateTo(next);
       }
-      await verifySignup(verification);
-      navigateTo(next);
     } catch (err) {
       setError(err.message || "Unable to verify code.");
     } finally {

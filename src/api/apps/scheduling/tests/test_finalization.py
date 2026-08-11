@@ -10,8 +10,8 @@ from rest_framework.test import APIClient
 
 from apps.authn.models import ContactEmail
 from apps.authn.tests.helpers import create_member, token_for
-from apps.messaging.models import EmailDeliveryJob, EmailDeliveryRequest, EmailMessageLog
-from apps.messaging.services import dispatch_email_job
+from apps.mail.models import EmailDeliveryJob, EmailDeliveryRequest, EmailMessageLog
+from apps.mail.services import dispatch_email_job
 from apps.scheduling.finalization import (
     FinalizationError,
     build_attendance_review,
@@ -1008,7 +1008,7 @@ class FinalizationApiTests(TestCase):
         self.assertEqual(confirmed.data["delivery"]["pending"], 1)
         job = EmailDeliveryJob.objects.get()
         with patch(
-            "apps.messaging.services.EmailMultiAlternatives.send",
+            "apps.mail.services.EmailMultiAlternatives.send",
             side_effect=TimeoutError("provider timeout"),
         ):
             dispatch_email_job(job.pk)

@@ -369,7 +369,7 @@ django.setup()
 
 from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 
-from apps.authn.models import AuthSession, ContactEmail, ContactPhone, EmailAuthChallenge, Member
+from apps.authn.models import AuthSession, ContactEmail, EmailAuthChallenge, Member
 from apps.messaging.models import EmailDeliveryJob, EmailMessageLog
 from apps.scheduling.models import EventInvitation
 
@@ -388,7 +388,6 @@ assert member.profile_image == ""
 assert member.admin_apps == []
 assert not member.has_usable_password()
 assert not ContactEmail.objects.filter(member=member).exists()
-assert not ContactPhone.objects.filter(member=member).exists()
 assert not EmailAuthChallenge.objects.filter(member=member).exists()
 assert not EmailDeliveryJob.objects.filter(member=member).exists()
 assert not EmailMessageLog.objects.filter(recipient=data["email"]).exists()

@@ -11,12 +11,12 @@ from rest_framework.test import APIClient
 
 from apps.authn.models import AuthRateLimitBucket, ContactEmail
 from apps.authn.tests.helpers import create_member, token_for
-from apps.messaging.models import (
+from apps.mail.models import (
     EmailDeliveryJob,
     EmailDeliveryRequest,
     EmailMessageLog,
 )
-from apps.messaging.services import dispatch_due_email_jobs, dispatch_email_job
+from apps.mail.services import dispatch_due_email_jobs, dispatch_email_job
 from apps.scheduling.models import Event, EventInvitation, Participant
 from apps.scheduling.services import (
     EventEmailRequestError,
@@ -719,7 +719,7 @@ class InvitationApiTests(TestCase):
         retry_job = EmailDeliveryJob.objects.get(recipient="again@example.com")
         self.assertEqual(retry_job.status, EmailDeliveryJob.Status.PENDING)
         with patch(
-            "apps.messaging.services.EmailMultiAlternatives.send",
+            "apps.mail.services.EmailMultiAlternatives.send",
             side_effect=TimeoutError("provider timeout"),
         ):
             dispatch_email_job(retry_job.pk)
@@ -911,7 +911,7 @@ class InvitationApiTests(TestCase):
             message_type=EmailMessageLog.MessageType.REMINDER,
         ).get()
         with patch(
-            "apps.messaging.services.EmailMultiAlternatives.send",
+            "apps.mail.services.EmailMultiAlternatives.send",
             side_effect=TimeoutError("provider timeout"),
         ):
             dispatch_email_job(failed_job.pk)

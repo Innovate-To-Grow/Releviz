@@ -1,0 +1,176 @@
+{% extends "admin/base_site.html" %}
+{% load i18n admin_urls static %}
+
+{% block title %}Import Members - {{ site_title|default:_('Django site admin') }}{% endblock %}
+
+{% block breadcrumbs %}
+    <div class="breadcrumbs">
+        <a href="{% url 'admin:index' %}">{% trans 'Home' %}</a>
+        &rsaquo; <a href="{% url 'admin:app_list' app_label='authn' %}">Authn</a>
+        &rsaquo; <a href="{% url 'admin:authn_member_changelist' %}">Members</a>
+        &rsaquo; Import Members
+    </div>
+{% endblock %}
+
+{% block content %}
+    <div class="max-w-3xl mx-auto py-8 px-4">
+        <h1 class="text-2xl font-bold text-font-default-light dark:text-font-default-dark mb-2">Import Members from
+            Excel</h1>
+
+        <!-- Template Download Section -->
+        <div class="bg-base-50 dark:bg-base-800 border border-dashed border-base-300 dark:border-base-600 rounded-default p-5 mb-6 text-center">
+            <a href="{% url 'admin:authn_member_import_template' %}"
+               class="bg-primary-600 hover:bg-primary-700 text-white font-medium text-sm px-5 py-2.5 rounded-default transition-colors inline-flex items-center gap-2">
+                <span class="material-symbols-outlined !text-[18px]">download</span>
+                Download Import Template
+            </a>
+            <p class="text-xs text-font-subtle-light dark:text-font-subtle-dark mt-3">
+                Download the Excel template, fill in member information, then upload
+            </p>
+        </div>
+
+        <!-- Instructions -->
+        <div class="bg-base-50 dark:bg-base-800 border border-base-200 dark:border-base-700 rounded-default p-5 mb-6">
+            <h4 class="text-sm font-semibold text-font-default-light dark:text-font-default-dark mb-3">Expected Excel
+                Columns</h4>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1 text-sm text-font-subtle-light dark:text-font-subtle-dark mb-4">
+                <div><code class="bg-white dark:bg-base-900 px-1.5 py-0.5 rounded text-xs">First Name</code></div>
+                <div><code class="bg-white dark:bg-base-900 px-1.5 py-0.5 rounded text-xs">Last Name</code></div>
+                <div><code class="bg-white dark:bg-base-900 px-1.5 py-0.5 rounded text-xs">Middle Name</code></div>
+                <div><code class="bg-white dark:bg-base-900 px-1.5 py-0.5 rounded text-xs">Title</code></div>
+                <div><code class="bg-white dark:bg-base-900 px-1.5 py-0.5 rounded text-xs">When Started</code></div>
+                <div><code class="bg-white dark:bg-base-900 px-1.5 py-0.5 rounded text-xs">Last Updated</code> <span
+                        class="text-xs opacity-60">(not imported)</span></div>
+                <div><code class="bg-white dark:bg-base-900 px-1.5 py-0.5 rounded text-xs font-bold">Primary
+                    Email</code> <span class="text-xs text-red-500">required</span></div>
+                <div><code class="bg-white dark:bg-base-900 px-1.5 py-0.5 rounded text-xs">Primary Verified</code></div>
+                <div><code class="bg-white dark:bg-base-900 px-1.5 py-0.5 rounded text-xs">Primary Subscribed</code></div>
+                <div><code class="bg-white dark:bg-base-900 px-1.5 py-0.5 rounded text-xs">Primary Expired</code>
+                    <span class="text-xs opacity-60">(not imported)</span></div>
+                <div><code class="bg-white dark:bg-base-900 px-1.5 py-0.5 rounded text-xs">Secondary Email</code></div>
+                <div><code class="bg-white dark:bg-base-900 px-1.5 py-0.5 rounded text-xs">Secondary Verified</code></div>
+                <div><code class="bg-white dark:bg-base-900 px-1.5 py-0.5 rounded text-xs">Secondary Subscribed</code></div>
+                <div><code class="bg-white dark:bg-base-900 px-1.5 py-0.5 rounded text-xs">Phone Number</code></div>
+                <div><code class="bg-white dark:bg-base-900 px-1.5 py-0.5 rounded text-xs">Phone Subscribed</code></div>
+                <div><code class="bg-white dark:bg-base-900 px-1.5 py-0.5 rounded text-xs">Phone Verified</code></div>
+                <div><code class="bg-white dark:bg-base-900 px-1.5 py-0.5 rounded text-xs">Organization
+                    (optional)</code></div>
+            </div>
+            <ul class="list-disc list-inside text-sm text-font-subtle-light dark:text-font-subtle-dark space-y-1.5">
+                <li><strong>Primary Email</strong> is the only required field</li>
+                <li>Username is <strong>auto-generated</strong> from the primary email address</li>
+                <li>A random password is generated unless a default is specified</li>
+                <li><strong>Boolean values:</strong> Use <code
+                        class="bg-white dark:bg-base-900 px-1.5 py-0.5 rounded text-xs">TRUE</code> / <code
+                        class="bg-white dark:bg-base-900 px-1.5 py-0.5 rounded text-xs">FALSE</code> or <code
+                        class="bg-white dark:bg-base-900 px-1.5 py-0.5 rounded text-xs">yes</code> / <code
+                        class="bg-white dark:bg-base-900 px-1.5 py-0.5 rounded text-xs">no</code></li>
+                <li>Existing members (matched by primary email) are skipped unless "Update Existing" is enabled</li>
+                <li><strong>Last Updated</strong> and <strong>Primary Expired</strong> columns are accepted but not stored</li>
+            </ul>
+        </div>
+
+        {% if result %}
+            <!-- Import Results -->
+            <div class="border border-base-200 dark:border-base-700 bg-white dark:bg-base-900 rounded-default p-6 mb-6">
+                <h3 class="text-lg font-semibold text-font-default-light dark:text-font-default-dark mb-4">Import
+                    Results</h3>
+
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+                    <div class="bg-base-50 dark:bg-base-800 border border-base-200 dark:border-base-700 rounded-default p-3 text-center">
+                        <div class="text-2xl font-bold text-green-600 dark:text-green-400">{{ result.created_count }}</div>
+                        <div class="text-xs text-font-subtle-light dark:text-font-subtle-dark mt-1">Created</div>
+                    </div>
+                    <div class="bg-base-50 dark:bg-base-800 border border-base-200 dark:border-base-700 rounded-default p-3 text-center">
+                        <div class="text-2xl font-bold text-blue-600 dark:text-blue-400">{{ result.updated_count }}</div>
+                        <div class="text-xs text-font-subtle-light dark:text-font-subtle-dark mt-1">Updated</div>
+                    </div>
+                    <div class="bg-base-50 dark:bg-base-800 border border-base-200 dark:border-base-700 rounded-default p-3 text-center">
+                        <div class="text-2xl font-bold text-yellow-600 dark:text-yellow-400">{{ result.skipped_count }}</div>
+                        <div class="text-xs text-font-subtle-light dark:text-font-subtle-dark mt-1">Skipped</div>
+                    </div>
+                    {% if result.errors %}
+                        <div class="bg-base-50 dark:bg-base-800 border border-base-200 dark:border-base-700 rounded-default p-3 text-center">
+                            <div class="text-2xl font-bold text-red-600 dark:text-red-400">{{ result.errors|length }}</div>
+                            <div class="text-xs text-font-subtle-light dark:text-font-subtle-dark mt-1">Errors</div>
+                        </div>
+                    {% endif %}
+                </div>
+
+                {% if result.errors %}
+                    <div class="border border-yellow-300 dark:border-yellow-700 bg-yellow-50 dark:bg-yellow-900/30 rounded-default p-4">
+                        <div class="flex items-center gap-2 mb-2">
+                            <span class="material-symbols-outlined text-yellow-600 dark:text-yellow-400 !text-[20px]">warning</span>
+                            <span class="text-sm font-semibold text-yellow-800 dark:text-yellow-300">Error Details</span>
+                        </div>
+                        <ul class="list-disc list-inside text-sm text-yellow-800 dark:text-yellow-300">
+                            {% for error in result.errors %}
+                                <li>{{ error }}</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                {% endif %}
+            </div>
+        {% endif %}
+
+        <!-- Import Form -->
+        <form method="post" enctype="multipart/form-data"
+              class="bg-white dark:bg-base-900 border border-base-200 dark:border-base-700 rounded-default p-6">
+            {% csrf_token %}
+
+            <div class="mb-5">
+                <label for="id_excel_file"
+                       class="block text-sm font-semibold text-font-default-light dark:text-font-default-dark mb-2">
+                <span class="flex items-center gap-1.5">
+                    <span class="material-symbols-outlined !text-[18px]">description</span>
+                    {{ form.excel_file.label }}
+                </span>
+                </label>
+                {{ form.excel_file }}
+                {% if form.excel_file.help_text %}
+                    <p class="text-xs text-font-subtle-light dark:text-font-subtle-dark mt-1">{{ form.excel_file.help_text }}</p>
+                {% endif %}
+                {% if form.excel_file.errors %}
+                    <ul class="mt-1">
+                        {% for error in form.excel_file.errors %}
+                            <li class="text-xs text-red-600 dark:text-red-400">{{ error }}</li>
+                        {% endfor %}
+                    </ul>
+                {% endif %}
+            </div>
+
+            <div class="mb-5">
+                <label for="id_set_password"
+                       class="block text-sm font-semibold text-font-default-light dark:text-font-default-dark mb-2">
+                    {{ form.set_password.label }}
+                </label>
+                {{ form.set_password }}
+                {% if form.set_password.help_text %}
+                    <p class="text-xs text-font-subtle-light dark:text-font-subtle-dark mt-1">{{ form.set_password.help_text }}</p>
+                {% endif %}
+            </div>
+
+            <div class="mb-5">
+                <label class="flex items-center gap-2 cursor-pointer">
+                    {{ form.update_existing }}
+                    <span class="text-sm font-medium text-font-default-light dark:text-font-default-dark">{{ form.update_existing.label }}</span>
+                </label>
+                {% if form.update_existing.help_text %}
+                    <p class="text-xs text-font-subtle-light dark:text-font-subtle-dark mt-1 ml-6">{{ form.update_existing.help_text }}</p>
+                {% endif %}
+            </div>
+
+            <div class="flex items-center gap-3 pt-4 border-t border-base-100 dark:border-base-800">
+                <button type="submit"
+                        class="bg-primary-600 hover:bg-primary-700 text-white font-medium text-sm px-5 py-2.5 rounded-default transition-colors flex items-center gap-2">
+                    <span class="material-symbols-outlined !text-[18px]">upload</span>
+                    Start Import
+                </button>
+                <a href="{% url 'admin:authn_member_changelist' %}"
+                   class="text-sm font-medium text-font-subtle-light dark:text-font-subtle-dark hover:text-primary-600 dark:hover:text-primary-500 transition-colors">
+                    Cancel
+                </a>
+            </div>
+        </form>
+    </div>
+{% endblock %}

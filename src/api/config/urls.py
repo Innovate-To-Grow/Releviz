@@ -4,7 +4,7 @@ from django.conf import settings
 from django.contrib import admin
 from django.urls import include, path
 
-from apps.authn.views_admin_login import AdminLoginView
+from apps.authn.views import AdminLoginView
 
 admin.site.site_title = "Releviz Admin"
 admin.site.site_header = "Releviz"

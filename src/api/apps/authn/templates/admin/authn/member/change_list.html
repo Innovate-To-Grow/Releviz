@@ -1,0 +1,20 @@
+{% extends "admin/change_list.html" %}
+{% load i18n admin_urls %}
+
+{% block object-tools-items %}
+    <div class="i2g-admin-object-tools">
+        <a href="{% url 'admin:authn_member_export_excel' %}"
+           class="i2g-admin-action"
+           title="Export to Excel">
+            <span class="material-symbols-outlined">download</span>
+            Export Excel
+        </a>
+        <a href="{% url 'admin:authn_member_import_excel' %}"
+           class="i2g-admin-action"
+           title="Import from Excel">
+            <span class="material-symbols-outlined">upload_file</span>
+            Import Excel
+        </a>
+        {{ block.super }}
+    </div>
+{% endblock %}

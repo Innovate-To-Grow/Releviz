@@ -1,8 +1,9 @@
 from django.urls import path
 
-from apps.core import views
+from apps.core.views.maintenance import MaintenanceBypassView
+
+app_name = "core"
 
 urlpatterns = [
-    path("feedback", views.FeedbackView.as_view(), name="api-feedback"),
-    path("metrics", views.product_metrics, name="api-product-metrics"),
+    path("maintenance/bypass/", MaintenanceBypassView.as_view(), name="maintenance-bypass"),
 ]

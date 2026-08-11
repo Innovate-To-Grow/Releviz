@@ -6,8 +6,8 @@ from pathlib import Path
 
 from django.templatetags.static import static
 
-from apps.core.access import user_can_access_app
-from apps.core.error_tracking import initialize_error_tracking
+from apps.core.utils.access import user_can_access_app
+from apps.core.utils.error_tracking import initialize_error_tracking
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 
@@ -20,7 +20,7 @@ INSTALLED_APPS = [
     "unfold.contrib.filters",
     "unfold.contrib.forms",
     "apps.authn.apps.AuthnConfig",
-    "apps.core.apps.RelevizAdminConfig",
+    "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
@@ -28,7 +28,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "apps.core.apps.CoreConfig",
     "apps.scheduling.apps.SchedulingConfig",
-    "apps.messaging.apps.MessagingConfig",
+    "apps.mail.apps.MailConfig",
     "corsheaders",
     "rest_framework",
     "rest_framework_simplejwt",
@@ -226,12 +226,12 @@ LOGGING = {
     "disable_existing_loggers": False,
     "filters": {
         "request_context": {
-            "()": "apps.core.logging.RequestContextFilter",
+            "()": "apps.core.utils.logging.RequestContextFilter",
         }
     },
     "formatters": {
         "json": {
-            "()": "apps.core.logging.JsonFormatter",
+            "()": "apps.core.utils.logging.JsonFormatter",
         }
     },
     "handlers": {
@@ -308,11 +308,10 @@ UNFOLD = {
             ],
         },
         {
-            "models": ["authn.member", "authn.contactemail", "authn.contactphone"],
+            "models": ["authn.member", "authn.contactemail"],
             "items": [
                 {"title": "Members", "link": "/admin/authn/member/"},
                 {"title": "Emails", "link": "/admin/authn/contactemail/"},
-                {"title": "Phones", "link": "/admin/authn/contactphone/"},
             ],
         },
         {
@@ -324,10 +323,10 @@ UNFOLD = {
             ],
         },
         {
-            "models": ["messaging.emailproviderconfig", "messaging.emailmessagelog"],
+            "models": ["mail.emailproviderconfig", "mail.emailmessagelog"],
             "items": [
-                {"title": "Email Providers", "link": "/admin/messaging/emailproviderconfig/"},
-                {"title": "Email Logs", "link": "/admin/messaging/emailmessagelog/"},
+                {"title": "Email Providers", "link": "/admin/mail/emailproviderconfig/"},
+                {"title": "Email Logs", "link": "/admin/mail/emailmessagelog/"},
             ],
         },
     ],
@@ -362,17 +361,17 @@ UNFOLD = {
             },
             {
                 "title": "Email Delivery",
-                "permission": _can("messaging"),
+                "permission": _can("mail"),
                 "items": [
                     {
                         "title": "AWS SES Providers",
-                        "link": "/admin/messaging/emailproviderconfig/",
-                        "permission": _can("messaging"),
+                        "link": "/admin/mail/emailproviderconfig/",
+                        "permission": _can("mail"),
                     },
                     {
                         "title": "Email Logs",
-                        "link": "/admin/messaging/emailmessagelog/",
-                        "permission": _can("messaging"),
+                        "link": "/admin/mail/emailmessagelog/",
+                        "permission": _can("mail"),
                     },
                 ],
             },
@@ -386,11 +385,10 @@ UNFOLD = {
                         "permission": _can("authn"),
                     },
                     {
-                        "title": "Emails & Phones",
+                        "title": "Emails",
                         "link": "/admin/authn/contactemail/",
                         "active_paths": [
                             "/admin/authn/contactemail/",
-                            "/admin/authn/contactphone/",
                         ],
                         "permission": _can("authn"),
                     },

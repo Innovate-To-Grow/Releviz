@@ -10,8 +10,8 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.authn.tests.helpers import create_member, token_for
-from apps.messaging.management.commands.dispatch_email_jobs import Command as EmailWorkerCommand
-from apps.messaging.models import EmailDeliveryJob, EmailDeliveryRequest, EmailMessageLog
+from apps.mail.management.commands.dispatch_email_jobs import Command as EmailWorkerCommand
+from apps.mail.models import EmailDeliveryJob, EmailDeliveryRequest, EmailMessageLog
 from apps.scheduling.event_management import EventManagementError, parse_event_configuration
 from apps.scheduling.finalization import (
     FinalizationError,

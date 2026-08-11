@@ -1,0 +1,84 @@
+.ip-geo-popup {
+  position: fixed;
+  z-index: 9999;
+  min-width: 280px;
+  max-width: 360px;
+  padding: 16px;
+  border-radius: var(--md-sys-shape-corner-large, 16px);
+  border: 1px solid var(--md-sys-color-outline-variant, #c4c7ca);
+  background: var(--md-sys-color-surface-container-lowest, #fff);
+  box-shadow: var(--md-sys-elevation-2, 0 8px 30px rgba(60, 64, 67, .14));
+  font-size: 0.85rem;
+  line-height: 1.5;
+  pointer-events: auto;
+}
+.dark .ip-geo-popup {
+  background: var(--md-sys-color-surface-container-high, #2b2b2f);
+  border-color: var(--md-sys-color-outline-variant, #444746);
+  box-shadow: 0 8px 30px rgba(0,0,0,.35);
+  color: var(--md-sys-color-on-surface, #e8eaed);
+}
+.ip-geo-popup-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant, #c4c7ca);
+}
+.dark .ip-geo-popup-header {
+  border-color: var(--md-sys-color-outline-variant, #444746);
+}
+.ip-geo-popup-header strong {
+  font-size: 0.95rem;
+}
+.ip-geo-popup-close {
+  background: none;
+  border: none;
+  cursor: pointer;
+  opacity: 0.4;
+  padding: 2px;
+  line-height: 1;
+}
+.ip-geo-popup-close:hover { opacity: 1; }
+.ip-geo-popup-row {
+  display: flex;
+  gap: 8px;
+  padding: 3px 0;
+}
+.ip-geo-popup-label {
+  flex: 0 0 70px;
+  font-weight: 600;
+  opacity: 0.6;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.ip-geo-popup-value {
+  flex: 1;
+}
+.ip-geo-popup-map-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 10px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-decoration: none;
+  background: var(--md-sys-color-primary, #305f9d);
+  color: var(--md-sys-color-on-primary, #fff);
+}
+.ip-geo-popup-map-link:hover { opacity: 0.85; }
+.ip-geo-popup-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  opacity: 0.5;
+}
+.ip-geo-popup-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+}

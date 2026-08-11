@@ -16,11 +16,13 @@ import {
   loginWithPassword,
   logoutApi,
   requestLoginCode,
+  requestUnifiedEmailAuthCode,
   revokeAuthSessions,
   startRegistration,
   updateProfileApi,
   verifyLoginCode,
   verifyRegistration,
+  verifyUnifiedEmailAuthCode,
 } from "@/lib/api/auth";
 
 jest.mock("@/lib/api/auth", () => ({
@@ -31,11 +33,13 @@ jest.mock("@/lib/api/auth", () => ({
   loginWithPassword: jest.fn(),
   logoutApi: jest.fn(),
   requestLoginCode: jest.fn(),
+  requestUnifiedEmailAuthCode: jest.fn(),
   revokeAuthSessions: jest.fn(),
   startRegistration: jest.fn(),
   updateProfileApi: jest.fn(),
   verifyLoginCode: jest.fn(),
   verifyRegistration: jest.fn(),
+  verifyUnifiedEmailAuthCode: jest.fn(),
 }));
 
 jest.mock("@/lib/navigation", () => ({
@@ -62,6 +66,10 @@ function Probe() {
       <button onClick={() => auth.requestEmailLoginCode({ email: "a" })}>request-code</button>
       <button onClick={() => auth.verifyEmailLoginCode({ email: "a", code: "1" })}>
         verify-login
+      </button>
+      <button onClick={() => auth.requestEmailAuthCode({ email: "a" })}>request-auth-code</button>
+      <button onClick={() => auth.verifyEmailAuthCode({ email: "a", code: "1" })}>
+        verify-auth
       </button>
       <button onClick={() => auth.signup({ email: "a" })}>signup</button>
       <button onClick={() => auth.verifySignup({ email: "a", code: "1" })}>verify</button>
@@ -155,6 +163,16 @@ describe("AuthContext", () => {
       writeAuthSession({ access: "code-token", user: { displayName: "Code User" } });
       return { ok: true };
     });
+    requestUnifiedEmailAuthCode.mockResolvedValue({ message: "unified code sent" });
+    verifyUnifiedEmailAuthCode.mockImplementation(async () => {
+      writeAuthSession({
+        access: "unified-token",
+        user: { displayName: "Unified User" },
+        next_step: "account",
+        requires_profile_completion: false,
+      });
+      return { ok: true };
+    });
     startRegistration.mockResolvedValue({ message: "started" });
     verifyRegistration.mockImplementation(async () => {
       writeAuthSession({ access: "verify-token", user: { displayName: "Verified User" } });
@@ -179,6 +197,12 @@ describe("AuthContext", () => {
     expect(requestLoginCode).toHaveBeenCalledWith({ email: "a" });
     await userEvent.click(screen.getByText("verify-login"));
     expect(screen.getByTestId("user")).toHaveTextContent("Code User");
+    await userEvent.click(screen.getByText("request-auth-code"));
+    expect(requestUnifiedEmailAuthCode).toHaveBeenCalledWith({ email: "a" });
+    await userEvent.click(screen.getByText("verify-auth"));
+    expect(screen.getByTestId("user")).toHaveTextContent("Unified User");
+    expect(readAuthSession().nextStep).toBe("account");
+    expect(readAuthSession().requiresProfileCompletion).toBe(false);
     await userEvent.click(screen.getByText("signup"));
     expect(startRegistration).toHaveBeenCalledWith({ email: "a" });
     await userEvent.click(screen.getByText("verify"));

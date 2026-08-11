@@ -10,7 +10,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.messaging.models import EmailDeliveryJob, EmailDeliveryRequest, EmailMessageLog
+from apps.mail.models import EmailDeliveryJob, EmailDeliveryRequest, EmailMessageLog
 from apps.scheduling.lifecycle import LifecycleError, transition_event
 from apps.scheduling.models import Event, FinalMeeting
 from apps.scheduling.services import EventEmailRequestError, upsert_and_send_invitations

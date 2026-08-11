@@ -1,0 +1,16 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Page not found" %} | I2G Admin{% endblock %}
+
+{% block content %}
+    <div class="flex flex-col items-center justify-center py-20 text-center">
+        <h1 class="text-6xl font-bold text-gray-300 dark:text-gray-600 mb-4">404</h1>
+        <h2 class="text-xl font-semibold text-gray-700 dark:text-gray-300 mb-2">{% trans "Page not found" %}</h2>
+        <p class="text-gray-500 dark:text-gray-400 mb-8">{% trans "The page you requested could not be found." %}</p>
+        <a href="{% url 'admin:index' %}"
+           class="inline-flex items-center px-4 py-2 rounded-md text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 transition-colors">
+            {% trans "Back to dashboard" %}
+        </a>
+    </div>
+{% endblock %}

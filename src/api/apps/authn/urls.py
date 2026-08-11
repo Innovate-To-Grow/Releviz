@@ -1,66 +1,106 @@
+"""
+URL configuration for authn app.
+"""
+
 from django.urls import path
 
-from apps.authn import views
+from .views import (
+    AcceptInvitationView,
+    AccountEmailsView,
+    ChangePasswordCodeConfirmView,
+    ChangePasswordCodeRequestView,
+    ChangePasswordCodeVerifyView,
+    ChangePasswordView,
+    ContactEmailDetailView,
+    ContactEmailListCreateView,
+    ContactEmailMakePrimaryView,
+    ContactEmailRequestVerificationView,
+    ContactEmailVerifyCodeView,
+    DeleteAccountCodeConfirmView,
+    DeleteAccountCodeRequestView,
+    DeleteAccountCodeVerifyView,
+    EmailAuthRequestCodeView,
+    EmailAuthVerifyCodeView,
+    ImpersonateLoginView,
+    LoginCodeRequestView,
+    LoginCodeVerifyView,
+    LoginView,
+    LogoutView,
+    PasswordResetConfirmView,
+    PasswordResetRequestView,
+    PasswordResetVerifyView,
+    ProfileView,
+    PublicKeyView,
+    PublicTokenRefreshView,
+    RegisterResendCodeView,
+    RegisterVerifyCodeView,
+    RegisterView,
+    SessionView,
+    SubscribeView,
+    UnsubscribeAutoLoginView,
+)
+
+app_name = "authn"
 
 urlpatterns = [
-    path("public-key/", views.PublicKeyView.as_view(), name="authn-public-key"),
-    path("register/", views.RegisterView.as_view(), name="authn-register"),
+    # Public key for RSA encryption
+    path("public-key/", PublicKeyView.as_view(), name="public-key"),
+    # Unified email auth
+    path("email-auth/request-code/", EmailAuthRequestCodeView.as_view(), name="email-auth-request-code"),
+    path("email-auth/verify-code/", EmailAuthVerifyCodeView.as_view(), name="email-auth-verify-code"),
+    # Registration
+    path("register/", RegisterView.as_view(), name="register"),
+    path("register/verify-code/", RegisterVerifyCodeView.as_view(), name="register-verify-code"),
+    path("register/resend-code/", RegisterResendCodeView.as_view(), name="register-resend-code"),
+    # Login
+    path("login/", LoginView.as_view(), name="login"),
+    path("login/request-code/", LoginCodeRequestView.as_view(), name="login-request-code"),
+    path("login/verify-code/", LoginCodeVerifyView.as_view(), name="login-verify-code"),
+    # Logout (blacklists refresh token)
+    path("logout/", LogoutView.as_view(), name="logout"),
+    # Token refresh
+    path("refresh/", PublicTokenRefreshView.as_view(), name="token-refresh"),
+    # Authenticated frontend session bootstrap
+    path("session/", SessionView.as_view(), name="session"),
+    # Password reset
+    path("password-reset/request-code/", PasswordResetRequestView.as_view(), name="password-reset-request-code"),
+    path("password-reset/verify-code/", PasswordResetVerifyView.as_view(), name="password-reset-verify-code"),
+    path("password-reset/confirm/", PasswordResetConfirmView.as_view(), name="password-reset-confirm"),
+    # Profile
+    path("profile/", ProfileView.as_view(), name="profile"),
+    path("account-emails/", AccountEmailsView.as_view(), name="account-emails"),
+    # Change password
+    path("change-password/", ChangePasswordView.as_view(), name="change-password"),
+    path("change-password/request-code/", ChangePasswordCodeRequestView.as_view(), name="change-password-request-code"),
+    path("change-password/verify-code/", ChangePasswordCodeVerifyView.as_view(), name="change-password-verify-code"),
+    path("change-password/confirm/", ChangePasswordCodeConfirmView.as_view(), name="change-password-confirm"),
+    path("delete-account/request-code/", DeleteAccountCodeRequestView.as_view(), name="delete-account-request-code"),
+    path("delete-account/verify-code/", DeleteAccountCodeVerifyView.as_view(), name="delete-account-verify-code"),
+    path("delete-account/confirm/", DeleteAccountCodeConfirmView.as_view(), name="delete-account-confirm"),
+    # Contact Emails (authenticated)
+    path("contact-emails/", ContactEmailListCreateView.as_view(), name="contact-email-list-create"),
+    path("contact-emails/<uuid:pk>/", ContactEmailDetailView.as_view(), name="contact-email-detail"),
     path(
-        "register/verify-code/",
-        views.RegisterVerifyCodeView.as_view(),
-        name="authn-register-verify",
+        "contact-emails/<uuid:pk>/request-verification/",
+        ContactEmailRequestVerificationView.as_view(),
+        name="contact-email-request-verification",
     ),
     path(
-        "register/resend-code/",
-        views.RegisterResendCodeView.as_view(),
-        name="authn-register-resend",
-    ),
-    path("login/", views.LoginView.as_view(), name="authn-login"),
-    path(
-        "login/request-code/", views.LoginRequestCodeView.as_view(), name="authn-login-request-code"
-    ),
-    path("login/verify-code/", views.LoginVerifyCodeView.as_view(), name="authn-login-verify-code"),
-    path(
-        "email-auth/request-code/",
-        views.LoginRequestCodeView.as_view(),
-        name="authn-email-request-code",
+        "contact-emails/<uuid:pk>/verify-code/",
+        ContactEmailVerifyCodeView.as_view(),
+        name="contact-email-verify-code",
     ),
     path(
-        "email-auth/verify-code/",
-        views.LoginVerifyCodeView.as_view(),
-        name="authn-email-verify-code",
+        "contact-emails/<uuid:pk>/make-primary/",
+        ContactEmailMakePrimaryView.as_view(),
+        name="contact-email-make-primary",
     ),
-    path(
-        "phone-auth/request-code/",
-        views.PhoneAuthRequestCodeView.as_view(),
-        name="authn-phone-request-code",
-    ),
-    path(
-        "phone-auth/verify-code/",
-        views.PhoneAuthVerifyCodeView.as_view(),
-        name="authn-phone-verify-code",
-    ),
-    path("logout/", views.LogoutView.as_view(), name="authn-logout"),
-    path("refresh/", views.RefreshView.as_view(), name="authn-refresh"),
-    path("profile/", views.ProfileView.as_view(), name="authn-profile"),
-    path("sessions/", views.AuthSessionsView.as_view(), name="authn-sessions"),
-    path("account-emails/", views.AccountEmailsView.as_view(), name="authn-account-emails"),
-    path("contact-phones/", views.ContactPhonesView.as_view(), name="authn-contact-phones"),
-    path(
-        "password-reset/request-code/",
-        views.PasswordResetRequestView.as_view(),
-        name="authn-password-reset-request",
-    ),
-    path(
-        "password-reset/verify-code/",
-        views.PasswordResetConfirmView.as_view(),
-        name="authn-password-reset-verify",
-    ),
-    path(
-        "password-reset/confirm/",
-        views.PasswordResetConfirmView.as_view(),
-        name="authn-password-reset-confirm",
-    ),
-    path("change-password/", views.ChangePasswordView.as_view(), name="authn-change-password"),
-    path("delete-account/", views.DeleteAccountView.as_view(), name="authn-delete-account"),
+    # Admin invitation acceptance (public)
+    path("invite/<str:token>/", AcceptInvitationView.as_view(), name="accept-invitation"),
+    # Subscribe (public)
+    path("subscribe/", SubscribeView.as_view(), name="subscribe"),
+    # Unsubscribe auto-login (from email link)
+    path("unsubscribe-login/", UnsubscribeAutoLoginView.as_view(), name="unsubscribe-login"),
+    # Admin impersonation login
+    path("impersonate-login/", ImpersonateLoginView.as_view(), name="impersonate-login"),
 ]

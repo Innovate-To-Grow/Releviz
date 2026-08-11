@@ -13,7 +13,7 @@ from django.db.models import Q
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
-from apps.messaging.models import EmailDeliveryJob, EmailMessageLog
+from apps.mail.models import EmailDeliveryJob, EmailMessageLog
 from apps.scheduling.lifecycle import event_configuration_write_error
 from apps.scheduling.models import (
     Event,

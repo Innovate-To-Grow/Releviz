@@ -15,9 +15,9 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.authn.models import ContactEmail
-from apps.messaging.email_templates import render_branded_email
-from apps.messaging.models import EmailDeliveryJob, EmailDeliveryRequest, EmailMessageLog
-from apps.messaging.services import EmailAttachment, enqueue_email_job, frontend_url
+from apps.mail.email_templates import render_branded_email
+from apps.mail.models import EmailDeliveryJob, EmailDeliveryRequest, EmailMessageLog
+from apps.mail.services import EmailAttachment, enqueue_email_job, frontend_url
 from apps.scheduling.lifecycle import event_configuration_write_error, response_write_error
 from apps.scheduling.models import Event, EventInvitation, Participant, UserEvent
 from apps.scheduling.utils import default_availability
