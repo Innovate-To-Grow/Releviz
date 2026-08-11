@@ -6,8 +6,10 @@
     "src/web",
     "src/api"
   ],
+  "devDependencies": {
+    "brace-expansion": "file:./src/web/vendor/brace-expansion-compat"
+  },
   "overrides": {
-    "brace-expansion": "file:./src/web/vendor/brace-expansion-compat",
     "eslint-plugin-react-hooks": "7.1.1",
     "next": {
       "postcss": "8.5.23",
