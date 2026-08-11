@@ -9,7 +9,14 @@ from hashlib import sha256
 from django.core import signing
 from django.core.cache import cache
 
-from apps.event.services.ticket.assets import build_frontend_absolute_url
+def build_frontend_absolute_url(path: str) -> str:
+    """Build an absolute frontend URL from a path."""
+    from django.conf import settings
+
+    base = getattr(settings, "FRONTEND_URL", "").rstrip("/")
+    if not base:
+        base = getattr(settings, "BACKEND_URL", "").rstrip("/")
+    return f"{base}{path}"
 
 _UNSUBSCRIBE_LOGIN_SALT = "email-unsubscribe-login"
 _UNSUBSCRIBE_LOGIN_MAX_AGE = 60 * 60 * 24 * 7  # 7 days

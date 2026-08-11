@@ -19,7 +19,9 @@ def noop_reverse(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
-    dependencies = []
+    dependencies = [
+        ("core", "0001_initial"),
+    ]
 
     operations = [
         migrations.AddField(

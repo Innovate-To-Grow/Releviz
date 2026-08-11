@@ -5,8 +5,9 @@ from django.core.cache import cache
 from rest_framework.test import APITestCase
 
 from apps.authn.models import ContactEmail
-from apps.event.models import EventRegistration
-from apps.event.tests.helpers import make_event, make_ticket
+# FIXME(stale): apps.event removed during restructuring — test needs updating
+# from apps.event.models import EventRegistration
+# from apps.event.tests.helpers import make_event, make_ticket
 
 Member = get_user_model()
 

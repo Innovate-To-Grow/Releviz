@@ -7,7 +7,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("authn", "0002_secure_auth_sessions"),
+        ("authn", "0002_alter_emailauthchallenge_purpose"),
         ("mail", "0002_email_delivery_jobs"),
         ("scheduling", "0005_event_timezone_finalmeeting_finalizationrequest"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),

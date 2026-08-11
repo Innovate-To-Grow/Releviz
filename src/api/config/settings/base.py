@@ -20,6 +20,7 @@ INSTALLED_APPS = [
     "unfold.contrib.filters",
     "unfold.contrib.forms",
     "apps.authn.apps.AuthnConfig",
+    "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
