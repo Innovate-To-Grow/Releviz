@@ -170,7 +170,9 @@ class RepositorySurfaceTests(SimpleTestCase):
         restore = (ROOT / "scripts/db/postgres-restore.sh").read_text(encoding="utf-8")
         drill = (ROOT / "scripts/db/backup-restore-drill.sh").read_text(encoding="utf-8")
         rollout = (ROOT / "scripts/deploy/ecs-service-rollout.sh").read_text(encoding="utf-8")
-        frontend_build = (ROOT / "scripts/deploy/docker-build-frontend.sh").read_text(encoding="utf-8")
+        frontend_build = (ROOT / "scripts/deploy/docker-build-frontend.sh").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("ALLOW_DATABASE_RESTORE", restore)
         self.assertIn("sha256sum --check", restore)
         self.assertIn("database_manifest", drill)
@@ -192,9 +194,7 @@ class RepositorySurfaceTests(SimpleTestCase):
                 self.assertNotIn("clerk.com", text.lower())
 
     def test_admin_theme_templates_reference_releviz_assets(self):
-        login = (ROOT / "src/api/apps/core/templates/admin/login.html").read_text(
-            encoding="utf-8"
-        )
+        login = (ROOT / "src/api/apps/core/templates/admin/login.html").read_text(encoding="utf-8")
         base_site = (ROOT / "src/api/apps/core/templates/admin/base_site.html").read_text(
             encoding="utf-8"
         )

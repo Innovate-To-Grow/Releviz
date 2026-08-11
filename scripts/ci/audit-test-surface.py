@@ -86,11 +86,18 @@ def should_audit(path: str) -> bool:
 def main() -> int:
     tracked = tracked_files()
     references = "\n".join(
-        (ROOT / file).read_text(encoding="utf-8") for file in REFERENCE_FILES if (ROOT / file).exists()
+        (ROOT / file).read_text(encoding="utf-8")
+        for file in REFERENCE_FILES
+        if (ROOT / file).exists()
     )
-    missing = [path for path in tracked if should_audit(path) and path not in references]
+    missing = [
+        path for path in tracked if should_audit(path) and path not in references
+    ]
     if missing:
-        print("Repository files are not covered by the resource audit manifest:", file=sys.stderr)
+        print(
+            "Repository files are not covered by the resource audit manifest:",
+            file=sys.stderr,
+        )
         for path in missing:
             print(f"  - {path}", file=sys.stderr)
         return 1
