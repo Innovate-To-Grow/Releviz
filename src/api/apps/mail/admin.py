@@ -3,13 +3,13 @@ from django.contrib import admin, messages
 from django.utils import timezone
 from unfold.admin import ModelAdmin
 
-from apps.messaging.models import (
+from apps.mail.models import (
     EmailDeliveryJob,
     EmailDeliveryRequest,
     EmailMessageLog,
     EmailProviderConfig,
 )
-from apps.messaging.services import EmailDeliveryError, send_email_message
+from apps.mail.services import EmailDeliveryError, send_email_message
 
 
 class EmailProviderConfigForm(forms.ModelForm):

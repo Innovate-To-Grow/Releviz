@@ -10,8 +10,8 @@ from rest_framework.test import APIClient
 
 from apps.authn.models import ContactEmail, EmailAuthChallenge
 from apps.authn.tests.helpers import create_member, token_for
-from apps.messaging.models import EmailDeliveryJob, EmailDeliveryRequest
-from apps.messaging.services import dispatch_email_job
+from apps.mail.models import EmailDeliveryJob, EmailDeliveryRequest
+from apps.mail.services import dispatch_email_job
 from apps.scheduling.models import (
     Event,
     EventInvitation,

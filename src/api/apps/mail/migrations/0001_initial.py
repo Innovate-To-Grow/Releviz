@@ -104,10 +104,10 @@ class Migration(migrations.Migration):
                 "ordering": ["-created_at"],
                 "indexes": [
                     models.Index(
-                        fields=["message_type", "status"], name="messaging_e_message_606b50_idx"
+                        fields=["message_type", "status"], name="mail_e_message_606b50_idx"
                     ),
-                    models.Index(fields=["recipient"], name="messaging_e_recipie_2d8f66_idx"),
-                    models.Index(fields=["created_at"], name="messaging_e_created_c6602a_idx"),
+                    models.Index(fields=["recipient"], name="mail_e_recipie_2d8f66_idx"),
+                    models.Index(fields=["created_at"], name="mail_e_created_c6602a_idx"),
                 ],
             },
         ),

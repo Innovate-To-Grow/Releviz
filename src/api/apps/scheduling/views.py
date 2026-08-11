@@ -24,8 +24,8 @@ from apps.authn.security import (
     security_log_key,
 )
 from apps.authn.services import start_registration
-from apps.messaging.models import EmailDeliveryRequest
-from apps.messaging.services import (
+from apps.mail.models import EmailDeliveryRequest
+from apps.mail.services import (
     EmailDeliveryError,
     email_delivery_summary,
 )

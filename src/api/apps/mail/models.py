@@ -5,7 +5,7 @@ from django.db import models
 from django.utils import timezone
 
 from apps.core.models import TimestampedModel
-from apps.messaging.crypto import decrypt_secret, encrypt_secret
+from apps.mail.crypto import decrypt_secret, encrypt_secret
 
 
 class EmailProviderConfig(TimestampedModel):
@@ -77,7 +77,7 @@ class EmailMessageLog(TimestampedModel):
         related_name="email_logs",
     )
     delivery_job = models.ForeignKey(
-        "messaging.EmailDeliveryJob",
+        "mail.EmailDeliveryJob",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,

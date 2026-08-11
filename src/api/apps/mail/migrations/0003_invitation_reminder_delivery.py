@@ -8,7 +8,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
     dependencies = [
         ("authn", "0002_secure_auth_sessions"),
-        ("messaging", "0002_email_delivery_jobs"),
+        ("mail", "0002_email_delivery_jobs"),
         ("scheduling", "0005_event_timezone_finalmeeting_finalizationrequest"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
@@ -66,7 +66,7 @@ class Migration(migrations.Migration):
                     models.ManyToManyField(
                         blank=True,
                         related_name="delivery_requests",
-                        to="messaging.emaildeliveryjob",
+                        to="mail.emaildeliveryjob",
                     ),
                 ),
                 (
@@ -85,7 +85,7 @@ class Migration(migrations.Migration):
             model_name="emaildeliveryrequest",
             index=models.Index(
                 fields=["event", "operation", "created_at"],
-                name="messaging_e_event_i_550660_idx",
+                name="mail_e_event_i_550660_idx",
             ),
         ),
         migrations.AddConstraint(

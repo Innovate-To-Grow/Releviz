@@ -21,7 +21,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from apps.authn.models import ContactEmail, EmailAuthChallenge
-from apps.messaging.models import EmailDeliveryJob, EmailMessageLog
+from apps.mail.models import EmailDeliveryJob, EmailMessageLog
 from apps.scheduling.models import (
     Event,
     EventInvitation,

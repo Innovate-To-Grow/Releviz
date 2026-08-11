@@ -18,7 +18,7 @@ MESSAGE_TYPE_CHOICES = [
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("messaging", "0001_initial"),
+        ("mail", "0001_initial"),
         ("scheduling", "0005_event_timezone_finalmeeting_finalizationrequest"),
     ]
 
@@ -100,21 +100,21 @@ class Migration(migrations.Migration):
                 null=True,
                 on_delete=django.db.models.deletion.SET_NULL,
                 related_name="message_logs",
-                to="messaging.emaildeliveryjob",
+                to="mail.emaildeliveryjob",
             ),
         ),
         migrations.AddIndex(
             model_name="emaildeliveryjob",
             index=models.Index(
                 fields=["status", "next_attempt_at"],
-                name="messaging_e_status_22d4d4_idx",
+                name="mail_e_status_22d4d4_idx",
             ),
         ),
         migrations.AddIndex(
             model_name="emaildeliveryjob",
             index=models.Index(
                 fields=["event", "message_type"],
-                name="messaging_e_event_i_e73507_idx",
+                name="mail_e_event_i_e73507_idx",
             ),
         ),
         migrations.AddConstraint(

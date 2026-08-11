@@ -7,11 +7,11 @@ from django.contrib.admin.sites import AdminSite
 from django.core import mail
 from django.test import RequestFactory, TestCase, override_settings
 
-from apps.messaging.admin import EmailProviderConfigAdmin, EmailProviderConfigForm
-from apps.messaging.crypto import decrypt_secret, encrypt_secret
-from apps.messaging.email_templates import brand_site_url, render_branded_email
-from apps.messaging.models import EmailMessageLog, EmailProviderConfig
-from apps.messaging.services import (
+from apps.mail.admin import EmailProviderConfigAdmin, EmailProviderConfigForm
+from apps.mail.crypto import decrypt_secret, encrypt_secret
+from apps.mail.email_templates import brand_site_url, render_branded_email
+from apps.mail.models import EmailMessageLog, EmailProviderConfig
+from apps.mail.services import (
     EmailAttachment,
     EmailDeliveryError,
     _message,
@@ -168,7 +168,7 @@ class MessagingTests(TestCase):
             )
 
     def test_delivery_failures_are_logged(self):
-        with patch("apps.messaging.services.EmailMultiAlternatives.send", return_value=0):
+        with patch("apps.mail.services.EmailMultiAlternatives.send", return_value=0):
             with self.assertRaisesMessage(EmailDeliveryError, "did not send"):
                 send_email_message(
                     subject="Zero",
@@ -182,7 +182,7 @@ class MessagingTests(TestCase):
         )
 
         with patch(
-            "apps.messaging.services.EmailMultiAlternatives.send",
+            "apps.mail.services.EmailMultiAlternatives.send",
             side_effect=RuntimeError("smtp down"),
         ):
             with self.assertRaisesMessage(EmailDeliveryError, "smtp down"):
@@ -258,7 +258,7 @@ class MessagingTests(TestCase):
             from_email="sender@example.com",
             aws_access_key_id="AKIASES",
         )
-        request = RequestFactory().post("/admin/messaging/emailproviderconfig/")
+        request = RequestFactory().post("/admin/mail/emailproviderconfig/")
         model_admin = EmailProviderConfigAdmin(EmailProviderConfig, AdminSite())
 
         with patch.object(model_admin, "message_user") as message_user:
@@ -269,7 +269,7 @@ class MessagingTests(TestCase):
         message_user.assert_called_once()
 
         with patch(
-            "apps.messaging.admin.send_email_message",
+            "apps.mail.admin.send_email_message",
             side_effect=EmailDeliveryError("bad credentials"),
         ):
             model_admin.send_test_email(request, EmailProviderConfig.objects.filter(pk=config.pk))

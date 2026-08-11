@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
     dependencies = [
         ("authn", "0002_secure_auth_sessions"),
-        ("messaging", "0003_invitation_reminder_delivery"),
+        ("mail", "0003_invitation_reminder_delivery"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
@@ -80,7 +80,7 @@ class Migration(migrations.Migration):
             model_name="emaildeliveryjob",
             index=models.Index(
                 fields=["member", "message_type"],
-                name="messaging_e_member__8b4ca8_idx",
+                name="mail_e_member__8b4ca8_idx",
             ),
         ),
         migrations.AddConstraint(

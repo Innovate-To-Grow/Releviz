@@ -6,7 +6,7 @@ from threading import Event as StopEvent
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
-from apps.messaging.services import dispatch_due_email_jobs
+from apps.mail.services import dispatch_due_email_jobs
 
 
 class Command(BaseCommand):

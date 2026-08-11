@@ -9,8 +9,8 @@ from zoneinfo import ZoneInfo
 from django.db import transaction
 from django.utils import timezone
 
-from apps.messaging.models import EmailDeliveryJob, EmailDeliveryRequest, EmailMessageLog
-from apps.messaging.services import enqueue_email_job
+from apps.mail.models import EmailDeliveryJob, EmailDeliveryRequest, EmailMessageLog
+from apps.mail.services import enqueue_email_job
 from apps.scheduling.aggregation import classify_event_responses
 from apps.scheduling.models import Event, FinalizationRequest, FinalMeeting
 from apps.scheduling.services import (

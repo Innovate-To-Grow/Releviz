@@ -3,7 +3,7 @@ from django.utils import timezone
 
 from apps.authn.security import prune_auth_security_state
 from apps.core.retention import prune_feedback_submissions
-from apps.messaging.services import dispatch_due_email_jobs
+from apps.mail.services import dispatch_due_email_jobs
 from apps.scheduling.services import send_due_event_reminders
 
 

@@ -12,9 +12,9 @@ from django.utils import timezone
 from apps.authn.models import EmailAuthChallenge
 from apps.authn.services import issue_email_challenge
 from apps.authn.tests.helpers import create_member
-from apps.messaging.crypto import decrypt_secret
-from apps.messaging.models import EmailDeliveryJob, EmailMessageLog
-from apps.messaging.services import (
+from apps.mail.crypto import decrypt_secret
+from apps.mail.models import EmailDeliveryJob, EmailMessageLog
+from apps.mail.services import (
     EmailAttachment,
     EmailDeliveryError,
     _DispatchRateLimiter,
@@ -63,10 +63,10 @@ class EmailDeliveryJobTests(TestCase):
     def test_message_log_failure_is_isolated_from_delivery_state(self):
         with (
             patch(
-                "apps.messaging.services._log_each",
+                "apps.mail.services._log_each",
                 side_effect=RuntimeError("message log unavailable"),
             ),
-            self.assertLogs("apps.messaging.services", level="ERROR") as logs,
+            self.assertLogs("apps.mail.services", level="ERROR") as logs,
         ):
             _safe_log_each(
                 recipients=["recipient@example.com"],
@@ -312,7 +312,7 @@ class EmailDeliveryJobTests(TestCase):
         retry_job, _ = self.enqueue(recipient="retry@example.com", max_attempts=2)
         now = timezone.now() + timedelta(seconds=1)
         with patch(
-            "apps.messaging.services.EmailMultiAlternatives.send",
+            "apps.mail.services.EmailMultiAlternatives.send",
             side_effect=TimeoutError("timeout"),
         ):
             first = dispatch_email_job(retry_job.pk, now=now)
@@ -336,7 +336,7 @@ class EmailDeliveryJobTests(TestCase):
 
         permanent, _ = self.enqueue(recipient="permanent@example.com", max_attempts=1)
         with patch(
-            "apps.messaging.services.send_email_message",
+            "apps.mail.services.send_email_message",
             side_effect=EmailDeliveryError("hard failure"),
         ):
             failed = dispatch_email_job(permanent.pk, now=now)
@@ -357,10 +357,10 @@ class EmailDeliveryJobTests(TestCase):
 
         with (
             patch(
-                "apps.messaging.services.send_email_message",
+                "apps.mail.services.send_email_message",
                 side_effect=RuntimeError("unexpected provider failure"),
             ),
-            self.assertLogs("apps.messaging.services", level="ERROR") as logs,
+            self.assertLogs("apps.mail.services", level="ERROR") as logs,
         ):
             result = dispatch_email_job(job.pk, now=now)
 
@@ -382,7 +382,7 @@ class EmailDeliveryJobTests(TestCase):
             return "provider-id"
 
         with patch(
-            "apps.messaging.services.send_email_message",
+            "apps.mail.services.send_email_message",
             side_effect=change_success_lock,
         ):
             success = dispatch_email_job(success_job.pk)
@@ -395,7 +395,7 @@ class EmailDeliveryJobTests(TestCase):
             raise EmailDeliveryError("late worker")
 
         with patch(
-            "apps.messaging.services.send_email_message",
+            "apps.mail.services.send_email_message",
             side_effect=change_failure_lock,
         ):
             failure = dispatch_email_job(failure_job.pk)
@@ -430,7 +430,7 @@ class EmailDeliveryJobTests(TestCase):
                 raise EmailDeliveryError("permanent")
             return f"provider-{recipient}"
 
-        with patch("apps.messaging.services.send_email_message", side_effect=deliver):
+        with patch("apps.mail.services.send_email_message", side_effect=deliver):
             summary = dispatch_due_email_jobs(limit=10, now=now)
         self.assertEqual(
             summary,
@@ -454,7 +454,7 @@ class EmailDeliveryJobTests(TestCase):
         pending, _ = self.enqueue(recipient="race@example.com")
         processing_race, _ = self.enqueue(recipient="processing-race@example.com")
         with patch(
-            "apps.messaging.services.dispatch_email_job",
+            "apps.mail.services.dispatch_email_job",
             side_effect=[
                 {"attempted": False, "status": EmailDeliveryJob.Status.PENDING},
                 {"attempted": True, "status": EmailDeliveryJob.Status.PROCESSING},
@@ -472,13 +472,13 @@ class EmailDeliveryJobTests(TestCase):
 
         with (
             patch(
-                "apps.messaging.services.dispatch_email_job",
+                "apps.mail.services.dispatch_email_job",
                 side_effect=[
                     RuntimeError("poisoned job"),
                     {"attempted": True, "status": EmailDeliveryJob.Status.SENT},
                 ],
             ) as dispatch,
-            self.assertLogs("apps.messaging.services", level="ERROR") as logs,
+            self.assertLogs("apps.mail.services", level="ERROR") as logs,
         ):
             summary = dispatch_due_email_jobs(limit=2)
 
@@ -512,7 +512,7 @@ class EmailDeliveryJobTests(TestCase):
             self.enqueue(recipient=f"parallel-{position}@example.com")
         with (
             patch(
-                "apps.messaging.services.dispatch_email_job",
+                "apps.mail.services.dispatch_email_job",
                 return_value={"attempted": True, "status": EmailDeliveryJob.Status.SENT},
             ) as dispatch,
             patch.object(_DispatchRateLimiter, "wait", return_value=True) as wait,
@@ -539,8 +539,8 @@ class EmailDeliveryJobTests(TestCase):
         stopped = dispatch_due_email_jobs(limit=10, stop_event=stop_event)
         self.assertEqual(stopped["attempted"], 0)
         with (
-            patch("apps.messaging.services.time.monotonic", side_effect=[5.0, 5.0]),
-            patch("apps.messaging.services.time.sleep") as sleep,
+            patch("apps.mail.services.time.monotonic", side_effect=[5.0, 5.0]),
+            patch("apps.mail.services.time.sleep") as sleep,
         ):
             limiter = _DispatchRateLimiter(2)
             self.assertTrue(limiter.wait())
@@ -561,7 +561,7 @@ class EmailDeliveryJobTests(TestCase):
 
         output = StringIO()
         with patch(
-            "apps.messaging.management.commands.dispatch_email_jobs.dispatch_due_email_jobs",
+            "apps.mail.management.commands.dispatch_email_jobs.dispatch_due_email_jobs",
             side_effect=stop_after_batch,
         ):
             call_command(

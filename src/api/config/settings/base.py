@@ -28,7 +28,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "apps.core.apps.CoreConfig",
     "apps.scheduling.apps.SchedulingConfig",
-    "apps.messaging.apps.MessagingConfig",
+    "apps.mail.apps.MailConfig",
     "corsheaders",
     "rest_framework",
     "rest_framework_simplejwt",
@@ -324,10 +324,10 @@ UNFOLD = {
             ],
         },
         {
-            "models": ["messaging.emailproviderconfig", "messaging.emailmessagelog"],
+            "models": ["mail.emailproviderconfig", "mail.emailmessagelog"],
             "items": [
-                {"title": "Email Providers", "link": "/admin/messaging/emailproviderconfig/"},
-                {"title": "Email Logs", "link": "/admin/messaging/emailmessagelog/"},
+                {"title": "Email Providers", "link": "/admin/mail/emailproviderconfig/"},
+                {"title": "Email Logs", "link": "/admin/mail/emailmessagelog/"},
             ],
         },
     ],
@@ -362,17 +362,17 @@ UNFOLD = {
             },
             {
                 "title": "Email Delivery",
-                "permission": _can("messaging"),
+                "permission": _can("mail"),
                 "items": [
                     {
                         "title": "AWS SES Providers",
-                        "link": "/admin/messaging/emailproviderconfig/",
-                        "permission": _can("messaging"),
+                        "link": "/admin/mail/emailproviderconfig/",
+                        "permission": _can("mail"),
                     },
                     {
                         "title": "Email Logs",
-                        "link": "/admin/messaging/emailmessagelog/",
-                        "permission": _can("messaging"),
+                        "link": "/admin/mail/emailmessagelog/",
+                        "permission": _can("mail"),
                     },
                 ],
             },

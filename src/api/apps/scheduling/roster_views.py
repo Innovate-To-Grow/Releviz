@@ -26,7 +26,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.messaging.models import EmailDeliveryJob
+from apps.mail.models import EmailDeliveryJob
 from apps.scheduling.models import (
     Event,
     EventInvitation,

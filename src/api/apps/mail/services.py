@@ -17,9 +17,9 @@ from django.db import close_old_connections, transaction
 from django.db.models import Q
 from django.utils import timezone
 
-from apps.messaging.crypto import decrypt_secret, encrypt_secret
-from apps.messaging.email_templates import render_branded_email
-from apps.messaging.models import EmailDeliveryJob, EmailMessageLog, EmailProviderConfig
+from apps.mail.crypto import decrypt_secret, encrypt_secret
+from apps.mail.email_templates import render_branded_email
+from apps.mail.models import EmailDeliveryJob, EmailMessageLog, EmailProviderConfig
 
 logger = logging.getLogger(__name__)
 

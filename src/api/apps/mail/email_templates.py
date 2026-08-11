@@ -29,7 +29,7 @@ def render_branded_email(
 ) -> str:
     site_url = brand_site_url()
     return render_to_string(
-        "messaging/email/branded.html",
+        "mail/email/branded.html",
         {
             "title": title,
             "preheader": preheader or title,
