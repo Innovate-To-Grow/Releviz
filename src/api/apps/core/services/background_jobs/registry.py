@@ -17,7 +17,6 @@ def _cms_handlers():
 
 
 _HANDLER_LOADERS = {
-    "authn.member_sheet_sync": lambda: _core_handlers().sync_member_sheet_job,
     "authn.notification_email": lambda: _core_handlers().send_notification_email_job,
     "cms.amplify_redirects": lambda: _cms_handlers().sync_amplify_redirects_job,
     "event.registration_sheet_sync": lambda: _core_handlers().sync_registration_sheet_job,

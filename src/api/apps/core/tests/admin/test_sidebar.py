@@ -179,21 +179,6 @@ class AdminSidebarNavigationTest(SimpleTestCase):
         self.assertNotIn("Member Sheet Sync", item_titles)
         self.assertNotIn("Contact Info", item_titles)
 
-    def test_member_sheet_sync_is_grouped_under_members_tabs(self):
-        tabs = settings.UNFOLD["TABS"]
-        members_tab = next(tab for tab in tabs if "authn.member" in tab.get("models", []))
-        item_titles = {item["title"] for item in members_tab["items"]}
-        item_links = {item["title"]: item["link"] for item in members_tab["items"]}
-
-        self.assertEqual(
-            members_tab["models"],
-            ["authn.member", "authn.membersheetsyncconfig", "authn.membersheetsynclog"],
-        )
-        self.assertEqual(item_titles, {"Members", "Member Sheet Sync", "Sync Logs"})
-        self.assertEqual(item_links["Members"], "/admin/authn/member/")
-        self.assertEqual(item_links["Member Sheet Sync"], "/admin/authn/membersheetsyncconfig/")
-        self.assertEqual(item_links["Sync Logs"], "/admin/authn/membersheetsynclog/")
-
     def test_mail_navigation_includes_settings_and_tools(self):
         navigation = settings.UNFOLD["SIDEBAR"]["navigation"]
         mail_section = next(section for section in navigation if section["title"] == "Broadcast Delivery")
@@ -311,25 +296,14 @@ class AdminIndexNavigationTest(TestCase):
         self.assertContains(response, 'href="/admin/system-intelligence/"')
         self.assertNotContains(response, "Models in the Administration application")
 
-    def test_members_and_sheet_sync_render_as_admin_tabs(self):
-        for url, active_href in (
-            (reverse("admin:authn_member_changelist"), "/admin/authn/member/"),
-            (reverse("admin:authn_membersheetsyncconfig_changelist"), "/admin/authn/membersheetsyncconfig/"),
-        ):
-            with self.subTest(url=url):
-                response = self.client.get(url)
+    def test_members_render_as_admin_tabs(self):
+        url = reverse("admin:authn_member_changelist")
+        active_href = "/admin/authn/member/"
+        response = self.client.get(url)
 
-                self.assertEqual(response.status_code, 200)
-                self.assertContains(response, 'id="tabs-items"')
-                self.assertContains(response, 'href="/admin/authn/member/"')
-                self.assertContains(response, 'href="/admin/authn/membersheetsyncconfig/"')
-                self.assertContains(response, 'href="/admin/authn/membersheetsynclog/"')
-                self.assertContains(response, f'href="{active_href}" class="active"')
-
-        response = self.client.get(reverse("admin:authn_member_changelist"))
-        html = response.content.decode()
-        sidebar_html = html.split('<div id="main"', maxsplit=1)[0]
-        self.assertNotIn("Member Sheet Sync", sidebar_html)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'id="tabs-items"')
+        self.assertContains(response, 'href="/admin/authn/member/"')
 
     def test_mail_delivery_operations_render_as_admin_tabs(self):
         for url, active_href in (

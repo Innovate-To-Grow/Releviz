@@ -22,13 +22,7 @@ from apps.authn.models import (
     AdminInvitation,
     ContactEmail,
     ContactPhone,
-    MemberSheetSyncConfig,
-    MemberSheetSyncLog,
     RSAKeypair,
-)
-from apps.authn.services.members.sheet_sync.admin import (
-    MemberSheetSyncConfigAdmin,
-    MemberSheetSyncLogAdmin,
 )
 
 Member = get_user_model()
@@ -102,21 +96,6 @@ class MemberAdminActionTests(_AdminTestBase):
         response = self.model_admin.export_members_to_vcard(request, Member.objects.all())
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response["Content-Type"].startswith("text/vcard"))
-
-    @patch("apps.authn.services.members.sheet_sync.sync_members_to_sheet", return_value=7)
-    def test_sync_all_members_to_sheet_success(self, mock_sync):
-        request = _request(self.rf, self.admin_user)
-        self.model_admin.sync_all_members_to_sheet(request, Member.objects.all())
-        self.assertIn("Synced 7 members to Google Sheet.", self._messages(request))
-
-    @patch(
-        "apps.authn.services.members.sheet_sync.sync_members_to_sheet",
-        side_effect=RuntimeError("sheets down"),
-    )
-    def test_sync_all_members_to_sheet_failure(self, mock_sync):
-        request = _request(self.rf, self.admin_user)
-        self.model_admin.sync_all_members_to_sheet(request, Member.objects.all())
-        self.assertTrue(any("Sheet sync failed" in m for m in self._messages(request)))
 
     def test_ensure_new_member_uuid_assigns_when_blank(self):
         obj = Member(first_name="X", last_name="Y")
@@ -582,35 +561,3 @@ class AdminInvitationAdminTests(_AdminTestBase):
         self.assertTrue(any("Cancelled" in m for m in self._messages(request)))
 
 
-class MemberSheetSyncAdminTests(_AdminTestBase):
-    def setUp(self):
-        super().setUp()
-        self.config_admin = MemberSheetSyncConfigAdmin(MemberSheetSyncConfig, self.site)
-        self.log_admin = MemberSheetSyncLogAdmin(MemberSheetSyncLog, self.site)
-
-    def test_sync_error_short_empty(self):
-        config = MemberSheetSyncConfig(sync_error="")
-        self.assertEqual(self.config_admin.sync_error_short(config), "")
-
-    def test_sync_error_short_truncates(self):
-        config = MemberSheetSyncConfig(sync_error="x" * 200)
-        html = self.config_admin.sync_error_short(config)
-        self.assertIn("span", html)
-
-    def test_log_status_badge_success(self):
-        log = MemberSheetSyncLog(status=MemberSheetSyncLog.Status.SUCCESS, sync_type="full", rows_written=3)
-        html = self.log_admin.status_badge(log)
-        self.assertIn("green", html)
-
-    def test_log_status_badge_failure(self):
-        log = MemberSheetSyncLog(status=MemberSheetSyncLog.Status.FAILED, sync_type="full", rows_written=0)
-        html = self.log_admin.status_badge(log)
-        self.assertIn("red", html)
-
-    def test_error_message_short_empty(self):
-        log = MemberSheetSyncLog(error_message="")
-        self.assertEqual(self.log_admin.error_message_short(log), "")
-
-    def test_error_message_short_truncates(self):
-        log = MemberSheetSyncLog(error_message="e" * 200)
-        self.assertEqual(len(self.log_admin.error_message_short(log)), 100)

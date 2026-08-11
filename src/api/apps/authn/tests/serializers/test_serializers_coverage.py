@@ -8,7 +8,7 @@ from django.test import RequestFactory, TestCase
 from django.utils import timezone
 from rest_framework import serializers
 
-from apps.authn.models import ContactEmail, EmailAuthChallenge, MemberSheetSyncConfig, MemberSheetSyncLog
+from apps.authn.models import ContactEmail, EmailAuthChallenge
 from apps.authn.serializers.auth.login import LoginSerializer
 from apps.authn.serializers.contacts.emails import (
     ContactEmailCreateSerializer,
@@ -145,24 +145,3 @@ class PasswordCodeEdgeTests(TestCase):
         self.assertIn("detail", serializer.errors)
 
 
-class MemberSheetSyncModelStrTests(TestCase):
-    def test_config_str_enabled(self):
-        config = MemberSheetSyncConfig(is_enabled=True, google_sheet_id="abc123")
-        text = str(config)
-        self.assertIn("enabled", text)
-        self.assertIn("abc123", text)
-
-    def test_config_str_disabled_no_sheet(self):
-        config = MemberSheetSyncConfig(is_enabled=False)
-        text = str(config)
-        self.assertIn("disabled", text)
-        self.assertIn("no sheet", text)
-
-    def test_log_str(self):
-        log = MemberSheetSyncLog(
-            sync_type=MemberSheetSyncLog.SyncType.FULL,
-            status=MemberSheetSyncLog.Status.SUCCESS,
-            rows_written=5,
-        )
-        text = str(log)
-        self.assertIn("5 rows", text)

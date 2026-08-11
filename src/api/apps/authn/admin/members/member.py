@@ -101,9 +101,8 @@ class MemberAdmin(BaseModelAdmin, UserAdmin):
         "deactivate_members",
         "export_members_to_excel",
         "export_members_to_vcard",
-        "sync_all_members_to_sheet",
     ]
-    actions_no_confirmation = ["export_members_to_excel", "export_members_to_vcard", "sync_all_members_to_sheet"]
+    actions_no_confirmation = ["export_members_to_excel", "export_members_to_vcard"]
 
     @admin.display(description="Primary Email")
     def get_primary_email_display(self, obj):
@@ -132,16 +131,6 @@ class MemberAdmin(BaseModelAdmin, UserAdmin):
     @admin.action(description="Export selected members as vCard (.vcf)")
     def export_members_to_vcard(self, request, queryset):
         return export_members_vcard_response(queryset)
-
-    @admin.action(description="Sync ALL members to Google Sheet")
-    def sync_all_members_to_sheet(self, request, queryset):
-        try:
-            from apps.authn.services.members.sheet_sync import sync_members_to_sheet
-
-            rows = sync_members_to_sheet(sync_type="full")
-            self.message_user(request, f"Synced {rows} members to Google Sheet.")
-        except Exception as exc:
-            self.message_user(request, f"Sheet sync failed: {exc}", level="error")
 
     def get_urls(self):
         custom_urls = [

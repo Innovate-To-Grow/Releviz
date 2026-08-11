@@ -8,7 +8,4 @@ class AuthnConfig(AppConfig):
 
     # noinspection PyMethodMayBeStatic
     def ready(self):
-        try:
-            from . import signals  # noqa: F401
-        except ImportError:
-            pass
+        pass

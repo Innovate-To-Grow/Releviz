@@ -11,7 +11,6 @@ Organized into modules by functionality:
 from django.contrib import admin
 from django.contrib.auth.models import Group
 
-from apps.authn.services.members.sheet_sync.admin import MemberSheetSyncConfigAdmin, MemberSheetSyncLogAdmin
 
 from .members.contact import ContactEmailAdmin, ContactPhoneAdmin
 from .members.invitation import AdminInvitationAdmin
@@ -30,7 +29,5 @@ __all__ = [
     "AdminInvitationAdmin",
     # Security
     "RSAKeypairAdmin",
-    # Sheet Sync
-    "MemberSheetSyncConfigAdmin",
-    "MemberSheetSyncLogAdmin",
+
 ]
