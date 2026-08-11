@@ -13,5 +13,5 @@ if [ "${DB_TEST_SKIP_DOCKER:-0}" != "1" ]; then
   trap 'docker compose -f docker-compose.e2e.yml down -v' EXIT
 fi
 
-scripts/wait-for-postgres.sh
-npm --workspace=releviz-backend run test:db
+scripts/db/wait-for-postgres.sh
+npm --workspace=releviz-api run test:db

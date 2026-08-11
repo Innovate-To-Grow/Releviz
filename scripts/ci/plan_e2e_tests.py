@@ -15,7 +15,7 @@ FULL_BROWSER_FILES = {
     "package-lock.json",
     "package.json",
 }
-FULL_BROWSER_PREFIXES = (".github/", "scripts/ci/", "src/frontend/next.config.js")
+FULL_BROWSER_PREFIXES = (".github/", "scripts/ci/", "src/web/next.config.js")
 
 
 def read_changed_files(path: Path) -> list[str]:

@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 AUDITED_SUFFIXES = {
     ".css",
     ".html",
@@ -40,11 +40,11 @@ AUDITED_NAMES = {
     "pyproject.toml",
 }
 REFERENCE_FILES = [
-    "src/backend/apps/core/tests/test_admin_theme.py",
-    "src/backend/apps/core/tests/test_repository_surface.py",
+    "src/api/apps/core/tests/test_admin_theme.py",
+    "src/api/apps/core/tests/test_repository_surface.py",
     "src/e2e/repository-surface.spec.js",
 ]
-LOCAL_ONLY_FILES = {"AGENTS.md"}
+LOCAL_ONLY_FILES = {"agents/AGENTS.md"}
 
 
 def tracked_files() -> list[str]:
@@ -69,10 +69,10 @@ def should_audit(path: str) -> bool:
             "node_modules/",
             "coverage/",
             "htmlcov/",
-            "src/frontend/.next/",
-            "src/frontend/coverage/",
-            "src/frontend/playwright-report/",
-            "src/frontend/test-results/",
+            "src/web/.next/",
+            "src/web/coverage/",
+            "src/web/playwright-report/",
+            "src/web/test-results/",
             "src/e2e/playwright-report/",
             "src/e2e/test-results/",
             "playwright-report/",
@@ -86,11 +86,18 @@ def should_audit(path: str) -> bool:
 def main() -> int:
     tracked = tracked_files()
     references = "\n".join(
-        (ROOT / file).read_text(encoding="utf-8") for file in REFERENCE_FILES if (ROOT / file).exists()
+        (ROOT / file).read_text(encoding="utf-8")
+        for file in REFERENCE_FILES
+        if (ROOT / file).exists()
     )
-    missing = [path for path in tracked if should_audit(path) and path not in references]
+    missing = [
+        path for path in tracked if should_audit(path) and path not in references
+    ]
     if missing:
-        print("Repository files are not covered by the resource audit manifest:", file=sys.stderr)
+        print(
+            "Repository files are not covered by the resource audit manifest:",
+            file=sys.stderr,
+        )
         for path in missing:
             print(f"  - {path}", file=sys.stderr)
         return 1

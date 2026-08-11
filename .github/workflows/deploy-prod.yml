@@ -557,7 +557,7 @@ jobs:
           set -euo pipefail
           account_id="$(aws sts get-caller-identity --query Account --output text)"
           image_uri="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_BACKEND}:${DEPLOY_SHA}"
-          docker build --pull --tag "$image_uri" ./src/backend
+          docker build --pull --tag "$image_uri" ./src/api
           docker push "$image_uri"
 
       - name: Build and push immutable ECS fallback frontend image
@@ -570,24 +570,24 @@ jobs:
             --pull \
             --build-arg "NEXT_PUBLIC_API_BASE_URL=https://${API_DOMAIN}" \
             --tag "$image_uri" \
-            ./src/frontend
+            ./src/web
           docker push "$image_uri"
 
       - name: Install frontend dependencies
-        run: npm ci --workspace=releviz-frontend
+        run: npm ci --workspace=releviz-web
 
       - name: Build Amplify static artifact
         env:
           NEXT_PUBLIC_API_BASE_URL: https://${{ env.API_DOMAIN }}
         run: |
           set -euo pipefail
-          npm --workspace=releviz-frontend run build:amplify
+          npm --workspace=releviz-web run build:amplify
           python3 scripts/ci/validate_amplify_static_export.py \
-            --out src/frontend/out \
-            --manifest src/frontend/amplify-routes.json
-          jq -n --arg sha "$DEPLOY_SHA" '{sha: $sha}' >src/frontend/out/release.json
+            --out src/web/out \
+            --manifest src/web/amplify-routes.json
+          jq -n --arg sha "$DEPLOY_SHA" '{sha: $sha}' >src/web/out/release.json
           (
-            cd src/frontend/out
+            cd src/web/out
             zip -q -r "$AMPLIFY_ARTIFACT" .
           )
           unzip -tq "$AMPLIFY_ARTIFACT"
@@ -1472,7 +1472,7 @@ jobs:
                 --retry-delay 5 \
                 "${candidate_url}${path}" >/dev/null
             done
-          done < <(jq -r '.static_routes[]' src/frontend/amplify-routes.json)
+          done < <(jq -r '.static_routes[]' src/web/amplify-routes.json)
           while IFS= read -r legacy_route; do
             for path in "/${legacy_route}" "/${legacy_route}/" "/${legacy_route}/legacy"; do
               curl \
@@ -1486,7 +1486,7 @@ jobs:
                 --retry-delay 5 \
                 "${candidate_url}${path}" >/dev/null
             done
-          done < <(jq -r '.legacy_redirects | keys[]' src/frontend/amplify-routes.json)
+          done < <(jq -r '.legacy_redirects | keys[]' src/web/amplify-routes.json)
 
           event_redirect_headers="${RUNNER_TEMP}/candidate-event-redirect.headers"
           event_redirect_status="$(
@@ -1524,8 +1524,8 @@ jobs:
           esac
 
           static_asset="$(
-            find src/frontend/out/_next/static -type f -name '*.js' -print -quit |
-              sed 's#^src/frontend/out##'
+            find src/web/out/_next/static -type f -name '*.js' -print -quit |
+              sed 's#^src/web/out##'
           )"
           if [ -z "$static_asset" ]; then
             echo "::error::The Amplify artifact has no JavaScript asset to smoke-test."
@@ -1819,10 +1819,10 @@ jobs:
                 --retry-delay 5 \
                 "${production_url}${path}" >/dev/null
             done
-          done < <(jq -r '.static_routes[]' src/frontend/amplify-routes.json)
+          done < <(jq -r '.static_routes[]' src/web/amplify-routes.json)
           static_asset="$(
-            find src/frontend/out/_next/static -type f -name '*.js' -print -quit |
-              sed 's#^src/frontend/out##'
+            find src/web/out/_next/static -type f -name '*.js' -print -quit |
+              sed 's#^src/web/out##'
           )"
           bounded_curl \
             --connect-timeout 5 \

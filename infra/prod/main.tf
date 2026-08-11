@@ -30,7 +30,7 @@ locals {
   amplify_candidate_branch  = "candidate"
   amplify_production_url    = "https://${local.amplify_production_branch}.${aws_amplify_app.frontend.default_domain}"
   amplify_candidate_url     = "https://${local.amplify_candidate_branch}.${aws_amplify_app.frontend.default_domain}"
-  amplify_route_manifest    = jsondecode(file("${path.module}/../../src/frontend/amplify-routes.json"))
+  amplify_route_manifest    = jsondecode(file("${path.module}/../../src/web/amplify-routes.json"))
   amplify_custom_headers_document = jsondecode(
     file("${path.module}/amplify-custom-headers.json"),
   )

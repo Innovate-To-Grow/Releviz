@@ -96,8 +96,8 @@ environment, apply Terraform, or validate real SES delivery.
 ```
 releviz-monorepo/
   src/
-    frontend/       # Next.js 16 — statically exported UI, no API routes
-    backend/        # Django — API server, account auth, admin
+    web/            # Next.js 16 — statically exported UI, no API routes
+    api/            # Django — API server, account auth, admin
     e2e/            # Playwright browser tests
   infra/
     prod/           # Amplify frontend, public TLS ALB, private HA ECS backend, RDS, DNS, and monitoring
@@ -118,11 +118,11 @@ backend virtual environment before running commands that use `python3`.
 
 ```bash
 npm install          # install all workspace dependencies
-python3 -m pip install -r src/backend/requirements/local.txt
-python3 src/backend/manage.py migrate --settings=config.settings.local
+python3 -m pip install -r src/api/requirements/local.txt
+python3 src/api/manage.py migrate --settings=config.settings.local
 npm run dev          # start backend (4000) + frontend (3000)
-npm run dev:backend  # backend only
-npm run dev:frontend # frontend only
+npm run dev:api  # backend only
+npm run dev:web # frontend only
 ```
 
 The frontend calls the Django service directly. Local development defaults to
@@ -134,9 +134,9 @@ Run the coalescing result worker and durable email worker in separate terminals 
 organizer results or delivery flows:
 
 ```bash
-python3 src/backend/manage.py recompute_event_results --watch --poll-interval=1 \
+python3 src/api/manage.py recompute_event_results --watch --poll-interval=1 \
   --settings=config.settings.local
-python3 src/backend/manage.py dispatch_email_jobs --watch --limit=1000 \
+python3 src/api/manage.py dispatch_email_jobs --watch --limit=1000 \
   --concurrency=10 --rate-limit=10 --poll-interval=1 \
   --settings=config.settings.local
 ```
@@ -144,13 +144,13 @@ python3 src/backend/manage.py dispatch_email_jobs --watch --limit=1000 \
 Run checks:
 
 ```bash
-npm --workspace=releviz-backend run lint
-npm --workspace=releviz-frontend run lint
-python src/backend/manage.py test --settings=config.settings.test
-npm --workspace=releviz-backend run test
-npm --workspace=releviz-frontend run test
-npm --workspace=releviz-frontend run build
-npm --workspace=releviz-frontend run build:amplify
+npm --workspace=releviz-api run lint
+npm --workspace=releviz-web run lint
+python src/api/manage.py test --settings=config.settings.test
+npm --workspace=releviz-api run test
+npm --workspace=releviz-web run test
+npm --workspace=releviz-web run build
+npm --workspace=releviz-web run build:amplify
 npm run quality-gate               # all of the above
 ```
 
@@ -207,7 +207,7 @@ branch protection always receives the same required check.
 
 - `NEXT_PUBLIC_API_BASE_URL` — API origin; defaults to `https://api.releviz.com` in production and
   `http://localhost:4000` in local development
-- `AMPLIFY_STATIC_EXPORT` — set by `build:amplify` to produce `src/frontend/out`; do not set for the
+- `AMPLIFY_STATIC_EXPORT` — set by `build:amplify` to produce `src/web/out`; do not set for the
   local standalone Next server
 
 Production builds set `NEXT_PUBLIC_API_BASE_URL=https://api.releviz.com`. Amplify serves only the
@@ -221,23 +221,20 @@ Authentication is handled by the Django backend using email/password accounts, e
 codes, short-lived in-memory JWT access credentials, an `HttpOnly` refresh cookie bound to a
 revocable server session, browser-side public-key encryption when required by the deployment,
 account recovery and session controls. Django admin is served directly at
-`https://api.releviz.com/admin/`; it is not a frontend route. See
-[`docs/auth-security.md`](docs/auth-security.md).
+`https://api.releviz.com/admin/`; it is not a frontend route.
 
 The first production switch to the API hostname can require users to sign in again. Refresh
 cookies previously issued on the frontend hostname are host-scoped and are not transferred to
 `api.releviz.com`.
 
 Availability uses backend-authored 15/30-minute slot groups with explicit timezone and DST
-semantics, and continuous recommendations use the configured meeting duration. See
-[`docs/scheduling-slots.md`](docs/scheduling-slots.md).
+semantics, and continuous recommendations use the configured meeting duration.
 
-The roster source format, preview/merge/rebuild flow, duplicate rules, and paginated roster APIs are
-documented in [`docs/roster-imports.md`](docs/roster-imports.md).
+The roster source format, preview/merge/rebuild flow, duplicate rules, and paginated roster APIs
+are implemented in the scheduling app.
 
 Temporary/full identity rules, the restricted link session, shared versioned editing, upgrade, and
-rollback behavior are documented in
-[`docs/temporary-accounts.md`](docs/temporary-accounts.md).
+rollback behavior are enforced by the authn app.
 
 Email delivery is configured in Django admin under **Email Delivery**. Authentication messages,
 final notifications, invitations, and reminders use persisted retryable jobs. Event launch,
@@ -246,31 +243,19 @@ performs provider calls. Add an active AWS SES provider with region, sender emai
 and IAM secret access key. Provider secrets and queued authentication content are encrypted in the
 database and are not stored in Terraform or GitHub secrets. SES identities/domains and IAM
 permissions must already be configured in AWS.
-See [`docs/email-delivery.md`](docs/email-delivery.md) and
-[`docs/worker-runbook.md`](docs/worker-runbook.md).
-
-Operational procedures and product evidence definitions:
-
-- [`docs/observability.md`](docs/observability.md)
-- [`docs/worker-runbook.md`](docs/worker-runbook.md)
-- [`docs/performance-benchmarks.md`](docs/performance-benchmarks.md)
-- [`docs/product-analytics.md`](docs/product-analytics.md)
-- [`docs/backup-restore.md`](docs/backup-restore.md)
-- [`docs/deployment-rollback.md`](docs/deployment-rollback.md)
-- [`docs/real-user-validation-plan.md`](docs/real-user-validation-plan.md)
 
 ## Docker
 
 ```bash
 # Backend
-docker build -t releviz-backend:local ./src/backend
+docker build -t releviz-api:local ./src/api
 docker run --rm -p 4000:4000 \
   -e DJANGO_SETTINGS_MODULE=config.settings.local \
-  releviz-backend:local
+  releviz-api:local
 
 # Frontend development/migration-fallback image (production traffic uses Amplify)
-scripts/docker-build-frontend.sh releviz-frontend:local
-docker run --rm -p 3000:3000 releviz-frontend:local
+scripts/deploy/docker-build-frontend.sh releviz-web:local
+docker run --rm -p 3000:3000 releviz-web:local
 ```
 
 ## Deployment
@@ -280,14 +265,14 @@ docker run --rm -p 3000:3000 releviz-frontend:local
 Production CD is a protected manual workflow on `main`. It requires the exact confirmation
 `DEPLOY`, verifies that the selected immutable commit passed `CI Result`, assumes the production
 AWS role through GitHub OIDC, builds and pushes SHA-tagged backend and ECS-fallback frontend
-images, and creates one SHA-identified static ZIP from `src/frontend/out`. The workflow manually
+images, and creates one SHA-identified static ZIP from `src/web/out`. The workflow manually
 deploys that exact ZIP to an Amplify `candidate` branch, verifies the frontend plus the direct
 `https://api.releviz.com` CORS/auth/admin boundary, promotes the same ZIP to Amplify `main`, and
 only then associates `releviz.com`. The reviewed infrastructure plan preserves the public TLS ALB
 and private ECS boundary and keeps the backend on a fixed one-hop ALB trust model. The Amplify app
 is not connected to GitHub and does not use a PAT or an auto-build webhook.
 
-The static build must match `src/frontend/amplify-routes.json`. Candidate smoke tests exercise
+The static build must match `src/web/amplify-routes.json`. Candidate smoke tests exercise
 clean and trailing-slash routes, deployed JavaScript, query-preserving redirects, credentialed
 CORS, protected non-GET auth requests, and a cookie/CSRF Django admin POST directly on the API
 hostname. During the first API-subdomain cutover only, the workflow temporarily preserves the old
@@ -315,8 +300,7 @@ artifacts for 90 days; after that boundary, an old Amplify job record alone is n
 release artifact, so recovery requires a reviewed roll-forward or revert that passes current CI.
 The first cutover also snapshots the exact Route 53 ALB alias so it can atomically restore that
 alias if migration fails. The protected Amplify domain association remains available for a safe
-retry. Review
-[`docs/deployment-rollback.md`](docs/deployment-rollback.md) before every live release.
+retry. Review the deployment procedures before every live release.
 
 Keeping the API load balancer private requires a separately reviewed architecture migration. The
 preferred direction is API Gateway with a VPC Link, or another documented private ingress design.

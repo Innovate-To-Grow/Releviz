@@ -11,8 +11,8 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_MANIFEST = ROOT / "src/frontend/amplify-routes.json"
-DEFAULT_OUTPUT = ROOT / "src/frontend/out"
+DEFAULT_MANIFEST = ROOT / "src/web/amplify-routes.json"
+DEFAULT_OUTPUT = ROOT / "src/web/out"
 EXCLUDED_ROOT_HTML = {"404", "_not-found", "index"}
 
 

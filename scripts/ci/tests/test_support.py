@@ -46,7 +46,7 @@ class LicenseReportTests(TestCase):
         lock = {
             "packages": {
                 "": {"name": "root"},
-                "src/frontend": {"link": True},
+                "src/web": {"link": True},
                 "node_modules/demo": {"version": "1.0.0", "license": "MIT"},
             }
         }
@@ -661,9 +661,9 @@ steps:
       echo "TF_VAR_frontend_image_tag: ${{ github.sha }}"
       echo "Build and push immutable ECS fallback frontend image"
       echo "NEXT_PUBLIC_API_BASE_URL=https://${API_DOMAIN}"
-      npm ci --workspace=releviz-frontend
-      npm --workspace=releviz-frontend run build:amplify
-      python3 scripts/ci/validate_amplify_static_export.py --out src/frontend/out
+      npm ci --workspace=releviz-web
+      npm --workspace=releviz-web run build:amplify
+      python3 scripts/ci/validate_amplify_static_export.py --out src/web/out
       echo "${{ env.AMPLIFY_ARTIFACT }}.sha256"
       echo "retention-days: 90"
       echo release.json
@@ -844,10 +844,10 @@ steps:
       echo "referrer-policy: no-referrer"
       echo "^content-security-policy:"
       echo "connect-src 'self' https://${API_DOMAIN}"
-      jq -r '.static_routes[]' src/frontend/amplify-routes.json
-      jq -r '.legacy_redirects | keys[]' src/frontend/amplify-routes.json
+      jq -r '.static_routes[]' src/web/amplify-routes.json
+      jq -r '.legacy_redirects | keys[]' src/web/amplify-routes.json
       echo 'event/?code=AMPLIFYSMOKE'
-      find src/frontend/out/_next/static
+      find src/web/out/_next/static
       echo "Access-Control-Request-Method: PUT"
       echo "access-control-allow-origin"
       echo '${api_url}/admin/login/'
@@ -875,8 +875,8 @@ steps:
         if [ "$remaining" -le 0 ]; then return 124; fi
         timeout --signal=TERM "${remaining}s" curl "$@"
       }
-      jq -r '.static_routes[]' src/frontend/amplify-routes.json
-      find src/frontend/out/_next/static
+      jq -r '.static_routes[]' src/web/amplify-routes.json
+      find src/web/out/_next/static
       if ((SECONDS >= phase_deadline)); then exit 1; fi
       canonical_preflight_headers="${RUNNER_TEMP}/canonical-api-preflight.headers"
       canonical_preflight_status="$(
@@ -2142,7 +2142,7 @@ steps:
             (workflows / "deploy-prod.yml").write_text(
                 """
 TF_VAR_manage_dns: "false"
-run: docker build --tag demo ./src/frontend
+run: docker build --tag demo ./src/web
 TF_VAR_restrict_origin_to_cloudfront: "true"
 TF_VAR_trust_cloudfront_proxy_chain: "true"
 echo "Plan CloudFront-only origin hardening"

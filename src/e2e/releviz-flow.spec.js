@@ -209,12 +209,12 @@ async function apiJson(request, method, url, token, body) {
 function runBackendCommand(command, ...args) {
   execFileSync(
     PYTHON_BIN,
-    [path.join(ROOT, "src/backend/manage.py"), command, ...args, "--settings=config.settings.e2e"],
+    [path.join(ROOT, "src/api/manage.py"), command, ...args, "--settings=config.settings.e2e"],
     {
       cwd: ROOT,
       env: {
         ...process.env,
-        PYTHONPATH: path.join(ROOT, "src/backend"),
+        PYTHONPATH: path.join(ROOT, "src/api"),
         DJANGO_SETTINGS_MODULE: "config.settings.e2e",
       },
       stdio: "pipe",
@@ -351,7 +351,7 @@ assert EmailMessageLog.objects.filter(event=event, message_type="final_cancellat
     cwd: ROOT,
     env: {
       ...process.env,
-      PYTHONPATH: path.join(ROOT, "src/backend"),
+      PYTHONPATH: path.join(ROOT, "src/api"),
       DJANGO_SETTINGS_MODULE: "config.settings.e2e",
     },
     stdio: "pipe",
@@ -405,7 +405,7 @@ assert BlacklistedToken.objects.filter(token__user=member).exists()
     cwd: ROOT,
     env: {
       ...process.env,
-      PYTHONPATH: path.join(ROOT, "src/backend"),
+      PYTHONPATH: path.join(ROOT, "src/api"),
       DJANGO_SETTINGS_MODULE: "config.settings.e2e",
     },
     stdio: "pipe",
@@ -455,7 +455,7 @@ assert duplication.duplicate_event_id is None
     cwd: ROOT,
     env: {
       ...process.env,
-      PYTHONPATH: path.join(ROOT, "src/backend"),
+      PYTHONPATH: path.join(ROOT, "src/api"),
       DJANGO_SETTINGS_MODULE: "config.settings.e2e",
     },
     stdio: "pipe",
@@ -520,7 +520,7 @@ print(json.dumps({
     cwd: ROOT,
     env: {
       ...process.env,
-      PYTHONPATH: path.join(ROOT, "src/backend"),
+      PYTHONPATH: path.join(ROOT, "src/api"),
       DJANGO_SETTINGS_MODULE: "config.settings.e2e",
     },
     encoding: "utf8",

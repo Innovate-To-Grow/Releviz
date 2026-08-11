@@ -10,24 +10,24 @@ Backend commands require Python 3.12 or newer; activate the backend virtual envi
 
 ```bash
 npm install
-python3 -m pip install -r src/backend/requirements/local.txt
+python3 -m pip install -r src/api/requirements/local.txt
 
 npm run dev                              # Django :4000 + Next.js :3000
-npm run dev:backend                      # Django only
-npm run dev:frontend                     # Next.js only
+npm run dev:api                      # Django only
+npm run dev:web                     # Next.js only
 
-npm --workspace=releviz-backend run lint
-npm --workspace=releviz-backend run format:check
-npm --workspace=releviz-backend run test
-npm --workspace=releviz-frontend run lint
-npm --workspace=releviz-frontend run format:check
-npm --workspace=releviz-frontend run test
-npm --workspace=releviz-frontend run build
+npm --workspace=releviz-api run lint
+npm --workspace=releviz-api run format:check
+npm --workspace=releviz-api run test
+npm --workspace=releviz-web run lint
+npm --workspace=releviz-web run format:check
+npm --workspace=releviz-web run test
+npm --workspace=releviz-web run build
 
 npm run test:db                          # PostgreSQL suite (Docker by default)
 npm run test:e2e                         # Chromium, Firefox, and WebKit
 npm run quality-gate                     # complete local gate
-python3 src/backend/manage.py makemigrations --check --dry-run \
+python3 src/api/manage.py makemigrations --check --dry-run \
   --settings=config.settings.test
 ```
 
@@ -35,9 +35,9 @@ python3 src/backend/manage.py makemigrations --check --dry-run \
 
 The npm workspaces live under `src/`:
 
-- `src/backend/` — Django 6, Django REST Framework, SimpleJWT, PostgreSQL in deployed/test-db
+- `src/api/` — Django 6, Django REST Framework, SimpleJWT, PostgreSQL in deployed/test-db
   environments, and SQLite for ordinary local development.
-- `src/frontend/` — Next.js 16 App Router, React 19, Material Web, and a production static export.
+- `src/web/` — Next.js 16 App Router, React 19, Material Web, and a production static export.
 - `src/e2e/` — Playwright coverage for the real browser workflow.
 
 Business routes have no `/api` prefix. The backend is mounted directly at paths such as `/events`,
@@ -71,21 +71,21 @@ Important scheduling modules:
 Long-running local workers:
 
 ```bash
-python3 src/backend/manage.py recompute_event_results --watch --poll-interval=1 \
+python3 src/api/manage.py recompute_event_results --watch --poll-interval=1 \
   --settings=config.settings.local
-python3 src/backend/manage.py dispatch_email_jobs --watch --limit=1000 \
+python3 src/api/manage.py dispatch_email_jobs --watch --limit=1000 \
   --concurrency=10 --rate-limit=10 --poll-interval=1 \
   --settings=config.settings.local
 ```
 
 Launch, invitation, reminder, and final-notification endpoints only commit durable jobs and return
 `202`; they must not wait for a provider call. Authentication emails retain their own security
-delivery behavior. See `docs/worker-runbook.md` and `docs/email-delivery.md`.
+delivery behavior.
 
 ### Frontend
 
-The App Router pages live in `src/frontend/app/`. Client UI and API helpers are in
-`src/frontend/components/` and `src/frontend/lib/api/`.
+The App Router pages live in `src/web/app/`. Client UI and API helpers are in
+`src/web/components/` and `src/web/lib/api/`.
 
 The organizer surface is split into Overview, Roster, Results, and Finalize. Roster data is
 server-paginated (50 by default, 100 maximum); do not restore an all-participant schedule grid.
@@ -126,18 +126,17 @@ and Docker images.
 The local performance tools are intentionally separate from the normal test suite:
 
 ```bash
-python3 scripts/performance/benchmark_aggregation.py --runs 3 \
+python3 scripts/perf/benchmark_aggregation.py --runs 3 \
   --assert-p95-seconds 10
-python3 scripts/performance/prepare_scale_scenario.py --event-code PERF1000 \
+python3 scripts/perf/prepare_scale_scenario.py --event-code PERF1000 \
   --confirm-code PERF1000
-python3 scripts/performance/run_http_scale_scenario.py \
+python3 scripts/perf/run_http_scale_scenario.py \
   --manifest /tmp/releviz-perf1000-manifest.json \
   --event-code PERF1000 --confirm-code PERF1000
 ```
 
 The HTTP fixture tool refuses remote/non-performance PostgreSQL targets by default and writes a
-mode-`0600` short-lived token manifest outside the repository. Never commit that manifest. See
-`docs/performance-benchmarks.md` for the complete setup and acceptance interpretation.
+mode-`0600` short-lived token manifest outside the repository. Never commit that manifest.
 
 ## Infrastructure boundary
 

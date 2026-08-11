@@ -9,35 +9,35 @@ from scripts.ci.plan_e2e_tests import ALL_PROJECTS, read_changed_files, select_m
 class DjangoPlannerTests(TestCase):
     def test_push_runs_every_app(self):
         self.assertEqual(
-            select_apps("push", ["src/backend/apps/core/views.py"]), list(APPS)
+            select_apps("push", ["src/api/apps/core/views.py"]), list(APPS)
         )
 
     def test_shared_backend_change_runs_every_app(self):
         self.assertEqual(
-            select_apps("pull_request", ["src/backend/config/urls.py"]), list(APPS)
+            select_apps("pull_request", ["src/api/config/urls.py"]), list(APPS)
         )
 
     def test_scheduling_change_is_focused(self):
         self.assertEqual(
-            select_apps("pull_request", ["src/backend/apps/scheduling/views.py"]),
+            select_apps("pull_request", ["src/api/apps/scheduling/views.py"]),
             ["scheduling"],
         )
 
     def test_auth_change_includes_dependent_apps(self):
         self.assertEqual(
-            select_apps("pull_request", ["src/backend/apps/authn/models.py"]),
+            select_apps("pull_request", ["src/api/apps/authn/models.py"]),
             ["authn", "messaging", "scheduling"],
         )
 
 
 class E2EPlannerTests(TestCase):
     def test_push_runs_all_browsers(self):
-        matrix = select_matrix("push", ["src/frontend/app/page.js"])
+        matrix = select_matrix("push", ["src/web/app/page.js"])
         self.assertEqual([item["project"] for item in matrix], list(ALL_PROJECTS))
 
     def test_normal_pr_uses_chromium(self):
         self.assertEqual(
-            select_matrix("pull_request", ["src/frontend/app/page.js"]),
+            select_matrix("pull_request", ["src/web/app/page.js"]),
             [{"project": "chromium", "spec_args": ""}],
         )
 
