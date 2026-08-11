@@ -3,12 +3,12 @@
     window.I2GMaterialWebAdminInitialized = true;
 
     var modules = [
-        "https://esm.run/@material/web/textfield/outlined-text-field.js",
-        "https://esm.run/@material/web/select/outlined-select.js",
-        "https://esm.run/@material/web/select/select-option.js",
-        "https://esm.run/@material/web/switch/switch.js",
-        "https://esm.run/@material/web/checkbox/checkbox.js",
-        "https://esm.run/@material/web/radio/radio.js",
+        "https://cdn.jsdelivr.net/npm/@material/web@2.4.1/textfield/outlined-text-field.js/+esm",
+        "https://cdn.jsdelivr.net/npm/@material/web@2.4.1/select/outlined-select.js/+esm",
+        "https://cdn.jsdelivr.net/npm/@material/web@2.4.1/select/select-option.js/+esm",
+        "https://cdn.jsdelivr.net/npm/@material/web@2.4.1/switch/switch.js/+esm",
+        "https://cdn.jsdelivr.net/npm/@material/web@2.4.1/checkbox/checkbox.js/+esm",
+        "https://cdn.jsdelivr.net/npm/@material/web@2.4.1/radio/radio.js/+esm",
     ];
 
     function dispatchNativeEvent(nativeField, type) {

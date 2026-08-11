@@ -1,0 +1,288 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block title %}{{ title }}{% endblock %}
+{% block content_title %}<h1>{{ title }}</h1>{% endblock %}
+
+{% block content %}
+<style nonce="{{ request.csp_nonce }}">
+    .export-card {
+        background: var(--md-sys-color-surface-container-lowest, var(--color-white, #fff));
+        border: 1px solid var(--md-sys-color-outline-variant, var(--color-base-200, #e5e7eb));
+        border-radius: var(--md-sys-shape-corner-large, 1rem);
+        padding: 1.25rem 1.5rem;
+    }
+    @media (prefers-color-scheme: dark) {
+        .export-card {
+            background: var(--md-sys-color-surface-container, var(--color-base-900, #111827));
+            border-color: var(--md-sys-color-outline-variant, var(--color-base-700, #374151));
+        }
+    }
+    .export-radio-card {
+        display: flex;
+        align-items: center;
+        gap: .5rem;
+        border: 1px solid var(--md-sys-color-outline-variant, var(--color-base-200, #e5e7eb));
+        border-radius: 999px;
+        padding: .5rem 1rem;
+        cursor: pointer;
+        transition: border-color .15s, box-shadow .15s;
+        user-select: none;
+    }
+    .export-radio-card:has(input:checked) {
+        border-color: var(--md-sys-color-primary, var(--color-primary-500, #305f9d));
+        box-shadow: 0 0 0 1px var(--md-sys-color-primary, var(--color-primary-500, #305f9d));
+    }
+    .export-field-item {
+        display: flex;
+        align-items: center;
+        gap: .5rem;
+        padding: .375rem .5rem;
+        border-radius: .25rem;
+        cursor: pointer;
+        transition: background .1s;
+        user-select: none;
+        font-size: .8125rem;
+    }
+    .export-field-item:hover {
+        background: var(--color-base-100, #f3f4f6);
+    }
+    #columns-section {
+        transition: opacity .2s, max-height .3s;
+        overflow: hidden;
+    }
+    #columns-section.hidden-section {
+        opacity: 0;
+        max-height: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        pointer-events: none;
+    }
+    .preview-wrap {
+        overflow-x: auto;
+        margin-top: 1rem;
+        border: 1px solid var(--color-base-200, #e5e7eb);
+        border-radius: .375rem;
+    }
+    .preview-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: .75rem;
+        white-space: nowrap;
+    }
+    .preview-table th {
+        background: var(--color-base-50, #f9fafb);
+        color: var(--color-base-500, #6b7280);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: .03em;
+        padding: .5rem .75rem;
+        text-align: left;
+        border-bottom: 1px solid var(--color-base-200, #e5e7eb);
+        position: sticky;
+        top: 0;
+    }
+    .preview-table td {
+        padding: .4rem .75rem;
+        border-bottom: 1px solid var(--color-base-100, #f3f4f6);
+        color: var(--color-base-600, #4b5563);
+        max-width: 220px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .preview-table tr:last-child td {
+        border-bottom: none;
+    }
+    @media (prefers-color-scheme: dark) {
+        .preview-wrap {
+            border-color: var(--color-base-700, #374151);
+        }
+        .preview-table th {
+            background: var(--color-base-800, #1f2937);
+            border-color: var(--color-base-700, #374151);
+        }
+        .preview-table td {
+            border-color: var(--color-base-800, #1f2937);
+            color: var(--color-base-300, #d1d5db);
+        }
+    }
+</style>
+
+<form method="post" action="">
+    {% csrf_token %}
+
+    {% for pk in pks %}
+        <input type="hidden" name="{{ action_checkbox_name }}" value="{{ pk }}">
+    {% endfor %}
+    <input type="hidden" name="action" value="export_data">
+    <input type="hidden" name="{{ confirm_param }}" value="1">
+
+    <div style="max-width: 960px;" class="flex flex-col gap-5">
+
+        <p class="text-sm">
+            Exporting <strong>{{ pks|length }}</strong>
+            {{ opts.verbose_name_plural }}.
+        </p>
+
+        {# ── Settings card ── #}
+        <div class="export-card flex flex-col gap-5">
+
+            {# Filename #}
+            <div>
+                <label for="export-filename"
+                       class="block text-xs font-semibold uppercase tracking-wide mb-1.5"
+                       style="color: var(--color-base-400, #9ca3af);">
+                    Filename
+                </label>
+                <div class="flex items-baseline gap-1.5">
+                    <input type="text"
+                           id="export-filename"
+                           name="export_filename"
+                           value="{{ default_filename }}"
+                           class="border border-base-200 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500/40 focus:border-primary-500 dark:bg-base-800 dark:border-base-700"
+                           style="width: 280px;">
+                    <span id="ext-hint" class="text-sm font-medium" style="color: var(--color-base-400, #9ca3af);">.xlsx</span>
+                </div>
+            </div>
+
+            {# Format #}
+            <div>
+                <label class="block text-xs font-semibold uppercase tracking-wide mb-1.5"
+                       style="color: var(--color-base-400, #9ca3af);">
+                    Format
+                </label>
+                <div class="flex gap-3">
+                    {% for fmt_value, fmt_label in formats %}
+                    <label class="export-radio-card text-sm">
+                        <input type="radio" name="export_format" value="{{ fmt_value }}"
+                               class="export-format-radio accent-primary-600"
+                               {% if forloop.first %}checked{% endif %}>
+                        {{ fmt_label }}
+                    </label>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+
+        {# ── Columns + Preview card ── #}
+        <div id="columns-section" class="export-card">
+            <div class="flex items-center justify-between mb-3">
+                <label class="block text-xs font-semibold uppercase tracking-wide"
+                       style="color: var(--color-base-400, #9ca3af);">
+                    Columns
+                </label>
+                <label class="inline-flex items-center gap-2 cursor-pointer text-xs font-medium select-none"
+                       style="color: var(--color-base-500, #6b7280);">
+                    <input type="checkbox" id="toggle-all" checked
+                           class="rounded border-base-300 accent-primary-600">
+                    Select All / Deselect All
+                </label>
+            </div>
+
+            <div class="grid gap-x-2 gap-y-0.5"
+                 style="grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));">
+                {% for field_name, field_label in available_fields %}
+                <label class="export-field-item">
+                    <input type="checkbox"
+                           name="export_fields"
+                           value="{{ field_name }}"
+                           class="export-field-cb rounded border-base-300 accent-primary-600"
+                           data-col-index="{{ forloop.counter0 }}"
+                           checked>
+                    <span>{{ field_label }}</span>
+                </label>
+                {% endfor %}
+            </div>
+
+            {# ── Data preview ── #}
+            {% if preview_rows %}
+            <div class="preview-wrap" style="max-height: 280px;">
+                <table class="preview-table" id="preview-table">
+                    <thead>
+                        <tr>
+                            {% for field_name, field_label in available_fields %}
+                            <th data-col-index="{{ forloop.counter0 }}">{{ field_label }}</th>
+                            {% endfor %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in preview_rows %}
+                        <tr>
+                            {% for field_name, cell_value in row %}
+                            <td data-col-index="{{ forloop.counter0 }}">{{ cell_value }}</td>
+                            {% endfor %}
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% if pks|length > 5 %}
+            <p class="text-xs mt-1.5" style="color: var(--color-base-400, #9ca3af);">
+                Showing first 5 of {{ pks|length }} rows.
+            </p>
+            {% endif %}
+            {% endif %}
+        </div>
+
+        {# ── Actions ── #}
+        <div class="flex gap-3">
+            <button type="submit"
+                    class="bg-primary-600 text-white px-5 py-2 rounded-md text-sm font-medium hover:bg-primary-700 transition-colors">
+                Export
+            </button>
+            <a href="#"
+               data-admin-action="history-back"
+               class="border border-base-200 px-5 py-2 rounded-md text-sm font-medium hover:bg-base-50 transition-colors dark:border-base-700 dark:hover:bg-base-800">
+                Cancel
+            </a>
+        </div>
+    </div>
+</form>
+
+<script nonce="{{ request.csp_nonce }}">
+(function () {
+    var toggle = document.getElementById('toggle-all');
+    var boxes = document.querySelectorAll('.export-field-cb');
+
+    function syncPreviewColumns() {
+        boxes.forEach(function (cb) {
+            var idx = cb.getAttribute('data-col-index');
+            var cells = document.querySelectorAll('#preview-table [data-col-index="' + idx + '"]');
+            var visible = cb.checked ? '' : 'none';
+            cells.forEach(function (el) { el.style.display = visible; });
+        });
+    }
+
+    toggle.addEventListener('change', function () {
+        var checked = toggle.checked;
+        boxes.forEach(function (cb) { cb.checked = checked; });
+        syncPreviewColumns();
+    });
+
+    boxes.forEach(function (cb) {
+        cb.addEventListener('change', function () {
+            var allChecked = Array.prototype.every.call(boxes, function (b) { return b.checked; });
+            toggle.checked = allChecked;
+            toggle.indeterminate = !allChecked && Array.prototype.some.call(boxes, function (b) { return b.checked; });
+            syncPreviewColumns();
+        });
+    });
+
+    var extHint = document.getElementById('ext-hint');
+    var columnsSection = document.getElementById('columns-section');
+
+    function onFormatChange(fmt) {
+        extHint.textContent = '.' + fmt;
+        if (fmt === 'json') {
+            columnsSection.classList.add('hidden-section');
+        } else {
+            columnsSection.classList.remove('hidden-section');
+        }
+    }
+
+    document.querySelectorAll('.export-format-radio').forEach(function (radio) {
+        radio.addEventListener('change', function () { onFormatChange(radio.value); });
+    });
+})();
+</script>
+{% endblock %}

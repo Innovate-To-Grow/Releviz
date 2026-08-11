@@ -1,0 +1,87 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block title %}{{ title }}{% endblock %}
+{% block content_title %}<h1>{{ title }}</h1>{% endblock %}
+
+{% block content %}
+<div style="max-width:640px">
+    <!-- Warning banner -->
+    <div class="mb-6 rounded-default border border-yellow-300 bg-yellow-50 p-4 dark:border-yellow-700 dark:bg-yellow-900/20">
+        <div class="flex items-start gap-3">
+            <span class="material-symbols-outlined text-yellow-600 dark:text-yellow-400 !text-[22px] mt-0.5">warning</span>
+            <div>
+                <p class="text-sm font-semibold text-yellow-800 dark:text-yellow-300">
+                    You are about to perform: <strong>{{ action_description }}</strong>
+                </p>
+                <p class="text-xs text-yellow-700 dark:text-yellow-400 mt-1">
+                    This will affect <strong>{{ item_count }}</strong> {{ model_name_plural }}.
+                    Please type the confirmation word to proceed.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Action summary -->
+    <div class="mb-6 rounded-default border border-base-200 dark:border-base-700 overflow-hidden">
+        <div class="bg-base-50 dark:bg-base-800 px-4 py-2 border-b border-base-200 dark:border-base-700 flex items-center gap-2">
+            <span class="material-symbols-outlined !text-[16px] text-base-400">info</span>
+            <span class="text-xs font-medium text-base-400">Action Summary</span>
+        </div>
+        <table class="w-full text-sm">
+            <tbody>
+                <tr class="border-b border-base-100 dark:border-base-800">
+                    <td class="px-4 py-2 font-medium text-base-700 dark:text-base-300">Action</td>
+                    <td class="px-4 py-2 text-base-600 dark:text-base-400">{{ action_description }}</td>
+                </tr>
+                <tr class="border-b border-base-100 dark:border-base-800">
+                    <td class="px-4 py-2 font-medium text-base-700 dark:text-base-300">Items affected</td>
+                    <td class="px-4 py-2 text-base-600 dark:text-base-400">{{ item_count }} {{ model_name_plural }}</td>
+                </tr>
+                <tr>
+                    <td class="px-4 py-2 font-medium text-base-700 dark:text-base-300">Model</td>
+                    <td class="px-4 py-2 text-base-600 dark:text-base-400">{{ model_name }}</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Confirmation form -->
+    <form method="post" id="confirm-action-form">
+        {% csrf_token %}
+        <input type="hidden" name="token" value="{{ token }}">
+        <div class="mb-4">
+            <label for="confirm-input" class="block text-sm font-medium text-base-700 dark:text-base-300 mb-2">
+                Type <strong>"{{ confirmation_word }}"</strong> to confirm:
+            </label>
+            <input type="text" id="confirm-input" name="confirmation_word" autocomplete="off"
+                   class="w-full border border-base-300 dark:border-base-600 rounded-md px-3 py-2 text-sm bg-white dark:bg-base-800 text-base-900 dark:text-base-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                   placeholder="Type confirmation word here">
+        </div>
+        <div class="flex gap-3">
+            <button type="submit" id="confirm-send-btn" disabled
+                    class="bg-red-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-red-700 inline-flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+                <span class="material-symbols-outlined !text-[18px]">check_circle</span>
+                Confirm Action
+            </button>
+            <a href="{{ cancel_url }}"
+               class="border border-base-300 dark:border-base-600 px-4 py-2 rounded-md text-sm font-medium hover:bg-base-50 dark:hover:bg-base-900 inline-flex items-center gap-2">
+                <span class="material-symbols-outlined !text-[18px]">close</span>
+                Cancel
+            </a>
+        </div>
+    </form>
+</div>
+
+{{ confirmation_word|json_script:"confirmation-word-data" }}
+<script nonce="{{ request.csp_nonce }}">
+(function() {
+    const input = document.getElementById('confirm-input');
+    const btn = document.getElementById('confirm-send-btn');
+    const expected = JSON.parse(document.getElementById('confirmation-word-data').textContent);
+    input.addEventListener('input', function() {
+        btn.disabled = input.value.trim().toLowerCase() !== expected.toLowerCase();
+    });
+})();
+</script>
+{% endblock %}

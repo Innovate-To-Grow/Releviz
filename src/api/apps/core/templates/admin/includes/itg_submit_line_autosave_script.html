@@ -1,0 +1,81 @@
+{% load i18n %}
+<script nonce="{{ request.csp_nonce }}">
+    (function () {
+        var STORAGE_KEY = 'admin_autosave_enabled';
+        var INTERVAL_MS = 30000;
+        var form = document.getElementById('{{ opts.model_name }}_form');
+        if (!form) return;
+
+        var toggle = document.getElementById('admin-autosave-toggle');
+        var statusEl = document.getElementById('admin-autosave-status');
+        var timer = null;
+        var lastSavedState = '';
+
+        function setStatus(text, klass) {
+            if (!statusEl) return;
+            statusEl.textContent = text;
+            statusEl.className = 'admin-autosave-status text-xs ' + (klass || '');
+        }
+
+        function getFormState() {
+            var fd = new FormData(form);
+            var pairs = [];
+            for (var pair of fd.entries()) if (pair[0] !== '_continue') pairs.push(pair[0] + '=' + (pair[1] || ''));
+            pairs.sort();
+            return pairs.join('&');
+        }
+
+        function loadPreference() {
+            try { return localStorage.getItem(STORAGE_KEY) === '1'; } catch (e) { return false; }
+        }
+
+        function savePreference(on) {
+            try { localStorage.setItem(STORAGE_KEY, on ? '1' : '0'); } catch (e) {}
+        }
+
+        function doAutoSave() {
+            if (!toggle || !toggle.checked) return;
+            if (getFormState() === lastSavedState) return;
+            setStatus('{% translate "Auto saving..." %}', 'saving');
+
+            var fd = new FormData(form);
+            fd.append('_continue', '1');
+            fetch(form.action || window.location.href, {
+                method: 'POST',
+                body: fd,
+                redirect: 'follow',
+                headers: {'X-Requested-With': 'XMLHttpRequest'}
+            }).then(function (res) {
+                if (!res.ok) return setStatus('{% translate "Save failed" %}', 'error');
+                lastSavedState = getFormState();
+                setStatus('{% translate "Saved at" %} ' + new Date().toLocaleTimeString(undefined, {hour: '2-digit', minute: '2-digit'}), 'saved');
+                var currentPath = window.location.pathname + window.location.search;
+                if (res.url && res.url !== window.location.href && currentPath.indexOf('/add/') !== -1) window.location.href = res.url;
+            }).catch(function () {
+                setStatus('{% translate "Save failed" %}', 'error');
+            });
+        }
+
+        function scheduleNext() {
+            if (timer) clearInterval(timer);
+            timer = toggle && toggle.checked ? setInterval(doAutoSave, INTERVAL_MS) : null;
+        }
+
+        if (toggle) {
+            lastSavedState = getFormState();
+            toggle.checked = loadPreference();
+            toggle.addEventListener('change', function () {
+                savePreference(toggle.checked);
+                if (toggle.checked) {
+                    doAutoSave();
+                    scheduleNext();
+                } else {
+                    if (timer) clearInterval(timer);
+                    timer = null;
+                    setStatus('', '');
+                }
+            });
+            if (toggle.checked) scheduleNext();
+        }
+    })();
+</script>
