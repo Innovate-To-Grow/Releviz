@@ -44,7 +44,7 @@ REFERENCE_FILES = [
     "src/api/apps/core/tests/test_repository_surface.py",
     "src/e2e/repository-surface.spec.js",
 ]
-LOCAL_ONLY_FILES = {"AGENTS.md"}
+LOCAL_ONLY_FILES = {"agents/AGENTS.md"}
 
 
 def tracked_files() -> list[str]:
