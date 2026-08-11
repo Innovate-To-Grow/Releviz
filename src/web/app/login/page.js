@@ -19,7 +19,7 @@ function LoginContent() {
       "account-deleted": "Your account has been deleted.",
     }[statusCode] || "";
   const next = safeNextPath(searchParams.get("next"));
-  const { login, requestEmailLoginCode, verifyEmailLoginCode, loading: authLoading } = useAuth();
+  const { login, requestEmailAuthCode, verifyEmailAuthCode, loading: authLoading } = useAuth();
   const [mode, setMode] = useState("password");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -37,6 +37,14 @@ function LoginContent() {
     setCodeSent(false);
   };
 
+  const handlePostAuthRedirect = (data) => {
+    if (data?.requires_profile_completion || data?.next_step === "complete_profile") {
+      navigateTo("/settings?complete_profile=1");
+    } else {
+      navigateTo(next);
+    }
+  };
+
   const handleSubmit = async (event) => {
     event.preventDefault();
     if (authLoading) return;
@@ -45,17 +53,17 @@ function LoginContent() {
     setLoading(true);
     try {
       if (mode === "password") {
-        await login({ email, password });
-        navigateTo(next);
+        const data = await login({ email, password });
+        handlePostAuthRedirect(data);
       } else if (!codeSent) {
-        await requestEmailLoginCode({ email });
+        await requestEmailAuthCode({ email });
         setCodeSent(true);
         setStatus(
-          "If an existing verified account uses this email, a login code will arrive shortly."
+          "If an account exists or can be created with this email, a verification code will arrive shortly."
         );
       } else {
-        await verifyEmailLoginCode({ email, code });
-        navigateTo(next);
+        const data = await verifyEmailAuthCode({ email, code });
+        handlePostAuthRedirect(data);
       }
     } catch (err) {
       setError(err.message || (mode === "code" ? "Unable to verify code." : "Unable to log in."));
@@ -106,13 +114,9 @@ function LoginContent() {
         )}
         {mode === "code" && (
           <div className="auth-code-guidance">
-            <strong>Email code is for existing verified accounts.</strong>
+            <strong>Enter your email to receive a verification code.</strong>
             <span>
-              New to Releviz?{" "}
-              <Link href={`/signup?next=${encodeURIComponent(next)}`}>
-                Create an account with your profile details
-              </Link>
-              .
+              The code works for both new and existing accounts.
             </span>
           </div>
         )}

@@ -93,6 +93,27 @@ export async function verifyLoginCode({ email, code }) {
   return parseAuthResponse(res);
 }
 
+export async function requestUnifiedEmailAuthCode({ email, source, event }) {
+  const res = await fetch(`${API_BASE}/authn/email-auth/request-code/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, ...(source ? { source } : {}), ...(event ? { event } : {}) }),
+    credentials: "include",
+  });
+  if (!res.ok) throw new Error(await extractError(res));
+  return res.json();
+}
+
+export async function verifyUnifiedEmailAuthCode({ email, code }) {
+  const res = await fetch(`${API_BASE}/authn/email-auth/verify-code/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, code }),
+    credentials: "include",
+  });
+  return parseAuthResponse(res);
+}
+
 async function postRegistration(path, payload) {
   const securedPayload = await securePasswordPayload(payload, ["password", "password_confirm"]);
   const res = await fetch(`${API_BASE}${path}`, {
@@ -116,17 +137,11 @@ export function startTemporaryUpgradeRegistration(code, payload) {
   );
 }
 
-export async function verifyRegistration(payload) {
-  const passwordFields = ["password", "password_confirm"].filter((field) =>
-    Object.prototype.hasOwnProperty.call(payload, field)
-  );
-  const securedPayload = passwordFields.length
-    ? await securePasswordPayload(payload, passwordFields)
-    : payload;
+export async function verifyRegistration({ email, code }) {
   const res = await fetch(`${API_BASE}/authn/register/verify-code/`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(securedPayload),
+    body: JSON.stringify({ email, code }),
     credentials: "include",
   });
   return parseAuthResponse(res);

@@ -40,6 +40,8 @@ export function writeAuthSession(session) {
         accessExpiresAt: session.accessExpiresAt || null,
         session: session.session || null,
         user: session.user || null,
+        nextStep: session.next_step || null,
+        requiresProfileCompletion: session.requires_profile_completion || false,
       }
     : null;
   notifyAuthChanged();

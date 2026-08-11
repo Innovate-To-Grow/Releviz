@@ -22,12 +22,14 @@ import {
   logoutApi,
   requestPasswordResetCode,
   requestLoginCode,
+  requestUnifiedEmailAuthCode,
   revokeAuthSessions,
   startRegistration,
   startTemporaryUpgradeRegistration,
   updateProfileApi,
   verifyLoginCode,
   verifyRegistration,
+  verifyUnifiedEmailAuthCode,
 } from "@/lib/api/auth";
 import { fetchDashboardEvents } from "@/lib/api/dashboard";
 import { submitFeedback } from "@/lib/api/feedback";
@@ -120,6 +122,8 @@ describe("api config session helpers", () => {
       accessExpiresAt: null,
       session: null,
       user: { id: "1" },
+      nextStep: null,
+      requiresProfileCompletion: false,
     });
     expect(readAuthSession().refresh).toBeUndefined();
     expect(localStorage.getItem(LEGACY_AUTH_SESSION_KEY)).toBeNull();
@@ -132,9 +136,23 @@ describe("api config session helpers", () => {
       accessExpiresAt: null,
       session: null,
       user: null,
+      nextStep: null,
+      requiresProfileCompletion: false,
     });
     writeAuthSession(null);
     expect(listener).toHaveBeenCalledTimes(4);
+  });
+
+  test("writeAuthSession stores nextStep and requiresProfileCompletion", () => {
+    writeAuthSession({
+      access: "a",
+      user: { id: "u" },
+      next_step: "complete_profile",
+      requires_profile_completion: true,
+    });
+    const session = readAuthSession();
+    expect(session.nextStep).toBe("complete_profile");
+    expect(session.requiresProfileCompletion).toBe(true);
   });
 
   test("extractError handles common API error shapes and invalid JSON", async () => {
@@ -310,23 +328,20 @@ describe("auth API helpers", () => {
     expect(JSON.parse(global.fetch.mock.calls[1][1].body)).not.toHaveProperty("email");
   });
 
-  test("secures and resubmits registration details when verifying a mailbox claim", async () => {
+  test("verify registration sends only email and code", async () => {
     global.fetch
-      .mockResolvedValueOnce(passwordKeyResponse())
       .mockResolvedValueOnce(jsonResponse({ access: "verified", user: { id: "member" } }));
 
     await verifyRegistration({
       email: "temporary@example.com",
       code: "123456",
-      temporaryUpgrade: false,
       password: "password123",
       password_confirm: "password123",
       first_name: "Taylor",
       last_name: "Temp",
     });
 
-    expect(global.fetch).toHaveBeenNthCalledWith(
-      2,
+    expect(global.fetch).toHaveBeenCalledWith(
       "/authn/register/verify-code/",
       expect.objectContaining({
         method: "POST",
@@ -334,11 +349,50 @@ describe("auth API helpers", () => {
         body: JSON.stringify({
           email: "temporary@example.com",
           code: "123456",
-          temporaryUpgrade: false,
-          password: "password123",
-          password_confirm: "password123",
-          first_name: "Taylor",
-          last_name: "Temp",
+        }),
+      })
+    );
+  });
+
+  test("unified email auth request and verify dispatch correctly", async () => {
+    global.fetch
+      .mockResolvedValueOnce(jsonResponse({ message: "Check your email" }, { status: 202 }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          access: "a",
+          user: { id: "u" },
+          next_step: "account",
+          requires_profile_completion: false,
+        })
+      );
+
+    await expect(
+      requestUnifiedEmailAuthCode({ email: "a@b.com" })
+    ).resolves.toEqual({ message: "Check your email" });
+    await expect(
+      verifyUnifiedEmailAuthCode({ email: "a@b.com", code: "123456" })
+    ).resolves.toEqual({
+      access: "a",
+      user: { id: "u" },
+      next_step: "account",
+      requires_profile_completion: false,
+    });
+    expect(readAuthSession().access).toBe("a");
+
+    // Verify source and event fields are forwarded
+    global.fetch.mockResolvedValueOnce(jsonResponse({ message: "Check your email" }, { status: 202 }));
+    await requestUnifiedEmailAuthCode({
+      email: "a@b.com",
+      source: "event_registration",
+      event: "my-event",
+    });
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/authn/email-auth/request-code/",
+      expect.objectContaining({
+        body: JSON.stringify({
+          email: "a@b.com",
+          source: "event_registration",
+          event: "my-event",
         }),
       })
     );
