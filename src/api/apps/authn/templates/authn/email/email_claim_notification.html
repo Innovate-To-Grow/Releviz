@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin:0;padding:0;background-color:#f4f4f7;font-family:Arial,Helvetica,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f7;padding:40px 0;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+          <!-- Header -->
+          <tr>
+            <td style="background-color:#0b1f3f;padding:28px 32px;text-align:center;border-bottom:4px solid #daa520;">
+              <span style="color:#ffffff;font-size:22px;font-weight:700;letter-spacing:0.5px;">Innovate to Grow</span>
+            </td>
+          </tr>
+          <!-- Body -->
+          <tr>
+            <td style="padding:36px 32px 24px;">
+              <p style="margin:0 0 16px;font-size:18px;font-weight:700;color:#0b2653;line-height:1.4;">
+                Security Notice
+              </p>
+              <p style="margin:0 0 16px;font-size:16px;color:#0b2653;line-height:1.5;">
+                Someone recently tried to add your email address to a different Innovate to Grow account.
+              </p>
+              <p style="margin:0 0 16px;font-size:14px;color:#4a5568;line-height:1.5;">
+                <strong>No changes were made to your account.</strong> Your email address remains securely associated with your existing account.
+              </p>
+              <p style="margin:0 0 16px;font-size:14px;color:#4a5568;line-height:1.5;">
+                If you own both accounts and would like to consolidate them, you can delete the old account and re-add this email to the new one. Visit your account settings to manage your email addresses or delete your account:
+              </p>
+              {% if account_url %}
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td align="center" style="padding:8px 0 24px;">
+                    <a href="{{ account_url }}" style="display:inline-block;background-color:#0b1f3f;color:#ffffff;font-size:14px;font-weight:600;text-decoration:none;padding:12px 28px;border-radius:6px;border:2px solid #daa520;">Account Settings</a>
+                  </td>
+                </tr>
+              </table>
+              {% endif %}
+              <p style="margin:0;font-size:14px;color:#4a5568;line-height:1.5;">
+                If you did not expect this, you can safely ignore this email. No action is required.
+              </p>
+            </td>
+          </tr>
+          <!-- Footer -->
+          <tr>
+            <td style="padding:20px 32px;border-top:1px solid #eeeeee;text-align:center;">
+              <p style="margin:0;font-size:12px;color:#0b2653;">
+                Innovate to Grow &mdash; University of California, Merced
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

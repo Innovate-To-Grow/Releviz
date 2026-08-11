@@ -1,0 +1,52 @@
+{% extends 'unfold/layouts/unauthenticated.html' %}
+
+{% load i18n unfold %}
+
+{% block title %}Accept Invitation | Innovate to Grow{% endblock %}
+
+{% block content %}
+    {% include "unfold/helpers/unauthenticated_title.html" with title="Innovate to Grow" subtitle="You're invited to join" %}
+
+    {% if form.non_field_errors %}
+        <div class="flex flex-col gap-4 mb-8 *:mb-0">
+            {% for error in form.non_field_errors %}
+                <div class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-md text-sm dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">
+                    {{ error }}
+                </div>
+            {% endfor %}
+        </div>
+    {% endif %}
+
+    <p class="text-sm text-base-500 mb-6 dark:text-base-400">
+        Complete the form below to create your <strong>{{ invitation.get_role_display|lower }}</strong> account.
+    </p>
+
+    <form method="post" novalidate>
+        {% csrf_token %}
+
+        {% for field in form %}
+            <div class="{% if field.errors %}errors {% endif %}flex flex-col group mb-5">
+                <div class="flex flex-col gap-2">
+                    <label for="{{ field.id_for_label }}"
+                           class="flex font-medium text-font-default-light text-sm dark:text-font-default-dark">
+                        {{ field.label }}
+                        {% if field.field.required %}<span class="text-red-600 ml-0.5">*</span>{% endif %}
+                    </label>
+                    {{ field }}
+                </div>
+                {% if field.errors %}
+                    {% for error in field.errors %}
+                        <p class="text-red-600 text-xs mt-1 dark:text-red-400">{{ error }}</p>
+                    {% endfor %}
+                {% endif %}
+            </div>
+        {% endfor %}
+
+        <div class="flex flex-col gap-3 mt-6">
+            {% component "unfold/components/button.html" with submit=1 variant="primary" class="submit-row w-full" %}
+                Create account
+                <span class="material-symbols-outlined relative right-0 transition-all group-hover:-right-1 text-sm">arrow_forward</span>
+            {% endcomponent %}
+        </div>
+    </form>
+{% endblock %}

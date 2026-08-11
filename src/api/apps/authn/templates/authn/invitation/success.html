@@ -1,0 +1,25 @@
+{% extends 'unfold/layouts/unauthenticated.html' %}
+
+{% load i18n unfold %}
+
+{% block title %}Account Created | Innovate to Grow{% endblock %}
+
+{% block content %}
+    {% include "unfold/helpers/unauthenticated_title.html" with title="Innovate to Grow" subtitle="Welcome to" %}
+
+    <div class="text-center">
+        <span class="material-symbols-outlined text-5xl text-green-500 mb-4">check_circle</span>
+        <h2 class="text-lg font-semibold text-font-default-light dark:text-font-default-dark mb-2">Account Created</h2>
+        <p class="text-sm text-base-500 mb-6 dark:text-base-400">
+            Your admin account has been created successfully.
+            You can now log in with your credentials.
+        </p>
+
+        <div class="flex flex-col gap-3 mt-6">
+            {% component "unfold/components/button.html" with href="/admin/login/" variant="primary" class="w-full" %}
+                Log in to admin
+                <span class="material-symbols-outlined relative right-0 transition-all group-hover:-right-1 text-sm">arrow_forward</span>
+            {% endcomponent %}
+        </div>
+    </div>
+{% endblock %}
