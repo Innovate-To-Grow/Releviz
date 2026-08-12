@@ -12,8 +12,6 @@ def search_members(params):
             qs = qs.filter(Q(first_name__icontains=term) | Q(last_name__icontains=term))
     if params.get("email"):
         qs = qs.filter(contact_emails__email_address__icontains=params["email"])
-    if params.get("organization"):
-        qs = qs.filter(organization__icontains=params["organization"])
     if params.get("is_staff") is not None:
         qs = qs.filter(is_staff=params["is_staff"])
     if params.get("is_active") is not None:
@@ -24,8 +22,6 @@ def search_members(params):
             "id",
             "first_name",
             "last_name",
-            "organization",
-            "title",
             "is_staff",
             "is_active",
             "created_at",
@@ -41,6 +37,4 @@ def count_members(params):
         qs = qs.filter(is_staff=params["is_staff"])
     if params.get("is_active") is not None:
         qs = qs.filter(is_active=params["is_active"])
-    if params.get("organization"):
-        qs = qs.filter(organization__icontains=params["organization"])
     return f"Count: {qs.count()}"

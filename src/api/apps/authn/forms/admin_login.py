@@ -58,11 +58,15 @@ class AdminPasswordForm(forms.Form):
 
     email = forms.EmailField(
         label=_("Email"),
-        widget=forms.EmailInput(attrs={"placeholder": _("Email"), "autofocus": True, "autocomplete": "email"}),
+        widget=forms.EmailInput(
+            attrs={"placeholder": _("Email"), "autofocus": True, "autocomplete": "email"}
+        ),
     )
     password = forms.CharField(
         label=_("Password"),
-        widget=forms.PasswordInput(attrs={"placeholder": _("Password"), "autocomplete": "current-password"}),
+        widget=forms.PasswordInput(
+            attrs={"placeholder": _("Password"), "autocomplete": "current-password"}
+        ),
     )
 
 
@@ -71,5 +75,7 @@ class AdminRememberedPasswordForm(forms.Form):
 
     password = forms.CharField(
         label=_("Password"),
-        widget=forms.PasswordInput(attrs={"placeholder": _("Password"), "autocomplete": "current-password"}),
+        widget=forms.PasswordInput(
+            attrs={"placeholder": _("Password"), "autocomplete": "current-password"}
+        ),
     )

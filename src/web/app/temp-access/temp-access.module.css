@@ -2,21 +2,26 @@
   background:
     radial-gradient(
       circle at 90% 0,
-      color-mix(in srgb, #d1e4ff 78%, transparent),
+      color-mix(in srgb, var(--rv-accent) 10%, transparent),
       transparent 28rem
     ),
-    var(--md-sys-color-background);
+    var(--rv-background);
   min-height: 100vh;
 }
 
 .header {
   align-items: center;
-  background: color-mix(in srgb, var(--md-sys-color-surface) 94%, transparent);
-  border-bottom: 1px solid var(--md-sys-color-surface-variant);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  background: var(--rv-chrome);
+  border-bottom: 1px solid var(--rv-separator);
   display: flex;
   gap: 16px;
   justify-content: space-between;
   padding: 12px clamp(16px, 4vw, 48px);
+  position: sticky;
+  top: 0;
+  z-index: 50;
 }
 
 .brandBlock,
@@ -54,8 +59,8 @@
 }
 
 .submittedBadge {
-  background: #d8f5df;
-  color: #145c2b;
+  background: color-mix(in srgb, var(--rv-success) 15%, transparent);
+  color: var(--rv-success);
 }
 
 .content {
@@ -104,8 +109,8 @@
 
 .upgradeLink {
   align-items: center;
-  background: var(--md-sys-color-primary);
-  border: 1px solid var(--md-sys-color-primary);
+  background: var(--rv-accent);
+  border: 1px solid var(--rv-accent);
   border-radius: 999px;
   color: var(--md-sys-color-on-primary);
   display: inline-flex;
@@ -115,6 +120,19 @@
   min-height: 44px;
   padding: 9px 18px;
   text-decoration: none;
+  transition:
+    transform 100ms ease-out,
+    background-color 140ms ease-out,
+    box-shadow 140ms ease-out;
+}
+
+.upgradeLink:hover {
+  background: var(--rv-accent-hover);
+  box-shadow: 0 4px 14px rgba(0, 113, 227, 0.18);
+}
+
+.upgradeLink:active {
+  transform: scale(0.97);
 }
 
 .upgradeLink:focus-visible {
@@ -137,10 +155,10 @@
 .scheduleCard,
 .resultsCard,
 .authCard {
-  background: var(--md-sys-color-surface-container-lowest);
-  border: 1px solid var(--md-sys-color-surface-variant);
-  border-radius: 18px;
-  box-shadow: var(--md-sys-elevation-1);
+  background: var(--rv-control-surface);
+  border: 1px solid var(--rv-glass-edge);
+  border-radius: 22px;
+  box-shadow: var(--rv-shadow-small);
 }
 
 .scheduleCard,
@@ -194,14 +212,14 @@
 }
 
 .errorNotice {
-  background: color-mix(in srgb, #b3261e 8%, transparent);
-  border: 1px solid #b3261e;
-  color: #8c1d18;
+  background: color-mix(in srgb, var(--rv-danger) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--rv-danger) 55%, transparent);
+  color: var(--rv-danger);
   flex-wrap: wrap;
 }
 
 .fieldError {
-  color: #b3261e;
+  color: var(--rv-danger);
   line-height: 1.45;
   margin: 0;
 }
@@ -225,10 +243,10 @@
   background:
     radial-gradient(
       circle at 75% 15%,
-      color-mix(in srgb, #d1e4ff 88%, transparent),
+      color-mix(in srgb, var(--rv-accent) 12%, transparent),
       transparent 24rem
     ),
-    var(--md-sys-color-background);
+    var(--rv-background);
   display: flex;
   justify-content: center;
   min-height: 100vh;
@@ -236,11 +254,42 @@
 }
 
 .authCard {
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
   display: grid;
   gap: 20px;
   max-width: 480px;
   padding: clamp(24px, 5vw, 40px);
   width: 100%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .upgradeLink {
+    transition-duration: 1ms;
+  }
+
+  .upgradeLink:active {
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .header,
+  .authCard {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: var(--rv-surface);
+  }
+}
+
+@media (prefers-contrast: more) {
+  .header,
+  .scheduleCard,
+  .resultsCard,
+  .authCard {
+    background: var(--rv-surface);
+    border-color: var(--rv-label);
+  }
 }
 
 .authLogo {

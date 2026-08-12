@@ -6,8 +6,14 @@ from cryptography.fernet import Fernet
 from django.contrib.admin.sites import AdminSite
 from django.core import mail
 from django.test import RequestFactory, TestCase, override_settings
+from unfold.enums import ActionVariant
 
-from apps.mail.admin import EmailProviderConfigAdmin, EmailProviderConfigForm
+from apps.core.models import AWSCredentialConfig
+from apps.mail.admin import (
+    EmailProviderConfigAdmin,
+    EmailProviderConfigForm,
+    TestEmailForm,
+)
 from apps.mail.email_templates import brand_site_url, render_branded_email
 from apps.mail.models import EmailMessageLog, EmailProviderConfig
 from apps.mail.services import (
@@ -113,6 +119,43 @@ class MessagingTests(TestCase):
         updated = form.save()
         self.assertEqual(updated.from_email, "updated@example.com")
         self.assertEqual(updated.reply_to_email, "reply@example.com")
+
+    def test_admin_displays_only_active_aws_credentials(self):
+        inactive = AWSCredentialConfig.objects.create(
+            name="Inactive credentials",
+            access_key_id="AKIAINACTIVE1234",
+            default_region="us-west-1",
+        )
+        active = AWSCredentialConfig.objects.create(
+            name="Production AWS",
+            is_active=True,
+            access_key_id="AKIAACTIVE5678",
+            default_region="us-east-2",
+        )
+        active.set_secret_access_key("test-secret")
+        active.save()
+        model_admin = EmailProviderConfigAdmin(EmailProviderConfig, AdminSite())
+
+        rendered = str(model_admin.active_aws_credentials(None))
+
+        self.assertIn("Production AWS", rendered)
+        self.assertIn("•••• 5678", rendered)
+        self.assertIn("us-east-2", rendered)
+        self.assertIn("Configured", rendered)
+        self.assertNotIn(inactive.name, rendered)
+        self.assertNotIn(active.access_key_id, rendered)
+
+    def test_admin_explains_when_no_aws_credentials_are_active(self):
+        AWSCredentialConfig.objects.create(
+            name="Inactive credentials",
+            access_key_id="AKIAINACTIVE1234",
+        )
+        model_admin = EmailProviderConfigAdmin(EmailProviderConfig, AdminSite())
+
+        rendered = str(model_admin.active_aws_credentials(None))
+
+        self.assertIn("No active AWS Credentials", rendered)
+        self.assertIn("Open AWS Credentials", rendered)
 
     def test_frontend_url_and_django_backend_delivery_with_logs(self):
         with override_settings(FRONTEND_URL="", BACKEND_URL=""):
@@ -252,39 +295,64 @@ class MessagingTests(TestCase):
                         message_type=EmailMessageLog.MessageType.TEST,
                     )
 
-    def test_admin_action_updates_test_status(self):
-        from apps.core.services.aws.credentials import AwsCredentials
+    def test_test_email_form_defaults_to_active_provider_sender(self):
+        config = EmailProviderConfig.objects.create(from_email="sender@example.com")
 
-        config = EmailProviderConfig.objects.create(
-            from_email="sender@example.com",
-        )
-        request = RequestFactory().post("/admin/mail/emailproviderconfig/")
+        form = TestEmailForm()
+
+        self.assertEqual(form.fields["recipient"].initial, config.from_email)
+        self.assertIn("w-full", form.fields["recipient"].widget.attrs["class"])
+
+    def test_test_email_action_opens_a_dedicated_dark_mode_safe_page(self):
         model_admin = EmailProviderConfigAdmin(EmailProviderConfig, AdminSite())
 
-        mock_creds = AwsCredentials(
-            access_key_id="AKIASES",
-            secret_access_key="secret",
-            region="us-east-2",
+        action_config = model_admin.get_unfold_action("send_test_email")
+
+        self.assertIsNone(action_config.dialog)
+        self.assertEqual(action_config.variant, ActionVariant.DEFAULT)
+
+    def test_admin_test_email_action_updates_test_status(self):
+        config = EmailProviderConfig.objects.create(from_email="sender@example.com")
+        model_admin = EmailProviderConfigAdmin(EmailProviderConfig, AdminSite())
+        request = RequestFactory().post(
+            "/admin/mail/emailproviderconfig/send-test-email/",
+            {"recipient": "recipient@example.com"},
         )
-        with patch(
-            "apps.mail.services.resolve_aws_credentials",
-            return_value=mock_creds,
-        ):
+        request.user = Mock(has_perm=Mock(return_value=True))
+
+        with patch("apps.mail.admin.send_email_message") as send_email:
             with patch.object(model_admin, "message_user") as message_user:
-                model_admin.send_test_email(request, EmailProviderConfig.objects.filter(pk=config.pk))
+                response = model_admin.send_test_email(request)
+
+        self.assertEqual(response.status_code, 302)
+        send_email.assert_called_once_with(
+            subject="Releviz email delivery test",
+            body="This is a Releviz AWS SES delivery test.",
+            recipients=["recipient@example.com"],
+            message_type=EmailMessageLog.MessageType.TEST,
+            provider_config=config,
+        )
         config.refresh_from_db()
         self.assertIsNotNone(config.last_tested_at)
         self.assertEqual(config.last_error, "")
         message_user.assert_called_once()
 
+    def test_admin_test_email_action_records_delivery_error(self):
+        config = EmailProviderConfig.objects.create(from_email="sender@example.com")
+        model_admin = EmailProviderConfigAdmin(EmailProviderConfig, AdminSite())
+        request = RequestFactory().post(
+            "/admin/mail/emailproviderconfig/send-test-email/",
+            {"recipient": "recipient@example.com"},
+        )
+        request.user = Mock(has_perm=Mock(return_value=True))
+
         with patch(
-            "apps.mail.services.resolve_aws_credentials",
-            return_value=mock_creds,
+            "apps.mail.admin.send_email_message",
+            side_effect=EmailDeliveryError("bad credentials"),
         ):
-            with patch(
-                "apps.mail.admin.send_email_message",
-                side_effect=EmailDeliveryError("bad credentials"),
-            ):
-                model_admin.send_test_email(request, EmailProviderConfig.objects.filter(pk=config.pk))
+            with patch.object(model_admin, "message_user"):
+                response = model_admin.send_test_email(request)
+
+        self.assertEqual(response.status_code, 302)
         config.refresh_from_db()
         self.assertEqual(config.last_error, "bad credentials")

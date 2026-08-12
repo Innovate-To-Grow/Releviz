@@ -106,7 +106,9 @@ class ContactEmailListCreateView(APIView):
                 subscribe=serializer.validated_data["subscribe"],
             )
         except AuthChallengeInvalid:
-            return Response({"detail": CONTACT_EMAIL_ADD_FAILED}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"detail": CONTACT_EMAIL_ADD_FAILED}, status=status.HTTP_400_BAD_REQUEST
+            )
         except Exception as exc:  # noqa: BLE001
             return challenge_error_response(exc)
 
@@ -155,7 +157,9 @@ class ContactEmailDetailView(APIView):
         try:
             delete_contact_email(member=request.user, contact_email_id=pk)
         except LastRecoveryContactError:
-            return Response({"detail": LAST_RECOVERY_CONTACT_DELETE_FAILED}, status=status.HTTP_409_CONFLICT)
+            return Response(
+                {"detail": LAST_RECOVERY_CONTACT_DELETE_FAILED}, status=status.HTTP_409_CONFLICT
+            )
         except AuthChallengeInvalid:
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
 
@@ -176,12 +180,16 @@ class ContactEmailRequestVerificationView(APIView):
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
 
         if contact_email.verified:
-            return Response({"detail": "This email is already verified."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"detail": "This email is already verified."}, status=status.HTTP_400_BAD_REQUEST
+            )
 
         try:
             result = resend_contact_email_verification(member=request.user, contact_email_id=pk)
         except AuthChallengeInvalid:
-            return Response({"detail": CONTACT_EMAIL_SEND_FAILED}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"detail": CONTACT_EMAIL_SEND_FAILED}, status=status.HTTP_400_BAD_REQUEST
+            )
         except Exception as exc:  # noqa: BLE001
             return challenge_error_response(exc)
 
@@ -228,7 +236,9 @@ class ContactEmailMakePrimaryView(APIView):
         try:
             updated = make_contact_email_primary(member=request.user, contact_email_id=pk)
         except AuthChallengeInvalid:
-            return Response({"detail": CONTACT_EMAIL_PRIMARY_FAILED}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"detail": CONTACT_EMAIL_PRIMARY_FAILED}, status=status.HTTP_400_BAD_REQUEST
+            )
         except Exception as exc:  # noqa: BLE001
             return challenge_error_response(exc)
 

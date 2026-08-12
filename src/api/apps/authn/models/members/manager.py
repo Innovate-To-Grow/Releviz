@@ -39,7 +39,11 @@ class MemberManager(BaseUserManager):
         if extra_fields.get("is_superuser") is not True:
             raise ValueError("Superuser must have is_superuser=True.")
 
-        extra_fields["first_name"] = self._normalize_required_name(extra_fields.get("first_name"), "first name")
-        extra_fields["last_name"] = self._normalize_required_name(extra_fields.get("last_name"), "last name")
+        extra_fields["first_name"] = self._normalize_required_name(
+            extra_fields.get("first_name"), "first name"
+        )
+        extra_fields["last_name"] = self._normalize_required_name(
+            extra_fields.get("last_name"), "last name"
+        )
 
         return self._create_user(password, **extra_fields)

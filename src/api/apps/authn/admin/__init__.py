@@ -28,5 +28,4 @@ __all__ = [
     "AdminInvitationAdmin",
     # Security
     "RSAKeypairAdmin",
-
 ]

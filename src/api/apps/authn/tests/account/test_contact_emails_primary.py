@@ -19,12 +19,16 @@ class FirstEmailPrimaryTests(APITestCase):
     # noinspection PyPep8Naming,PyAttributeOutsideInit
     def setUp(self):
         cache.clear()
-        self.member = Member.objects.create_user(password="StrongPass123!", is_active=True, first_name="Pat", last_name="Member")
+        self.member = Member.objects.create_user(
+            password="StrongPass123!", is_active=True, first_name="Pat", last_name="Member"
+        )
         self.client.force_authenticate(user=self.member)
 
     def test_first_email_is_assigned_primary_and_not_marked_verified(self, _mock_code, _mock_send):
         response = self.client.post(
-            CREATE_URL, {"email_address": "first@example.com", "email_type": "secondary"}, format="json"
+            CREATE_URL,
+            {"email_address": "first@example.com", "email_type": "secondary"},
+            format="json",
         )
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data["email_type"], "primary")
@@ -32,10 +36,15 @@ class FirstEmailPrimaryTests(APITestCase):
 
     def test_second_email_does_not_replace_existing_primary(self, _mock_code, _mock_send):
         ContactEmail.objects.create(
-            member=self.member, email_address="primary@example.com", email_type="primary", verified=True
+            member=self.member,
+            email_address="primary@example.com",
+            email_type="primary",
+            verified=True,
         )
         response = self.client.post(
-            CREATE_URL, {"email_address": "second@example.com", "email_type": "secondary"}, format="json"
+            CREATE_URL,
+            {"email_address": "second@example.com", "email_type": "secondary"},
+            format="json",
         )
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data["email_type"], "secondary")

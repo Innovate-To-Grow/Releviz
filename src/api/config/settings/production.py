@@ -63,6 +63,7 @@ CORS_ALLOWED_ORIGINS = split_csv("CORS_ALLOWED_ORIGINS")
 CSRF_TRUSTED_ORIGINS = split_csv("CSRF_TRUSTED_ORIGINS")
 CORS_ALLOW_CREDENTIALS = True
 AUTH_REFRESH_COOKIE_SECURE = True
+AUTH_REFRESH_COOKIE_SAMESITE = "None"
 TEMP_EVENT_COOKIE_SECURE = True
 # Candidate and production Amplify branches call the API from an explicitly
 # trusted cross-site origin. Origin validation still protects every

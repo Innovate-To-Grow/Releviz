@@ -18,14 +18,20 @@ class ContactEmailCrudTests(APITestCase):
             is_active=True,
         )
         ContactEmail.objects.create(
-            member=self.member, email_address="primary@example.com", email_type="primary", verified=True
+            member=self.member,
+            email_address="primary@example.com",
+            email_type="primary",
+            verified=True,
         )
         self.other_member = Member.objects.create_user(
             password="StrongPass123!",
             is_active=True,
         )
         ContactEmail.objects.create(
-            member=self.other_member, email_address="other@example.com", email_type="primary", verified=True
+            member=self.other_member,
+            email_address="other@example.com",
+            email_type="primary",
+            verified=True,
         )
         self.client.force_authenticate(user=self.member)
 
@@ -39,7 +45,11 @@ class ContactEmailCrudTests(APITestCase):
     def test_create_sends_verification_code(self, _mock_code, mock_send):
         response = self.client.post(
             "/authn/contact-emails/",
-            {"email_address": "secondary@example.com", "email_type": "secondary", "subscribe": True},
+            {
+                "email_address": "secondary@example.com",
+                "email_type": "secondary",
+                "subscribe": True,
+            },
             format="json",
         )
         self.assertEqual(response.status_code, 201)
@@ -299,7 +309,9 @@ class ContactEmailCrudTests(APITestCase):
 
     def test_update_other_to_secondary_when_none_exists(self, _mock_code, _mock_send):
         """Changing 'other' to 'secondary' should work when no secondary email exists."""
-        contact = ContactEmail.objects.create(member=self.member, email_address="extra@example.com", email_type="other")
+        contact = ContactEmail.objects.create(
+            member=self.member, email_address="extra@example.com", email_type="other"
+        )
         patch_resp = self.client.patch(
             f"/authn/contact-emails/{contact.pk}/",
             {"email_type": "secondary"},
@@ -345,7 +357,10 @@ class ContactEmailCrudTests(APITestCase):
     def test_make_primary_from_secondary_no_false_demotion(self, _mock_code, _mock_send):
         """Promoting the secondary itself should not trigger a spurious demotion to 'other'."""
         secondary = ContactEmail.objects.create(
-            member=self.member, email_address="sec@example.com", email_type="secondary", verified=True
+            member=self.member,
+            email_address="sec@example.com",
+            email_type="secondary",
+            verified=True,
         )
 
         make_resp = self.client.post(f"/authn/contact-emails/{secondary.pk}/make-primary/")
@@ -356,12 +371,17 @@ class ContactEmailCrudTests(APITestCase):
         self.assertEqual(old_primary.email_type, "secondary")
 
         # Only two emails — neither should be "other"
-        self.assertEqual(ContactEmail.objects.filter(member=self.member, email_type="other").count(), 0)
+        self.assertEqual(
+            ContactEmail.objects.filter(member=self.member, email_type="other").count(), 0
+        )
 
     def test_make_primary_cascades_demotion_when_secondary_exists(self, _mock_code, _mock_send):
         # Setup: primary + secondary + verified other
         ContactEmail.objects.create(
-            member=self.member, email_address="sec@example.com", email_type="secondary", verified=True
+            member=self.member,
+            email_address="sec@example.com",
+            email_type="secondary",
+            verified=True,
         )
         third = ContactEmail.objects.create(
             member=self.member, email_address="third@example.com", email_type="other", verified=True

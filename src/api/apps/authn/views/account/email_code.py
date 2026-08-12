@@ -43,7 +43,9 @@ class ChangePasswordCodeRequestView(APIView):
 
     # noinspection PyMethodMayBeStatic
     def post(self, request):
-        serializer = ChangePasswordCodeRequestSerializer(data=request.data, context={"request": request})
+        serializer = ChangePasswordCodeRequestSerializer(
+            data=request.data, context={"request": request}
+        )
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         try:
@@ -61,7 +63,9 @@ class ChangePasswordCodeVerifyView(APIView):
 
     # noinspection PyMethodMayBeStatic
     def post(self, request):
-        serializer = ChangePasswordCodeVerifySerializer(data=request.data, context={"request": request})
+        serializer = ChangePasswordCodeVerifySerializer(
+            data=request.data, context={"request": request}
+        )
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         payload = serializer.save()
@@ -74,13 +78,17 @@ class ChangePasswordCodeConfirmView(APIView):
 
     # noinspection PyMethodMayBeStatic
     def post(self, request):
-        serializer = ChangePasswordCodeConfirmSerializer(data=request.data, context={"request": request})
+        serializer = ChangePasswordCodeConfirmSerializer(
+            data=request.data, context={"request": request}
+        )
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         try:
             payload = serializer.save()
         except AuthChallengeInvalid:
-            return Response({"detail": VERIFICATION_LINK_INVALID}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"detail": VERIFICATION_LINK_INVALID}, status=status.HTTP_400_BAD_REQUEST
+            )
         return Response(payload, status=status.HTTP_200_OK)
 
 
@@ -90,7 +98,9 @@ class DeleteAccountCodeRequestView(APIView):
 
     # noinspection PyMethodMayBeStatic
     def post(self, request):
-        serializer = DeleteAccountCodeRequestSerializer(data=request.data, context={"request": request})
+        serializer = DeleteAccountCodeRequestSerializer(
+            data=request.data, context={"request": request}
+        )
         # Defensive guard: this serializer has no fields, so is_valid() is always True.
         if not serializer.is_valid():  # pragma: no cover
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -109,7 +119,9 @@ class DeleteAccountCodeVerifyView(APIView):
 
     # noinspection PyMethodMayBeStatic
     def post(self, request):
-        serializer = DeleteAccountCodeVerifySerializer(data=request.data, context={"request": request})
+        serializer = DeleteAccountCodeVerifySerializer(
+            data=request.data, context={"request": request}
+        )
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         payload = serializer.save()
@@ -122,11 +134,15 @@ class DeleteAccountCodeConfirmView(APIView):
 
     # noinspection PyMethodMayBeStatic
     def post(self, request):
-        serializer = DeleteAccountCodeConfirmSerializer(data=request.data, context={"request": request})
+        serializer = DeleteAccountCodeConfirmSerializer(
+            data=request.data, context={"request": request}
+        )
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         try:
             payload = serializer.save()
         except AuthChallengeInvalid:
-            return Response({"detail": VERIFICATION_LINK_INVALID}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"detail": VERIFICATION_LINK_INVALID}, status=status.HTTP_400_BAD_REQUEST
+            )
         return Response(payload, status=status.HTTP_200_OK)

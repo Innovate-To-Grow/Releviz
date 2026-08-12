@@ -49,7 +49,9 @@ class EnsureDefaultAdminCommandTests(TestCase):
         member = contact.member
 
         self.assertEqual(Member.objects.count(), 1)
-        self.assertEqual(ContactEmail.objects.filter(email_address="demo-admin@example.com").count(), 1)
+        self.assertEqual(
+            ContactEmail.objects.filter(email_address="demo-admin@example.com").count(), 1
+        )
         self.assertEqual(member.first_name, "Demo")
         self.assertEqual(member.last_name, "Admin")
         self.assertTrue(member.is_active)
@@ -123,7 +125,9 @@ class EnsureDefaultAdminCommandTests(TestCase):
 
         contact.refresh_from_db()
         member = contact.member
-        self.assertEqual(ContactEmail.objects.filter(email_address="subscribed@example.com").count(), 1)
+        self.assertEqual(
+            ContactEmail.objects.filter(email_address="subscribed@example.com").count(), 1
+        )
         self.assertTrue(member.is_active)
         self.assertTrue(member.is_staff)
         self.assertTrue(member.is_superuser)
@@ -213,7 +217,11 @@ class EnsureDefaultAdminCommandTests(TestCase):
 
     def test_unrelated_integrity_error_is_not_treated_as_a_concurrent_winner(self):
         with (
-            patch.object(ContactEmail.objects, "get_or_create", side_effect=IntegrityError("unrelated constraint")),
+            patch.object(
+                ContactEmail.objects,
+                "get_or_create",
+                side_effect=IntegrityError("unrelated constraint"),
+            ),
             patch.dict("os.environ", {"DJANGO_SUPERUSER_PASSWORD": "safe-demo-password"}),
             self.assertRaisesMessage(IntegrityError, "unrelated constraint"),
         ):

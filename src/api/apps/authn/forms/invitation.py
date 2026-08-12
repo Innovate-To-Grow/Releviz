@@ -41,16 +41,6 @@ class AcceptInvitationForm(forms.Form):
             }
         ),
     )
-    organization = forms.CharField(
-        max_length=255,
-        required=False,
-        widget=forms.TextInput(
-            attrs={
-                "class": "border bg-white font-medium min-w-full rounded-md text-font-default-light text-sm px-3 py-2 dark:bg-base-900 dark:text-font-default-dark",
-                "placeholder": "Organization (optional)",
-            }
-        ),
-    )
     password1 = forms.CharField(
         label="Password",
         strip=False,
@@ -96,7 +86,6 @@ class AcceptInvitationForm(forms.Form):
             candidate = Member(
                 first_name=cleaned.get("first_name", ""),
                 last_name=cleaned.get("last_name", ""),
-                organization=cleaned.get("organization", ""),
             )
             password_validation.validate_password(p1, user=candidate)
         return cleaned

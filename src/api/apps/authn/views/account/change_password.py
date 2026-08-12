@@ -54,7 +54,8 @@ class ChangePasswordView(APIView):
                 new_refresh = str(fresh)
             except TokenError:
                 logger.warning(
-                    "Unable to invalidate the prior session after account update for member %s", request.user.pk
+                    "Unable to invalidate the prior session after account update for member %s",
+                    request.user.pk,
                 )
 
         response_data = {"message": "Password changed successfully."}

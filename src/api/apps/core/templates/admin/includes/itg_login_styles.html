@@ -21,6 +21,12 @@
     .dark .login-box #login-form input[type="text"], .dark .login-box #login-form input[type="email"], .dark .login-box #login-form input[type="password"] { color: var(--md-sys-color-on-surface, #e8eaed); background-color: var(--md-sys-color-surface-container-high, #2b2b2f); border-color: var(--md-sys-color-outline-variant, #444746); }
     .dark .login-box #login-form input::placeholder { color: var(--md-sys-color-on-surface-variant, #c4c7c5); }
     .dark .login-box #login-form input:focus { border-color: var(--md-sys-color-primary, #a8c7fa); }
+    .login-box button.submit-row { display: inline-flex; align-items: center; justify-content: center; width: 100%; min-height: 44px; padding: 0.625rem 1rem; border: 1px solid transparent !important; border-radius: 12px !important; background-color: var(--md-sys-color-primary, #305f9d) !important; color: var(--md-sys-color-on-primary, #ffffff) !important; font-size: 0.875rem; font-weight: 600; line-height: 1.25rem; cursor: pointer; }
+    .login-box button.submit-row:hover { background-color: color-mix(in srgb, var(--md-sys-color-primary, #305f9d) 88%, #000) !important; }
+    .login-box button.submit-row:focus-visible { outline: 2px solid var(--md-sys-color-primary, #305f9d); outline-offset: 2px; }
+    .login-box button.submit-row:disabled { cursor: not-allowed; opacity: 0.6; }
+    .dark .login-box button.submit-row { background-color: var(--md-sys-color-primary, #a8c7fa) !important; color: var(--md-sys-color-on-primary, #202124) !important; }
+    .dark .login-box button.submit-row:hover { background-color: color-mix(in srgb, var(--md-sys-color-primary, #a8c7fa) 88%, #000) !important; }
     .code-input { font-size: 1.5rem !important; letter-spacing: 0.35em; text-align: center; font-weight: 600; }
     .login-message { padding: 0.75rem 0.875rem; border-radius: 16px; font-size: 0.8125rem; line-height: 1.4; margin-bottom: 1rem; }
     .login-message--info { background-color: var(--md-sys-color-primary-container, #d5e3ff); color: var(--md-sys-color-on-primary-container, #001b3c); border: 1px solid color-mix(in srgb, var(--md-sys-color-primary, #305f9d) 28%, transparent); }

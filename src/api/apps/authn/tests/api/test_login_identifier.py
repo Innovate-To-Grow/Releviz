@@ -20,7 +20,10 @@ class PasswordLoginIdentifierTests(APITestCase):
             password=PASSWORD, is_active=True, first_name="Eve", last_name="Email"
         )
         ContactEmail.objects.create(
-            member=self.email_member, email_address="eve@example.com", email_type="primary", verified=True
+            member=self.email_member,
+            email_address="eve@example.com",
+            email_type="primary",
+            verified=True,
         )
 
     def _login(self, identifier, password=PASSWORD, field="email"):

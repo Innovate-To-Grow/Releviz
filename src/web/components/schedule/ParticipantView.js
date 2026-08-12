@@ -7,7 +7,11 @@ import EventContext from "@/components/event/EventContext";
 import ScheduleChannelEditor from "@/components/schedule/ScheduleChannelEditor";
 import ScheduleGrid from "@/components/schedule/ScheduleGrid";
 import { useAuth } from "@/components/auth/AuthContext";
-import { fetchCurrentParticipant, joinEvent, updateParticipant } from "@/lib/api/participants";
+import {
+  fetchCurrentParticipant,
+  joinEvent,
+  updateParticipant,
+} from "@/lib/api/participants";
 import { fetchEventResults } from "@/lib/api/events";
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
 
@@ -16,6 +20,8 @@ const AVAILABILITY_CHOICES = [
   { label: "If needed", value: 0.5 },
   { label: "Available", value: 1 },
 ];
+
+const NOOP = () => {};
 
 function resultEnvelope(data) {
   if (!data) return { status: "unavailable", results: null };
@@ -30,7 +36,12 @@ function resultEnvelope(data) {
 }
 
 function ParticipantView() {
-  const { event, numSlots } = useContext(EventContext);
+  const {
+    event,
+    numSlots,
+    respondIntent = false,
+    consumeRespondIntent = NOOP,
+  } = useContext(EventContext);
   const { user, loading: authLoading, getToken } = useAuth();
   const mode = event?.mode || "inperson";
   const viewPermission = event?.participantViewPermission || "own_only";
@@ -63,10 +74,13 @@ function ParticipantView() {
   const autosavePendingRef = useRef(false);
   const autosaveRunnerRef = useRef(null);
   const draftSaveStateRef = useRef("idle");
+  const respondJoinAttemptedRef = useRef(false);
 
   const responseDeadlinePassed =
-    Boolean(event.responseDeadline) && Date.now() >= new Date(event.responseDeadline).getTime();
-  const responseChangesDisabled = event.status !== "open" || responseDeadlinePassed;
+    Boolean(event.responseDeadline) &&
+    Date.now() >= new Date(event.responseDeadline).getTime();
+  const responseChangesDisabled =
+    event.status !== "open" || responseDeadlinePassed;
 
   const applyParticipantResponse = useCallback((participant) => {
     const inperson = participant.availabilityInperson.map(Number);
@@ -95,7 +109,9 @@ function ParticipantView() {
     if (!draftDirtyRef.current) return true;
     if (responseChangesDisabled) {
       setDraftSaveState("failed");
-      setDraftSaveError("Responses are locked, so this draft could not be saved.");
+      setDraftSaveError(
+        "Responses are locked, so this draft could not be saved.",
+      );
       return false;
     }
 
@@ -122,7 +138,7 @@ function ParticipantView() {
             submitted: 0,
             expectedVersion: currentVersion,
           },
-          token
+          token,
         );
         participantVersionRef.current = participant.version;
         setSubmitted(false);
@@ -191,18 +207,65 @@ function ParticipantView() {
   }, []);
 
   useEffect(() => {
+    respondJoinAttemptedRef.current = false;
+  }, [event?.code]);
+
+  useEffect(() => {
     if (!event?.code || !user?.id) return;
     let active = true;
 
-    async function loadCurrentParticipant() {
+    async function joinFromIntent(token) {
+      if (!respondIntent || respondJoinAttemptedRef.current) return;
+      respondJoinAttemptedRef.current = true;
+
+      if (responseChangesDisabled) {
+        setJoinError("This event is no longer accepting responses.");
+        consumeRespondIntent();
+        return;
+      }
+
       try {
-        const token = await getToken();
+        const { participant } = await joinEvent(event.code, token);
+        if (!active) return;
+        applyParticipantResponse(participant);
+      } catch (err) {
+        if (!active) return;
+        setJoinError(
+          `We couldn't start your response: ${err.message || "Please try again."}`,
+        );
+      } finally {
+        if (active) consumeRespondIntent();
+      }
+    }
+
+    async function loadCurrentParticipant() {
+      let token;
+      try {
+        token = await getToken();
         const data = await fetchCurrentParticipant(event.code, token);
         if (!active) return;
-        if (data.participant) applyParticipantResponse(data.participant);
+        if (data.participant) {
+          applyParticipantResponse(data.participant);
+          if (respondIntent) consumeRespondIntent();
+          return;
+        }
       } catch {
         // A person who has not joined yet has no current participant response.
       }
+      if (!active || !respondIntent) return;
+      if (!token) {
+        try {
+          token = await getToken();
+        } catch (err) {
+          if (!active) return;
+          setJoinError(
+            `We couldn't start your response: ${err.message || "Please try again."}`,
+          );
+          consumeRespondIntent();
+          return;
+        }
+      }
+      await joinFromIntent(token);
     }
 
     const timer = setTimeout(loadCurrentParticipant, 0);
@@ -210,7 +273,16 @@ function ParticipantView() {
       active = false;
       clearTimeout(timer);
     };
-  }, [event?.code, user?.id, refreshKey, getToken, applyParticipantResponse]);
+  }, [
+    event?.code,
+    user?.id,
+    refreshKey,
+    getToken,
+    applyParticipantResponse,
+    respondIntent,
+    consumeRespondIntent,
+    responseChangesDisabled,
+  ]);
 
   const loadResults = useCallback(async () => {
     if (!event.code || viewPermission === "own_only") {
@@ -238,8 +310,10 @@ function ParticipantView() {
   }, [loadResults, resultSnapshot.status]);
 
   const results = resultSnapshot.results;
-  const avgInperson = results?.channels?.inperson?.unweighted ?? Array(numSlots).fill(0);
-  const avgVirtual = results?.channels?.virtual?.unweighted ?? Array(numSlots).fill(0);
+  const avgInperson =
+    results?.channels?.inperson?.unweighted ?? Array(numSlots).fill(0);
+  const avgVirtual =
+    results?.channels?.virtual?.unweighted ?? Array(numSlots).fill(0);
 
   const handleJoin = async () => {
     setJoinError("");
@@ -255,7 +329,8 @@ function ParticipantView() {
   };
 
   const makeCellPaintHandler = (channel) => (idx) => {
-    const scheduleRef = channel === "inperson" ? scheduleInpersonRef : scheduleVirtualRef;
+    const scheduleRef =
+      channel === "inperson" ? scheduleInpersonRef : scheduleVirtualRef;
     if (Number(scheduleRef.current[idx]) === availabilityValue) return;
     const next = [...scheduleRef.current];
     next[idx] = availabilityValue;
@@ -270,7 +345,9 @@ function ParticipantView() {
 
   const handleCopySchedule = (source, target) => {
     const sourceValues =
-      source === "inperson" ? scheduleInpersonRef.current : scheduleVirtualRef.current;
+      source === "inperson"
+        ? scheduleInpersonRef.current
+        : scheduleVirtualRef.current;
     const next = [...sourceValues];
     if (target === "inperson") {
       scheduleInpersonRef.current = next;
@@ -320,7 +397,7 @@ function ParticipantView() {
           submitted: 1,
           expectedVersion: participantVersionRef.current,
         },
-        token
+        token,
       );
       applyParticipantResponse(participant);
       setRefreshKey((key) => key + 1);
@@ -333,44 +410,20 @@ function ParticipantView() {
 
   if (authLoading || !user) {
     return (
-      <div
-        className="page-pad"
-        style={{
-          display: "flex",
-          justifyContent: "center",
-          alignItems: "center",
-          minHeight: "calc(100vh - 76px)",
-        }}
-      >
-        <p style={{ color: "var(--md-sys-color-on-surface-variant)" }}>Loading...</p>
+      <div className="page-pad participant-loading">
+        <p>Loading...</p>
       </div>
     );
   }
 
   if (!joined) {
     return (
-      <div
-        className="page-pad"
-        style={{
-          display: "flex",
-          justifyContent: "center",
-          alignItems: "center",
-          minHeight: "calc(100vh - 76px)",
-        }}
-      >
-        <div
-          className="md-card"
-          style={{
-            maxWidth: "760px",
-            width: "100%",
-            display: "flex",
-            flexDirection: "column",
-            gap: "24px",
-          }}
-        >
-          <div style={{ textAlign: "center" }}>
-            <h2 style={{ color: "var(--md-sys-color-primary)", margin: 0 }}>Join Event</h2>
-            <p style={{ color: "var(--md-sys-color-on-surface-variant)", margin: "8px 0 0 0" }}>
+      <div className="page-pad participant-join-shell">
+        <div className="participant-join-card">
+          <div className="participant-join-heading">
+            <p className="participant-eyebrow">Your invitation</p>
+            <h2>Join Event</h2>
+            <p>
               Join, mark the times that work for you, then submit your response.
             </p>
           </div>
@@ -378,7 +431,7 @@ function ParticipantView() {
           <EventDetailsGrid event={event} />
 
           {joinError && (
-            <p style={{ color: "var(--md-sys-color-error)", margin: 0, fontSize: "0.9rem" }}>
+            <p className="participant-error" role="alert">
               {joinError}
             </p>
           )}
@@ -392,39 +445,19 @@ function ParticipantView() {
   }
 
   return (
-    <div className="page-pad" style={{ maxWidth: "1400px", margin: "0 auto" }}>
-      <div
-        style={{
-          marginBottom: "32px",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          flexWrap: "wrap",
-          gap: "16px",
-        }}
-      >
+    <div className="page-pad participant-workspace">
+      <div className="participant-heading">
         <div>
-          <h2
-            style={{
-              color: "var(--md-sys-color-primary)",
-              margin: "0 0 4px 0",
-              fontSize: "1.8rem",
-            }}
-          >
+          <p className="participant-eyebrow">Your availability</p>
+          <h2 className="participant-title">
             Welcome, {participantName}
             {submitted && (
-              <span
-                style={{
-                  fontSize: "0.8rem",
-                  color: "var(--md-sys-color-on-surface-variant)",
-                  marginLeft: "12px",
-                }}
-              >
-                (submitted)
+              <span className="participant-submitted">
+                <span aria-hidden="true">✓</span> Submitted
               </span>
             )}
           </h2>
-          <p style={{ color: "var(--md-sys-color-on-surface-variant)", margin: 0 }}>
+          <p className="participant-heading-copy">
             Choose a status, then click or drag across the times below.
           </p>
         </div>
@@ -437,31 +470,28 @@ function ParticipantView() {
         </AppButton>
       </div>
 
-      <div className="two-pane">
+      <div className="participant-columns">
         <div
-          style={{
-            flex: viewPermission === "own_only" ? "1 1 100%" : "1 1 350px",
-            display: "flex",
-            flexDirection: "column",
-            gap: "24px",
-          }}
+          className={`participant-editor-pane${viewPermission === "own_only" ? " participant-editor-pane-wide" : ""}`}
         >
-          <div
-            className="md-card"
-            style={{ display: "flex", flexDirection: "column", gap: "24px" }}
+          <section
+            className="participant-editor"
+            aria-labelledby="participant-editor-title"
           >
-            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-              <p style={{ fontWeight: "500", margin: 0 }}>Mark times as</p>
+            <div className="participant-choice-block">
+              <h3 id="participant-editor-title">Mark times as</h3>
               <div
                 role="group"
                 aria-label="Availability status"
-                style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}
+                className="participant-choice-group"
               >
                 {AVAILABILITY_CHOICES.map((choice) => (
                   <AppButton
                     key={choice.value}
                     onClick={() => setAvailabilityValue(choice.value)}
-                    variant={availabilityValue === choice.value ? "filled" : "outlined"}
+                    variant={
+                      availabilityValue === choice.value ? "filled" : "outlined"
+                    }
                     aria-pressed={availabilityValue === choice.value}
                     disabled={responseChangesDisabled}
                   >
@@ -469,23 +499,21 @@ function ParticipantView() {
                   </AppButton>
                 ))}
               </div>
-              <p
-                style={{
-                  fontSize: "0.85rem",
-                  color: "var(--md-sys-color-on-surface-variant)",
-                  margin: 0,
-                }}
-              >
+              <p className="participant-hint">
                 Your changes save automatically.
               </p>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+              <div className="participant-actions">
                 <AppButton
                   onClick={() => fillAllAvailability(availabilityValue)}
                   variant="outlined"
                   disabled={responseChangesDisabled}
                 >
                   Apply{" "}
-                  {AVAILABILITY_CHOICES.find((choice) => choice.value === availabilityValue)?.label}{" "}
+                  {
+                    AVAILABILITY_CHOICES.find(
+                      (choice) => choice.value === availabilityValue,
+                    )?.label
+                  }{" "}
                   to all
                 </AppButton>
                 <AppButton
@@ -513,28 +541,15 @@ function ParticipantView() {
               <div
                 role={draftSaveState === "failed" ? "alert" : "status"}
                 aria-live={draftSaveState === "failed" ? "assertive" : "polite"}
-                style={{
-                  alignItems: "center",
-                  background:
-                    draftSaveState === "failed"
-                      ? "color-mix(in srgb, #b3261e 8%, transparent)"
-                      : "var(--md-sys-color-surface-container-low)",
-                  border: `1px solid ${
-                    draftSaveState === "failed" ? "#b3261e" : "var(--md-sys-color-surface-variant)"
-                  }`,
-                  borderRadius: "8px",
-                  display: "flex",
-                  flexWrap: "wrap",
-                  gap: "10px",
-                  justifyContent: "space-between",
-                  padding: "10px 12px",
-                }}
+                className={`participant-save-status${draftSaveState === "failed" ? " participant-save-status-failed" : ""}`}
               >
                 <span>
                   {draftSaveState === "saving" && "Saving draft…"}
-                  {draftSaveState === "saved" && "Draft saved. Submit when you are ready."}
+                  {draftSaveState === "saved" &&
+                    "Draft saved. Submit when you are ready."}
                   {draftSaveState === "submitted" && "Schedule submitted."}
-                  {draftSaveState === "failed" && (draftSaveError || "Draft autosave failed.")}
+                  {draftSaveState === "failed" &&
+                    (draftSaveError || "Draft autosave failed.")}
                 </span>
                 {draftSaveState === "failed" &&
                   (saveConflict ? (
@@ -545,7 +560,10 @@ function ParticipantView() {
                       Reload latest response
                     </AppButton>
                   ) : (
-                    <AppButton variant="outlined" onClick={() => void runAutosave()}>
+                    <AppButton
+                      variant="outlined"
+                      onClick={() => void runAutosave()}
+                    >
                       Retry save
                     </AppButton>
                   ))}
@@ -553,21 +571,18 @@ function ParticipantView() {
             )}
 
             {submitError && (
-              <p
-                role="alert"
-                style={{ color: "var(--md-sys-color-error)", margin: 0, fontSize: "0.9rem" }}
-              >
+              <p role="alert" className="participant-error">
                 {submitError}
               </p>
             )}
             {responseChangesDisabled && (
-              <p style={{ color: "var(--md-sys-color-error)", margin: 0, fontSize: "0.9rem" }}>
+              <p className="participant-error">
                 {event.status !== "open"
                   ? `Responses are locked while this event is ${event.status}.`
                   : "The response deadline has passed."}
               </p>
             )}
-            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <div className="participant-submit-row">
               <AppButton
                 onClick={handleSubmit}
                 disabled={isSubmitting || responseChangesDisabled}
@@ -580,81 +595,87 @@ function ParticipantView() {
                     : "Submit Availability"}
               </AppButton>
             </div>
-          </div>
+          </section>
         </div>
 
         {viewPermission !== "own_only" && (
-          <div
-            style={{
-              flex: "2 1 700px",
-              display: "flex",
-              flexDirection: "column",
-              gap: "24px",
-            }}
+          <aside
+            className="participant-results-pane"
+            aria-label="Group availability"
           >
             {resultSnapshot.status === "refreshing" && (
-              <div className="md-card" role="status">
+              <div className="participant-result-notice" role="status">
                 Group availability is updating for revision{" "}
-                {resultSnapshot.requestedRevision ?? event.resultsRevision ?? "latest"}.
-                {results ? " Showing the last completed snapshot meanwhile." : ""}
+                {resultSnapshot.requestedRevision ??
+                  event.resultsRevision ??
+                  "latest"}
+                .
+                {results
+                  ? " Showing the last completed snapshot meanwhile."
+                  : ""}
               </div>
             )}
             {resultSnapshot.status === "failed" && (
-              <div className="md-card" role="alert">
+              <div
+                className="participant-result-notice participant-result-notice-error"
+                role="alert"
+              >
                 Group availability could not be refreshed yet.
                 {results ? " Showing the last completed snapshot." : ""}
               </div>
             )}
             {results ? (
-              <div className="md-card" style={{ overflowX: "auto" }}>
-                <h3 style={{ margin: "0 0 8px 0", color: "var(--md-sys-color-on-surface)" }}>
-                  Group Availability
-                </h3>
-                <p
-                  style={{
-                    margin: "0 0 16px 0",
-                    color: "var(--md-sys-color-on-surface-variant)",
-                    fontSize: "0.9rem",
-                  }}
-                >
+              <section className="participant-results-card">
+                <h3>Group Availability</h3>
+                <p className="participant-results-summary">
                   Based on {results.countedResponseTotal} submitted response(s).{" "}
-                  {results.unansweredParticipantTotal} participant(s) are still unanswered.
+                  {results.unansweredParticipantTotal} participant(s) are still
+                  unanswered.
                 </p>
-                <div style={{ display: "flex", gap: "24px", flexWrap: "wrap" }}>
+                <div className="participant-results-grids">
                   {mode !== "virtual" && (
-                    <div style={{ flex: "1 1 300px", minWidth: 0 }}>
+                    <div className="participant-result-grid">
                       <ScheduleGrid
                         schedule={avgInperson}
                         slotGroups={event.slotGroups}
                         readOnly={true}
                         showValues={true}
-                        label={mode === "mixed" ? "In-Person Availability" : "Availability"}
+                        label={
+                          mode === "mixed"
+                            ? "In-Person Availability"
+                            : "Availability"
+                        }
                       />
                     </div>
                   )}
                   {mode !== "inperson" && (
-                    <div style={{ flex: "1 1 300px", minWidth: 0 }}>
+                    <div className="participant-result-grid">
                       <ScheduleGrid
                         schedule={avgVirtual}
                         slotGroups={event.slotGroups}
                         readOnly={true}
                         showValues={true}
-                        label={mode === "mixed" ? "Virtual Availability" : "Availability"}
+                        label={
+                          mode === "mixed"
+                            ? "Virtual Availability"
+                            : "Availability"
+                        }
                         virtual
                       />
                     </div>
                   )}
                 </div>
-              </div>
+              </section>
             ) : (
-              <div className="md-card">
-                <h3 style={{ margin: "0 0 8px 0" }}>Group Availability</h3>
-                <p style={{ margin: 0, color: "var(--md-sys-color-on-surface-variant)" }}>
-                  Submit a valid schedule before shared results become available.
+              <section className="participant-results-card participant-results-empty">
+                <h3>Group Availability</h3>
+                <p>
+                  Submit a valid schedule before shared results become
+                  available.
                 </p>
-              </div>
+              </section>
             )}
-          </div>
+          </aside>
         )}
       </div>
     </div>

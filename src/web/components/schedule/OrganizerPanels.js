@@ -6,37 +6,48 @@ import { MdClose, MdRefresh, MdSave } from "react-icons/md";
 import AppButton from "@/components/ui/AppButton";
 import ScheduleChannelEditor from "@/components/schedule/ScheduleChannelEditor";
 
-export function OrganizerHeader({ onRefresh }) {
+function formatStatus(status) {
+  const normalized = status || "draft";
+  return normalized
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+export function OrganizerHeader({ event, onRefresh }) {
+  const status = event?.status || "draft";
+  const statusClass = status.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+  const meetingDuration =
+    event?.meetingDurationMinutes || event?.slotMinutes || 30;
+
   return (
-    <div
-      style={{
-        marginBottom: "32px",
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-        flexWrap: "wrap",
-        gap: "16px",
-      }}
-    >
-      <div>
-        <h2
-          className="organizer-title"
-          style={{
-            color: "var(--md-sys-color-primary)",
-            margin: "0 0 4px 0",
-            fontSize: "1.8rem",
-          }}
-        >
-          Organizer Dashboard
-        </h2>
-        <p style={{ color: "var(--md-sys-color-on-surface-variant)", margin: 0 }}>
-          Manage participants and find the best meeting time.
-        </p>
+    <header className="organizer-heading">
+      <div className="organizer-heading__content">
+        <span className="organizer-eyebrow">Event workspace</span>
+        <h2 className="organizer-title">Organizer Dashboard</h2>
+        <p>Manage participants and find the best meeting time.</p>
+        <div className="organizer-heading__meta" aria-label="Event summary">
+          <span
+            className={`organizer-status organizer-status--${statusClass}`}
+            aria-label={`Event status: ${formatStatus(status)}`}
+          >
+            {formatStatus(status)}
+          </span>
+          <span className="organizer-heading__meta-item">
+            {event?.timezone || "UTC"} timezone
+          </span>
+          <span className="organizer-heading__meta-item">
+            {meetingDuration}-minute meeting
+          </span>
+        </div>
       </div>
-      <AppButton onClick={onRefresh} variant="outlined" icon={<MdRefresh />}>
-        Refresh
-      </AppButton>
-    </div>
+      <div className="organizer-heading__actions">
+        <AppButton onClick={onRefresh} variant="outlined" icon={<MdRefresh />}>
+          Refresh
+        </AppButton>
+      </div>
+    </header>
   );
 }
 
@@ -92,8 +103,8 @@ export function ManagedScheduleDrawer({
       if (keyboardEvent.key !== "Tab") return;
       const focusable = Array.from(
         drawerRef.current?.querySelectorAll(
-          'button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
-        ) || []
+          'button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+        ) || [],
       );
       if (!focusable.length) return;
       const first = focusable[0];
@@ -135,7 +146,9 @@ export function ManagedScheduleDrawer({
         <header className="managed-drawer__header">
           <div>
             <p>Temporary participant</p>
-            <h2 id="managed-drawer-title">Edit {participant.name}&apos;s schedule</h2>
+            <h2 id="managed-drawer-title">
+              Edit {participant.name}&apos;s schedule
+            </h2>
           </div>
           <button
             ref={closeButtonRef}
@@ -154,22 +167,24 @@ export function ManagedScheduleDrawer({
             <span>Event display name</span>
             <input
               value={participantName}
-              onChange={(changeEvent) => setParticipantName(changeEvent.target.value)}
+              onChange={(changeEvent) =>
+                setParticipantName(changeEvent.target.value)
+              }
               maxLength={100}
               disabled={!responsesOpen || saving}
             />
           </label>
           <p className="managed-drawer__hint">
-            You and this participant edit the same response. A version conflict will never be
-            silently overwritten.
+            You and this participant edit the same response. A version conflict
+            will never be silently overwritten.
           </p>
 
           <div>
             <p className="managed-drawer__hint">Mark times as</p>
             <div
+              className="managed-drawer__choices"
               role="group"
               aria-label="Availability status"
-              style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "8px" }}
             >
               {[
                 { label: "Busy", value: 0 },
@@ -178,9 +193,13 @@ export function ManagedScheduleDrawer({
               ].map((choice) => (
                 <AppButton
                   key={choice.value}
-                  variant={availabilityValue === choice.value ? "filled" : "outlined"}
+                  variant={
+                    availabilityValue === choice.value ? "filled" : "outlined"
+                  }
                   aria-pressed={availabilityValue === choice.value}
-                  disabled={!responsesOpen || saving || Boolean(conflictParticipant)}
+                  disabled={
+                    !responsesOpen || saving || Boolean(conflictParticipant)
+                  }
                   onClick={() => onAvailabilityValueChange(choice.value)}
                 >
                   {choice.label}
@@ -231,7 +250,10 @@ export function ManagedScheduleDrawer({
             icon={<MdSave />}
             onClick={onSaveDraft}
             disabled={
-              saving || !responsesOpen || Boolean(conflictParticipant) || !participantName.trim()
+              saving ||
+              !responsesOpen ||
+              Boolean(conflictParticipant) ||
+              !participantName.trim()
             }
           >
             {saving ? "Saving..." : "Save draft"}
@@ -240,7 +262,10 @@ export function ManagedScheduleDrawer({
             icon={<GoVerified />}
             onClick={onSubmit}
             disabled={
-              saving || !responsesOpen || Boolean(conflictParticipant) || !participantName.trim()
+              saving ||
+              !responsesOpen ||
+              Boolean(conflictParticipant) ||
+              !participantName.trim()
             }
           >
             {saving ? "Saving..." : "Submit on behalf"}

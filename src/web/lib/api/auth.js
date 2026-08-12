@@ -6,11 +6,30 @@ import {
   readAuthSession,
   writeAuthSession,
 } from "@/lib/api/config";
+import { normalizeAuthUser } from "@/lib/authUser";
+
+function writeProfileSession(session, user) {
+  if (!session) return;
+  const profileComplete = Boolean(
+    user?.firstName?.trim() && user?.lastName?.trim(),
+  );
+  writeAuthSession({
+    ...session,
+    user,
+    next_step: profileComplete ? "account" : "complete_profile",
+    requires_profile_completion: !profileComplete,
+  });
+}
 
 async function parseAuthResponse(res) {
   if (!res.ok) throw new Error(await extractError(res));
   const data = await res.json();
-  if (data.access) writeAuthSession(data);
+  if (data.access) {
+    writeAuthSession({
+      ...data,
+      user: normalizeAuthUser(data.user),
+    });
+  }
   return data;
 }
 
@@ -44,14 +63,14 @@ async function securePasswordPayload(payload, fields) {
       decodePublicKey(config.public_key),
       { name: "RSA-OAEP", hash: "SHA-256" },
       false,
-      ["encrypt"]
+      ["encrypt"],
     );
     const secured = { ...payload, key_id: config.key_id };
     for (const field of fields) {
       const ciphertext = await globalThis.crypto.subtle.encrypt(
         { name: "RSA-OAEP" },
         key,
-        new TextEncoder().encode(String(secured[field]))
+        new TextEncoder().encode(String(secured[field])),
       );
       secured[field] = encodeCiphertext(ciphertext);
     }
@@ -62,7 +81,9 @@ async function securePasswordPayload(payload, fields) {
 }
 
 export async function loginWithPassword({ email, password }) {
-  const payload = await securePasswordPayload({ email, password }, ["password"]);
+  const payload = await securePasswordPayload({ email, password }, [
+    "password",
+  ]);
   const res = await fetch(`${API_BASE}/authn/login/`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -93,11 +114,21 @@ export async function verifyLoginCode({ email, code }) {
   return parseAuthResponse(res);
 }
 
-export async function requestUnifiedEmailAuthCode({ email, source, event }) {
+export async function requestUnifiedEmailAuthCode({
+  email,
+  source,
+  event,
+  next,
+}) {
   const res = await fetch(`${API_BASE}/authn/email-auth/request-code/`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, ...(source ? { source } : {}), ...(event ? { event } : {}) }),
+    body: JSON.stringify({
+      email,
+      ...(source ? { source } : {}),
+      ...(event ? { event } : {}),
+      ...(next ? { next } : {}),
+    }),
     credentials: "include",
   });
   if (!res.ok) throw new Error(await extractError(res));
@@ -115,7 +146,10 @@ export async function verifyUnifiedEmailAuthCode({ email, code }) {
 }
 
 async function postRegistration(path, payload) {
-  const securedPayload = await securePasswordPayload(payload, ["password", "password_confirm"]);
+  const securedPayload = await securePasswordPayload(payload, [
+    "password",
+    "password_confirm",
+  ]);
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -133,7 +167,7 @@ export function startRegistration(payload) {
 export function startTemporaryUpgradeRegistration(code, payload) {
   return postRegistration(
     `/events/temp-access/upgrade-registration?code=${encodeURIComponent(code)}`,
-    payload
+    payload,
   );
 }
 
@@ -158,7 +192,12 @@ export async function requestPasswordResetCode({ email }) {
   return res.json();
 }
 
-export async function confirmPasswordReset({ email, code, password, passwordConfirm }) {
+export async function confirmPasswordReset({
+  email,
+  code,
+  password,
+  passwordConfirm,
+}) {
   const payload = await securePasswordPayload(
     {
       email,
@@ -166,7 +205,7 @@ export async function confirmPasswordReset({ email, code, password, passwordConf
       password,
       password_confirm: passwordConfirm,
     },
-    ["password", "password_confirm"]
+    ["password", "password_confirm"],
   );
   const res = await fetch(`${API_BASE}/authn/password-reset/confirm/`, {
     method: "POST",
@@ -184,22 +223,24 @@ export async function fetchProfile() {
   const res = await apiFetch(`${API_BASE}/authn/profile/`);
   if (!res.ok) throw new Error(await extractError(res));
   const data = await res.json();
+  const user = normalizeAuthUser(data.user || data);
   const session = readAuthSession();
-  if (session) writeAuthSession({ ...session, user: data.user });
-  return data.user;
+  writeProfileSession(session, user);
+  return user;
 }
 
 export async function updateProfileApi(payload) {
   const res = await apiFetch(`${API_BASE}/authn/profile/`, {
-    method: "PUT",
+    method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
   if (!res.ok) throw new Error(await extractError(res));
   const data = await res.json();
+  const user = normalizeAuthUser(data.user || data);
   const session = readAuthSession();
-  if (session) writeAuthSession({ ...session, user: data.user });
-  return data.user;
+  writeProfileSession(session, user);
+  return user;
 }
 
 export async function fetchAuthSessions() {
@@ -221,14 +262,18 @@ export async function revokeAuthSessions({ sessionId = "", all = false }) {
   return data;
 }
 
-export async function changePasswordApi({ currentPassword, newPassword, newPasswordConfirm }) {
+export async function changePasswordApi({
+  currentPassword,
+  newPassword,
+  newPasswordConfirm,
+}) {
   const payload = await securePasswordPayload(
     {
       current_password: currentPassword,
       new_password: newPassword,
       new_password_confirm: newPasswordConfirm,
     },
-    ["current_password", "new_password", "new_password_confirm"]
+    ["current_password", "new_password", "new_password_confirm"],
   );
   const res = await apiFetch(`${API_BASE}/authn/change-password/`, {
     method: "POST",
@@ -242,7 +287,9 @@ export async function changePasswordApi({ currentPassword, newPassword, newPassw
 }
 
 export async function deleteAccountApi({ password, confirmation }) {
-  const payload = await securePasswordPayload({ password, confirmation }, ["password"]);
+  const payload = await securePasswordPayload({ password, confirmation }, [
+    "password",
+  ]);
   const res = await apiFetch(`${API_BASE}/authn/delete-account/`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

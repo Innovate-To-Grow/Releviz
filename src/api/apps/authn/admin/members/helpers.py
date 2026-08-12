@@ -47,7 +47,9 @@ def deactivate_members(admin_obj, request, queryset):
 
 
 def build_excel_response(content, filename):
-    response = HttpResponse(content, content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    response = HttpResponse(
+        content, content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
     response["Content-Disposition"] = f'attachment; filename="{filename}"'
     return response
 
@@ -104,7 +106,9 @@ def import_excel_view(admin_obj, request):
             default_password=form.cleaned_data.get("set_password") or None,
             update_existing=update_existing,
             update_member_allowed=(
-                (lambda member: admin_obj.has_change_permission(request, member)) if update_existing else None
+                (lambda member: admin_obj.has_change_permission(request, member))
+                if update_existing
+                else None
             ),
         )
         context["result"] = result
@@ -116,7 +120,9 @@ def import_excel_view(admin_obj, request):
             )
             if result.errors:
                 message += f", {len(result.errors)} error(s)"
-            admin_obj.message_user(request, message, level="success" if not result.errors else "warning")
+            admin_obj.message_user(
+                request, message, level="success" if not result.errors else "warning"
+            )
 
     return render(request, "admin/authn/member/import_excel.html", context)
 

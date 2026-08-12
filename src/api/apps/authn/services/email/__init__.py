@@ -23,7 +23,11 @@ from .challenges import (
     verify_email_code_and_mint_token,
     verify_email_code_for_purposes,
 )
-from .send_email import send_admin_invitation_email, send_notification_email, send_verification_email
+from .send_email import (
+    send_admin_invitation_email,
+    send_notification_email,
+    send_verification_email,
+)
 
 __all__ = [
     "AuthChallengeDeliveryError",

@@ -43,7 +43,9 @@ class Command(BaseCommand):
                     email = None
                     continue
                 if ContactEmail.objects.filter(email_address__iexact=email).exists():
-                    self.stderr.write(f"Error: A contact email with address '{email}' already exists.")
+                    self.stderr.write(
+                        f"Error: A contact email with address '{email}' already exists."
+                    )
                     email = None
 
             while not password:
@@ -86,4 +88,6 @@ class Command(BaseCommand):
             subscribe=True,
         )
 
-        self.stdout.write(self.style.SUCCESS(f"Superuser created with email '{email}' (UUID: {member.id})."))
+        self.stdout.write(
+            self.style.SUCCESS(f"Superuser created with email '{email}' (UUID: {member.id}).")
+        )

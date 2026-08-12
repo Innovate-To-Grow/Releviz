@@ -63,8 +63,6 @@ class MemberChangeFormProfileImageTest(TestCase):
             "first_name": member.first_name,
             "middle_name": member.middle_name or "",
             "last_name": member.last_name,
-            "organization": member.organization or "",
-            "title": member.title or "",
             "profile_image": "",
             "is_active": "on" if member.is_active else "",
             "is_staff": "on" if member.is_staff else "",
@@ -80,7 +78,9 @@ class MemberChangeFormProfileImageTest(TestCase):
     def test_empty_profile_image_input_preserves_existing_image(self):
         member = self._member()
 
-        form = MemberChangeForm(data=self._form_data(member, first_name="Updated"), files={}, instance=member)
+        form = MemberChangeForm(
+            data=self._form_data(member, first_name="Updated"), files={}, instance=member
+        )
 
         self.assertTrue(form.is_valid(), form.errors)
         saved = form.save()

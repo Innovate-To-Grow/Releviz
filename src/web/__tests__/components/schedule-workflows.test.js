@@ -127,11 +127,11 @@ function participant(id, userId, name, overrides = {}) {
   };
 }
 
-function renderParticipant(event = baseEvent) {
+function renderParticipant(event = baseEvent, context = {}) {
   return render(
-    <EventContext.Provider value={{ event, numSlots: 2 }}>
+    <EventContext.Provider value={{ event, numSlots: 2, ...context }}>
       <ParticipantView />
-    </EventContext.Provider>
+    </EventContext.Provider>,
   );
 }
 
@@ -172,6 +172,82 @@ describe("participant workflow", () => {
       configurable: true,
       value: { randomUUID: jest.fn().mockReturnValue("request-key") },
     });
+  });
+
+  test("a response intent joins a new participant exactly once", async () => {
+    const consumeRespondIntent = jest.fn();
+
+    renderParticipant(baseEvent, {
+      respondIntent: true,
+      consumeRespondIntent,
+    });
+
+    expect(
+      await screen.findByText(`Welcome, ${member.displayName}`),
+    ).toBeInTheDocument();
+    expect(fetchCurrentParticipant).toHaveBeenCalledTimes(1);
+    expect(joinEvent).toHaveBeenCalledTimes(1);
+    expect(joinEvent).toHaveBeenCalledWith(baseEvent.code, "token");
+    expect(consumeRespondIntent).toHaveBeenCalledTimes(1);
+
+    await act(async () => {});
+    expect(joinEvent).toHaveBeenCalledTimes(1);
+  });
+
+  test("a response intent resumes an existing participant without joining again", async () => {
+    const consumeRespondIntent = jest.fn();
+    fetchCurrentParticipant.mockResolvedValue({
+      participant: participant("mine", member.id, member.displayName),
+      scheduleDataIncluded: true,
+    });
+
+    renderParticipant(baseEvent, {
+      respondIntent: true,
+      consumeRespondIntent,
+    });
+
+    expect(
+      await screen.findByText(`Welcome, ${member.displayName}`),
+    ).toBeInTheDocument();
+    expect(joinEvent).not.toHaveBeenCalled();
+    expect(consumeRespondIntent).toHaveBeenCalledTimes(1);
+  });
+
+  test("a failed automatic join is not retried and leaves the manual action available", async () => {
+    const consumeRespondIntent = jest.fn();
+    joinEvent.mockRejectedValue(new Error("Invitation required"));
+
+    renderParticipant(baseEvent, {
+      respondIntent: true,
+      consumeRespondIntent,
+    });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "We couldn't start your response: Invitation required",
+    );
+    expect(
+      screen.getByRole("button", { name: `Join as ${member.displayName}` }),
+    ).toBeInTheDocument();
+    expect(joinEvent).toHaveBeenCalledTimes(1);
+    expect(consumeRespondIntent).toHaveBeenCalledTimes(1);
+
+    await act(async () => {});
+    expect(joinEvent).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not auto-join when an event is no longer accepting responses", async () => {
+    const consumeRespondIntent = jest.fn();
+
+    renderParticipant(
+      { ...baseEvent, status: "closed" },
+      { respondIntent: true, consumeRespondIntent },
+    );
+
+    expect(
+      await screen.findByText("This event is no longer accepting responses."),
+    ).toBeInTheDocument();
+    expect(joinEvent).not.toHaveBeenCalled();
+    expect(consumeRespondIntent).toHaveBeenCalledTimes(1);
   });
 
   test("joins, autosaves changed availability, and submits a valid response", async () => {

@@ -16,6 +16,7 @@ from apps.authn.services.account.unsubscribe import (
     UnsubscribeLoginTokenInvalid,
     get_member_from_unsubscribe_token,
 )
+
 logger = logging.getLogger(__name__)
 
 

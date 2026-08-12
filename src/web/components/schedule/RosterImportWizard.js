@@ -36,12 +36,16 @@ function suggestedMapping(headers = [], current = {}) {
   const result = Object.fromEntries(
     Object.entries(current).map(([field, value]) => [
       field,
-      Number.isInteger(value) || /^\d+$/.test(String(value)) ? String(value) : "",
-    ])
+      Number.isInteger(value) || /^\d+$/.test(String(value))
+        ? String(value)
+        : "",
+    ]),
   );
   FIELD_OPTIONS.forEach(([field]) => {
     if (result[field] !== undefined && result[field] !== "") return;
-    const match = headers.findIndex((header) => aliases[field].includes(normalizedHeader(header)));
+    const match = headers.findIndex((header) =>
+      aliases[field].includes(normalizedHeader(header)),
+    );
     if (match >= 0) result[field] = String(match);
   });
   return result;
@@ -54,7 +58,7 @@ function importFrom(data) {
 function Pagination({ pagination, onPage }) {
   if (!pagination || pagination.pages <= 1) return null;
   return (
-    <div style={{ display: "flex", gap: "10px", alignItems: "center", justifyContent: "end" }}>
+    <div className="roster-import__pagination">
       <AppButton
         variant="outlined"
         disabled={pagination.page <= 1}
@@ -76,7 +80,12 @@ function Pagination({ pagination, onPage }) {
   );
 }
 
-export default function RosterImportWizard({ event, getToken, onCommitted, onClose }) {
+export default function RosterImportWizard({
+  event,
+  getToken,
+  onCommitted,
+  onClose,
+}) {
   const [sourceType, setSourceType] = useState("file");
   const [file, setFile] = useState(null);
   const [pastedText, setPastedText] = useState("");
@@ -84,7 +93,11 @@ export default function RosterImportWizard({ event, getToken, onCommitted, onClo
   const [worksheet, setWorksheet] = useState("");
   const [headerRow, setHeaderRow] = useState(1);
   const [mapping, setMapping] = useState({});
-  const [defaults, setDefaults] = useState({ group: "", weight: 1, included: true });
+  const [defaults, setDefaults] = useState({
+    group: "",
+    weight: 1,
+    included: true,
+  });
   const [rows, setRows] = useState([]);
   const [pagination, setPagination] = useState(null);
   const [phase, setPhase] = useState("source");
@@ -96,8 +109,10 @@ export default function RosterImportWizard({ event, getToken, onCommitted, onClo
   const idempotencyKey = useRef("");
 
   const selectedSheet = useMemo(
-    () => record?.worksheets?.find((candidate) => candidate.name === worksheet) || null,
-    [record, worksheet]
+    () =>
+      record?.worksheets?.find((candidate) => candidate.name === worksheet) ||
+      null,
+    [record, worksheet],
   );
   const headers =
     record?.selectedWorksheet === worksheet &&
@@ -106,19 +121,28 @@ export default function RosterImportWizard({ event, getToken, onCommitted, onClo
       ? record.headers
       : selectedSheet?.headers || [];
 
-  const loadRows = async (importRecord = record, page = 1, tokenOverride = null) => {
+  const loadRows = async (
+    importRecord = record,
+    page = 1,
+    tokenOverride = null,
+  ) => {
     if (!importRecord?.id) return;
     const token = tokenOverride || (await getToken());
     const data = await fetchRosterImportRows(
       event.code,
       importRecord.id,
       { page, pageSize: 50 },
-      token
+      token,
     );
     setRecord(importFrom(data) || importRecord);
     setRows(data.rows || []);
     setPagination(
-      data.pagination || { page, pageSize: 50, total: data.rows?.length || 0, pages: 1 }
+      data.pagination || {
+        page,
+        pageSize: 50,
+        total: data.rows?.length || 0,
+        pages: 1,
+      },
     );
   };
 
@@ -140,19 +164,24 @@ export default function RosterImportWizard({ event, getToken, onCommitted, onClo
       const data = await createRosterImport(
         event.code,
         sourceType === "file" ? { file } : { pastedText },
-        token
+        token,
       );
       const nextRecord = importFrom(data);
       setRecord(nextRecord);
       const nextWorksheet =
         nextRecord?.selectedWorksheet ||
-        (nextRecord?.worksheets?.length === 1 ? nextRecord.worksheets[0].name : "");
+        (nextRecord?.worksheets?.length === 1
+          ? nextRecord.worksheets[0].name
+          : "");
       const nextHeaders =
-        nextRecord?.worksheets?.find((candidate) => candidate.name === nextWorksheet)?.headers ||
-        [];
+        nextRecord?.worksheets?.find(
+          (candidate) => candidate.name === nextWorksheet,
+        )?.headers || [];
       setWorksheet(nextWorksheet);
       setHeaderRow(nextRecord?.headerRow || 1);
-      setMapping(suggestedMapping(nextHeaders, nextRecord?.columnMapping || {}));
+      setMapping(
+        suggestedMapping(nextHeaders, nextRecord?.columnMapping || {}),
+      );
       setDefaults({
         group: nextRecord?.defaults?.group || "",
         weight: nextRecord?.defaults?.weight ?? 1,
@@ -176,7 +205,8 @@ export default function RosterImportWizard({ event, getToken, onCommitted, onClo
     const defaultHeaderRow = Number(selectedSheet?.defaultHeaderRow || 1);
     const needsHeaderRefresh =
       Number(headerRow) !== defaultHeaderRow &&
-      (record?.selectedWorksheet !== worksheet || Number(record?.headerRow) !== Number(headerRow));
+      (record?.selectedWorksheet !== worksheet ||
+        Number(record?.headerRow) !== Number(headerRow));
     if (needsHeaderRefresh) {
       setBusy(true);
       try {
@@ -185,15 +215,20 @@ export default function RosterImportWizard({ event, getToken, onCommitted, onClo
           event.code,
           record.id,
           { worksheet, headerRow },
-          token
+          token,
         );
         const nextRecord = importFrom(data);
         const nextHeaders = nextRecord?.headers || [];
         setRecord(nextRecord);
         setMapping(suggestedMapping(nextHeaders));
-        setStatus("Columns loaded from the selected header row. Check the mapping, then preview.");
+        setStatus(
+          "Columns loaded from the selected header row. Check the mapping, then preview.",
+        );
       } catch (requestError) {
-        setError(requestError.message || "Unable to load columns from this header row.");
+        setError(
+          requestError.message ||
+            "Unable to load columns from this header row.",
+        );
       } finally {
         setBusy(false);
       }
@@ -210,14 +245,16 @@ export default function RosterImportWizard({ event, getToken, onCommitted, onClo
         event.code,
         record.id,
         { worksheet, headerRow, columnMapping: mapping, defaults },
-        token
+        token,
       );
       const nextRecord = importFrom(data);
       setRecord(nextRecord);
       await loadRows(nextRecord, 1, token);
       setPhase("preview");
     } catch (requestError) {
-      setError(requestError.message || "Unable to validate the roster mapping.");
+      setError(
+        requestError.message || "Unable to validate the roster mapping.",
+      );
     } finally {
       setBusy(false);
     }
@@ -232,7 +269,7 @@ export default function RosterImportWizard({ event, getToken, onCommitted, onClo
         event.code,
         record.id,
         { rowUpdates: [{ id: row.id, ...updates }] },
-        token
+        token,
       );
       setRecord(importFrom(data));
       await loadRows(importFrom(data), pagination?.page || 1, token);
@@ -262,11 +299,11 @@ export default function RosterImportWizard({ event, getToken, onCommitted, onClo
           idempotencyKey: idempotencyKey.current,
           ...(mode === "rebuild" ? { confirmationCode } : {}),
         },
-        token
+        token,
       );
       const receipt = data.receipt || {};
       setStatus(
-        `Imported ${receipt.importedCount ?? receipt.createdCount ?? 0} people: ${receipt.createdCount || 0} created and ${receipt.updatedCount || 0} updated.`
+        `Imported ${receipt.importedCount ?? receipt.createdCount ?? 0} people: ${receipt.createdCount || 0} created and ${receipt.updatedCount || 0} updated.`,
       );
       setPhase("complete");
       onCommitted?.(data);
@@ -294,27 +331,22 @@ export default function RosterImportWizard({ event, getToken, onCommitted, onClo
 
   return (
     <section
-      className="md-card"
+      className="md-card roster-import"
       aria-labelledby="roster-import-heading"
-      style={{ display: "grid", gap: "18px" }}
     >
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          gap: "16px",
-          alignItems: "start",
-        }}
-      >
-        <div>
-          <h3 id="roster-import-heading" style={{ margin: 0 }}>
+      <div className="roster-import__header">
+        <div className="roster-import__heading-copy">
+          <h3 id="roster-import-heading" className="roster-import__title">
             Import roster
           </h3>
-          <p style={{ margin: "5px 0 0", color: "var(--md-sys-color-on-surface-variant)" }}>
-            {phase === "source" && "Upload a CSV/XLSX file or paste cells from a spreadsheet."}
+          <p className="roster-import__subtitle">
+            {phase === "source" &&
+              "Upload a CSV/XLSX file or paste cells from a spreadsheet."}
             {phase === "mapping" && "Choose a worksheet and map its columns."}
-            {phase === "preview" && "Review validation issues before changing the event roster."}
-            {phase === "complete" && "The roster import was committed successfully."}
+            {phase === "preview" &&
+              "Review validation issues before changing the event roster."}
+            {phase === "complete" &&
+              "The roster import was committed successfully."}
           </p>
         </div>
         {onClose && (
@@ -326,7 +358,11 @@ export default function RosterImportWizard({ event, getToken, onCommitted, onClo
 
       {phase === "source" && (
         <>
-          <div role="tablist" aria-label="Roster source" style={{ display: "flex", gap: "8px" }}>
+          <div
+            className="roster-import__source-switcher"
+            role="tablist"
+            aria-label="Roster source"
+          >
             <AppButton
               variant={sourceType === "file" ? "filled" : "outlined"}
               onClick={() => setSourceType("file")}
@@ -341,7 +377,7 @@ export default function RosterImportWizard({ event, getToken, onCommitted, onClo
             </AppButton>
           </div>
           {sourceType === "file" ? (
-            <label style={{ display: "grid", gap: "8px" }}>
+            <label className="roster-import__field roster-import__source-field">
               <strong>CSV or XLSX file</strong>
               <input
                 aria-label="CSV or XLSX file"
@@ -350,22 +386,25 @@ export default function RosterImportWizard({ event, getToken, onCommitted, onClo
                 onChange={(event) => setFile(event.target.files?.[0] || null)}
               />
               <small>
-                Maximum compressed size: 5 MiB. Legacy .xls files and formulas are not supported.
+                Maximum compressed size: 5 MiB. Legacy .xls files and formulas
+                are not supported.
               </small>
             </label>
           ) : (
-            <label style={{ display: "grid", gap: "8px" }}>
+            <label className="roster-import__field roster-import__source-field">
               <strong>Rows copied from Google Sheets or Excel</strong>
               <textarea
                 aria-label="Pasted roster rows"
                 rows={9}
                 value={pastedText}
                 onChange={(event) => setPastedText(event.target.value)}
-                placeholder={"name\temail\tgroup\nAda\tada@example.com\tFaculty"}
+                placeholder={
+                  "name\temail\tgroup\nAda\tada@example.com\tFaculty"
+                }
               />
             </label>
           )}
-          <div>
+          <div className="roster-import__actions">
             <AppButton onClick={handleSource} disabled={busy}>
               {busy ? "Reading…" : "Continue to mapping"}
             </AppButton>
@@ -376,13 +415,15 @@ export default function RosterImportWizard({ event, getToken, onCommitted, onClo
       {phase === "mapping" && (
         <>
           {record?.worksheets?.length > 1 && (
-            <label style={{ display: "grid", gap: "6px" }}>
+            <label className="roster-import__field">
               <strong>Worksheet</strong>
               <select
                 value={worksheet}
                 onChange={(event) => {
                   const name = event.target.value;
-                  const selected = record.worksheets.find((item) => item.name === name);
+                  const selected = record.worksheets.find(
+                    (item) => item.name === name,
+                  );
                   const sheetHeaders = selected?.headers || [];
                   setWorksheet(name);
                   setHeaderRow(selected?.defaultHeaderRow || 1);
@@ -398,7 +439,7 @@ export default function RosterImportWizard({ event, getToken, onCommitted, onClo
               </select>
             </label>
           )}
-          <label style={{ display: "grid", gap: "6px", maxWidth: "220px" }}>
+          <label className="roster-import__field roster-import__header-row-field">
             <strong>Header row</strong>
             <input
               type="number"
@@ -410,20 +451,14 @@ export default function RosterImportWizard({ event, getToken, onCommitted, onClo
                 setMapping(
                   nextHeaderRow === Number(selectedSheet?.defaultHeaderRow || 1)
                     ? suggestedMapping(selectedSheet?.headers || [])
-                    : {}
+                    : {},
                 );
               }}
             />
           </label>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
-              gap: "12px",
-            }}
-          >
+          <div className="roster-import__field-grid roster-import__mapping-grid">
             {FIELD_OPTIONS.map(([field, label, mandatory]) => (
-              <label key={field} style={{ display: "grid", gap: "6px" }}>
+              <label key={field} className="roster-import__field">
                 <strong>
                   {label}
                   {mandatory ? " *" : ""}
@@ -437,7 +472,9 @@ export default function RosterImportWizard({ event, getToken, onCommitted, onClo
                     }))
                   }
                 >
-                  <option value="">{mandatory ? "Select a column" : "Use default"}</option>
+                  <option value="">
+                    {mandatory ? "Select a column" : "Use default"}
+                  </option>
                   {headers.map((header, index) => (
                     <option key={`${index}:${header}`} value={String(index)}>
                       {header || `Column ${index + 1}`}
@@ -447,23 +484,20 @@ export default function RosterImportWizard({ event, getToken, onCommitted, onClo
               </label>
             ))}
           </div>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
-              gap: "12px",
-            }}
-          >
-            <label style={{ display: "grid", gap: "6px" }}>
+          <div className="roster-import__field-grid roster-import__defaults-grid">
+            <label className="roster-import__field">
               <strong>Default group</strong>
               <input
                 value={defaults.group}
                 onChange={(event) =>
-                  setDefaults((current) => ({ ...current, group: event.target.value }))
+                  setDefaults((current) => ({
+                    ...current,
+                    group: event.target.value,
+                  }))
                 }
               />
             </label>
-            <label style={{ display: "grid", gap: "6px" }}>
+            <label className="roster-import__field">
               <strong>Default weight</strong>
               <input
                 type="number"
@@ -472,31 +506,33 @@ export default function RosterImportWizard({ event, getToken, onCommitted, onClo
                 step="0.05"
                 value={defaults.weight}
                 onChange={(event) =>
-                  setDefaults((current) => ({ ...current, weight: Number(event.target.value) }))
+                  setDefaults((current) => ({
+                    ...current,
+                    weight: Number(event.target.value),
+                  }))
                 }
               />
             </label>
-            <label
-              style={{
-                display: "flex",
-                gap: "8px",
-                alignItems: "center",
-                alignSelf: "end",
-                minHeight: "42px",
-              }}
-            >
+            <label className="roster-import__checkbox-field">
               <input
                 type="checkbox"
                 checked={Boolean(defaults.included)}
                 onChange={(event) =>
-                  setDefaults((current) => ({ ...current, included: event.target.checked }))
+                  setDefaults((current) => ({
+                    ...current,
+                    included: event.target.checked,
+                  }))
                 }
               />{" "}
               Include by default
             </label>
           </div>
-          <div style={{ display: "flex", gap: "10px" }}>
-            <AppButton variant="outlined" onClick={() => setPhase("source")} disabled={busy}>
+          <div className="roster-import__actions">
+            <AppButton
+              variant="outlined"
+              onClick={() => setPhase("source")}
+              disabled={busy}
+            >
               Back
             </AppButton>
             <AppButton onClick={handleConfigure} disabled={busy}>
@@ -508,7 +544,7 @@ export default function RosterImportWizard({ event, getToken, onCommitted, onClo
 
       {phase === "preview" && (
         <>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "12px" }}>
+          <div className="roster-import__summary">
             {[
               ["Selected", record?.summary?.selected],
               ["Valid", record?.summary?.valid],
@@ -520,8 +556,8 @@ export default function RosterImportWizard({ event, getToken, onCommitted, onClo
               </span>
             ))}
           </div>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <div className="roster-import__table-scroll">
+            <table className="roster-import__table">
               <thead>
                 <tr>
                   <th scope="col">Use</th>
@@ -543,7 +579,9 @@ export default function RosterImportWizard({ event, getToken, onCommitted, onClo
                         type="checkbox"
                         checked={Boolean(row.selected)}
                         disabled={busy}
-                        onChange={(event) => updateRow(row, { selected: event.target.checked })}
+                        onChange={(event) =>
+                          updateRow(row, { selected: event.target.checked })
+                        }
                       />
                     </td>
                     <td>{row.rowNumber}</td>
@@ -586,7 +624,8 @@ export default function RosterImportWizard({ event, getToken, onCommitted, onClo
                         step="0.05"
                         defaultValue={row.weight ?? 1}
                         onBlur={(event) =>
-                          Number(event.target.value) !== Number(row.weight ?? 1) &&
+                          Number(event.target.value) !==
+                            Number(row.weight ?? 1) &&
                           updateRow(row, { weight: Number(event.target.value) })
                         }
                       />
@@ -596,7 +635,9 @@ export default function RosterImportWizard({ event, getToken, onCommitted, onClo
                         aria-label={`Included for row ${row.rowNumber}`}
                         type="checkbox"
                         checked={Boolean(row.included)}
-                        onChange={(event) => updateRow(row, { included: event.target.checked })}
+                        onChange={(event) =>
+                          updateRow(row, { included: event.target.checked })
+                        }
                       />
                     </td>
                     <td>
@@ -616,17 +657,12 @@ export default function RosterImportWizard({ event, getToken, onCommitted, onClo
           <Pagination
             pagination={pagination}
             onPage={(page) =>
-              loadRows(record, page).catch((requestError) => setError(requestError.message))
+              loadRows(record, page).catch((requestError) =>
+                setError(requestError.message),
+              )
             }
           />
-          <fieldset
-            style={{
-              display: "grid",
-              gap: "10px",
-              border: "1px solid var(--md-sys-color-outline)",
-              borderRadius: "10px",
-            }}
-          >
+          <fieldset className="roster-import__mode-options">
             <legend>Import behavior</legend>
             <label>
               <input
@@ -646,10 +682,11 @@ export default function RosterImportWizard({ event, getToken, onCommitted, onClo
                 checked={mode === "rebuild"}
                 onChange={() => setMode("rebuild")}
               />{" "}
-              Rebuild the roster and clear schedules, invitations, and pending delivery
+              Rebuild the roster and clear schedules, invitations, and pending
+              delivery
             </label>
             {mode === "rebuild" && (
-              <label style={{ display: "grid", gap: "6px", maxWidth: "360px" }}>
+              <label className="roster-import__field roster-import__confirmation-field">
                 <strong>Type {event.code} to confirm</strong>
                 <input
                   aria-label="Rebuild confirmation code"
@@ -660,8 +697,12 @@ export default function RosterImportWizard({ event, getToken, onCommitted, onClo
               </label>
             )}
           </fieldset>
-          <div style={{ display: "flex", gap: "10px" }}>
-            <AppButton variant="outlined" onClick={() => setPhase("mapping")} disabled={busy}>
+          <div className="roster-import__actions">
+            <AppButton
+              variant="outlined"
+              onClick={() => setPhase("mapping")}
+              disabled={busy}
+            >
               Back
             </AppButton>
             <AppButton
@@ -672,27 +713,31 @@ export default function RosterImportWizard({ event, getToken, onCommitted, onClo
                 (mode === "rebuild" && confirmationCode !== event.code)
               }
             >
-              {busy ? "Importing…" : mode === "rebuild" ? "Rebuild roster" : "Merge roster"}
+              {busy
+                ? "Importing…"
+                : mode === "rebuild"
+                  ? "Rebuild roster"
+                  : "Merge roster"}
             </AppButton>
           </div>
         </>
       )}
 
       {phase === "complete" && (
-        <div>
-          <p role="status" style={{ color: "var(--md-sys-color-primary)" }}>
+        <div className="roster-import__complete">
+          <p role="status" className="roster-import__status">
             {status}
           </p>
           <AppButton onClick={onClose}>Return to roster</AppButton>
         </div>
       )}
       {phase !== "complete" && status && (
-        <p role="status" style={{ color: "var(--md-sys-color-primary)", margin: 0 }}>
+        <p role="status" className="roster-import__status">
           {status}
         </p>
       )}
       {error && (
-        <p role="alert" style={{ color: "var(--md-sys-color-error)", margin: 0 }}>
+        <p role="alert" className="roster-import__error">
           {error}
         </p>
       )}

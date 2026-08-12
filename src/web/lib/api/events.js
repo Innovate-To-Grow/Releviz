@@ -17,6 +17,52 @@ async function eventMutationError(res) {
   }
 }
 
+function payloadMessage(payload, status) {
+  if (typeof payload === "string" && payload.trim()) return payload.trim();
+  if (!payload || typeof payload !== "object") return `HTTP ${status}`;
+  if (typeof payload.error === "string" && payload.error) return payload.error;
+  if (typeof payload.detail === "string" && payload.detail)
+    return payload.detail;
+  const firstKey = Object.keys(payload)[0];
+  const firstValue = firstKey ? payload[firstKey] : null;
+  if (Array.isArray(firstValue)) return firstValue.join(" ");
+  if (typeof firstValue === "string" && firstValue) return firstValue;
+  return "Request failed";
+}
+
+async function invitationRequestError(res) {
+  let payload = null;
+  if (typeof res.text === "function") {
+    try {
+      const text = await res.text();
+      if (text) {
+        try {
+          payload = JSON.parse(text);
+        } catch {
+          payload = text;
+        }
+      }
+    } catch {
+      payload = null;
+    }
+  } else {
+    try {
+      payload = await res.json();
+    } catch {
+      payload = null;
+    }
+  }
+
+  const metadata = payload && typeof payload === "object" ? payload : null;
+  const error = new Error(payloadMessage(payload, res.status));
+  error.status = res.status;
+  error.errorCode = metadata?.errorCode ?? metadata?.code ?? null;
+  error.event = metadata?.event ?? null;
+  error.participant = metadata?.participant ?? null;
+  error.payload = payload;
+  return error;
+}
+
 export async function createEvent(
   {
     name,
@@ -37,7 +83,7 @@ export async function createEvent(
     meetingDurationMinutes = 30,
     status = "draft",
   },
-  token
+  token,
 ) {
   const res = await apiFetch(
     `${API_BASE}/events`,
@@ -64,14 +110,18 @@ export async function createEvent(
         status,
       }),
     },
-    token
+    token,
   );
   if (!res.ok) throw new Error(await extractError(res));
   return res.json();
 }
 
 export async function fetchEvent(code, token) {
-  const res = await apiFetch(`${API_BASE}/events?code=${encodeURIComponent(code)}`, {}, token);
+  const res = await apiFetch(
+    `${API_BASE}/events?code=${encodeURIComponent(code)}`,
+    {},
+    token,
+  );
   if (!res.ok) throw new Error(await extractError(res));
   return res.json();
 }
@@ -84,7 +134,7 @@ export async function updateEvent(code, payload, token) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     },
-    token
+    token,
   );
   if (!res.ok) throw await eventMutationError(res);
   return res.json();
@@ -98,7 +148,7 @@ export async function duplicateEvent(code, payload, token) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     },
-    token
+    token,
   );
   if (!res.ok) throw await eventMutationError(res);
   return res.json();
@@ -112,7 +162,7 @@ export async function deleteEvent(code, payload, token) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     },
-    token
+    token,
   );
   if (!res.ok) throw await eventMutationError(res);
   return res.json();
@@ -122,7 +172,7 @@ export async function fetchEventResults(code, token) {
   const res = await apiFetch(
     `${API_BASE}/events/results?code=${encodeURIComponent(code)}`,
     {},
-    token
+    token,
   );
   if (!res.ok) throw new Error(await extractError(res));
   return res.json();
@@ -136,7 +186,7 @@ export async function previewFinalMeeting(code, payload, token) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     },
-    token
+    token,
   );
   if (!res.ok) throw new Error(await extractError(res));
   return res.json();
@@ -150,7 +200,7 @@ export async function confirmFinalMeeting(code, payload, token) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     },
-    token
+    token,
   );
   if (!res.ok) throw new Error(await extractError(res));
   return res.json();
@@ -160,7 +210,7 @@ export async function fetchFinalization(code, token) {
   const res = await apiFetch(
     `${API_BASE}/events/finalization?code=${encodeURIComponent(code)}`,
     {},
-    token
+    token,
   );
   if (!res.ok) throw new Error(await extractError(res));
   return res.json();
@@ -169,7 +219,7 @@ export async function fetchFinalization(code, token) {
 export async function updateEventLifecycle(
   code,
   { status, expectedVersion, responseDeadline },
-  token
+  token,
 ) {
   const res = await apiFetch(
     `${API_BASE}/events/lifecycle?code=${encodeURIComponent(code)}`,
@@ -178,7 +228,7 @@ export async function updateEventLifecycle(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status, expectedVersion, responseDeadline }),
     },
-    token
+    token,
   );
   if (!res.ok) throw new Error(await extractError(res));
   return res.json();
@@ -188,7 +238,7 @@ export async function fetchInvitations(code, token) {
   const res = await apiFetch(
     `${API_BASE}/events/invitations?code=${encodeURIComponent(code)}`,
     {},
-    token
+    token,
   );
   if (!res.ok) throw new Error(await extractError(res));
   return res.json();
@@ -204,7 +254,11 @@ export async function markInvitationOpened(code, invitationToken) {
   return true;
 }
 
-export async function sendInvitations(code, { emails, message = "", idempotencyKey }, token) {
+export async function sendInvitations(
+  code,
+  { emails, message = "", idempotencyKey },
+  token,
+) {
   const res = await apiFetch(
     `${API_BASE}/events/invitations?code=${encodeURIComponent(code)}`,
     {
@@ -212,9 +266,9 @@ export async function sendInvitations(code, { emails, message = "", idempotencyK
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ emails, message, idempotencyKey }),
     },
-    token
+    token,
   );
-  if (!res.ok) throw new Error(await extractError(res));
+  if (!res.ok) throw await invitationRequestError(res);
   return res.json();
 }
 
@@ -226,13 +280,17 @@ export async function sendReminders(code, { idempotencyKey }, token) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ idempotencyKey }),
     },
-    token
+    token,
   );
   if (!res.ok) throw new Error(await extractError(res));
   return res.json();
 }
 
-export async function launchEvent(code, { expectedVersion, idempotencyKey, selection }, token) {
+export async function launchEvent(
+  code,
+  { expectedVersion, idempotencyKey, selection },
+  token,
+) {
   const res = await apiFetch(
     `${API_BASE}/events/launch?code=${encodeURIComponent(code)}`,
     {
@@ -240,7 +298,7 @@ export async function launchEvent(code, { expectedVersion, idempotencyKey, selec
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ expectedVersion, idempotencyKey, selection }),
     },
-    token
+    token,
   );
   if (!res.ok) throw await eventMutationError(res);
   return res.json();
@@ -250,7 +308,7 @@ export async function fetchDeliveryRequest(requestId, token) {
   const res = await apiFetch(
     `${API_BASE}/events/delivery-requests/${encodeURIComponent(requestId)}`,
     {},
-    token
+    token,
   );
   if (!res.ok) throw new Error(await extractError(res));
   return res.json();
@@ -259,8 +317,12 @@ export async function fetchDeliveryRequest(requestId, token) {
 export async function retryDeliveryRequest(requestId, token) {
   const res = await apiFetch(
     `${API_BASE}/events/delivery-requests/${encodeURIComponent(requestId)}`,
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
-    token
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    },
+    token,
   );
   if (!res.ok) throw new Error(await extractError(res));
   return res.json();
@@ -270,7 +332,7 @@ export async function downloadFinalCalendar(code, token) {
   const res = await apiFetch(
     `${API_BASE}/events/finalization/calendar?code=${encodeURIComponent(code)}`,
     {},
-    token
+    token,
   );
   if (!res.ok) throw new Error(await extractError(res));
   const disposition = res.headers?.get?.("content-disposition") || "";

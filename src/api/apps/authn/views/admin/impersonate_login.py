@@ -8,9 +8,10 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.authn.models import ImpersonationToken
+from apps.authn.security import enforce_cookie_request_origin
 from apps.authn.security.throttles import LoginRateThrottle
 
-from ..helpers import build_auth_success_payload
+from ..helpers import auth_success_response, build_auth_success_payload
 
 logger = logging.getLogger(__name__)
 
@@ -23,14 +24,19 @@ class ImpersonateLoginView(APIView):
 
     # noinspection PyMethodMayBeStatic
     def post(self, request):
+        enforce_cookie_request_origin(request)
         token = request.data.get("token", "").strip()
         if not token:
             return Response({"detail": "Token is required."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            impersonation = ImpersonationToken.objects.select_related("member", "created_by").get(token=token)
+            impersonation = ImpersonationToken.objects.select_related("member", "created_by").get(
+                token=token
+            )
         except ImpersonationToken.DoesNotExist:
-            return Response({"detail": "Invalid impersonation link."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"detail": "Invalid impersonation link."}, status=status.HTTP_400_BAD_REQUEST
+            )
 
         if not impersonation.try_mark_used():
             impersonation.refresh_from_db(fields=["is_used", "expires_at"])
@@ -49,5 +55,11 @@ class ImpersonateLoginView(APIView):
             impersonation.member.get_primary_email(),
         )
 
-        payload = build_auth_success_payload(impersonation.member, "Impersonation login successful.")
-        return Response(payload, status=status.HTTP_200_OK)
+        payload = build_auth_success_payload(
+            impersonation.member, "Impersonation login successful."
+        )
+        return auth_success_response(
+            payload,
+            request=request,
+            response_status=status.HTTP_200_OK,
+        )

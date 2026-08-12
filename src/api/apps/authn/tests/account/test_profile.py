@@ -25,7 +25,10 @@ class ProfileUpdateTests(APITestCase):
             is_active=True,
         )
         ContactEmail.objects.create(
-            member=self.member, email_address="prof@example.com", email_type="primary", verified=True
+            member=self.member,
+            email_address="prof@example.com",
+            email_type="primary",
+            verified=True,
         )
         self.client.force_authenticate(user=self.member)
 
@@ -38,7 +41,8 @@ class ProfileUpdateTests(APITestCase):
         self.assertIn("first_name", data)
         self.assertIn("last_name", data)
         self.assertIn("middle_name", data)
-        self.assertIn("organization", data)
+        self.assertNotIn("organization", data)
+        self.assertNotIn("title", data)
         self.assertIn("email_subscribe", data)
         self.assertIn("is_active", data)
         self.assertIn("date_joined", data)
@@ -65,15 +69,15 @@ class ProfileUpdateTests(APITestCase):
         self.member.refresh_from_db()
         self.assertEqual(self.member.last_name, "NewLast")
 
-    def test_patch_organization(self):
+    def test_patch_removed_profile_fields_are_ignored(self):
         response = self.client.patch(
             "/authn/profile/",
-            {"organization": "Acme Corp"},
+            {"organization": "Acme Corp", "title": "Engineer"},
             format="json",
         )
         self.assertEqual(response.status_code, 200)
-        self.member.refresh_from_db()
-        self.assertEqual(self.member.organization, "Acme Corp")
+        self.assertNotIn("organization", response.data)
+        self.assertNotIn("title", response.data)
 
     def test_patch_email_subscribe(self):
         # Start subscribed
@@ -93,14 +97,13 @@ class ProfileUpdateTests(APITestCase):
     def test_patch_multiple_fields(self):
         response = self.client.patch(
             "/authn/profile/",
-            {"first_name": "Multi", "last_name": "Update", "organization": "TestOrg"},
+            {"first_name": "Multi", "last_name": "Update"},
             format="json",
         )
         self.assertEqual(response.status_code, 200)
         self.member.refresh_from_db()
         self.assertEqual(self.member.first_name, "Multi")
         self.assertEqual(self.member.last_name, "Update")
-        self.assertEqual(self.member.organization, "TestOrg")
 
     def test_patch_ignores_readonly_fields(self):
         original_uuid = str(self.member.member_uuid)
@@ -140,26 +143,34 @@ class ProfileUpdateTests(APITestCase):
 
     def test_patch_profile_image_upload_success(self):
         upload = SimpleUploadedFile("avatar.png", _PNG_BYTES, content_type="image/png")
-        response = self.client.patch("/authn/profile/", {"profile_image": upload}, format="multipart")
+        response = self.client.patch(
+            "/authn/profile/", {"profile_image": upload}, format="multipart"
+        )
         self.assertEqual(response.status_code, 200)
         self.member.refresh_from_db()
         self.assertTrue(self.member.profile_image.startswith("data:image/png;base64,"))
 
     def test_patch_profile_image_too_large(self):
-        big = SimpleUploadedFile("big.png", b"\x89PNG\r\n\x1a\n" + b"0" * (6 * 1024 * 1024), content_type="image/png")
+        big = SimpleUploadedFile(
+            "big.png", b"\x89PNG\r\n\x1a\n" + b"0" * (6 * 1024 * 1024), content_type="image/png"
+        )
         response = self.client.patch("/authn/profile/", {"profile_image": big}, format="multipart")
         self.assertEqual(response.status_code, 400)
         self.assertIn("5 MB", response.data["detail"])
 
     def test_patch_profile_image_disallowed_content_type(self):
         upload = SimpleUploadedFile("doc.pdf", _PNG_BYTES, content_type="application/pdf")
-        response = self.client.patch("/authn/profile/", {"profile_image": upload}, format="multipart")
+        response = self.client.patch(
+            "/authn/profile/", {"profile_image": upload}, format="multipart"
+        )
         self.assertEqual(response.status_code, 400)
         self.assertIn("JPEG, PNG, GIF, or WebP", response.data["detail"])
 
     def test_patch_profile_image_bad_magic_bytes(self):
         upload = SimpleUploadedFile("fake.png", b"not-an-image-at-all", content_type="image/png")
-        response = self.client.patch("/authn/profile/", {"profile_image": upload}, format="multipart")
+        response = self.client.patch(
+            "/authn/profile/", {"profile_image": upload}, format="multipart"
+        )
         self.assertEqual(response.status_code, 400)
         self.assertIn("does not match", response.data["detail"])
 

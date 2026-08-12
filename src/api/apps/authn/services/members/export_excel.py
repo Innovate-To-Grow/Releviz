@@ -30,8 +30,6 @@ def export_members_to_excel(queryset) -> bytes:
         "first_name",
         "last_name",
         "middle_name",
-        "title",
-        "organization",
         "is_active",
         "is_staff",
         "date_joined",
@@ -46,8 +44,6 @@ def export_members_to_excel(queryset) -> bytes:
         ("First Name", 15),
         ("Last Name", 15),
         ("Middle Name", 15),
-        ("Title", 20),
-        ("Organization", 25),
         ("Active", 10),
         ("Staff", 10),
         ("When Started", 18),
@@ -85,7 +81,7 @@ def export_members_to_excel(queryset) -> bytes:
         primary = next((ce for ce in contact_emails if ce.email_type == "primary"), None)
         secondary = next((ce for ce in contact_emails if ce.email_type == "secondary"), None)
 
-        # Member-controlled text (name/title/org/email) is neutralized so
+        # Member-controlled text (name/email) is neutralized so
         # a value like ``=HYPERLINK(...)`` is not written as a live formula that
         # executes when a staffer opens the export (CSV/formula injection).
         ws.append(
@@ -94,8 +90,6 @@ def export_members_to_excel(queryset) -> bytes:
                 safe_sheet_value(member.first_name),
                 safe_sheet_value(member.last_name),
                 safe_sheet_value(member.middle_name or ""),
-                safe_sheet_value(member.title or ""),
-                safe_sheet_value(member.organization or ""),
                 "Yes" if member.is_active else "No",
                 "Yes" if member.is_staff else "No",
                 member.date_joined.strftime("%Y-%m-%d %H:%M") if member.date_joined else "",

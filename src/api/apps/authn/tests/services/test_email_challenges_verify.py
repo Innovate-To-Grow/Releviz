@@ -28,7 +28,9 @@ PURPOSE = EmailAuthChallenge.Purpose.LOGIN
 
 def _make_member():
     member = Member.objects.create_user(password="StrongPass123!", is_active=True)
-    ContactEmail.objects.create(member=member, email_address="user@example.com", email_type="primary", verified=True)
+    ContactEmail.objects.create(
+        member=member, email_address="user@example.com", email_type="primary", verified=True
+    )
     return member
 
 
@@ -147,10 +149,14 @@ class ConsumeVerificationTokenTests(TestCase):
     def test_valid_token_consumes_challenge(self):
         challenge = _make_challenge(self.member)
         token = mark_challenge_verified(challenge)
-        consumed = consume_verification_token(purpose=PURPOSE, verification_token=token, member=self.member)
+        consumed = consume_verification_token(
+            purpose=PURPOSE, verification_token=token, member=self.member
+        )
         self.assertEqual(consumed.status, EmailAuthChallenge.Status.CONSUMED)
         with self.assertRaises(AuthChallengeInvalid):
-            consume_verification_token(purpose=PURPOSE, verification_token=token, member=self.member)
+            consume_verification_token(
+                purpose=PURPOSE, verification_token=token, member=self.member
+            )
 
     def test_expired_verified_challenge_skipped(self):
         challenge = _make_challenge(self.member, status=EmailAuthChallenge.Status.VERIFIED)
@@ -159,7 +165,9 @@ class ConsumeVerificationTokenTests(TestCase):
         challenge.verified_at = timezone.now()
         challenge.save(update_fields=["verification_token_hash", "expires_at", "verified_at"])
         with self.assertRaises(AuthChallengeInvalid):
-            consume_verification_token(purpose=PURPOSE, verification_token="tok", member=self.member)
+            consume_verification_token(
+                purpose=PURPOSE, verification_token="tok", member=self.member
+            )
         challenge.refresh_from_db()
         self.assertEqual(challenge.status, EmailAuthChallenge.Status.EXPIRED)
 
@@ -167,7 +175,9 @@ class ConsumeVerificationTokenTests(TestCase):
         challenge = _make_challenge(self.member)
         mark_challenge_verified(challenge)
         with self.assertRaises(AuthChallengeInvalid):
-            consume_verification_token(purpose=PURPOSE, verification_token="wrong", member=self.member)
+            consume_verification_token(
+                purpose=PURPOSE, verification_token="wrong", member=self.member
+            )
 
     def test_challenge_can_only_transition_to_verified_once(self):
         challenge = _make_challenge(self.member)

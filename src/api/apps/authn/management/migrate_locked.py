@@ -22,7 +22,9 @@ class Command(MigrateCommand):
         parser.add_argument(
             "--lock-timeout-seconds",
             type=int,
-            default=int(os.environ.get("MIGRATION_LOCK_TIMEOUT_SECONDS", DEFAULT_LOCK_TIMEOUT_SECONDS)),
+            default=int(
+                os.environ.get("MIGRATION_LOCK_TIMEOUT_SECONDS", DEFAULT_LOCK_TIMEOUT_SECONDS)
+            ),
             help="Maximum time to wait for another migration task (default: 600 seconds).",
         )
 
@@ -47,7 +49,9 @@ class Command(MigrateCommand):
             if acquired:
                 break
             if time.monotonic() >= deadline:
-                raise CommandError(f"Timed out waiting {lock_timeout}s for the database migration lock.")
+                raise CommandError(
+                    f"Timed out waiting {lock_timeout}s for the database migration lock."
+                )
             time.sleep(min(LOCK_POLL_SECONDS, max(0, deadline - time.monotonic())))
 
         self.stdout.write("Acquired database migration lock.")

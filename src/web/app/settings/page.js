@@ -1,10 +1,69 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import AppButton from "@/components/ui/AppButton";
 import AppHeader from "@/components/ui/AppHeader";
 import { useAuth } from "@/components/auth/AuthContext";
-import { navigateTo } from "@/lib/navigation";
+import { navigateTo, safeNextPath } from "@/lib/navigation";
+
+function completionDestination(value) {
+  const destination = safeNextPath(value);
+  const url = new URL(destination, "https://releviz.invalid");
+  if (url.pathname === "/event" && url.searchParams.get("code")?.trim()) {
+    url.searchParams.set("respond", "1");
+  }
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+function isEventDestination(value) {
+  const destination = safeNextPath(value);
+  const url = new URL(destination, "https://releviz.invalid");
+  return (
+    url.pathname === "/event" && Boolean(url.searchParams.get("code")?.trim())
+  );
+}
+
+function subscribeToLocation(callback) {
+  window.addEventListener("popstate", callback);
+  return () => window.removeEventListener("popstate", callback);
+}
+
+function locationSearch() {
+  return window.location.search;
+}
+
+function serverLocationSearch() {
+  return null;
+}
+
+function describeSessionDevice(userAgent) {
+  const value = (userAgent || "").trim();
+  if (!value) return "Unknown browser";
+
+  const browser = value.match(/Edg\//)
+    ? "Edge"
+    : value.match(/(?:Chrome|CriOS)\//)
+      ? "Chrome"
+      : value.match(/Firefox\//)
+        ? "Firefox"
+        : value.match(/Safari\//)
+          ? "Safari"
+          : "";
+  const platform = value.match(/iPhone|iPad/)
+    ? "iOS"
+    : value.match(/Android/)
+      ? "Android"
+      : value.match(/Mac OS X/)
+        ? "macOS"
+        : value.match(/Windows/)
+          ? "Windows"
+          : value.match(/Linux/)
+            ? "Linux"
+            : "";
+
+  if (browser && platform) return `${browser} on ${platform}`;
+  return value.length > 80 ? "Browser session" : value;
+}
 
 export default function SettingsPage() {
   const {
@@ -33,23 +92,50 @@ export default function SettingsPage() {
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [deleteError, setDeleteError] = useState("");
   const [deleteAction, setDeleteAction] = useState(false);
-  const securityActionInProgress = Boolean(sessionAction) || passwordAction || deleteAction;
+  const search = useSyncExternalStore(
+    subscribeToLocation,
+    locationSearch,
+    serverLocationSearch,
+  );
+  const completionResolved = search !== null;
+  const completionQuery = new URLSearchParams(search || "");
+  const completionActive = completionQuery.get("complete_profile") === "1";
+  const completionNext = safeNextPath(completionQuery.get("next"));
+  const securityActionInProgress =
+    Boolean(sessionAction) || passwordAction || deleteAction;
 
   useEffect(() => {
-    if (!loading && !user && !securityActionInProgress) {
-      navigateTo("/login?next=/settings");
+    if (completionResolved && !loading && !user && !securityActionInProgress) {
+      const settingsDestination = completionActive
+        ? `/settings?complete_profile=1&next=${encodeURIComponent(completionNext)}`
+        : "/settings";
+      navigateTo(
+        completionActive
+          ? `/login?next=${encodeURIComponent(settingsDestination)}`
+          : "/login?next=/settings",
+      );
     }
-  }, [loading, securityActionInProgress, user]);
+  }, [
+    completionActive,
+    completionNext,
+    completionResolved,
+    loading,
+    securityActionInProgress,
+    user,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
-    if (loading || !user) return () => {};
+    if (!completionResolved || completionActive || loading || !user) {
+      return () => {};
+    }
     listSessions()
       .then((items) => {
         if (!cancelled) setSessions(items);
       })
       .catch((err) => {
-        if (!cancelled) setSessionError(err.message || "Unable to load active sessions.");
+        if (!cancelled)
+          setSessionError(err.message || "Unable to load active sessions.");
       })
       .finally(() => {
         if (!cancelled) setSessionsLoading(false);
@@ -57,13 +143,11 @@ export default function SettingsPage() {
     return () => {
       cancelled = true;
     };
-  }, [listSessions, loading, user]);
+  }, [completionActive, completionResolved, listSessions, loading, user]);
 
   const current = draft || {
     firstName: user?.firstName || "",
     lastName: user?.lastName || "",
-    organization: user?.organization || "",
-    title: user?.title || "",
   };
 
   const setField = (field, value) => {
@@ -77,11 +161,13 @@ export default function SettingsPage() {
       await updateProfile({
         first_name: current.firstName,
         last_name: current.lastName,
-        organization: current.organization,
-        title: current.title,
       });
       setDraft(null);
       setSaved(true);
+      if (completionActive) {
+        navigateTo(completionDestination(completionNext));
+        return;
+      }
       setTimeout(() => setSaved(false), 2000);
     } catch (err) {
       setError(err.message || "Unable to save profile.");
@@ -151,7 +237,7 @@ export default function SettingsPage() {
     }
   };
 
-  if (loading || !user) {
+  if (!completionResolved || loading || !user) {
     return (
       <div className="center-page">
         <p>Loading...</p>
@@ -159,216 +245,431 @@ export default function SettingsPage() {
     );
   }
 
+  const displayName =
+    [user.firstName, user.lastName].filter(Boolean).join(" ") || user.email;
+  const initials =
+    [user.firstName, user.lastName]
+      .filter(Boolean)
+      .map((part) => part.charAt(0))
+      .join("")
+      .slice(0, 2)
+      .toUpperCase() || user.email.charAt(0).toUpperCase();
+
+  if (completionActive) {
+    const continueToEvent = isEventDestination(completionNext);
+    return (
+      <>
+        <AppHeader pageTitle="Complete your profile" />
+        <main className="auth-page auth-page-with-header profile-onboarding-page">
+          <section
+            className="auth-panel profile-onboarding-panel"
+            aria-labelledby="profile-onboarding-heading"
+          >
+            <header className="profile-onboarding-heading">
+              <span className="settings-eyebrow">One last step</span>
+              <h1 id="profile-onboarding-heading">Complete your profile</h1>
+              <p>
+                Add your name so people can recognize your response in the
+                schedule.
+              </p>
+            </header>
+
+            <form className="profile-onboarding-form" onSubmit={handleSave}>
+              {error && (
+                <div className="auth-error" role="alert">
+                  {error}
+                </div>
+              )}
+
+              <label className="field-label profile-onboarding-email">
+                Email address
+                <input value={user.email} type="email" readOnly />
+              </label>
+
+              <div className="auth-grid">
+                <label className="field-label">
+                  First name
+                  <input
+                    value={current.firstName}
+                    onChange={(event) =>
+                      setField("firstName", event.target.value)
+                    }
+                    autoComplete="given-name"
+                    autoFocus
+                    required
+                  />
+                </label>
+                <label className="field-label">
+                  Last name
+                  <input
+                    value={current.lastName}
+                    onChange={(event) =>
+                      setField("lastName", event.target.value)
+                    }
+                    autoComplete="family-name"
+                    required
+                  />
+                </label>
+              </div>
+
+              <AppButton type="submit" fullWidth>
+                {continueToEvent ? "Continue to event" : "Continue"}
+              </AppButton>
+            </form>
+          </section>
+        </main>
+      </>
+    );
+  }
+
   return (
     <>
       <AppHeader pageTitle="Account settings" />
       <main className="page-pad settings-shell">
-        <div className="md-card settings-panel">
-          <div>
-            <h1>Account settings</h1>
-            <p className="settings-muted">{user.email}</p>
-          </div>
-          <form className="settings-section" onSubmit={handleSave}>
-            <h2>Profile</h2>
-            {error && (
-              <div className="auth-error" role="alert">
-                {error}
+        <div className="settings-panel">
+          <aside className="settings-sidebar">
+            <div className="settings-account-summary">
+              <span className="settings-avatar" aria-hidden="true">
+                {initials}
+              </span>
+              <div>
+                <span className="settings-eyebrow">Signed in as</span>
+                <strong>{displayName}</strong>
+                <span className="settings-sidebar-email">{user.email}</span>
               </div>
-            )}
-            <div className="auth-grid">
-              <label className="field-label">
-                First name
-                <input
-                  value={current.firstName}
-                  onChange={(event) => setField("firstName", event.target.value)}
-                  autoComplete="given-name"
-                />
-              </label>
-              <label className="field-label">
-                Last name
-                <input
-                  value={current.lastName}
-                  onChange={(event) => setField("lastName", event.target.value)}
-                  autoComplete="family-name"
-                />
-              </label>
             </div>
-            <label className="field-label">
-              Organization
-              <input
-                value={current.organization}
-                onChange={(event) => setField("organization", event.target.value)}
-                autoComplete="organization"
-              />
-            </label>
-            <label className="field-label">
-              Title
-              <input
-                value={current.title}
-                onChange={(event) => setField("title", event.target.value)}
-                autoComplete="organization-title"
-              />
-            </label>
-            <p className="field-help">User ID: {user.id}</p>
-            <div className="settings-actions">
-              {saved && (
-                <span className="settings-saved" role="status" aria-live="polite">
-                  Saved
-                </span>
-              )}
-              <AppButton type="submit">Save profile</AppButton>
+            <nav className="settings-nav" aria-label="Settings sections">
+              <a href="#profile">Profile</a>
+              <a href="#sessions">Active sessions</a>
+              <a href="#password">Password</a>
+              <a href="#danger-zone">Danger zone</a>
+            </nav>
+            <div className="settings-account-id">
+              <span>Account ID</span>
+              <code>{user.id}</code>
             </div>
-          </form>
+          </aside>
 
-          <section className="settings-section" aria-labelledby="active-sessions-heading">
-            <h2 id="active-sessions-heading">Active sessions</h2>
-            <p className="settings-muted">
-              Revoke devices you no longer recognize. Access is invalidated immediately.
-            </p>
-            {sessionError && (
-              <div className="auth-error" role="alert">
-                {sessionError}
+          <div className="settings-content">
+            <header className="settings-heading">
+              <div>
+                <span className="settings-eyebrow">Your account</span>
+                <h1>Account settings</h1>
               </div>
-            )}
-            {sessionsLoading ? (
-              <p>Loading active sessions...</p>
-            ) : sessions.length ? (
-              <ul className="session-list">
-                {sessions.map((session) => (
-                  <li key={session.id} className="session-card">
-                    <div className="session-description">
-                      <strong>{session.current ? "This device" : "Other device"}</strong>
-                      <div>{session.userAgent || "Unknown browser"}</div>
-                      <small>
-                        Last active {new Date(session.lastSeenAt).toLocaleString()}
-                        {session.ipAddress ? ` · ${session.ipAddress}` : ""}
-                      </small>
-                    </div>
-                    <AppButton
-                      variant="outlined"
-                      disabled={Boolean(sessionAction)}
-                      onClick={() => handleRevokeSession(session)}
+              <p>
+                Manage your profile, signed-in devices, and account security.
+              </p>
+            </header>
+
+            <form
+              id="profile"
+              className="settings-section"
+              onSubmit={handleSave}
+            >
+              <div className="settings-section-copy">
+                <span className="settings-section-index">01</span>
+                <h2>Profile</h2>
+                <p className="settings-muted">
+                  Update the name shown across your scheduling workspace.
+                </p>
+              </div>
+              <div className="settings-section-body">
+                {error && (
+                  <div className="auth-error" role="alert">
+                    {error}
+                  </div>
+                )}
+                <div className="auth-grid">
+                  <label className="field-label">
+                    First name
+                    <input
+                      value={current.firstName}
+                      onChange={(event) =>
+                        setField("firstName", event.target.value)
+                      }
+                      autoComplete="given-name"
+                      required
+                    />
+                  </label>
+                  <label className="field-label">
+                    Last name
+                    <input
+                      value={current.lastName}
+                      onChange={(event) =>
+                        setField("lastName", event.target.value)
+                      }
+                      autoComplete="family-name"
+                      required
+                    />
+                  </label>
+                </div>
+                <div className="settings-actions">
+                  {saved && (
+                    <span
+                      className="settings-saved"
+                      role="status"
+                      aria-live="polite"
                     >
-                      {sessionAction === session.id
-                        ? "Revoking..."
-                        : session.current
-                          ? "Sign out this device"
-                          : "Revoke"}
-                    </AppButton>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p>No active sessions were found.</p>
-            )}
-            <div className="settings-actions">
-              <AppButton
-                variant="outlined"
-                disabled={Boolean(sessionAction)}
-                onClick={handleLogoutAll}
-              >
-                {sessionAction === "all" ? "Signing out..." : "Sign out all devices"}
-              </AppButton>
-            </div>
-          </section>
-
-          <form className="settings-section" onSubmit={handleChangePassword}>
-            <h2>Change password</h2>
-            <p className="settings-muted">
-              Changing your password signs out every device, including this one.
-            </p>
-            {passwordError && (
-              <div className="auth-error" role="alert">
-                {passwordError}
+                      Saved
+                    </span>
+                  )}
+                  <AppButton type="submit">Save profile</AppButton>
+                </div>
               </div>
-            )}
-            <label className="field-label">
-              Current password
-              <input
-                value={currentPassword}
-                onChange={(event) => setCurrentPassword(event.target.value)}
-                type="password"
-                autoComplete="current-password"
-                required
-              />
-            </label>
-            <label className="field-label">
-              New password
-              <input
-                value={newPassword}
-                onChange={(event) => setNewPassword(event.target.value)}
-                type="password"
-                autoComplete="new-password"
-                minLength={8}
-                aria-describedby="settings-password-help"
-                required
-              />
-            </label>
-            <p id="settings-password-help" className="field-help">
-              Use at least 8 characters.
-            </p>
-            <label className="field-label">
-              Confirm new password
-              <input
-                value={newPasswordConfirm}
-                onChange={(event) => setNewPasswordConfirm(event.target.value)}
-                type="password"
-                autoComplete="new-password"
-                minLength={8}
-                required
-              />
-            </label>
-            <div className="settings-actions">
-              <AppButton type="submit" disabled={passwordAction}>
-                {passwordAction ? "Changing..." : "Change password"}
-              </AppButton>
-            </div>
-          </form>
+            </form>
 
-          <form className="settings-section settings-danger-zone" onSubmit={handleDeleteAccount}>
-            <h2>Delete account</h2>
-            <p>
-              This permanently removes your sign-in details and profile, revokes every session, and
-              anonymizes your identity in retained scheduling records. This cannot be undone.
-            </p>
-            {deleteError && (
-              <div className="auth-error" role="alert">
-                {deleteError}
+            <section
+              id="sessions"
+              className="settings-section"
+              aria-labelledby="active-sessions-heading"
+            >
+              <div className="settings-section-copy">
+                <span className="settings-section-index">02</span>
+                <h2 id="active-sessions-heading">Active sessions</h2>
+                <p className="settings-muted">
+                  Revoke devices you no longer recognize. Access is invalidated
+                  immediately.
+                </p>
               </div>
-            )}
-            <label className="field-label">
-              Current password
-              <input
-                value={deletePassword}
-                onChange={(event) => setDeletePassword(event.target.value)}
-                type="password"
-                autoComplete="current-password"
-                required
-              />
-            </label>
-            <label className="field-label">
-              Type DELETE to confirm
-              <input
-                value={deleteConfirmation}
-                onChange={(event) => setDeleteConfirmation(event.target.value)}
-                autoComplete="off"
-                spellCheck="false"
-                required
-              />
-            </label>
-            <div className="settings-actions">
-              <AppButton
-                type="submit"
-                variant="outlined"
-                className="app-btn-danger"
-                disabled={deleteAction || !deletePassword || deleteConfirmation !== "DELETE"}
-              >
-                {deleteAction ? "Deleting..." : "Delete account permanently"}
-              </AppButton>
-            </div>
-          </form>
+              <div className="settings-section-body">
+                {sessionError && (
+                  <div className="auth-error" role="alert">
+                    {sessionError}
+                  </div>
+                )}
+                {sessionsLoading ? (
+                  <p>Loading active sessions...</p>
+                ) : sessions.length ? (
+                  <ul className="session-list">
+                    {sessions.map((session) => (
+                      <li
+                        key={session.id}
+                        className={`session-card${session.current ? " session-card-current" : ""}`}
+                      >
+                        <div className="session-description">
+                          <div className="session-title">
+                            <strong>
+                              {session.current ? "This device" : "Other device"}
+                            </strong>
+                            {session.current && (
+                              <span className="session-current-badge">
+                                Current
+                              </span>
+                            )}
+                          </div>
+                          <div>{describeSessionDevice(session.userAgent)}</div>
+                          <small>
+                            Last active{" "}
+                            {new Date(session.lastSeenAt).toLocaleString()}
+                            {session.ipAddress ? ` · ${session.ipAddress}` : ""}
+                          </small>
+                        </div>
+                        <AppButton
+                          variant="outlined"
+                          disabled={Boolean(sessionAction)}
+                          onClick={() => handleRevokeSession(session)}
+                        >
+                          {sessionAction === session.id
+                            ? "Revoking..."
+                            : session.current
+                              ? "Sign out this device"
+                              : "Revoke"}
+                        </AppButton>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p>No active sessions were found.</p>
+                )}
+                <div className="settings-actions">
+                  <AppButton
+                    variant="outlined"
+                    disabled={Boolean(sessionAction)}
+                    onClick={handleLogoutAll}
+                  >
+                    {sessionAction === "all"
+                      ? "Signing out..."
+                      : "Sign out all devices"}
+                  </AppButton>
+                </div>
+              </div>
+            </section>
+
+            <form
+              id="password"
+              className="settings-disclosure"
+              onSubmit={handleChangePassword}
+            >
+              <details>
+                <summary className="settings-disclosure-summary">
+                  <div className="settings-section-copy">
+                    <span className="settings-section-index">03</span>
+                    <h2>Change password</h2>
+                    <p className="settings-muted">
+                      Changing your password signs out every device, including
+                      this one.
+                    </p>
+                  </div>
+                  <span className="settings-disclosure-toggle">
+                    <span className="settings-disclosure-label-closed">
+                      Show
+                    </span>
+                    <span className="settings-disclosure-label-open">Hide</span>
+                    <span
+                      className="settings-disclosure-chevron"
+                      aria-hidden="true"
+                    />
+                  </span>
+                </summary>
+                <div className="settings-disclosure-content">
+                  <div className="settings-section-body">
+                    {passwordError && (
+                      <div className="auth-error" role="alert">
+                        {passwordError}
+                      </div>
+                    )}
+                    <div className="settings-fields-grid settings-password-fields">
+                      <label className="field-label">
+                        Current password
+                        <input
+                          value={currentPassword}
+                          onChange={(event) =>
+                            setCurrentPassword(event.target.value)
+                          }
+                          type="password"
+                          autoComplete="current-password"
+                          required
+                        />
+                      </label>
+                      <label className="field-label">
+                        New password
+                        <input
+                          value={newPassword}
+                          onChange={(event) =>
+                            setNewPassword(event.target.value)
+                          }
+                          type="password"
+                          autoComplete="new-password"
+                          minLength={8}
+                          aria-describedby="settings-password-help"
+                          required
+                        />
+                      </label>
+                      <label className="field-label">
+                        Confirm new password
+                        <input
+                          value={newPasswordConfirm}
+                          onChange={(event) =>
+                            setNewPasswordConfirm(event.target.value)
+                          }
+                          type="password"
+                          autoComplete="new-password"
+                          minLength={8}
+                          required
+                        />
+                      </label>
+                    </div>
+                    <p id="settings-password-help" className="field-help">
+                      Use at least 8 characters.
+                    </p>
+                    <div className="settings-actions">
+                      <AppButton type="submit" disabled={passwordAction}>
+                        {passwordAction ? "Changing..." : "Change password"}
+                      </AppButton>
+                    </div>
+                  </div>
+                </div>
+              </details>
+            </form>
+
+            <form
+              id="danger-zone"
+              className="settings-disclosure settings-danger-zone"
+              onSubmit={handleDeleteAccount}
+            >
+              <details>
+                <summary className="settings-disclosure-summary">
+                  <div className="settings-section-copy">
+                    <span className="settings-section-index">04</span>
+                    <h2>Delete account</h2>
+                    <p>
+                      Permanently remove your sign-in details and profile. This
+                      cannot be undone.
+                    </p>
+                  </div>
+                  <span className="settings-disclosure-toggle">
+                    <span className="settings-disclosure-label-closed">
+                      Show
+                    </span>
+                    <span className="settings-disclosure-label-open">Hide</span>
+                    <span
+                      className="settings-disclosure-chevron"
+                      aria-hidden="true"
+                    />
+                  </span>
+                </summary>
+                <div className="settings-disclosure-content">
+                  <div className="settings-section-body">
+                    <p className="settings-danger-note">
+                      Every session will be revoked and your identity will be
+                      anonymized in retained scheduling records.
+                    </p>
+                    {deleteError && (
+                      <div className="auth-error" role="alert">
+                        {deleteError}
+                      </div>
+                    )}
+                    <div className="settings-fields-grid">
+                      <label className="field-label">
+                        Current password
+                        <input
+                          value={deletePassword}
+                          onChange={(event) =>
+                            setDeletePassword(event.target.value)
+                          }
+                          type="password"
+                          autoComplete="current-password"
+                          required
+                        />
+                      </label>
+                      <label className="field-label">
+                        Type DELETE to confirm
+                        <input
+                          value={deleteConfirmation}
+                          onChange={(event) =>
+                            setDeleteConfirmation(event.target.value)
+                          }
+                          autoComplete="off"
+                          spellCheck="false"
+                          required
+                        />
+                      </label>
+                    </div>
+                    <div className="settings-actions">
+                      <AppButton
+                        type="submit"
+                        variant="outlined"
+                        className="app-btn-danger"
+                        disabled={
+                          deleteAction ||
+                          !deletePassword ||
+                          deleteConfirmation !== "DELETE"
+                        }
+                      >
+                        {deleteAction
+                          ? "Deleting..."
+                          : "Delete account permanently"}
+                      </AppButton>
+                    </div>
+                  </div>
+                </div>
+              </details>
+            </form>
+          </div>
         </div>
       </main>
     </>
   );
 }
+
+export { completionDestination, isEventDestination };

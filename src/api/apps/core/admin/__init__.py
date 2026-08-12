@@ -25,6 +25,7 @@ from .registrations import (  # noqa: F401 - register admin
     LogEntryAdmin,
     SiteMaintenanceControlAdmin,
 )
+from .service_credentials import AWSCredentialConfigAdmin  # noqa: F401 - register admin
 
 __all__ = [
     # Base classes
@@ -35,6 +36,7 @@ __all__ = [
     "TimestampedAdminMixin",
     "DataExportMixin",
     "ExcelExportMixin",
+    "AWSCredentialConfigAdmin",
     # Utilities
     "admin_url",
     "truncate_text",

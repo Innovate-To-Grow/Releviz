@@ -43,7 +43,10 @@ class AdminPasswordLoginTest(TestCase):
             is_active=True,
         )
         ContactEmail.objects.create(
-            member=self.staff, email_address="admin@example.com", email_type="primary", verified=True
+            member=self.staff,
+            email_address="admin@example.com",
+            email_type="primary",
+            verified=True,
         )
         self.non_staff = Member.objects.create_user(
             password="testpass123",
@@ -51,7 +54,10 @@ class AdminPasswordLoginTest(TestCase):
             is_active=True,
         )
         ContactEmail.objects.create(
-            member=self.non_staff, email_address="regular@example.com", email_type="primary", verified=True
+            member=self.non_staff,
+            email_address="regular@example.com",
+            email_type="primary",
+            verified=True,
         )
 
     # noinspection PyPep8Naming,PyMethodMayBeStatic
@@ -87,8 +93,7 @@ class AdminPasswordLoginTest(TestCase):
     def test_password_login_cookie_can_render_next_login_summary(self):
         self.staff.first_name = "Ada"
         self.staff.last_name = "Lovelace"
-        self.staff.organization = "Analytical Engines"
-        self.staff.save(update_fields=["first_name", "last_name", "organization"])
+        self.staff.save(update_fields=["first_name", "last_name"])
         resp = self.client.post(
             LOGIN_URL, {"mode": "password", "email": "admin@example.com", "password": "testpass123"}
         )
@@ -101,7 +106,6 @@ class AdminPasswordLoginTest(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "Last signed in")
         self.assertContains(resp, "Ada Lovelace")
-        self.assertContains(resp, "Analytical Engines")
         self.assertContains(resp, 'name="password"')
         self.assertContains(resp, "Send verification code instead")
         self.assertNotContains(resp, "admin@example.com")
@@ -115,7 +119,9 @@ class AdminPasswordLoginTest(TestCase):
         self.client.logout()
         self.client.cookies[LAST_ADMIN_LOGIN_COOKIE_NAME] = cookie_value
 
-        resp = self.client.post(LOGIN_URL, {"mode": "password", "remembered_admin": "1", "password": "testpass123"})
+        resp = self.client.post(
+            LOGIN_URL, {"mode": "password", "remembered_admin": "1", "password": "testpass123"}
+        )
 
         self.assertRedirects(resp, "/admin/", fetch_redirect_response=False)
 
@@ -127,7 +133,9 @@ class AdminPasswordLoginTest(TestCase):
         self.client.logout()
         self.client.cookies[LAST_ADMIN_LOGIN_COOKIE_NAME] = cookie_value
 
-        resp = self.client.post(LOGIN_URL, {"mode": "password", "remembered_admin": "1", "password": "wrongpass"})
+        resp = self.client.post(
+            LOGIN_URL, {"mode": "password", "remembered_admin": "1", "password": "wrongpass"}
+        )
 
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "Invalid password", count=1)
@@ -135,20 +143,24 @@ class AdminPasswordLoginTest(TestCase):
         self.assertNotContains(resp, 'name="email"')
 
     def test_post_password_wrong_password_shows_error(self):
-        resp = self.client.post(LOGIN_URL, {"mode": "password", "email": "admin@example.com", "password": "wrongpass"})
+        resp = self.client.post(
+            LOGIN_URL, {"mode": "password", "email": "admin@example.com", "password": "wrongpass"}
+        )
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "Invalid email or password", count=1)
 
     def test_post_password_unknown_email_shows_error(self):
         resp = self.client.post(
-            LOGIN_URL, {"mode": "password", "email": "unknown@example.com", "password": "testpass123"}
+            LOGIN_URL,
+            {"mode": "password", "email": "unknown@example.com", "password": "testpass123"},
         )
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "Invalid email or password")
 
     def test_post_password_non_staff_shows_error(self):
         resp = self.client.post(
-            LOGIN_URL, {"mode": "password", "email": "regular@example.com", "password": "testpass123"}
+            LOGIN_URL,
+            {"mode": "password", "email": "regular@example.com", "password": "testpass123"},
         )
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "Invalid email or password")
@@ -164,7 +176,9 @@ class AdminPasswordLoginTest(TestCase):
 
     def test_password_next_redirect(self):
         url = LOGIN_URL + "?next=/admin/cms/cmspage/"
-        resp = self.client.post(url, {"mode": "password", "email": "admin@example.com", "password": "testpass123"})
+        resp = self.client.post(
+            url, {"mode": "password", "email": "admin@example.com", "password": "testpass123"}
+        )
         self.assertRedirects(resp, "/admin/cms/cmspage/", fetch_redirect_response=False)
 
     @patch("apps.authn.views.admin.login.issue_email_challenge")
@@ -190,9 +204,14 @@ class AdminPasswordLoginTest(TestCase):
 
     def test_password_rate_limit(self):
         for _ in range(10):
-            self.client.post(LOGIN_URL, {"mode": "password", "email": "admin@example.com", "password": "wrongpass"})
+            self.client.post(
+                LOGIN_URL,
+                {"mode": "password", "email": "admin@example.com", "password": "wrongpass"},
+            )
 
         # 11th attempt should be throttled
-        resp = self.client.post(LOGIN_URL, {"mode": "password", "email": "admin@example.com", "password": "wrongpass"})
+        resp = self.client.post(
+            LOGIN_URL, {"mode": "password", "email": "admin@example.com", "password": "wrongpass"}
+        )
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "Too many login attempts")

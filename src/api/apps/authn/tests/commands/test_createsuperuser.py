@@ -45,9 +45,15 @@ class CreateSuperuserCommandTests(TestCase):
 
 class CreateSuperuserInteractiveTests(TestCase):
     def test_noninteractive_rejects_duplicate_email(self):
-        member = Member.objects.create_user(password="StrongPass123!", first_name="A", last_name="B")
-        ContactEmail.objects.create(member=member, email_address="dup@example.com", email_type="primary", verified=True)
-        with self.assertRaisesMessage(CommandError, "A contact email with address 'dup@example.com' already exists."):
+        member = Member.objects.create_user(
+            password="StrongPass123!", first_name="A", last_name="B"
+        )
+        ContactEmail.objects.create(
+            member=member, email_address="dup@example.com", email_type="primary", verified=True
+        )
+        with self.assertRaisesMessage(
+            CommandError, "A contact email with address 'dup@example.com' already exists."
+        ):
             call_command(
                 Command(),
                 interactive=False,
@@ -76,7 +82,9 @@ class CreateSuperuserInteractiveTests(TestCase):
     @patch("getpass.getpass")
     @patch("builtins.input")
     def test_interactive_reprompts_on_blank_email_then_duplicate(self, mock_input, mock_getpass):
-        existing = Member.objects.create_user(password="StrongPass123!", first_name="A", last_name="B")
+        existing = Member.objects.create_user(
+            password="StrongPass123!", first_name="A", last_name="B"
+        )
         ContactEmail.objects.create(
             member=existing, email_address="taken@example.com", email_type="primary", verified=True
         )
@@ -95,7 +103,9 @@ class CreateSuperuserInteractiveTests(TestCase):
 
     @patch("getpass.getpass")
     @patch("builtins.input")
-    def test_interactive_reprompts_on_password_mismatch_and_blank_names(self, mock_input, mock_getpass):
+    def test_interactive_reprompts_on_password_mismatch_and_blank_names(
+        self, mock_input, mock_getpass
+    ):
         # email, then blank first name (reprompt), valid first, blank last (reprompt), valid last
         mock_input.side_effect = ["mismatch@example.com", "", "Ada", "", "Lovelace"]
         # mismatch then match

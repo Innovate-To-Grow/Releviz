@@ -1,12 +1,14 @@
 """Views for public email-code auth flows."""
 
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.authn.models.security import EmailAuthChallenge
+from apps.authn.security import enforce_cookie_request_origin
 from apps.authn.security.throttles import (
     EmailCodeRequestThrottle,
     EmailCodeVerifyThrottle,
@@ -24,7 +26,7 @@ from apps.authn.serializers import (
 )
 from apps.authn.services import AuthChallengeInvalid
 
-from ..helpers import build_auth_success_payload
+from ..helpers import auth_success_response, build_auth_success_payload
 from .email_code_helpers import auth_challenge_response, request_code_response
 
 Member = get_user_model()
@@ -57,6 +59,7 @@ class LoginCodeVerifyView(APIView):
 
     # noinspection PyMethodMayBeStatic
     def post(self, request):
+        enforce_cookie_request_origin(request)
         serializer = LoginCodeVerifySerializer(
             data=request.data,
             context={"approved_callback": _complete_login},
@@ -64,9 +67,10 @@ class LoginCodeVerifyView(APIView):
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        return Response(
+        return auth_success_response(
             serializer.validated_data["approved_result"],
-            status=status.HTTP_200_OK,
+            request=request,
+            response_status=status.HTTP_200_OK,
         )
 
 
@@ -77,6 +81,7 @@ class EmailAuthVerifyCodeView(APIView):
 
     # noinspection PyMethodMayBeStatic
     def post(self, request):
+        enforce_cookie_request_origin(request)
         serializer = UnifiedEmailAuthVerifySerializer(
             data=request.data,
             context={"approved_callback": _complete_unified_auth},
@@ -84,9 +89,10 @@ class EmailAuthVerifyCodeView(APIView):
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        return Response(
+        return auth_success_response(
             serializer.validated_data["approved_result"],
-            status=status.HTTP_200_OK,
+            request=request,
+            response_status=status.HTTP_200_OK,
         )
 
 
@@ -97,6 +103,7 @@ class RegisterVerifyCodeView(APIView):
 
     # noinspection PyMethodMayBeStatic
     def post(self, request):
+        enforce_cookie_request_origin(request)
         serializer = RegisterVerifyCodeSerializer(
             data=request.data,
             context={"approved_callback": _complete_registration},
@@ -104,9 +111,10 @@ class RegisterVerifyCodeView(APIView):
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        return Response(
+        return auth_success_response(
             serializer.validated_data["approved_result"],
-            status=status.HTTP_200_OK,
+            request=request,
+            response_status=status.HTTP_200_OK,
         )
 
 
@@ -188,11 +196,39 @@ def _complete_login(challenge):
 
 def _complete_registration(challenge):
     member = _lock_challenge_member(challenge)
-    if not member.is_active:
+    was_inactive = not member.is_active
+    was_temporary = member.access_level == Member.AccessLevel.TEMPORARY
+    member_update_fields = []
+    if was_inactive:
         member.is_active = True
-        member.save(update_fields=["is_active", "updated_at"])
+        member_update_fields.append("is_active")
+    if was_temporary:
+        member.access_level = Member.AccessLevel.FULL
+        member_update_fields.append("access_level")
+    if member_update_fields:
+        member.save(update_fields=[*member_update_fields, "updated_at"])
+    if was_inactive:
         _link_email_subscriber(member)
     _mark_contact_email_verified(member, challenge.target_email)
+    if was_temporary:
+        from apps.scheduling.models import Participant, TemporaryEventSession
+
+        now = timezone.now()
+        display_name = member.display_name().strip()[:100]
+        if display_name:
+            Participant.objects.filter(member=member).exclude(
+                participant_name=display_name
+            ).update(
+                participant_name=display_name,
+                updated_at=now,
+            )
+        TemporaryEventSession.objects.filter(
+            member=member,
+            revoked_at__isnull=True,
+        ).update(
+            revoked_at=now,
+            updated_at=now,
+        )
     return build_auth_success_payload(member, "Email verified. Registration successful.")
 
 

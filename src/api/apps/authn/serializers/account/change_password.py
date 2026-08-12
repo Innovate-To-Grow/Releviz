@@ -44,7 +44,9 @@ class ChangePasswordSerializer(serializers.Serializer):
             raise serializers.ValidationError({"current_password": exc.detail}) from exc
 
         if not user.check_password(current_password):
-            raise serializers.ValidationError({"current_password": "Current password is incorrect."})
+            raise serializers.ValidationError(
+                {"current_password": "Current password is incorrect."}
+            )
 
         attrs["_decrypted_new_password"] = decrypt_password_pair(attrs, user=user)
         return attrs

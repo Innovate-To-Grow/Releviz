@@ -27,7 +27,9 @@ def _member(email=None, **kw):
         **kw,
     )
     if email:
-        ContactEmail.objects.create(member=member, email_address=email, email_type="primary", verified=True)
+        ContactEmail.objects.create(
+            member=member, email_address=email, email_type="primary", verified=True
+        )
     return member
 
 
@@ -52,7 +54,10 @@ class DecryptFieldTests(TestCase):
 
 class DecryptPasswordPairTests(TestCase):
     def test_password_decrypt_error_wrapped(self):
-        with patch("apps.authn.serializers.helpers.decrypt_field", side_effect=serializers.ValidationError("x")):
+        with patch(
+            "apps.authn.serializers.helpers.decrypt_field",
+            side_effect=serializers.ValidationError("x"),
+        ):
             with self.assertRaises(serializers.ValidationError):
                 decrypt_password_pair({"new_password": "a", "new_password_confirm": "b"})
 
@@ -67,7 +72,9 @@ class DecryptPasswordPairTests(TestCase):
 
         with patch("apps.authn.serializers.helpers.decrypt_field", side_effect=fake_decrypt):
             with self.assertRaises(serializers.ValidationError):
-                decrypt_password_pair({"new_password": "GoodPass123!", "new_password_confirm": "confirmval"})
+                decrypt_password_pair(
+                    {"new_password": "GoodPass123!", "new_password_confirm": "confirmval"}
+                )
 
     def test_too_short_password_rejected(self):
         with self.assertRaises(serializers.ValidationError):
@@ -80,7 +87,9 @@ class DecryptPasswordPairTests(TestCase):
 
     def test_mismatched_passwords_rejected(self):
         with self.assertRaises(serializers.ValidationError):
-            decrypt_password_pair({"new_password": "StrongPass123!", "new_password_confirm": "DifferentPass123!"})
+            decrypt_password_pair(
+                {"new_password": "StrongPass123!", "new_password_confirm": "DifferentPass123!"}
+            )
 
 
 class RegisterSerializerValidationTests(TestCase):
@@ -91,7 +100,6 @@ class RegisterSerializerValidationTests(TestCase):
             "password_confirm": "PlaintextPass123!",
             "first_name": "New",
             "last_name": "Bie",
-            "organization": "Acme",
         }
         base.update(overrides)
         return base
@@ -105,6 +113,13 @@ class RegisterSerializerValidationTests(TestCase):
         serializer = RegisterSerializer(data=self._payload(last_name="<i>Hax</i>"))
         self.assertFalse(serializer.is_valid())
         self.assertIn("last_name", serializer.errors)
+
+    def test_legacy_organization_and_title_are_ignored(self):
+        serializer = RegisterSerializer(data=self._payload(organization="Acme", title="Engineer"))
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertNotIn("organization", serializer.validated_data)
+        self.assertNotIn("title", serializer.validated_data)
 
     def test_password_rejects_similarity_to_registration_name(self):
         serializer = RegisterSerializer(
@@ -145,16 +160,24 @@ class UnifiedEmailAuthVerifyValidationTests(TestCase):
         self.assertIn("code", serializer.errors)
 
     def test_validate_rejects_when_no_challenge(self):
-        serializer = UnifiedEmailAuthVerifySerializer(data={"email": "nobody@example.com", "code": "123456"})
+        serializer = UnifiedEmailAuthVerifySerializer(
+            data={"email": "nobody@example.com", "code": "123456"}
+        )
         self.assertFalse(serializer.is_valid())
         self.assertIn("detail", serializer.errors)
 
 
 class CreatePendingMemberIntegrityTests(TestCase):
     @patch("apps.authn.serializers.email_code.auth.issue_email_challenge")
-    @patch("apps.authn.serializers.email_code.auth.claim_unclaimed_contact_email", return_value=None)
-    @patch("apps.authn.serializers.email_code.auth.get_pending_registration_member", return_value=None)
-    def test_create_pending_member_integrity_error_raises(self, _mock_pending, _mock_claim, _mock_issue):
+    @patch(
+        "apps.authn.serializers.email_code.auth.claim_unclaimed_contact_email", return_value=None
+    )
+    @patch(
+        "apps.authn.serializers.email_code.auth.get_pending_registration_member", return_value=None
+    )
+    def test_create_pending_member_integrity_error_raises(
+        self, _mock_pending, _mock_claim, _mock_issue
+    ):
         serializer = UnifiedEmailAuthRequestSerializer()
         with patch(
             "apps.authn.models.ContactEmail.objects.create",
@@ -164,7 +187,9 @@ class CreatePendingMemberIntegrityTests(TestCase):
                 serializer._create_pending_member("conflict@example.com")
 
     @patch("apps.authn.serializers.email_code.auth.issue_email_challenge")
-    @patch("apps.authn.serializers.email_code.auth.claim_unclaimed_contact_email", return_value=None)
+    @patch(
+        "apps.authn.serializers.email_code.auth.claim_unclaimed_contact_email", return_value=None
+    )
     def test_create_pending_member_returns_existing_pending_on_race(self, _mock_claim, _mock_issue):
         existing = _member(email="race@example.com", is_active=False)
         serializer = UnifiedEmailAuthRequestSerializer()

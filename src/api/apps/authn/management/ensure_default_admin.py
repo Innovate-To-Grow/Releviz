@@ -20,7 +20,9 @@ class Command(BaseCommand):
     help = "Create a default superuser identified by email if it does not already exist."
 
     def add_arguments(self, parser):
-        parser.add_argument("--yes", action="store_true", help="Confirm that this command may mutate admin users.")
+        parser.add_argument(
+            "--yes", action="store_true", help="Confirm that this command may mutate admin users."
+        )
         parser.add_argument("--email", default=os.environ.get("DJANGO_SUPERUSER_EMAIL", ""))
         parser.add_argument("--password-env", default="DJANGO_SUPERUSER_PASSWORD")
         parser.add_argument(
@@ -78,7 +80,9 @@ class Command(BaseCommand):
                 self._write_existing_admin(email=email, contact=contact)
             return
 
-        self.stdout.write(self.style.SUCCESS(f"Default admin created: email={email}, member={member.pk}"))
+        self.stdout.write(
+            self.style.SUCCESS(f"Default admin created: email={email}, member={member.pk}")
+        )
 
     @staticmethod
     def _find_contact_for_update(email: str):
@@ -107,7 +111,9 @@ class Command(BaseCommand):
             )
         )
 
-    def _create_member(self, *, email: str, password: str, first_name: str, last_name: str, contact=None):
+    def _create_member(
+        self, *, email: str, password: str, first_name: str, last_name: str, contact=None
+    ):
         Member = get_user_model()
         member = Member.objects.create_user(
             password=password,

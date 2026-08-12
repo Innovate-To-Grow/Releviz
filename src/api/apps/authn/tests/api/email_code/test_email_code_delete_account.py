@@ -32,7 +32,9 @@ class EmailCodeDeleteAccountTests(APITestCase):
         )
         event = make_event()
         ticket = make_ticket(event)
-        self.registration = EventRegistration.objects.create(member=self.member, event=event, ticket=ticket)
+        self.registration = EventRegistration.objects.create(
+            member=self.member, event=event, ticket=ticket
+        )
         self.client.force_authenticate(user=self.member)
 
     def test_request_delete_account_code(self, _mock_code, mock_send):
@@ -52,7 +54,9 @@ class EmailCodeDeleteAccountTests(APITestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("detail", response.data)
 
-    def test_confirm_delete_account_removes_member_and_related_records(self, _mock_code, _mock_send):
+    def test_confirm_delete_account_removes_member_and_related_records(
+        self, _mock_code, _mock_send
+    ):
         self.client.post("/authn/delete-account/request-code/", {}, format="json")
         verify_response = self.client.post(
             "/authn/delete-account/verify-code/",

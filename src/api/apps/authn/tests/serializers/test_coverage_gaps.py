@@ -41,8 +41,12 @@ class ProfileSerializerImageErrorTests(TestCase):
         """profile.py:70-71 — profile_image without .startswith -> None (AttributeError path)."""
         from apps.authn.serializers.account.profile import ProfileSerializer
 
-        member = Member.objects.create_user(first_name="Img", last_name="Err", password="StrongPass123!")
-        ContactEmail.objects.create(member=member, email_address="img@example.com", email_type="primary", verified=True)
+        member = Member.objects.create_user(
+            first_name="Img", last_name="Err", password="StrongPass123!"
+        )
+        ContactEmail.objects.create(
+            member=member, email_address="img@example.com", email_type="primary", verified=True
+        )
         member.profile_image = 12345  # int -> .startswith raises AttributeError
 
         data = ProfileSerializer().to_representation(member)
@@ -72,14 +76,26 @@ class RegisterSerializerRaceTests(TestCase):
         serializer = RegisterSerializer(data=self._data())
         serializer.initial_data  # noqa: B018 - ensure data attached
         with (
-            patch("apps.authn.serializers.auth.register.decrypt_password_pair", return_value="plain123"),
-            patch("apps.authn.serializers.auth.register.get_pending_registration_member", return_value=None),
-            patch("apps.authn.serializers.auth.register.registration_email_conflicts", return_value=False),
+            patch(
+                "apps.authn.serializers.auth.register.decrypt_password_pair",
+                return_value="plain123",
+            ),
+            patch(
+                "apps.authn.serializers.auth.register.get_pending_registration_member",
+                return_value=None,
+            ),
+            patch(
+                "apps.authn.serializers.auth.register.registration_email_conflicts",
+                return_value=False,
+            ),
         ):
             self.assertTrue(serializer.is_valid(), serializer.errors)
 
         with (
-            patch("apps.authn.serializers.auth.register.claim_unclaimed_contact_email", return_value=None),
+            patch(
+                "apps.authn.serializers.auth.register.claim_unclaimed_contact_email",
+                return_value=None,
+            ),
             patch(
                 "apps.authn.serializers.auth.register.get_pending_registration_member",
                 return_value=pending,
@@ -99,19 +115,33 @@ class RegisterSerializerRaceTests(TestCase):
 
         serializer = RegisterSerializer(data=self._data("race2@example.com"))
         with (
-            patch("apps.authn.serializers.auth.register.decrypt_password_pair", return_value="plain123"),
-            patch("apps.authn.serializers.auth.register.get_pending_registration_member", return_value=None),
-            patch("apps.authn.serializers.auth.register.registration_email_conflicts", return_value=False),
+            patch(
+                "apps.authn.serializers.auth.register.decrypt_password_pair",
+                return_value="plain123",
+            ),
+            patch(
+                "apps.authn.serializers.auth.register.get_pending_registration_member",
+                return_value=None,
+            ),
+            patch(
+                "apps.authn.serializers.auth.register.registration_email_conflicts",
+                return_value=False,
+            ),
         ):
             self.assertTrue(serializer.is_valid(), serializer.errors)
 
         with (
-            patch("apps.authn.serializers.auth.register.claim_unclaimed_contact_email", return_value=None),
+            patch(
+                "apps.authn.serializers.auth.register.claim_unclaimed_contact_email",
+                return_value=None,
+            ),
             patch(
                 "apps.authn.serializers.auth.register.get_pending_registration_member",
                 side_effect=[None, pending],
             ),
-            patch("apps.authn.models.ContactEmail.objects.create", side_effect=IntegrityError("dup")),
+            patch(
+                "apps.authn.models.ContactEmail.objects.create", side_effect=IntegrityError("dup")
+            ),
             patch("apps.authn.serializers.auth.register.issue_email_challenge"),
         ):
             member = serializer.save()
@@ -124,19 +154,33 @@ class RegisterSerializerRaceTests(TestCase):
 
         serializer = RegisterSerializer(data=self._data("race3@example.com"))
         with (
-            patch("apps.authn.serializers.auth.register.decrypt_password_pair", return_value="plain123"),
-            patch("apps.authn.serializers.auth.register.get_pending_registration_member", return_value=None),
-            patch("apps.authn.serializers.auth.register.registration_email_conflicts", return_value=False),
+            patch(
+                "apps.authn.serializers.auth.register.decrypt_password_pair",
+                return_value="plain123",
+            ),
+            patch(
+                "apps.authn.serializers.auth.register.get_pending_registration_member",
+                return_value=None,
+            ),
+            patch(
+                "apps.authn.serializers.auth.register.registration_email_conflicts",
+                return_value=False,
+            ),
         ):
             self.assertTrue(serializer.is_valid(), serializer.errors)
 
         with (
-            patch("apps.authn.serializers.auth.register.claim_unclaimed_contact_email", return_value=None),
+            patch(
+                "apps.authn.serializers.auth.register.claim_unclaimed_contact_email",
+                return_value=None,
+            ),
             patch(
                 "apps.authn.serializers.auth.register.get_pending_registration_member",
                 side_effect=[None, None],
             ),
-            patch("apps.authn.models.ContactEmail.objects.create", side_effect=IntegrityError("dup")),
+            patch(
+                "apps.authn.models.ContactEmail.objects.create", side_effect=IntegrityError("dup")
+            ),
             patch("apps.authn.serializers.auth.register.issue_email_challenge"),
         ):
             with self.assertRaises(serializers.ValidationError):
@@ -163,7 +207,9 @@ class UnifiedEmailAuthCreatePendingRaceTests(TestCase):
                 "apps.authn.serializers.email_code.auth.get_pending_registration_member",
                 side_effect=[None, pending],
             ),
-            patch("apps.authn.models.ContactEmail.objects.create", side_effect=IntegrityError("dup")),
+            patch(
+                "apps.authn.models.ContactEmail.objects.create", side_effect=IntegrityError("dup")
+            ),
         ):
             result = serializer._create_pending_member("authrace@example.com")
 
@@ -183,7 +229,9 @@ class UnifiedEmailAuthCreatePendingRaceTests(TestCase):
                 "apps.authn.serializers.email_code.auth.get_pending_registration_member",
                 side_effect=[None, None],
             ),
-            patch("apps.authn.models.ContactEmail.objects.create", side_effect=IntegrityError("dup")),
+            patch(
+                "apps.authn.models.ContactEmail.objects.create", side_effect=IntegrityError("dup")
+            ),
         ):
             with self.assertRaises(serializers.ValidationError):
                 serializer._create_pending_member("authrace2@example.com")

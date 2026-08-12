@@ -101,7 +101,9 @@ class EmailCodeLoginMixin:
             step="code",
             email=contact.email_address,
             form=login_api.AdminCodeForm(),
-            message=(f"A verification code has been sent to {get_admin_member_display_name(member)}."),
+            message=(
+                f"A verification code has been sent to {get_admin_member_display_name(member)}."
+            ),
         )
 
     def _handle_code_step(self, request):

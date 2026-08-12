@@ -9,6 +9,10 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from apps.authn.security import enforce_cookie_request_origin
+
+from ..helpers import clear_refresh_cookie, get_refresh_token_from_request
+
 logger = logging.getLogger(__name__)
 
 
@@ -20,13 +24,18 @@ class LogoutView(APIView):
 
     permission_classes = [AllowAny]
 
-    # noinspection PyMethodMayBeStatic
     def post(self, request):
-        refresh = request.data.get("refresh", "")
-        if not isinstance(refresh, str) or not refresh.strip():
-            return Response({"detail": "Refresh token is required."}, status=status.HTTP_400_BAD_REQUEST)
+        enforce_cookie_request_origin(request)
+        refresh = get_refresh_token_from_request(request)
+        if not refresh:
+            return clear_refresh_cookie(Response(status=status.HTTP_204_NO_CONTENT))
         try:
             RefreshToken(refresh).blacklist()
         except TokenError:
-            return Response({"detail": "Invalid or already-blacklisted token."}, status=status.HTTP_400_BAD_REQUEST)
-        return Response(status=status.HTTP_204_NO_CONTENT)
+            return clear_refresh_cookie(
+                Response(
+                    {"detail": "Invalid or already-blacklisted token."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            )
+        return clear_refresh_cookie(Response(status=status.HTTP_204_NO_CONTENT))

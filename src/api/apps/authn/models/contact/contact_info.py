@@ -19,7 +19,9 @@ class ContactEmail(ProjectControlModel):
     )
 
     # contact email
-    email_address = models.EmailField(unique=True, help_text="Email address for contact", verbose_name="Email Address")
+    email_address = models.EmailField(
+        unique=True, help_text="Email address for contact", verbose_name="Email Address"
+    )
 
     # contact email type
     EMAIL_TYPE_CHOICES = [
@@ -39,12 +41,16 @@ class ContactEmail(ProjectControlModel):
 
     # subscribe
     subscribe = models.BooleanField(
-        default=True, help_text="Whether the email is subscribed to communications", verbose_name="Subscribed"
+        default=True,
+        help_text="Whether the email is subscribed to communications",
+        verbose_name="Subscribed",
     )
 
     # verified
     verified = models.BooleanField(
-        default=False, help_text="Whether the email address has been verified", verbose_name="Verified"
+        default=False,
+        help_text="Whether the email address has been verified",
+        verbose_name="Verified",
     )
 
     class Meta:
@@ -68,11 +74,19 @@ class ContactEmail(ProjectControlModel):
         super().clean()
         if self.email_address:
             self.email_address = self.email_address.strip()
-            existing = ContactEmail.objects.filter(email_address__iexact=self.email_address).exclude(pk=self.pk).first()
+            existing = (
+                ContactEmail.objects.filter(email_address__iexact=self.email_address)
+                .exclude(pk=self.pk)
+                .first()
+            )
             if existing:
                 if self.member_id and existing.member_id == self.member_id:
-                    raise ValidationError({"email_address": "This member already has this email address."})
-                raise ValidationError({"email_address": "This email address is already assigned to another member."})
+                    raise ValidationError(
+                        {"email_address": "This member already has this email address."}
+                    )
+                raise ValidationError(
+                    {"email_address": "This email address is already assigned to another member."}
+                )
 
         if self.email_type == "primary" and self.member_id:
             qs = ContactEmail.objects.filter(member=self.member, email_type="primary")
@@ -94,4 +108,3 @@ class ContactEmail(ProjectControlModel):
             str_contact_email += " - Verified"
 
         return str_contact_email
-

@@ -42,7 +42,9 @@ class RsaManagerEdgeTests(TestCase):
     def test_decrypt_with_unknown_key_id_fails_closed(self):
         get_or_create_auth_keypair()
         with self.assertRaisesMessage(RSADecryptionError, "Unknown RSA key identifier"):
-            decrypt_password("bm90LXZhbGlkLWVuY3J5cHRlZA==", key_id="00000000-0000-0000-0000-000000000000")
+            decrypt_password(
+                "bm90LXZhbGlkLWVuY3J5cHRlZA==", key_id="00000000-0000-0000-0000-000000000000"
+            )
 
     def test_database_rejects_duplicate_active_key_name(self):
         from apps.authn.services.security.rsa_manager import AUTH_KEY_NAME
@@ -60,7 +62,9 @@ class RsaManagerEdgeTests(TestCase):
         from apps.authn.services.security.rsa_manager import AUTH_KEY_NAME
 
         keypair = RSAKeypair.objects.create(name=AUTH_KEY_NAME, is_active=True)
-        RSAKeypair.objects.filter(pk=keypair.pk).update(created_at=timezone.now() - timedelta(days=2))
+        RSAKeypair.objects.filter(pk=keypair.pk).update(
+            created_at=timezone.now() - timedelta(days=2)
+        )
         get_or_create_auth_keypair()
         mock_rotate.assert_called_once()
 
@@ -85,7 +89,9 @@ class ExportVcfHelperTests(TestCase):
 
     def test__build_vcard_omits_tel_when_no_phone_present(self):
         member = _member()
-        ContactEmail.objects.create(member=member, email_address="p@example.com", email_type="primary", verified=True)
+        ContactEmail.objects.create(
+            member=member, email_address="p@example.com", email_type="primary", verified=True
+        )
         member.refresh_from_db()
         card = _build_vcard(member)
         self.assertNotIn("TEL", card)

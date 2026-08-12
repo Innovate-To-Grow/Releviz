@@ -43,7 +43,9 @@ class AdminInvitation(ProjectControlModel):
     )
     expires_at = models.DateTimeField()
     accepted_at = models.DateTimeField(null=True, blank=True)
-    message = models.TextField(blank=True, help_text="Optional note included in the invitation email.")
+    message = models.TextField(
+        blank=True, help_text="Optional note included in the invitation email."
+    )
 
     class Meta:
         ordering = ["-created_at"]

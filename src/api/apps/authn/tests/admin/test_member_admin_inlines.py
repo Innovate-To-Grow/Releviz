@@ -352,7 +352,9 @@ class MemberAdminInlineUUIDSubmitTest(TestCase):
         data = self._build_post_data()
         total_forms = int(data["contact_emails-TOTAL_FORMS"])
         secondary_index = next(
-            index for index in range(total_forms) if data[f"contact_emails-{index}-id"] == str(secondary.pk)
+            index
+            for index in range(total_forms)
+            if data[f"contact_emails-{index}-id"] == str(secondary.pk)
         )
         data[f"contact_emails-{secondary_index}-email_type"] = "primary"
 
@@ -394,8 +396,6 @@ class MemberAdminInlineUUIDSubmitTest(TestCase):
             "first_name": "Monique",
             "middle_name": "",
             "last_name": "Hampton",
-            "organization": "",
-            "title": "",
             "is_active": "on",
             "contact_emails-TOTAL_FORMS": "1",
             "contact_emails-INITIAL_FORMS": "0",
@@ -477,7 +477,9 @@ class MemberAdminInlineUUIDSubmitTest(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "This email address is already assigned to another member.")
         self.assertFalse(
-            ContactEmail.objects.filter(member=self.target, email_address__iexact="claimed@example.com").exists()
+            ContactEmail.objects.filter(
+                member=self.target, email_address__iexact="claimed@example.com"
+            ).exists()
         )
 
     def test_add_member_rejects_contact_email_owned_by_other_member(self):
@@ -501,8 +503,6 @@ class MemberAdminInlineUUIDSubmitTest(TestCase):
             "first_name": "Monique",
             "middle_name": "",
             "last_name": "Hampton",
-            "organization": "",
-            "title": "",
             "is_active": "on",
             "contact_emails-TOTAL_FORMS": "1",
             "contact_emails-INITIAL_FORMS": "0",
@@ -522,4 +522,6 @@ class MemberAdminInlineUUIDSubmitTest(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "This email address is already assigned to another member.")
         self.assertFalse(Member.objects.filter(first_name="Monique", last_name="Hampton").exists())
-        self.assertEqual(ContactEmail.objects.filter(email_address__iexact="claimed-add@example.com").count(), 1)
+        self.assertEqual(
+            ContactEmail.objects.filter(email_address__iexact="claimed-add@example.com").count(), 1
+        )

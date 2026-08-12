@@ -31,7 +31,7 @@ _HTML_TAG_RE = re.compile(r"<[^>]+>")
 class RegisterSerializer(serializers.Serializer):
     """
     Serializer for user registration.
-    Requires email and password. Optionally accepts first_name, last_name, organization.
+    Requires email, password, first name, and last name.
     Passwords should be RSA encrypted with the public key.
     """
 
@@ -64,17 +64,6 @@ class RegisterSerializer(serializers.Serializer):
         max_length=150,
         help_text="User's last name.",
     )
-    organization = serializers.CharField(
-        required=True,
-        max_length=255,
-        help_text="Organization or company the user belongs to.",
-    )
-    title = serializers.CharField(
-        required=False,
-        allow_blank=True,
-        max_length=255,
-        help_text="Job title or position.",
-    )
 
     # noinspection PyMethodMayBeStatic
     def validate_first_name(self, value: str) -> str:
@@ -106,8 +95,6 @@ class RegisterSerializer(serializers.Serializer):
         candidate = Member(
             first_name=attrs.get("first_name", ""),
             last_name=attrs.get("last_name", ""),
-            organization=attrs.get("organization", ""),
-            title=attrs.get("title", ""),
         )
         attrs["_decrypted_password"] = decrypt_password_pair(
             attrs,
@@ -127,13 +114,9 @@ class RegisterSerializer(serializers.Serializer):
 
         first_name = validated_data.get("first_name", "")
         last_name = validated_data.get("last_name", "")
-        organization = validated_data.get("organization", "")
-        title = validated_data.get("title", "")
         candidate = Member(
             first_name=first_name,
             last_name=last_name,
-            organization=organization or "",
-            title=title or "",
         )
         try:
             validate_password(password, user=candidate)
@@ -177,9 +160,7 @@ class RegisterSerializer(serializers.Serializer):
         member.is_active = False
         member.set_password(password)
 
-        member.organization = organization or ""
-        member.title = title or ""
-        update_fields = ["first_name", "last_name", "organization", "title", "is_active", "password", "updated_at"]
+        update_fields = ["first_name", "last_name", "is_active", "password", "updated_at"]
         member.save(update_fields=update_fields)
 
         issue_email_challenge(

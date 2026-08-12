@@ -1,6 +1,6 @@
 from django.conf import settings
-from django.test import RequestFactory, SimpleTestCase, TestCase
-from django.urls import NoReverseMatch, reverse
+from django.test import SimpleTestCase, TestCase
+from django.urls import reverse
 
 from apps.event.tests.helpers import make_superuser
 
@@ -42,68 +42,49 @@ class AdminSidebarNavigationTest(SimpleTestCase):
                     f"Tab group exposes multiple sidebar entries: {exposed_items}",
                 )
 
-    def test_site_settings_navigation_includes_groups_and_rsa_keys(self):
+    def test_site_settings_navigation_uses_aws_credentials_entry(self):
         navigation = settings.UNFOLD["SIDEBAR"]["navigation"]
         site_settings_section = next(
             section for section in navigation if section["title"] == "Site Settings"
         )
-        items_by_title = {item["title"]: item for item in site_settings_section["items"]}
+        self.assertEqual(
+            [(item["title"], item["link"]) for item in site_settings_section["items"]],
+            [("AWS Credentials", "/admin/core/awscredentialconfig/")],
+        )
 
-        self.assertIn("Groups", items_by_title)
-        self.assertIn("RSA Keypairs", items_by_title)
-        self.assertEqual(items_by_title["Groups"]["link"], "/admin/auth/group/")
-        self.assertEqual(items_by_title["RSA Keypairs"]["link"], "/admin/authn/rsakeypair/")
-
-    def test_members_navigation_includes_auth_entries(self):
+    def test_members_navigation_uses_members_entry(self):
         navigation = settings.UNFOLD["SIDEBAR"]["navigation"]
         members_section = next(
             section for section in navigation if section["title"] == "Members & Authentication"
         )
-        item_titles = {item["title"] for item in members_section["items"]}
+        self.assertEqual(
+            [(item["title"], item["link"]) for item in members_section["items"]],
+            [("Members", "/admin/authn/member/")],
+        )
 
-        self.assertIn("Members", item_titles)
-        self.assertIn("Emails", item_titles)
-        self.assertIn("Login Challenges", item_titles)
-
-    def test_email_delivery_navigation_includes_providers_and_logs(self):
+    def test_email_delivery_navigation_uses_providers_entry(self):
         navigation = settings.UNFOLD["SIDEBAR"]["navigation"]
         email_section = next(
             section for section in navigation if section["title"] == "Email Delivery"
         )
-        items_by_title = {item["title"]: item for item in email_section["items"]}
-
-        self.assertIn("AWS SES Providers", items_by_title)
-        self.assertIn("Email Logs", items_by_title)
         self.assertEqual(
-            items_by_title["AWS SES Providers"]["link"], "/admin/mail/emailproviderconfig/"
-        )
-        self.assertEqual(
-            items_by_title["Email Logs"]["link"], "/admin/mail/emailmessagelog/"
+            [(item["title"], item["link"]) for item in email_section["items"]],
+            [("AWS SES Providers", "/admin/mail/emailproviderconfig/")],
         )
 
-    def test_scheduling_navigation_includes_event_participants_and_weights(self):
+    def test_scheduling_navigation_uses_one_entry_for_the_tab_group(self):
         navigation = settings.UNFOLD["SIDEBAR"]["navigation"]
         scheduling_section = next(
             section for section in navigation if section["title"] == "Scheduling"
         )
-        items_by_title = {item["title"]: item for item in scheduling_section["items"]}
-
-        self.assertIn("Events", items_by_title)
-        self.assertIn("Participants", items_by_title)
-        self.assertIn("Weights", items_by_title)
-        self.assertIn("Invitations", items_by_title)
-        self.assertEqual(items_by_title["Events"]["link"], "/admin/scheduling/event/")
-        self.assertEqual(items_by_title["Participants"]["link"], "/admin/scheduling/participant/")
-        self.assertEqual(items_by_title["Weights"]["link"], "/admin/scheduling/weight/")
-        self.assertEqual(
-            items_by_title["Invitations"]["link"], "/admin/scheduling/eventinvitation/"
-        )
+        self.assertEqual(len(scheduling_section["items"]), 1)
+        scheduling_entry = scheduling_section["items"][0]
+        self.assertEqual(scheduling_entry["title"], "Events")
+        self.assertEqual(scheduling_entry["link"], "/admin/scheduling/event/")
 
     def test_scheduling_pages_are_grouped_under_tabs(self):
         tabs = settings.UNFOLD["TABS"]
-        scheduling_tab = next(
-            tab for tab in tabs if "scheduling.event" in tab.get("models", [])
-        )
+        scheduling_tab = next(tab for tab in tabs if "scheduling.event" in tab.get("models", []))
 
         self.assertEqual(
             scheduling_tab["models"],
@@ -132,13 +113,42 @@ class AdminSidebarNavigationTest(SimpleTestCase):
 
         self.assertEqual(
             members_tab["models"],
-            ["authn.member", "authn.contactemail"],
+            [
+                "authn.member",
+                "authn.contactemail",
+                "authn.emailauthchallenge",
+            ],
         )
         self.assertEqual(
             members_tab["items"],
             [
                 {"title": "Members", "link": "/admin/authn/member/"},
                 {"title": "Emails", "link": "/admin/authn/contactemail/"},
+                {
+                    "title": "Login Challenges",
+                    "link": "/admin/authn/emailauthchallenge/",
+                },
+            ],
+        )
+
+    def test_site_settings_pages_are_grouped_under_site_settings_tabs(self):
+        tabs = settings.UNFOLD["TABS"]
+        site_settings_tab = next(
+            tab for tab in tabs if "core.awscredentialconfig" in tab.get("models", [])
+        )
+
+        self.assertEqual(
+            site_settings_tab["models"],
+            ["core.awscredentialconfig", "authn.rsakeypair"],
+        )
+        self.assertEqual(
+            site_settings_tab["items"],
+            [
+                {
+                    "title": "AWS Credentials",
+                    "link": "/admin/core/awscredentialconfig/",
+                },
+                {"title": "RSA Keypairs", "link": "/admin/authn/rsakeypair/"},
             ],
         )
 
@@ -168,6 +178,7 @@ class AdminSidebarNavigationTest(SimpleTestCase):
             self.assertNotIn("core.googlecredentialconfig", models_str)
             self.assertNotIn("authn.membersheetsyncconfig", models_str)
             self.assertNotIn("authn.membersheetsynclog", models_str)
+            self.assertNotIn("auth.group", models_str)
 
     def test_no_stale_model_references_in_sidebar(self):
         """Verify no sidebar items reference deleted model admin URLs."""
@@ -178,6 +189,7 @@ class AdminSidebarNavigationTest(SimpleTestCase):
 
         self.assertNotIn("/admin/core/emailserviceconfig/", all_links)
         self.assertNotIn("/admin/core/gmailaccessaccount/", all_links)
+        self.assertNotIn("/admin/auth/group/", all_links)
         self.assertNotIn("/admin/core/googlecredentialconfig/", all_links)
         self.assertNotIn("/admin/authn/membersheetsyncconfig/", all_links)
         self.assertNotIn("/admin/authn/membersheetsynclog/", all_links)

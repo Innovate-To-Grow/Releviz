@@ -5,7 +5,6 @@ const footerLinks = [
   { href: "/privacy", label: "Privacy" },
   { href: "/terms", label: "Terms" },
   { href: "/support", label: "Support" },
-  { href: "/feedback", label: "Report a problem" },
 ];
 
 export default function SiteFooter() {

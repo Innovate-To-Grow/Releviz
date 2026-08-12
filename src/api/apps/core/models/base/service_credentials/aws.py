@@ -49,8 +49,8 @@ class AWSCredentialConfig(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        verbose_name = "AWS Credential Config"
-        verbose_name_plural = "AWS Credential Configs"
+        verbose_name = "AWS Credential"
+        verbose_name_plural = "AWS Credentials"
         constraints = [
             models.UniqueConstraint(
                 fields=["is_active"],
@@ -70,8 +70,14 @@ class AWSCredentialConfig(models.Model):
         # select_for_update is a no-op on SQLite (dev), effective on PostgreSQL.
         if self.is_active:
             with transaction.atomic():
-                list(AWSCredentialConfig.objects.select_for_update().filter(is_active=True).exclude(pk=self.pk))
-                AWSCredentialConfig.objects.filter(is_active=True).exclude(pk=self.pk).update(is_active=False)
+                list(
+                    AWSCredentialConfig.objects.select_for_update()
+                    .filter(is_active=True)
+                    .exclude(pk=self.pk)
+                )
+                AWSCredentialConfig.objects.filter(is_active=True).exclude(pk=self.pk).update(
+                    is_active=False
+                )
                 super().save(*args, **kwargs)
         else:
             super().save(*args, **kwargs)

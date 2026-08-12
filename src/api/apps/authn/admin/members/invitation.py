@@ -39,7 +39,10 @@ class AdminInvitationAdmin(BaseModelAdmin):
             ]
         return [
             (None, {"fields": ("email", "role", "status", "message")}),
-            ("Details", {"fields": ("token", "invited_by", "accepted_by", "expires_at", "accepted_at")}),
+            (
+                "Details",
+                {"fields": ("token", "invited_by", "accepted_by", "expires_at", "accepted_at")},
+            ),
             ("Timestamps", {"fields": ("created_at", "updated_at"), "classes": ("collapse",)}),
         ]
 
@@ -62,7 +65,11 @@ class AdminInvitationAdmin(BaseModelAdmin):
         if status == AdminInvitation.Status.PENDING and obj.is_expired:
             status = AdminInvitation.Status.EXPIRED
         color = colors.get(status, "#6b7280")
-        label = AdminInvitation.Status(status).label if status != obj.status else obj.get_status_display()
+        label = (
+            AdminInvitation.Status(status).label
+            if status != obj.status
+            else obj.get_status_display()
+        )
         return format_html(
             '<span style="display:inline-block;padding:2px 10px;border-radius:12px;font-size:12px;font-weight:600;color:#fff;background:{};">{}</span>',
             color,
@@ -125,7 +132,9 @@ class AdminInvitationAdmin(BaseModelAdmin):
                 sent += 1
 
         if skipped:
-            messages.warning(request, f"Skipped {skipped} invalid, expired, or already-used invitation(s).")
+            messages.warning(
+                request, f"Skipped {skipped} invalid, expired, or already-used invitation(s)."
+            )
         if sent:
             messages.success(request, f"Resent {sent} invitation email(s).")
 

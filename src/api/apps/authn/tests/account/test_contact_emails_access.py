@@ -18,14 +18,20 @@ class ContactEmailAccessTests(APITestCase):
             is_active=True,
         )
         ContactEmail.objects.create(
-            member=self.member, email_address="primary@example.com", email_type="primary", verified=True
+            member=self.member,
+            email_address="primary@example.com",
+            email_type="primary",
+            verified=True,
         )
         self.other_member = Member.objects.create_user(
             password="StrongPass123!",
             is_active=True,
         )
         ContactEmail.objects.create(
-            member=self.other_member, email_address="other@example.com", email_type="primary", verified=True
+            member=self.other_member,
+            email_address="other@example.com",
+            email_type="primary",
+            verified=True,
         )
         self.client.force_authenticate(user=self.member)
 
@@ -62,7 +68,9 @@ class ContactEmailAccessTests(APITestCase):
         # Clear cooldown
         from apps.authn.models.security import EmailAuthChallenge
 
-        EmailAuthChallenge.objects.filter(target_email="resend-me@example.com").update(last_sent_at=None)
+        EmailAuthChallenge.objects.filter(target_email="resend-me@example.com").update(
+            last_sent_at=None
+        )
 
         resend_resp = self.client.post(f"/authn/contact-emails/{contact_id}/request-verification/")
         self.assertEqual(resend_resp.status_code, 202)
@@ -80,7 +88,10 @@ class ContactEmailAccessTests(APITestCase):
             member=self.member, email_address="bombing-target@example.com", email_type="other"
         )
         statuses = [
-            self.client.post(f"/authn/contact-emails/{contact.pk}/request-verification/").status_code for _ in range(6)
+            self.client.post(
+                f"/authn/contact-emails/{contact.pk}/request-verification/"
+            ).status_code
+            for _ in range(6)
         ]
         self.assertEqual(statuses[-1], 429)
 

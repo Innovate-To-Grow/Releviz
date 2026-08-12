@@ -133,6 +133,7 @@ describe("small UI modules", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     searchParams = new URLSearchParams();
+    window.history.replaceState({}, "", "/");
   });
 
   test("format and constants helpers", () => {
@@ -515,7 +516,7 @@ describe("role-aware headers", () => {
 
   test("EventHeader shows event identity, role, and dashboard navigation", () => {
     const { rerender } = render(
-      <EventHeader eventName="Team Sync" eventCode="ABC12345" isOrganizer />
+      <EventHeader eventName="Team Sync" eventCode="ABC12345" isOrganizer />,
     );
 
     expect(screen.getByText("Team Sync")).toBeInTheDocument();
@@ -523,12 +524,17 @@ describe("role-aware headers", () => {
     expect(screen.getByText("Organizer")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Prachi" }));
-    expect(screen.getByRole("link", { name: "My Dashboard" })).toHaveAttribute(
-      "href",
-      "/dashboard"
-    );
+    expect(
+      screen.getByRole("menuitem", { name: "My Dashboard" }),
+    ).toHaveAttribute("href", "/dashboard");
 
-    rerender(<EventHeader eventName="Team Sync" eventCode="ABC12345" isOrganizer={false} />);
+    rerender(
+      <EventHeader
+        eventName="Team Sync"
+        eventCode="ABC12345"
+        isOrganizer={false}
+      />,
+    );
     expect(screen.getByText("Participant")).toBeInTheDocument();
   });
 
@@ -550,16 +556,38 @@ describe("role-aware headers", () => {
     await waitFor(() => expect(logout).toHaveBeenCalled());
   });
 
+  test("account menu supports arrow navigation and restores trigger focus", () => {
+    render(<AppHeader pageTitle="My Dashboard" />);
+
+    const trigger = screen.getByRole("button", { name: "Prachi" });
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+
+    const dashboardItem = screen.getByRole("menuitem", {
+      name: "My Dashboard",
+    });
+    expect(dashboardItem).toHaveFocus();
+
+    fireEvent.keyDown(dashboardItem, { key: "ArrowDown" });
+    expect(screen.getByRole("menuitem", { name: "Settings" })).toHaveFocus();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(trigger).toHaveFocus();
+  });
+
   test("AppHeader handles loading and signed-out states", () => {
     useAuth.mockReturnValue({ user: null, loading: true, logout: jest.fn() });
     const loading = render(<AppHeader pageTitle="My Dashboard" />);
-    expect(screen.queryByRole("link", { name: "Log in" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "Log in" }),
+    ).not.toBeInTheDocument();
     loading.unmount();
 
     useAuth.mockReturnValue({ user: null, loading: false, logout: jest.fn() });
     render(<AppHeader pageTitle="My Dashboard" />);
-    expect(screen.getByRole("link", { name: "Log in" })).toHaveAttribute("href", "/login");
-    expect(screen.getByRole("link", { name: "Sign up" })).toHaveAttribute("href", "/signup");
+    expect(
+      screen.getByRole("link", { name: "Continue with email" }),
+    ).toHaveAttribute("href", "/login");
   });
 });
 
@@ -590,10 +618,7 @@ describe("app pages", () => {
     expect(screen.getByText("event client")).toBeInTheDocument();
     expect(screen.getByText("Page not found")).toBeInTheDocument();
     expect(screen.getByRole("navigation", { name: "Product and support" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Report a problem" })).toHaveAttribute(
-      "href",
-      "/feedback"
-    );
+    expect(screen.queryByRole("link", { name: "Report a problem" })).not.toBeInTheDocument();
     SignInPage();
     SignUpPage();
     expect(redirect).toHaveBeenCalledWith("/login");
@@ -717,158 +742,138 @@ describe("app pages", () => {
     );
   });
 
-  test("Login submits, sanitizes next, and shows errors", async () => {
-    const login = jest.fn().mockResolvedValue({});
-    useAuth.mockReturnValue({
-      login,
-      requestEmailLoginCode: jest.fn(),
-      verifyEmailLoginCode: jest.fn(),
-    });
+  test("Login uses the unified email flow and sanitizes next", async () => {
+    const requestEmailAuthCode = jest.fn().mockResolvedValue({});
+    const verifyEmailAuthCode = jest.fn().mockResolvedValue({});
+    useAuth.mockReturnValue({ requestEmailAuthCode, verifyEmailAuthCode });
     searchParams = new URLSearchParams("next=//evil.example");
     const firstLogin = render(<LoginPage />);
     await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
-    await userEvent.type(screen.getByLabelText("Password"), "password123");
-    await userEvent.click(screen.getByRole("button", { name: "Log in" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Continue with email" }),
+    );
+    await userEvent.type(
+      await screen.findByLabelText("Verification code"),
+      "123456",
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Verify and continue" }),
+    );
     await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/dashboard"));
-    expect(screen.getByRole("link", { name: "Forgot your password?" })).toHaveAttribute(
-      "href",
-      "/recover"
-    );
-    expect(screen.getByRole("link", { name: "Sign up" })).toHaveAttribute(
-      "href",
-      "/signup?next=%2Fdashboard"
-    );
+    expect(verifyEmailAuthCode).toHaveBeenCalledWith({
+      email: "ada@example.com",
+      code: "123456",
+    });
 
     firstLogin.unmount();
-    login.mockRejectedValueOnce(new Error("Bad login"));
+    requestEmailAuthCode.mockRejectedValueOnce(new Error("No code"));
     render(<LoginPage />);
     await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
-    await userEvent.type(screen.getByLabelText("Password"), "bad");
-    await userEvent.click(screen.getByRole("button", { name: "Log in" }));
-    expect(await screen.findByText("Bad login")).toBeInTheDocument();
-
-    login.mockRejectedValueOnce(new Error());
-    searchParams = new URLSearchParams("next=/create");
-    render(<LoginPage />);
-    await userEvent.type(screen.getAllByLabelText("Email").at(-1), "ada@example.com");
-    await userEvent.type(screen.getAllByLabelText("Password").at(-1), "bad");
-    await userEvent.click(screen.getAllByRole("button", { name: "Log in" }).at(-1));
-    expect(await screen.findByText("Unable to log in.")).toBeInTheDocument();
-
-    login.mockResolvedValueOnce({});
-    searchParams = new URLSearchParams();
-    render(<LoginPage />);
-    await userEvent.type(screen.getAllByLabelText("Email").at(-1), "ada@example.com");
-    await userEvent.type(screen.getAllByLabelText("Password").at(-1), "password123");
-    await userEvent.click(screen.getAllByRole("button", { name: "Log in" }).at(-1));
-    await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/dashboard"));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Continue with email" }),
+    );
+    expect(await screen.findByText("No code")).toBeInTheDocument();
   });
 
   test("Login and signup wait for auth hydration before allowing submission", () => {
     useAuth.mockReturnValue({
       loading: true,
-      login: jest.fn(),
-      requestEmailLoginCode: jest.fn(),
-      verifyEmailLoginCode: jest.fn(),
+      requestEmailAuthCode: jest.fn(),
+      verifyEmailAuthCode: jest.fn(),
     });
     const login = render(<LoginPage />);
-    expect(screen.getByRole("button", { name: "Log in" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Continue with email" }),
+    ).toBeDisabled();
     login.unmount();
 
     useAuth.mockReturnValue({
       loading: true,
-      signup: jest.fn(),
-      verifySignup: jest.fn(),
+      requestEmailAuthCode: jest.fn(),
+      verifyEmailAuthCode: jest.fn(),
     });
     render(<SignupPage />);
-    expect(screen.getByRole("button", { name: "Send verification code" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Continue with email" }),
+    ).toBeDisabled();
   });
 
-  test("Login supports email code flow and mode switching", async () => {
-    const login = jest.fn();
-    const requestEmailLoginCode = jest.fn().mockResolvedValue({});
-    const verifyEmailLoginCode = jest.fn().mockResolvedValue({});
-    useAuth.mockReturnValue({ login, requestEmailLoginCode, verifyEmailLoginCode });
+  test("Login preserves next and sends new accounts to profile completion", async () => {
+    const requestEmailAuthCode = jest.fn().mockResolvedValue({});
+    const verifyEmailAuthCode = jest
+      .fn()
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({ next_step: "complete_profile" });
+    useAuth.mockReturnValue({ requestEmailAuthCode, verifyEmailAuthCode });
     searchParams = new URLSearchParams("next=/event?code=ABC123");
     const firstLogin = render(<LoginPage />);
-
-    await userEvent.click(screen.getByRole("button", { name: "Email code" }));
-    expect(screen.getByText("Email code is for existing verified accounts.")).toBeInTheDocument();
-    expect(
-      screen.getByRole("link", { name: "Create an account with your profile details" })
-    ).toHaveAttribute("href", "/signup?next=%2Fevent%3Fcode%3DABC123");
     await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
-    await userEvent.click(screen.getByRole("button", { name: "Send login code" }));
-    await waitFor(() =>
-      expect(requestEmailLoginCode).toHaveBeenCalledWith({ email: "ada@example.com" })
+    await userEvent.click(
+      screen.getByRole("button", { name: "Continue with email" }),
     );
-    expect(
-      await screen.findByText(
-        "If an existing verified account uses this email, a login code will arrive shortly."
-      )
-    ).toBeInTheDocument();
-    await userEvent.type(screen.getByLabelText("Verification code"), "123456");
-    await userEvent.click(screen.getByRole("button", { name: "Log in" }));
-    await waitFor(() =>
-      expect(verifyEmailLoginCode).toHaveBeenCalledWith({
-        email: "ada@example.com",
-        code: "123456",
-      })
+    await userEvent.type(
+      await screen.findByLabelText("Verification code"),
+      "123456",
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Verify and continue" }),
     );
     expect(navigateTo).toHaveBeenCalledWith("/event?code=ABC123");
-
-    await userEvent.click(screen.getByRole("button", { name: "Password" }));
-    expect(screen.queryByLabelText("Verification code")).not.toBeInTheDocument();
     firstLogin.unmount();
 
-    requestEmailLoginCode.mockRejectedValueOnce(new Error("No code"));
-    const secondLogin = render(<LoginPage />);
-    await userEvent.click(screen.getByRole("button", { name: "Email code" }));
-    await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
-    await userEvent.click(screen.getByRole("button", { name: "Send login code" }));
-    expect(await screen.findByText("No code")).toBeInTheDocument();
-    secondLogin.unmount();
-
-    requestEmailLoginCode.mockResolvedValueOnce({});
-    verifyEmailLoginCode.mockRejectedValueOnce(new Error());
+    searchParams = new URLSearchParams();
     render(<LoginPage />);
-    await userEvent.click(screen.getAllByRole("button", { name: "Email code" }).at(-1));
-    await userEvent.type(screen.getAllByLabelText("Email").at(-1), "ada@example.com");
-    await userEvent.click(screen.getAllByRole("button", { name: "Send login code" }).at(-1));
-    await screen.findByText(
-      "If an existing verified account uses this email, a login code will arrive shortly."
+    await userEvent.type(screen.getByLabelText("Email"), "new@example.com");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Continue with email" }),
     );
-    await userEvent.type(screen.getAllByLabelText("Verification code").at(-1), "000000");
-    await userEvent.click(screen.getAllByRole("button", { name: "Log in" }).at(-1));
-    expect(await screen.findByText("Unable to verify code.")).toBeInTheDocument();
+    await userEvent.type(
+      await screen.findByLabelText("Verification code"),
+      "654321",
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Verify and continue" }),
+    );
+    await waitFor(() =>
+      expect(navigateTo).toHaveBeenCalledWith(
+        "/settings?complete_profile=1&next=%2Fdashboard",
+      ),
+    );
   });
 
   test("Login shows account lifecycle status messages", () => {
     useAuth.mockReturnValue({
-      login: jest.fn(),
-      requestEmailLoginCode: jest.fn(),
-      verifyEmailLoginCode: jest.fn(),
+      requestEmailAuthCode: jest.fn(),
+      verifyEmailAuthCode: jest.fn(),
     });
     searchParams = new URLSearchParams("status=password-reset");
     const reset = render(<LoginPage />);
     expect(
-      screen.getByText("Password reset complete. Log in with your new password.")
+      screen.getByText("Password reset complete. Continue with your email."),
     ).toBeInTheDocument();
     reset.unmount();
 
     searchParams = new URLSearchParams("status=password-changed");
     const changed = render(<LoginPage />);
-    expect(screen.getByText("Password changed. Log in again on this device.")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Password changed. Continue with your email on this device.",
+      ),
+    ).toBeInTheDocument();
     changed.unmount();
 
     searchParams = new URLSearchParams("status=signed-out-all");
     const signedOut = render(<LoginPage />);
-    expect(screen.getByText("All devices have been signed out.")).toBeInTheDocument();
+    expect(
+      screen.getByText("All devices have been signed out."),
+    ).toBeInTheDocument();
     signedOut.unmount();
 
     searchParams = new URLSearchParams("status=account-deleted");
     render(<LoginPage />);
-    expect(screen.getByText("Your account has been deleted.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Your account has been deleted."),
+    ).toBeInTheDocument();
   });
 
   test("Account recovery requests a code, validates passwords, and resets", async () => {
@@ -952,104 +957,79 @@ describe("app pages", () => {
     expect(await screen.findByText("Unable to reset your password.")).toBeInTheDocument();
   });
 
-  test("Signup validates passwords, starts registration, verifies, and shows errors", async () => {
-    const signup = jest.fn().mockResolvedValue({});
-    const verifySignup = jest.fn().mockResolvedValue({});
-    useAuth.mockReturnValue({ signup, verifySignup });
-    const firstSignup = render(<SignupPage />);
-    await userEvent.type(screen.getByLabelText("First name"), "Ada");
-    await userEvent.type(screen.getByLabelText("Last name"), "Lovelace");
-    await userEvent.type(screen.getByLabelText("Organization"), "Releviz");
-    await userEvent.type(screen.getByLabelText("Title"), "Engineer");
-    await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
-    await userEvent.type(screen.getByLabelText("Password"), "password123");
-    await userEvent.type(screen.getByLabelText("Confirm password"), "different123");
-    await userEvent.click(screen.getByRole("button", { name: "Send verification code" }));
-    expect(screen.getByText("Passwords do not match.")).toBeInTheDocument();
-
-    fireEvent.change(screen.getByLabelText("Confirm password"), {
-      target: { value: "password123" },
+  test("Signup route uses the same passwordless email flow", async () => {
+    const requestEmailAuthCode = jest.fn().mockResolvedValue({});
+    const verifyEmailAuthCode = jest.fn().mockResolvedValue({});
+    useAuth.mockReturnValue({
+      requestEmailAuthCode,
+      verifyEmailAuthCode,
+      loading: false,
     });
-    await userEvent.click(screen.getByRole("button", { name: "Send verification code" }));
-    await waitFor(() => expect(signup).toHaveBeenCalled());
-    await userEvent.type(await screen.findByLabelText("Verification code"), "123456");
-    await userEvent.click(screen.getByRole("button", { name: "Verify and continue" }));
-    await waitFor(() =>
-      expect(verifySignup).toHaveBeenCalledWith({
-        email: "ada@example.com",
-        code: "123456",
-        temporaryUpgrade: false,
-        password: "password123",
-        password_confirm: "password123",
-        first_name: "Ada",
-        last_name: "Lovelace",
-        organization: "Releviz",
-        title: "Engineer",
-      })
+    render(<SignupPage />);
+
+    expect(screen.queryByLabelText("First name")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Password")).not.toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Continue with email" }),
+    );
+    expect(requestEmailAuthCode).toHaveBeenCalledWith({
+      email: "ada@example.com",
+      next: "/dashboard",
+      source: "login",
+    });
+    await userEvent.type(
+      await screen.findByLabelText("Verification code"),
+      "123456",
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Verify and continue" }),
     );
     await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/dashboard"));
-    await screen.findByRole("button", { name: "Verify and continue" });
-
-    verifySignup.mockRejectedValueOnce(new Error("Bad code"));
-    await userEvent.click(screen.getByRole("button", { name: "Verify and continue" }));
-    expect(await screen.findByText("Bad code")).toBeInTheDocument();
-
-    verifySignup.mockRejectedValueOnce(new Error());
-    await userEvent.click(screen.getByRole("button", { name: "Verify and continue" }));
-    expect(await screen.findByText("Unable to verify code.")).toBeInTheDocument();
-
-    firstSignup.unmount();
-    signup.mockRejectedValueOnce(new Error("No signup"));
-    render(<SignupPage />);
-    await userEvent.type(screen.getByLabelText("First name"), "Ada");
-    await userEvent.type(screen.getByLabelText("Last name"), "Lovelace");
-    await userEvent.type(screen.getByLabelText("Organization"), "Releviz");
-    await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
-    await userEvent.type(screen.getByLabelText("Password"), "password123");
-    await userEvent.type(screen.getByLabelText("Confirm password"), "password123");
-    await userEvent.click(screen.getByRole("button", { name: "Send verification code" }));
-    expect(await screen.findByText("No signup")).toBeInTheDocument();
-
-    signup.mockRejectedValueOnce(new Error());
-    render(<SignupPage />);
-    await userEvent.type(screen.getAllByLabelText("First name").at(-1), "Ada");
-    await userEvent.type(screen.getAllByLabelText("Last name").at(-1), "Lovelace");
-    await userEvent.type(screen.getAllByLabelText("Organization").at(-1), "Releviz");
-    await userEvent.type(screen.getAllByLabelText("Email").at(-1), "ada@example.com");
-    await userEvent.type(screen.getAllByLabelText("Password").at(-1), "password123");
-    await userEvent.type(screen.getAllByLabelText("Confirm password").at(-1), "password123");
-    await userEvent.click(screen.getAllByRole("button", { name: "Send verification code" }).at(-1));
-    expect(await screen.findByText("Unable to start registration.")).toBeInTheDocument();
   });
 
-  test("Signup preserves the intended destination through verification and login", async () => {
-    const signup = jest.fn().mockResolvedValue({});
-    const verifySignup = jest.fn().mockResolvedValue({});
-    useAuth.mockReturnValue({ signup, verifySignup, loading: false });
+  test("Signup preserves the intended destination through unified verification", async () => {
+    const requestEmailAuthCode = jest.fn().mockResolvedValue({});
+    const verifyEmailAuthCode = jest.fn().mockResolvedValue({});
+    useAuth.mockReturnValue({
+      requestEmailAuthCode,
+      verifyEmailAuthCode,
+      loading: false,
+    });
     searchParams = new URLSearchParams("next=/event?code=ABC123");
     render(<SignupPage />);
 
-    expect(screen.getByRole("link", { name: "Log in" })).toHaveAttribute(
-      "href",
-      "/login?next=%2Fevent%3Fcode%3DABC123"
+    await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Continue with email" }),
+    );
+    await userEvent.type(
+      await screen.findByLabelText("Verification code"),
+      "123456",
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Verify and continue" }),
     );
 
-    await userEvent.type(screen.getByLabelText("First name"), "Ada");
-    await userEvent.type(screen.getByLabelText("Last name"), "Lovelace");
-    await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
-    await userEvent.type(screen.getByLabelText("Password"), "password123");
-    await userEvent.type(screen.getByLabelText("Confirm password"), "password123");
-    await userEvent.click(screen.getByRole("button", { name: "Send verification code" }));
-    await userEvent.type(await screen.findByLabelText("Verification code"), "123456");
-    await userEvent.click(screen.getByRole("button", { name: "Verify and continue" }));
-
-    await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/event?code=ABC123"));
+    await waitFor(() =>
+      expect(navigateTo).toHaveBeenCalledWith("/event?code=ABC123"),
+    );
   });
 
   test("Settings redirects unauthenticated users and saves profiles", async () => {
-    useAuth.mockReturnValue({ user: null, loading: false, updateProfile: jest.fn() });
+    useAuth.mockReturnValue({
+      user: null,
+      loading: false,
+      updateProfile: jest.fn(),
+    });
     const unauthenticated = render(<SettingsPage />);
-    expect(navigateTo).toHaveBeenCalledWith("/login?next=/settings");
+    expect(navigateTo).toHaveBeenCalledTimes(1);
+    const settingsLoginUrl = new URL(
+      navigateTo.mock.calls[0][0],
+      "https://releviz.test",
+    );
+    expect(settingsLoginUrl.pathname).toBe("/login");
+    expect(settingsLoginUrl.searchParams.get("next")).toBe("/settings");
     unauthenticated.unmount();
 
     const updateProfile = jest.fn().mockResolvedValue({});
@@ -1091,29 +1071,46 @@ describe("app pages", () => {
       },
     });
     const authenticated = render(<SettingsPage />);
+    const settingsNav = screen.getByRole("navigation", {
+      name: "Settings sections",
+    });
+    expect(
+      within(settingsNav).getByRole("link", { name: "Profile" }),
+    ).toHaveAttribute("href", "#profile");
+    expect(
+      within(settingsNav).getByRole("link", { name: "Active sessions" }),
+    ).toHaveAttribute("href", "#sessions");
+    expect(
+      within(settingsNav).getByRole("link", { name: "Password" }),
+    ).toHaveAttribute("href", "#password");
+    expect(
+      within(settingsNav).getByRole("link", { name: "Danger zone" }),
+    ).toHaveAttribute("href", "#danger-zone");
     expect(screen.getByText("Loading active sessions...")).toBeInTheDocument();
     expect(await screen.findByText("This device")).toBeInTheDocument();
     expect(screen.getByText("Other device")).toBeInTheDocument();
     expect(screen.getByText("Unknown browser")).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("First name"), { target: { value: "Augusta" } });
-    fireEvent.change(screen.getByLabelText("Last name"), { target: { value: "King" } });
-    fireEvent.change(screen.getByLabelText("Organization"), { target: { value: "Math" } });
-    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Countess" } });
-    let savedTimeout;
-    const timeoutSpy = jest.spyOn(window, "setTimeout").mockImplementation((callback) => {
-      savedTimeout = callback;
-      return 1;
+    fireEvent.change(screen.getByLabelText("First name"), {
+      target: { value: "Augusta" },
     });
+    fireEvent.change(screen.getByLabelText("Last name"), {
+      target: { value: "King" },
+    });
+    expect(screen.queryByLabelText("Organization")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Title")).not.toBeInTheDocument();
+    let savedTimeout;
+    const timeoutSpy = jest
+      .spyOn(window, "setTimeout")
+      .mockImplementation((callback) => {
+        savedTimeout = callback;
+        return 1;
+      });
     fireEvent.click(screen.getByText("Save profile"));
     await act(async () => {});
-    expect(updateProfile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        first_name: "Augusta",
-        last_name: "King",
-        organization: "Math",
-        title: "Countess",
-      })
-    );
+    expect(updateProfile).toHaveBeenCalledWith({
+      first_name: "Augusta",
+      last_name: "King",
+    });
     expect(screen.getByText("Saved")).toBeInTheDocument();
     expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), 2000);
     act(() => savedTimeout());
@@ -1126,55 +1123,92 @@ describe("app pages", () => {
 
     updateProfile.mockRejectedValueOnce(new Error());
     fireEvent.click(screen.getByText("Save profile"));
-    expect(await screen.findByText("Unable to save profile.")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Unable to save profile."),
+    ).toBeInTheDocument();
 
     revokeSession.mockRejectedValueOnce(new Error("No revoke"));
     fireEvent.click(screen.getByRole("button", { name: "Revoke" }));
     expect(await screen.findByText("No revoke")).toBeInTheDocument();
     revokeSession.mockRejectedValueOnce(new Error());
     fireEvent.click(screen.getByRole("button", { name: "Revoke" }));
-    expect(await screen.findByText("Unable to revoke this session.")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Unable to revoke this session."),
+    ).toBeInTheDocument();
     revokeSession.mockResolvedValueOnce({ currentRevoked: false });
     fireEvent.click(screen.getByRole("button", { name: "Revoke" }));
-    await waitFor(() => expect(screen.queryByText("Other device")).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByText("Other device")).not.toBeInTheDocument(),
+    );
 
     revokeSession.mockResolvedValueOnce({ currentRevoked: true });
-    fireEvent.click(screen.getByRole("button", { name: "Sign out this device" }));
-    await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/login?next=/settings"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sign out this device" }),
+    );
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Sign out all devices" })).not.toBeDisabled()
+      expect(navigateTo).toHaveBeenCalledWith("/login?next=/settings"),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Sign out all devices" }),
+      ).not.toBeDisabled(),
     );
 
     logoutAll.mockRejectedValueOnce(new Error("No all"));
-    fireEvent.click(screen.getByRole("button", { name: "Sign out all devices" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sign out all devices" }),
+    );
     expect(await screen.findByText("No all")).toBeInTheDocument();
     logoutAll.mockRejectedValueOnce(new Error());
-    fireEvent.click(screen.getByRole("button", { name: "Sign out all devices" }));
-    expect(await screen.findByText("Unable to sign out all devices.")).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sign out all devices" }),
+    );
+    expect(
+      await screen.findByText("Unable to sign out all devices."),
+    ).toBeInTheDocument();
     logoutAll.mockResolvedValueOnce();
-    fireEvent.click(screen.getByRole("button", { name: "Sign out all devices" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sign out all devices" }),
+    );
     await waitFor(() => expect(logoutAll).toHaveBeenCalledTimes(3));
 
-    const passwordForm = screen.getByRole("heading", { name: "Change password" }).closest("form");
-    await userEvent.type(within(passwordForm).getByLabelText("Current password"), "password789");
-    await userEvent.type(within(passwordForm).getByLabelText("New password"), "passwordABC");
+    const passwordForm = screen
+      .getByRole("heading", { name: "Change password" })
+      .closest("form");
+    const passwordDetails = passwordForm.querySelector("details");
+    expect(passwordDetails).not.toHaveAttribute("open");
+    fireEvent.click(passwordDetails.querySelector("summary"));
+    expect(passwordDetails).toHaveAttribute("open");
+    await userEvent.type(
+      within(passwordForm).getByLabelText("Current password"),
+      "password789",
+    );
+    await userEvent.type(
+      within(passwordForm).getByLabelText("New password"),
+      "passwordABC",
+    );
     await userEvent.type(
       within(passwordForm).getByLabelText("Confirm new password"),
-      "differentABC"
+      "differentABC",
     );
     fireEvent.submit(passwordForm);
     expect(screen.getByText("New passwords do not match.")).toBeInTheDocument();
     expect(changePassword).not.toHaveBeenCalled();
 
-    fireEvent.change(within(passwordForm).getByLabelText("Confirm new password"), {
-      target: { value: "passwordABC" },
-    });
+    fireEvent.change(
+      within(passwordForm).getByLabelText("Confirm new password"),
+      {
+        target: { value: "passwordABC" },
+      },
+    );
     changePassword.mockRejectedValueOnce(new Error("No password change"));
     fireEvent.submit(passwordForm);
     expect(await screen.findByText("No password change")).toBeInTheDocument();
     changePassword.mockRejectedValueOnce(new Error());
     fireEvent.submit(passwordForm);
-    expect(await screen.findByText("Unable to change your password.")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Unable to change your password."),
+    ).toBeInTheDocument();
     changePassword.mockResolvedValueOnce({ message: "changed" });
     fireEvent.submit(passwordForm);
     await waitFor(() =>
@@ -1182,30 +1216,44 @@ describe("app pages", () => {
         currentPassword: "password789",
         newPassword: "passwordABC",
         newPasswordConfirm: "passwordABC",
-      })
+      }),
     );
 
-    const deleteForm = screen.getByRole("heading", { name: "Delete account" }).closest("form");
+    const deleteForm = screen
+      .getByRole("heading", { name: "Delete account" })
+      .closest("form");
+    const deleteDetails = deleteForm.querySelector("details");
+    expect(deleteDetails).not.toHaveAttribute("open");
+    fireEvent.click(deleteDetails.querySelector("summary"));
+    expect(deleteDetails).toHaveAttribute("open");
     const deleteButton = within(deleteForm).getByRole("button", {
       name: "Delete account permanently",
     });
     expect(deleteButton).toBeDisabled();
-    await userEvent.type(within(deleteForm).getByLabelText("Current password"), "passwordABC");
-    await userEvent.type(within(deleteForm).getByLabelText("Type DELETE to confirm"), "DELETE");
+    await userEvent.type(
+      within(deleteForm).getByLabelText("Current password"),
+      "passwordABC",
+    );
+    await userEvent.type(
+      within(deleteForm).getByLabelText("Type DELETE to confirm"),
+      "DELETE",
+    );
     expect(deleteButton).not.toBeDisabled();
     deleteAccount.mockRejectedValueOnce(new Error("No deletion"));
     fireEvent.submit(deleteForm);
     expect(await screen.findByText("No deletion")).toBeInTheDocument();
     deleteAccount.mockRejectedValueOnce(new Error());
     fireEvent.submit(deleteForm);
-    expect(await screen.findByText("Unable to delete your account.")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Unable to delete your account."),
+    ).toBeInTheDocument();
     deleteAccount.mockResolvedValueOnce({ message: "deleted" });
     fireEvent.submit(deleteForm);
     await waitFor(() =>
       expect(deleteAccount).toHaveBeenLastCalledWith({
         password: "passwordABC",
         confirmation: "DELETE",
-      })
+      }),
     );
     authenticated.unmount();
 
@@ -1220,7 +1268,9 @@ describe("app pages", () => {
       user: { id: "u2", email: "empty@example.com" },
     });
     const empty = render(<SettingsPage />);
-    expect(await screen.findByText("No active sessions were found.")).toBeInTheDocument();
+    expect(
+      await screen.findByText("No active sessions were found."),
+    ).toBeInTheDocument();
     empty.unmount();
 
     useAuth.mockReturnValue({
@@ -1248,6 +1298,109 @@ describe("app pages", () => {
       user: { id: "u4", email: "error2@example.com" },
     });
     render(<SettingsPage />);
-    expect(await screen.findByText("Unable to load active sessions.")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Unable to load active sessions."),
+    ).toBeInTheDocument();
+  });
+
+  test("profile completion stays focused and continues directly into an event response", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/settings?complete_profile=1&next=%2Fevent%3Fcode%3DABC123",
+    );
+    const updateProfile = jest.fn().mockResolvedValue({});
+    const listSessions = jest.fn().mockResolvedValue([]);
+    useAuth.mockReturnValue({
+      loading: false,
+      updateProfile,
+      listSessions,
+      revokeSession: jest.fn(),
+      logoutAll: jest.fn(),
+      changePassword: jest.fn(),
+      deleteAccount: jest.fn(),
+      user: {
+        id: "new-user",
+        email: "new@example.com",
+        firstName: "",
+        lastName: "",
+      },
+    });
+
+    render(<SettingsPage />);
+
+    expect(
+      screen.getByRole("heading", { name: "Complete your profile" }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Email address")).toHaveValue(
+      "new@example.com",
+    );
+    expect(screen.getByLabelText("Email address")).toHaveAttribute("readonly");
+    expect(screen.getByLabelText("First name")).toBeRequired();
+    expect(screen.getByLabelText("First name")).toHaveAttribute(
+      "autocomplete",
+      "given-name",
+    );
+    expect(screen.getByLabelText("Last name")).toBeRequired();
+    expect(screen.getByLabelText("Last name")).toHaveAttribute(
+      "autocomplete",
+      "family-name",
+    );
+    expect(
+      screen.queryByRole("heading", { name: "Active sessions" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Change password" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Delete account" }),
+    ).not.toBeInTheDocument();
+    expect(listSessions).not.toHaveBeenCalled();
+
+    await userEvent.type(screen.getByLabelText("First name"), "New");
+    await userEvent.type(screen.getByLabelText("Last name"), "Member");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Continue to event" }),
+    );
+
+    await waitFor(() =>
+      expect(updateProfile).toHaveBeenCalledWith({
+        first_name: "New",
+        last_name: "Member",
+      }),
+    );
+    expect(navigateTo).toHaveBeenCalledWith("/event?code=ABC123&respond=1");
+  });
+
+  test("profile completion rejects an unsafe destination", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/settings?complete_profile=1&next=%2F%2Fevil.example",
+    );
+    const updateProfile = jest.fn().mockResolvedValue({});
+    const listSessions = jest.fn().mockResolvedValue([]);
+    useAuth.mockReturnValue({
+      loading: false,
+      updateProfile,
+      listSessions,
+      revokeSession: jest.fn(),
+      logoutAll: jest.fn(),
+      changePassword: jest.fn(),
+      deleteAccount: jest.fn(),
+      user: {
+        id: "new-user",
+        email: "new@example.com",
+        firstName: "New",
+        lastName: "Member",
+      },
+    });
+
+    render(<SettingsPage />);
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    await waitFor(() => expect(updateProfile).toHaveBeenCalled());
+    expect(navigateTo).toHaveBeenCalledWith("/dashboard");
+    expect(listSessions).not.toHaveBeenCalled();
   });
 });

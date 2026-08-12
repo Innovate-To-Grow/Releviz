@@ -8,7 +8,11 @@ import uuid
 from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 
-from apps.authn.constants import RECOVERY_CHANNEL_UNAVAILABLE, VERIFICATION_CONFIRM_INVALID, VERIFICATION_INVALID
+from apps.authn.constants import (
+    RECOVERY_CHANNEL_UNAVAILABLE,
+    VERIFICATION_CONFIRM_INVALID,
+    VERIFICATION_INVALID,
+)
 from apps.authn.services import (
     AuthChallengeInvalid,
     NoRecoveryChannelError,
@@ -48,7 +52,9 @@ class PasswordResetRequestSerializer(serializers.Serializer):
         # Always return an opaque ID so response shape cannot reveal whether the
         # identifier resolved.
         challenge_id = str(uuid.uuid4())
-        resolved = resolve_login_identifier(_identifier_value(self.validated_data), require_active=True)
+        resolved = resolve_login_identifier(
+            _identifier_value(self.validated_data), require_active=True
+        )
         if resolved is not None:
             issue_email_challenge(
                 member=resolved.member,
@@ -141,7 +147,9 @@ class ChangePasswordCodeRequestSerializer(serializers.Serializer):
         member = self.context["request"].user
         requested = normalize_email(attrs["email"]) if attrs.get("email") else None
         if requested and requested not in set(get_member_auth_emails(member)):
-            raise serializers.ValidationError({"email": "This email is not eligible for password change verification."})
+            raise serializers.ValidationError(
+                {"email": "This email is not eligible for password change verification."}
+            )
         try:
             attrs["selected"] = select_recovery_channel(member, requested_email=requested)
         except NoRecoveryChannelError:
@@ -205,7 +213,9 @@ class ChangePasswordCodeConfirmSerializer(serializers.Serializer):
     key_id = serializers.CharField(required=False, allow_blank=True)
 
     def validate(self, attrs: dict) -> dict:
-        attrs["decrypted_new_password"] = decrypt_password_pair(attrs, user=self.context["request"].user)
+        attrs["decrypted_new_password"] = decrypt_password_pair(
+            attrs, user=self.context["request"].user
+        )
         return attrs
 
     def save(self):
@@ -228,7 +238,9 @@ class DeleteAccountCodeRequestSerializer(serializers.Serializer):
         email = member.get_primary_email()
         if not email:
             raise serializers.ValidationError(
-                {"detail": "No verified email is available for account deletion. Add and verify an email first."}
+                {
+                    "detail": "No verified email is available for account deletion. Add and verify an email first."
+                }
             )
 
         issue_email_challenge(
@@ -250,7 +262,9 @@ class DeleteAccountCodeVerifySerializer(serializers.Serializer):
         email = member.get_primary_email()
         if not email:
             raise serializers.ValidationError(
-                {"detail": "No verified email is available for account deletion. Add and verify an email first."}
+                {
+                    "detail": "No verified email is available for account deletion. Add and verify an email first."
+                }
             )
 
         try:

@@ -24,7 +24,9 @@ def bulk_update_members(
         .filter(email_lower__in=[e.lower() for e in emails], email_type="primary")
         .select_related("member")
     )
-    member_map = {contact.email_address.lower(): contact.member for contact in contacts if contact.member}
+    member_map = {
+        contact.email_address.lower(): contact.member for contact in contacts if contact.member
+    }
 
     for parsed in rows:
         member = member_map.get(parsed["primary_email"].lower())
@@ -33,7 +35,9 @@ def bulk_update_members(
             continue
         if update_member_allowed is not None and not update_member_allowed(member):
             result.skipped_count += 1
-            result.errors.append(f"Row {parsed['row']}: You do not have permission to update this member")
+            result.errors.append(
+                f"Row {parsed['row']}: You do not have permission to update this member"
+            )
             continue
         try:
             with transaction.atomic():
@@ -51,10 +55,6 @@ def update_single_member(member, parsed, claimed_contact_emails):
         member.last_name = parsed["last_name"]
     if parsed["middle_name"]:
         member.middle_name = parsed["middle_name"]
-    if parsed["title"]:
-        member.title = parsed["title"]
-    if parsed["organization"]:
-        member.organization = parsed["organization"]
     if parsed["is_active"] is not None:
         member.is_active = parsed["is_active"]
     if parsed["is_staff"] is not None:
@@ -65,7 +65,9 @@ def update_single_member(member, parsed, claimed_contact_emails):
     primary_email = primary_contact.email_address if primary_contact else parsed["primary_email"]
     email_key = primary_email.lower()
     if email_key not in claimed_contact_emails:
-        existing = ContactEmail.objects.filter(member=member, email_address__iexact=primary_email).first()
+        existing = ContactEmail.objects.filter(
+            member=member, email_address__iexact=primary_email
+        ).first()
         if existing:
             existing.verified = parsed["primary_verified"]
             existing.subscribe = parsed["primary_subscribed"]
@@ -100,7 +102,9 @@ def update_single_member(member, parsed, claimed_contact_emails):
                 existing_sec.email_type = "secondary"
                 existing_sec.verified = parsed["secondary_verified"]
                 existing_sec.subscribe = parsed["secondary_subscribed"]
-                existing_sec.save(update_fields=["email_type", "verified", "subscribe", "updated_at"])
+                existing_sec.save(
+                    update_fields=["email_type", "verified", "subscribe", "updated_at"]
+                )
             else:
                 ContactEmail.objects.create(
                     member=member,

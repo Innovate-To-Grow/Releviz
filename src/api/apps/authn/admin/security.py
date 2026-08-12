@@ -47,13 +47,19 @@ class RSAKeypairAdmin(BaseModelAdmin):
                         "description": "RSA keys in PEM format. These are auto-generated and cannot be modified.",
                     },
                 ),
-                (_("Timestamps"), {"fields": ("created_at", "rotated_at"), "classes": ("collapse",)}),
+                (
+                    _("Timestamps"),
+                    {"fields": ("created_at", "rotated_at"), "classes": ("collapse",)},
+                ),
             )
         else:  # Adding new object - only show name and is_active
             return (
                 (
                     None,
-                    {"fields": ("name", "is_active"), "description": "RSA keys will be auto-generated when you save."},
+                    {
+                        "fields": ("name", "is_active"),
+                        "description": "RSA keys will be auto-generated when you save.",
+                    },
                 ),
             )
 

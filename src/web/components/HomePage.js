@@ -3,7 +3,14 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { MdAdd, MdArrowForward, MdCheckCircle, MdGroups, MdLink, MdSearch } from "react-icons/md";
+import {
+  MdAdd,
+  MdArrowForward,
+  MdCheckCircle,
+  MdGroups,
+  MdLink,
+  MdSearch,
+} from "react-icons/md";
 import AppButton from "@/components/ui/AppButton";
 import AppHeader from "@/components/ui/AppHeader";
 import { useAuth } from "@/components/auth/AuthContext";
@@ -15,7 +22,7 @@ function HomePage() {
 
   const handleOrganize = () => {
     if (loading) return;
-    router.push(user ? "/create" : "/signup?next=%2Fcreate");
+    router.push(user ? "/create" : "/login?next=%2Fcreate");
   };
 
   const handleJoin = (submitEvent) => {
@@ -24,7 +31,9 @@ function HomePage() {
     const code = eventCode.trim();
     if (!code) return;
     const eventPath = `/event?code=${encodeURIComponent(code)}`;
-    router.push(user ? eventPath : `/login?next=${encodeURIComponent(eventPath)}`);
+    router.push(
+      user ? eventPath : `/login?next=${encodeURIComponent(eventPath)}`,
+    );
   };
 
   return (
@@ -33,11 +42,13 @@ function HomePage() {
       <main className="home-page">
         <section className="home-hero" aria-labelledby="home-heading">
           <div className="home-hero-copy">
-            <p className="home-eyebrow">Group scheduling without the back-and-forth</p>
+            <p className="home-eyebrow">
+              Group scheduling without the back-and-forth
+            </p>
             <h1 id="home-heading">Find a time that works for everyone.</h1>
             <p className="home-lede">
-              Create a scheduling poll, share one link, and watch the best meeting times appear as
-              your group responds.
+              Create a scheduling poll, share one link, and watch the best
+              meeting times appear as your group responds.
             </p>
 
             <div className="home-hero-actions">
@@ -55,13 +66,16 @@ function HomePage() {
                 </Link>
               ) : (
                 <p className="home-action-note">
-                  New here? Creating a poll starts with a free account.
+                  Continue with your email to create a free account.
                 </p>
               )}
             </div>
           </div>
 
-          <aside className="home-preview" aria-label="Example group availability">
+          <aside
+            className="home-preview"
+            aria-label="Example group availability"
+          >
             <div className="home-preview-heading">
               <div>
                 <p>Project kickoff</p>
@@ -103,7 +117,10 @@ function HomePage() {
             <div>
               <p className="home-role-label">I&apos;ve been invited</p>
               <h2 id="join-heading">Open an existing poll</h2>
-              <p>Use the event code from your organizer to add or update your availability.</p>
+              <p>
+                Use the event code from your organizer to add or update your
+                availability.
+              </p>
             </div>
           </div>
           <form className="home-code-form" onSubmit={handleJoin}>
@@ -119,13 +136,17 @@ function HomePage() {
                 autoComplete="off"
                 spellCheck="false"
               />
-              <AppButton type="submit" icon={<MdSearch />} disabled={loading || !eventCode.trim()}>
+              <AppButton
+                type="submit"
+                icon={<MdSearch />}
+                disabled={loading || !eventCode.trim()}
+              >
                 Open event
               </AppButton>
             </div>
             {!user && (
               <p className="home-code-help">
-                We&apos;ll ask you to log in or create an account, then bring you straight to the
+                We&apos;ll verify your email, then bring you straight to the
                 event.
               </p>
             )}
@@ -140,27 +161,36 @@ function HomePage() {
               <span>1</span>
               <div>
                 <h3>Suggest the options</h3>
-                <p>Pick the dates, time range, location, and response deadline.</p>
+                <p>
+                  Pick the dates, time range, location, and response deadline.
+                </p>
               </div>
             </li>
             <li>
               <span>2</span>
               <div>
                 <h3>Share one link</h3>
-                <p>Invite your group with a secure link or event code—no spreadsheet required.</p>
+                <p>
+                  Invite your group with a secure link or event code—no
+                  spreadsheet required.
+                </p>
               </div>
             </li>
             <li>
               <span>3</span>
               <div>
                 <h3>Choose the best time</h3>
-                <p>Compare everyone&apos;s availability and finalize the strongest overlap.</p>
+                <p>
+                  Compare everyone&apos;s availability and finalize the
+                  strongest overlap.
+                </p>
               </div>
             </li>
           </ol>
           <div className="home-trust-note">
             <MdLink aria-hidden="true" />
-            Each poll keeps its own shareable code, participants, and live result.
+            Each poll keeps its own shareable code, participants, and live
+            result.
           </div>
         </section>
       </main>

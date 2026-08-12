@@ -16,6 +16,7 @@ from apps.core.services.aws.provider_outcomes import (
     PROVIDER_OUTCOME_TRANSIENT,
     ProviderDeliveryError,
 )
+from apps.mail.models import EmailProviderConfig
 
 
 class SendViaSesTests(TestCase):
@@ -47,6 +48,45 @@ class SendViaSesTests(TestCase):
             mock_boto3.client.call_args.kwargs["config"].retries["total_max_attempts"],
             1,
         )
+
+    @patch("apps.authn.services.email.send_email.transport.resolve_aws_credentials")
+    @patch("apps.authn.services.email.send_email.boto3")
+    def test_uses_active_email_provider_as_source(self, mock_boto3, mock_resolve):
+        from apps.core.services.aws.credentials import AwsCredentials
+
+        EmailProviderConfig.objects.create(
+            name="Default",
+            is_active=True,
+            from_email="no-reply@releviz.com",
+        )
+        mock_resolve.return_value = AwsCredentials(
+            access_key_id="k", secret_access_key="s", region="us-west-2"
+        )
+
+        result = _send_via_ses(
+            recipient="a@b.com",
+            subject="Hi",
+            html_body="<p>Hi</p>",
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(
+            mock_boto3.client.return_value.send_email.call_args.kwargs["Source"],
+            "no-reply@releviz.com",
+        )
+
+    @patch("apps.authn.services.email.send_email.transport.resolve_aws_credentials")
+    @patch("apps.authn.services.email.send_email.boto3")
+    def test_returns_false_without_active_email_provider(self, mock_boto3, mock_resolve):
+        result = _send_via_ses(
+            recipient="a@b.com",
+            subject="Hi",
+            html_body="<p>Hi</p>",
+        )
+
+        self.assertFalse(result)
+        mock_resolve.assert_not_called()
+        mock_boto3.client.assert_not_called()
 
     @patch("apps.authn.services.email.send_email.transport.resolve_aws_credentials")
     @patch("apps.authn.services.email.send_email.boto3")
@@ -115,6 +155,9 @@ class SendVerificationEmailTests(TestCase):
         self.assertIn("source=register", html)
         self.assertIn("email=new-user%40example.com", html)
         self.assertIn("code=123456", html)
+        self.assertIn("Releviz security", html)
+        self.assertIn("/brand/releviz-logo.png", html)
+        self.assertNotIn("Innovate to Grow", html)
 
     @override_settings(FRONTEND_URL="https://www.example.com")
     def test_render_body_includes_login_link_for_public_auth(self):
@@ -171,12 +214,12 @@ class SendVerificationEmailTests(TestCase):
         self.assertNotIn("Continue Registration", html)
         self.assertNotIn("Sign In to Your Account", html)
 
-    @patch("apps.authn.services.email.send_email.senders._send_via_ses", return_value=True)
+    @patch("apps.authn.services.email.send_email._send_via_ses", return_value=True)
     def test_ses_success_completes(self, mock_ses):
         send_verification_email(recipient="a@b.com", code="123456", purpose="admin_login")
         mock_ses.assert_called_once()
 
-    @patch("apps.authn.services.email.send_email.senders._send_via_ses", return_value=False)
+    @patch("apps.authn.services.email.send_email._send_via_ses", return_value=False)
     def test_ses_failure_raises(self, mock_ses):
         with self.assertRaises(RuntimeError):
             send_verification_email(recipient="a@b.com", code="123456", purpose="admin_login")
@@ -184,7 +227,7 @@ class SendVerificationEmailTests(TestCase):
 
 
 class SendNotificationEmailTests(TestCase):
-    @patch("apps.authn.services.email.send_email.senders._send_via_ses", return_value=True)
+    @patch("apps.authn.services.email.send_email._send_via_ses", return_value=True)
     def test_notification_sent_via_ses(self, mock_ses):
         send_notification_email(
             recipient="owner@example.com",
@@ -194,7 +237,7 @@ class SendNotificationEmailTests(TestCase):
         )
         mock_ses.assert_called_once()
 
-    @patch("apps.authn.services.email.send_email.senders._send_via_ses", return_value=False)
+    @patch("apps.authn.services.email.send_email._send_via_ses", return_value=False)
     def test_notification_logs_when_send_fails(self, mock_ses):
         # Should NOT raise — notification failures are swallowed (logged).
         send_notification_email(
@@ -234,7 +277,7 @@ class SendAdminInvitationEmailTests(TestCase):
         invitation.get_role_display.return_value = "Admin"
         return invitation
 
-    @patch("apps.authn.services.email.send_email.senders._send_via_ses", return_value=False)
+    @patch("apps.authn.services.email.send_email._send_via_ses", return_value=False)
     def test_ses_failure_raises(self, mock_ses):
         invitation = self._invitation()
 
@@ -243,7 +286,7 @@ class SendAdminInvitationEmailTests(TestCase):
 
         mock_ses.assert_called_once()
 
-    @patch("apps.authn.services.email.send_email.senders._send_via_ses", return_value=True)
+    @patch("apps.authn.services.email.send_email._send_via_ses", return_value=True)
     def test_ses_success_sends_invitation(self, mock_ses):
         send_admin_invitation_email(invitation=self._invitation())
 

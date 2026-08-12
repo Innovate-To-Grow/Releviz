@@ -1,6 +1,6 @@
 """Coverage for authn backends: EmailAuthBackend."""
 
-from django.contrib.auth import get_user_model
+from django.contrib.auth import get_backends, get_user_model
 from django.test import TestCase
 
 from apps.authn.models import ContactEmail
@@ -19,9 +19,14 @@ def _member(**kw):
 
 
 class EmailAuthBackendTests(TestCase):
+    def test_configured_backend_is_importable(self):
+        self.assertIsInstance(get_backends()[0], EmailAuthBackend)
+
     def test_username_falls_back_to_email_kwarg(self):
         member = _member(is_active=True)
-        ContactEmail.objects.create(member=member, email_address="b@example.com", email_type="primary", verified=True)
+        ContactEmail.objects.create(
+            member=member, email_address="b@example.com", email_type="primary", verified=True
+        )
         backend = EmailAuthBackend()
         result = backend.authenticate(None, email="b@example.com", password="StrongPass123!")
         self.assertEqual(result, member)

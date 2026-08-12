@@ -9,6 +9,7 @@ from hashlib import sha256
 from django.core import signing
 from django.core.cache import cache
 
+
 def build_frontend_absolute_url(path: str) -> str:
     """Build an absolute frontend URL from a path."""
     from django.conf import settings
@@ -17,6 +18,7 @@ def build_frontend_absolute_url(path: str) -> str:
     if not base:
         base = getattr(settings, "BACKEND_URL", "").rstrip("/")
     return f"{base}{path}"
+
 
 _UNSUBSCRIBE_LOGIN_SALT = "email-unsubscribe-login"
 _UNSUBSCRIBE_LOGIN_MAX_AGE = 60 * 60 * 24 * 7  # 7 days
@@ -37,7 +39,9 @@ class UnsubscribeLoginTokenInvalid(UnsubscribeLoginTokenError):
 def _consume_one_time_token(token: str) -> bool:
     token_digest = sha256(token.encode("utf-8")).hexdigest()
     # Replay protection depends on cache retention; a cache flush or eviction resets this used-token marker.
-    return cache.add(f"authn:unsubscribe-login-used:{token_digest}", True, timeout=_UNSUBSCRIBE_LOGIN_MAX_AGE)
+    return cache.add(
+        f"authn:unsubscribe-login-used:{token_digest}", True, timeout=_UNSUBSCRIBE_LOGIN_MAX_AGE
+    )
 
 
 def build_unsubscribe_login_token(member) -> str:
@@ -50,7 +54,9 @@ def get_member_from_unsubscribe_token(token: str):
     from apps.authn.models import Member
 
     try:
-        payload = signing.loads(token, salt=_UNSUBSCRIBE_LOGIN_SALT, max_age=_UNSUBSCRIBE_LOGIN_MAX_AGE)
+        payload = signing.loads(
+            token, salt=_UNSUBSCRIBE_LOGIN_SALT, max_age=_UNSUBSCRIBE_LOGIN_MAX_AGE
+        )
         member_id = payload["member_id"]
     except signing.BadSignature as exc:
         raise UnsubscribeLoginTokenInvalid("Invalid or expired login link.") from exc

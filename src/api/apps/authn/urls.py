@@ -7,6 +7,7 @@ from django.urls import path
 from .views import (
     AcceptInvitationView,
     AccountEmailsView,
+    AuthSessionsView,
     ChangePasswordCodeConfirmView,
     ChangePasswordCodeRequestView,
     ChangePasswordCodeVerifyView,
@@ -46,8 +47,14 @@ urlpatterns = [
     # Public key for RSA encryption
     path("public-key/", PublicKeyView.as_view(), name="public-key"),
     # Unified email auth
-    path("email-auth/request-code/", EmailAuthRequestCodeView.as_view(), name="email-auth-request-code"),
-    path("email-auth/verify-code/", EmailAuthVerifyCodeView.as_view(), name="email-auth-verify-code"),
+    path(
+        "email-auth/request-code/",
+        EmailAuthRequestCodeView.as_view(),
+        name="email-auth-request-code",
+    ),
+    path(
+        "email-auth/verify-code/", EmailAuthVerifyCodeView.as_view(), name="email-auth-verify-code"
+    ),
     # Registration
     path("register/", RegisterView.as_view(), name="register"),
     path("register/verify-code/", RegisterVerifyCodeView.as_view(), name="register-verify-code"),
@@ -62,24 +69,61 @@ urlpatterns = [
     path("refresh/", PublicTokenRefreshView.as_view(), name="token-refresh"),
     # Authenticated frontend session bootstrap
     path("session/", SessionView.as_view(), name="session"),
+    path("sessions/", AuthSessionsView.as_view(), name="sessions"),
     # Password reset
-    path("password-reset/request-code/", PasswordResetRequestView.as_view(), name="password-reset-request-code"),
-    path("password-reset/verify-code/", PasswordResetVerifyView.as_view(), name="password-reset-verify-code"),
-    path("password-reset/confirm/", PasswordResetConfirmView.as_view(), name="password-reset-confirm"),
+    path(
+        "password-reset/request-code/",
+        PasswordResetRequestView.as_view(),
+        name="password-reset-request-code",
+    ),
+    path(
+        "password-reset/verify-code/",
+        PasswordResetVerifyView.as_view(),
+        name="password-reset-verify-code",
+    ),
+    path(
+        "password-reset/confirm/", PasswordResetConfirmView.as_view(), name="password-reset-confirm"
+    ),
     # Profile
     path("profile/", ProfileView.as_view(), name="profile"),
     path("account-emails/", AccountEmailsView.as_view(), name="account-emails"),
     # Change password
     path("change-password/", ChangePasswordView.as_view(), name="change-password"),
-    path("change-password/request-code/", ChangePasswordCodeRequestView.as_view(), name="change-password-request-code"),
-    path("change-password/verify-code/", ChangePasswordCodeVerifyView.as_view(), name="change-password-verify-code"),
-    path("change-password/confirm/", ChangePasswordCodeConfirmView.as_view(), name="change-password-confirm"),
-    path("delete-account/request-code/", DeleteAccountCodeRequestView.as_view(), name="delete-account-request-code"),
-    path("delete-account/verify-code/", DeleteAccountCodeVerifyView.as_view(), name="delete-account-verify-code"),
-    path("delete-account/confirm/", DeleteAccountCodeConfirmView.as_view(), name="delete-account-confirm"),
+    path(
+        "change-password/request-code/",
+        ChangePasswordCodeRequestView.as_view(),
+        name="change-password-request-code",
+    ),
+    path(
+        "change-password/verify-code/",
+        ChangePasswordCodeVerifyView.as_view(),
+        name="change-password-verify-code",
+    ),
+    path(
+        "change-password/confirm/",
+        ChangePasswordCodeConfirmView.as_view(),
+        name="change-password-confirm",
+    ),
+    path(
+        "delete-account/request-code/",
+        DeleteAccountCodeRequestView.as_view(),
+        name="delete-account-request-code",
+    ),
+    path(
+        "delete-account/verify-code/",
+        DeleteAccountCodeVerifyView.as_view(),
+        name="delete-account-verify-code",
+    ),
+    path(
+        "delete-account/confirm/",
+        DeleteAccountCodeConfirmView.as_view(),
+        name="delete-account-confirm",
+    ),
     # Contact Emails (authenticated)
     path("contact-emails/", ContactEmailListCreateView.as_view(), name="contact-email-list-create"),
-    path("contact-emails/<uuid:pk>/", ContactEmailDetailView.as_view(), name="contact-email-detail"),
+    path(
+        "contact-emails/<uuid:pk>/", ContactEmailDetailView.as_view(), name="contact-email-detail"
+    ),
     path(
         "contact-emails/<uuid:pk>/request-verification/",
         ContactEmailRequestVerificationView.as_view(),
