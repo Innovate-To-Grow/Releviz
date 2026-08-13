@@ -29,7 +29,7 @@
                 {% endif %}
                 <span class="login-title">{{ site_title|default:_('Django site admin') }}</span>
             </div>
-            <img src="{% static 'images/i2glogo.png' %}" alt="Innovate To Grow" class="login-logo">
+            <img src="{% static 'images/releviz-mark.png' %}" alt="Releviz" class="login-logo">
         </div>
 
         {% include "unfold/helpers/messages.html" %}
@@ -62,9 +62,6 @@
             <div class="login-last-admin" aria-label="{% translate 'Last signed in admin' %}">
                 <div class="login-last-admin__label">{% translate "Last signed in" %}</div>
                 <div class="login-last-admin__name">{{ last_admin_user.name }}</div>
-                {% if last_admin_user.organization %}
-                    <div class="login-last-admin__meta">{{ last_admin_user.organization }}</div>
-                {% endif %}
             </div>
         {% endif %}
 

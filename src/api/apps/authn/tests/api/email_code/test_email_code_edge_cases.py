@@ -57,7 +57,10 @@ class PasswordResetSerializerSecurityTests(APITestCase):
     )
     def test_password_change_serializers_use_client_safe_recovery_error(self, _select):
         request = SimpleNamespace(user=object())
-        serializer_classes = (ChangePasswordCodeRequestSerializer, ChangePasswordCodeVerifySerializer)
+        serializer_classes = (
+            ChangePasswordCodeRequestSerializer,
+            ChangePasswordCodeVerifySerializer,
+        )
 
         for serializer_class in serializer_classes:
             with self.subTest(serializer=serializer_class.__name__):
@@ -65,7 +68,9 @@ class PasswordResetSerializerSecurityTests(APITestCase):
                 with self.assertRaises(serializers.ValidationError) as raised:
                     serializer.validate({})
 
-                self.assertEqual(str(raised.exception.detail["detail"]), RECOVERY_CHANNEL_UNAVAILABLE)
+                self.assertEqual(
+                    str(raised.exception.detail["detail"]), RECOVERY_CHANNEL_UNAVAILABLE
+                )
                 self.assertIsNone(raised.exception.__cause__)
                 self.assertTrue(raised.exception.__suppress_context__)
                 self.assertNotIn("internal recovery diagnostics", str(raised.exception.detail))
@@ -92,11 +97,17 @@ class PublicEmailCodeViewEdgeTests(APITestCase):
         cache.clear()
         self.active = Member.objects.create_user(password="StrongPass123!", is_active=True)
         ContactEmail.objects.create(
-            member=self.active, email_address="active@example.com", email_type="primary", verified=True
+            member=self.active,
+            email_address="active@example.com",
+            email_type="primary",
+            verified=True,
         )
         self.inactive = Member.objects.create_user(password="StrongPass123!", is_active=False)
         ContactEmail.objects.create(
-            member=self.inactive, email_address="inactive@example.com", email_type="primary", verified=True
+            member=self.inactive,
+            email_address="inactive@example.com",
+            email_type="primary",
+            verified=True,
         )
 
     # ── invalid serializer payloads (return 400) ──────────
@@ -106,7 +117,9 @@ class PublicEmailCodeViewEdgeTests(APITestCase):
         self.assertEqual(resp.status_code, 400)
 
     def test_email_auth_verify_invalid_payload(self, _c, _s):
-        resp = self.client.post("/authn/email-auth/verify-code/", {"email": "x@y.com", "code": "12"}, format="json")
+        resp = self.client.post(
+            "/authn/email-auth/verify-code/", {"email": "x@y.com", "code": "12"}, format="json"
+        )
         self.assertEqual(resp.status_code, 400)
 
     def test_register_verify_invalid_payload(self, _c, _s):
@@ -169,7 +182,10 @@ class PublicEmailCodeViewEdgeTests(APITestCase):
     def test_register_resend_code_for_pending_member(self, _c, mock_send):
         pending = Member.objects.create_user(password="StrongPass123!", is_active=False)
         ContactEmail.objects.create(
-            member=pending, email_address="pending@example.com", email_type="primary", verified=False
+            member=pending,
+            email_address="pending@example.com",
+            email_type="primary",
+            verified=False,
         )
         resp = self.client.post(
             "/authn/register/resend-code/",
@@ -235,7 +251,9 @@ class PublicEmailCodeViewEdgeTests(APITestCase):
         )
         self.assertEqual(resp.status_code, 202)
         # A LOGIN challenge is issued for the existing active member.
-        self.assertTrue(EmailAuthChallenge.objects.filter(member=self.active, purpose=PURPOSE_LOGIN).exists())
+        self.assertTrue(
+            EmailAuthChallenge.objects.filter(member=self.active, purpose=PURPOSE_LOGIN).exists()
+        )
 
     def test_email_auth_request_reuses_pending_member(self, _c, mock_send):
         resp = self.client.post(
@@ -245,7 +263,11 @@ class PublicEmailCodeViewEdgeTests(APITestCase):
         )
         # inactive member already owns a primary contact -> pending_member path reused.
         self.assertEqual(resp.status_code, 202)
-        self.assertTrue(EmailAuthChallenge.objects.filter(member=self.inactive, purpose=PURPOSE_REGISTER).exists())
+        self.assertTrue(
+            EmailAuthChallenge.objects.filter(
+                member=self.inactive, purpose=PURPOSE_REGISTER
+            ).exists()
+        )
 
 
 @patch("apps.authn.services.email.send_email.send_verification_email")

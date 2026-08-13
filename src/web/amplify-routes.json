@@ -3,6 +3,7 @@
     "create",
     "dashboard",
     "edit",
+    "email-auth-link",
     "event",
     "feedback",
     "login",

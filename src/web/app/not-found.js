@@ -2,21 +2,13 @@ import Link from "next/link";
 
 export default function NotFound() {
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        display: "flex",
-        flexDirection: "column",
-        justifyContent: "center",
-        alignItems: "center",
-        gap: "16px",
-      }}
-    >
-      <h1 style={{ fontSize: "3rem", margin: 0 }}>404</h1>
-      <p style={{ color: "gray" }}>Page not found</p>
-      <Link href="/" style={{ color: "#1a73e8" }}>
+    <main className="status-page">
+      <span className="status-page-code">404</span>
+      <h1>Page not found</h1>
+      <p>The page may have moved, or the link may no longer be available.</p>
+      <Link className="app-btn app-btn-filled" href="/">
         Go home
       </Link>
-    </div>
+    </main>
   );
 }

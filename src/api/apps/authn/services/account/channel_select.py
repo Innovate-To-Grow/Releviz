@@ -48,7 +48,9 @@ def select_recovery_channel(member, *, requested_email: str | None = None) -> Re
     if requested_email:
         normalized = normalize_email(requested_email)
         if normalized and normalized in set(get_member_auth_emails(member)):
-            return RecoveryChannel(target_email=normalized, masked_destination=mask_email(normalized))
+            return RecoveryChannel(
+                target_email=normalized, masked_destination=mask_email(normalized)
+            )
 
     primary = member.get_primary_contact_email()
     if primary is not None and primary.verified:

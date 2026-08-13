@@ -46,16 +46,12 @@ def _validated_registration_details(data: dict) -> dict:
         "password": password,
         "first_name": first_name,
         "last_name": last_name,
-        "organization": str(data.get("organization") or "").strip(),
-        "title": str(data.get("title") or "").strip(),
     }
 
 
 def _apply_registration_details(member, details: dict, *, email: str) -> None:
     member.first_name = details["first_name"]
     member.last_name = details["last_name"]
-    member.organization = details["organization"]
-    member.title = details["title"]
     member.email = email
     member.set_password(details["password"])
 
@@ -107,8 +103,6 @@ def start_registration(data: dict, *, _temporary_upgrade_member_id=None):
             password=details["password"],
             first_name=details["first_name"],
             last_name=details["last_name"],
-            organization=details["organization"],
-            title=details["title"],
             is_active=False,
             email=email,
         )

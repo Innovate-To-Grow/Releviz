@@ -43,7 +43,7 @@ def _notify_email_owner_in_background(email: str):
     account_url = f"{frontend_url}/account" if frontend_url else ""
     notification = {
         "recipient": email,
-        "subject": "Security notice - Innovate to Grow",
+        "subject": "Security notice - Releviz",
         "template": "authn/email/email_claim_notification.html",
         "context": {"account_url": account_url},
     }
@@ -74,7 +74,9 @@ def _send_email_owner_notification(notification: dict) -> None:
         logger.exception("Failed to send email claim notification")
 
 
-def create_contact_email(*, member, email_address: str, email_type: str = "secondary", subscribe: bool = True):
+def create_contact_email(
+    *, member, email_address: str, email_type: str = "secondary", subscribe: bool = True
+):
     normalized = normalize_email(email_address)
 
     if registration_email_conflicts(normalized):
@@ -107,9 +109,9 @@ def create_contact_email(*, member, email_address: str, email_type: str = "secon
                 subscribe=subscribe,
                 verified=False,
             )
-    except IntegrityError:
+    except IntegrityError as exc:
         _notify_email_owner_in_background(normalized)
-        raise AuthChallengeInvalid("This email address is already in use.")
+        raise AuthChallengeInvalid("This email address is already in use.") from exc
 
     issue_email_challenge(member=member, purpose=PURPOSE, target_email=normalized)
 
@@ -174,15 +176,21 @@ def delete_contact_email(*, member, contact_email_id):
     # only the target contact cannot serialize cross-table "last recovery
     # method" checks.
     Member.objects.select_for_update().get(pk=member.pk)
-    contact = ContactEmail.objects.select_for_update().filter(pk=contact_email_id, member=member).first()
+    contact = (
+        ContactEmail.objects.select_for_update().filter(pk=contact_email_id, member=member).first()
+    )
     if contact is None:
         raise AuthChallengeInvalid("Contact email not found.")
 
     # Deleting an *unverified* email never reduces recovery capability, so only
     # guard verified emails. The guard checks what would remain *after* deletion.
-    if contact.verified and count_verified_recovery_contacts(member, exclude_email_pk=contact.pk) == 0:
+    if (
+        contact.verified
+        and count_verified_recovery_contacts(member, exclude_email_pk=contact.pk) == 0
+    ):
         raise LastRecoveryContactError(
-            "You can't remove your only verified recovery method. Add and verify another email or phone first."
+            "You can't remove your only verified recovery method. "
+            "Add and verify another email or phone first."
         )
 
     was_primary = contact.email_type == "primary"
@@ -190,7 +198,10 @@ def delete_contact_email(*, member, contact_email_id):
 
     if was_primary:
         replacement = (
-            ContactEmail.objects.select_for_update().filter(member=member).order_by("-verified", "created_at").first()
+            ContactEmail.objects.select_for_update()
+            .filter(member=member)
+            .order_by("-verified", "created_at")
+            .first()
         )
         if replacement is not None:
             replacement.email_type = "primary"
@@ -202,10 +213,13 @@ def make_contact_email_primary(*, member, contact_email_id):
     """
     Set a verified non-primary contact email as primary.
 
-    The previous primary becomes ``secondary`` (not deleted). Requires the target email to be verified.
+    The previous primary becomes ``secondary`` (not deleted). Requires the
+    target email to be verified.
     """
     Member.objects.select_for_update().get(pk=member.pk)
-    contact = ContactEmail.objects.select_for_update().filter(pk=contact_email_id, member=member).first()
+    contact = (
+        ContactEmail.objects.select_for_update().filter(pk=contact_email_id, member=member).first()
+    )
     if contact is None:
         raise AuthChallengeInvalid("Contact email not found.")
 

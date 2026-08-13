@@ -23,7 +23,10 @@ class RequireEncryptedPasswordsTests(APITestCase):
             is_active=True,
         )
         ContactEmail.objects.create(
-            member=self.member, email_address="enctest@example.com", email_type="primary", verified=True
+            member=self.member,
+            email_address="enctest@example.com",
+            email_type="primary",
+            verified=True,
         )
 
     def test_login_rejects_plaintext_when_encryption_required(self):

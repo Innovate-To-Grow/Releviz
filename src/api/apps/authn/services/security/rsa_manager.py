@@ -42,7 +42,9 @@ def get_or_create_auth_keypair() -> RSAKeypair:
     A database constraint guarantees at most one active row for this key name.
     """
     purge_retired_auth_keypairs()
-    keypair = RSAKeypair.objects.select_for_update().filter(name=AUTH_KEY_NAME, is_active=True).first()
+    keypair = (
+        RSAKeypair.objects.select_for_update().filter(name=AUTH_KEY_NAME, is_active=True).first()
+    )
     if keypair is None:
         # A partial unique constraint arbitrates concurrent first-key creation.
         # The inner savepoint keeps the outer transaction usable if another

@@ -43,7 +43,9 @@ def _member(email="primary@example.com", **kwargs):
         is_active=kwargs.pop("is_active", True),
         **kwargs,
     )
-    ContactEmail.objects.create(member=member, email_address=email, email_type="primary", verified=True)
+    ContactEmail.objects.create(
+        member=member, email_address=email, email_type="primary", verified=True
+    )
     return member
 
 
@@ -53,7 +55,9 @@ class CreateMemberErrorPathTests(TestCase):
             "apps.authn.services.members.create.Member.objects.create_user",
             side_effect=IntegrityError("dup key"),
         ):
-            result = CreateMemberService.create_member(password="StrongPass123!", first_name="A", last_name="B")
+            result = CreateMemberService.create_member(
+                password="StrongPass123!", first_name="A", last_name="B"
+            )
         self.assertFalse(result["success"])
         self.assertIn("Database integrity error", result["error"])
 
@@ -62,7 +66,9 @@ class CreateMemberErrorPathTests(TestCase):
             "apps.authn.services.members.create.Member.objects.create_user",
             side_effect=ValidationError("bad"),
         ):
-            result = CreateMemberService.create_member(password="StrongPass123!", first_name="A", last_name="B")
+            result = CreateMemberService.create_member(
+                password="StrongPass123!", first_name="A", last_name="B"
+            )
         self.assertFalse(result["success"])
         self.assertIn("Validation error", result["error"])
 
@@ -71,7 +77,9 @@ class CreateMemberErrorPathTests(TestCase):
             "apps.authn.services.members.create.Member.objects.create_user",
             side_effect=RuntimeError("boom"),
         ):
-            result = CreateMemberService.create_member(password="StrongPass123!", first_name="A", last_name="B")
+            result = CreateMemberService.create_member(
+                password="StrongPass123!", first_name="A", last_name="B"
+            )
         self.assertFalse(result["success"])
         self.assertIn("Unexpected error", result["error"])
 
@@ -84,7 +92,9 @@ class AuthEmailHelperTests(TestCase):
         self.assertIsNone(get_unclaimed_contact_email(""))
 
     def test_get_unclaimed_contact_email_returns_match(self):
-        ContactEmail.objects.create(email_address="unclaimed@example.com", email_type="primary", member=None)
+        ContactEmail.objects.create(
+            email_address="unclaimed@example.com", email_type="primary", member=None
+        )
         result = get_unclaimed_contact_email("Unclaimed@Example.com")
         self.assertIsNotNone(result)
 
@@ -105,18 +115,22 @@ class ContactEmailServiceTests(TestCase):
         self.member = _member()
 
     def test_member_has_secondary_with_exclude(self):
-        sec = ContactEmail.objects.create(member=self.member, email_address="sec@example.com", email_type="secondary")
+        sec = ContactEmail.objects.create(
+            member=self.member, email_address="sec@example.com", email_type="secondary"
+        )
         self.assertTrue(_member_has_secondary(self.member))
         self.assertFalse(_member_has_secondary(self.member, exclude_pk=sec.pk))
 
     def test_create_contact_email_rejects_second_secondary(self):
-        ContactEmail.objects.create(member=self.member, email_address="sec1@example.com", email_type="secondary")
+        ContactEmail.objects.create(
+            member=self.member, email_address="sec1@example.com", email_type="secondary"
+        )
         with self.assertRaises(AuthChallengeInvalid):
             create_contact_email(member=self.member, email_address="sec2@example.com")
 
     @patch("apps.authn.services.contacts.contact_emails._notify_email_owner_in_background")
     def test_create_contact_email_conflict_notifies_owner(self, mock_notify):
-        other = _member(email="taken@example.com", first_name="O", last_name="Wner")
+        _member(email="taken@example.com", first_name="O", last_name="Wner")
         with self.assertRaises(AuthChallengeInvalid):
             create_contact_email(member=self.member, email_address="taken@example.com")
         mock_notify.assert_called_once()
@@ -136,7 +150,9 @@ class ContactEmailServiceTests(TestCase):
         import uuid
 
         with self.assertRaises(AuthChallengeInvalid):
-            verify_contact_email_code(member=self.member, contact_email_id=uuid.uuid4(), code="123456")
+            verify_contact_email_code(
+                member=self.member, contact_email_id=uuid.uuid4(), code="123456"
+            )
 
     @patch("apps.authn.services.contacts.contact_emails.verify_email_code")
     def test_verify_contact_email_code_marks_contact_inside_approved_callback(self, mock_verify):
@@ -151,7 +167,9 @@ class ContactEmailServiceTests(TestCase):
             return kwargs["approved_callback"](object())
 
         mock_verify.side_effect = approve
-        result = verify_contact_email_code(member=self.member, contact_email_id=contact.pk, code="123456")
+        result = verify_contact_email_code(
+            member=self.member, contact_email_id=contact.pk, code="123456"
+        )
 
         self.assertEqual(result.pk, contact.pk)
         self.assertTrue(result.verified)
@@ -165,7 +183,10 @@ class ContactEmailServiceTests(TestCase):
 
     def test_resend_verification_already_verified(self):
         verified = ContactEmail.objects.create(
-            member=self.member, email_address="ver@example.com", email_type="secondary", verified=True
+            member=self.member,
+            email_address="ver@example.com",
+            email_type="secondary",
+            verified=True,
         )
         with self.assertRaises(AuthChallengeInvalid):
             resend_contact_email_verification(member=self.member, contact_email_id=verified.pk)
@@ -206,7 +227,7 @@ class ContactEmailServiceTests(TestCase):
 
         mock_enqueue.assert_called_once_with(
             recipient="owner@example.com",
-            subject="Security notice - Innovate to Grow",
+            subject="Security notice - Releviz",
             template="authn/email/email_claim_notification.html",
             context={"account_url": "https://example.com/account"},
         )

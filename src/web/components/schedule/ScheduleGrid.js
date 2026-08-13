@@ -10,7 +10,7 @@ function slotLabel(slot) {
   const startOffset = slot.startOffset ? ` ${slot.startOffset}` : "";
   const endOffset = slot.endOffset ? ` ${slot.endOffset}` : "";
   return `${formatTime(slot.localStart)}${startDay}${startOffset} – ${formatTime(
-    slot.localEnd
+    slot.localEnd,
   )}${endDay}${endOffset}`;
 }
 
@@ -33,7 +33,7 @@ function ScheduleGrid({
   const groups = Array.isArray(slotGroups) ? slotGroups : [];
   const maxRows = groups.reduce(
     (largest, group) => Math.max(largest, group?.slots?.length || 0),
-    0
+    0,
   );
 
   const finishStroke = useCallback(() => {
@@ -63,8 +63,14 @@ function ScheduleGrid({
     if (phase !== "keyboard") strokeRef.current.visited.add(index);
     onCellPaint(index, {
       phase,
-      pointerType: event.pointerType || (phase === "keyboard" ? "keyboard" : "mouse"),
-      type: phase === "keyboard" ? "keydown" : phase === "start" ? "pointerdown" : "pointermove",
+      pointerType:
+        event.pointerType || (phase === "keyboard" ? "keyboard" : "mouse"),
+      type:
+        phase === "keyboard"
+          ? "keydown"
+          : phase === "start"
+            ? "pointerdown"
+            : "pointermove",
     });
   };
 
@@ -94,107 +100,58 @@ function ScheduleGrid({
   };
 
   return (
-    <div>
-      {label && (
-        <h4
-          style={{
-            margin: "0 0 12px 0",
-            color: "var(--md-sys-color-on-surface)",
-            fontWeight: "500",
-          }}
-        >
-          {label}
-        </h4>
-      )}
-      <div
-        style={{
-          overflowX: "auto",
-          backgroundColor: "#fff",
-          borderRadius: "8px",
-          padding: "16px",
-          border: "1px solid var(--md-sys-color-outline)",
-        }}
-      >
+    <div className="schedule-grid-shell">
+      {label && <h4 className="schedule-grid-title">{label}</h4>}
+      <div className="schedule-grid-scroll">
         {groups.length === 0 ? (
-          <p style={{ margin: 0, color: "var(--md-sys-color-on-surface-variant)" }}>
+          <p className="schedule-grid-empty">
             No schedule slots are configured.
           </p>
         ) : (
           <div
+            className="schedule-grid"
             role="grid"
             aria-label={label || "Availability"}
             style={{ minWidth: `${80 + groups.length * 96}px` }}
           >
             <div
+              className="schedule-grid-header"
               role="row"
               style={{
-                display: "grid",
                 gridTemplateColumns: `80px repeat(${groups.length}, minmax(96px, 1fr))`,
-                marginBottom: "8px",
               }}
             >
-              <div
-                role="columnheader"
-                style={{
-                  paddingRight: "8px",
-                  textAlign: "right",
-                  fontSize: "0.8rem",
-                  color: "var(--md-sys-color-on-surface-variant)",
-                }}
-              >
+              <div className="schedule-grid-time-header" role="columnheader">
                 Time
               </div>
               {groups.map((group) => (
                 <div
+                  className="schedule-grid-column-header"
                   role="columnheader"
                   key={group.key}
-                  style={{
-                    flex: 1,
-                    minWidth: "96px",
-                    textAlign: "center",
-                    fontWeight: "bold",
-                    fontSize: "0.9rem",
-                    color: "var(--md-sys-color-secondary)",
-                  }}
                 >
                   {group.label}
                 </div>
               ))}
             </div>
 
-            <div
-              role="rowgroup"
-              style={{
-                border: "1px solid var(--md-sys-color-surface-variant)",
-                borderRadius: "8px",
-                overflow: "hidden",
-              }}
-            >
+            <div className="schedule-grid-body" role="rowgroup">
               {Array.from({ length: maxRows }, (_, row) => {
-                const firstSlot = groups.find((group) => group.slots?.[row])?.slots?.[row];
+                const firstSlot = groups.find((group) => group.slots?.[row])
+                  ?.slots?.[row];
                 return (
                   <div
+                    className="schedule-grid-row"
                     key={row}
                     role="row"
                     style={{
-                      display: "grid",
                       gridTemplateColumns: `80px repeat(${groups.length}, minmax(96px, 1fr))`,
                     }}
                   >
                     <div
+                      className="schedule-grid-row-header"
                       role="rowheader"
-                      style={{
-                        alignItems: "center",
-                        background: "#fff",
-                        borderTop:
-                          row === 0 ? "none" : "1px solid var(--md-sys-color-surface-variant)",
-                        color: "var(--md-sys-color-on-surface-variant)",
-                        display: "flex",
-                        fontSize: "0.72rem",
-                        height: "36px",
-                        justifyContent: "flex-end",
-                        paddingRight: "8px",
-                      }}
+                      data-first-row={row === 0 ? "true" : undefined}
                     >
                       {firstSlot ? formatTime(firstSlot.localStart) : ""}
                     </div>
@@ -203,14 +160,12 @@ function ScheduleGrid({
                       if (!slot) {
                         return (
                           <div
+                            className="schedule-grid-cell schedule-grid-cell-empty"
                             key={`${group.key}:empty:${row}`}
                             role="gridcell"
                             aria-label={`${group.label}, no slot at this time`}
                             aria-disabled="true"
                             style={{
-                              height: "36px",
-                              background:
-                                "repeating-linear-gradient(135deg, transparent, transparent 5px, rgba(0,0,0,0.04) 5px, rgba(0,0,0,0.04) 10px)",
                               borderTop:
                                 row === 0
                                   ? "none"
@@ -228,19 +183,25 @@ function ScheduleGrid({
                       const value = Number(schedule[index] || 0);
                       const details = participantDetails
                         ? participantDetails
-                            .filter((participant) => Number(participant.schedule[index] || 0) > 0)
+                            .filter(
+                              (participant) =>
+                                Number(participant.schedule[index] || 0) > 0,
+                            )
                             .map(
                               (participant) =>
-                                `${participant.name}: ${Number(participant.schedule[index]).toFixed(
-                                  2
-                                )}`
+                                `${participant.name}: ${Number(
+                                  participant.schedule[index],
+                                ).toFixed(2)}`,
                             )
                             .join("\n")
                         : "";
-                      const title = details ? `${slotLabel(slot)}\n${details}` : slotLabel(slot);
+                      const title = details
+                        ? `${slotLabel(slot)}\n${details}`
+                        : slotLabel(slot);
 
                       return (
                         <div
+                          className="schedule-grid-cell"
                           key={index}
                           role="gridcell"
                           tabIndex={readOnly ? undefined : 0}
@@ -261,29 +222,23 @@ function ScheduleGrid({
                             }
                           }}
                           style={{
-                            height: "36px",
-                            backgroundColor: virtual ? lerpVirtualColor(value) : lerpColor(value),
+                            backgroundColor: virtual
+                              ? lerpVirtualColor(value)
+                              : lerpColor(value),
                             borderTop:
-                              row === 0 ? "none" : "1px solid var(--md-sys-color-surface-variant)",
+                              row === 0
+                                ? "none"
+                                : "1px solid var(--md-sys-color-surface-variant)",
                             borderLeft:
                               column === 0
                                 ? "none"
                                 : "1px solid var(--md-sys-color-surface-variant)",
                             cursor: readOnly ? "default" : "pointer",
-                            touchAction: "none",
-                            userSelect: "none",
-                            WebkitUserSelect: "none",
-                            transition: "background-color 0.1s ease",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            fontSize: "0.7rem",
-                            color: "var(--md-sys-color-on-surface)",
-                            fontWeight: "500",
-                            boxSizing: "border-box",
                           }}
                         >
-                          {showValues ? value.toFixed(2).replace(/\.00$/, "") : ""}
+                          {showValues
+                            ? value.toFixed(2).replace(/\.00$/, "")
+                            : ""}
                         </div>
                       );
                     })}

@@ -32,7 +32,7 @@ class ProfileView(APIView):
     """
     API endpoint for user profile.
     GET: Retrieve current user's profile.
-    PATCH: Update profile (JSON: first_name, last_name, organization;
+    PATCH: Update profile (JSON: first_name, middle_name, last_name;
            multipart: profile_image file).
     """
 
@@ -79,7 +79,9 @@ class ProfileView(APIView):
             content = file.read()
             if not _validate_image_bytes(content[:32]):
                 return Response(
-                    {"detail": "File content does not match an allowed image type (JPEG, PNG, GIF, WebP)."},
+                    {
+                        "detail": "File content does not match an allowed image type (JPEG, PNG, GIF, WebP)."
+                    },
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             b64 = base64.b64encode(content).decode("utf-8")

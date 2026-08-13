@@ -23,7 +23,10 @@ class UnsubscribeAutoLoginViewTests(APITestCase):
             is_active=True,
         )
         ContactEmail.objects.create(
-            member=self.member, email_address="unsub@example.com", email_type="primary", verified=True
+            member=self.member,
+            email_address="unsub@example.com",
+            email_type="primary",
+            verified=True,
         )
 
     def test_valid_token_unsubscribes_without_jwt(self):
@@ -34,7 +37,9 @@ class UnsubscribeAutoLoginViewTests(APITestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data, {"message": "You have been unsubscribed.", "unsubscribed": True})
+        self.assertEqual(
+            response.data, {"message": "You have been unsubscribed.", "unsubscribed": True}
+        )
         self.assertNotIn("access", response.data)
         self.assertNotIn("refresh", response.data)
         self.assertNotIn("user", response.data)
@@ -99,4 +104,6 @@ class UnsubscribeAutoLoginViewTests(APITestCase):
             format="json",
         )
         self.assertEqual(second_response.status_code, 400)
-        self.assertEqual(second_response.data["detail"], "This unsubscribe link has already been used.")
+        self.assertEqual(
+            second_response.data["detail"], "This unsubscribe link has already been used."
+        )

@@ -102,7 +102,9 @@ def _verify_and_transition_email_code(
     # both write N+1 (a lost update that under-counts and weakens brute-force limits),
     # and two simultaneous correct guesses could both succeed. The conditional
     # status update below remains the final one-time-use guard.
-    challenge = latest_pending_for_input(purposes=purposes, target_email=target_email, for_update=True)
+    challenge = latest_pending_for_input(
+        purposes=purposes, target_email=target_email, for_update=True
+    )
     if challenge is None:
         return None, None, "Verification code is invalid or has expired."
 

@@ -19,7 +19,10 @@ class ChangePasswordViewTests(APITestCase):
             is_active=True,
         )
         ContactEmail.objects.create(
-            member=self.member, email_address="chgpwd@example.com", email_type="primary", verified=True
+            member=self.member,
+            email_address="chgpwd@example.com",
+            email_type="primary",
+            verified=True,
         )
         self.client.force_authenticate(user=self.member)
 

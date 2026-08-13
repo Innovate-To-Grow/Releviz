@@ -16,8 +16,6 @@ def _parsed(**overrides):
         "first_name": "New",
         "last_name": "Name",
         "middle_name": "",
-        "title": "",
-        "organization": "",
         "is_active": None,
         "is_staff": None,
         "date_joined": None,
@@ -37,23 +35,22 @@ class UpdateSingleMemberTests(TestCase):
             password="StrongPass123!", first_name="Old", last_name="Name", is_active=True
         )
         self.primary = ContactEmail.objects.create(
-            member=self.member, email_address="user@example.com", email_type="primary", verified=False
+            member=self.member,
+            email_address="user@example.com",
+            email_type="primary",
+            verified=False,
         )
 
     def test_updates_all_optional_fields(self):
-        # Exercises the middle_name/title/organization/is_active/is_staff branches.
+        # Exercises the middle_name/is_active/is_staff branches.
         parsed = _parsed(
             middle_name="Quincy",
-            title="Engineer",
-            organization="Acme",
             is_active=True,
             is_staff=True,
         )
         update_single_member(self.member, parsed, claimed_contact_emails=set())
         self.member.refresh_from_db()
         self.assertEqual(self.member.middle_name, "Quincy")
-        self.assertEqual(self.member.title, "Engineer")
-        self.assertEqual(self.member.organization, "Acme")
         self.assertTrue(self.member.is_staff)
 
     def test_primary_email_updated_when_not_claimed(self):
@@ -66,7 +63,9 @@ class UpdateSingleMemberTests(TestCase):
 
     def test_primary_email_created_when_member_has_none(self):
         # Member with no primary contact -> create branch (lines 70-76).
-        bare = Member.objects.create_user(password="StrongPass123!", first_name="No", last_name="Email")
+        bare = Member.objects.create_user(
+            password="StrongPass123!", first_name="No", last_name="Email"
+        )
         parsed = _parsed(primary_email="fresh@example.com")
         update_single_member(bare, parsed, claimed_contact_emails=set())
         self.assertTrue(ContactEmail.objects.filter(member=bare, email_type="primary").exists())

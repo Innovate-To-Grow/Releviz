@@ -112,16 +112,30 @@ class MemberAdminChangePageTests(TestCase):
     def setUp(self):
         cache.clear()
         self.superuser = Member.objects.create_superuser(
-            password="StrongPass123!", first_name="Super", last_name="User", is_staff=True, is_active=True
+            password="StrongPass123!",
+            first_name="Super",
+            last_name="User",
+            is_staff=True,
+            is_active=True,
         )
         ContactEmail.objects.create(
-            member=self.superuser, email_address="super@example.com", email_type="primary", verified=True
+            member=self.superuser,
+            email_address="super@example.com",
+            email_type="primary",
+            verified=True,
         )
         self.target = Member.objects.create_user(
-            password="StrongPass123!", first_name="Target", last_name="User", is_staff=True, is_active=True
+            password="StrongPass123!",
+            first_name="Target",
+            last_name="User",
+            is_staff=True,
+            is_active=True,
         )
         ContactEmail.objects.create(
-            member=self.target, email_address="target@example.com", email_type="primary", verified=True
+            member=self.target,
+            email_address="target@example.com",
+            email_type="primary",
+            verified=True,
         )
         self.client.force_login(self.superuser)
 

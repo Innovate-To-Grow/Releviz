@@ -12,7 +12,9 @@ Member = get_user_model()
 
 
 def _member(first="A", last="B", **kw):
-    return Member.objects.create_user(password="StrongPass123!", first_name=first, last_name=last, **kw)
+    return Member.objects.create_user(
+        password="StrongPass123!", first_name=first, last_name=last, **kw
+    )
 
 
 class MemberAdminAppsFieldTests(TestCase):
@@ -45,7 +47,9 @@ class MemberCanAccessAppTests(TestCase):
         self.assertFalse(member.can_access_app("cms"))
 
     def test_superuser_can_access_any_app_regardless_of_grant(self):
-        superuser = Member.objects.create_superuser(password="StrongPass123!", first_name="Super", last_name="User")
+        superuser = Member.objects.create_superuser(
+            password="StrongPass123!", first_name="Super", last_name="User"
+        )
         # Superuser has no admin_apps grant, yet may access every app.
         self.assertEqual(superuser.admin_apps, [])
         self.assertTrue(superuser.can_access_app("cms"))

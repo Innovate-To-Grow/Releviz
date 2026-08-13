@@ -17,7 +17,6 @@ class CreateMemberService:
         last_name: str,
         email: str = "",
         middle_name: str = "",
-        organization: str = "",
         is_active: bool = True,
         is_staff: bool = False,
     ) -> dict[str, Any]:
@@ -30,7 +29,6 @@ class CreateMemberService:
             last_name: Member's last name (required)
             email: Email address (optional, unique if provided)
             middle_name: Member's middle name (optional)
-            organization: Organization or company name (optional)
             is_active: Whether the account is active (default: True)
             is_staff: Whether user has admin permissions (default: False)
 
@@ -85,7 +83,6 @@ class CreateMemberService:
                 first_name=first_name.strip(),
                 middle_name=middle_name.strip() if middle_name else "",
                 last_name=last_name.strip(),
-                organization=organization.strip() if organization else "",
                 is_active=is_active,
                 is_staff=is_staff,
             )

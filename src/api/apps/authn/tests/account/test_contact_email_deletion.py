@@ -27,7 +27,10 @@ class EmailDeletionPolicyTests(APITestCase):
 
     def test_cannot_delete_last_verified_contact(self, _mock_code, _mock_send):
         email = ContactEmail.objects.create(
-            member=self.member, email_address="last@example.com", email_type="primary", verified=True
+            member=self.member,
+            email_address="last@example.com",
+            email_type="primary",
+            verified=True,
         )
         response = self.client.delete(_url(email.id))
         self.assertEqual(response.status_code, 409)
@@ -36,10 +39,16 @@ class EmailDeletionPolicyTests(APITestCase):
 
     def test_deleting_primary_promotes_remaining_email(self, _mock_code, _mock_send):
         primary = ContactEmail.objects.create(
-            member=self.member, email_address="primary@example.com", email_type="primary", verified=True
+            member=self.member,
+            email_address="primary@example.com",
+            email_type="primary",
+            verified=True,
         )
         secondary = ContactEmail.objects.create(
-            member=self.member, email_address="secondary@example.com", email_type="secondary", verified=True
+            member=self.member,
+            email_address="secondary@example.com",
+            email_type="secondary",
+            verified=True,
         )
         response = self.client.delete(_url(primary.id))
         self.assertEqual(response.status_code, 204)
@@ -48,10 +57,16 @@ class EmailDeletionPolicyTests(APITestCase):
 
     def test_unverified_email_is_always_deletable(self, _mock_code, _mock_send):
         ContactEmail.objects.create(
-            member=self.member, email_address="primary@example.com", email_type="primary", verified=True
+            member=self.member,
+            email_address="primary@example.com",
+            email_type="primary",
+            verified=True,
         )
         unverified = ContactEmail.objects.create(
-            member=self.member, email_address="unverified@example.com", email_type="other", verified=False
+            member=self.member,
+            email_address="unverified@example.com",
+            email_type="other",
+            verified=False,
         )
         response = self.client.delete(_url(unverified.id))
         self.assertEqual(response.status_code, 204)

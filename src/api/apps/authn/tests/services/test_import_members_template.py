@@ -34,6 +34,8 @@ class GenerateTemplateExcelTests(TestCase):
         members_sheet = workbook["Members"]
         header_values = [cell.value for cell in members_sheet[1]]
         self.assertIn("Primary Email", header_values)
+        self.assertNotIn("Organization", header_values)
+        self.assertNotIn("Title", header_values)
 
         # Example row populated on row 2
         example_first = members_sheet.cell(row=2, column=1).value

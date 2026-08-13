@@ -1,11 +1,21 @@
 PURPOSE_SUBJECTS = {
-    "register": "Verify your email - Innovate to Grow",
-    "login": "Your login code - Innovate to Grow",
-    "password_reset": "Password reset code - Innovate to Grow",
-    "password_change": "Password change code - Innovate to Grow",
-    "account_delete": "Delete account code - Innovate to Grow",
-    "contact_email_verify": "Verify your contact email - Innovate to Grow",
-    "admin_login": "Admin login code - Innovate to Grow",
+    "register": "Verify your email - Releviz",
+    "login": "Your login code - Releviz",
+    "password_reset": "Password reset code - Releviz",
+    "password_change": "Password change code - Releviz",
+    "account_delete": "Delete account code - Releviz",
+    "contact_email_verify": "Verify your contact email - Releviz",
+    "admin_login": "Admin login code - Releviz",
+}
+
+PURPOSE_TITLES = {
+    "register": "Verify your email",
+    "login": "Your login code",
+    "password_reset": "Reset your password",
+    "password_change": "Confirm your password change",
+    "account_delete": "Confirm account deletion",
+    "contact_email_verify": "Verify your contact email",
+    "admin_login": "Your admin login code",
 }
 
 PURPOSE_DISPLAY = {
@@ -27,7 +37,13 @@ PUBLIC_LINK_LABELS = {
 
 PUBLIC_LINK_DESCRIPTIONS = {
     "login": "Use this secure link within the next 10 minutes to sign in instantly.",
-    "subscribe": ("Use this secure link within the next 10 minutes to continue with your newsletter access."),
-    "event_registration": ("Use this secure link within the next 10 minutes to continue with event registration."),
-    "register": ("Use this secure link within the next 10 minutes to continue setting up your account."),
+    "subscribe": (
+        "Use this secure link within the next 10 minutes to continue with your newsletter access."
+    ),
+    "event_registration": (
+        "Use this secure link within the next 10 minutes to continue with event registration."
+    ),
+    "register": (
+        "Use this secure link within the next 10 minutes to continue setting up your account."
+    ),
 }

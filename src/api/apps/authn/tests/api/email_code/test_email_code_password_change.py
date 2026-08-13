@@ -33,13 +33,18 @@ class EmailCodePasswordChangeTests(APITestCase):
             verified=True,
         )
 
-    def test_authenticated_password_change_code_flow_uses_own_verified_emails(self, _mock_code, _mock_send):
+    def test_authenticated_password_change_code_flow_uses_own_verified_emails(
+        self, _mock_code, _mock_send
+    ):
         other_member = Member.objects.create_user(
             password="OtherPass123!",
             is_active=True,
         )
         ContactEmail.objects.create(
-            member=other_member, email_address="other@example.com", email_type="primary", verified=True
+            member=other_member,
+            email_address="other@example.com",
+            email_type="primary",
+            verified=True,
         )
         other_alias = ContactEmail.objects.create(
             member=other_member,
@@ -128,7 +133,10 @@ class EmailCodePasswordChangeTests(APITestCase):
             is_active=True,
         )
         ContactEmail.objects.create(
-            member=other_member, email_address="other-reset@example.com", email_type="primary", verified=True
+            member=other_member,
+            email_address="other-reset@example.com",
+            email_type="primary",
+            verified=True,
         )
 
         # Request + verify code for self.member (member A)

@@ -42,7 +42,10 @@ class _AdminTestBase(TestCase):
             password="admin123", first_name="Admin", last_name="User", is_staff=True, is_active=True
         )
         ContactEmail.objects.create(
-            member=self.admin_user, email_address="admin@example.com", email_type="primary", verified=True
+            member=self.admin_user,
+            email_address="admin@example.com",
+            email_type="primary",
+            verified=True,
         )
 
     def _messages(self, request):
@@ -53,8 +56,12 @@ class MemberAdminActionTests(_AdminTestBase):
     def setUp(self):
         super().setUp()
         self.model_admin = MemberAdmin(Member, self.site)
-        self.m1 = Member.objects.create_user(password="t", first_name="Mem", last_name="One", is_active=False)
-        ContactEmail.objects.create(member=self.m1, email_address="m1@example.com", email_type="primary")
+        self.m1 = Member.objects.create_user(
+            password="t", first_name="Mem", last_name="One", is_active=False
+        )
+        ContactEmail.objects.create(
+            member=self.m1, email_address="m1@example.com", email_type="primary"
+        )
 
     def test_get_primary_email_display(self):
         self.assertEqual(self.model_admin.get_primary_email_display(self.m1), "m1@example.com")
@@ -108,7 +115,9 @@ class MemberAdminActionTests(_AdminTestBase):
 
     @override_settings(FRONTEND_URL="https://frontend.example.com")
     def test_impersonate_view_redirects_with_token(self):
-        request = _request(self.rf, self.admin_user, path=f"/admin/authn/member/{self.m1.pk}/impersonate/")
+        request = _request(
+            self.rf, self.admin_user, path=f"/admin/authn/member/{self.m1.pk}/impersonate/"
+        )
         response = self.model_admin.impersonate_view(request, str(self.m1.pk))
         self.assertEqual(response.status_code, 302)
         self.assertIn("https://frontend.example.com/impersonate-login#token=", response.url)
@@ -189,7 +198,9 @@ class MemberAdminActionTests(_AdminTestBase):
             payload.getvalue(),
             content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
-        request = self.rf.post("/admin/authn/member/import-excel/", {"excel_file": upload, "update_existing": "on"})
+        request = self.rf.post(
+            "/admin/authn/member/import-excel/", {"excel_file": upload, "update_existing": "on"}
+        )
         request.user = self.admin_user
         request.session = {}
         request._messages = FallbackStorage(request)
@@ -477,7 +488,9 @@ class AdminInvitationAdminTests(_AdminTestBase):
         valid = self._make_invitation()
         expired = self._make_invitation(expires_delta_days=-1)
         request = _request(self.rf, self.admin_user)
-        self.model_admin.resend_invitations(request, AdminInvitation.objects.filter(pk__in=[valid.pk, expired.pk]))
+        self.model_admin.resend_invitations(
+            request, AdminInvitation.objects.filter(pk__in=[valid.pk, expired.pk])
+        )
         expired.refresh_from_db()
         self.assertEqual(expired.status, AdminInvitation.Status.EXPIRED)
         msgs = self._messages(request)
@@ -491,5 +504,3 @@ class AdminInvitationAdminTests(_AdminTestBase):
         inv.refresh_from_db()
         self.assertEqual(inv.status, AdminInvitation.Status.CANCELLED)
         self.assertTrue(any("Cancelled" in m for m in self._messages(request)))
-
-

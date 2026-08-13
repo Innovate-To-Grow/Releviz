@@ -16,7 +16,7 @@ DEBUG = False
 ALLOWED_HOSTS: list[str] = []
 
 INSTALLED_APPS = [
-    "unfold.apps.BasicAppConfig",
+    "unfold.apps.DefaultAppConfig",
     "unfold.contrib.filters",
     "unfold.contrib.forms",
     "apps.authn.apps.AuthnConfig",
@@ -89,13 +89,20 @@ MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 AUTH_USER_MODEL = "authn.Member"
-AUTHENTICATION_BACKENDS = ["apps.authn.backends.EmailAuthBackend"]
+AUTHENTICATION_BACKENDS = ["apps.authn.security.backends.EmailAuthBackend"]
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "apps.authn.authentication.SessionJWTAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
+    "DEFAULT_THROTTLE_RATES": {
+        "contact_email_create": "5/hour",
+        "login": "10/minute",
+        "email_code_request": "5/minute",
+        "email_code_verify": "10/minute",
+        "email_code_user_request": "5/hour",
+    },
 }
 
 SIMPLE_JWT = {
@@ -308,18 +315,25 @@ UNFOLD = {
             ],
         },
         {
-            "models": ["authn.member", "authn.contactemail"],
+            "models": [
+                "authn.member",
+                "authn.contactemail",
+                "authn.emailauthchallenge",
+            ],
             "items": [
                 {"title": "Members", "link": "/admin/authn/member/"},
                 {"title": "Emails", "link": "/admin/authn/contactemail/"},
+                {
+                    "title": "Login Challenges",
+                    "link": "/admin/authn/emailauthchallenge/",
+                },
             ],
         },
         {
-            "models": ["authn.emailauthchallenge", "authn.rsakeypair", "auth.group"],
+            "models": ["core.awscredentialconfig", "authn.rsakeypair"],
             "items": [
-                {"title": "Email Challenges", "link": "/admin/authn/emailauthchallenge/"},
+                {"title": "AWS Credentials", "link": "/admin/core/awscredentialconfig/"},
                 {"title": "RSA Keypairs", "link": "/admin/authn/rsakeypair/"},
-                {"title": "Groups", "link": "/admin/auth/group/"},
             ],
         },
         {
@@ -342,21 +356,6 @@ UNFOLD = {
                         "link": "/admin/scheduling/event/",
                         "permission": _can("scheduling"),
                     },
-                    {
-                        "title": "Participants",
-                        "link": "/admin/scheduling/participant/",
-                        "permission": _can("scheduling"),
-                    },
-                    {
-                        "title": "Weights",
-                        "link": "/admin/scheduling/weight/",
-                        "permission": _can("scheduling"),
-                    },
-                    {
-                        "title": "Invitations",
-                        "link": "/admin/scheduling/eventinvitation/",
-                        "permission": _can("scheduling"),
-                    },
                 ],
             },
             {
@@ -366,11 +365,6 @@ UNFOLD = {
                     {
                         "title": "AWS SES Providers",
                         "link": "/admin/mail/emailproviderconfig/",
-                        "permission": _can("mail"),
-                    },
-                    {
-                        "title": "Email Logs",
-                        "link": "/admin/mail/emailmessagelog/",
                         "permission": _can("mail"),
                     },
                 ],
@@ -384,30 +378,16 @@ UNFOLD = {
                         "link": "/admin/authn/member/",
                         "permission": _can("authn"),
                     },
-                    {
-                        "title": "Emails",
-                        "link": "/admin/authn/contactemail/",
-                        "active_paths": [
-                            "/admin/authn/contactemail/",
-                        ],
-                        "permission": _can("authn"),
-                    },
-                    {
-                        "title": "Login Challenges",
-                        "link": "/admin/authn/emailauthchallenge/",
-                        "permission": _can("authn"),
-                    },
                 ],
             },
             {
                 "title": "Site Settings",
-                "permission": _can_any("auth", "admin"),
+                "permission": _can_any("authn", "core"),
                 "items": [
-                    {"title": "Groups", "link": "/admin/auth/group/", "permission": _can("auth")},
                     {
-                        "title": "RSA Keypairs",
-                        "link": "/admin/authn/rsakeypair/",
-                        "permission": _can("authn"),
+                        "title": "AWS Credentials",
+                        "link": "/admin/core/awscredentialconfig/",
+                        "permission": _can("core"),
                     },
                 ],
             },

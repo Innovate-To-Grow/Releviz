@@ -22,7 +22,9 @@ class AuthSecurityInvariantMigrationTest(SimpleTestCase):
 
         rsa_objects = Mock()
         rsa_objects.filter.side_effect = [active_names, name_filter]
-        active_names.order_by.return_value.values_list.return_value.distinct.return_value = active_names
+        active_names.order_by.return_value.values_list.return_value.distinct.return_value = (
+            active_names
+        )
         rsa_model = SimpleNamespace(objects=rsa_objects)
 
         enabled_filter = Mock()

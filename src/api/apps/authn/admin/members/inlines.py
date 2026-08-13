@@ -169,12 +169,11 @@ class ContactEmailInline(StaffPermissionInlineMixin, UUIDInlineMixin, TabularInl
             primary_count = sum(
                 1
                 for form in self_fs.forms
-                if not form.cleaned_data.get("DELETE", False) and form.cleaned_data.get("email_type") == "primary"
+                if not form.cleaned_data.get("DELETE", False)
+                and form.cleaned_data.get("email_type") == "primary"
             )
             if primary_count > 1:
                 raise ValidationError("A member may only have one primary email.")
 
         formset_class.clean = clean
         return formset_class
-
-

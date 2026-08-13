@@ -1,5 +1,6 @@
 """Tests for token refresh, image magic-byte validation, and profile GET."""
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -25,7 +26,10 @@ class PublicTokenRefreshTests(APITestCase):
             is_active=True,
         )
         ContactEmail.objects.create(
-            member=self.member, email_address="refresher@example.com", email_type="primary", verified=True
+            member=self.member,
+            email_address="refresher@example.com",
+            email_type="primary",
+            verified=True,
         )
 
     def test_refresh_returns_new_access_token(self):
@@ -37,6 +41,25 @@ class PublicTokenRefreshTests(APITestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertIn("access", response.data)
+        self.assertIn("user", response.data)
+
+    def test_refresh_uses_httponly_cookie_and_bootstraps_session(self):
+        refresh = RefreshToken.for_user(self.member)
+        self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME] = str(refresh)
+
+        response = self.client.post("/authn/refresh/", {}, format="json")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("access", response.data)
+        self.assertNotIn("refresh", response.data)
+        self.assertEqual(response.data["user"]["email"], "refresher@example.com")
+        cookie = response.cookies[settings.AUTH_REFRESH_COOKIE_NAME]
+        self.assertTrue(cookie["httponly"])
+        self.assertEqual(cookie["path"], settings.AUTH_REFRESH_COOKIE_PATH)
+
+    def test_refresh_without_cookie_returns_401(self):
+        response = self.client.post("/authn/refresh/", {}, format="json")
+        self.assertEqual(response.status_code, 401)
 
     def test_refresh_rejects_invalid_token(self):
         response = self.client.post(
@@ -92,7 +115,10 @@ class ProfileImageUploadTests(APITestCase):
             is_active=True,
         )
         ContactEmail.objects.create(
-            member=self.member, email_address="uploader@example.com", email_type="primary", verified=True
+            member=self.member,
+            email_address="uploader@example.com",
+            email_type="primary",
+            verified=True,
         )
         self.client.force_authenticate(user=self.member)
 

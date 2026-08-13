@@ -17,7 +17,10 @@ class ContactEmailViewEdgeTests(APITestCase):
         cache.clear()
         self.member = Member.objects.create_user(password="StrongPass123!", is_active=True)
         ContactEmail.objects.create(
-            member=self.member, email_address="primary@example.com", email_type="primary", verified=True
+            member=self.member,
+            email_address="primary@example.com",
+            email_type="primary",
+            verified=True,
         )
         self.client.force_authenticate(user=self.member)
 
@@ -49,7 +52,10 @@ class ContactEmailViewEdgeTests(APITestCase):
 
     def test_request_verification_already_verified(self):
         verified = ContactEmail.objects.create(
-            member=self.member, email_address="ver@example.com", email_type="secondary", verified=True
+            member=self.member,
+            email_address="ver@example.com",
+            email_type="secondary",
+            verified=True,
         )
         resp = self.client.post(f"/authn/contact-emails/{verified.pk}/request-verification/")
         self.assertEqual(resp.status_code, 400)
@@ -58,7 +64,10 @@ class ContactEmailViewEdgeTests(APITestCase):
     def test_request_verification_delivery_error_returns_503(self, mock_resend):
         mock_resend.side_effect = AuthChallengeDeliveryError("ses down")
         unverified = ContactEmail.objects.create(
-            member=self.member, email_address="unv@example.com", email_type="secondary", verified=False
+            member=self.member,
+            email_address="unv@example.com",
+            email_type="secondary",
+            verified=False,
         )
         resp = self.client.post(f"/authn/contact-emails/{unverified.pk}/request-verification/")
         self.assertEqual(resp.status_code, 503)
@@ -67,7 +76,10 @@ class ContactEmailViewEdgeTests(APITestCase):
     def test_request_verification_auth_invalid_returns_400(self, mock_resend):
         mock_resend.side_effect = AuthChallengeInvalid("nope")
         unverified = ContactEmail.objects.create(
-            member=self.member, email_address="unv2@example.com", email_type="secondary", verified=False
+            member=self.member,
+            email_address="unv2@example.com",
+            email_type="secondary",
+            verified=False,
         )
         resp = self.client.post(f"/authn/contact-emails/{unverified.pk}/request-verification/")
         self.assertEqual(resp.status_code, 400)
@@ -75,32 +87,49 @@ class ContactEmailViewEdgeTests(APITestCase):
     def test_verify_code_not_found(self):
         import uuid
 
-        resp = self.client.post(f"/authn/contact-emails/{uuid.uuid4()}/verify-code/", {"code": "123456"}, format="json")
+        resp = self.client.post(
+            f"/authn/contact-emails/{uuid.uuid4()}/verify-code/", {"code": "123456"}, format="json"
+        )
         self.assertEqual(resp.status_code, 404)
 
     def test_verify_code_invalid_payload(self):
         contact = ContactEmail.objects.create(
-            member=self.member, email_address="vc@example.com", email_type="secondary", verified=False
+            member=self.member,
+            email_address="vc@example.com",
+            email_type="secondary",
+            verified=False,
         )
-        resp = self.client.post(f"/authn/contact-emails/{contact.pk}/verify-code/", {}, format="json")
+        resp = self.client.post(
+            f"/authn/contact-emails/{contact.pk}/verify-code/", {}, format="json"
+        )
         self.assertEqual(resp.status_code, 400)
 
     @patch("apps.authn.views.account.contact_emails.verify_contact_email_code")
     def test_verify_code_auth_invalid_returns_400(self, mock_verify):
         mock_verify.side_effect = AuthChallengeInvalid("bad code")
         contact = ContactEmail.objects.create(
-            member=self.member, email_address="vc2@example.com", email_type="secondary", verified=False
+            member=self.member,
+            email_address="vc2@example.com",
+            email_type="secondary",
+            verified=False,
         )
-        resp = self.client.post(f"/authn/contact-emails/{contact.pk}/verify-code/", {"code": "123456"}, format="json")
+        resp = self.client.post(
+            f"/authn/contact-emails/{contact.pk}/verify-code/", {"code": "123456"}, format="json"
+        )
         self.assertEqual(resp.status_code, 400)
 
     @patch("apps.authn.views.account.contact_emails.verify_contact_email_code")
     def test_verify_code_delivery_error_returns_503(self, mock_verify):
         mock_verify.side_effect = AuthChallengeDeliveryError("ses down")
         contact = ContactEmail.objects.create(
-            member=self.member, email_address="vc3@example.com", email_type="secondary", verified=False
+            member=self.member,
+            email_address="vc3@example.com",
+            email_type="secondary",
+            verified=False,
         )
-        resp = self.client.post(f"/authn/contact-emails/{contact.pk}/verify-code/", {"code": "123456"}, format="json")
+        resp = self.client.post(
+            f"/authn/contact-emails/{contact.pk}/verify-code/", {"code": "123456"}, format="json"
+        )
         self.assertEqual(resp.status_code, 503)
 
     def test_delete_not_found(self):
@@ -119,7 +148,10 @@ class ContactEmailViewEdgeTests(APITestCase):
     def test_make_primary_auth_invalid_returns_400(self, mock_make):
         mock_make.side_effect = AuthChallengeInvalid("not verified")
         contact = ContactEmail.objects.create(
-            member=self.member, email_address="mp@example.com", email_type="secondary", verified=True
+            member=self.member,
+            email_address="mp@example.com",
+            email_type="secondary",
+            verified=True,
         )
         resp = self.client.post(f"/authn/contact-emails/{contact.pk}/make-primary/")
         self.assertEqual(resp.status_code, 400)
@@ -128,7 +160,10 @@ class ContactEmailViewEdgeTests(APITestCase):
     def test_make_primary_delivery_error_returns_503(self, mock_make):
         mock_make.side_effect = AuthChallengeDeliveryError("ses down")
         contact = ContactEmail.objects.create(
-            member=self.member, email_address="mp2@example.com", email_type="secondary", verified=True
+            member=self.member,
+            email_address="mp2@example.com",
+            email_type="secondary",
+            verified=True,
         )
         resp = self.client.post(f"/authn/contact-emails/{contact.pk}/make-primary/")
         self.assertEqual(resp.status_code, 503)
@@ -141,7 +176,10 @@ class AccountEmailCodeViewEdgeTests(APITestCase):
         cache.clear()
         self.member = Member.objects.create_user(password="StrongPass123!", is_active=True)
         ContactEmail.objects.create(
-            member=self.member, email_address="user@example.com", email_type="primary", verified=True
+            member=self.member,
+            email_address="user@example.com",
+            email_type="primary",
+            verified=True,
         )
         self.client.force_authenticate(user=self.member)
 
@@ -203,5 +241,7 @@ class AccountEmailCodeViewEdgeTests(APITestCase):
         self.assertEqual(resp.status_code, 503)
 
     def test_delete_account_verify_invalid_code_format_returns_400(self):
-        resp = self.client.post("/authn/delete-account/verify-code/", {"code": "abcdef"}, format="json")
+        resp = self.client.post(
+            "/authn/delete-account/verify-code/", {"code": "abcdef"}, format="json"
+        )
         self.assertEqual(resp.status_code, 400)

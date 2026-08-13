@@ -52,7 +52,6 @@ class MemberAdmin(BaseModelAdmin, UserAdmin):
     list_display = (
         "get_full_name_display",
         "get_primary_email_display",
-        "organization",
         "is_active",
         "is_staff",
         "date_joined",
@@ -64,8 +63,6 @@ class MemberAdmin(BaseModelAdmin, UserAdmin):
         "middle_name",
         "last_name",
         "id",
-        "organization",
-        "title",
     )
     ordering = ("-date_joined",)
     readonly_fields = ("member_uuid", "date_joined", "last_login")
@@ -74,7 +71,7 @@ class MemberAdmin(BaseModelAdmin, UserAdmin):
         (None, {"fields": ("password",)}),
         (
             _("Personal Info"),
-            {"fields": ("first_name", "middle_name", "last_name", "organization", "title", "profile_image")},
+            {"fields": ("first_name", "middle_name", "last_name", "profile_image")},
         ),
         (
             _("Permissions"),
@@ -87,7 +84,7 @@ class MemberAdmin(BaseModelAdmin, UserAdmin):
     )
     add_fieldsets = (
         (None, {"classes": ("wide",), "fields": ("password1", "password2")}),
-        (_("Personal Info"), {"fields": ("first_name", "middle_name", "last_name", "organization", "title")}),
+        (_("Personal Info"), {"fields": ("first_name", "middle_name", "last_name")}),
         (_("Member Status"), {"fields": ("is_active",)}),
     )
     inlines = [ContactEmailInline]
@@ -126,13 +123,21 @@ class MemberAdmin(BaseModelAdmin, UserAdmin):
 
     def get_urls(self):
         custom_urls = [
-            path("import-excel/", self.admin_site.admin_view(self.import_excel_view), name="authn_member_import_excel"),
+            path(
+                "import-excel/",
+                self.admin_site.admin_view(self.import_excel_view),
+                name="authn_member_import_excel",
+            ),
             path(
                 "import-template/",
                 self.admin_site.admin_view(self.download_template_view),
                 name="authn_member_import_template",
             ),
-            path("export-excel/", self.admin_site.admin_view(self.export_excel_view), name="authn_member_export_excel"),
+            path(
+                "export-excel/",
+                self.admin_site.admin_view(self.export_excel_view),
+                name="authn_member_export_excel",
+            ),
             path(
                 "<path:object_id>/impersonate/",
                 self.admin_site.admin_view(self.impersonate_view),
@@ -189,11 +194,15 @@ class MemberAdmin(BaseModelAdmin, UserAdmin):
             and target is not None
             and not (target.is_staff or target.is_superuser)
         )
-        return super().change_view(request, object_id, form_url=form_url, extra_context=extra_context)
+        return super().change_view(
+            request, object_id, form_url=form_url, extra_context=extra_context
+        )
 
     def changeform_view(self, request, object_id=None, form_url="", extra_context=None):
         normalize_inline_uuid_none_values(request)
-        return super().changeform_view(request, object_id=object_id, form_url=form_url, extra_context=extra_context)
+        return super().changeform_view(
+            request, object_id=object_id, form_url=form_url, extra_context=extra_context
+        )
 
     def save_form(self, request, form, change):
         obj = super().save_form(request, form, change)

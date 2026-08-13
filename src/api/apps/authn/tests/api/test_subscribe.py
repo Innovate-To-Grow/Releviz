@@ -18,10 +18,14 @@ class SubscribeViewTests(APITestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 201)
-        self.assertTrue(ContactEmail.objects.filter(email_address="new@example.com", subscribe=True).exists())
+        self.assertTrue(
+            ContactEmail.objects.filter(email_address="new@example.com", subscribe=True).exists()
+        )
 
     def test_subscribe_existing_returns_200(self):
-        ContactEmail.objects.create(email_address="existing@example.com", subscribe=True, email_type="other")
+        ContactEmail.objects.create(
+            email_address="existing@example.com", subscribe=True, email_type="other"
+        )
         response = self.client.post(
             "/authn/subscribe/",
             {"email": "existing@example.com"},
@@ -31,13 +35,17 @@ class SubscribeViewTests(APITestCase):
 
     def test_double_submit_does_not_create_duplicate(self):
         first = self.client.post("/authn/subscribe/", {"email": "twice@example.com"}, format="json")
-        second = self.client.post("/authn/subscribe/", {"email": "twice@example.com"}, format="json")
+        second = self.client.post(
+            "/authn/subscribe/", {"email": "twice@example.com"}, format="json"
+        )
         self.assertIn(first.status_code, (200, 201))
         self.assertIn(second.status_code, (200, 201))
         self.assertEqual(ContactEmail.objects.filter(email_address="twice@example.com").count(), 1)
 
     def test_subscribe_resubscribe_flips_flag(self):
-        ContactEmail.objects.create(email_address="unsub@example.com", subscribe=False, email_type="other")
+        ContactEmail.objects.create(
+            email_address="unsub@example.com", subscribe=False, email_type="other"
+        )
         response = self.client.post(
             "/authn/subscribe/",
             {"email": "unsub@example.com"},

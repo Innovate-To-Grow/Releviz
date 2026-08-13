@@ -32,10 +32,17 @@ class AdminLoginHelpersTest(TestCase):
         cache.clear()
         self.rf = RequestFactory()
         self.staff = Member.objects.create_user(
-            password="testpass123", first_name="Staff", last_name="Admin", is_staff=True, is_active=True
+            password="testpass123",
+            first_name="Staff",
+            last_name="Admin",
+            is_staff=True,
+            is_active=True,
         )
         ContactEmail.objects.create(
-            member=self.staff, email_address="admin@example.com", email_type="primary", verified=True
+            member=self.staff,
+            email_address="admin@example.com",
+            email_type="primary",
+            verified=True,
         )
 
     def test_get_admin_login_member_invalid_uuid_in_session(self):
@@ -67,10 +74,17 @@ class AdminRememberedPasswordTest(TestCase):
     def setUp(self):
         cache.clear()
         self.staff = Member.objects.create_user(
-            password="testpass123", first_name="Staff", last_name="Admin", is_staff=True, is_active=True
+            password="testpass123",
+            first_name="Staff",
+            last_name="Admin",
+            is_staff=True,
+            is_active=True,
         )
         ContactEmail.objects.create(
-            member=self.staff, email_address="admin@example.com", email_type="primary", verified=True
+            member=self.staff,
+            email_address="admin@example.com",
+            email_type="primary",
+            verified=True,
         )
 
     def tearDown(self):
@@ -115,7 +129,9 @@ class AdminRememberedPasswordTest(TestCase):
 
     def test_remembered_password_throttled(self):
         self._set_remembered_cookie()
-        with patch("apps.authn.views.admin.login.password.is_password_throttled", return_value=True):
+        with patch(
+            "apps.authn.views.admin.login.password.is_password_throttled", return_value=True
+        ):
             resp = self.client.post(
                 LOGIN_URL,
                 {"mode": "password", "remembered_admin": "1", "password": "testpass123"},
@@ -129,10 +145,17 @@ class AdminRememberedCodeTest(TestCase):
     def setUp(self):
         cache.clear()
         self.staff = Member.objects.create_user(
-            password="testpass123", first_name="Staff", last_name="Admin", is_staff=True, is_active=True
+            password="testpass123",
+            first_name="Staff",
+            last_name="Admin",
+            is_staff=True,
+            is_active=True,
         )
         ContactEmail.objects.create(
-            member=self.staff, email_address="admin@example.com", email_type="primary", verified=True
+            member=self.staff,
+            email_address="admin@example.com",
+            email_type="primary",
+            verified=True,
         )
 
     def tearDown(self):
@@ -183,10 +206,17 @@ class AdminCodeStepNoStateTest(TestCase):
     def setUp(self):
         cache.clear()
         self.staff = Member.objects.create_user(
-            password="testpass123", first_name="Staff", last_name="Admin", is_staff=True, is_active=True
+            password="testpass123",
+            first_name="Staff",
+            last_name="Admin",
+            is_staff=True,
+            is_active=True,
         )
         ContactEmail.objects.create(
-            member=self.staff, email_address="admin@example.com", email_type="primary", verified=True
+            member=self.staff,
+            email_address="admin@example.com",
+            email_type="primary",
+            verified=True,
         )
 
     def test_get_code_step_renders_when_session_in_code(self):

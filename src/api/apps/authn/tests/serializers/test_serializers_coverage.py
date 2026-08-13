@@ -27,7 +27,9 @@ Member = get_user_model()
 
 class ContactEmailSerializerValidationTests(TestCase):
     def test_create_rejects_primary_type(self):
-        serializer = ContactEmailCreateSerializer(data={"email_address": "x@y.com", "email_type": "primary"})
+        serializer = ContactEmailCreateSerializer(
+            data={"email_address": "x@y.com", "email_type": "primary"}
+        )
         self.assertFalse(serializer.is_valid())
         self.assertIn("email_type", serializer.errors)
 
@@ -61,11 +63,16 @@ class LoginSerializerValidationTests(TestCase):
         self.password = "StrongPass123!"
         self.member = Member.objects.create_user(password=self.password, is_active=True)
         ContactEmail.objects.create(
-            member=self.member, email_address="login@example.com", email_type="primary", verified=True
+            member=self.member,
+            email_address="login@example.com",
+            email_type="primary",
+            verified=True,
         )
 
     def test_invalid_credentials_when_email_unknown(self):
-        serializer = LoginSerializer(data={"email": "unknown@example.com", "password": self.password})
+        serializer = LoginSerializer(
+            data={"email": "unknown@example.com", "password": self.password}
+        )
         self.assertFalse(serializer.is_valid())
         self.assertIn("non_field_errors", serializer.errors)
 
@@ -92,11 +99,17 @@ class PasswordCodeEdgeTests(TestCase):
         self.rf = RequestFactory()
         self.member = Member.objects.create_user(password="StrongPass123!", is_active=True)
         ContactEmail.objects.create(
-            member=self.member, email_address="user@example.com", email_type="primary", verified=True
+            member=self.member,
+            email_address="user@example.com",
+            email_type="primary",
+            verified=True,
         )
         self.other = Member.objects.create_user(password="StrongPass123!", is_active=True)
         ContactEmail.objects.create(
-            member=self.other, email_address="other@example.com", email_type="primary", verified=True
+            member=self.other,
+            email_address="other@example.com",
+            email_type="primary",
+            verified=True,
         )
 
     def _ctx(self, user):
@@ -133,15 +146,17 @@ class PasswordCodeEdgeTests(TestCase):
 
     def test_delete_account_verify_no_primary_email(self):
         bare = Member.objects.create_user(password="StrongPass123!", is_active=True)
-        serializer = DeleteAccountCodeVerifySerializer(data={"code": "123456"}, context=self._ctx(bare))
+        serializer = DeleteAccountCodeVerifySerializer(
+            data={"code": "123456"}, context=self._ctx(bare)
+        )
         self.assertFalse(serializer.is_valid())
         self.assertIn("detail", serializer.errors)
 
     def test_delete_account_verify_rejects_mismatched_member(self):
         # Create an ACCOUNT_DELETE challenge for self.member's email but bound to self.other.
         self._challenge(self.other, EmailAuthChallenge.Purpose.ACCOUNT_DELETE, "user@example.com")
-        serializer = DeleteAccountCodeVerifySerializer(data={"code": "123456"}, context=self._ctx(self.member))
+        serializer = DeleteAccountCodeVerifySerializer(
+            data={"code": "123456"}, context=self._ctx(self.member)
+        )
         self.assertFalse(serializer.is_valid())
         self.assertIn("detail", serializer.errors)
-
-

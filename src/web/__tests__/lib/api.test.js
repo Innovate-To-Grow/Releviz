@@ -121,7 +121,7 @@ describe("api config session helpers", () => {
       access: "a",
       accessExpiresAt: null,
       session: null,
-      user: { id: "1" },
+      user: expect.objectContaining({ id: "1", memberUuid: "1" }),
       nextStep: null,
       requiresProfileCompletion: false,
     });
@@ -156,18 +156,24 @@ describe("api config session helpers", () => {
   });
 
   test("extractError handles common API error shapes and invalid JSON", async () => {
-    await expect(extractError(jsonResponse({ error: "bad" }, { status: 400 }))).resolves.toBe(
-      "bad"
+    await expect(
+      extractError(jsonResponse({ error: "bad" }, { status: 400 })),
+    ).resolves.toBe("bad");
+    await expect(
+      extractError(jsonResponse({ detail: "nope" }, { status: 400 })),
+    ).resolves.toBe("nope");
+    await expect(
+      extractError(jsonResponse({ email: ["Required", "Invalid"] })),
+    ).resolves.toBe("Required Invalid");
+    await expect(
+      extractError(jsonResponse({ email: "Required" })),
+    ).resolves.toBe("Required");
+    await expect(extractError(jsonResponse({}))).resolves.toBe(
+      "Request failed",
     );
-    await expect(extractError(jsonResponse({ detail: "nope" }, { status: 400 }))).resolves.toBe(
-      "nope"
-    );
-    await expect(extractError(jsonResponse({ email: ["Required", "Invalid"] }))).resolves.toBe(
-      "Required Invalid"
-    );
-    await expect(extractError(jsonResponse({ email: "Required" }))).resolves.toBe("Required");
-    await expect(extractError(jsonResponse({}))).resolves.toBe("Request failed");
-    await expect(extractError(textResponse("not json", { status: 418 }))).resolves.toBe("HTTP 418");
+    await expect(
+      extractError(textResponse("not json", { status: 418 })),
+    ).resolves.toBe("HTTP 418");
   });
 
   test("apiFetch sends bearer token and refreshes once after 401", async () => {
@@ -186,12 +192,14 @@ describe("api config session helpers", () => {
       expect.objectContaining({
         credentials: "include",
         headers: { "X-Test": "1", Authorization: "Bearer old" },
-      })
+      }),
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
       3,
       "/things",
-      expect.objectContaining({ headers: { "X-Test": "1", Authorization: "Bearer new" } })
+      expect.objectContaining({
+        headers: { "X-Test": "1", Authorization: "Bearer new" },
+      }),
     );
     expect(readAuthSession().access).toBe("new");
   });
@@ -206,20 +214,24 @@ describe("api config session helpers", () => {
     global.fetch.mockReturnValueOnce(
       new Promise((resolve) => {
         resolveRefresh = resolve;
-      })
+      }),
     );
     const firstRefresh = refreshAuthSession();
     const secondRefresh = refreshAuthSession();
     resolveRefresh(jsonResponse({ access: "shared", user: { id: "1" } }));
-    await expect(firstRefresh).resolves.toEqual(expect.objectContaining({ access: "shared" }));
-    await expect(secondRefresh).resolves.toEqual(expect.objectContaining({ access: "shared" }));
+    await expect(firstRefresh).resolves.toEqual(
+      expect.objectContaining({ access: "shared" }),
+    );
+    await expect(secondRefresh).resolves.toEqual(
+      expect.objectContaining({ access: "shared" }),
+    );
     expect(global.fetch).toHaveBeenCalledTimes(2);
     expect(global.fetch).toHaveBeenLastCalledWith(
       "/authn/refresh/",
       expect.objectContaining({
         body: "{}",
         credentials: "include",
-      })
+      }),
     );
 
     writeAuthSession({ access: "old" });
@@ -232,7 +244,9 @@ describe("api config session helpers", () => {
 
     global.fetch
       .mockResolvedValueOnce(textResponse("no cookie", { status: 401 }))
-      .mockResolvedValueOnce(textResponse("still unauthorized", { status: 401 }));
+      .mockResolvedValueOnce(
+        textResponse("still unauthorized", { status: 401 }),
+      );
     const noRefresh = await apiFetch("/things");
     expect(noRefresh.status).toBe(401);
 
@@ -253,7 +267,7 @@ describe("api config session helpers", () => {
       .mockResolvedValueOnce(jsonResponse({ access: "new-again" }))
       .mockResolvedValueOnce(jsonResponse({ ok: true }));
     await expect(apiFetch("/no-headers")).resolves.toEqual(
-      expect.objectContaining({ status: 200 })
+      expect.objectContaining({ status: 200 }),
     );
   });
 });
@@ -271,30 +285,38 @@ describe("auth API helpers", () => {
     global.fetch
       .mockResolvedValueOnce(passwordKeyResponse())
       .mockResolvedValueOnce(jsonResponse(authBody))
-      .mockResolvedValueOnce(jsonResponse({ message: "code sent" }, { status: 202 }))
+      .mockResolvedValueOnce(
+        jsonResponse({ message: "code sent" }, { status: 202 }),
+      )
       .mockResolvedValueOnce(jsonResponse(authBody))
       .mockResolvedValueOnce(passwordKeyResponse())
-      .mockResolvedValueOnce(jsonResponse({ message: "started" }, { status: 202 }))
+      .mockResolvedValueOnce(
+        jsonResponse({ message: "started" }, { status: 202 }),
+      )
       .mockResolvedValueOnce(jsonResponse(authBody))
       .mockResolvedValueOnce(passwordKeyResponse())
       .mockResolvedValueOnce(jsonResponse({ message: "ok" }));
 
-    await expect(loginWithPassword({ email: "a@b.com", password: "pw" })).resolves.toEqual(
-      authBody
-    );
+    await expect(
+      loginWithPassword({ email: "a@b.com", password: "pw" }),
+    ).resolves.toEqual(authBody);
     expect(readAuthSession().access).toBe("a");
     await expect(requestLoginCode({ email: "a@b.com" })).resolves.toEqual({
       message: "code sent",
     });
-    await expect(verifyLoginCode({ email: "a@b.com", code: "123456" })).resolves.toEqual(authBody);
+    await expect(
+      verifyLoginCode({ email: "a@b.com", code: "123456" }),
+    ).resolves.toEqual(authBody);
     await expect(startRegistration({ email: "a@b.com" })).resolves.toEqual({
       message: "started",
     });
-    await expect(verifyRegistration({ email: "a@b.com", code: "123456" })).resolves.toEqual(
-      authBody
-    );
+    await expect(
+      verifyRegistration({ email: "a@b.com", code: "123456" }),
+    ).resolves.toEqual(authBody);
 
-    await expect(loginWithPassword({ email: "a@b.com", password: "pw" })).resolves.toEqual({
+    await expect(
+      loginWithPassword({ email: "a@b.com", password: "pw" }),
+    ).resolves.toEqual({
       message: "ok",
     });
   });
@@ -302,14 +324,16 @@ describe("auth API helpers", () => {
   test("starts a temporary upgrade registration without a client email", async () => {
     global.fetch
       .mockResolvedValueOnce(passwordKeyResponse())
-      .mockResolvedValueOnce(jsonResponse({ message: "started" }, { status: 202 }));
+      .mockResolvedValueOnce(
+        jsonResponse({ message: "started" }, { status: 202 }),
+      );
 
     await expect(
       startTemporaryUpgradeRegistration("A B", {
         first_name: "Taylor",
         password: "password123",
         password_confirm: "password123",
-      })
+      }),
     ).resolves.toEqual({ message: "started" });
 
     expect(global.fetch).toHaveBeenNthCalledWith(
@@ -323,14 +347,17 @@ describe("auth API helpers", () => {
           password: "password123",
           password_confirm: "password123",
         }),
-      })
+      }),
     );
-    expect(JSON.parse(global.fetch.mock.calls[1][1].body)).not.toHaveProperty("email");
+    expect(JSON.parse(global.fetch.mock.calls[1][1].body)).not.toHaveProperty(
+      "email",
+    );
   });
 
   test("verify registration sends only email and code", async () => {
-    global.fetch
-      .mockResolvedValueOnce(jsonResponse({ access: "verified", user: { id: "member" } }));
+    global.fetch.mockResolvedValueOnce(
+      jsonResponse({ access: "verified", user: { id: "member" } }),
+    );
 
     await verifyRegistration({
       email: "temporary@example.com",
@@ -350,27 +377,29 @@ describe("auth API helpers", () => {
           email: "temporary@example.com",
           code: "123456",
         }),
-      })
+      }),
     );
   });
 
   test("unified email auth request and verify dispatch correctly", async () => {
     global.fetch
-      .mockResolvedValueOnce(jsonResponse({ message: "Check your email" }, { status: 202 }))
+      .mockResolvedValueOnce(
+        jsonResponse({ message: "Check your email" }, { status: 202 }),
+      )
       .mockResolvedValueOnce(
         jsonResponse({
           access: "a",
           user: { id: "u" },
           next_step: "account",
           requires_profile_completion: false,
-        })
+        }),
       );
 
     await expect(
-      requestUnifiedEmailAuthCode({ email: "a@b.com" })
+      requestUnifiedEmailAuthCode({ email: "a@b.com" }),
     ).resolves.toEqual({ message: "Check your email" });
     await expect(
-      verifyUnifiedEmailAuthCode({ email: "a@b.com", code: "123456" })
+      verifyUnifiedEmailAuthCode({ email: "a@b.com", code: "123456" }),
     ).resolves.toEqual({
       access: "a",
       user: { id: "u" },
@@ -380,11 +409,14 @@ describe("auth API helpers", () => {
     expect(readAuthSession().access).toBe("a");
 
     // Verify source and event fields are forwarded
-    global.fetch.mockResolvedValueOnce(jsonResponse({ message: "Check your email" }, { status: 202 }));
+    global.fetch.mockResolvedValueOnce(
+      jsonResponse({ message: "Check your email" }, { status: 202 }),
+    );
     await requestUnifiedEmailAuthCode({
       email: "a@b.com",
       source: "event_registration",
       event: "my-event",
+      next: "/event?code=my-event",
     });
     expect(global.fetch).toHaveBeenCalledWith(
       "/authn/email-auth/request-code/",
@@ -393,8 +425,9 @@ describe("auth API helpers", () => {
           email: "a@b.com",
           source: "event_registration",
           event: "my-event",
+          next: "/event?code=my-event",
         }),
-      })
+      }),
     );
   });
 
@@ -403,24 +436,75 @@ describe("auth API helpers", () => {
     global.fetch
       .mockResolvedValueOnce(passwordKeyResponse())
       .mockResolvedValueOnce(jsonResponse({ detail: "bad" }, { status: 400 }))
-      .mockResolvedValueOnce(jsonResponse({ error: "code bad" }, { status: 400 }))
-      .mockResolvedValueOnce(jsonResponse({ detail: "verify bad" }, { status: 400 }))
+      .mockResolvedValueOnce(
+        jsonResponse({ error: "code bad" }, { status: 400 }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ detail: "verify bad" }, { status: 400 }),
+      )
       .mockResolvedValueOnce(passwordKeyResponse())
       .mockResolvedValueOnce(jsonResponse({ error: "no" }, { status: 400 }))
-      .mockResolvedValueOnce(jsonResponse({ user: { id: "new" } }))
-      .mockResolvedValueOnce(jsonResponse({ detail: "profile bad" }, { status: 400 }))
-      .mockResolvedValueOnce(jsonResponse({ user: { id: "updated" } }))
-      .mockResolvedValueOnce(jsonResponse({ detail: "update bad" }, { status: 400 }));
+      .mockResolvedValueOnce(
+        jsonResponse({
+          member_uuid: "new",
+          email: "new@example.com",
+          first_name: "New",
+          last_name: "Member",
+          email_verified: true,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ detail: "profile bad" }, { status: 400 }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          member_uuid: "updated",
+          email: "new@example.com",
+          first_name: "Ada",
+          last_name: "Member",
+          email_verified: true,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ detail: "update bad" }, { status: 400 }),
+      );
 
-    await expect(loginWithPassword({ email: "x", password: "bad" })).rejects.toThrow("bad");
+    await expect(
+      loginWithPassword({ email: "x", password: "bad" }),
+    ).rejects.toThrow("bad");
     await expect(requestLoginCode({ email: "x" })).rejects.toThrow("code bad");
-    await expect(verifyLoginCode({ email: "x", code: "000000" })).rejects.toThrow("verify bad");
+    await expect(
+      verifyLoginCode({ email: "x", code: "000000" }),
+    ).rejects.toThrow("verify bad");
     await expect(startRegistration({})).rejects.toThrow("no");
-    await expect(fetchProfile()).resolves.toEqual({ id: "new" });
+    await expect(fetchProfile()).resolves.toEqual(
+      expect.objectContaining({
+        id: "new",
+        firstName: "New",
+        lastName: "Member",
+        displayName: "New Member",
+        emailVerified: true,
+      }),
+    );
+    expect(readAuthSession()).toEqual(
+      expect.objectContaining({
+        nextStep: "account",
+        requiresProfileCompletion: false,
+      }),
+    );
     await expect(fetchProfile()).rejects.toThrow("profile bad");
-    await expect(updateProfileApi({ first_name: "Ada" })).resolves.toEqual({ id: "updated" });
+    await expect(updateProfileApi({ first_name: "Ada" })).resolves.toEqual(
+      expect.objectContaining({ id: "updated", firstName: "Ada" }),
+    );
     expect(readAuthSession().user.id).toBe("updated");
-    await expect(updateProfileApi({ first_name: "Ada" })).rejects.toThrow("update bad");
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      9,
+      "/authn/profile/",
+      expect.objectContaining({ method: "PATCH" }),
+    );
+    await expect(updateProfileApi({ first_name: "Ada" })).rejects.toThrow(
+      "update bad",
+    );
   });
 
   test("logout always posts the cookie endpoint and clears memory", async () => {
@@ -439,7 +523,7 @@ describe("auth API helpers", () => {
     expect(global.fetch).toHaveBeenCalledTimes(3);
     expect(global.fetch).toHaveBeenLastCalledWith(
       "/authn/logout/",
-      expect.objectContaining({ body: "{}", credentials: "include" })
+      expect.objectContaining({ body: "{}", credentials: "include" }),
     );
   });
 
@@ -447,11 +531,19 @@ describe("auth API helpers", () => {
     writeAuthSession({ access: "a", user: { id: "u" } });
     global.fetch
       .mockResolvedValueOnce(jsonResponse({ sessions: [{ id: "s1" }] }))
-      .mockResolvedValueOnce(jsonResponse({ revoked: 1, currentRevoked: false }))
-      .mockResolvedValueOnce(jsonResponse({ detail: "list failed" }, { status: 500 }))
-      .mockResolvedValueOnce(jsonResponse({ detail: "revoke failed" }, { status: 500 }))
+      .mockResolvedValueOnce(
+        jsonResponse({ revoked: 1, currentRevoked: false }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ detail: "list failed" }, { status: 500 }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ detail: "revoke failed" }, { status: 500 }),
+      )
       .mockResolvedValueOnce(jsonResponse({}))
-      .mockResolvedValueOnce(jsonResponse({ revoked: 2, currentRevoked: true }));
+      .mockResolvedValueOnce(
+        jsonResponse({ revoked: 2, currentRevoked: true }),
+      );
 
     await expect(fetchAuthSessions()).resolves.toEqual([{ id: "s1" }]);
     await expect(revokeAuthSessions({ sessionId: "s1" })).resolves.toEqual({
@@ -459,7 +551,9 @@ describe("auth API helpers", () => {
       currentRevoked: false,
     });
     await expect(fetchAuthSessions()).rejects.toThrow("list failed");
-    await expect(revokeAuthSessions({ sessionId: "bad" })).rejects.toThrow("revoke failed");
+    await expect(revokeAuthSessions({ sessionId: "bad" })).rejects.toThrow(
+      "revoke failed",
+    );
     await expect(fetchAuthSessions()).resolves.toEqual([]);
     await expect(revokeAuthSessions({ all: true })).resolves.toEqual({
       revoked: 2,
@@ -472,7 +566,7 @@ describe("auth API helpers", () => {
       expect.objectContaining({
         body: JSON.stringify({ sessionId: "s1" }),
         method: "DELETE",
-      })
+      }),
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
       6,
@@ -480,13 +574,15 @@ describe("auth API helpers", () => {
       expect.objectContaining({
         body: JSON.stringify({ all: true }),
         method: "DELETE",
-      })
+      }),
     );
   });
 
   test("resets, changes, and deletes accounts while clearing local auth state", async () => {
     global.fetch
-      .mockResolvedValueOnce(jsonResponse({ message: "code sent" }, { status: 202 }))
+      .mockResolvedValueOnce(
+        jsonResponse({ message: "code sent" }, { status: 202 }),
+      )
       .mockResolvedValueOnce(passwordKeyResponse())
       .mockResolvedValueOnce(jsonResponse({ message: "reset" }))
       .mockResolvedValueOnce(passwordKeyResponse())
@@ -494,7 +590,9 @@ describe("auth API helpers", () => {
       .mockResolvedValueOnce(passwordKeyResponse())
       .mockResolvedValueOnce(jsonResponse({ message: "deleted" }));
 
-    await expect(requestPasswordResetCode({ email: "ada@example.com" })).resolves.toEqual({
+    await expect(
+      requestPasswordResetCode({ email: "ada@example.com" }),
+    ).resolves.toEqual({
       message: "code sent",
     });
     writeAuthSession({ access: "before-reset" });
@@ -504,7 +602,7 @@ describe("auth API helpers", () => {
         code: "123456",
         password: "password456",
         passwordConfirm: "password456",
-      })
+      }),
     ).resolves.toEqual({ message: "reset" });
     expect(readAuthSession()).toBeNull();
 
@@ -514,13 +612,13 @@ describe("auth API helpers", () => {
         currentPassword: "password456",
         newPassword: "password789",
         newPasswordConfirm: "password789",
-      })
+      }),
     ).resolves.toEqual({ message: "changed" });
     expect(readAuthSession()).toBeNull();
 
     writeAuthSession({ access: "before-delete" });
     await expect(
-      deleteAccountApi({ password: "password789", confirmation: "DELETE" })
+      deleteAccountApi({ password: "password789", confirmation: "DELETE" }),
     ).resolves.toEqual({ message: "deleted" });
     expect(readAuthSession()).toBeNull();
 
@@ -530,12 +628,12 @@ describe("auth API helpers", () => {
       expect.objectContaining({
         body: JSON.stringify({ email: "ada@example.com" }),
         credentials: "include",
-      })
+      }),
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
       2,
       "/authn/public-key/",
-      expect.objectContaining({ credentials: "include" })
+      expect.objectContaining({ credentials: "include" }),
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
       3,
@@ -547,12 +645,12 @@ describe("auth API helpers", () => {
           password: "password456",
           password_confirm: "password456",
         }),
-      })
+      }),
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
       4,
       "/authn/public-key/",
-      expect.objectContaining({ credentials: "include" })
+      expect.objectContaining({ credentials: "include" }),
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
       5,
@@ -563,40 +661,53 @@ describe("auth API helpers", () => {
           new_password: "password789",
           new_password_confirm: "password789",
         }),
-      })
+      }),
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
       6,
       "/authn/public-key/",
-      expect.objectContaining({ credentials: "include" })
+      expect.objectContaining({ credentials: "include" }),
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
       7,
       "/authn/delete-account/",
       expect.objectContaining({
-        body: JSON.stringify({ password: "password789", confirmation: "DELETE" }),
-      })
+        body: JSON.stringify({
+          password: "password789",
+          confirmation: "DELETE",
+        }),
+      }),
     );
   });
 
   test("account lifecycle helpers surface backend errors", async () => {
     global.fetch
-      .mockResolvedValueOnce(jsonResponse({ detail: "request failed" }, { status: 400 }))
+      .mockResolvedValueOnce(
+        jsonResponse({ detail: "request failed" }, { status: 400 }),
+      )
       .mockResolvedValueOnce(passwordKeyResponse())
-      .mockResolvedValueOnce(jsonResponse({ detail: "reset failed" }, { status: 400 }))
+      .mockResolvedValueOnce(
+        jsonResponse({ detail: "reset failed" }, { status: 400 }),
+      )
       .mockResolvedValueOnce(passwordKeyResponse())
-      .mockResolvedValueOnce(jsonResponse({ detail: "change failed" }, { status: 400 }))
+      .mockResolvedValueOnce(
+        jsonResponse({ detail: "change failed" }, { status: 400 }),
+      )
       .mockResolvedValueOnce(passwordKeyResponse())
-      .mockResolvedValueOnce(jsonResponse({ detail: "delete failed" }, { status: 400 }));
+      .mockResolvedValueOnce(
+        jsonResponse({ detail: "delete failed" }, { status: 400 }),
+      );
 
-    await expect(requestPasswordResetCode({ email: "x" })).rejects.toThrow("request failed");
+    await expect(requestPasswordResetCode({ email: "x" })).rejects.toThrow(
+      "request failed",
+    );
     await expect(
       confirmPasswordReset({
         email: "x",
         code: "0",
         password: "password456",
         passwordConfirm: "password456",
-      })
+      }),
     ).rejects.toThrow("reset failed");
     writeAuthSession({ access: "a" });
     await expect(
@@ -604,18 +715,20 @@ describe("auth API helpers", () => {
         currentPassword: "old",
         newPassword: "password456",
         newPasswordConfirm: "password456",
-      })
+      }),
     ).rejects.toThrow("change failed");
-    await expect(deleteAccountApi({ password: "old", confirmation: "DELETE" })).rejects.toThrow(
-      "delete failed"
-    );
+    await expect(
+      deleteAccountApi({ password: "old", confirmation: "DELETE" }),
+    ).rejects.toThrow("delete failed");
   });
 
   test("encrypts password fields when the backend requires it", async () => {
     const originalCrypto = globalThis.crypto;
     const originalTextEncoder = globalThis.TextEncoder;
     const importKey = jest.fn().mockResolvedValue("imported-key");
-    const encrypt = jest.fn().mockResolvedValue(Uint8Array.from([1, 2, 3]).buffer);
+    const encrypt = jest
+      .fn()
+      .mockResolvedValue(Uint8Array.from([1, 2, 3]).buffer);
     Object.defineProperty(globalThis, "crypto", {
       configurable: true,
       value: { subtle: { importKey, encrypt } },
@@ -630,7 +743,10 @@ describe("auth API helpers", () => {
       .mockResolvedValueOnce(passwordKeyResponse(true))
       .mockResolvedValueOnce(jsonResponse({ message: "ok" }));
 
-    await loginWithPassword({ email: "ada@example.com", password: "secret-password" });
+    await loginWithPassword({
+      email: "ada@example.com",
+      password: "secret-password",
+    });
 
     const payload = JSON.parse(global.fetch.mock.calls[1][1].body);
     expect(payload).toEqual({
@@ -643,11 +759,15 @@ describe("auth API helpers", () => {
       Uint8Array.from([1, 2, 3]),
       { name: "RSA-OAEP", hash: "SHA-256" },
       false,
-      ["encrypt"]
+      ["encrypt"],
     );
-    expect(encrypt).toHaveBeenCalledWith({ name: "RSA-OAEP" }, "imported-key", expect.anything());
+    expect(encrypt).toHaveBeenCalledWith(
+      { name: "RSA-OAEP" },
+      "imported-key",
+      expect.anything(),
+    );
     expect(Array.from(encrypt.mock.calls[0][2])).toEqual(
-      Array.from(new TextEncoder().encode("secret-password"))
+      Array.from(new TextEncoder().encode("secret-password")),
     );
 
     Object.defineProperty(globalThis, "crypto", {
@@ -662,11 +782,11 @@ describe("auth API helpers", () => {
 
   test("rejects unavailable key negotiation and browser encryption", async () => {
     global.fetch.mockResolvedValueOnce(
-      jsonResponse({ detail: "key unavailable" }, { status: 503 })
+      jsonResponse({ detail: "key unavailable" }, { status: 503 }),
     );
-    await expect(loginWithPassword({ email: "x", password: "password123" })).rejects.toThrow(
-      "key unavailable"
-    );
+    await expect(
+      loginWithPassword({ email: "x", password: "password123" }),
+    ).rejects.toThrow("key unavailable");
 
     const originalCrypto = globalThis.crypto;
     Object.defineProperty(globalThis, "crypto", {
@@ -674,9 +794,9 @@ describe("auth API helpers", () => {
       value: {},
     });
     global.fetch.mockResolvedValueOnce(passwordKeyResponse(true));
-    await expect(loginWithPassword({ email: "x", password: "password123" })).rejects.toThrow(
-      "Unable to secure password for transmission."
-    );
+    await expect(
+      loginWithPassword({ email: "x", password: "password123" }),
+    ).rejects.toThrow("Unable to secure password for transmission.");
     Object.defineProperty(globalThis, "crypto", {
       configurable: true,
       value: originalCrypto,
@@ -711,7 +831,7 @@ describe("business API helpers", () => {
         remindersEnabled: false,
         reminderHoursBefore: 12,
       },
-      "tok"
+      "tok",
     );
     await fetchEvent("ABC 123", "tok");
     await updateEvent(
@@ -721,7 +841,7 @@ describe("business API helpers", () => {
         expectedVersion: 3,
         resetResponses: true,
       },
-      "tok"
+      "tok",
     );
     await duplicateEvent(
       "ABC 123",
@@ -729,7 +849,7 @@ describe("business API helpers", () => {
         expectedVersion: 3,
         idempotencyKey: "duplicate-key",
       },
-      "tok"
+      "tok",
     );
     await deleteEvent(
       "ABC 123",
@@ -738,7 +858,7 @@ describe("business API helpers", () => {
         idempotencyKey: "delete-key",
         confirmation: "ABC 123",
       },
-      "tok"
+      "tok",
     );
     await fetchEventResults("ABC 123", "tok");
     await previewFinalMeeting(
@@ -748,7 +868,7 @@ describe("business API helpers", () => {
         endsAt: "2026-07-20T17:00:00.000Z",
         channel: "inperson",
       },
-      "tok"
+      "tok",
     );
     await confirmFinalMeeting(
       "ABC 123",
@@ -759,7 +879,7 @@ describe("business API helpers", () => {
         expectedVersion: 2,
         idempotencyKey: "key",
       },
-      "tok"
+      "tok",
     );
     await fetchFinalization("ABC 123", "tok");
     await updateEventLifecycle(
@@ -769,7 +889,7 @@ describe("business API helpers", () => {
         expectedVersion: 2,
         responseDeadline: "2026-07-09T12:00:00.000Z",
       },
-      "tok"
+      "tok",
     );
     await fetchInvitations("ABC 123", "tok");
     await markInvitationOpened("ABC 123", "invitation-token");
@@ -780,7 +900,7 @@ describe("business API helpers", () => {
         message: "Join",
         idempotencyKey: "invite-key",
       },
-      "tok"
+      "tok",
     );
     await sendReminders("ABC 123", { idempotencyKey: "reminder-key" }, "tok");
     await launchEvent(
@@ -790,36 +910,51 @@ describe("business API helpers", () => {
         idempotencyKey: "launch-key",
         selection: { participantIds: ["participant 1"] },
       },
-      "tok"
+      "tok",
     );
     await fetchDeliveryRequest("delivery 1", "tok");
     await retryDeliveryRequest("delivery 1", "tok");
-    await createRosterImport("ABC 123", { pastedText: "name\temail\nAda\tada@example.com" }, "tok");
+    await createRosterImport(
+      "ABC 123",
+      { pastedText: "name\temail\nAda\tada@example.com" },
+      "tok",
+    );
     await configureRosterImport(
       "ABC 123",
       "import 1",
       { worksheet: "Sheet 1", columnMapping: { name: "name", email: "email" } },
-      "tok"
+      "tok",
     );
-    await fetchRosterImportRows("ABC 123", "import 1", { page: 2, pageSize: 25 }, "tok");
+    await fetchRosterImportRows(
+      "ABC 123",
+      "import 1",
+      { page: 2, pageSize: 25 },
+      "tok",
+    );
     await commitRosterImport(
       "ABC 123",
       "import 1",
       { mode: "merge", idempotencyKey: "import-key" },
-      "tok"
+      "tok",
     );
     await cancelRosterImport("ABC 123", "import 1", "tok");
     await fetchRoster(
       "ABC 123",
-      { page: 2, pageSize: 100, search: "Ada", group: "Faculty", submitted: true },
-      "tok"
+      {
+        page: 2,
+        pageSize: 100,
+        search: "Ada",
+        group: "Faculty",
+        submitted: true,
+      },
+      "tok",
     );
     await fetchRosterSchedule("ABC 123", "participant 1", "tok");
     await patchRosterParticipant(
       "ABC 123",
       "participant 1",
       { weight: 0.5, expectedVersion: 2 },
-      "tok"
+      "tok",
     );
     await patchRosterBulk(
       "ABC 123",
@@ -828,7 +963,7 @@ describe("business API helpers", () => {
         updates: { included: false },
         idempotencyKey: "bulk-key",
       },
-      "tok"
+      "tok",
     );
     await fetchParticipants("ABC 123", "tok");
     await expect(fetchCurrentParticipant("ABC 123", "tok")).resolves.toEqual({
@@ -839,7 +974,7 @@ describe("business API helpers", () => {
     await createManagedParticipant(
       "ABC 123",
       { name: "Temporary Person", email: "temp@example.com" },
-      "tok"
+      "tok",
     );
     await updateParticipant("ABC 123", "user 1", { submitted: 1 }, "tok");
     await fetchParticipantsIncludeHidden("ABC 123", "tok");
@@ -860,8 +995,11 @@ describe("business API helpers", () => {
       "/events/participants/managed?code=ABC%20123",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ name: "Temporary Person", email: "temp@example.com" }),
-      })
+        body: JSON.stringify({
+          name: "Temporary Person",
+          email: "temp@example.com",
+        }),
+      }),
     );
     expect(global.fetch).toHaveBeenCalledWith(
       "/events?code=ABC%20123",
@@ -872,7 +1010,7 @@ describe("business API helpers", () => {
           expectedVersion: 3,
           resetResponses: true,
         }),
-      })
+      }),
     );
     expect(global.fetch).toHaveBeenCalledWith(
       "/events/duplicate?code=ABC%20123",
@@ -882,7 +1020,7 @@ describe("business API helpers", () => {
           expectedVersion: 3,
           idempotencyKey: "duplicate-key",
         }),
-      })
+      }),
     );
     expect(global.fetch).toHaveBeenCalledWith(
       "/events?code=ABC%20123",
@@ -893,7 +1031,7 @@ describe("business API helpers", () => {
           idempotencyKey: "delete-key",
           confirmation: "ABC 123",
         }),
-      })
+      }),
     );
     expect(urls).toContain("/events/results?code=ABC%20123");
     expect(urls).toContain("/events/finalization/preview?code=ABC%20123");
@@ -908,7 +1046,7 @@ describe("business API helpers", () => {
           code: "ABC 123",
           token: "invitation-token",
         }),
-      })
+      }),
     );
     expect(urls).toContain("/events/reminders?code=ABC%20123");
     expect(urls).toContain("/events/launch?code=ABC%20123");
@@ -920,19 +1058,23 @@ describe("business API helpers", () => {
           idempotencyKey: "launch-key",
           selection: { participantIds: ["participant 1"] },
         }),
-      })
+      }),
     );
     expect(urls).toContain("/events/delivery-requests/delivery%201");
     expect(urls).toContain("/events/roster-imports?code=ABC%20123");
     expect(urls).toContain("/events/roster-imports/import%201?code=ABC%20123");
     expect(urls).toContain(
-      "/events/roster-imports/import%201/rows?code=ABC+123&page=2&pageSize=25"
+      "/events/roster-imports/import%201/rows?code=ABC+123&page=2&pageSize=25",
     );
-    expect(urls).toContain("/events/roster-imports/import%201/commit?code=ABC%20123");
     expect(urls).toContain(
-      "/events/roster?code=ABC+123&page=2&pageSize=100&search=Ada&group=Faculty&submitted=true"
+      "/events/roster-imports/import%201/commit?code=ABC%20123",
     );
-    expect(urls).toContain("/events/roster/participant%201/schedule?code=ABC%20123");
+    expect(urls).toContain(
+      "/events/roster?code=ABC+123&page=2&pageSize=100&search=Ada&group=Faculty&submitted=true",
+    );
+    expect(urls).toContain(
+      "/events/roster/participant%201/schedule?code=ABC%20123",
+    );
     expect(urls).toContain("/events/roster/participant%201?code=ABC%20123");
     expect(urls).toContain("/events/roster/bulk?code=ABC%20123");
     expect(global.fetch).toHaveBeenCalledWith(
@@ -943,17 +1085,19 @@ describe("business API helpers", () => {
           message: "Join",
           idempotencyKey: "invite-key",
         }),
-      })
+      }),
     );
     expect(global.fetch).toHaveBeenCalledWith(
       "/events/reminders?code=ABC%20123",
       expect.objectContaining({
         body: JSON.stringify({ idempotencyKey: "reminder-key" }),
-      })
+      }),
     );
-    expect(urls).toContain("/events/participants?code=ABC%20123&includeHidden=true");
     expect(urls).toContain(
-      "/events/participants/update/unhide?code=ABC%20123&participantId=user%201"
+      "/events/participants?code=ABC%20123&includeHidden=true",
+    );
+    expect(urls).toContain(
+      "/events/participants/update/unhide?code=ABC%20123&participantId=user%201",
     );
     expect(global.fetch).toHaveBeenCalledWith(
       "/feedback",
@@ -965,12 +1109,14 @@ describe("business API helpers", () => {
           pagePath: "/event",
           consentToFollowUp: true,
         }),
-      })
+      }),
     );
   });
 
   test("business API helpers throw extracted errors", async () => {
-    global.fetch.mockResolvedValue(jsonResponse({ error: "nope" }, { status: 400 }));
+    global.fetch.mockResolvedValue(
+      jsonResponse({ error: "nope" }, { status: 400 }),
+    );
     await expect(createEvent({ name: "Bad" })).rejects.toThrow("nope");
     await expect(fetchDashboardEvents()).rejects.toThrow("nope");
     await expect(fetchEvent("BAD")).rejects.toThrow("nope");
@@ -982,25 +1128,39 @@ describe("business API helpers", () => {
     await expect(confirmFinalMeeting("BAD", {})).rejects.toThrow("nope");
     await expect(fetchFinalization("BAD")).rejects.toThrow("nope");
     await expect(
-      updateEventLifecycle("BAD", { status: "closed", expectedVersion: 1 })
+      updateEventLifecycle("BAD", { status: "closed", expectedVersion: 1 }),
     ).rejects.toThrow("nope");
     await expect(fetchInvitations("BAD")).rejects.toThrow("nope");
     await expect(markInvitationOpened("BAD", "token")).rejects.toThrow("nope");
     await expect(
-      sendInvitations("BAD", { emails: [], idempotencyKey: "invite-key" })
+      sendInvitations("BAD", { emails: [], idempotencyKey: "invite-key" }),
     ).rejects.toThrow("nope");
-    await expect(sendReminders("BAD", { idempotencyKey: "reminder-key" })).rejects.toThrow("nope");
+    await expect(
+      sendReminders("BAD", { idempotencyKey: "reminder-key" }),
+    ).rejects.toThrow("nope");
     await expect(launchEvent("BAD", {})).rejects.toThrow("nope");
     await expect(fetchDeliveryRequest("bad-request")).rejects.toThrow("nope");
     await expect(retryDeliveryRequest("bad-request")).rejects.toThrow("nope");
-    await expect(createRosterImport("BAD", { pastedText: "bad" })).rejects.toThrow("nope");
-    await expect(configureRosterImport("BAD", "import", {})).rejects.toThrow("nope");
-    await expect(fetchRosterImportRows("BAD", "import")).rejects.toThrow("nope");
-    await expect(commitRosterImport("BAD", "import", {})).rejects.toThrow("nope");
+    await expect(
+      createRosterImport("BAD", { pastedText: "bad" }),
+    ).rejects.toThrow("nope");
+    await expect(configureRosterImport("BAD", "import", {})).rejects.toThrow(
+      "nope",
+    );
+    await expect(fetchRosterImportRows("BAD", "import")).rejects.toThrow(
+      "nope",
+    );
+    await expect(commitRosterImport("BAD", "import", {})).rejects.toThrow(
+      "nope",
+    );
     await expect(cancelRosterImport("BAD", "import")).rejects.toThrow("nope");
     await expect(fetchRoster("BAD")).rejects.toThrow("nope");
-    await expect(fetchRosterSchedule("BAD", "participant")).rejects.toThrow("nope");
-    await expect(patchRosterParticipant("BAD", "participant", {})).rejects.toThrow("nope");
+    await expect(fetchRosterSchedule("BAD", "participant")).rejects.toThrow(
+      "nope",
+    );
+    await expect(
+      patchRosterParticipant("BAD", "participant", {}),
+    ).rejects.toThrow("nope");
     await expect(patchRosterBulk("BAD", {})).rejects.toThrow("nope");
     await expect(fetchParticipants("BAD")).rejects.toThrow("nope");
     await expect(fetchCurrentParticipant("BAD")).rejects.toThrow("nope");
@@ -1013,7 +1173,7 @@ describe("business API helpers", () => {
       submitFeedback({
         category: "problem",
         message: "Failed",
-      })
+      }),
     ).rejects.toThrow("nope");
   });
 
@@ -1022,7 +1182,9 @@ describe("business API helpers", () => {
     global.fetch.mockResolvedValue({
       ok: true,
       status: 200,
-      headers: { get: jest.fn().mockReturnValue('attachment; filename="planning.ics"') },
+      headers: {
+        get: jest.fn().mockReturnValue('attachment; filename="planning.ics"'),
+      },
       blob: jest.fn().mockResolvedValue(blob),
     });
 
@@ -1032,7 +1194,7 @@ describe("business API helpers", () => {
     });
     expect(global.fetch).toHaveBeenCalledWith(
       "/events/finalization/calendar?code=ABC%20123",
-      expect.objectContaining({ headers: { Authorization: "Bearer tok" } })
+      expect.objectContaining({ headers: { Authorization: "Bearer tok" } }),
     );
   });
 
@@ -1047,10 +1209,12 @@ describe("business API helpers", () => {
             participantCount: 3,
             retryable: true,
           },
-          { status: 409 }
-        )
+          { status: 409 },
+        ),
       )
-      .mockResolvedValueOnce(jsonResponse({ detail: "Duplicate conflict" }, { status: 409 }))
+      .mockResolvedValueOnce(
+        jsonResponse({ detail: "Duplicate conflict" }, { status: 409 }),
+      )
       .mockResolvedValueOnce(jsonResponse({}, { status: 400 }))
       .mockResolvedValueOnce(textResponse("gateway", { status: 502 }));
 
@@ -1070,7 +1234,9 @@ describe("business API helpers", () => {
       participantCount: 0,
       retryable: false,
     });
-    await expect(deleteEvent("ABC", {}, "tok")).rejects.toThrow("Request failed");
+    await expect(deleteEvent("ABC", {}, "tok")).rejects.toThrow(
+      "Request failed",
+    );
     await expect(deleteEvent("ABC", {}, "tok")).rejects.toMatchObject({
       message: "HTTP 502",
       status: 502,
@@ -1086,32 +1252,42 @@ describe("business API helpers", () => {
             errorCode: "organizer_edit_full_account",
             participant: { id: "participant-1", version: 4 },
           },
-          { status: 409 }
-        )
+          { status: 409 },
+        ),
       )
-      .mockResolvedValueOnce(jsonResponse({ detail: "Responses are locked" }, { status: 423 }))
+      .mockResolvedValueOnce(
+        jsonResponse({ detail: "Responses are locked" }, { status: 423 }),
+      )
       .mockResolvedValueOnce(jsonResponse({}, { status: 400 }))
       .mockResolvedValueOnce(textResponse("gateway", { status: 502 }));
 
-    await expect(updateParticipant("ABC", "participant-1", {}, "tok")).rejects.toMatchObject({
+    await expect(
+      updateParticipant("ABC", "participant-1", {}, "tok"),
+    ).rejects.toMatchObject({
       message: "Response version conflict",
       status: 409,
       errorCode: "organizer_edit_full_account",
       participant: { id: "participant-1", version: 4 },
     });
-    await expect(updateParticipant("ABC", "participant-1", {}, "tok")).rejects.toMatchObject({
+    await expect(
+      updateParticipant("ABC", "participant-1", {}, "tok"),
+    ).rejects.toMatchObject({
       message: "Responses are locked",
       status: 423,
       errorCode: null,
       participant: null,
     });
-    await expect(updateParticipant("ABC", "participant-1", {}, "tok")).rejects.toMatchObject({
+    await expect(
+      updateParticipant("ABC", "participant-1", {}, "tok"),
+    ).rejects.toMatchObject({
       message: "Request failed",
       status: 400,
       errorCode: null,
       participant: null,
     });
-    await expect(updateParticipant("ABC", "participant-1", {}, "tok")).rejects.toMatchObject({
+    await expect(
+      updateParticipant("ABC", "participant-1", {}, "tok"),
+    ).rejects.toMatchObject({
       message: "HTTP 502",
       status: 502,
       errorCode: null,

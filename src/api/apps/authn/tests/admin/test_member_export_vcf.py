@@ -55,8 +55,6 @@ class MemberVCardExportActionTest(TestCase):
             first_name="Jane",
             middle_name="Q",
             last_name="Doe",
-            organization="Acme Corp",
-            title="Engineer",
             is_active=True,
         )
         ContactEmail.objects.create(
@@ -87,8 +85,8 @@ class MemberVCardExportActionTest(TestCase):
         self.assertIn("END:VCARD", body)
         self.assertIn("FN:Jane Q Doe", body)
         self.assertIn("N:Doe;Jane;Q;;", body)
-        self.assertIn("ORG:Acme Corp", body)
-        self.assertIn("TITLE:Engineer", body)
+        self.assertNotIn("ORG:", body)
+        self.assertNotIn("TITLE:", body)
         self.assertIn("EMAIL;TYPE=INTERNET,PREF:jane.primary@example.com", body)
         self.assertIn("EMAIL;TYPE=INTERNET:jane.secondary@example.com", body)
         self.assertIn(f"UID:urn:uuid:{member.id}", body)
@@ -96,10 +94,18 @@ class MemberVCardExportActionTest(TestCase):
         self.assertIn("\r\n", body)
 
     def test_multiple_members_each_get_a_card(self):
-        m1 = Member.objects.create_user(password="t1", first_name="Ann", last_name="One", is_active=True)
-        ContactEmail.objects.create(member=m1, email_address="ann@example.com", email_type="primary")
-        m2 = Member.objects.create_user(password="t2", first_name="Bob", last_name="Two", is_active=True)
-        ContactEmail.objects.create(member=m2, email_address="bob@example.com", email_type="primary")
+        m1 = Member.objects.create_user(
+            password="t1", first_name="Ann", last_name="One", is_active=True
+        )
+        ContactEmail.objects.create(
+            member=m1, email_address="ann@example.com", email_type="primary"
+        )
+        m2 = Member.objects.create_user(
+            password="t2", first_name="Bob", last_name="Two", is_active=True
+        )
+        ContactEmail.objects.create(
+            member=m2, email_address="bob@example.com", email_type="primary"
+        )
 
         resp = self._run_export([m1.pk, m2.pk])
         self.assertEqual(resp.status_code, 200)
@@ -111,7 +117,9 @@ class MemberVCardExportActionTest(TestCase):
         self.assertIn("FN:Bob Two", body)
 
     def test_minimal_member_omits_optional_fields(self):
-        member = Member.objects.create_user(password="t1", first_name="Solo", last_name="Person", is_active=True)
+        member = Member.objects.create_user(
+            password="t1", first_name="Solo", last_name="Person", is_active=True
+        )
 
         resp = self._run_export([member.pk])
         self.assertEqual(resp.status_code, 200)
@@ -130,10 +138,8 @@ class MemberVCardExportActionTest(TestCase):
     def test_special_characters_are_escaped(self):
         member = Member.objects.create_user(
             password="t1",
-            first_name="Eve",
-            last_name="Smith",
-            organization="Acme, Inc.; Ltd",
-            title="Lead; Engineer, Backend",
+            first_name="Eve, Inc.",
+            last_name="Smith; Jr.",
             is_active=True,
         )
 
@@ -141,8 +147,8 @@ class MemberVCardExportActionTest(TestCase):
         self.assertEqual(resp.status_code, 200)
 
         body = resp.content.decode("utf-8")
-        self.assertIn("ORG:Acme\\, Inc.\\; Ltd", body)
-        self.assertIn("TITLE:Lead\\; Engineer\\, Backend", body)
+        self.assertIn("FN:Eve\\, Inc. Smith\\; Jr.", body)
+        self.assertIn(r"N:Smith\; Jr.;Eve\, Inc.;;;", body)
 
     def test_profile_image_data_uri_preserves_mime_type(self):
         cases = [
@@ -185,7 +191,7 @@ class MemberVCardExportActionTest(TestCase):
         self.assertNotIn("PHOTO;ENCODING=b;TYPE=", body)
 
     def test_fold_preserves_utf8_text_and_line_octet_limit(self):
-        line = "ORG:" + ("研究中心" * 30)
+        line = "FN:" + ("研究中心" * 30)
 
         folded = _fold(line)
 

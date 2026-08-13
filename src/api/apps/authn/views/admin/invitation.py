@@ -43,7 +43,9 @@ class AcceptInvitationView(View):
     def get(self, request, token):
         invitation = self._get_invitation(token)
         if invitation is None:
-            return render(request, "authn/invitation/invalid.html", _get_unfold_context(request), status=400)
+            return render(
+                request, "authn/invitation/invalid.html", _get_unfold_context(request), status=400
+            )
 
         existing = self._get_verified_member(invitation)
         if existing:
@@ -65,12 +67,16 @@ class AcceptInvitationView(View):
         cache_key = f"invitation-rate:{token}"
         attempts = cache.get(cache_key, 0)
         if attempts >= _INVITATION_RATE_LIMIT:
-            return HttpResponse("Too many attempts. Please try again later.", status=429, content_type="text/plain")
+            return HttpResponse(
+                "Too many attempts. Please try again later.", status=429, content_type="text/plain"
+            )
         cache.set(cache_key, attempts + 1, timeout=3600)
 
         invitation = self._get_invitation(token)
         if invitation is None:
-            return render(request, "authn/invitation/invalid.html", _get_unfold_context(request), status=400)
+            return render(
+                request, "authn/invitation/invalid.html", _get_unfold_context(request), status=400
+            )
 
         existing = self._get_verified_member(invitation)
         if existing:
@@ -95,7 +101,6 @@ class AcceptInvitationView(View):
             member = MemberModel(
                 first_name=form.cleaned_data["first_name"],
                 last_name=form.cleaned_data["last_name"],
-                organization=form.cleaned_data.get("organization", ""),
                 is_staff=True,
                 is_active=True,
             )
@@ -142,7 +147,11 @@ class AcceptInvitationView(View):
 
     # noinspection PyMethodMayBeStatic
     def _attach_invitation_email(self, member, invitation):
-        contact = ContactEmail.objects.select_for_update().filter(email_address__iexact=invitation.email).first()
+        contact = (
+            ContactEmail.objects.select_for_update()
+            .filter(email_address__iexact=invitation.email)
+            .first()
+        )
         if contact is None:
             ContactEmail.objects.create(
                 member=member,

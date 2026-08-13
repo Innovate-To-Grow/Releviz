@@ -29,24 +29,38 @@ class BackfillPrimaryEmailMigrationTests(TestCase):
     def test_member_without_primary_gets_one_promoted(self):
         # No primary; one verified email should be promoted (verified preferred).
         ContactEmail.objects.create(
-            member=self.member, email_address="old-other@example.com", email_type="other", verified=False
+            member=self.member,
+            email_address="old-other@example.com",
+            email_type="other",
+            verified=False,
         )
         verified = ContactEmail.objects.create(
-            member=self.member, email_address="verified@example.com", email_type="secondary", verified=True
+            member=self.member,
+            email_address="verified@example.com",
+            email_type="secondary",
+            verified=True,
         )
 
         _run_migration()
 
         verified.refresh_from_db()
         self.assertEqual(verified.email_type, "primary")
-        self.assertEqual(ContactEmail.objects.filter(member=self.member, email_type="primary").count(), 1)
+        self.assertEqual(
+            ContactEmail.objects.filter(member=self.member, email_type="primary").count(), 1
+        )
 
     def test_member_without_primary_or_verified_uses_oldest(self):
         oldest = ContactEmail.objects.create(
-            member=self.member, email_address="oldest@example.com", email_type="other", verified=False
+            member=self.member,
+            email_address="oldest@example.com",
+            email_type="other",
+            verified=False,
         )
         ContactEmail.objects.create(
-            member=self.member, email_address="newer@example.com", email_type="other", verified=False
+            member=self.member,
+            email_address="newer@example.com",
+            email_type="other",
+            verified=False,
         )
 
         _run_migration()
@@ -74,7 +88,9 @@ class BackfillPrimaryEmailMigrationTests(TestCase):
         unverified_primary.refresh_from_db()
         self.assertEqual(verified_primary.email_type, "primary")  # verified kept
         self.assertNotEqual(unverified_primary.email_type, "primary")  # other demoted
-        self.assertEqual(ContactEmail.objects.filter(member=self.member, email_type="primary").count(), 1)
+        self.assertEqual(
+            ContactEmail.objects.filter(member=self.member, email_type="primary").count(), 1
+        )
 
     def test_migration_is_idempotent(self):
         ContactEmail.objects.create(
@@ -82,4 +98,6 @@ class BackfillPrimaryEmailMigrationTests(TestCase):
         )
         _run_migration()
         _run_migration()  # second run must be a no-op
-        self.assertEqual(ContactEmail.objects.filter(member=self.member, email_type="primary").count(), 1)
+        self.assertEqual(
+            ContactEmail.objects.filter(member=self.member, email_type="primary").count(), 1
+        )

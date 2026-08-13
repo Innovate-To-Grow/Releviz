@@ -16,7 +16,9 @@ class EmailAuthBackend(ModelBackend):
             return None
 
         contact = (
-            ContactEmail.objects.select_related("member").filter(email_address__iexact=username, verified=True).first()
+            ContactEmail.objects.select_related("member")
+            .filter(email_address__iexact=username, verified=True)
+            .first()
         )
         if contact is None:
             return None

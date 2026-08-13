@@ -4,7 +4,6 @@ Helpers for resolving which email addresses are eligible for auth flows.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
 from django.contrib.auth import get_user_model
@@ -38,15 +37,21 @@ def resolve_auth_email(email: str, *, require_active: bool = True) -> ResolvedAu
         return None
 
     contact = (
-        ContactEmail.objects.select_related("member").filter(email_address__iexact=normalized, verified=True).first()
+        ContactEmail.objects.select_related("member")
+        .filter(email_address__iexact=normalized, verified=True)
+        .first()
     )
     if contact and contact.member and (contact.member.is_active or not require_active):
-        return ResolvedAuthEmail(member=contact.member, delivery_email=normalized, source_type="contact")
+        return ResolvedAuthEmail(
+            member=contact.member, delivery_email=normalized, source_type="contact"
+        )
 
     return None
 
 
-def resolve_login_identifier(identifier: str, *, require_active: bool = False) -> ResolvedLoginIdentifier | None:
+def resolve_login_identifier(
+    identifier: str, *, require_active: bool = False
+) -> ResolvedLoginIdentifier | None:
     """Resolve a login identifier (email) to a member.
 
     Only verified contacts resolve — an unverified email is never a valid
@@ -75,7 +80,9 @@ def get_member_auth_emails(member: Member) -> list[str]:
             seen.add(normalized)
             emails.append(normalized)
 
-    contacts = ContactEmail.objects.filter(member=member, verified=True).order_by("email_type", "created_at")
+    contacts = ContactEmail.objects.filter(member=member, verified=True).order_by(
+        "email_type", "created_at"
+    )
     for contact in contacts:
         add(contact.email_address)
 
@@ -86,7 +93,9 @@ def get_unclaimed_contact_email(email: str) -> ContactEmail | None:
     normalized = normalize_email(email)
     if not normalized:
         return None
-    return ContactEmail.objects.filter(email_address__iexact=normalized, member__isnull=True).first()
+    return ContactEmail.objects.filter(
+        email_address__iexact=normalized, member__isnull=True
+    ).first()
 
 
 def claim_unclaimed_contact_email(
@@ -99,7 +108,9 @@ def claim_unclaimed_contact_email(
     normalized = normalize_email(email)
     if not normalized:
         return None
-    updated = ContactEmail.objects.filter(email_address__iexact=normalized, member__isnull=True).update(
+    updated = ContactEmail.objects.filter(
+        email_address__iexact=normalized, member__isnull=True
+    ).update(
         member=member,
         email_type=email_type,
         verified=verified,
@@ -116,13 +127,19 @@ def get_pending_registration_member(email: str) -> Member | None:
         return None
     contact = (
         ContactEmail.objects.select_related("member")
-        .filter(email_address__iexact=normalized, member__is_active=False)
+        .filter(
+            email_address__iexact=normalized,
+            member__is_active=False,
+            verified=False,
+        )
         .first()
     )
     return contact.member if contact else None
 
 
-def registration_email_conflicts(email: str, *, exclude_member_id=None, allow_unclaimed: bool = False) -> bool:
+def registration_email_conflicts(
+    email: str, *, exclude_member_id=None, allow_unclaimed: bool = False
+) -> bool:
     normalized = normalize_email(email)
     qs = ContactEmail.objects.filter(email_address__iexact=normalized)
     if exclude_member_id:

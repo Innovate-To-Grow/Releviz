@@ -19,8 +19,12 @@ class ChangePasswordTokenErrorTests(TestCase):
         """change_password.py:53-54 — bad refresh token logs warning, password still changes."""
         from rest_framework.test import APIClient
 
-        member = Member.objects.create_user(first_name="CP", last_name="User", password="OldPass123!", is_active=True)
-        ContactEmail.objects.create(member=member, email_address="cp@example.com", email_type="primary", verified=True)
+        member = Member.objects.create_user(
+            first_name="CP", last_name="User", password="OldPass123!", is_active=True
+        )
+        ContactEmail.objects.create(
+            member=member, email_address="cp@example.com", email_type="primary", verified=True
+        )
         client = APIClient()
         client.force_authenticate(member)
 

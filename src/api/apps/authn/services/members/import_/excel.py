@@ -30,7 +30,10 @@ def import_members_from_excel(
 ) -> ImportResult:
     """Import members from an Excel file using bulk inserts when possible."""
     if load_workbook is None:
-        return ImportResult(success=False, errors=["openpyxl library not installed. Please run: pip install openpyxl"])
+        return ImportResult(
+            success=False,
+            errors=["openpyxl library not installed. Please run: pip install openpyxl"],
+        )
 
     result = ImportResult(success=True)
     try:
@@ -43,7 +46,9 @@ def import_members_from_excel(
 
         headers = [normalize_header(header) for header in raw_rows[0]]
         if "primary_email" not in headers:
-            return ImportResult(success=False, errors=["Excel file must contain a 'Primary Email' column"])
+            return ImportResult(
+                success=False, errors=["Excel file must contain a 'Primary Email' column"]
+            )
 
         parsed_rows = []
         seen_in_file: set[str] = set()
@@ -59,7 +64,9 @@ def import_members_from_excel(
             email_key = parsed["primary_email"].lower()
             if email_key in seen_in_file:
                 result.skipped_count += 1
-                result.errors.append(f"Row {row_num}: Duplicate email in file ({parsed['primary_email']})")
+                result.errors.append(
+                    f"Row {row_num}: Duplicate email in file ({parsed['primary_email']})"
+                )
                 continue
             seen_in_file.add(email_key)
             parsed_rows.append(parsed)
@@ -67,7 +74,9 @@ def import_members_from_excel(
         if not parsed_rows:
             return result
 
-        existing_emails = {email.lower() for email in ContactEmail.objects.values_list("email_address", flat=True)}
+        existing_emails = {
+            email.lower() for email in ContactEmail.objects.values_list("email_address", flat=True)
+        }
         hashed_pw = make_password(default_password or generate_random_password())
         members_to_create: list[Member] = []
         emails_to_create: list[ContactEmail] = []
@@ -102,16 +111,12 @@ def import_members_from_excel(
                 first_name=parsed["first_name"],
                 last_name=parsed["last_name"],
                 middle_name=parsed["middle_name"] or None,
-                title=parsed["title"] or None,
-                organization=parsed["organization"],
                 is_active=parsed["is_active"] if parsed["is_active"] is not None else True,
                 date_joined=parsed["date_joined"] or now,
             )
             members_to_create.append(member)
             existing_emails.add(email_key)
-            _append_contact_records(
-                member, parsed, emails_to_create, claimed_contact_emails
-            )
+            _append_contact_records(member, parsed, emails_to_create, claimed_contact_emails)
             result.created_count += 1
 
         with transaction.atomic():
@@ -131,7 +136,9 @@ def import_members_from_excel(
 
     if rows_to_update:
         # Rebuild claimed set from actual DB state after successful create
-        claimed_contact_emails = {e.lower() for e in ContactEmail.objects.values_list("email_address", flat=True)}
+        claimed_contact_emails = {
+            e.lower() for e in ContactEmail.objects.values_list("email_address", flat=True)
+        }
         bulk_update_members(rows_to_update, result, claimed_contact_emails, update_member_allowed)
 
     return result

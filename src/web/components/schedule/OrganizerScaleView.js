@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useContext, useEffect, useState } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from "react";
 import { useAuth } from "@/components/auth/AuthContext";
 import EventContext from "@/components/event/EventContext";
 import { OrganizerHeader } from "@/components/schedule/OrganizerPanels";
@@ -25,7 +32,11 @@ function deliveryStorageKey(eventCode) {
 function readStoredDeliveryRequest(eventCode) {
   if (typeof window === "undefined" || !eventCode) return null;
   try {
-    return JSON.parse(window.sessionStorage.getItem(deliveryStorageKey(eventCode))) || null;
+    return (
+      JSON.parse(
+        window.sessionStorage.getItem(deliveryStorageKey(eventCode)),
+      ) || null
+    );
   } catch {
     window.sessionStorage.removeItem(deliveryStorageKey(eventCode));
     return null;
@@ -36,6 +47,8 @@ export default function OrganizerScaleView() {
   const { event, setEvent } = useContext(EventContext);
   const { user, loading, getToken } = useAuth();
   const [tab, setTab] = useState("overview");
+  const tabGroupId = useId().replace(/:/g, "");
+  const tabRefs = useRef([]);
   const [deliveryRequest, setDeliveryRequestState] = useState(null);
   const [launchParticipantIds, setLaunchParticipantIds] = useState([]);
   const [launchSelectionMode, setLaunchSelectionMode] = useState("all");
@@ -54,7 +67,7 @@ export default function OrganizerScaleView() {
         return next;
       });
     },
-    [event.code]
+    [event.code],
   );
 
   useEffect(() => {
@@ -65,57 +78,89 @@ export default function OrganizerScaleView() {
     return () => clearTimeout(timer);
   }, [event.code]);
 
+  const activateTab = useCallback((index) => {
+    const nextIndex = (index + TABS.length) % TABS.length;
+    setTab(TABS[nextIndex][0]);
+    tabRefs.current[nextIndex]?.focus();
+  }, []);
+
+  const handleTabKeyDown = useCallback(
+    (keyboardEvent, index) => {
+      switch (keyboardEvent.key) {
+        case "ArrowRight":
+        case "ArrowDown":
+          keyboardEvent.preventDefault();
+          activateTab(index + 1);
+          break;
+        case "ArrowLeft":
+        case "ArrowUp":
+          keyboardEvent.preventDefault();
+          activateTab(index - 1);
+          break;
+        case "Home":
+          keyboardEvent.preventDefault();
+          activateTab(0);
+          break;
+        case "End":
+          keyboardEvent.preventDefault();
+          activateTab(TABS.length - 1);
+          break;
+        default:
+          break;
+      }
+    },
+    [activateTab],
+  );
+
   if (loading || !user) {
     return (
-      <div
-        className="page-pad"
-        style={{ minHeight: "calc(100vh - 76px)", display: "grid", placeItems: "center" }}
-      >
+      <div className="page-pad organizer-loading">
         <p>Loading…</p>
       </div>
     );
   }
 
   return (
-    <main className="page-pad" style={{ maxWidth: "1400px", margin: "0 auto" }}>
-      <OrganizerHeader onRefresh={() => setResultsInvalidationKey((current) => current + 1)} />
+    <main className="page-pad organizer-workspace">
+      <OrganizerHeader
+        event={event}
+        onRefresh={() => setResultsInvalidationKey((current) => current + 1)}
+      />
       <nav
+        className="organizer-tabs"
         role="tablist"
         aria-label="Organizer sections"
-        style={{
-          borderBottom: "1px solid var(--md-sys-color-surface-variant)",
-          display: "flex",
-          gap: "4px",
-          marginBottom: "24px",
-          overflowX: "auto",
-        }}
       >
-        {TABS.map(([value, label]) => (
+        {TABS.map(([value, label], index) => (
           <button
             key={value}
+            ref={(node) => {
+              tabRefs.current[index] = node;
+            }}
+            id={`${tabGroupId}-tab-${value}`}
             type="button"
             role="tab"
             aria-selected={tab === value}
+            aria-controls={`${tabGroupId}-panel-${value}`}
+            tabIndex={tab === value ? 0 : -1}
             onClick={() => setTab(value)}
-            style={{
-              background: tab === value ? "var(--md-sys-color-secondary-container)" : "transparent",
-              border: 0,
-              borderBottom:
-                tab === value ? "3px solid var(--md-sys-color-primary)" : "3px solid transparent",
-              color: "var(--md-sys-color-on-surface)",
-              cursor: "pointer",
-              font: "inherit",
-              fontWeight: tab === value ? 700 : 500,
-              padding: "12px 20px",
-              whiteSpace: "nowrap",
-            }}
+            onKeyDown={(keyboardEvent) =>
+              handleTabKeyDown(keyboardEvent, index)
+            }
           >
             {label}
           </button>
         ))}
       </nav>
 
-      <div role="tabpanel" aria-label={TABS.find(([value]) => value === tab)?.[1]}>
+      <div
+        className="organizer-tab-panel"
+        id={`${tabGroupId}-panel-${tab}`}
+        role="tabpanel"
+        aria-label={TABS.find(([value]) => value === tab)?.[1]}
+        aria-labelledby={`${tabGroupId}-tab-${tab}`}
+        tabIndex={0}
+      >
         {tab === "overview" && (
           <OverviewPanel
             event={event}
@@ -133,7 +178,9 @@ export default function OrganizerScaleView() {
             event={event}
             setEvent={setEvent}
             getToken={getToken}
-            onResultsInvalidated={() => setResultsInvalidationKey((current) => current + 1)}
+            onResultsInvalidated={() =>
+              setResultsInvalidationKey((current) => current + 1)
+            }
             initialSelectedParticipantIds={launchParticipantIds}
             onSelectionChange={setLaunchParticipantIds}
             onRosterRebuilt={() => setLaunchSelectionMode("all")}

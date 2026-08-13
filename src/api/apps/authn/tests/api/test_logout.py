@@ -1,5 +1,6 @@
 """Tests for LogoutView — refresh-token blacklisting on user logout."""
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from rest_framework.test import APITestCase
@@ -16,7 +17,10 @@ class LogoutViewTests(APITestCase):
         cache.clear()
         self.member = Member.objects.create_user(password="StrongPass123!", is_active=True)
         ContactEmail.objects.create(
-            member=self.member, email_address="logout@example.com", email_type="primary", verified=True
+            member=self.member,
+            email_address="logout@example.com",
+            email_type="primary",
+            verified=True,
         )
 
     def test_logout_blacklists_refresh_token(self):
@@ -28,12 +32,25 @@ class LogoutViewTests(APITestCase):
         followup = self.client.post("/authn/refresh/", {"refresh": str(refresh)}, format="json")
         self.assertEqual(followup.status_code, 401)
 
-    def test_logout_rejects_missing_refresh(self):
+    def test_logout_without_session_is_idempotent(self):
         response = self.client.post("/authn/logout/", {}, format="json")
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 204)
+
+    def test_logout_blacklists_cookie_refresh_and_clears_cookie(self):
+        refresh = RefreshToken.for_user(self.member)
+        self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME] = str(refresh)
+
+        response = self.client.post("/authn/logout/", {}, format="json")
+
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.cookies[settings.AUTH_REFRESH_COOKIE_NAME]["max-age"], 0)
+        followup = self.client.post("/authn/refresh/", {"refresh": str(refresh)}, format="json")
+        self.assertEqual(followup.status_code, 401)
 
     def test_logout_rejects_invalid_refresh(self):
-        response = self.client.post("/authn/logout/", {"refresh": "not-a-real-token"}, format="json")
+        response = self.client.post(
+            "/authn/logout/", {"refresh": "not-a-real-token"}, format="json"
+        )
         self.assertEqual(response.status_code, 400)
 
     def test_logout_does_not_require_authentication(self):

@@ -1,3 +1,5 @@
+import { normalizeAuthUser } from "@/lib/authUser";
+
 const defaultApiBase =
   process.env.NODE_ENV === "production"
     ? "https://api.releviz.com"
@@ -5,10 +7,9 @@ const defaultApiBase =
       ? ""
       : "http://localhost:4000";
 
-export const API_BASE = (process.env.NEXT_PUBLIC_API_BASE_URL || defaultApiBase).replace(
-  /\/+$/,
-  ""
-);
+export const API_BASE = (
+  process.env.NEXT_PUBLIC_API_BASE_URL || defaultApiBase
+).replace(/\/+$/, "");
 export const LEGACY_AUTH_SESSION_KEY = "releviz.auth";
 
 let authSession = null;
@@ -37,11 +38,15 @@ export function writeAuthSession(session) {
   authSession = session
     ? {
         access: session.access || null,
-        accessExpiresAt: session.accessExpiresAt || null,
+        accessExpiresAt:
+          session.accessExpiresAt || session.access_expires_at || null,
         session: session.session || null,
-        user: session.user || null,
-        nextStep: session.next_step || null,
-        requiresProfileCompletion: session.requires_profile_completion || false,
+        user: normalizeAuthUser(session.user),
+        nextStep: session.next_step || session.nextStep || null,
+        requiresProfileCompletion:
+          session.requires_profile_completion ??
+          session.requiresProfileCompletion ??
+          false,
       }
     : null;
   notifyAuthChanged();
@@ -110,7 +115,10 @@ export async function getAccessToken() {
 
 export async function apiFetch(url, options = {}, token = null) {
   const access =
-    token || (options.skipAuthRefresh ? readAuthSession()?.access : await getAccessToken());
+    token ||
+    (options.skipAuthRefresh
+      ? readAuthSession()?.access
+      : await getAccessToken());
   const headers = {
     ...(options.headers || {}),
     ...(access ? { Authorization: `Bearer ${access}` } : {}),

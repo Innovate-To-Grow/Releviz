@@ -17,7 +17,9 @@ from apps.authn.models import ContactEmail, ImpersonationToken, Member
 
 
 def _staff(admin_apps=None, **kwargs):
-    member = Member.objects.create_user(password="StrongPass123!", is_staff=True, is_active=True, **kwargs)
+    member = Member.objects.create_user(
+        password="StrongPass123!", is_staff=True, is_active=True, **kwargs
+    )
     if admin_apps is not None:
         member.admin_apps = admin_apps
         member.save(update_fields=["admin_apps"])
@@ -106,12 +108,16 @@ class MemberToolingAuthorizationTests(TestCase):
     def test_non_authn_staff_cannot_open_import(self):
         attacker = _staff(admin_apps=["event"], first_name="Low", last_name="Priv")
         self.client.force_login(attacker)
-        self.assertEqual(self.client.get(reverse("admin:authn_member_import_excel")).status_code, 403)
+        self.assertEqual(
+            self.client.get(reverse("admin:authn_member_import_excel")).status_code, 403
+        )
 
     def test_non_authn_staff_cannot_download_template(self):
         attacker = _staff(admin_apps=["event"], first_name="Low", last_name="Priv")
         self.client.force_login(attacker)
-        self.assertEqual(self.client.get(reverse("admin:authn_member_import_template")).status_code, 403)
+        self.assertEqual(
+            self.client.get(reverse("admin:authn_member_import_template")).status_code, 403
+        )
 
     def test_authn_admin_can_export_members(self):
         authn_admin = _staff(admin_apps=["authn"], first_name="Authn", last_name="Admin")
@@ -130,7 +136,11 @@ class PrivilegeFieldEditTests(TestCase):
         # A concrete instance so UserAdmin returns the *change* form (obj=None
         # would yield the add form, which omits these fields regardless).
         self.target = Member.objects.create_user(
-            password="StrongPass123!", first_name="Edit", last_name="Target", is_staff=True, is_active=True
+            password="StrongPass123!",
+            first_name="Edit",
+            last_name="Target",
+            is_staff=True,
+            is_active=True,
         )
 
     def _request(self, user):
@@ -173,7 +183,10 @@ class PrivilegeFieldPostTests(TestCase):
         cache.clear()
         self.attacker = _staff(admin_apps=["authn"], first_name="Self", last_name="Escalate")
         ContactEmail.objects.create(
-            member=self.attacker, email_address="attacker@example.com", email_type="primary", verified=True
+            member=self.attacker,
+            email_address="attacker@example.com",
+            email_type="primary",
+            verified=True,
         )
         self.client.force_login(self.attacker)
 

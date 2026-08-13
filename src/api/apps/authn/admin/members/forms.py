@@ -104,7 +104,9 @@ class MemberCreationForm(UserCreationForm):
         self.fields["password1"].help_text = _(
             "Optional. If left empty, the member cannot sign in with a password until you set one (or they use other login methods)."
         )
-        self.fields["password2"].help_text = _("Optional. Must match the password field if you enter a password.")
+        self.fields["password2"].help_text = _(
+            "Optional. Must match the password field if you enter a password."
+        )
 
     def validate_passwords(
         self,
@@ -162,7 +164,9 @@ class MemberChangeForm(UserChangeForm):
 
     def clean_profile_image(self):
         value = self.cleaned_data.get("profile_image")
-        clear_name = self.fields["profile_image"].widget.clear_checkbox_name(self.add_prefix("profile_image"))
+        clear_name = self.fields["profile_image"].widget.clear_checkbox_name(
+            self.add_prefix("profile_image")
+        )
         if clear_name in self.data:
             return ""
         if value in (None, "") and self.instance.pk:

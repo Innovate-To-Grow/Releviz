@@ -21,7 +21,6 @@ class ExportMembersFormulaSafetyTest(TestCase):
             password="StrongPass123!",
             first_name='=HYPERLINK("https://attacker.example","click")',
             last_name="@SUM(A1:A9)",
-            organization="-2+3",
             is_active=True,
         )
 

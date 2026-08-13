@@ -1,0 +1,73 @@
+{% extends "admin/base_site.html" %}
+{% load unfold %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="flex flex-col gap-6 max-w-3xl">
+    <div>
+        <h1 class="font-semibold text-xl text-font-important-light dark:text-font-important-dark">
+            Send test email
+        </h1>
+        <p class="mt-2 text-sm text-base-500 dark:text-base-400">
+            Enter a recipient address to test delivery through the active Email Provider and AWS Credentials.
+        </p>
+    </div>
+
+    <div class="grid gap-4 md:grid-cols-2">
+        <div class="border border-base-200 p-4 rounded-default dark:border-base-700 dark:bg-base-800/30">
+            <div class="flex items-center gap-2 mb-3">
+                <span class="material-symbols-outlined text-base-400">outgoing_mail</span>
+                <h2 class="font-semibold text-sm">Email Provider</h2>
+            </div>
+            {% if active_provider %}
+                <p class="font-medium">{{ active_provider.name }}</p>
+                <p class="mt-1 text-sm text-base-500 dark:text-base-400">
+                    From: {{ active_provider.from_email }}
+                </p>
+            {% else %}
+                <p class="text-sm text-orange-600 dark:text-orange-400">
+                    No active Email Provider.
+                </p>
+            {% endif %}
+        </div>
+
+        <div class="border border-base-200 p-4 rounded-default dark:border-base-700 dark:bg-base-800/30">
+            <div class="flex items-center gap-2 mb-3">
+                <span class="material-symbols-outlined text-base-400">key</span>
+                <h2 class="font-semibold text-sm">AWS Credentials</h2>
+            </div>
+            {% if active_credentials %}
+                <p class="font-medium">{{ active_credentials.name }}</p>
+                <p class="mt-1 text-sm text-base-500 dark:text-base-400">
+                    Region: {{ active_credentials.region }} ·
+                    {% if active_credentials.is_configured %}Configured{% else %}Incomplete{% endif %}
+                </p>
+            {% else %}
+                <p class="text-sm text-orange-600 dark:text-orange-400">
+                    No active AWS Credentials.
+                </p>
+            {% endif %}
+        </div>
+    </div>
+
+    <form method="post" class="border border-base-200 p-6 rounded-default dark:border-base-700">
+        {% csrf_token %}
+
+        {% include "unfold/helpers/form_errors.html" with errors=form.non_field_errors %}
+
+        {% for field in form %}
+            {% include "unfold/helpers/field.html" %}
+        {% endfor %}
+
+        <div class="border-t border-base-200 flex gap-3 mt-6 pt-4 dark:border-base-700">
+            {% component "unfold/components/button.html" with submit=1 variant="primary" icon="send" %}
+                Send email
+            {% endcomponent %}
+            {% component "unfold/components/button.html" with href=changelist_url variant="default" %}
+                Cancel
+            {% endcomponent %}
+        </div>
+    </form>
+</div>
+{% endblock %}

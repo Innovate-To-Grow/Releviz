@@ -26,8 +26,6 @@ def export_members_to_vcard(queryset) -> bytes:
         "first_name",
         "middle_name",
         "last_name",
-        "organization",
-        "title",
         "profile_image",
     ).prefetch_related("contact_emails")
 
@@ -52,16 +50,13 @@ def _build_vcard(member) -> str:
 
     full_name = (member.get_full_name() or "").strip()
     if not full_name:
-        full_name = (primary_email.email_address if primary_email else f"Member {str(member.id)[:8]}").strip()
+        full_name = (
+            primary_email.email_address if primary_email else f"Member {str(member.id)[:8]}"
+        ).strip()
 
     lines: list[str] = ["BEGIN:VCARD", "VERSION:3.0"]
     lines.append(_fold(f"FN:{_escape(full_name)}"))
     lines.append(_fold(f"N:{_escape(last)};{_escape(first)};{_escape(middle)};;"))
-
-    if member.organization:
-        lines.append(_fold(f"ORG:{_escape(member.organization)}"))
-    if member.title:
-        lines.append(_fold(f"TITLE:{_escape(member.title)}"))
 
     if primary_email and primary_email.email_address:
         lines.append(_fold(f"EMAIL;TYPE=INTERNET,PREF:{_escape(primary_email.email_address)}"))
@@ -133,6 +128,10 @@ def _profile_image(value: str | None) -> tuple[str, str]:
     if raw.startswith("data:") and "," in raw:
         metadata, payload = raw[5:].split(",", 1)
         mime_type = metadata.split(";", 1)[0].lower()
-        subtype = mime_type.split("/", 1)[1] if mime_type.startswith("image/") and "/" in mime_type else ""
+        subtype = (
+            mime_type.split("/", 1)[1]
+            if mime_type.startswith("image/") and "/" in mime_type
+            else ""
+        )
         return payload.strip(), PHOTO_MIME_TYPES.get(subtype, "")
     return raw, ""

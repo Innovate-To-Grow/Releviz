@@ -82,14 +82,14 @@ class MemberChangeFormClearImageTests(TestCase):
             password="StrongPass123!",
             profile_image="data:image/png;base64,old-image",
         )
-        clear_name = MemberChangeForm().fields["profile_image"].widget.clear_checkbox_name("profile_image")
+        clear_name = (
+            MemberChangeForm().fields["profile_image"].widget.clear_checkbox_name("profile_image")
+        )
         data = {
             "password": member.password,
             "first_name": member.first_name,
             "middle_name": "",
             "last_name": member.last_name,
-            "organization": "",
-            "title": "",
             "profile_image": "",
             clear_name: "on",
             "is_active": "on",
@@ -180,7 +180,9 @@ class UUIDInlineMixinTests(TestCase):
 
         inline = ContactEmailInline(Member, AdminSite())
         request = RequestFactory().get("/")
-        request.user = Member.objects.create_user(first_name="A", last_name="B", password="StrongPass123!")
+        request.user = Member.objects.create_user(
+            first_name="A", last_name="B", password="StrongPass123!"
+        )
         uuid_dbfield = _ContactEmail._meta.get_field("id")
         formfield = inline.formfield_for_dbfield(uuid_dbfield, request)
         self.assertIsInstance(formfield, NoneSafeUUIDField)
@@ -209,7 +211,10 @@ class ContactEmailInlinePrimaryFormsetTests(TestCase):
             password="admin123", first_name="Admin", last_name="User", is_staff=True, is_active=True
         )
         ContactEmail.objects.create(
-            member=self.admin, email_address="admin@example.com", email_type="primary", verified=True
+            member=self.admin,
+            email_address="admin@example.com",
+            email_type="primary",
+            verified=True,
         )
         self.target = Member.objects.create_user(
             first_name="Target", last_name="User", password="target123", is_active=True
@@ -228,8 +233,6 @@ class ContactEmailInlinePrimaryFormsetTests(TestCase):
             "first_name": "Two",
             "middle_name": "",
             "last_name": "Primaries",
-            "organization": "",
-            "title": "",
             "is_active": "on",
             "contact_emails-TOTAL_FORMS": "2",
             "contact_emails-INITIAL_FORMS": "0",
@@ -295,7 +298,11 @@ class ImportResultMessageTests(TestCase):
         ):
             form = FormCls.return_value
             form.is_valid.return_value = True
-            form.cleaned_data = {"excel_file": object(), "set_password": "", "update_existing": False}
+            form.cleaned_data = {
+                "excel_file": object(),
+                "set_password": "",
+                "update_existing": False,
+            }
             helpers.import_excel_view(FakeAdmin(), request)
 
         self.assertIn("1 error(s)", captured["message"])

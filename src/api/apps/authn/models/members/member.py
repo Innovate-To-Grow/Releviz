@@ -8,6 +8,10 @@ from .manager import MemberManager
 
 
 class Member(AbstractUser, ProjectControlModel):
+    class AccessLevel(models.TextChoices):
+        FULL = "full", "Full"
+        TEMPORARY = "temporary", "Temporary"
+
     username = None
 
     USERNAME_FIELD = "id"
@@ -21,7 +25,10 @@ class Member(AbstractUser, ProjectControlModel):
     admin_apps = models.JSONField(
         default=list,
         blank=True,
-        help_text='Django apps this admin may manage (e.g. ["cms", "event"]). Superusers ignore this.',
+        help_text=(
+            'Django apps this admin may manage (e.g. ["cms", "event"]). '
+            "Superusers ignore this."
+        ),
         verbose_name="Admin apps",
     )
 
@@ -38,6 +45,13 @@ class Member(AbstractUser, ProjectControlModel):
 
     # add field for user models
     middle_name = models.CharField(max_length=255, null=True, blank=True, help_text="Middle Name")
+    access_level = models.CharField(
+        max_length=16,
+        choices=AccessLevel.choices,
+        default=AccessLevel.FULL,
+        db_index=True,
+        help_text="Whether this member has a full account or event-scoped temporary access.",
+    )
 
     @property
     def member_uuid(self):
@@ -53,24 +67,6 @@ class Member(AbstractUser, ProjectControlModel):
     def requires_profile_completion(self) -> bool:
         """Return whether the member must complete their profile before continuing."""
         return not self.has_required_name_fields
-
-    # organization
-    organization = models.CharField(
-        max_length=255,
-        null=True,
-        blank=True,
-        help_text="Organization or company the member belongs to",
-        verbose_name="Organization",
-    )
-
-    # job title or position
-    title = models.CharField(
-        max_length=255,
-        null=True,
-        blank=True,
-        help_text="Job title or position within the organization",
-        verbose_name="Title",
-    )
 
     # profile image (base64 encoded)
     profile_image = models.TextField(
@@ -91,6 +87,10 @@ class Member(AbstractUser, ProjectControlModel):
         if self.last_name:
             full_name += f" {self.last_name}"
         return full_name.strip()
+
+    def display_name(self) -> str:
+        """Return the best human-readable label for scheduling views."""
+        return self.get_full_name() or self.get_primary_email()
 
     def _primary_contact_from_prefetch(self):
         """Return the primary ContactEmail from the prefetch cache, or None if not prefetched."""

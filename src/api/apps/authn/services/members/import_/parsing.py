@@ -17,9 +17,6 @@ HEADER_MAP = {
     "lastname": "last_name",
     "middle name": "middle_name",
     "middle_name": "middle_name",
-    "title": "title",
-    "title - role": "title",
-    "title - role (optional)": "title",
     "when started": "when_started",
     "when_started": "when_started",
     "date joined": "when_started",
@@ -47,10 +44,6 @@ HEADER_MAP = {
     "secondary_expired": "secondary_expired",
     "secondary bounced": "secondary_bounced",
     "secondary_bounced": "secondary_bounced",
-    "organization": "organization",
-    "organization (optional)": "organization",
-    "company": "organization",
-    "org": "organization",
 }
 DATE_FORMATS = [
     "%Y-%m-%d %I:%M %p",
@@ -101,18 +94,32 @@ def parse_date(value):
 
 
 def parse_row(row_num: int, row_data: dict) -> dict:
-    primary_email = str(row_data.get("primary_email", "")).strip() if row_data.get("primary_email") else None
-    secondary_email = str(row_data.get("secondary_email", "")).strip() if row_data.get("secondary_email") else None
+    primary_email = (
+        str(row_data.get("primary_email", "")).strip() if row_data.get("primary_email") else None
+    )
+    secondary_email = (
+        str(row_data.get("secondary_email", "")).strip()
+        if row_data.get("secondary_email")
+        else None
+    )
     return {
         "row": row_num,
         "primary_email": primary_email,
-        "first_name": str(row_data.get("first_name", "")).strip() if row_data.get("first_name") else "",
-        "last_name": str(row_data.get("last_name", "")).strip() if row_data.get("last_name") else "",
-        "middle_name": str(row_data.get("middle_name", "")).strip() if row_data.get("middle_name") else "",
-        "title": str(row_data.get("title", "")).strip() if row_data.get("title") else "",
-        "organization": str(row_data.get("organization", "")).strip() if row_data.get("organization") else "",
-        "is_active": parse_boolean(row_data.get("is_active")) if row_data.get("is_active") is not None else None,
-        "is_staff": parse_boolean(row_data.get("is_staff")) if row_data.get("is_staff") is not None else None,
+        "first_name": str(row_data.get("first_name", "")).strip()
+        if row_data.get("first_name")
+        else "",
+        "last_name": str(row_data.get("last_name", "")).strip()
+        if row_data.get("last_name")
+        else "",
+        "middle_name": str(row_data.get("middle_name", "")).strip()
+        if row_data.get("middle_name")
+        else "",
+        "is_active": parse_boolean(row_data.get("is_active"))
+        if row_data.get("is_active") is not None
+        else None,
+        "is_staff": parse_boolean(row_data.get("is_staff"))
+        if row_data.get("is_staff") is not None
+        else None,
         "date_joined": parse_date(row_data.get("when_started")),
         "primary_verified": parse_boolean(row_data.get("primary_verified")),
         "primary_subscribed": parse_boolean(row_data.get("primary_subscribed")),

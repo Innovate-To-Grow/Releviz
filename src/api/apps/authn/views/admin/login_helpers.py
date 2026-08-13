@@ -115,10 +115,7 @@ def get_last_admin_login_summary(request):
     if member is None:
         return None
 
-    return {
-        "name": get_admin_member_display_name(member),
-        "organization": member.organization or "",
-    }
+    return {"name": get_admin_member_display_name(member)}
 
 
 def get_admin_member_display_name(member):
@@ -164,7 +161,9 @@ def render_admin_login(request, *, form, step: str, email: str = "", **extra):
             "hide_email": hide_email,
             "code_recipient_name": code_recipient_name,
             "last_admin_user": (
-                get_last_admin_login_summary(request) if step != "code" and not use_different_account else None
+                get_last_admin_login_summary(request)
+                if step != "code" and not use_different_account
+                else None
             ),
         }
     )

@@ -41,11 +41,13 @@ from .auth.logout import LogoutView
 from .auth.public_key import PublicKeyView
 from .auth.register import RegisterView
 from .auth.session import SessionView
+from .auth.sessions import AuthSessionsView
 from .auth.token import PublicTokenRefreshView
 
 __all__ = [
     "RegisterView",
     "SessionView",
+    "AuthSessionsView",
     "RegisterVerifyCodeView",
     "RegisterResendCodeView",
     "LoginView",

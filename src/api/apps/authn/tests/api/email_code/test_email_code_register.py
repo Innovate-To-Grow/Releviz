@@ -42,7 +42,6 @@ class EmailCodeAuthRegisterTests(APITestCase):
                 "password_confirm": self.password,
                 "first_name": "New",
                 "last_name": "Member",
-                "organization": "Individual",
             },
             format="json",
         )
@@ -77,7 +76,6 @@ class EmailCodeAuthRegisterTests(APITestCase):
                 "password_confirm": self.password,
                 "first_name": "Roll",
                 "last_name": "Back",
-                "organization": "Individual",
             },
             format="json",
         )
@@ -110,7 +108,10 @@ class EmailCodeAuthRegisterTests(APITestCase):
             first_name="Old",
         )
         ContactEmail.objects.create(
-            member=pending, email_address="pending@example.com", email_type="primary", verified=True
+            member=pending,
+            email_address="pending@example.com",
+            email_type="primary",
+            verified=False,
         )
 
         response = self.client.post(
@@ -121,14 +122,15 @@ class EmailCodeAuthRegisterTests(APITestCase):
                 "password_confirm": self.password,
                 "first_name": "Updated",
                 "last_name": "User",
-                "organization": "Individual",
             },
             format="json",
         )
 
         pending.refresh_from_db()
         self.assertEqual(response.status_code, 202)
-        self.assertEqual(ContactEmail.objects.filter(email_address="pending@example.com").count(), 1)
+        self.assertEqual(
+            ContactEmail.objects.filter(email_address="pending@example.com").count(), 1
+        )
         self.assertEqual(pending.first_name, "Updated")
         self.assertTrue(pending.check_password(self.password))
         self.assertTrue(
@@ -150,13 +152,14 @@ class EmailCodeAuthRegisterTests(APITestCase):
                 "password_confirm": self.password,
                 "first_name": "Sub",
                 "last_name": "Scriber",
-                "organization": "Individual",
             },
             format="json",
         )
 
         self.assertEqual(response.status_code, 202)
-        self.assertEqual(ContactEmail.objects.filter(email_address="subscriber@example.com").count(), 1)
+        self.assertEqual(
+            ContactEmail.objects.filter(email_address="subscriber@example.com").count(), 1
+        )
         contact = ContactEmail.objects.get(email_address="subscriber@example.com")
         self.assertIsNotNone(contact.member)
         self.assertEqual(contact.email_type, "primary")
@@ -173,7 +176,6 @@ class EmailCodeAuthRegisterTests(APITestCase):
                 "password_confirm": self.password,
                 "first_name": "Alias",
                 "last_name": "Conflict",
-                "organization": "Individual",
             },
             format="json",
         )

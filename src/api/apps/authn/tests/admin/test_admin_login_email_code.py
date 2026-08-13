@@ -18,7 +18,10 @@ from apps.authn.services.email.challenges import (
     AuthChallengeInvalid,
     AuthChallengeThrottled,
 )
-from apps.authn.views.admin.login_helpers import LAST_ADMIN_LOGIN_COOKIE_NAME, set_last_admin_login_cookie
+from apps.authn.views.admin.login_helpers import (
+    LAST_ADMIN_LOGIN_COOKIE_NAME,
+    set_last_admin_login_cookie,
+)
 
 Member = get_user_model()
 LOGIN_URL = "/admin/login/"
@@ -66,7 +69,10 @@ class AdminLoginViewTest(TestCase):
             is_active=True,
         )
         ContactEmail.objects.create(
-            member=self.staff, email_address="admin@example.com", email_type="primary", verified=True
+            member=self.staff,
+            email_address="admin@example.com",
+            email_type="primary",
+            verified=True,
         )
         self.non_staff = Member.objects.create_user(
             password="testpass123",
@@ -74,7 +80,10 @@ class AdminLoginViewTest(TestCase):
             is_active=True,
         )
         ContactEmail.objects.create(
-            member=self.non_staff, email_address="regular@example.com", email_type="primary", verified=True
+            member=self.non_staff,
+            email_address="regular@example.com",
+            email_type="primary",
+            verified=True,
         )
 
     # ── GET requests ────────────────────────────────────────────────
@@ -93,8 +102,7 @@ class AdminLoginViewTest(TestCase):
     def test_get_with_last_admin_cookie_shows_member_summary(self):
         self.staff.first_name = "Ada"
         self.staff.last_name = "Lovelace"
-        self.staff.organization = "Analytical Engines"
-        self.staff.save(update_fields=["first_name", "last_name", "organization"])
+        self.staff.save(update_fields=["first_name", "last_name"])
         self.client.cookies[LAST_ADMIN_LOGIN_COOKIE_NAME] = _last_admin_cookie_value(self.staff)
 
         resp = self.client.get(LOGIN_URL)
@@ -102,7 +110,6 @@ class AdminLoginViewTest(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "Last signed in")
         self.assertContains(resp, "Ada Lovelace")
-        self.assertContains(resp, "Analytical Engines")
         self.assertContains(resp, 'name="password"')
         self.assertContains(resp, "Send verification code instead")
         self.assertNotContains(resp, "admin@example.com")
@@ -131,7 +138,6 @@ class AdminLoginViewTest(TestCase):
             password="testpass123",
             first_name="Inactive",
             last_name="Admin",
-            organization="Inactive Org",
             is_staff=True,
             is_active=False,
         )
@@ -213,9 +219,14 @@ class AdminLoginViewTest(TestCase):
 
     def test_unverified_email_shows_error(self):
         """Staff member with unverified email cannot receive a verification code."""
-        unverified_staff = Member.objects.create_user(password="testpass123", is_staff=True, is_active=True)
+        unverified_staff = Member.objects.create_user(
+            password="testpass123", is_staff=True, is_active=True
+        )
         ContactEmail.objects.create(
-            member=unverified_staff, email_address="unverified@example.com", email_type="primary", verified=False
+            member=unverified_staff,
+            email_address="unverified@example.com",
+            email_type="primary",
+            verified=False,
         )
         resp = self.client.post(LOGIN_URL, {"email": "unverified@example.com"})
         self.assertEqual(resp.status_code, 200)
@@ -223,9 +234,14 @@ class AdminLoginViewTest(TestCase):
 
     def test_inactive_staff_email_shows_error(self):
         """Inactive staff member should not be able to request a code."""
-        inactive_staff = Member.objects.create_user(password="testpass123", is_staff=True, is_active=False)
+        inactive_staff = Member.objects.create_user(
+            password="testpass123", is_staff=True, is_active=False
+        )
         ContactEmail.objects.create(
-            member=inactive_staff, email_address="inactive@example.com", email_type="primary", verified=True
+            member=inactive_staff,
+            email_address="inactive@example.com",
+            email_type="primary",
+            verified=True,
         )
         resp = self.client.post(LOGIN_URL, {"email": "inactive@example.com"})
         self.assertEqual(resp.status_code, 200)
@@ -318,7 +334,10 @@ class AdminLoginViewTest(TestCase):
         self.client.post(LOGIN_URL, {"email": "admin@example.com"})
 
         # Step 2 with invalid code
-        with patch("apps.authn.views.admin.login.verify_email_code", side_effect=AuthChallengeInvalid("bad")):
+        with patch(
+            "apps.authn.views.admin.login.verify_email_code",
+            side_effect=AuthChallengeInvalid("bad"),
+        ):
             resp = self.client.post(LOGIN_URL, {"code": "000000"})
 
         self.assertEqual(resp.status_code, 200)
@@ -330,7 +349,10 @@ class AdminLoginViewTest(TestCase):
         """After entering a wrong code the user should still be on the code step, not kicked to email."""
         self.client.post(LOGIN_URL, {"email": "admin@example.com"})
 
-        with patch("apps.authn.views.admin.login.verify_email_code", side_effect=AuthChallengeInvalid("bad")):
+        with patch(
+            "apps.authn.views.admin.login.verify_email_code",
+            side_effect=AuthChallengeInvalid("bad"),
+        ):
             resp = self.client.post(LOGIN_URL, {"code": "000000"})
 
         self.assertContains(resp, 'name="code"')
@@ -455,7 +477,9 @@ class AdminLoginViewTest(TestCase):
         self.client.post(LOGIN_URL, {"email": "admin@example.com"})
 
         mock_issue.reset_mock()
-        mock_issue.side_effect = AuthChallengeThrottled("Please wait before requesting another code.")
+        mock_issue.side_effect = AuthChallengeThrottled(
+            "Please wait before requesting another code."
+        )
         resp = self.client.post(LOGIN_URL, {"action": "resend"})
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "Please wait before requesting another code")

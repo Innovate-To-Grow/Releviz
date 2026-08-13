@@ -93,7 +93,9 @@ class DefinitionsTest(TestCase):
         self.assertGreater(len(defs), 0)
 
     def test_search_events_contract_uses_registration_and_date_range(self):
-        definition = next(item for item in get_tool_definitions() if item["toolSpec"]["name"] == "search_events")
+        definition = next(
+            item for item in get_tool_definitions() if item["toolSpec"]["name"] == "search_events"
+        )
         properties = definition["toolSpec"]["inputSchema"]["json"]["properties"]
 
         self.assertNotIn("is_live", properties)
@@ -181,7 +183,7 @@ class EventsToolsTest(TestCase):
         from apps.authn.models import Member
         from apps.event.models import EventRegistration, Ticket
 
-        member = Member.objects.create(first_name="Ann", last_name="Lee", organization="Acme")
+        member = Member.objects.create(first_name="Ann", last_name="Lee")
         ticket = Ticket.objects.create(event=event, name="General", order=1)
         return EventRegistration.objects.create(
             member=member,
@@ -306,21 +308,24 @@ class MailToolsTest(TestCase):
 
 
 class MembersToolsTest(TestCase):
-    def _make_member(self, first="Jane", last="Doe", org="Acme"):
+    def _make_member(self, first="Jane", last="Doe", *, is_active=True):
         from apps.authn.models import Member
 
-        return Member.objects.create(first_name=first, last_name=last, organization=org, is_staff=False)
+        return Member.objects.create(
+            first_name=first, last_name=last, is_staff=False, is_active=is_active
+        )
 
-    def test_search_members_by_name_and_org(self):
+    def test_search_members_by_name_and_email(self):
         member = self._make_member()
         from apps.authn.models import ContactEmail
 
-        ContactEmail.objects.create(member=member, email_address="jane@acme.com", email_type="primary")
+        ContactEmail.objects.create(
+            member=member, email_address="jane@acme.com", email_type="primary"
+        )
         result = search_members(
             {
                 "name": "Jane Doe",
                 "email": "jane@acme",
-                "organization": "Acme",
                 "is_staff": False,
                 "is_active": True,
             }
@@ -329,8 +334,8 @@ class MembersToolsTest(TestCase):
 
     def test_count_members(self):
         self._make_member()
-        self._make_member(first="Bob", org="Beta")
-        result = count_members({"is_staff": False, "is_active": True, "organization": "Acme"})
+        self._make_member(first="Bob", is_active=False)
+        result = count_members({"is_staff": False, "is_active": True})
         self.assertEqual(result, "Count: 1")
 
 
@@ -341,7 +346,9 @@ class ProjectsToolsTest(TestCase):
     def _make_project(self):
         from apps.projects.models import Project, Semester
 
-        semester = Semester.objects.create(year=2025, season=1, is_published=True, label="Spring 2025")
+        semester = Semester.objects.create(
+            year=2025, season=1, is_published=True, label="Spring 2025"
+        )
         return Project.objects.create(
             project_title="Smart Garden",
             team_name="Green Team",
@@ -438,7 +445,9 @@ class RunCustomQueryTest(TestCase):
 
     def test_explicit_fields(self):
         self._make_semester()
-        result = run_custom_query({"model": "Semester", "fields": ["year", "label"], "filters": {"year": 2025}})
+        result = run_custom_query(
+            {"model": "Semester", "fields": ["year", "label"], "filters": {"year": 2025}}
+        )
         self.assertIn("2025", result)
         self.assertIn('"label"', result)
 
@@ -493,5 +502,7 @@ class RunCustomQueryTest(TestCase):
 
         for y in range(2020, 2025):
             self._make_semester(year=y)
-        result = serialize_custom_rows(Semester.objects.all(), "Semester", {"limit": 2, "fields": ["year"]})
+        result = serialize_custom_rows(
+            Semester.objects.all(), "Semester", {"limit": 2, "fields": ["year"]}
+        )
         self.assertIn("Showing 2 of 5", result)

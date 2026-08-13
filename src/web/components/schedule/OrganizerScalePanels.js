@@ -21,11 +21,17 @@ function deliveryFrom(request) {
 
 function deliveryWaiting(delivery) {
   return (
-    Number(delivery.pending || 0) + Number(delivery.processing || 0) + Number(delivery.retry || 0)
+    Number(delivery.pending || 0) +
+    Number(delivery.processing || 0) +
+    Number(delivery.retry || 0)
   );
 }
 
-export function DeliveryRequestProgress({ initialRequest, getToken, onChange }) {
+export function DeliveryRequestProgress({
+  initialRequest,
+  getToken,
+  onChange,
+}) {
   const [request, setRequest] = useState(initialRequest || null);
   const [error, setError] = useState("");
   const [retrying, setRetrying] = useState(false);
@@ -46,7 +52,8 @@ export function DeliveryRequestProgress({ initialRequest, getToken, onChange }) 
   }, [getToken, onChange, requestId]);
 
   useEffect(() => {
-    if (!request?.id || deliveryWaiting(deliveryFrom(request)) === 0) return undefined;
+    if (!request?.id || deliveryWaiting(deliveryFrom(request)) === 0)
+      return undefined;
     const timer = setInterval(load, 3000);
     return () => clearInterval(timer);
   }, [load, request]);
@@ -73,30 +80,37 @@ export function DeliveryRequestProgress({ initialRequest, getToken, onChange }) 
   };
 
   return (
-    <div
-      aria-label="Delivery progress"
-      style={{
-        border: "1px solid var(--md-sys-color-surface-variant)",
-        borderRadius: "10px",
-        display: "grid",
-        gap: "10px",
-        padding: "14px",
-      }}
-    >
-      <div style={{ display: "flex", justifyContent: "space-between", gap: "12px" }}>
-        <strong>{request.operation ? `${request.operation} delivery` : "Email delivery"}</strong>
-        <span>{waiting > 0 ? "In progress" : failed > 0 ? "Needs attention" : "Complete"}</span>
-      </div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "14px" }}>
+    <div aria-label="Delivery progress" className="delivery-progress">
+      <div className="delivery-progress__header">
+        <strong>
+          {request.operation
+            ? `${request.operation} delivery`
+            : "Email delivery"}
+        </strong>
         <span>
-          {delivery.total ?? delivery.recipientTotal ?? request.recipientCount ?? 0} total
+          {waiting > 0
+            ? "In progress"
+            : failed > 0
+              ? "Needs attention"
+              : "Complete"}
+        </span>
+      </div>
+      <div className="delivery-progress__metrics">
+        <span>
+          {delivery.total ??
+            delivery.recipientTotal ??
+            request.recipientCount ??
+            0}{" "}
+          total
         </span>
         <span>{delivery.sent || 0} sent</span>
         <span>{waiting} queued</span>
         <span>{failed} failed</span>
-        {Number(delivery.canceled || 0) > 0 && <span>{delivery.canceled} canceled</span>}
+        {Number(delivery.canceled || 0) > 0 && (
+          <span>{delivery.canceled} canceled</span>
+        )}
       </div>
-      <div style={{ display: "flex", gap: "8px" }}>
+      <div className="delivery-progress__actions">
         <AppButton variant="outlined" onClick={load} disabled={retrying}>
           Refresh progress
         </AppButton>
@@ -107,7 +121,7 @@ export function DeliveryRequestProgress({ initialRequest, getToken, onChange }) 
         )}
       </div>
       {error && (
-        <p role="alert" style={{ color: "var(--md-sys-color-error)", margin: 0 }}>
+        <p role="alert" className="organizer-message organizer-message--error">
           {error}
         </p>
       )}
@@ -142,7 +156,10 @@ export function OverviewPanel({
         launchSelectionMode === "selected"
           ? { participantIds: launchParticipantIds }
           : launchSelectionMode === "exclude_selected"
-            ? { allEligible: true, excludedParticipantIds: launchParticipantIds }
+            ? {
+                allEligible: true,
+                excludedParticipantIds: launchParticipantIds,
+              }
             : { allEligible: true };
       const data = await launchEvent(
         event.code,
@@ -151,12 +168,12 @@ export function OverviewPanel({
           idempotencyKey: launchKey.current,
           selection,
         },
-        token
+        token,
       );
       setEvent(data.event);
       setDeliveryRequest(data.deliveryRequest || null);
       setStatus(
-        `Event launched. ${data.deliveryRequest?.recipientCount || 0} invitation emails were queued.`
+        `Event launched. ${data.deliveryRequest?.recipientCount || 0} invitation emails were queued.`,
       );
       launchKey.current = "";
     } catch (requestError) {
@@ -186,7 +203,7 @@ export function OverviewPanel({
           expectedVersion: event.version,
           responseDeadline,
         },
-        token
+        token,
       );
       setEvent(data.event);
       if (data.cancellationDeliveryRequestId) {
@@ -214,7 +231,11 @@ export function OverviewPanel({
     setError("");
     try {
       const token = await getToken();
-      const data = await sendReminders(event.code, { idempotencyKey: reminderKey.current }, token);
+      const data = await sendReminders(
+        event.code,
+        { idempotencyKey: reminderKey.current },
+        token,
+      );
       setDeliveryRequest(
         data.deliveryRequest ||
           (data.deliveryRequestId
@@ -224,10 +245,10 @@ export function OverviewPanel({
                 recipientCount: data.recipientCount,
                 delivery: data.delivery,
               }
-            : null)
+            : null),
       );
       setStatus(
-        `${data.recipientCount || data.deliveryRequest?.recipientCount || 0} reminder emails were queued.`
+        `${data.recipientCount || data.deliveryRequest?.recipientCount || 0} reminder emails were queued.`,
       );
       reminderKey.current = "";
     } catch (requestError) {
@@ -238,110 +259,162 @@ export function OverviewPanel({
   };
 
   return (
-    <div style={{ display: "grid", gap: "20px" }}>
-      <section className="md-card" style={{ display: "grid", gap: "16px" }}>
-        <div>
-          <h2 style={{ margin: 0 }}>Overview</h2>
-          <p style={{ color: "var(--md-sys-color-on-surface-variant)", margin: "4px 0 0" }}>
-            Prepare the roster while the event is a draft, then launch invitations atomically.
-          </p>
-        </div>
-        <EventDetailsGrid
-          event={event}
-          extraCards={[
-            { label: "Status", value: event.status || "draft" },
-            {
-              label: "Access",
-              value: event.accessMode === "open_link" ? "Anyone with code" : "Invite only",
-            },
-            {
-              label: "Meeting duration",
-              value: `${event.meetingDurationMinutes || event.slotMinutes || 30} minutes`,
-            },
-            { label: "Result revision", value: event.resultsRevision ?? 1 },
-          ]}
-        />
-        <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+    <div className="organizer-panel-stack">
+      <div className="organizer-overview-layout">
+        <section className="md-card organizer-panel organizer-overview-panel">
+          <header className="organizer-panel__header">
+            <div>
+              <h2 className="organizer-panel__title">Overview</h2>
+              <p className="organizer-panel__description">
+                Prepare the roster while the event is a draft, then launch
+                invitations atomically.
+              </p>
+            </div>
+          </header>
+          <div className="organizer-overview-panel__snapshot">
+            <EventDetailsGrid
+              event={event}
+              variant="organizer"
+              extraCards={[
+                {
+                  label: "Access",
+                  value:
+                    event.accessMode === "open_link"
+                      ? "Anyone with code"
+                      : "Invite only",
+                },
+                {
+                  label: "Meeting duration",
+                  value: `${event.meetingDurationMinutes || event.slotMinutes || 30} minutes`,
+                },
+                { label: "Result revision", value: event.resultsRevision ?? 1 },
+              ]}
+            />
+          </div>
+        </section>
+
+        <aside
+          className="md-card organizer-panel organizer-lifecycle-panel"
+          aria-labelledby="organizer-lifecycle-title"
+        >
+          <header className="organizer-panel__header organizer-lifecycle-panel__header">
+            <div>
+              <span className="organizer-lifecycle-panel__status">
+                {event.status || "draft"}
+              </span>
+              <h2
+                id="organizer-lifecycle-title"
+                className="organizer-panel__title"
+              >
+                Event controls
+              </h2>
+            </div>
+          </header>
+
           {event.status === "draft" && (
-            <>
-              <label style={{ display: "grid", gap: "5px" }}>
+            <div className="organizer-launch-form">
+              <label className="organizer-field">
                 Invitation audience
                 <select
                   aria-label="Invitation audience"
                   value={launchSelectionMode}
-                  onChange={(changeEvent) => setLaunchSelectionMode?.(changeEvent.target.value)}
+                  onChange={(changeEvent) =>
+                    setLaunchSelectionMode?.(changeEvent.target.value)
+                  }
                 >
                   <option value="all">All eligible roster members</option>
                   <option value="selected">Only selected roster members</option>
-                  <option value="exclude_selected">All except selected roster members</option>
+                  <option value="exclude_selected">
+                    All except selected roster members
+                  </option>
                 </select>
               </label>
-              <span style={{ alignSelf: "center" }}>
+              <span className="organizer-selection-count">
                 {launchParticipantIds.length} selected in Roster
               </span>
-              <AppButton
-                onClick={launch}
-                disabled={
-                  changing || (launchSelectionMode !== "all" && launchParticipantIds.length === 0)
-                }
-              >
-                {changing ? "Launching…" : "Launch and send invitations"}
-              </AppButton>
-            </>
+              <div className="organizer-launch-form__actions">
+                <AppButton
+                  onClick={launch}
+                  disabled={
+                    changing ||
+                    (launchSelectionMode !== "all" &&
+                      launchParticipantIds.length === 0)
+                  }
+                >
+                  {changing ? "Launching…" : "Launch and send invitations"}
+                </AppButton>
+              </div>
+            </div>
           )}
-          {event.status === "open" && (
-            <>
-              <AppButton variant="outlined" onClick={remind} disabled={changing}>
-                Queue reminders
-              </AppButton>
-              <AppButton
-                variant="outlined"
-                onClick={() => changeLifecycle("closed")}
-                disabled={changing}
-              >
-                Close responses
-              </AppButton>
-            </>
+
+          {event.status !== "draft" && (
+            <div className="organizer-panel__actions organizer-lifecycle-panel__actions">
+              {event.status === "open" && (
+                <>
+                  <AppButton
+                    variant="outlined"
+                    onClick={remind}
+                    disabled={changing}
+                  >
+                    Queue reminders
+                  </AppButton>
+                  <AppButton
+                    variant="outlined"
+                    onClick={() => changeLifecycle("closed")}
+                    disabled={changing}
+                  >
+                    Close responses
+                  </AppButton>
+                </>
+              )}
+              {event.status === "closed" && (
+                <AppButton
+                  variant="outlined"
+                  onClick={() => changeLifecycle("open")}
+                  disabled={changing}
+                >
+                  Reopen responses
+                </AppButton>
+              )}
+              {["finalized", "archived"].includes(event.status) && (
+                <AppButton
+                  variant="outlined"
+                  onClick={() => changeLifecycle("open")}
+                  disabled={changing}
+                >
+                  Reopen event
+                </AppButton>
+              )}
+              {!["archived", "draft"].includes(event.status) && (
+                <AppButton
+                  variant="outlined"
+                  onClick={() => changeLifecycle("archived")}
+                  disabled={changing}
+                >
+                  Archive event
+                </AppButton>
+              )}
+            </div>
           )}
-          {event.status === "closed" && (
-            <AppButton
-              variant="outlined"
-              onClick={() => changeLifecycle("open")}
-              disabled={changing}
+
+          {status && (
+            <p
+              role="status"
+              className="organizer-message organizer-message--success"
             >
-              Reopen responses
-            </AppButton>
+              {status}
+            </p>
           )}
-          {["finalized", "archived"].includes(event.status) && (
-            <AppButton
-              variant="outlined"
-              onClick={() => changeLifecycle("open")}
-              disabled={changing}
+          {error && (
+            <p
+              role="alert"
+              className="organizer-message organizer-message--error"
             >
-              Reopen event
-            </AppButton>
+              {error}
+            </p>
           )}
-          {!["archived", "draft"].includes(event.status) && (
-            <AppButton
-              variant="outlined"
-              onClick={() => changeLifecycle("archived")}
-              disabled={changing}
-            >
-              Archive event
-            </AppButton>
-          )}
-        </div>
-        {status && (
-          <p role="status" style={{ color: "var(--md-sys-color-primary)", margin: 0 }}>
-            {status}
-          </p>
-        )}
-        {error && (
-          <p role="alert" style={{ color: "var(--md-sys-color-error)", margin: 0 }}>
-            {error}
-          </p>
-        )}
-      </section>
+        </aside>
+      </div>
       <DeliveryRequestProgress
         key={deliveryRequest?.id || "no-delivery"}
         initialRequest={deliveryRequest}
@@ -371,8 +444,16 @@ function recommendationKey(recommendation, index) {
   );
 }
 
-export function ResultsSnapshotPanel({ event, getToken, invalidationKey, onChoose }) {
-  const [snapshot, setSnapshot] = useState({ status: "refreshing", results: null });
+export function ResultsSnapshotPanel({
+  event,
+  getToken,
+  invalidationKey,
+  onChoose,
+}) {
+  const [snapshot, setSnapshot] = useState({
+    status: "refreshing",
+    results: null,
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -404,15 +485,13 @@ export function ResultsSnapshotPanel({ event, getToken, invalidationKey, onChoos
   const recommendations = (results.recommendations || []).slice(0, 10);
 
   return (
-    <section className="md-card" style={{ display: "grid", gap: "16px" }}>
-      <div
-        style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}
-      >
+    <section className="md-card organizer-panel organizer-results-panel">
+      <div className="organizer-panel__header">
         <div>
-          <h2 style={{ margin: 0 }}>Results</h2>
-          <p style={{ color: "var(--md-sys-color-on-surface-variant)", margin: "4px 0 0" }}>
-            Top continuous windows for a {event.meetingDurationMinutes || event.slotMinutes}-minute
-            meeting.
+          <h2 className="organizer-panel__title">Results</h2>
+          <p className="organizer-panel__description">
+            Top continuous windows for a{" "}
+            {event.meetingDurationMinutes || event.slotMinutes}-minute meeting.
           </p>
         </div>
         <AppButton variant="outlined" onClick={load} disabled={loading}>
@@ -421,21 +500,24 @@ export function ResultsSnapshotPanel({ event, getToken, invalidationKey, onChoos
       </div>
 
       {snapshot.status === "refreshing" && (
-        <p role="status" style={{ margin: 0 }}>
+        <p role="status" className="organizer-message">
           Results are updating for revision{" "}
           {snapshot.requestedRevision ?? event.resultsRevision ?? "latest"}.
-          {snapshot.results ? " Showing the last successful snapshot meanwhile." : ""}
+          {snapshot.results
+            ? " Showing the last successful snapshot meanwhile."
+            : ""}
         </p>
       )}
       {snapshot.status === "failed" && (
-        <p role="alert" style={{ color: "var(--md-sys-color-error)", margin: 0 }}>
-          Result calculation failed. The worker will retry; the last successful snapshot remains
-          visible.
+        <p role="alert" className="organizer-message organizer-message--error">
+          Result calculation failed. The worker will retry; the last successful
+          snapshot remains visible.
         </p>
       )}
       {snapshot.status === "fresh" && (
-        <p role="status" style={{ margin: 0 }}>
-          Results are current at revision {snapshot.computedRevision ?? "latest"}
+        <p role="status" className="organizer-message">
+          Results are current at revision{" "}
+          {snapshot.computedRevision ?? "latest"}
           {snapshot.generatedAt
             ? ` · generated ${new Date(snapshot.generatedAt).toLocaleString()}`
             : ""}
@@ -444,63 +526,94 @@ export function ResultsSnapshotPanel({ event, getToken, invalidationKey, onChoos
       )}
 
       {recommendations.length > 0 ? (
-        <ol style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: "10px" }}>
+        <ol className="results-list">
           {recommendations.map((recommendation, index) => {
             const weighted =
-              recommendation.weightedAvailability ?? recommendation.weightedScore ?? 0;
+              recommendation.weightedAvailability ??
+              recommendation.weightedScore ??
+              0;
             const unweighted =
-              recommendation.unweightedAvailability ?? recommendation.unweightedScore ?? 0;
-            const startsAt = recommendation.suggestedStartsAt || recommendation.startsAt;
-            const endsAt = recommendation.suggestedEndsAt || recommendation.endsAt;
+              recommendation.unweightedAvailability ??
+              recommendation.unweightedScore ??
+              0;
+            const startsAt =
+              recommendation.suggestedStartsAt || recommendation.startsAt;
+            const endsAt =
+              recommendation.suggestedEndsAt || recommendation.endsAt;
             return (
               <li
                 key={recommendationKey(recommendation, index)}
-                style={{
-                  border: "1px solid var(--md-sys-color-surface-variant)",
-                  borderRadius: "10px",
-                  padding: "13px",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: "14px",
-                  flexWrap: "wrap",
-                }}
+                className="result-option"
               >
-                <div>
-                  <strong>
-                    #{recommendation.rank || index + 1} ·{" "}
-                    {recommendation.label ||
-                      (startsAt
-                        ? new Date(startsAt).toLocaleString([], { timeZone: event.timezone })
-                        : "Candidate window")}
-                  </strong>
-                  <p style={{ margin: "5px 0 0", color: "var(--md-sys-color-on-surface-variant)" }}>
-                    {recommendation.channel === "virtual" ? "Virtual" : "In person"} ·{" "}
-                    {(weighted * 100).toFixed(0)}% weighted · {(unweighted * 100).toFixed(0)}%
-                    unweighted · {recommendation.fullyAvailableParticipantTotal || 0} fully
-                    available
+                <div className="result-option__content">
+                  <div className="result-option__heading">
+                    <span className="result-option__rank">
+                      #{recommendation.rank || index + 1}
+                    </span>
+                    <strong className="result-option__title">
+                      {recommendation.label ||
+                        (startsAt
+                          ? new Date(startsAt).toLocaleString([], {
+                              timeZone: event.timezone,
+                            })
+                          : "Candidate window")}
+                    </strong>
+                  </div>
+                  <p className="result-option__summary">
+                    <span className="result-option__metric">
+                      {recommendation.channel === "virtual"
+                        ? "Virtual"
+                        : "In person"}
+                    </span>{" "}
+                    ·{" "}
+                    <span className="result-option__metric">
+                      {(weighted * 100).toFixed(0)}% weighted
+                    </span>{" "}
+                    ·{" "}
+                    <span className="result-option__metric">
+                      {(unweighted * 100).toFixed(0)}% unweighted
+                    </span>{" "}
+                    ·{" "}
+                    <span className="result-option__metric">
+                      {recommendation.fullyAvailableParticipantTotal || 0} fully
+                      available
+                    </span>
                   </p>
                   {startsAt && endsAt && (
-                    <small>
-                      {new Date(startsAt).toLocaleString([], { timeZone: event.timezone })} –{" "}
-                      {new Date(endsAt).toLocaleString([], { timeZone: event.timezone })}
+                    <small className="result-option__time">
+                      {new Date(startsAt).toLocaleString([], {
+                        timeZone: event.timezone,
+                      })}{" "}
+                      –{" "}
+                      {new Date(endsAt).toLocaleString([], {
+                        timeZone: event.timezone,
+                      })}
                     </small>
                   )}
                 </div>
-                <AppButton variant="outlined" onClick={() => onChoose(recommendation)}>
+                <AppButton
+                  variant="outlined"
+                  onClick={() => onChoose(recommendation)}
+                >
                   Choose this time
                 </AppButton>
               </li>
             );
           })}
         </ol>
-      ) : !loading ? (
-        <p>No valid meeting window is available yet.</p>
+      ) : loading || snapshot.status === "refreshing" ? (
+        <div className="organizer-empty-state organizer-empty-state--loading">
+          <h3>Calculating the best options</h3>
+          <p>Recommendations will appear here as responses arrive.</p>
+        </div>
       ) : (
-        <p>Loading recommendations…</p>
+        <div className="organizer-empty-state">
+          <h3>No recommendation yet</h3>
+          <p>No valid meeting window is available yet.</p>
+        </div>
       )}
       {error && (
-        <p role="alert" style={{ color: "var(--md-sys-color-error)", margin: 0 }}>
+        <p role="alert" className="organizer-message organizer-message--error">
           {error}
         </p>
       )}
@@ -508,7 +621,13 @@ export function ResultsSnapshotPanel({ event, getToken, invalidationKey, onChoos
   );
 }
 
-export function FinalizeScalePanel({ event, setEvent, getToken, recommendation, onBrowseResults }) {
+export function FinalizeScalePanel({
+  event,
+  setEvent,
+  getToken,
+  recommendation,
+  onBrowseResults,
+}) {
   const [location, setLocation] = useState(event.location || "");
   const [review, setReview] = useState(null);
   const [reviewing, setReviewing] = useState(false);
@@ -559,7 +678,7 @@ export function FinalizeScalePanel({ event, setEvent, getToken, recommendation, 
           expectedVersion: event.version,
           idempotencyKey: confirmationKey.current,
         },
-        token
+        token,
       );
       setEvent(data.event);
       setReview(data.finalMeeting?.attendance || review);
@@ -571,9 +690,11 @@ export function FinalizeScalePanel({ event, setEvent, getToken, recommendation, 
                 operation: "final_confirmation",
                 delivery: data.delivery,
               }
-            : null)
+            : null),
       );
-      setStatus("The meeting is finalized and calendar invitations are queued.");
+      setStatus(
+        "The meeting is finalized and calendar invitations are queued.",
+      );
       confirmationKey.current = "";
     } catch (requestError) {
       setError(requestError.message || "Unable to finalize this meeting.");
@@ -597,7 +718,9 @@ export function FinalizeScalePanel({ event, setEvent, getToken, recommendation, 
       link.remove();
       setTimeout(() => URL.revokeObjectURL(href), 0);
     } catch (requestError) {
-      setError(requestError.message || "Unable to download the calendar invitation.");
+      setError(
+        requestError.message || "Unable to download the calendar invitation.",
+      );
     } finally {
       setDownloading(false);
     }
@@ -606,96 +729,119 @@ export function FinalizeScalePanel({ event, setEvent, getToken, recommendation, 
   const meeting = event.finalMeeting;
   const canFinalize = ["open", "closed"].includes(event.status);
   return (
-    <div style={{ display: "grid", gap: "20px" }}>
-      <section className="md-card" style={{ display: "grid", gap: "16px" }}>
-        <div>
-          <h2 style={{ margin: 0 }}>Finalize</h2>
-          <p style={{ color: "var(--md-sys-color-on-surface-variant)", margin: "4px 0 0" }}>
-            Confirm one ranked, continuous window and send an iCalendar update to invited people.
-          </p>
-        </div>
-        {["finalized", "archived"].includes(event.status) && meeting && meeting.active !== false ? (
-          <div style={{ display: "grid", gap: "10px" }}>
-            <strong>
-              {new Date(meeting.startsAt).toLocaleString([], { timeZone: event.timezone })} –{" "}
-              {new Date(meeting.endsAt).toLocaleString([], { timeZone: event.timezone })}
-            </strong>
-            <span>
-              {meeting.channel === "virtual" ? "Virtual" : "In person"} ·{" "}
-              {meeting.location || "Location TBD"}
-            </span>
-            <div>
-              <AppButton variant="outlined" onClick={download} disabled={downloading}>
+    <div className="organizer-panel-stack">
+      <section className="md-card organizer-panel organizer-finalize-panel">
+        <header className="organizer-panel__header">
+          <div>
+            <h2 className="organizer-panel__title">Finalize</h2>
+            <p className="organizer-panel__description">
+              Confirm one ranked, continuous window and send an iCalendar update
+              to invited people.
+            </p>
+          </div>
+        </header>
+        {["finalized", "archived"].includes(event.status) &&
+        meeting &&
+        meeting.active !== false ? (
+          <div className="finalized-meeting">
+            <div className="finalized-meeting__summary">
+              <strong className="finalized-meeting__time">
+                {new Date(meeting.startsAt).toLocaleString([], {
+                  timeZone: event.timezone,
+                })}{" "}
+                –{" "}
+                {new Date(meeting.endsAt).toLocaleString([], {
+                  timeZone: event.timezone,
+                })}
+              </strong>
+              <span className="finalized-meeting__meta">
+                {meeting.channel === "virtual" ? "Virtual" : "In person"} ·{" "}
+                {meeting.location || "Location TBD"}
+              </span>
+            </div>
+            <div className="finalized-meeting__actions">
+              <AppButton
+                variant="outlined"
+                onClick={download}
+                disabled={downloading}
+              >
                 {downloading ? "Preparing…" : "Download calendar (.ics)"}
               </AppButton>
             </div>
           </div>
         ) : recommendation ? (
-          <>
-            <div
-              style={{
-                border: "1px solid var(--md-sys-color-surface-variant)",
-                borderRadius: "10px",
-                padding: "14px",
-              }}
-            >
-              <strong>{recommendation.label || "Selected candidate"}</strong>
-              <p>
-                {new Date(payload.startsAt).toLocaleString([], { timeZone: event.timezone })} –{" "}
-                {new Date(payload.endsAt).toLocaleString([], { timeZone: event.timezone })}
+          <div className="organizer-finalize-workspace">
+            <div className="final-candidate">
+              <div className="final-candidate__heading">
+                <strong className="final-candidate__title">
+                  {recommendation.label || "Selected candidate"}
+                </strong>
+                <span className="final-candidate__channel">
+                  {recommendation.channel === "virtual"
+                    ? "Virtual"
+                    : "In person"}
+                </span>
+              </div>
+              <p className="final-candidate__time">
+                {new Date(payload.startsAt).toLocaleString([], {
+                  timeZone: event.timezone,
+                })}{" "}
+                –{" "}
+                {new Date(payload.endsAt).toLocaleString([], {
+                  timeZone: event.timezone,
+                })}
               </p>
-              <span>{recommendation.channel === "virtual" ? "Virtual" : "In person"}</span>
             </div>
-            <label style={{ display: "grid", gap: "6px" }}>
-              <strong>Location or meeting link</strong>
-              <input
-                value={location}
-                maxLength={500}
-                onChange={(changeEvent) => {
-                  setLocation(changeEvent.target.value);
-                  setReview(null);
-                }}
-              />
-            </label>
-            <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-              <AppButton variant="outlined" onClick={onBrowseResults}>
-                Choose a different result
-              </AppButton>
-              <AppButton
-                variant="outlined"
-                onClick={preview}
-                disabled={!canFinalize || reviewing || confirming}
-              >
-                {reviewing ? "Reviewing…" : "Review attendance"}
-              </AppButton>
-              <AppButton
-                onClick={confirm}
-                disabled={!canFinalize || !review || reviewing || confirming}
-              >
-                {confirming ? "Finalizing…" : "Finalize meeting"}
-              </AppButton>
+            <div className="organizer-finalize-workspace__form">
+              <label className="organizer-field">
+                <strong>Location or meeting link</strong>
+                <input
+                  value={location}
+                  maxLength={500}
+                  onChange={(changeEvent) => {
+                    setLocation(changeEvent.target.value);
+                    setReview(null);
+                  }}
+                />
+              </label>
+              <div className="organizer-panel__actions organizer-finalize-workspace__actions">
+                <AppButton variant="outlined" onClick={onBrowseResults}>
+                  Choose a different result
+                </AppButton>
+                <AppButton
+                  variant="outlined"
+                  onClick={preview}
+                  disabled={!canFinalize || reviewing || confirming}
+                >
+                  {reviewing ? "Reviewing…" : "Review attendance"}
+                </AppButton>
+                <AppButton
+                  onClick={confirm}
+                  disabled={!canFinalize || !review || reviewing || confirming}
+                >
+                  {confirming ? "Finalizing…" : "Finalize meeting"}
+                </AppButton>
+              </div>
+              {!canFinalize && (
+                <p role="note" className="organizer-message">
+                  Launch this event before reviewing and finalizing a meeting
+                  time.
+                </p>
+              )}
             </div>
-            {!canFinalize && (
-              <p role="note" style={{ margin: 0 }}>
-                Launch this event before reviewing and finalizing a meeting time.
-              </p>
-            )}
-          </>
+          </div>
         ) : (
-          <div>
+          <div className="organizer-empty-state organizer-empty-state--finalize">
+            <h3>No time selected yet</h3>
             <p>Choose a recommended window before finalizing.</p>
-            <AppButton onClick={onBrowseResults}>Browse results</AppButton>
+            <div className="organizer-empty-state__actions">
+              <AppButton onClick={onBrowseResults}>Browse results</AppButton>
+            </div>
           </div>
         )}
 
         {review && (
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
-              gap: "8px",
-            }}
-          >
+          <div className="attendance-review" aria-label="Attendance review">
             {[
               ["Available", review.availableParticipantTotal],
               ["Partial", review.partialParticipantTotal],
@@ -703,27 +849,28 @@ export function FinalizeScalePanel({ event, setEvent, getToken, recommendation, 
               ["Unanswered", review.unansweredParticipantTotal],
               ["Excluded", review.excludedParticipantTotal],
             ].map(([label, value]) => (
-              <div
-                key={label}
-                style={{
-                  border: "1px solid var(--md-sys-color-surface-variant)",
-                  borderRadius: "8px",
-                  padding: "10px",
-                }}
-              >
+              <div key={label} className="attendance-review__item">
                 <span>{label}</span>
-                <strong style={{ display: "block" }}>{value || 0}</strong>
+                <strong className="attendance-review__value">
+                  {value || 0}
+                </strong>
               </div>
             ))}
           </div>
         )}
         {status && (
-          <p role="status" style={{ color: "var(--md-sys-color-primary)", margin: 0 }}>
+          <p
+            role="status"
+            className="organizer-message organizer-message--success"
+          >
             {status}
           </p>
         )}
         {error && (
-          <p role="alert" style={{ color: "var(--md-sys-color-error)", margin: 0 }}>
+          <p
+            role="alert"
+            className="organizer-message organizer-message--error"
+          >
             {error}
           </p>
         )}

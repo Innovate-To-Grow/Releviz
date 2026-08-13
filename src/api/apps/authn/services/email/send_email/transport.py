@@ -11,7 +11,13 @@ from apps.core.services.aws.provider_outcomes import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SOURCE_ADDRESS = "Innovate to Grow <i2g@g.ucmerced.edu>"
+
+def _active_source_address() -> str:
+    """Return the sender address configured for the active email provider."""
+    from apps.mail.models import EmailProviderConfig
+
+    provider = EmailProviderConfig.objects.filter(is_active=True).first()
+    return provider.from_email if provider is not None else ""
 
 
 def _send_via_ses(
@@ -19,11 +25,14 @@ def _send_via_ses(
     recipient: str,
     subject: str,
     html_body: str,
-    source_address: str = DEFAULT_SOURCE_ADDRESS,
+    source_address: str | None = None,
     before_provider_call=None,
     raise_provider_errors: bool = False,
 ) -> bool:
+    if source_address is None:
+        source_address = _active_source_address()
     if not source_address:
+        logger.warning("SES send skipped: no active email provider is configured")
         return False
     try:
         import apps.authn.services.email.send_email as email_api

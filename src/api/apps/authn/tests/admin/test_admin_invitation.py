@@ -72,7 +72,9 @@ class AdminInvitationAdminTests(TestCase):
         self.assertEqual(response.status_code, 302)
         old.refresh_from_db()
         self.assertEqual(old.status, AdminInvitation.Status.CANCELLED)
-        self.assertEqual(AdminInvitation.objects.filter(email__iexact="invite@example.com").count(), 2)
+        self.assertEqual(
+            AdminInvitation.objects.filter(email__iexact="invite@example.com").count(), 2
+        )
         mock_send.assert_called_once()
 
     @patch("apps.authn.services.email.send_admin_invitation_email")
@@ -82,7 +84,9 @@ class AdminInvitationAdminTests(TestCase):
             email="expired@example.com",
             expires_at=timezone.now() - timezone.timedelta(days=1),
         )
-        accepted = self._create_invitation(email="accepted@example.com", status=AdminInvitation.Status.ACCEPTED)
+        accepted = self._create_invitation(
+            email="accepted@example.com", status=AdminInvitation.Status.ACCEPTED
+        )
 
         request = RequestFactory().post("/")
         request.user = self.staff

@@ -2,13 +2,21 @@
  * @jest-environment jsdom
  */
 
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 
 jest.mock("@material/web/checkbox/checkbox.js", () => ({}), { virtual: true });
 jest.mock("@material/web/slider/slider.js", () => ({}), { virtual: true });
-jest.mock("@material/web/textfield/outlined-text-field.js", () => ({}), { virtual: true });
+jest.mock("@material/web/textfield/outlined-text-field.js", () => ({}), {
+  virtual: true,
+});
 
 jest.mock("@/components/auth/AuthContext", () => ({ useAuth: jest.fn() }));
 jest.mock("@/components/event/EventDetailsGrid", () => ({
@@ -25,9 +33,10 @@ jest.mock("@/components/event/EventDetailsGrid", () => ({
   ),
 }));
 jest.mock("@/components/schedule/OrganizerPanels", () => ({
-  OrganizerHeader: ({ onRefresh }) => (
+  OrganizerHeader: ({ event, onRefresh }) => (
     <header>
       <h2>Organizer Dashboard</h2>
+      <span data-testid="organizer-header-event-status">{event.status}</span>
       <button onClick={onRefresh}>Refresh</button>
     </header>
   ),
@@ -41,10 +50,14 @@ jest.mock("@/lib/api/events", () => ({
   launchEvent: jest.fn(),
   previewFinalMeeting: jest.fn(),
   retryDeliveryRequest: jest.fn(),
+  sendInvitations: jest.fn(),
   sendReminders: jest.fn(),
   updateEventLifecycle: jest.fn(),
 }));
-jest.mock("@/lib/api/participants", () => ({ updateParticipant: jest.fn() }));
+jest.mock("@/lib/api/participants", () => ({
+  createManagedParticipant: jest.fn(),
+  updateParticipant: jest.fn(),
+}));
 jest.mock("@/lib/api/roster", () => ({
   cancelRosterImport: jest.fn(),
   commitRosterImport: jest.fn(),
@@ -65,8 +78,10 @@ import {
   fetchEventResults,
   launchEvent,
   previewFinalMeeting,
+  sendInvitations,
   sendReminders,
 } from "@/lib/api/events";
+import { createManagedParticipant } from "@/lib/api/participants";
 import {
   commitRosterImport,
   configureRosterImport,
@@ -97,8 +112,16 @@ const event = {
     {
       key: "2026-08-20",
       slots: [
-        { index: 0, startsAt: "2026-08-20T09:00:00Z", endsAt: "2026-08-20T09:30:00Z" },
-        { index: 1, startsAt: "2026-08-20T09:30:00Z", endsAt: "2026-08-20T10:00:00Z" },
+        {
+          index: 0,
+          startsAt: "2026-08-20T09:00:00Z",
+          endsAt: "2026-08-20T09:30:00Z",
+        },
+        {
+          index: 1,
+          startsAt: "2026-08-20T09:30:00Z",
+          endsAt: "2026-08-20T10:00:00Z",
+        },
       ],
     },
   ],
@@ -150,23 +173,46 @@ function mockRosterImportPreview() {
 
 async function openPastedRosterPreview() {
   await userEvent.click(screen.getByRole("button", { name: "Import roster" }));
-  await userEvent.click(screen.getByRole("button", { name: "Paste spreadsheet" }));
+  await userEvent.click(
+    screen.getByRole("button", { name: "Paste spreadsheet" }),
+  );
   fireEvent.change(screen.getByLabelText("Pasted roster rows"), {
     target: { value: "name\temail\nAda\tada@example.com" },
   });
-  await userEvent.click(screen.getByRole("button", { name: "Continue to mapping" }));
-  await userEvent.click(await screen.findByRole("button", { name: "Preview rows" }));
-  expect(await screen.findByDisplayValue("ada@example.com")).toBeInTheDocument();
+  await userEvent.click(
+    screen.getByRole("button", { name: "Continue to mapping" }),
+  );
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Preview rows" }),
+  );
+  expect(
+    await screen.findByDisplayValue("ada@example.com"),
+  ).toBeInTheDocument();
 }
 
 function renderView(setEvent = jest.fn(), currentEvent = event) {
   return {
     setEvent,
     ...render(
-      <EventContext.Provider value={{ event: currentEvent, setEvent, numSlots: 2 }}>
+      <EventContext.Provider
+        value={{ event: currentEvent, setEvent, numSlots: 2 }}
+      >
         <OrganizerScaleView />
-      </EventContext.Provider>
+      </EventContext.Provider>,
     ),
+  };
+}
+
+async function openInvitePersonForm() {
+  await userEvent.click(screen.getByRole("tab", { name: "Roster" }));
+  await screen.findByText("Ada Faculty");
+  await userEvent.click(screen.getByRole("button", { name: "Invite person" }));
+  return {
+    name: screen.getByRole("textbox", { name: "Full name" }),
+    email: screen.getByRole("textbox", { name: "Email address" }),
+    submit: screen.getByRole("button", {
+      name: "Add and send invitation",
+    }),
   };
 }
 
@@ -234,6 +280,26 @@ describe("scaled organizer workspace", () => {
         version: 1,
       },
     });
+    createManagedParticipant.mockResolvedValue({
+      participant: {
+        id: "manual-1",
+        memberId: "manual-1",
+        name: "Manual Person",
+        email: "manual@example.com",
+        accountAccess: "temporary",
+        canOrganizerEditAvailability: true,
+        invitationStatus: "not_sent",
+        version: 1,
+      },
+      created: true,
+      memberCreated: true,
+    });
+    sendInvitations.mockResolvedValue({
+      deliveryRequestId: "manual-delivery",
+      recipientCount: 1,
+      enqueued: 1,
+      delivery: { total: 1, pending: 1, sent: 0 },
+    });
     fetchEventResults.mockResolvedValue({
       status: "fresh",
       requestedRevision: 3,
@@ -262,6 +328,213 @@ describe("scaled organizer workspace", () => {
     expect(screen.getByText("Loading…")).toBeInTheDocument();
   });
 
+  test("exposes one labelled tab panel and supports keyboard tab navigation", () => {
+    renderView();
+
+    expect(
+      screen.getByTestId("organizer-header-event-status"),
+    ).toHaveTextContent("draft");
+    const overviewTab = screen.getByRole("tab", { name: "Overview" });
+    const rosterTab = screen.getByRole("tab", { name: "Roster" });
+    const resultsTab = screen.getByRole("tab", { name: "Results" });
+    const finalizeTab = screen.getByRole("tab", { name: "Finalize" });
+
+    expect(overviewTab).toHaveAttribute("aria-selected", "true");
+    expect(overviewTab).toHaveAttribute("tabindex", "0");
+    expect(rosterTab).toHaveAttribute("tabindex", "-1");
+    expect(screen.getAllByRole("tabpanel")).toHaveLength(1);
+    expect(screen.getByRole("tabpanel", { name: "Overview" })).toHaveAttribute(
+      "aria-labelledby",
+      overviewTab.id,
+    );
+    expect(overviewTab).toHaveAttribute(
+      "aria-controls",
+      screen.getByRole("tabpanel", { name: "Overview" }).id,
+    );
+
+    overviewTab.focus();
+    fireEvent.keyDown(overviewTab, { key: "ArrowRight" });
+    expect(rosterTab).toHaveFocus();
+    expect(rosterTab).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tabpanel", { name: "Roster" })).toHaveAttribute(
+      "aria-labelledby",
+      rosterTab.id,
+    );
+
+    fireEvent.keyDown(rosterTab, { key: "End" });
+    expect(finalizeTab).toHaveFocus();
+    expect(
+      screen.getByRole("tabpanel", { name: "Finalize" }),
+    ).toBeInTheDocument();
+
+    fireEvent.keyDown(finalizeTab, { key: "Home" });
+    expect(overviewTab).toHaveFocus();
+    fireEvent.keyDown(overviewTab, { key: "ArrowLeft" });
+    expect(finalizeTab).toHaveFocus();
+    fireEvent.keyDown(finalizeTab, { key: "ArrowRight" });
+    expect(overviewTab).toHaveFocus();
+
+    fireEvent.keyDown(overviewTab, { key: "ArrowDown" });
+    expect(rosterTab).toHaveFocus();
+    fireEvent.keyDown(rosterTab, { key: "ArrowUp" });
+    expect(overviewTab).toHaveFocus();
+    expect(resultsTab).toHaveAttribute("tabindex", "-1");
+  });
+
+  test("validates required invite fields and invalid email locally", async () => {
+    renderView();
+    const invite = await openInvitePersonForm();
+    const form = invite.submit.closest("form");
+
+    fireEvent.submit(form);
+    expect(
+      await screen.findByText("Full name is required."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Email address is required.")).toBeInTheDocument();
+    expect(createManagedParticipant).not.toHaveBeenCalled();
+    expect(launchEvent).not.toHaveBeenCalled();
+    expect(sendInvitations).not.toHaveBeenCalled();
+
+    await userEvent.type(invite.name, "Manual Person");
+    await userEvent.type(invite.email, "not-an-email");
+    fireEvent.submit(form);
+    expect(
+      await screen.findByText("Enter a valid email address."),
+    ).toBeInTheDocument();
+    expect(createManagedParticipant).not.toHaveBeenCalled();
+    expect(launchEvent).not.toHaveBeenCalled();
+    expect(sendInvitations).not.toHaveBeenCalled();
+  });
+
+  test("adds a draft invitee and launches invitations only for that person", async () => {
+    launchEvent.mockResolvedValue({
+      event: { ...event, status: "open", version: 3 },
+      deliveryRequest: {
+        id: "manual-launch-delivery",
+        operation: "invitation",
+        recipientCount: 1,
+        delivery: { total: 1, pending: 1, sent: 0 },
+      },
+    });
+    const { setEvent } = renderView();
+    const invite = await openInvitePersonForm();
+    await userEvent.type(invite.name, "Manual Person");
+    await userEvent.type(invite.email, "manual@example.com");
+    await userEvent.click(invite.submit);
+
+    await waitFor(() =>
+      expect(createManagedParticipant).toHaveBeenCalledWith(
+        event.code,
+        { name: "Manual Person", email: "manual@example.com" },
+        "token",
+      ),
+    );
+    expect(launchEvent).toHaveBeenCalledWith(
+      event.code,
+      {
+        expectedVersion: event.version,
+        idempotencyKey: "request-key",
+        selection: { participantIds: ["manual-1"] },
+      },
+      "token",
+    );
+    expect(sendInvitations).not.toHaveBeenCalled();
+    expect(setEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "open", version: 3 }),
+    );
+    expect(await screen.findByLabelText("Delivery progress")).toHaveTextContent(
+      "1 queued",
+    );
+  });
+
+  test("adds an invitee to an open event and queues a direct invitation", async () => {
+    renderView(jest.fn(), { ...event, status: "open" });
+    const invite = await openInvitePersonForm();
+    await userEvent.type(invite.name, "Manual Person");
+    await userEvent.type(invite.email, "manual@example.com");
+    await userEvent.click(invite.submit);
+
+    await waitFor(() =>
+      expect(sendInvitations).toHaveBeenCalledWith(
+        event.code,
+        {
+          emails: ["manual@example.com"],
+          idempotencyKey: "request-key",
+        },
+        "token",
+      ),
+    );
+    expect(createManagedParticipant).toHaveBeenCalledWith(
+      event.code,
+      { name: "Manual Person", email: "manual@example.com" },
+      "token",
+    );
+    expect(launchEvent).not.toHaveBeenCalled();
+    expect(await screen.findByLabelText("Delivery progress")).toHaveTextContent(
+      "1 queued",
+    );
+  });
+
+  test("disables invite submission while the person is being added", async () => {
+    let resolveCreate;
+    createManagedParticipant.mockReturnValue(
+      new Promise((resolve) => {
+        resolveCreate = resolve;
+      }),
+    );
+    renderView(jest.fn(), { ...event, status: "open" });
+    const invite = await openInvitePersonForm();
+    await userEvent.type(invite.name, "Manual Person");
+    await userEvent.type(invite.email, "manual@example.com");
+
+    fireEvent.click(invite.submit);
+    await waitFor(() =>
+      expect(createManagedParticipant).toHaveBeenCalledTimes(1),
+    );
+    expect(invite.submit).toBeDisabled();
+    fireEvent.click(invite.submit);
+    expect(createManagedParticipant).toHaveBeenCalledTimes(1);
+
+    resolveCreate({
+      participant: {
+        id: "manual-1",
+        name: "Manual Person",
+        email: "manual@example.com",
+      },
+      created: true,
+    });
+    await waitFor(() => expect(sendInvitations).toHaveBeenCalledTimes(1));
+  });
+
+  test("keeps an added invitee in the form when sending fails and allows retry", async () => {
+    sendInvitations
+      .mockRejectedValueOnce(new Error("delivery service unavailable"))
+      .mockResolvedValueOnce({
+        deliveryRequestId: "manual-delivery-retry",
+        recipientCount: 1,
+        enqueued: 1,
+        delivery: { total: 1, pending: 1, sent: 0 },
+      });
+    renderView(jest.fn(), { ...event, status: "open" });
+    const invite = await openInvitePersonForm();
+    await userEvent.type(invite.name, "Manual Person");
+    await userEvent.type(invite.email, "manual@example.com");
+    await userEvent.click(invite.submit);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /added.*not sent/i,
+    );
+    expect(invite.name).toHaveValue("Manual Person");
+    expect(invite.email).toHaveValue("manual@example.com");
+    expect(sendInvitations).toHaveBeenCalledTimes(1);
+
+    await userEvent.click(invite.submit);
+    await waitFor(() => expect(sendInvitations).toHaveBeenCalledTimes(2));
+    expect(await screen.findByLabelText("Delivery progress")).toHaveTextContent(
+      "1 queued",
+    );
+  });
+
   test("discards malformed persisted delivery progress", async () => {
     const key = `releviz.delivery-request.${event.code}`;
     window.sessionStorage.setItem(key, "not-json");
@@ -275,7 +548,9 @@ describe("scaled organizer workspace", () => {
     window.sessionStorage.setItem(key, JSON.stringify({ id: "old-request" }));
     sendReminders.mockResolvedValue({ recipientCount: 0 });
     renderView(jest.fn(), { ...event, status: "open" });
-    await userEvent.click(screen.getByRole("button", { name: "Queue reminders" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Queue reminders" }),
+    );
     await waitFor(() => expect(window.sessionStorage.getItem(key)).toBeNull());
   });
 
@@ -291,7 +566,9 @@ describe("scaled organizer workspace", () => {
     });
     const { setEvent } = renderView();
 
-    await userEvent.click(screen.getByRole("button", { name: "Launch and send invitations" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Launch and send invitations" }),
+    );
 
     await waitFor(() =>
       expect(launchEvent).toHaveBeenCalledWith(
@@ -301,11 +578,15 @@ describe("scaled organizer workspace", () => {
           idempotencyKey: "request-key",
           selection: { allEligible: true },
         },
-        "token"
-      )
+        "token",
+      ),
     );
-    expect(setEvent).toHaveBeenCalledWith(expect.objectContaining({ status: "open" }));
-    expect(await screen.findByLabelText("Delivery progress")).toHaveTextContent("1000 queued");
+    expect(setEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "open" }),
+    );
+    expect(await screen.findByLabelText("Delivery progress")).toHaveTextContent(
+      "1000 queued",
+    );
   });
 
   test("launches only selected roster IDs and keeps delivery progress visible in Roster", async () => {
@@ -323,29 +604,46 @@ describe("scaled organizer workspace", () => {
     await userEvent.click(await screen.findByLabelText("Select Ada Faculty"));
     await userEvent.click(screen.getByRole("tab", { name: "Overview" }));
     expect(screen.getByText("1 selected in Roster")).toBeInTheDocument();
-    await userEvent.selectOptions(screen.getByLabelText("Invitation audience"), "selected");
-    await userEvent.click(screen.getByRole("button", { name: "Launch and send invitations" }));
+    await userEvent.selectOptions(
+      screen.getByLabelText("Invitation audience"),
+      "selected",
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Launch and send invitations" }),
+    );
 
     await waitFor(() =>
       expect(launchEvent).toHaveBeenCalledWith(
         event.code,
-        expect.objectContaining({ selection: { participantIds: ["roster-1"] } }),
-        "token"
-      )
+        expect.objectContaining({
+          selection: { participantIds: ["roster-1"] },
+        }),
+        "token",
+      ),
     );
     await userEvent.click(screen.getByRole("tab", { name: "Roster" }));
-    expect(await screen.findByLabelText("Delivery progress")).toHaveTextContent("1 queued");
+    expect(await screen.findByLabelText("Delivery progress")).toHaveTextContent(
+      "1 queued",
+    );
     await userEvent.click(screen.getByRole("tab", { name: "Overview" }));
-    await userEvent.selectOptions(screen.getByLabelText("Invitation audience"), "exclude_selected");
-    await userEvent.click(screen.getByRole("button", { name: "Launch and send invitations" }));
+    await userEvent.selectOptions(
+      screen.getByLabelText("Invitation audience"),
+      "exclude_selected",
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Launch and send invitations" }),
+    );
     await waitFor(() =>
       expect(launchEvent).toHaveBeenLastCalledWith(
         event.code,
         expect.objectContaining({
-          selection: { allEligible: true, excludedParticipantIds: ["roster-1"] },
+          selection: {
+            allEligible: true,
+            excludedParticipantIds: ["roster-1"],
+          },
         }),
-        "token"
-      )
+        "token",
+      ),
     );
   });
 
@@ -358,31 +656,46 @@ describe("scaled organizer workspace", () => {
     expect(fetchRoster).toHaveBeenCalledWith(
       event.code,
       expect.objectContaining({ page: 1, pageSize: 50 }),
-      "token"
+      "token",
     );
-    const row = document.querySelector('[data-roster-participant-id="roster-1"]');
+    const row = document.querySelector(
+      '[data-roster-participant-id="roster-1"]',
+    );
     await userEvent.click(within(row).getByLabelText("Include Ada Faculty"));
     await waitFor(() =>
       expect(patchRosterParticipant).toHaveBeenCalledWith(
         event.code,
         "roster-1",
         { included: false, expectedVersion: 1 },
-        "token"
-      )
+        "token",
+      ),
     );
 
-    await userEvent.type(screen.getByLabelText("Search roster"), "ada@example.com");
+    await userEvent.type(
+      screen.getByLabelText("Search roster"),
+      "ada@example.com",
+    );
     await waitFor(() =>
       expect(fetchRoster).toHaveBeenCalledWith(
         event.code,
-        expect.objectContaining({ page: 1, pageSize: 50, search: "ada@example.com" }),
-        "token"
-      )
+        expect.objectContaining({
+          page: 1,
+          pageSize: 50,
+          search: "ada@example.com",
+        }),
+        "token",
+      ),
     );
 
-    await userEvent.click(within(row).getByRole("button", { name: "Edit schedule" }));
+    await userEvent.click(
+      within(row).getByRole("button", { name: "Edit schedule" }),
+    );
     await waitFor(() =>
-      expect(fetchRosterSchedule).toHaveBeenCalledWith(event.code, "roster-1", "token")
+      expect(fetchRosterSchedule).toHaveBeenCalledWith(
+        event.code,
+        "roster-1",
+        "token",
+      ),
     );
   });
 
@@ -391,17 +704,29 @@ describe("scaled organizer workspace", () => {
     await userEvent.click(screen.getByRole("tab", { name: "Roster" }));
     expect(await screen.findByText("Ada Faculty")).toBeInTheDocument();
 
-    const bulk = screen.getByText("Bulk weight and inclusion").closest("details");
+    const bulk = screen
+      .getByText("Bulk weight and inclusion")
+      .closest("details");
     fireEvent.click(within(bulk).getByText("Bulk weight and inclusion"));
-    await userEvent.selectOptions(within(bulk).getByLabelText("Bulk update scope"), "group");
-    await userEvent.selectOptions(within(bulk).getByLabelText("Bulk update group"), "Faculty");
+    await userEvent.selectOptions(
+      within(bulk).getByLabelText("Bulk update scope"),
+      "group",
+    );
+    await userEvent.selectOptions(
+      within(bulk).getByLabelText("Bulk update group"),
+      "Faculty",
+    );
     await userEvent.click(within(bulk).getByLabelText("Apply bulk weight"));
     fireEvent.change(within(bulk).getByLabelText("Bulk weight"), {
       target: { value: "0.4" },
     });
-    await userEvent.click(within(bulk).getByLabelText("Apply bulk included status"));
+    await userEvent.click(
+      within(bulk).getByLabelText("Apply bulk included status"),
+    );
     await userEvent.click(within(bulk).getByLabelText("Bulk included"));
-    await userEvent.click(within(bulk).getByRole("button", { name: "Apply update" }));
+    await userEvent.click(
+      within(bulk).getByRole("button", { name: "Apply update" }),
+    );
 
     await waitFor(() =>
       expect(patchRosterBulk).toHaveBeenCalledWith(
@@ -411,8 +736,8 @@ describe("scaled organizer workspace", () => {
           updates: { weight: 0.4, included: false },
           idempotencyKey: "request-key",
         },
-        "token"
-      )
+        "token",
+      ),
     );
   });
 
@@ -420,13 +745,17 @@ describe("scaled organizer workspace", () => {
     renderView();
     await userEvent.click(screen.getByRole("tab", { name: "Roster" }));
     expect(await screen.findByText("Ada Faculty")).toBeInTheDocument();
-    const bulk = screen.getByText("Bulk weight and inclusion").closest("details");
+    const bulk = screen
+      .getByText("Bulk weight and inclusion")
+      .closest("details");
     fireEvent.click(within(bulk).getByText("Bulk weight and inclusion"));
     await userEvent.click(screen.getByLabelText("Select Ada Faculty"));
 
-    await userEvent.click(within(bulk).getByRole("button", { name: "Apply update" }));
+    await userEvent.click(
+      within(bulk).getByRole("button", { name: "Apply update" }),
+    );
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Choose weight, included status, or both"
+      "Choose weight, included status, or both",
     );
     expect(patchRosterBulk).not.toHaveBeenCalled();
 
@@ -434,7 +763,9 @@ describe("scaled organizer workspace", () => {
     fireEvent.change(within(bulk).getByLabelText("Bulk weight"), {
       target: { value: "0.25" },
     });
-    await userEvent.click(within(bulk).getByRole("button", { name: "Apply update" }));
+    await userEvent.click(
+      within(bulk).getByRole("button", { name: "Apply update" }),
+    );
     await waitFor(() =>
       expect(patchRosterBulk).toHaveBeenLastCalledWith(
         event.code,
@@ -443,8 +774,8 @@ describe("scaled organizer workspace", () => {
           updates: { weight: 0.25 },
           idempotencyKey: "request-key",
         },
-        "token"
-      )
+        "token",
+      ),
     );
   });
 
@@ -452,12 +783,21 @@ describe("scaled organizer workspace", () => {
     renderView();
     await userEvent.click(screen.getByRole("tab", { name: "Roster" }));
     expect(await screen.findByText("Ada Faculty")).toBeInTheDocument();
-    const bulk = screen.getByText("Bulk weight and inclusion").closest("details");
+    const bulk = screen
+      .getByText("Bulk weight and inclusion")
+      .closest("details");
     fireEvent.click(within(bulk).getByText("Bulk weight and inclusion"));
-    await userEvent.selectOptions(within(bulk).getByLabelText("Bulk update scope"), "filter");
-    await userEvent.click(within(bulk).getByLabelText("Apply bulk included status"));
+    await userEvent.selectOptions(
+      within(bulk).getByLabelText("Bulk update scope"),
+      "filter",
+    );
+    await userEvent.click(
+      within(bulk).getByLabelText("Apply bulk included status"),
+    );
     await userEvent.click(within(bulk).getByLabelText("Bulk included"));
-    await userEvent.click(within(bulk).getByRole("button", { name: "Apply update" }));
+    await userEvent.click(
+      within(bulk).getByRole("button", { name: "Apply update" }),
+    );
 
     await waitFor(() =>
       expect(patchRosterBulk).toHaveBeenCalledWith(
@@ -467,8 +807,8 @@ describe("scaled organizer workspace", () => {
           updates: { included: false },
           idempotencyKey: "request-key",
         },
-        "token"
-      )
+        "token",
+      ),
     );
   });
 
@@ -485,7 +825,9 @@ describe("scaled organizer workspace", () => {
     });
     renderView();
     await userEvent.click(screen.getByRole("tab", { name: "Roster" }));
-    expect(await screen.findByLabelText("Delivery progress")).toHaveTextContent("2 queued");
+    expect(await screen.findByLabelText("Delivery progress")).toHaveTextContent(
+      "2 queued",
+    );
   });
 
   test("restores durable delivery progress after a browser refresh", async () => {
@@ -495,11 +837,13 @@ describe("scaled organizer workspace", () => {
         id: "stored-delivery",
         operation: "final_confirmation",
         delivery: { total: 5, pending: 1, sent: 4 },
-      })
+      }),
     );
     renderView();
     await userEvent.click(screen.getByRole("tab", { name: "Roster" }));
-    expect(await screen.findByLabelText("Delivery progress")).toHaveTextContent("1 queued");
+    expect(await screen.findByLabelText("Delivery progress")).toHaveTextContent(
+      "1 queued",
+    );
   });
 
   test("individual weight updates preserve included status", async () => {
@@ -518,15 +862,20 @@ describe("scaled organizer workspace", () => {
         event.code,
         "roster-1",
         { weight: 0.35, expectedVersion: 1 },
-        "token"
-      )
+        "token",
+      ),
     );
   });
 
   test("pastes, maps, previews, and merges a roster import", async () => {
     mockRosterImportPreview();
     commitRosterImport.mockResolvedValue({
-      receipt: { importedCount: 1, createdCount: 1, updatedCount: 0, resultsRevision: 4 },
+      receipt: {
+        importedCount: 1,
+        createdCount: 1,
+        updatedCount: 0,
+        resultsRevision: 4,
+      },
     });
     renderView();
     await userEvent.click(screen.getByRole("tab", { name: "Roster" }));
@@ -536,7 +885,7 @@ describe("scaled organizer workspace", () => {
       event.code,
       "import-1",
       expect.objectContaining({ columnMapping: { name: "0", email: "1" } }),
-      "token"
+      "token",
     );
     await userEvent.click(screen.getByRole("button", { name: "Merge roster" }));
 
@@ -545,15 +894,21 @@ describe("scaled organizer workspace", () => {
         event.code,
         "import-1",
         { mode: "merge", idempotencyKey: "request-key" },
-        "token"
-      )
+        "token",
+      ),
     );
-    expect(await screen.findByRole("button", { name: "Import roster" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Import roster" }),
+    ).toBeInTheDocument();
   });
 
   test("requires the exact event code before a destructive roster rebuild", async () => {
     mockRosterImportPreview();
-    const rebuiltEvent = { ...event, status: "draft", version: event.version + 1 };
+    const rebuiltEvent = {
+      ...event,
+      status: "draft",
+      version: event.version + 1,
+    };
     commitRosterImport.mockResolvedValue({
       event: rebuiltEvent,
       receipt: {
@@ -569,16 +924,29 @@ describe("scaled organizer workspace", () => {
     await screen.findByText("Ada Faculty");
     await userEvent.click(screen.getByLabelText("Select Ada Faculty"));
     await userEvent.click(screen.getByRole("tab", { name: "Overview" }));
-    await userEvent.selectOptions(screen.getByLabelText("Invitation audience"), "exclude_selected");
+    await userEvent.selectOptions(
+      screen.getByLabelText("Invitation audience"),
+      "exclude_selected",
+    );
     await userEvent.click(screen.getByRole("tab", { name: "Roster" }));
     await openPastedRosterPreview();
-    await userEvent.click(screen.getByRole("radio", { name: /Rebuild the roster/ }));
+    await userEvent.click(
+      screen.getByRole("radio", { name: /Rebuild the roster/ }),
+    );
 
-    const rebuildButton = screen.getByRole("button", { name: "Rebuild roster" });
+    const rebuildButton = screen.getByRole("button", {
+      name: "Rebuild roster",
+    });
     expect(rebuildButton).toBeDisabled();
-    await userEvent.type(screen.getByLabelText("Rebuild confirmation code"), "BIG100");
+    await userEvent.type(
+      screen.getByLabelText("Rebuild confirmation code"),
+      "BIG100",
+    );
     expect(rebuildButton).toBeDisabled();
-    await userEvent.type(screen.getByLabelText("Rebuild confirmation code"), "0");
+    await userEvent.type(
+      screen.getByLabelText("Rebuild confirmation code"),
+      "0",
+    );
     expect(rebuildButton).toBeEnabled();
     await userEvent.click(rebuildButton);
 
@@ -591,8 +959,8 @@ describe("scaled organizer workspace", () => {
           confirmationCode: event.code,
           idempotencyKey: "request-key",
         },
-        "token"
-      )
+        "token",
+      ),
     );
     expect(setEvent).toHaveBeenCalledWith(rebuiltEvent);
     await userEvent.click(screen.getByRole("tab", { name: "Overview" }));
@@ -628,14 +996,22 @@ describe("scaled organizer workspace", () => {
     const setEvent = jest.fn();
     renderView(setEvent, { ...event, status: "open" });
     await userEvent.click(screen.getByRole("tab", { name: "Results" }));
-    expect(await screen.findByText(/Results are current at revision 3/)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Choose this time" }));
-    expect(screen.getByRole("tabpanel", { name: "Finalize" })).toHaveTextContent(
-      "Thursday 9:00 AM"
+    expect(
+      await screen.findByText(/Results are current at revision 3/),
+    ).toBeInTheDocument();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Choose this time" }),
     );
-    await userEvent.click(screen.getByRole("button", { name: "Review attendance" }));
+    expect(
+      screen.getByRole("tabpanel", { name: "Finalize" }),
+    ).toHaveTextContent("Thursday 9:00 AM");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Review attendance" }),
+    );
     expect(await screen.findByText("700")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Finalize meeting" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Finalize meeting" }),
+    );
 
     await waitFor(() =>
       expect(confirmFinalMeeting).toHaveBeenCalledWith(
@@ -646,10 +1022,12 @@ describe("scaled organizer workspace", () => {
           expectedVersion: 2,
           idempotencyKey: "request-key",
         }),
-        "token"
-      )
+        "token",
+      ),
     );
-    expect(setEvent).toHaveBeenCalledWith(expect.objectContaining({ status: "finalized" }));
+    expect(setEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "finalized" }),
+    );
   });
 
   test("shows the previous snapshot while a newer result revision is refreshing", async () => {
@@ -676,9 +1054,9 @@ describe("scaled organizer workspace", () => {
     renderView();
     await userEvent.click(screen.getByRole("tab", { name: "Results" }));
 
-    expect(await screen.findByText(/Results are updating for revision 4/)).toHaveTextContent(
-      "Showing the last successful snapshot meanwhile"
-    );
+    expect(
+      await screen.findByText(/Results are updating for revision 4/),
+    ).toHaveTextContent("Showing the last successful snapshot meanwhile");
     expect(screen.getByText(/Previous best window/)).toBeInTheDocument();
   });
 });

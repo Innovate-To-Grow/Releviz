@@ -7,10 +7,11 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.authn.security import enforce_cookie_request_origin
 from apps.authn.security.throttles import LoginRateThrottle
 from apps.authn.serializers import LoginSerializer
 
-from ..helpers import build_auth_success_payload
+from ..helpers import auth_success_response, build_auth_success_payload
 
 
 class LoginView(APIView):
@@ -25,6 +26,7 @@ class LoginView(APIView):
 
     # noinspection PyMethodMayBeStatic
     def post(self, request):
+        enforce_cookie_request_origin(request)
         serializer = LoginSerializer(data=request.data)
 
         if not serializer.is_valid():
@@ -32,7 +34,8 @@ class LoginView(APIView):
 
         user = serializer.validated_data["user"]
 
-        return Response(
+        return auth_success_response(
             build_auth_success_payload(user, "Login successful."),
-            status=status.HTTP_200_OK,
+            request=request,
+            response_status=status.HTTP_200_OK,
         )

@@ -58,14 +58,18 @@ def assert_within_limit(*, member, purpose: str, target_email: str, now):
         created_at__gte=cutoff,
     ).count()
     if sent_count >= api.MAX_CHALLENGES_PER_HOUR:
-        raise api.AuthChallengeThrottled("Too many verification codes requested. Please try again later.")
+        raise api.AuthChallengeThrottled(
+            "Too many verification codes requested. Please try again later."
+        )
 
     latest = get_latest_pending(purpose=purpose, target_email=target_email)
     if latest and latest.last_sent_at and now - latest.last_sent_at < api.RESEND_COOLDOWN:
         raise api.AuthChallengeThrottled("Please wait before requesting another code.")
 
 
-def latest_pending_for_input(*, purposes: Sequence[str], target_email: str, for_update: bool = False):
+def latest_pending_for_input(
+    *, purposes: Sequence[str], target_email: str, for_update: bool = False
+):
     return get_latest_pending_for_purposes(
         purposes=purposes,
         target_email=normalize_email(target_email),

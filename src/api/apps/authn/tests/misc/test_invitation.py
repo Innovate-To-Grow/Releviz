@@ -13,7 +13,9 @@ Member = get_user_model()
 
 class AcceptInvitationViewTests(TestCase):
     # noinspection PyMethodMayBeStatic
-    def _create_invitation(self, email="invite@example.com", role=AdminInvitation.Role.ADMIN, **kwargs):
+    def _create_invitation(
+        self, email="invite@example.com", role=AdminInvitation.Role.ADMIN, **kwargs
+    ):
         defaults = {
             "email": email,
             "token": AdminInvitation.generate_token(),
@@ -49,7 +51,11 @@ class AcceptInvitationViewTests(TestCase):
     def test_get_existing_verified_member_upgrades_and_shows_registered(self):
         invitation = self._create_invitation(email="existing@example.com")
         member = Member.objects.create_user(
-            password="StrongPass123!", first_name="Ex", last_name="Member", is_staff=False, is_active=True
+            password="StrongPass123!",
+            first_name="Ex",
+            last_name="Member",
+            is_staff=False,
+            is_active=True,
         )
         ContactEmail.objects.create(
             member=member, email_address="existing@example.com", email_type="primary", verified=True
@@ -184,7 +190,9 @@ class AcceptInvitationViewTests(TestCase):
         self.assertTrue(contact.member.is_staff)
 
     def test_post_reclaims_unverified_contact_email_from_other_member(self):
-        other = Member.objects.create_user(password="StrongPass123!", is_active=True, is_staff=False)
+        other = Member.objects.create_user(
+            password="StrongPass123!", is_active=True, is_staff=False
+        )
         ContactEmail.objects.create(
             member=other,
             email_address="invite@example.com",

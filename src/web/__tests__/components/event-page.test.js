@@ -3,6 +3,7 @@
  */
 
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 
 let searchParams = new URLSearchParams();
@@ -29,10 +30,30 @@ jest.mock("@/components/event/EventHeader", () => ({
   ),
 }));
 
-jest.mock("@/components/schedule/ParticipantView", () => ({
-  __esModule: true,
-  default: () => <div>Participant workflow</div>,
-}));
+jest.mock("@/components/schedule/ParticipantView", () => {
+  const React = jest.requireActual("react");
+  const EventContext = jest.requireActual(
+    "@/components/event/EventContext",
+  ).default;
+
+  function MockParticipantView() {
+    const { respondIntent, consumeRespondIntent } =
+      React.useContext(EventContext);
+    return (
+      <div
+        data-testid="participant-workflow"
+        data-respond-intent={String(Boolean(respondIntent))}
+      >
+        Participant workflow
+        <button type="button" onClick={consumeRespondIntent}>
+          Consume response intent
+        </button>
+      </div>
+    );
+  }
+
+  return { __esModule: true, default: MockParticipantView };
+});
 
 jest.mock("@/components/schedule/OrganizerView", () => ({
   __esModule: true,
@@ -90,6 +111,36 @@ describe("event page routing", () => {
     expect(fetchEvent).toHaveBeenCalledWith("EVENT123", "token");
   });
 
+  test("passes and consumes a one-time response intent", async () => {
+    searchParams = new URLSearchParams("code=EVENT123&respond=1");
+    window.history.replaceState(
+      {},
+      "",
+      "/event?code=EVENT123&respond=1#availability",
+    );
+    fetchEvent.mockResolvedValue({ event });
+
+    render(<EventPage />);
+
+    expect(await screen.findByTestId("participant-workflow")).toHaveAttribute(
+      "data-respond-intent",
+      "true",
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Consume response intent" }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("participant-workflow")).toHaveAttribute(
+        "data-respond-intent",
+        "false",
+      ),
+    );
+    expect(replaceUrl).toHaveBeenCalledWith(
+      "/event?code=EVENT123#availability",
+    );
+  });
+
   test("marks an invitation opened, removes the capability token, and loads organizer tools", async () => {
     searchParams = new URLSearchParams("code=EVENT123&invitation=private-token");
     window.history.replaceState(
@@ -121,10 +172,25 @@ describe("event page routing", () => {
     expect(fetchEvent).not.toHaveBeenCalled();
   });
 
+  test("requires profile completion before loading a direct event link", async () => {
+    auth({ requiresProfileCompletion: true });
+
+    render(<EventPage />);
+
+    await waitFor(() =>
+      expect(navigateTo).toHaveBeenCalledWith(
+        "/settings?complete_profile=1&next=%2Fevent%3Fcode%3DEVENT123",
+      ),
+    );
+    expect(fetchEvent).not.toHaveBeenCalled();
+  });
+
   test("shows missing-code and API error states", async () => {
     searchParams = new URLSearchParams();
     const missing = render(<EventPage />);
-    expect(await screen.findByRole("heading", { name: "Event Not Found" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "Event Not Found" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("No event code in URL")).toBeInTheDocument();
     missing.unmount();
 
@@ -132,7 +198,9 @@ describe("event page routing", () => {
     fetchEvent.mockRejectedValue(new Error("Access denied"));
     render(<EventPage />);
     expect(await screen.findByText("Access denied")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Create New Event" })).toHaveAttribute("href", "/");
+    expect(
+      screen.getByRole("link", { name: "Create New Event" }),
+    ).toHaveAttribute("href", "/create");
   });
 
   test("keeps the loading state while authentication or invitation tracking is pending", () => {
