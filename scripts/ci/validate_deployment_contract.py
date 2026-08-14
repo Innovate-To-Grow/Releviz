@@ -17,6 +17,10 @@ TERRAFORM_ENVIRONMENTS = {
     "production": ROOT / "infra/prod/main.tf",
 }
 PRODUCTION_DEPLOY_WORKFLOW = ROOT / ".github/workflows/deploy-prod.yml"
+# Production CD can be parked with a .disabled suffix, which GitHub ignores.
+# The release safety invariants still apply to a parked definition so that it
+# cannot drift out of contract while it is switched off.
+PRODUCTION_DEPLOY_WORKFLOW_PARKED = ROOT / ".github/workflows/deploy-prod.yml.disabled"
 PRODUCTION_AMPLIFY_CUSTOM_HEADERS = ROOT / "infra/prod/amplify-custom-headers.json"
 AMPLIFY_DEPLOY_SCRIPT = ROOT / "scripts/deploy/amplify-static-deploy.sh"
 RETIRED_STAGING_PATHS = (
@@ -54,12 +58,22 @@ def terraform_environment_names(source: str) -> set[str]:
     return set(ENVIRONMENT_NAME_RE.findall(source))
 
 
+def production_cd_path(root: Path = ROOT) -> Path | None:
+    """Return the active production CD definition, or the parked one."""
+
+    for workflow in (PRODUCTION_DEPLOY_WORKFLOW, PRODUCTION_DEPLOY_WORKFLOW_PARKED):
+        candidate = root / workflow.relative_to(ROOT)
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def production_cd_errors(root: Path = ROOT) -> list[str]:
     """Ensure production CD is explicit, protected, immutable, and health-gated."""
 
     errors: list[str] = []
-    active_path = root / PRODUCTION_DEPLOY_WORKFLOW.relative_to(ROOT)
-    if not active_path.exists():
+    active_path = production_cd_path(root)
+    if active_path is None:
         errors.append("production CD workflow is missing")
         return errors
 
