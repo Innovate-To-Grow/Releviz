@@ -16,6 +16,7 @@ from scripts.ci.validate_deployment_contract import (
     production_amplify_custom_headers_errors,
     production_amplify_custom_headers_policy_errors,
     production_cd_errors,
+    production_cd_path,
     production_default_admin_task_errors,
     production_ecs_task_definition_errors,
     production_proxy_configuration_errors,
@@ -2588,3 +2589,58 @@ fi
                 "terminal_confirmed=false\n"
                 "cancellation_confirmed=false\n",
             )
+
+
+class ProductionCdResolutionTests(TestCase):
+    """A parked production CD stays under contract without becoming dispatchable."""
+
+    def workflows(self, root: Path) -> Path:
+        workflows = root / ".github/workflows"
+        workflows.mkdir(parents=True)
+        return workflows
+
+    def test_missing_production_cd_is_reported(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.workflows(root)
+            self.assertIsNone(production_cd_path(root))
+            self.assertEqual(
+                production_cd_errors(root),
+                ["production CD workflow is missing"],
+            )
+
+    def test_parked_production_cd_is_validated(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            parked = self.workflows(root) / "deploy-prod.yml.disabled"
+            parked.write_text("on:\n  workflow_dispatch:\n", encoding="utf-8")
+
+            self.assertEqual(production_cd_path(root), parked)
+            errors = production_cd_errors(root)
+            self.assertNotIn("production CD workflow is missing", errors)
+            # A parked definition is still held to the release invariants.
+            self.assertIn(
+                "production CD omits the reviewed 160-minute production job limit",
+                errors,
+            )
+
+    def test_active_production_cd_wins_over_parked(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflows = self.workflows(root)
+            active = workflows / "deploy-prod.yml"
+            active.write_text("on:\n  workflow_dispatch:\n", encoding="utf-8")
+            (workflows / "deploy-prod.yml.disabled").write_text(
+                "on:\n  workflow_dispatch:\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(production_cd_path(root), active)
+
+    def test_repository_parks_production_cd_under_contract(self):
+        self.assertEqual(
+            production_cd_path().name,
+            "deploy-prod.yml.disabled",
+            "production CD is expected to stay parked until CD is enabled",
+        )
+        self.assertEqual(production_cd_errors(), [])
