@@ -54,7 +54,9 @@ class HealthCheckMiddleware:
                 health_status["maintenance"] = True
                 health_status["maintenance_message"] = config.message
         except (DatabaseError, OSError):
-            logger.exception("Failed to load SiteMaintenanceControl configuration during health check")
+            logger.exception(
+                "Failed to load SiteMaintenanceControl configuration during health check"
+            )
 
         return self._json_response(health_status)
 

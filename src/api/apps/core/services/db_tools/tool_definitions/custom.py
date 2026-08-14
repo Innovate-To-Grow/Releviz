@@ -10,7 +10,9 @@ DEFINITIONS = [
                 "object",
                 "Django ORM filter kwargs (e.g. {name__icontains: demo, registration_open: true})",
             ),
-            "ordering": {"description": "Field(s) to order by (string or array of strings, prefix with - for desc)"},
+            "ordering": {
+                "description": "Field(s) to order by (string or array of strings, prefix with - for desc)"
+            },
             "fields": {
                 "type": "array",
                 "items": {"type": "string"},

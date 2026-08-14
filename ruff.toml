@@ -1,0 +1,12 @@
+target-version = "py312"
+line-length = 100
+src = ["src/api", "scripts/ci"]
+
+[lint]
+select = ["E", "F", "I", "UP", "B", "DJ"]
+# Ruff's formatter owns physical line layout. E501 disagrees with the
+# formatter for URLs, templates, and other intentionally indivisible strings.
+ignore = ["DJ001", "E501"]
+
+[format]
+quote-style = "double"

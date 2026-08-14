@@ -1,4 +1,3 @@
-
 def _provider_job_error(exc):
     from apps.core.services.aws.provider_outcomes import (
         PROVIDER_OUTCOME_PERMANENT,

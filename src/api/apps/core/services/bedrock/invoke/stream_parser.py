@@ -89,5 +89,10 @@ def stream_tool_results(content_blocks, round_num):
                 "input": tool_info.get("input", {}),
                 "result_preview": result_text[:200],
             },
-            {"toolResult": {"toolUseId": tool_info["toolUseId"], "content": [{"text": result_text}]}},
+            {
+                "toolResult": {
+                    "toolUseId": tool_info["toolUseId"],
+                    "content": [{"text": result_text}],
+                }
+            },
         )

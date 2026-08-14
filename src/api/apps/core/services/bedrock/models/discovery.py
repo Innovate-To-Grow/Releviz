@@ -9,7 +9,9 @@ def fetch_foundation_models(mgmt):
         response = mgmt.list_foundation_models(byOutputModality="TEXT", byInferenceType="ON_DEMAND")
         for model in response.get("modelSummaries", []):
             provider = model.get("providerName", "Other")
-            models.setdefault(provider, []).append((model["modelId"], model.get("modelName", model["modelId"])))
+            models.setdefault(provider, []).append(
+                (model["modelId"], model.get("modelName", model["modelId"]))
+            )
     except Exception:
         logger.warning("list_foundation_models failed")
     return models

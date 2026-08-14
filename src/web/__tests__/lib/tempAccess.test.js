@@ -31,7 +31,10 @@ describe("temporary access API", () => {
       .mockResolvedValueOnce(jsonResponse({ accepted: true }, { status: 202 }))
       .mockResolvedValueOnce(jsonResponse({ event: { code: "ABC123" } }));
 
-    await requestTempAccessCode({ code: "ABC123", invitationToken: "invite-token" });
+    await requestTempAccessCode({
+      code: "ABC123",
+      invitationToken: "invite-token",
+    });
     await verifyTempAccess({
       code: "ABC123",
       invitationToken: "invite-token",
@@ -44,8 +47,11 @@ describe("temporary access API", () => {
       expect.objectContaining({
         method: "POST",
         credentials: "include",
-        body: JSON.stringify({ code: "ABC123", invitationToken: "invite-token" }),
-      })
+        body: JSON.stringify({
+          code: "ABC123",
+          invitationToken: "invite-token",
+        }),
+      }),
     );
     expect(fetch).toHaveBeenNthCalledWith(
       2,
@@ -57,7 +63,7 @@ describe("temporary access API", () => {
           invitationToken: "invite-token",
           verificationCode: "123456",
         }),
-      })
+      }),
     );
   });
 
@@ -68,13 +74,20 @@ describe("temporary access API", () => {
       .mockResolvedValueOnce(jsonResponse({}, { status: 204 }));
 
     await fetchTempAccessSession("A B");
-    await updateTempAccessParticipant("A B", { submitted: 1, expectedVersion: 1 });
+    await updateTempAccessParticipant("A B", {
+      submitted: 1,
+      expectedVersion: 1,
+    });
     await logoutTempAccess("A B");
 
-    expect(fetch.mock.calls[0][0]).toBe("/events/temp-access/session?code=A%20B");
-    expect(fetch.mock.calls[1][0]).toBe("/events/temp-access/participant?code=A%20B");
+    expect(fetch.mock.calls[0][0]).toBe(
+      "/events/temp-access/session?code=A%20B",
+    );
+    expect(fetch.mock.calls[1][0]).toBe(
+      "/events/temp-access/participant?code=A%20B",
+    );
     expect(fetch.mock.calls[1][1]).toEqual(
-      expect.objectContaining({ credentials: "include", method: "PUT" })
+      expect.objectContaining({ credentials: "include", method: "PUT" }),
     );
     expect(fetch.mock.calls[2][0]).toBe("/events/temp-access/logout");
   });
@@ -88,12 +101,15 @@ describe("temporary access API", () => {
           errorCode: "participant_version_conflict",
           participant: latest,
         },
-        { status: 409 }
-      )
+        { status: 409 },
+      ),
     );
 
     await expect(
-      updateTempAccessParticipant("ABC123", { submitted: 0, expectedVersion: 6 })
+      updateTempAccessParticipant("ABC123", {
+        submitted: 0,
+        expectedVersion: 6,
+      }),
     ).rejects.toMatchObject({
       status: 409,
       errorCode: "participant_version_conflict",

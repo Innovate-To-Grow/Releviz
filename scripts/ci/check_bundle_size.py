@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-
 ASSET_SUFFIXES = {".css", ".js", ".mjs"}
 
 
@@ -32,14 +31,10 @@ def check_budgets(
     if not assets:
         failures.append("No JavaScript or CSS assets were found.")
     if total > max_total_bytes:
-        failures.append(
-            f"Total assets are {total} bytes; budget is {max_total_bytes} bytes."
-        )
+        failures.append(f"Total assets are {total} bytes; budget is {max_total_bytes} bytes.")
     oversized = [(path, size) for path, size in assets if size > max_file_bytes]
     for path, size in oversized:
-        failures.append(
-            f"{path} is {size} bytes; per-file budget is {max_file_bytes} bytes."
-        )
+        failures.append(f"{path} is {size} bytes; per-file budget is {max_file_bytes} bytes.")
     return failures
 
 

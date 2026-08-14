@@ -58,9 +58,13 @@ class ECSTaskDefinitionTopologyTests(SimpleTestCase):
     def test_validator_rejects_a_non_deployment_revision_in_the_template(self):
         taskdef = copy.deepcopy(self.taskdef)
         web = next(
-            container for container in taskdef["containerDefinitions"] if container["name"] == validator.WEB_CONTAINER
+            container
+            for container in taskdef["containerDefinitions"]
+            if container["name"] == validator.WEB_CONTAINER
         )
-        revision = next(item for item in web["environment"] if item["name"] == "AMPLIFY_CONFIG_REVISION")
+        revision = next(
+            item for item in web["environment"] if item["name"] == "AMPLIFY_CONFIG_REVISION"
+        )
         revision["value"] = "latest"
 
         with self.assertRaisesRegex(
@@ -73,7 +77,9 @@ class ECSTaskDefinitionTopologyTests(SimpleTestCase):
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
 
         self.assertIn('containers["itg-background-worker"]', workflow)
-        self.assertIn('worker_container["environment"] = deepcopy(web_container["environment"])', workflow)
+        self.assertIn(
+            'worker_container["environment"] = deepcopy(web_container["environment"])', workflow
+        )
         self.assertIn('worker_container["secrets"] = deepcopy(web_container["secrets"])', workflow)
         self.assertIn(
             "AMPLIFY_CONFIG_REVISION: ${{ github.run_id }}.${{ github.run_attempt }}",

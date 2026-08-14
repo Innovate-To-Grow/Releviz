@@ -216,9 +216,7 @@ def _complete_registration(challenge):
         now = timezone.now()
         display_name = member.display_name().strip()[:100]
         if display_name:
-            Participant.objects.filter(member=member).exclude(
-                participant_name=display_name
-            ).update(
+            Participant.objects.filter(member=member).exclude(participant_name=display_name).update(
                 participant_name=display_name,
                 updated_at=now,
             )

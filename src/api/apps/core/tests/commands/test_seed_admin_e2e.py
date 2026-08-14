@@ -53,7 +53,9 @@ class SeedAdminE2ECommandTests(TestCase):
         self.assertTrue(admin_member.is_superuser)
         self.assertTrue(admin_member.check_password("safe-test-password"))
         self.assertTrue(admin_contact.verified)
-        self.assertEqual(ContactEmail.objects.filter(email_address="admin-e2e-test@example.com").count(), 1)
+        self.assertEqual(
+            ContactEmail.objects.filter(email_address="admin-e2e-test@example.com").count(), 1
+        )
 
         nonstaff_contact = ContactEmail.objects.get(email_address="nonstaff-e2e-test@example.com")
         nonstaff_member = nonstaff_contact.member

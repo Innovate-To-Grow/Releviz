@@ -47,7 +47,9 @@ class BackgroundJobAdmin(ReadOnlyModelAdmin):
             if retry_job(job):
                 retried += 1
         if retried:
-            self.message_user(request, f"Queued {retried} job(s) for explicit retry.", messages.SUCCESS)
+            self.message_user(
+                request, f"Queued {retried} job(s) for explicit retry.", messages.SUCCESS
+            )
         else:
             self.message_user(
                 request,

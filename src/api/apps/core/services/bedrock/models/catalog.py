@@ -54,7 +54,9 @@ def fetch_inference_profiles(mgmt):
                 if profile.get("type") != "SYSTEM_DEFINED":
                     continue
                 pid = profile["inferenceProfileId"]
-                profiles.setdefault(provider_from_id(pid), []).append((pid, profile.get("inferenceProfileName", pid)))
+                profiles.setdefault(provider_from_id(pid), []).append(
+                    (pid, profile.get("inferenceProfileName", pid))
+                )
     except Exception:
         logger.warning("list_inference_profiles failed, will use foundation models only")
     return profiles

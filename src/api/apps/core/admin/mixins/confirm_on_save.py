@@ -385,7 +385,9 @@ class ConfirmOnSaveMixin:
         _func, _name, description = actions[action_name]
 
         try:
-            description_str = str(description) % {"verbose_name_plural": self.opts.verbose_name_plural}
+            description_str = str(description) % {
+                "verbose_name_plural": self.opts.verbose_name_plural
+            }
         except (KeyError, TypeError, ValueError):
             description_str = str(description)
 

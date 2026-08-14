@@ -42,7 +42,11 @@ def reset_postgresql(connection):
         if db_user:
             from psycopg2 import sql
 
-            cursor.execute(sql.SQL("GRANT ALL ON SCHEMA public TO {user};").format(user=sql.Identifier(db_user)))
+            cursor.execute(
+                sql.SQL("GRANT ALL ON SCHEMA public TO {user};").format(
+                    user=sql.Identifier(db_user)
+                )
+            )
 
 
 def reset_mysql(connection):
@@ -93,7 +97,9 @@ def create_default_admin(command):
         command.stdout.write("  Skipping admin user creation (DEV_ADD_ADMIN_USER=False).")
         return
     if ContactEmail.objects.filter(email_address__iexact=command.DEV_DEFAULT_ADMIN_EMAIL).exists():
-        command.stdout.write(f"  Admin user with email '{command.DEV_DEFAULT_ADMIN_EMAIL}' already exists.")
+        command.stdout.write(
+            f"  Admin user with email '{command.DEV_DEFAULT_ADMIN_EMAIL}' already exists."
+        )
         return
     member = Member.objects.create_superuser(
         password=command.DEV_DEFAULT_ADMIN_PASSWORD,
@@ -121,7 +127,9 @@ def _remove_pycache(migrations_dir):
 def seed_archive_data(command):
     """Seed CMS pages, menus, and footer from archive/data/."""
     if not os.path.isdir(ARCHIVE_DATA_DIR):
-        command.stdout.write(command.style.WARNING(f"  Archive data directory not found: {ARCHIVE_DATA_DIR}"))
+        command.stdout.write(
+            command.style.WARNING(f"  Archive data directory not found: {ARCHIVE_DATA_DIR}")
+        )
         return
 
     _seed_cms_pages(command)
@@ -148,11 +156,17 @@ def _seed_cms_pages(command):
 
     from apps.cms.admin.cms.page_admin.import_export import process_page_data
 
-    results = process_page_data(pages_data, action="execute", default_status="published", validate_required=False)
+    results = process_page_data(
+        pages_data, action="execute", default_status="published", validate_required=False
+    )
     created = sum(1 for r in results if r.get("success") and r.get("action") == "create")
     updated = sum(1 for r in results if r.get("success") and r.get("action") == "update")
     errors = sum(1 for r in results if r.get("errors"))
-    command.stdout.write(command.style.SUCCESS(f"  CMS pages: {created} created, {updated} updated, {errors} errors."))
+    command.stdout.write(
+        command.style.SUCCESS(
+            f"  CMS pages: {created} created, {updated} updated, {errors} errors."
+        )
+    )
 
 
 def _seed_menus(command):
@@ -173,7 +187,9 @@ def _seed_menus(command):
         defaults={"display_name": "Main Navigation", "items": items, "is_active": True},
     )
     action = "Created" if created else "Updated"
-    command.stdout.write(command.style.SUCCESS(f"  {action} menu 'main_nav' with {len(items)} top-level items."))
+    command.stdout.write(
+        command.style.SUCCESS(f"  {action} menu 'main_nav' with {len(items)} top-level items.")
+    )
 
 
 def _seed_footer(command):

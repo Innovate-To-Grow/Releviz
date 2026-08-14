@@ -28,7 +28,9 @@ def invoke_bedrock(conversation_messages, *, chat_config=None, aws_config=None, 
         output_message = response["output"]["message"]
         messages.append(output_message)
         if response.get("stopReason") == "tool_use":
-            messages.append({"role": "user", "content": collect_tool_results(output_message, tool_calls_log)})
+            messages.append(
+                {"role": "user", "content": collect_tool_results(output_message, tool_calls_log)}
+            )
             continue
         text_parts = [block["text"] for block in output_message["content"] if "text" in block]
         return {"text": "".join(text_parts), "tool_calls": tool_calls_log}
@@ -52,5 +54,12 @@ def collect_tool_results(output_message, tool_calls_log):
                 "result_preview": result_text[:200],
             }
         )
-        tool_results.append({"toolResult": {"toolUseId": tool_info["toolUseId"], "content": [{"text": result_text}]}})
+        tool_results.append(
+            {
+                "toolResult": {
+                    "toolUseId": tool_info["toolUseId"],
+                    "content": [{"text": result_text}],
+                }
+            }
+        )
     return tool_results

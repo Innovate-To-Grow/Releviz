@@ -102,7 +102,9 @@ def validate_write_payload(model: type[models.Model], values: dict[str, Any]) ->
 
 
 def assign_model_fields(obj: models.Model, values: dict[str, Any]) -> None:
-    writable = {field_output_name(field): field for field in safe_model_fields(obj.__class__, write=True)}
+    writable = {
+        field_output_name(field): field for field in safe_model_fields(obj.__class__, write=True)
+    }
     for name, value in values.items():
         field = writable[name]
         setattr(obj, field_output_name(field), coerce_field_value(field, value))

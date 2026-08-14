@@ -17,7 +17,8 @@ def search_projects(params):
         qs = qs.filter(industry__icontains=params["industry"])
     if params.get("semester"):
         qs = qs.filter(
-            Q(semester__label__icontains=params["semester"]) | Q(semester__season__icontains=params["semester"])
+            Q(semester__label__icontains=params["semester"])
+            | Q(semester__season__icontains=params["semester"])
         )
     if params.get("class_code"):
         qs = qs.filter(class_code__icontains=params["class_code"])
@@ -48,4 +49,6 @@ def search_semesters(params):
         qs = qs.filter(season__icontains=params["season"])
     if params.get("is_published") is not None:
         qs = qs.filter(is_published=params["is_published"])
-    return _serialize_rows(qs.order_by("-year", "season"), ["id", "year", "season", "label", "is_published"])
+    return _serialize_rows(
+        qs.order_by("-year", "season"), ["id", "year", "season", "label", "is_published"]
+    )

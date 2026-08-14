@@ -26,8 +26,7 @@ class Member(AbstractUser, ProjectControlModel):
         default=list,
         blank=True,
         help_text=(
-            'Django apps this admin may manage (e.g. ["cms", "event"]). '
-            "Superusers ignore this."
+            'Django apps this admin may manage (e.g. ["cms", "event"]). Superusers ignore this.'
         ),
         verbose_name="Admin apps",
     )

@@ -66,7 +66,9 @@ def _is_known_transient(exc: BaseException) -> bool:
             return True
         if isinstance(item, GspreadAPIError):
             status_code = getattr(getattr(item, "response", None), "status_code", None)
-            if status_code in {408, 429} or (isinstance(status_code, int) and 500 <= status_code <= 599):
+            if status_code in {408, 429} or (
+                isinstance(status_code, int) and 500 <= status_code <= 599
+            ):
                 return True
     return False
 
@@ -80,7 +82,9 @@ def claim_jobs(*, batch_size: int = 10) -> list[BackgroundJob]:
             available_at__lte=now,
         ).order_by("available_at", "created_at")
         if connection.features.has_select_for_update:
-            queryset = queryset.select_for_update(skip_locked=connection.features.has_select_for_update_skip_locked)
+            queryset = queryset.select_for_update(
+                skip_locked=connection.features.has_select_for_update_skip_locked
+            )
         jobs = list(queryset[: max(1, batch_size)])
         for job in jobs:
             job.status = BackgroundJob.Status.PROCESSING
@@ -144,7 +148,9 @@ def _fail(job: BackgroundJob, exc: BaseException) -> None:
     elif explicitly_permanent:
         status = BackgroundJob.Status.FAILED
         available_at = job.available_at
-    elif explicitly_uncertain or (job.provider_call_started_at is not None and not job.can_retry_after_claim):
+    elif explicitly_uncertain or (
+        job.provider_call_started_at is not None and not job.can_retry_after_claim
+    ):
         status = BackgroundJob.Status.UNCERTAIN
         available_at = job.available_at
     elif _is_known_transient(exc) and job.attempts < job.max_attempts:
@@ -161,7 +167,9 @@ def _fail(job: BackgroundJob, exc: BaseException) -> None:
     ).update(
         status=status,
         available_at=available_at,
-        completed_at=now if status in {BackgroundJob.Status.FAILED, BackgroundJob.Status.UNCERTAIN} else None,
+        completed_at=now
+        if status in {BackgroundJob.Status.FAILED, BackgroundJob.Status.UNCERTAIN}
+        else None,
         claim_token=None,
         claimed_at=None,
         last_error=error,

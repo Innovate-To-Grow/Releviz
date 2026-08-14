@@ -23,7 +23,9 @@ class MaterialWebAdminEnhancerTests(TestCase):
     def test_admin_base_loads_material_web_enhancer(self):
         config = SiteMaintenanceControl.objects.create(is_maintenance=False)
 
-        response = self.client.get(reverse("admin:core_sitemaintenancecontrol_change", args=[config.pk]))
+        response = self.client.get(
+            reverse("admin:core_sitemaintenancecontrol_change", args=[config.pk])
+        )
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "admin/js/material-web-text-field.js")
@@ -32,7 +34,9 @@ class MaterialWebAdminEnhancerTests(TestCase):
     def test_admin_base_loads_post_core_checkbox_overrides(self):
         config = SiteMaintenanceControl.objects.create(is_maintenance=False)
 
-        response = self.client.get(reverse("admin:core_sitemaintenancecontrol_change", args=[config.pk]))
+        response = self.client.get(
+            reverse("admin:core_sitemaintenancecontrol_change", args=[config.pk])
+        )
         html = response.content.decode()
 
         self.assertEqual(response.status_code, 200)
@@ -65,7 +69,9 @@ class MaterialWebAdminEnhancerTests(TestCase):
         self.assertIn('field.tagName === "SELECT" && field.multiple', source)
 
     def test_stylesheet_code_editor_page_keeps_code_textarea_available(self):
-        stylesheet = StyleSheet.objects.create(name="admin-test", display_name="Admin Test", css="body { color: red; }")
+        stylesheet = StyleSheet.objects.create(
+            name="admin-test", display_name="Admin Test", css="body { color: red; }"
+        )
 
         response = self.client.get(reverse("admin:cms_stylesheet_change", args=[stylesheet.pk]))
 

@@ -144,7 +144,9 @@ class DataExportMixinTest(TestCase):
     def test_action_tuple_uses_unbound_method(self):
         actions = self.admin.get_actions(self.request)
         func = actions["export_data"][0]
-        self.assertFalse(hasattr(func, "__self__"), "Action func should be unbound to avoid double-self bug")
+        self.assertFalse(
+            hasattr(func, "__self__"), "Action func should be unbound to avoid double-self bug"
+        )
 
     # -- backward compat alias -------------------------------------------------
 
@@ -240,7 +242,9 @@ class DataExportMixinTest(TestCase):
                 "_selected_action": [str(article.pk)],
             },
         )
-        request.user = User.objects.create_user(email="tmpl@example.com", password="StrongPass123!", is_staff=True)
+        request.user = User.objects.create_user(
+            email="tmpl@example.com", password="StrongPass123!", is_staff=True
+        )
         response = self.admin.export_data(request, qs)
 
         self.assertEqual(response.template_name, "admin/core/export_columns.html")
@@ -402,7 +406,9 @@ class DataExportMixinTest(TestCase):
         _make_article(source_guid="json-fname-1")
         qs = NewsArticle.objects.all()
 
-        request = _confirmed_post(self.factory, {"export_format": "json", "export_filename": "my_report"})
+        request = _confirmed_post(
+            self.factory, {"export_format": "json", "export_filename": "my_report"}
+        )
         response = self.admin.export_data(request, qs)
 
         self.assertIn("my_report_", response["Content-Disposition"])

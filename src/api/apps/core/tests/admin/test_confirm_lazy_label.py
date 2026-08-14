@@ -22,7 +22,9 @@ from apps.event.tests.helpers import make_member
 
 
 class _LazyLabelForm(forms.Form):
-    admin_apps = forms.MultipleChoiceField(label=_("Admin apps"), required=False, choices=[("cms", "cms")])
+    admin_apps = forms.MultipleChoiceField(
+        label=_("Admin apps"), required=False, choices=[("cms", "cms")]
+    )
 
 
 class ConfirmDiffLazyLabelTest(TestCase):

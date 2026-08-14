@@ -1,18 +1,3 @@
-[tool.ruff]
-target-version = "py312"
-line-length = 100
-src = ["."]
-
-[tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "DJ"]
-ignore = ["DJ001"]
-
-[tool.ruff.lint.per-file-ignores]
-"apps/**/migrations/*.py" = ["E501"]
-
-[tool.ruff.format]
-quote-style = "double"
-
 [tool.coverage.run]
 branch = true
 source = ["apps", "config"]

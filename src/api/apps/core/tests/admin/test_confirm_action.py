@@ -15,14 +15,22 @@ ACTION_SESSION_KEY = "_admin_pending_action_projects_semester"
 
 
 def _make_superuser(email="admin@example.com"):
-    user = User.objects.create_superuser(password="testpass123", first_name="Admin", last_name="User")
-    ContactEmail.objects.create(member=user, email_address=email, email_type="primary", verified=True)
+    user = User.objects.create_superuser(
+        password="testpass123", first_name="Admin", last_name="User"
+    )
+    ContactEmail.objects.create(
+        member=user, email_address=email, email_type="primary", verified=True
+    )
     return user
 
 
 def _make_staff(email="staff@example.com"):
-    user = User.objects.create_user(password="testpass123", is_staff=True, first_name="Staff", last_name="Member")
-    ContactEmail.objects.create(member=user, email_address=email, email_type="primary", verified=True)
+    user = User.objects.create_user(
+        password="testpass123", is_staff=True, first_name="Staff", last_name="Member"
+    )
+    ContactEmail.objects.create(
+        member=user, email_address=email, email_type="primary", verified=True
+    )
     return user
 
 
@@ -88,7 +96,9 @@ class ConfirmActionTest(TestCase):
         self._action_post("publish_selected", [semester.pk])
 
         confirm_url = reverse("admin:projects_semester_confirm_action")
-        response = self.client.post(confirm_url, _confirm_action_data(self.client, "wrong word"), follow=True)
+        response = self.client.post(
+            confirm_url, _confirm_action_data(self.client, "wrong word"), follow=True
+        )
 
         self.assertContains(response, "Please type")
         semester.refresh_from_db()

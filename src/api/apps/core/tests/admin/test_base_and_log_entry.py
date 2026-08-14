@@ -70,7 +70,10 @@ class ReadOnlyModelAdminTest(TestCase):
         # the `del actions["delete_selected"]` branch executes.
         with patch(
             "apps.core.admin.common.base.BaseModelAdmin.get_actions",
-            return_value={"delete_selected": ("f", "delete_selected", "Delete"), "export_data": ("g", "x", "y")},
+            return_value={
+                "delete_selected": ("f", "delete_selected", "Delete"),
+                "export_data": ("g", "x", "y"),
+            },
         ):
             actions = self.admin.get_actions(request)
         self.assertNotIn("delete_selected", actions)

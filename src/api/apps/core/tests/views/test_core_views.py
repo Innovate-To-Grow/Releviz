@@ -51,9 +51,13 @@ class SitemapXmlTest(TestCase):
         )
 
     def test_excludes_unpublished_cms_pages(self):
-        CMSPage.objects.create(slug="published", route="/published", title="Published", status="published")
+        CMSPage.objects.create(
+            slug="published", route="/published", title="Published", status="published"
+        )
         CMSPage.objects.create(slug="draft", route="/draft", title="Draft", status="draft")
-        CMSPage.objects.create(slug="archived", route="/archived", title="Archived", status="archived")
+        CMSPage.objects.create(
+            slug="archived", route="/archived", title="Archived", status="archived"
+        )
 
         response = self.client.get("/sitemap.xml")
 
@@ -62,7 +66,9 @@ class SitemapXmlTest(TestCase):
     def test_uses_latest_block_update_for_lastmod(self):
         old = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
         new = datetime(2026, 1, 2, 15, 30, 45, tzinfo=UTC)
-        page = CMSPage.objects.create(slug="content", route="/content", title="Content", status="published")
+        page = CMSPage.objects.create(
+            slug="content", route="/content", title="Content", status="published"
+        )
         block = CMSBlock.objects.create(page=page, block_type="hero", sort_order=0, data={})
         CMSPage.objects.filter(pk=page.pk).update(published_at=old, updated_at=old)
         CMSBlock.objects.filter(pk=block.pk).update(updated_at=new)

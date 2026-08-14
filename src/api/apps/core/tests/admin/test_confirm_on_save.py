@@ -14,14 +14,22 @@ CHANGE_SESSION_KEY = "_admin_pending_change_cms_cmsembedallowedhost"
 
 
 def _make_superuser(email="admin@example.com"):
-    user = User.objects.create_superuser(password="testpass123", first_name="Admin", last_name="User")
-    ContactEmail.objects.create(member=user, email_address=email, email_type="primary", verified=True)
+    user = User.objects.create_superuser(
+        password="testpass123", first_name="Admin", last_name="User"
+    )
+    ContactEmail.objects.create(
+        member=user, email_address=email, email_type="primary", verified=True
+    )
     return user
 
 
 def _make_staff(email="staff@example.com"):
-    user = User.objects.create_user(password="testpass123", is_staff=True, first_name="Staff", last_name="Member")
-    ContactEmail.objects.create(member=user, email_address=email, email_type="primary", verified=True)
+    user = User.objects.create_user(
+        password="testpass123", is_staff=True, first_name="Staff", last_name="Member"
+    )
+    ContactEmail.objects.create(
+        member=user, email_address=email, email_type="primary", verified=True
+    )
     return user
 
 
@@ -109,7 +117,9 @@ class ConfirmOnSaveAddTest(TestCase):
         self.client.post(url, {"hostname": "wrong-word.com", "is_active": True})
 
         confirm_url = reverse("admin:cms_cmsembedallowedhost_confirm_change")
-        response = self.client.post(confirm_url, _confirm_change_data(self.client, "WRONG"), follow=True)
+        response = self.client.post(
+            confirm_url, _confirm_change_data(self.client, "WRONG"), follow=True
+        )
 
         self.assertContains(response, "Please type")
         self.assertFalse(CMSEmbedAllowedHost.objects.filter(hostname="wrong-word.com").exists())
@@ -121,7 +131,9 @@ class ConfirmOnSaveAddTest(TestCase):
         confirm_url = reverse("admin:cms_cmsembedallowedhost_confirm_change")
         response = self.client.post(
             confirm_url,
-            _confirm_change_data(self.client, "cms embed allowed host", token="not-the-session-token"),
+            _confirm_change_data(
+                self.client, "cms embed allowed host", token="not-the-session-token"
+            ),
             follow=True,
         )
 
@@ -290,7 +302,9 @@ class ConfirmOnSaveSkipTest(TestCase):
 
     def test_popup_mode_skips_confirmation(self):
         url = reverse("admin:cms_cmsembedallowedhost_add")
-        response = self.client.post(url, {"hostname": "popup.com", "is_active": True, "_popup": "1"})
+        response = self.client.post(
+            url, {"hostname": "popup.com", "is_active": True, "_popup": "1"}
+        )
 
         self.assertNotIn("confirm-change", response.url if response.status_code == 302 else "")
         self.assertTrue(CMSEmbedAllowedHost.objects.filter(hostname="popup.com").exists())
@@ -304,7 +318,7 @@ class ConfirmOnSaveSkipTest(TestCase):
     @override_settings(ADMIN_REQUIRE_CONFIRMATION=False)
     def test_disabled_setting_saves_directly(self):
         url = reverse("admin:cms_cmsembedallowedhost_add")
-        response = self.client.post(url, {"hostname": "direct-save.com", "is_active": True})
+        self.client.post(url, {"hostname": "direct-save.com", "is_active": True})
 
         self.assertTrue(CMSEmbedAllowedHost.objects.filter(hostname="direct-save.com").exists())
 

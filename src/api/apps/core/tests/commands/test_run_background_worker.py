@@ -46,7 +46,10 @@ class RunBackgroundWorkerCommandTests(SimpleTestCase):
 
         purge.assert_called_once_with()
         self.assertEqual(
-            logs.output, ["INFO:apps.core.management.commands.run_background_worker:Purged retired RSA keypair rows"]
+            logs.output,
+            [
+                "INFO:apps.core.management.commands.run_background_worker:Purged retired RSA keypair rows"
+            ],
         )
 
     @patch.object(run_background_worker, "publish_worker_metrics")

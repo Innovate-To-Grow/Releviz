@@ -7,7 +7,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
 AUDITED_SUFFIXES = {
     ".css",
@@ -90,9 +89,7 @@ def main() -> int:
         for file in REFERENCE_FILES
         if (ROOT / file).exists()
     )
-    missing = [
-        path for path in tracked if should_audit(path) and path not in references
-    ]
+    missing = [path for path in tracked if should_audit(path) and path not in references]
     if missing:
         print(
             "Repository files are not covered by the resource audit manifest:",

@@ -1,7 +1,11 @@
 const isAmplifyStaticExport = process.env.AMPLIFY_STATIC_EXPORT === "1";
 const defaultApiBase =
-  process.env.NODE_ENV === "production" ? "https://api.releviz.com" : "http://localhost:4000";
-const apiBase = (process.env.NEXT_PUBLIC_API_BASE_URL || defaultApiBase).replace(/\/+$/, "");
+  process.env.NODE_ENV === "production"
+    ? "https://api.releviz.com"
+    : "http://localhost:4000";
+const apiBase = (
+  process.env.NEXT_PUBLIC_API_BASE_URL || defaultApiBase
+).replace(/\/+$/, "");
 const apiOrigin = new URL(apiBase).origin;
 
 const serverConfig = {

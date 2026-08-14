@@ -43,7 +43,9 @@ class SiteMaintenanceControlModelTest(TestCase):
         self.assertTrue(config.check_bypass_password("secret123"))
 
     def test_check_bypass_password_supports_legacy_plaintext_values(self):
-        SiteMaintenanceControl.objects.create(pk=1, is_maintenance=True, bypass_password="secret123")
+        SiteMaintenanceControl.objects.create(
+            pk=1, is_maintenance=True, bypass_password="secret123"
+        )
         SiteMaintenanceControl.objects.filter(pk=1).update(bypass_password="legacy-secret")
 
         config = SiteMaintenanceControl.load()

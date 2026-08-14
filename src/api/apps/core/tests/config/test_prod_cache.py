@@ -18,6 +18,7 @@ PROD_ENV = {
 
 def reload_prod_settings():
     import config.settings.components.production as production_settings
+
     import config.settings.production as prod_settings
 
     importlib.reload(production_settings)
@@ -33,8 +34,12 @@ class ProductionCacheSettingsTests(SimpleTestCase):
         ):
             prod_settings = reload_prod_settings()
 
-        self.assertEqual(prod_settings.CACHES["default"]["BACKEND"], "django_redis.cache.RedisCache")
-        self.assertEqual(prod_settings.CACHES["default"]["LOCATION"], "redis://cache.example.com:6379/0")
+        self.assertEqual(
+            prod_settings.CACHES["default"]["BACKEND"], "django_redis.cache.RedisCache"
+        )
+        self.assertEqual(
+            prod_settings.CACHES["default"]["LOCATION"], "redis://cache.example.com:6379/0"
+        )
 
     def test_prod_uses_file_based_cache_without_redis(self):
         cache_dir = "/tmp/i2g-test-cache"
@@ -46,14 +51,17 @@ class ProductionCacheSettingsTests(SimpleTestCase):
             prod_settings = reload_prod_settings()
 
         self.assertEqual(
-            prod_settings.CACHES["default"]["BACKEND"], "django.core.cache.backends.filebased.FileBasedCache"
+            prod_settings.CACHES["default"]["BACKEND"],
+            "django.core.cache.backends.filebased.FileBasedCache",
         )
         self.assertEqual(prod_settings.CACHES["default"]["LOCATION"], cache_dir)
 
     def test_prod_requires_secret_key(self):
         env = {key: value for key, value in PROD_ENV.items() if key != "DJANGO_SECRET_KEY"}
         with patch.dict("os.environ", env, clear=True):
-            with self.assertRaisesMessage(ImproperlyConfigured, "DJANGO_SECRET_KEY must be set in production."):
+            with self.assertRaisesMessage(
+                ImproperlyConfigured, "DJANGO_SECRET_KEY must be set in production."
+            ):
                 reload_prod_settings()
 
     def test_prod_staticfiles_overwrite_release_assets(self):
@@ -67,7 +75,9 @@ class ProductionCacheSettingsTests(SimpleTestCase):
         with patch.dict("os.environ", PROD_ENV, clear=True):
             prod_settings = reload_prod_settings()
 
-        self.assertIn("apps.core.middleware.ContentSecurityPolicyMiddleware", prod_settings.MIDDLEWARE)
+        self.assertIn(
+            "apps.core.middleware.ContentSecurityPolicyMiddleware", prod_settings.MIDDLEWARE
+        )
 
     def test_prod_csp_enforcement_is_an_explicit_toggle(self):
         with patch.dict(
@@ -82,8 +92,12 @@ class ProductionCacheSettingsTests(SimpleTestCase):
 
         self.assertFalse(prod_settings.CSP_REPORT_ONLY)
         self.assertEqual(prod_settings.CSP_SCRIPT_SOURCES, ("'self'", "https://cdn.jsdelivr.net"))
-        self.assertEqual(prod_settings.CSP_STYLE_SOURCES, ("'self'", "https://fonts.googleapis.com"))
-        self.assertEqual(prod_settings.CSP_FONT_SOURCES, ("'self'", "data:", "https://fonts.gstatic.com"))
+        self.assertEqual(
+            prod_settings.CSP_STYLE_SOURCES, ("'self'", "https://fonts.googleapis.com")
+        )
+        self.assertEqual(
+            prod_settings.CSP_FONT_SOURCES, ("'self'", "data:", "https://fonts.gstatic.com")
+        )
         self.assertEqual(
             prod_settings.CSP_CONNECT_SOURCES,
             ("'self'", "https://fonts.googleapis.com", "https://fonts.gstatic.com"),

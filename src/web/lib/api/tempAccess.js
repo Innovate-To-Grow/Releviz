@@ -18,7 +18,10 @@ async function tempAccessFetch(path, options = {}) {
       payload = null;
     }
     const error = new Error(
-      payload?.error || payload?.detail || (await extractError(response)) || "Request failed"
+      payload?.error ||
+        payload?.detail ||
+        (await extractError(response)) ||
+        "Request failed",
     );
     error.status = response.status;
     error.participant = payload?.participant || null;
@@ -45,14 +48,19 @@ export function verifyTempAccess({ code, invitationToken, verificationCode }) {
 }
 
 export function fetchTempAccessSession(code) {
-  return tempAccessFetch(`/events/temp-access/session?code=${encodeURIComponent(code)}`);
+  return tempAccessFetch(
+    `/events/temp-access/session?code=${encodeURIComponent(code)}`,
+  );
 }
 
 export function updateTempAccessParticipant(code, data) {
-  return tempAccessFetch(`/events/temp-access/participant?code=${encodeURIComponent(code)}`, {
-    method: "PUT",
-    body: JSON.stringify(data),
-  });
+  return tempAccessFetch(
+    `/events/temp-access/participant?code=${encodeURIComponent(code)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(data),
+    },
+  );
 }
 
 export function logoutTempAccess(code) {

@@ -171,7 +171,9 @@ class BackgroundJobQueueTests(TestCase):
     )
     @patch("apps.core.services.background_jobs.worker.get_handler")
     def test_failed_state_mirror_does_not_escape_job_boundary(self, get_handler, _notify):
-        get_handler.return_value = lambda _job: (_ for _ in ()).throw(TransientJobError("temporary"))
+        get_handler.return_value = lambda _job: (_ for _ in ()).throw(
+            TransientJobError("temporary")
+        )
         job, _created = enqueue_job(kind="test.echo", dedupe_key="failed-mirror", payload={})
 
         self.assertFalse(process_claimed_job(claim_jobs()[0]))
@@ -361,7 +363,9 @@ class BackgroundJobQueueTests(TestCase):
     def test_metrics_report_queue_and_terminal_counts(self):
         enqueue_job(kind="test.echo", dedupe_key="pending", payload={})
         failed, _created = enqueue_job(kind="test.echo", dedupe_key="failed", payload={})
-        uncertain, _created = enqueue_job(kind="test.echo", dedupe_key="uncertain-metric", payload={})
+        uncertain, _created = enqueue_job(
+            kind="test.echo", dedupe_key="uncertain-metric", payload={}
+        )
         BackgroundJob.objects.filter(pk=failed.pk).update(status=BackgroundJob.Status.FAILED)
         BackgroundJob.objects.filter(pk=uncertain.pk).update(status=BackgroundJob.Status.UNCERTAIN)
 

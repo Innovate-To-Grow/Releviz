@@ -26,7 +26,7 @@ export default function RecoverAccountPage() {
       await requestPasswordResetCode({ email });
       setStep("reset");
       setStatus(
-        "If an account exists for that email, a reset code has been sent. Check your inbox."
+        "If an account exists for that email, a reset code has been sent. Check your inbox.",
       );
     } catch (err) {
       setError(err.message || "Unable to request a reset code.");
@@ -65,7 +65,10 @@ export default function RecoverAccountPage() {
 
   return (
     <main className="auth-page">
-      <form className="auth-panel" onSubmit={step === "request" ? requestCode : resetPassword}>
+      <form
+        className="auth-panel"
+        onSubmit={step === "request" ? requestCode : resetPassword}
+      >
         <BrandHomeLink
           className="auth-brand-link"
           logoClassName="brand-logo brand-logo--auth"
@@ -74,8 +77,8 @@ export default function RecoverAccountPage() {
         <div>
           <h1>Recover your account</h1>
           <p>
-            Request a one-time code, then choose a new password. Resetting your password signs out
-            every device.
+            Request a one-time code, then choose a new password. Resetting your
+            password signs out every device.
           </p>
         </div>
         {error && (
@@ -101,7 +104,11 @@ export default function RecoverAccountPage() {
         </label>
         {step === "reset" && (
           <>
-            <button type="button" className="auth-inline-link" onClick={useDifferentEmail}>
+            <button
+              type="button"
+              className="auth-inline-link"
+              onClick={useDifferentEmail}
+            >
               Use a different email
             </button>
             <label>

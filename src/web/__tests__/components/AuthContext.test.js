@@ -6,8 +6,15 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 
-import AuthContext, { AuthProvider, useAuth } from "@/components/auth/AuthContext";
-import { clearAuthSession, readAuthSession, writeAuthSession } from "@/lib/api/config";
+import AuthContext, {
+  AuthProvider,
+  useAuth,
+} from "@/components/auth/AuthContext";
+import {
+  clearAuthSession,
+  readAuthSession,
+  writeAuthSession,
+} from "@/lib/api/config";
 import {
   changePasswordApi,
   deleteAccountApi,
@@ -62,24 +69,44 @@ function Probe() {
     <div>
       <span data-testid="loading">{String(auth.loading)}</span>
       <span data-testid="user">{auth.user?.displayName || "none"}</span>
-      <button onClick={() => auth.login({ email: "a", password: "p" })}>login</button>
-      <button onClick={() => auth.requestEmailLoginCode({ email: "a" })}>request-code</button>
-      <button onClick={() => auth.verifyEmailLoginCode({ email: "a", code: "1" })}>
+      <button onClick={() => auth.login({ email: "a", password: "p" })}>
+        login
+      </button>
+      <button onClick={() => auth.requestEmailLoginCode({ email: "a" })}>
+        request-code
+      </button>
+      <button
+        onClick={() => auth.verifyEmailLoginCode({ email: "a", code: "1" })}
+      >
         verify-login
       </button>
-      <button onClick={() => auth.requestEmailAuthCode({ email: "a" })}>request-auth-code</button>
-      <button onClick={() => auth.verifyEmailAuthCode({ email: "a", code: "1" })}>
+      <button onClick={() => auth.requestEmailAuthCode({ email: "a" })}>
+        request-auth-code
+      </button>
+      <button
+        onClick={() => auth.verifyEmailAuthCode({ email: "a", code: "1" })}
+      >
         verify-auth
       </button>
       <button onClick={() => auth.signup({ email: "a" })}>signup</button>
-      <button onClick={() => auth.verifySignup({ email: "a", code: "1" })}>verify</button>
-      <button onClick={() => auth.updateProfile({ first_name: "Ada" })}>update</button>
+      <button onClick={() => auth.verifySignup({ email: "a", code: "1" })}>
+        verify
+      </button>
+      <button onClick={() => auth.updateProfile({ first_name: "Ada" })}>
+        update
+      </button>
       <button onClick={() => auth.refreshUser()}>refresh</button>
-      <button onClick={async () => (window.__sessions = await auth.listSessions())}>
+      <button
+        onClick={async () => (window.__sessions = await auth.listSessions())}
+      >
         sessions
       </button>
-      <button onClick={() => auth.revokeSession("other-session")}>revoke-session</button>
-      <button onClick={() => auth.revokeSession("current-session")}>revoke-current</button>
+      <button onClick={() => auth.revokeSession("other-session")}>
+        revoke-session
+      </button>
+      <button onClick={() => auth.revokeSession("current-session")}>
+        revoke-current
+      </button>
       <button onClick={() => auth.logoutAll()}>logout-all</button>
       <button
         onClick={() =>
@@ -92,11 +119,17 @@ function Probe() {
       >
         change-password
       </button>
-      <button onClick={() => auth.deleteAccount({ password: "old", confirmation: "DELETE" })}>
+      <button
+        onClick={() =>
+          auth.deleteAccount({ password: "old", confirmation: "DELETE" })
+        }
+      >
         delete-account
       </button>
       <button onClick={() => auth.logout()}>logout</button>
-      <button onClick={async () => (window.__token = await auth.getToken())}>token</button>
+      <button onClick={async () => (window.__token = await auth.getToken())}>
+        token
+      </button>
     </div>
   );
 }
@@ -118,7 +151,9 @@ describe("AuthContext", () => {
       useAuth();
       return null;
     }
-    expect(() => render(<BadProbe />)).toThrow("useAuth must be used within AuthProvider");
+    expect(() => render(<BadProbe />)).toThrow(
+      "useAuth must be used within AuthProvider",
+    );
   });
 
   test("hydrates a session from the refresh cookie without Web Storage", async () => {
@@ -127,14 +162,16 @@ describe("AuthContext", () => {
       jsonResponse({
         access: "cookie-access",
         user: { displayName: "Cookie User" },
-      })
+      }),
     );
     render(
       <AuthProvider>
         <Probe />
-      </AuthProvider>
+      </AuthProvider>,
     );
-    await waitFor(() => expect(screen.getByTestId("loading")).toHaveTextContent("false"));
+    await waitFor(() =>
+      expect(screen.getByTestId("loading")).toHaveTextContent("false"),
+    );
     expect(screen.getByTestId("user")).toHaveTextContent("Cookie User");
     expect(readAuthSession().access).toBe("cookie-access");
     expect(localStorage.getItem("releviz.auth")).toBeNull();
@@ -146,24 +183,34 @@ describe("AuthContext", () => {
     render(
       <AuthProvider>
         <Probe />
-      </AuthProvider>
+      </AuthProvider>,
     );
-    await waitFor(() => expect(screen.getByTestId("loading")).toHaveTextContent("false"));
+    await waitFor(() =>
+      expect(screen.getByTestId("loading")).toHaveTextContent("false"),
+    );
     expect(screen.getByTestId("user")).toHaveTextContent("none");
     expect(readAuthSession()).toBeNull();
   });
 
   test("auth actions update session state and redirect on logout", async () => {
     loginWithPassword.mockImplementation(async () => {
-      writeAuthSession({ access: "login-token", user: { displayName: "Login User" } });
+      writeAuthSession({
+        access: "login-token",
+        user: { displayName: "Login User" },
+      });
       return { ok: true };
     });
     requestLoginCode.mockResolvedValue({ message: "sent" });
     verifyLoginCode.mockImplementation(async () => {
-      writeAuthSession({ access: "code-token", user: { displayName: "Code User" } });
+      writeAuthSession({
+        access: "code-token",
+        user: { displayName: "Code User" },
+      });
       return { ok: true };
     });
-    requestUnifiedEmailAuthCode.mockResolvedValue({ message: "unified code sent" });
+    requestUnifiedEmailAuthCode.mockResolvedValue({
+      message: "unified code sent",
+    });
     verifyUnifiedEmailAuthCode.mockImplementation(async () => {
       writeAuthSession({
         access: "unified-token",
@@ -175,7 +222,10 @@ describe("AuthContext", () => {
     });
     startRegistration.mockResolvedValue({ message: "started" });
     verifyRegistration.mockImplementation(async () => {
-      writeAuthSession({ access: "verify-token", user: { displayName: "Verified User" } });
+      writeAuthSession({
+        access: "verify-token",
+        user: { displayName: "Verified User" },
+      });
       return { ok: true };
     });
     updateProfileApi.mockResolvedValue({ displayName: "Updated User" });
@@ -187,9 +237,11 @@ describe("AuthContext", () => {
     render(
       <AuthProvider>
         <Probe />
-      </AuthProvider>
+      </AuthProvider>,
     );
-    await waitFor(() => expect(screen.getByTestId("loading")).toHaveTextContent("false"));
+    await waitFor(() =>
+      expect(screen.getByTestId("loading")).toHaveTextContent("false"),
+    );
 
     await userEvent.click(screen.getByText("login"));
     expect(screen.getByTestId("user")).toHaveTextContent("Login User");
@@ -208,7 +260,9 @@ describe("AuthContext", () => {
     await userEvent.click(screen.getByText("verify"));
     expect(screen.getByTestId("user")).toHaveTextContent("Verified User");
     await userEvent.click(screen.getByText("update"));
-    await waitFor(() => expect(screen.getByTestId("user")).toHaveTextContent("Updated User"));
+    await waitFor(() =>
+      expect(screen.getByTestId("user")).toHaveTextContent("Updated User"),
+    );
     await userEvent.click(screen.getByText("refresh"));
     expect(fetchProfile).toHaveBeenCalled();
     await userEvent.click(screen.getByText("token"));
@@ -221,11 +275,15 @@ describe("AuthContext", () => {
     render(
       <AuthProvider>
         <Probe />
-      </AuthProvider>
+      </AuthProvider>,
     );
-    await waitFor(() => expect(screen.getByTestId("loading")).toHaveTextContent("false"));
+    await waitFor(() =>
+      expect(screen.getByTestId("loading")).toHaveTextContent("false"),
+    );
     writeAuthSession({ access: "a", user: { displayName: "External" } });
-    await waitFor(() => expect(screen.getByTestId("user")).toHaveTextContent("External"));
+    await waitFor(() =>
+      expect(screen.getByTestId("user")).toHaveTextContent("External"),
+    );
   });
 
   test("lists and revokes individual or all sessions", async () => {
@@ -237,24 +295,34 @@ describe("AuthContext", () => {
     render(
       <AuthProvider>
         <Probe />
-      </AuthProvider>
+      </AuthProvider>,
     );
-    await waitFor(() => expect(screen.getByTestId("loading")).toHaveTextContent("false"));
+    await waitFor(() =>
+      expect(screen.getByTestId("loading")).toHaveTextContent("false"),
+    );
     writeAuthSession({ access: "a", user: { displayName: "Session User" } });
 
     await userEvent.click(screen.getByText("sessions"));
-    await waitFor(() => expect(window.__sessions).toEqual([{ id: "other-session" }]));
+    await waitFor(() =>
+      expect(window.__sessions).toEqual([{ id: "other-session" }]),
+    );
     await userEvent.click(screen.getByText("revoke-session"));
-    expect(revokeAuthSessions).toHaveBeenCalledWith({ sessionId: "other-session" });
+    expect(revokeAuthSessions).toHaveBeenCalledWith({
+      sessionId: "other-session",
+    });
     expect(screen.getByTestId("user")).toHaveTextContent("Session User");
 
     await userEvent.click(screen.getByText("revoke-current"));
-    await waitFor(() => expect(screen.getByTestId("user")).toHaveTextContent("none"));
+    await waitFor(() =>
+      expect(screen.getByTestId("user")).toHaveTextContent("none"),
+    );
 
     writeAuthSession({ access: "b", user: { displayName: "Again" } });
     await userEvent.click(screen.getByText("logout-all"));
     expect(revokeAuthSessions).toHaveBeenCalledWith({ all: true });
-    await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/login?status=signed-out-all"));
+    await waitFor(() =>
+      expect(navigateTo).toHaveBeenCalledWith("/login?status=signed-out-all"),
+    );
   });
 
   test("changes passwords and deletes accounts through security actions", async () => {
@@ -264,9 +332,11 @@ describe("AuthContext", () => {
     render(
       <AuthProvider>
         <Probe />
-      </AuthProvider>
+      </AuthProvider>,
     );
-    await waitFor(() => expect(screen.getByTestId("loading")).toHaveTextContent("false"));
+    await waitFor(() =>
+      expect(screen.getByTestId("loading")).toHaveTextContent("false"),
+    );
     writeAuthSession({ access: "a", user: { displayName: "Account User" } });
 
     await userEvent.click(screen.getByText("change-password"));
@@ -275,7 +345,9 @@ describe("AuthContext", () => {
       newPassword: "new-password",
       newPasswordConfirm: "new-password",
     });
-    await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/login?status=password-changed"));
+    await waitFor(() =>
+      expect(navigateTo).toHaveBeenCalledWith("/login?status=password-changed"),
+    );
     expect(screen.getByTestId("user")).toHaveTextContent("none");
 
     writeAuthSession({ access: "b", user: { displayName: "Again" } });
@@ -284,7 +356,9 @@ describe("AuthContext", () => {
       password: "old",
       confirmation: "DELETE",
     });
-    await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/login?status=account-deleted"));
+    await waitFor(() =>
+      expect(navigateTo).toHaveBeenCalledWith("/login?status=account-deleted"),
+    );
     expect(screen.getByTestId("user")).toHaveTextContent("none");
   });
 
@@ -292,9 +366,11 @@ describe("AuthContext", () => {
     render(
       <AuthProvider>
         <Probe />
-      </AuthProvider>
+      </AuthProvider>,
     );
-    await waitFor(() => expect(screen.getByTestId("loading")).toHaveTextContent("false"));
+    await waitFor(() =>
+      expect(screen.getByTestId("loading")).toHaveTextContent("false"),
+    );
     await userEvent.click(screen.getByText("token"));
     await waitFor(() => expect(window.__token).toBeNull());
   });

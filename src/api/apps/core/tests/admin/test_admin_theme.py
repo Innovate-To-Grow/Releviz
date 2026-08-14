@@ -33,7 +33,9 @@ class AdminThemeRenderingTests(TestCase):
     def test_admin_pages_default_to_persisted_system_theme(self):
         config = SiteMaintenanceControl.objects.create(is_maintenance=False)
 
-        response = self.client.get(reverse("admin:core_sitemaintenancecontrol_change", args=[config.pk]))
+        response = self.client.get(
+            reverse("admin:core_sitemaintenancecontrol_change", args=[config.pk])
+        )
 
         self.assertEqual(response.status_code, 200)
         self.assert_persisted_admin_theme_defaults_to_system(response)

@@ -22,7 +22,7 @@ function zonedParts(instant, formatter) {
     formatter
       .formatToParts(instant)
       .filter((part) => part.type !== "literal")
-      .map((part) => [part.type, Number(part.value)])
+      .map((part) => [part.type, Number(part.value)]),
   );
 }
 
@@ -51,7 +51,7 @@ export function zonedLocalDateTimeToIso(value, timeZone) {
     expected.month - 1,
     expected.day,
     expected.hour,
-    expected.minute
+    expected.minute,
   );
   const normalized = new Date(wallClockUtc);
   if (
@@ -66,17 +66,25 @@ export function zonedLocalDateTimeToIso(value, timeZone) {
 
   const candidates = new Set();
   const formatter = zonedFormatter(timeZone);
-  for (let offsetMinutes = -14 * 60; offsetMinutes <= 14 * 60; offsetMinutes += 15) {
+  for (
+    let offsetMinutes = -14 * 60;
+    offsetMinutes <= 14 * 60;
+    offsetMinutes += 15
+  ) {
     const candidate = new Date(wallClockUtc - offsetMinutes * 60_000);
     if (sameLocalTime(zonedParts(candidate, formatter), expected)) {
       candidates.add(candidate.getTime());
     }
   }
   if (candidates.size === 0) {
-    throw new Error("That local time does not exist because of a daylight-saving change.");
+    throw new Error(
+      "That local time does not exist because of a daylight-saving change.",
+    );
   }
   if (candidates.size > 1) {
-    throw new Error("That local time is ambiguous because of a daylight-saving change.");
+    throw new Error(
+      "That local time is ambiguous because of a daylight-saving change.",
+    );
   }
   return new Date([...candidates][0]).toISOString();
 }
@@ -87,6 +95,6 @@ export function formatIsoForDateTimeLocal(value, timeZone) {
   const parts = zonedParts(instant, zonedFormatter(timeZone));
   const pad = (number) => String(number).padStart(2, "0");
   return `${parts.year}-${pad(parts.month)}-${pad(parts.day)}T${pad(parts.hour)}:${pad(
-    parts.minute
+    parts.minute,
   )}`;
 }

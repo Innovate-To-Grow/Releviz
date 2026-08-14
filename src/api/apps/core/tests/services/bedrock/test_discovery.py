@@ -111,8 +111,13 @@ class FetchModelsFromAwsTest(SimpleTestCase):
     def test_empty_when_no_providers(self):
         with (
             patch("apps.core.services.bedrock.models.catalog.get_management_client"),
-            patch("apps.core.services.bedrock.models.catalog.fetch_inference_profiles", return_value={}),
-            patch("apps.core.services.bedrock.models.catalog.fetch_foundation_models", return_value={}),
+            patch(
+                "apps.core.services.bedrock.models.catalog.fetch_inference_profiles",
+                return_value={},
+            ),
+            patch(
+                "apps.core.services.bedrock.models.catalog.fetch_foundation_models", return_value={}
+            ),
         ):
             self.assertEqual(fetch_models_from_aws(), [])
 

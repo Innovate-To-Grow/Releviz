@@ -34,11 +34,16 @@ class ContentSecurityPolicyMiddleware:
         # to two unavoidable styles from the upstream admin theme.
         request.csp_nonce = secrets.token_urlsafe(24)
         response = self.get_response(request)
-        if "Content-Security-Policy" in response or "Content-Security-Policy-Report-Only" in response:
+        if (
+            "Content-Security-Policy" in response
+            or "Content-Security-Policy-Report-Only" in response
+        ):
             return response
 
         report_only = getattr(settings, "CSP_REPORT_ONLY", True)
-        header_name = "Content-Security-Policy-Report-Only" if report_only else "Content-Security-Policy"
+        header_name = (
+            "Content-Security-Policy-Report-Only" if report_only else "Content-Security-Policy"
+        )
         response[header_name] = self._build_policy(
             request.csp_nonce,
             allow_framing=bool(getattr(response, "xframe_options_exempt", False)),
@@ -48,7 +53,11 @@ class ContentSecurityPolicyMiddleware:
 
     @staticmethod
     def _configured_sources(setting_name: str, default: tuple[str, ...]) -> list[str]:
-        return [str(source).strip() for source in getattr(settings, setting_name, default) if str(source).strip()]
+        return [
+            str(source).strip()
+            for source in getattr(settings, setting_name, default)
+            if str(source).strip()
+        ]
 
     @staticmethod
     def _url_origin(value: object) -> str | None:

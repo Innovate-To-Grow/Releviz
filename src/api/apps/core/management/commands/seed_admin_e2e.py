@@ -26,14 +26,20 @@ class Command(BaseCommand):
     help = "Create deterministic admin E2E credentials and sample admin data."
 
     def add_arguments(self, parser):
-        parser.add_argument("--yes", action="store_true", help="Confirm that this mutating E2E seed may run.")
+        parser.add_argument(
+            "--yes", action="store_true", help="Confirm that this mutating E2E seed may run."
+        )
         parser.add_argument("--email", default=os.environ.get("ADMIN_E2E_EMAIL", DEFAULT_EMAIL))
-        parser.add_argument("--password", default=os.environ.get("ADMIN_E2E_PASSWORD", DEFAULT_PASSWORD))
+        parser.add_argument(
+            "--password", default=os.environ.get("ADMIN_E2E_PASSWORD", DEFAULT_PASSWORD)
+        )
         parser.add_argument(
             "--nonstaff-email",
             default=os.environ.get("ADMIN_E2E_NONSTAFF_EMAIL", DEFAULT_NONSTAFF_EMAIL),
         )
-        parser.add_argument("--action-email", default=os.environ.get("ADMIN_E2E_ACTION_EMAIL", DEFAULT_ACTION_EMAIL))
+        parser.add_argument(
+            "--action-email", default=os.environ.get("ADMIN_E2E_ACTION_EMAIL", DEFAULT_ACTION_EMAIL)
+        )
         parser.add_argument("--first-name", default=DEFAULT_FIRST_NAME)
         parser.add_argument("--last-name", default=DEFAULT_LAST_NAME)
 
@@ -53,7 +59,9 @@ class Command(BaseCommand):
         last_name = options["last_name"].strip() or DEFAULT_LAST_NAME
 
         if not email or not password or not nonstaff_email or not action_email:
-            raise CommandError("--email, --password, --nonstaff-email, and --action-email are required.")
+            raise CommandError(
+                "--email, --password, --nonstaff-email, and --action-email are required."
+            )
 
         with transaction.atomic():
             member = self._upsert_admin_member(email, password, first_name, last_name)
@@ -73,13 +81,19 @@ class Command(BaseCommand):
 
     def _upsert_admin_member(self, email, password, first_name, last_name):
         Member = get_user_model()
-        contact = ContactEmail.objects.select_related("member").filter(email_address__iexact=email).first()
+        contact = (
+            ContactEmail.objects.select_related("member")
+            .filter(email_address__iexact=email)
+            .first()
+        )
         member = contact.member if contact else None
         candidate = member or Member(first_name=first_name, last_name=last_name)
         try:
             validate_password(password, user=candidate)
         except ValidationError as exc:
-            raise CommandError(f"Refusing weak E2E admin password: {'; '.join(exc.messages)}") from exc
+            raise CommandError(
+                f"Refusing weak E2E admin password: {'; '.join(exc.messages)}"
+            ) from exc
 
         if member is None:
             member = Member.objects.create_user(
@@ -97,7 +111,16 @@ class Command(BaseCommand):
             member.is_staff = True
             member.is_superuser = True
             member.set_password(password)
-            member.save(update_fields=["first_name", "last_name", "is_active", "is_staff", "is_superuser", "password"])
+            member.save(
+                update_fields=[
+                    "first_name",
+                    "last_name",
+                    "is_active",
+                    "is_staff",
+                    "is_superuser",
+                    "password",
+                ]
+            )
 
         ContactEmail.objects.update_or_create(
             email_address=email,
@@ -112,13 +135,19 @@ class Command(BaseCommand):
 
     def _upsert_nonstaff_member(self, email, password):
         Member = get_user_model()
-        contact = ContactEmail.objects.select_related("member").filter(email_address__iexact=email).first()
+        contact = (
+            ContactEmail.objects.select_related("member")
+            .filter(email_address__iexact=email)
+            .first()
+        )
         member = contact.member if contact else None
         candidate = member or Member(first_name="Nonstaff", last_name="E2E")
         try:
             validate_password(password, user=candidate)
         except ValidationError as exc:
-            raise CommandError(f"Refusing weak E2E nonstaff password: {'; '.join(exc.messages)}") from exc
+            raise CommandError(
+                f"Refusing weak E2E nonstaff password: {'; '.join(exc.messages)}"
+            ) from exc
 
         if member is None:
             member = Member.objects.create_user(
@@ -136,7 +165,16 @@ class Command(BaseCommand):
             member.is_staff = False
             member.is_superuser = False
             member.set_password(password)
-            member.save(update_fields=["first_name", "last_name", "is_active", "is_staff", "is_superuser", "password"])
+            member.save(
+                update_fields=[
+                    "first_name",
+                    "last_name",
+                    "is_active",
+                    "is_staff",
+                    "is_superuser",
+                    "password",
+                ]
+            )
 
         ContactEmail.objects.update_or_create(
             email_address=email,

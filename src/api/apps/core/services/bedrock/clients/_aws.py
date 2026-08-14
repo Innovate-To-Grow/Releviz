@@ -9,7 +9,9 @@ def get_aws_config(aws_config=None):
     if aws_config is None:
         aws_config = AWSCredentialConfig.load()
     if not aws_config.is_configured:
-        raise BedrockError("AWS credentials are not configured. Add an active AWS Credential Config first.")
+        raise BedrockError(
+            "AWS credentials are not configured. Add an active AWS Credential Config first."
+        )
     return aws_config
 
 

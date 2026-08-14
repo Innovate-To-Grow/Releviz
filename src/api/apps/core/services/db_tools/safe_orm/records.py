@@ -20,7 +20,10 @@ def get_object(model: type[models.Model], pk: str, *, for_update: bool = False) 
 
 def serialize_model_instance(obj: models.Model, *, write: bool) -> dict:
     fields = safe_model_fields(obj.__class__, write=write)
-    data = {field_output_name(field): json_safe(getattr(obj, field_output_name(field), None)) for field in fields}
+    data = {
+        field_output_name(field): json_safe(getattr(obj, field_output_name(field), None))
+        for field in fields
+    }
     data["__repr__"] = record_repr(obj)
     return data
 
@@ -40,7 +43,9 @@ def check_model_permission(user, model: type[models.Model], action: str) -> None
     if not user or not user.is_authenticated or not user.is_staff:
         raise PermissionDenied("Staff authentication is required.")
     if not user_can_access_app(user, model._meta.app_label):
-        raise PermissionDenied(f"You do not have permission to {action} {model._meta.verbose_name}.")
+        raise PermissionDenied(
+            f"You do not have permission to {action} {model._meta.verbose_name}."
+        )
 
 
 def assert_snapshot_unchanged(before: dict, current: dict, label: str) -> None:
@@ -49,7 +54,9 @@ def assert_snapshot_unchanged(before: dict, current: dict, label: str) -> None:
     # change-detection (defense-in-depth — UPDATE/DELETE snapshots always carry
     # at least __repr__, but the guard should not depend on that).
     if before is not None and json_safe(before) != json_safe(current):
-        raise ActionRequestError(f"{label} changed after this request was proposed. Create a fresh proposal.")
+        raise ActionRequestError(
+            f"{label} changed after this request was proposed. Create a fresh proposal."
+        )
 
 
 __all__ = [

@@ -9,7 +9,9 @@ DEFINITIONS = [
             "team_name": prop("string", "Search by team name (partial match)"),
             "organization": prop("string", "Filter by organization (partial match)"),
             "industry": prop("string", "Filter by industry (partial match)"),
-            "semester": prop("string", "Filter by semester label or season (e.g. Spring 2025, Fall)"),
+            "semester": prop(
+                "string", "Filter by semester label or season (e.g. Spring 2025, Fall)"
+            ),
             "class_code": prop("string", "Filter by class code (partial match)"),
         },
     ),

@@ -74,11 +74,15 @@ class ChangeformObjectMissingTest(TestCase):
         self.admin = _host_admin()
 
     def test_confirmed_save_key_routes_to_executor(self):
-        request = _wire_request(self.factory.post("/admin/", {"_confirmed_save": "1", "hostname": "z.com"}))
+        request = _wire_request(
+            self.factory.post("/admin/", {"_confirmed_save": "1", "hostname": "z.com"})
+        )
         pending = {"token": "keep-this-token", "file_keys": {}}
         request.session[self.admin._session_key()] = pending
         sentinel = object()
-        with patch.object(self.admin, "_execute_confirmed_save", return_value=sentinel) as exec_save:
+        with patch.object(
+            self.admin, "_execute_confirmed_save", return_value=sentinel
+        ) as exec_save:
             result = self.admin.changeform_view(request, object_id=None)
         self.assertIs(result, sentinel)
         exec_save.assert_called_once()
@@ -187,14 +191,18 @@ class ChangeformInlineValidationTest(TestCase):
 
         with (
             patch.object(self.admin, "_create_formsets", return_value=([formset], [object()])),
-            patch.object(self.admin, "get_confirmation_diff", return_value=custom_diff) as diff_hook,
+            patch.object(
+                self.admin, "get_confirmation_diff", return_value=custom_diff
+            ) as diff_hook,
         ):
             response = self.admin.changeform_view(request, object_id=None)
 
         self.assertIsInstance(response, HttpResponseRedirect)
         formset.is_valid.assert_called_once_with()
         diff_hook.assert_called_once()
-        hook_request, hook_obj, hook_form, hook_formsets, hook_action_type = diff_hook.call_args.args
+        hook_request, hook_obj, hook_form, hook_formsets, hook_action_type = (
+            diff_hook.call_args.args
+        )
         self.assertIs(hook_request, request)
         self.assertIsNone(hook_obj)
         self.assertTrue(hook_form.is_valid())
@@ -214,7 +222,9 @@ class ChangeformInlineValidationTest(TestCase):
         normal_change_form = object()
 
         with (
-            patch.object(self.admin, "_create_formsets", return_value=([invalid_formset], [object()])),
+            patch.object(
+                self.admin, "_create_formsets", return_value=([invalid_formset], [object()])
+            ),
             patch.object(self.admin, "get_confirmation_diff") as diff_hook,
             patch(
                 "django.contrib.admin.options.ModelAdmin.changeform_view",
@@ -364,9 +374,13 @@ class DeleteViewBranchesTest(TestCase):
         super_del.assert_called_once()
 
     def test_confirmed_delete_key_routes_to_executor(self):
-        request = _wire_request(self.factory.post("/admin/", {"_confirmed_delete": "1", "post": "yes"}))
+        request = _wire_request(
+            self.factory.post("/admin/", {"_confirmed_delete": "1", "post": "yes"})
+        )
         sentinel = object()
-        with patch.object(self.admin, "_execute_confirmed_delete", return_value=sentinel) as exec_del:
+        with patch.object(
+            self.admin, "_execute_confirmed_delete", return_value=sentinel
+        ) as exec_del:
             result = self.admin.delete_view(request, str(self.host.pk))
         self.assertIs(result, sentinel)
         exec_del.assert_called_once()
@@ -393,7 +407,9 @@ class ExecuteConfirmedTest(TestCase):
         self.admin = _host_admin()
 
     def test_execute_confirmed_save_strips_marker(self):
-        request = _wire_request(self.factory.post("/admin/", {"_confirmed_save": "1", "hostname": "y.com"}))
+        request = _wire_request(
+            self.factory.post("/admin/", {"_confirmed_save": "1", "hostname": "y.com"})
+        )
         captured = {}
 
         def capture(req, object_id, form_url, extra):
@@ -406,7 +422,9 @@ class ExecuteConfirmedTest(TestCase):
         self.assertIn("hostname", captured["post"])
 
     def test_execute_confirmed_delete_strips_marker(self):
-        request = _wire_request(self.factory.post("/admin/", {"_confirmed_delete": "1", "post": "yes"}))
+        request = _wire_request(
+            self.factory.post("/admin/", {"_confirmed_delete": "1", "post": "yes"})
+        )
         captured = {}
 
         def capture(req, object_id, extra):

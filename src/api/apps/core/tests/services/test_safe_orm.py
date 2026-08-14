@@ -71,10 +71,16 @@ class SafetyTests(TestCase):
         self.assertNotIn("file", names)
 
     def test_is_field_denied_branches(self):
-        self.assertTrue(is_field_denied(Member._meta.get_field("is_staff"), write=True))  # denied name
-        self.assertTrue(is_field_denied(Member._meta.get_field("password"), write=True))  # sensitive regex
+        self.assertTrue(
+            is_field_denied(Member._meta.get_field("is_staff"), write=True)
+        )  # denied name
+        self.assertTrue(
+            is_field_denied(Member._meta.get_field("password"), write=True)
+        )  # sensitive regex
         self.assertTrue(is_field_denied(Semester._meta.get_field("id"), write=True))  # pk on write
-        self.assertTrue(is_field_denied(Semester._meta.get_field("updated_at"), write=True))  # auto_now
+        self.assertTrue(
+            is_field_denied(Semester._meta.get_field("updated_at"), write=True)
+        )  # auto_now
         self.assertFalse(is_field_denied(Semester._meta.get_field("year"), write=True))
 
     def test_is_field_denied_auto_now_guard_is_independent_of_editable(self):
@@ -174,10 +180,16 @@ class RecordsTests(TestCase):
         with self.assertRaises(PermissionDenied):
             check_model_permission(make_member(email="np@example.com"), Semester, "change")
         with self.assertRaises(PermissionDenied):
-            check_model_permission(make_member(email="staff@example.com", is_staff=True), Semester, "change")
+            check_model_permission(
+                make_member(email="staff@example.com", is_staff=True), Semester, "change"
+            )
         with self.assertRaises(PermissionDenied):
-            check_model_permission(make_admin(apps=["cms"], email="cms@example.com"), Semester, "change")
-        check_model_permission(make_admin(apps=["projects"], email="pa@example.com"), Semester, "change")
+            check_model_permission(
+                make_admin(apps=["cms"], email="cms@example.com"), Semester, "change"
+            )
+        check_model_permission(
+            make_admin(apps=["projects"], email="pa@example.com"), Semester, "change"
+        )
         check_model_permission(make_superuser(email="su@example.com"), Semester, "change")
 
     def test_assert_snapshot_unchanged(self):

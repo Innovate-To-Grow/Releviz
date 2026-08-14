@@ -115,7 +115,11 @@ class CSPHeaderTests(TestCase):
 
     def test_disables_inline_script_handlers_without_broad_script_exception(self):
         _, header = self._header()
-        directives = {part.strip().split(" ", 1)[0]: part.strip() for part in header.split(";") if part.strip()}
+        directives = {
+            part.strip().split(" ", 1)[0]: part.strip()
+            for part in header.split(";")
+            if part.strip()
+        }
 
         self.assertEqual(directives["script-src-attr"], "script-src-attr 'none'")
         self.assertNotIn("'unsafe-inline'", directives["script-src"])
@@ -147,7 +151,9 @@ class CSPHeaderTests(TestCase):
 
     def test_preserves_explicit_style_nonce(self):
         def _html_view(_request):
-            return HttpResponse('<style id="unfold-theme-colors" nonce="template-nonce">.ok{display:block}</style>')
+            return HttpResponse(
+                '<style id="unfold-theme-colors" nonce="template-nonce">.ok{display:block}</style>'
+            )
 
         response = ContentSecurityPolicyMiddleware(_html_view)(self.factory.get("/"))
 
@@ -167,7 +173,9 @@ class CSPHeaderTests(TestCase):
 
     def test_nonces_unfold_changelist_compatibility_style(self):
         def _html_view(_request):
-            return HttpResponse("<style>\n  #changelist table thead th:first-child {width: inherit}\n</style>")
+            return HttpResponse(
+                "<style>\n  #changelist table thead th:first-child {width: inherit}\n</style>"
+            )
 
         response = ContentSecurityPolicyMiddleware(_html_view)(self.factory.get("/admin/example/"))
         nonce = re.search(
@@ -189,7 +197,9 @@ class CSPHeaderTests(TestCase):
 
     def test_does_not_rewrite_non_html_responses(self):
         def _json_view(_request):
-            return HttpResponse('{"script":"<script>bad()</script>"}', content_type="application/json")
+            return HttpResponse(
+                '{"script":"<script>bad()</script>"}', content_type="application/json"
+            )
 
         response = ContentSecurityPolicyMiddleware(_json_view)(self.factory.get("/api/"))
 
@@ -201,7 +211,9 @@ class CSPHeaderTests(TestCase):
             response.xframe_options_exempt = True
             return response
 
-        response = ContentSecurityPolicyMiddleware(_embeddable_view)(self.factory.get("/cms/embed/example/"))
+        response = ContentSecurityPolicyMiddleware(_embeddable_view)(
+            self.factory.get("/cms/embed/example/")
+        )
 
         self.assertNotIn("frame-ancestors", response["Content-Security-Policy-Report-Only"])
 
@@ -261,7 +273,9 @@ class CSPHeaderTests(TestCase):
         ]
         style_elements = re.findall(r"<style\b[^>]*>", html, flags=re.IGNORECASE)
         self.assertTrue(style_elements)
-        self.assertTrue(all(f'nonce="{nonce}"' in tag for tag in [*inline_scripts, *style_elements]))
+        self.assertTrue(
+            all(f'nonce="{nonce}"' in tag for tag in [*inline_scripts, *style_elements])
+        )
         self.assertNotRegex(html, r"\son[a-z]+\s*=\s*[\"']")
         self.assertNotIn("'unsafe-eval'", header)
         self.assertIn("/static/admin/js/htmx-csp-config.js", html)

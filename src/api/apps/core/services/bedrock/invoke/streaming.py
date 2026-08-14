@@ -10,7 +10,9 @@ from .stream_parser import process_stream_response, stream_tool_results
 logger = logging.getLogger(__name__)
 
 
-def invoke_bedrock_stream(conversation_messages, *, chat_config=None, aws_config=None, model_id=None):
+def invoke_bedrock_stream(
+    conversation_messages, *, chat_config=None, aws_config=None, model_id=None
+):
     """Call the Bedrock ConverseStream API with tool-use loop."""
     try:
         client, messages, kwargs = prepare(conversation_messages, chat_config, aws_config, model_id)

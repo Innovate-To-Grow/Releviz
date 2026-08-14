@@ -43,7 +43,9 @@ def get_campaign_stats(params):
     campaign = qs.first()
     if not campaign:
         return "No campaign found matching the criteria."
-    stats = RecipientLog.objects.filter(campaign=campaign).values("status").annotate(count=Count("id"))
+    stats = (
+        RecipientLog.objects.filter(campaign=campaign).values("status").annotate(count=Count("id"))
+    )
     return (
         f"Campaign: {campaign.name}\nSubject: {campaign.subject}\nStatus: {campaign.status}\n"
         f"Total recipients: {campaign.total_recipients}\n"

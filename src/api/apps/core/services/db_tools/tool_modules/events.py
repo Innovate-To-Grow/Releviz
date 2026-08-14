@@ -14,7 +14,10 @@ def search_events(params):
     if params.get("registration_open") is not None:
         qs = qs.filter(registration_open=params["registration_open"])
     if params.get("date_from"):
-        qs = qs.filter(Q(end_date__gte=params["date_from"]) | Q(end_date__isnull=True, date__gte=params["date_from"]))
+        qs = qs.filter(
+            Q(end_date__gte=params["date_from"])
+            | Q(end_date__isnull=True, date__gte=params["date_from"])
+        )
     if params.get("date_to"):
         qs = qs.filter(date__lte=params["date_to"])
     return _serialize_rows(
@@ -57,5 +60,11 @@ def get_checkin_stats(params):
         qs = qs.filter(check_in__event__name__icontains=params["event_name"])
     if params.get("event_id"):
         qs = qs.filter(check_in__event_id=params["event_id"])
-    grouped = qs.values("check_in__name", "check_in__event__name").annotate(count=Count("id")).order_by("-count")
-    return _truncate(f"Total check-ins: {qs.count()}\nBy station:\n{json.dumps(list(grouped), default=str)}")
+    grouped = (
+        qs.values("check_in__name", "check_in__event__name")
+        .annotate(count=Count("id"))
+        .order_by("-count")
+    )
+    return _truncate(
+        f"Total check-ins: {qs.count()}\nBy station:\n{json.dumps(list(grouped), default=str)}"
+    )

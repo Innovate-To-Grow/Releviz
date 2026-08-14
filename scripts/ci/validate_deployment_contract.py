@@ -9,7 +9,6 @@ import re
 import sys
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
 PRODUCTION_SETTINGS = ROOT / "src/api/config/settings/production.py"
 BOOTSTRAP_TERRAFORM = ROOT / "infra/bootstrap/main.tf"
@@ -81,12 +80,8 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
     required_patterns = {
         r"workflow_dispatch:": "manual dispatch",
         r"timeout-minutes:\s*160": "the reviewed 160-minute production job limit",
-        r'PRODUCTION_JOB_TIMEOUT_SECONDS:\s*"9600"': (
-            "the production job timeout in seconds"
-        ),
-        r'AMPLIFY_TIMEOUT_SECONDS:\s*"1200"': (
-            "the bounded Amplify deployment-helper timeout"
-        ),
+        r'PRODUCTION_JOB_TIMEOUT_SECONDS:\s*"9600"': ("the production job timeout in seconds"),
+        r'AMPLIFY_TIMEOUT_SECONDS:\s*"1200"': ("the bounded Amplify deployment-helper timeout"),
         r"Record production job time budget": "production job start-time capture",
         r"actions:\s*read": "GitHub Actions artifact read permission",
         r"id-token:\s*write": "OIDC permission",
@@ -140,45 +135,27 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         r"NEXT_PUBLIC_API_BASE_URL=https://\$\{API_DOMAIN\}": (
             "the API subdomain baked into the ECS frontend fallback"
         ),
-        r"Detect API-subdomain transition state": (
-            "one-time legacy API compatibility detection"
-        ),
-        r"Install reviewed Amplify security headers": (
-            "the reviewed cross-origin frontend policy"
-        ),
+        r"Detect API-subdomain transition state": ("one-time legacy API compatibility detection"),
+        r"Install reviewed Amplify security headers": ("the reviewed cross-origin frontend policy"),
         r"amplify update-app[\s\S]{0,160}--custom-headers": (
             "an explicit Amplify custom-header update"
         ),
         r"npm ci --workspace=releviz-web": "locked frontend dependency install",
         r"run build:amplify": "Amplify static frontend build",
-        r"validate_amplify_static_export\.py": (
-            "Amplify static route and asset validation"
-        ),
+        r"validate_amplify_static_export\.py": ("Amplify static route and asset validation"),
         r"src/web/out": "static export artifact",
         r"AMPLIFY_ARTIFACT.*\.sha256": "a retained static-artifact checksum",
         r"retention-days:\s*90": "a 90-day rollback artifact retention window",
         r"release\.json": "immutable frontend release identity",
         r"release_sha.*DEPLOY_SHA": "deployed frontend SHA verification",
         r"amplify-static-deploy\.sh": "manual Amplify deployment helper",
-        r"Capture current Amplify production rollback point": (
-            "a live Amplify rollback point"
-        ),
-        r"Resolve retained Amplify rollback artifact": (
-            "a retained rollback-artifact resolver"
-        ),
-        r"releviz-amplify-(?:\$\{?)?PREVIOUS_SHA": (
-            "an exact previous-SHA rollback artifact name"
-        ),
+        r"Capture current Amplify production rollback point": ("a live Amplify rollback point"),
+        r"Resolve retained Amplify rollback artifact": ("a retained rollback-artifact resolver"),
+        r"releviz-amplify-(?:\$\{?)?PREVIOUS_SHA": ("an exact previous-SHA rollback artifact name"),
         r"actions/artifacts": "a repository artifact metadata lookup",
-        r"gh api[\s\S]{0,100}--method\s+GET": (
-            "an explicit read-only artifact API request"
-        ),
-        r"--paginate[\s\S]{0,100}--slurp": (
-            "complete paginated rollback artifact discovery"
-        ),
-        r"\.name\s*==\s*\$(?:name|artifact_name)": (
-            "exact rollback artifact-name matching"
-        ),
+        r"gh api[\s\S]{0,100}--method\s+GET": ("an explicit read-only artifact API request"),
+        r"--paginate[\s\S]{0,100}--slurp": ("complete paginated rollback artifact discovery"),
+        r"\.name\s*==\s*\$(?:name|artifact_name)": ("exact rollback artifact-name matching"),
         (
             r"\.expired\s*==\s*false|"
             r"select\(\s*\.expired\s*\|\s*not\s*\)|"
@@ -192,9 +169,7 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
             r"(?:\.workflow_run\.)?\.?head_branch\s*==\s*\"main\"|"
             r"head_branch[\s\S]{0,100}\bmain\b"
         ): "rollback artifact main-branch binding",
-        r"\.github/workflows/deploy-prod\.yml": (
-            "rollback artifact production-workflow binding"
-        ),
+        r"\.github/workflows/deploy-prod\.yml": ("rollback artifact production-workflow binding"),
         (
             r"\.event\s*==\s*\"workflow_dispatch\"|"
             r"workflow_dispatch[\s\S]{0,100}\.event"
@@ -208,12 +183,8 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         ): "rollback artifact source-repository binding",
         r"artifact_id": "an immutable rollback artifact ID",
         r"run_id": "the rollback artifact's workflow-run ID",
-        r"Download retained Amplify rollback artifact": (
-            "a retained rollback-artifact download"
-        ),
-        r"uses:\s*actions/download-artifact@v8": (
-            "the reviewed cross-run artifact downloader"
-        ),
+        r"Download retained Amplify rollback artifact": ("a retained rollback-artifact download"),
+        r"uses:\s*actions/download-artifact@v8": ("the reviewed cross-run artifact downloader"),
         r"artifact-ids:": "rollback download by immutable artifact ID",
         r"github-token:": "authenticated cross-run artifact download",
         r"repository:": "an exact rollback artifact repository",
@@ -225,9 +196,7 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         r"Verify retained Amplify rollback artifact": (
             "strict retained rollback-artifact verification"
         ),
-        r"retained_entries[\s\S]{0,300}-ne\s+2": (
-            "an exact two-file retained artifact payload"
-        ),
+        r"retained_entries[\s\S]{0,300}-ne\s+2": ("an exact two-file retained artifact payload"),
         r"\[0-9a-f\]\{64\}": "a strict rollback checksum digest format",
         (
             r"BASH_REMATCH\[[0-9]+\][\s\S]{0,150}expected_archive|"
@@ -266,24 +235,16 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
             "candidate frontend and direct API boundary smoke tests"
         ),
         r"\.static_routes\[\]": "all exported candidate routes in smoke tests",
-        r"\.legacy_redirects \| keys\[\]": (
-            "legacy Amplify redirects in candidate smoke tests"
-        ),
-        r"event/\?code=AMPLIFYSMOKE": (
-            "query-preserving trailing-slash route verification"
-        ),
+        r"\.legacy_redirects \| keys\[\]": ("legacy Amplify redirects in candidate smoke tests"),
+        r"event/\?code=AMPLIFYSMOKE": ("query-preserving trailing-slash route verification"),
         r"src/web/out/_next/static": "a deployed static-asset smoke test",
         r"PUT /authn/profile": "a direct protected PUT smoke test",
         r"DELETE /authn/sessions": "a direct protected DELETE smoke test",
-        r"Access-Control-Request-Method:\s*PUT": (
-            "a direct credentialed API CORS preflight"
-        ),
+        r"Access-Control-Request-Method:\s*PUT": ("a direct credentialed API CORS preflight"),
         r"access-control-allow-origin": "an exact API CORS origin check",
         r"amplify_default_domain": "Amplify default-domain verification",
         r"terraform .* state list": "existing domain cutover state detection",
-        r"TF_VAR_amplify_app_id.*PROD_AMPLIFY_APP_ID": (
-            "an explicitly provisioned Amplify app ID"
-        ),
+        r"TF_VAR_amplify_app_id.*PROD_AMPLIFY_APP_ID": ("an explicitly provisioned Amplify app ID"),
         (
             r"amplify get-domain-association[\s\S]{0,700}"
             r"terraform -chdir=infra/prod import[\s\S]{0,300}"
@@ -295,9 +256,7 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         r"Recovered the existing Amplify domain association into Terraform state": (
             "explicit orphan-recovery evidence"
         ),
-        r"terraform -chdir=infra/prod state pull": (
-            "exact Terraform instance-state inspection"
-        ),
+        r"terraform -chdir=infra/prod state pull": ("exact Terraform instance-state inspection"),
         r'\.status // "ready"': "tainted Amplify domain-state detection",
         r"Recovered the verified Amplify domain association from tainted Terraform state": (
             "verified tainted-domain state recovery"
@@ -366,16 +325,12 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         r"amplify update-domain-association": (
             "managed Route53 reconciliation on a migration retry"
         ),
-        r"Verify Amplify canonical DNS cutover": (
-            "authoritative Amplify DNS cutover verification"
-        ),
+        r"Verify Amplify canonical DNS cutover": ("authoritative Amplify DNS cutover verification"),
         r"expected_amplify_target": "the service-reported exact Amplify DNS target",
         r"canonical alias did not match Amplify's exact apex DNS target": (
             "fail-closed canonical target verification"
         ),
-        r"Fail closed when an Amplify release job is active": (
-            "a stale Amplify job preflight"
-        ),
+        r"Fail closed when an Amplify release job is active": ("a stale Amplify job preflight"),
         (
             r'for branch in "\$CANDIDATE_BRANCH" "\$PRODUCTION_BRANCH"'
         ): "candidate and production branch job preflights",
@@ -453,9 +408,7 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         r"Verify final API-only backend topology": (
             "a final direct API and retired frontend-proxy verification"
         ),
-        r"https://\$\{API_DOMAIN\}/api/health": (
-            "verification that the old API prefix is retired"
-        ),
+        r"https://\$\{API_DOMAIN\}/api/health": ("verification that the old API prefix is retired"),
         r"Restore pre-release canonical Route53 alias after failed first cutover": (
             "automatic first-cutover DNS compensation"
         ),
@@ -465,9 +418,7 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         ): "a canonical-smoke failure guard on first-cutover DNS compensation",
         r"route53 change-resource-record-sets": "an atomic Route53 alias restoration",
         r'Action:\s*"UPSERT"': "a non-destructive canonical alias UPSERT",
-        r"route53 wait resource-record-sets-changed": (
-            "authoritative DNS change propagation"
-        ),
+        r"route53 wait resource-record-sets-changed": ("authoritative DNS change propagation"),
         r"AMPLIFY_ALIAS_FILE": "a captured post-cutover alias race guard",
         r"amplify-apex-target\.sh": (
             "service-reported Amplify apex-target extraction during compensation"
@@ -529,9 +480,7 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         if not re.search(pattern, dependency_step, re.MULTILINE | re.DOTALL):
             errors.append(f"production CD omits {description}")
 
-    admin_step = named_step(
-        "Ensure production default administrator through one-off ECS task"
-    )
+    admin_step = named_step("Ensure production default administrator through one-off ECS task")
     admin_step_guards = {
         (
             r"--arg\s+password_secret\s+"
@@ -596,9 +545,7 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
     if run_task is None:
         errors.append("production CD omits the reviewed default-admin RunTask call")
     elif re.search(r"(?m)^\s*--overrides(?:\s|$)", run_task.group(0)):
-        errors.append(
-            "production CD must not override roles or commands on the default-admin task"
-        )
+        errors.append("production CD must not override roles or commands on the default-admin task")
 
     cleanup_step = named_step("Clean up an interrupted default-administrator task")
     cleanup_step_guards = {
@@ -672,9 +619,7 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         "Plan reviewed Amplify domain association",
         "Apply exact Amplify domain association plan",
     )
-    cutover_budget_start = domain_plan_to_apply.find(
-        "Require a safe first-cutover time budget"
-    )
+    cutover_budget_start = domain_plan_to_apply.find("Require a safe first-cutover time budget")
     cutover_budget = (
         domain_plan_to_apply[cutover_budget_start:] if cutover_budget_start >= 0 else ""
     )
@@ -692,8 +637,7 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
             "elapsed job-time calculation in the first-cutover guard"
         ),
         (r"remaining=\$\(\(PRODUCTION_JOB_TIMEOUT_SECONDS\s*-\s*elapsed\)\)"): (
-            "remaining job-time calculation from the reviewed timeout before "
-            "first cutover"
+            "remaining job-time calculation from the reviewed timeout before first cutover"
         ),
         r"compensation_reserve=\$\(\(70\s*\*\s*60\)\)": (
             "the 4,200-second DNS-compensation reserve"
@@ -710,9 +654,7 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
     domain_plan_position = source.find("Plan reviewed Amplify domain association")
     cutover_budget_position = source.find("Require a safe first-cutover time budget")
     domain_apply_position = source.find("Apply exact Amplify domain association plan")
-    if not (
-        0 <= domain_plan_position < cutover_budget_position < domain_apply_position
-    ):
+    if not (0 <= domain_plan_position < cutover_budget_position < domain_apply_position):
         errors.append(
             "production CD must place the first-cutover budget guard after the "
             "domain plan and before its apply"
@@ -723,9 +665,7 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
             r"(?m)^[ \t]+-\s+(?:name|uses|run):",
             source[
                 cutover_budget_position
-                + len(
-                    "Require a safe first-cutover time budget"
-                ) : domain_apply_line_start
+                + len("Require a safe first-cutover time budget") : domain_apply_line_start
             ],
         ):
             errors.append(
@@ -747,8 +687,7 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
             "elapsed job-time calculation in the live-branch guard"
         ),
         (r"remaining=\$\(\(PRODUCTION_JOB_TIMEOUT_SECONDS\s*-\s*elapsed\)\)"): (
-            "remaining job-time calculation from the reviewed timeout before "
-            "live-branch mutation"
+            "remaining job-time calculation from the reviewed timeout before live-branch mutation"
         ),
         r"rollback_reserve=\$\(\(90\s*\*\s*60\)\)": (
             "the 5,400-second live-branch rollback reserve"
@@ -771,9 +710,7 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         r"\$\{api_url\}/admin/login/": "the direct Django admin login page",
         r"csrfmiddlewaretoken": "a Django admin CSRF form token",
         r"<form": "the Django admin login form",
-        r"\$\{api_url\}/static/admin/css/base\.css": (
-            "the direct Django admin static asset"
-        ),
+        r"\$\{api_url\}/static/admin/css/base\.css": ("the direct Django admin static asset"),
     }
     for pattern, description in candidate_admin_patterns.items():
         if not re.search(pattern, candidate_smoke, re.MULTILINE | re.DOTALL):
@@ -782,13 +719,9 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         r'if\s+\[\s*"\$admin_post_status"\s*!=\s*"400"\s*\]\s*;\s*then',
         candidate_smoke,
     ):
-        errors.append(
-            "production CD retains an exclusive custom 400 Django admin contract"
-        )
+        errors.append("production CD retains an exclusive custom 400 Django admin contract")
     if "Please enter valid staff account credentials." in candidate_smoke:
-        errors.append(
-            "production CD retains a custom Django admin error-message contract"
-        )
+        errors.append("production CD retains a custom Django admin error-message contract")
 
     production_branch_smoke = marker_section(
         "Smoke production Amplify branch before domain cutover",
@@ -860,12 +793,9 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
             errors.append(f"production CD omits actual {scope} response-header capture")
         for header, patterns in reviewed_response_headers.items():
             if not all(
-                re.search(pattern, section, re.MULTILINE | re.IGNORECASE)
-                for pattern in patterns
+                re.search(pattern, section, re.MULTILINE | re.IGNORECASE) for pattern in patterns
             ):
-                errors.append(
-                    f"production CD omits the {header} check on actual {scope} responses"
-                )
+                errors.append(f"production CD omits the {header} check on actual {scope} responses")
 
     rollback_smoke = marker_section(
         "Roll back production Amplify branch after failed release",
@@ -881,16 +811,12 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
             r'"https://\$\{PROD_DOMAIN\}"'
         ): "both Amplify frontend domains in rollback smoke",
         r'"\$\{base_url\}/"': "frontend root availability in rollback smoke",
-        r'"\$\{base_url\}/release\.json"': (
-            "frontend release identity in rollback smoke"
-        ),
+        r'"\$\{base_url\}/release\.json"': ("frontend release identity in rollback smoke"),
         (
             r"for\s+path\s+in\s+/health/live\s+/health\s+/admin/\s+"
             r"/static/admin/css/base\.css"
         ): "direct API health, admin, and admin-static checks in rollback smoke",
-        r'"https://\$\{API_DOMAIN\}\$\{path\}"': (
-            "the API subdomain boundary in rollback smoke"
-        ),
+        r'"https://\$\{API_DOMAIN\}\$\{path\}"': ("the API subdomain boundary in rollback smoke"),
         (
             r'if\s+\[\s*"\$API_COMPATIBILITY"\s*=\s*"true"\s*\]\s*;\s*then'
         ): "the transitional compatibility branch in rollback smoke",
@@ -932,9 +858,7 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         r"for\s+path\s+in\s+/\s+/api/health/live\s+/api/health\s+/admin/",
         rollback_smoke,
     ):
-        errors.append(
-            "production CD mixes backend routes into the rollback frontend smoke loop"
-        )
+        errors.append("production CD mixes backend routes into the rollback frontend smoke loop")
 
     final_plan = marker_section(
         "Plan final production topology",
@@ -947,9 +871,7 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
             "no-op filtering in the final-plan allowlist"
         ),
         r"def\s+backend_proxy_source:": "the exact retired backend proxy-rule scope",
-        r"def\s+reviewed_backend_rule:": (
-            "validation of the retired backend proxy-rule shape"
-        ),
+        r"def\s+reviewed_backend_rule:": ("validation of the retired backend proxy-rule shape"),
         r"def\s+prune_unknown:": "fail-closed unknown-value normalization",
         r"del\(\.custom_rule\)": "a custom-rule-only Amplify app update",
         r'\.\s*==\s*"/api"': "retired Amplify API-rule rejection",
@@ -968,9 +890,7 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
             "a task-definition-only reminder target update"
         ),
         r"del\(\.task_definition\)": "task-definition-only ECS service updates",
-        r"del\(\.health_check\[0\]\.path\)": (
-            "health-path-only backend target-group update"
-        ),
+        r"del\(\.health_check\[0\]\.path\)": ("health-path-only backend target-group update"),
         r'\.change\.before\.health_check\[0\]\.path\s*!=\s*"/api/health"': (
             "the exact retired target-group health path"
         ),
@@ -990,12 +910,8 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         r"def\s+named_entries_are_unique:": (
             "duplicate-name rejection before order-independent task comparison"
         ),
-        r"def\s+normalized_backend_container:": (
-            "normalized backend container comparison"
-        ),
-        r"def\s+normalized_frontend_container:": (
-            "normalized frontend container comparison"
-        ),
+        r"def\s+normalized_backend_container:": ("normalized backend container comparison"),
+        r"def\s+normalized_frontend_container:": ("normalized frontend container comparison"),
         (
             r"def\s+normalized_backend_container:[\s\S]{0,900}"
             r"\.environment\s*\|=[\s\S]{0,600}sort_by\(\.name\)"
@@ -1028,18 +944,12 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
             r"\$after_containers\[0\]\.environment\s*\|\s*"
             r"named_entries_are_unique"
         ): "unique frontend environment names after normalization",
-        r"def\s+backend_final_values_are_safe:": (
-            "backend final-value safety validation"
-        ),
-        r"def\s+frontend_final_values_are_safe:": (
-            "frontend final-value safety validation"
-        ),
+        r"def\s+backend_final_values_are_safe:": ("backend final-value safety validation"),
+        r"def\s+frontend_final_values_are_safe:": ("frontend final-value safety validation"),
         r'ENABLE_LEGACY_API_PREFIX\s*==\s*"0"': (
             "disabled legacy API prefix in the final backend task"
         ),
-        r"BACKEND_URL\s*==\s*\$api_url": (
-            "the API subdomain in final task definitions"
-        ),
+        r"BACKEND_URL\s*==\s*\$api_url": ("the API subdomain in final task definitions"),
         r"aws\s+sts\s+get-caller-identity\s+--query\s+Account": (
             "the AWS account ID used to construct the reviewed frontend image"
         ),
@@ -1063,13 +973,9 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         r'if\s+\[\s*"\$unexpected_changes"\s*!=\s*"\[\]"\s*\]\s*;\s*then': (
             "fail-closed enforcement of unexpected final changes"
         ),
-        r"task_definition_diagnostics=": (
-            "sanitized task-definition comparison diagnostics"
-        ),
+        r"task_definition_diagnostics=": ("sanitized task-definition comparison diagnostics"),
         r"before_environment_order:": ("task-definition environment-order diagnostics"),
-        r"before_optional_task_strings:": (
-            "task-definition optional-string diagnostics"
-        ),
+        r"before_optional_task_strings:": ("task-definition optional-string diagnostics"),
         r"remaining_after_unknown:": ("task-definition unknown-value diagnostics"),
     }
     for pattern, description in final_plan_patterns.items():
@@ -1095,9 +1001,7 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         "aws_route53_record.origin[0]",
         "aws_route53_record.origin_cert_validation[",
     }
-    actual_final_plan_addresses = set(
-        re.findall(r'"(aws_[a-z0-9_.\[\]]+)"', final_plan)
-    )
+    actual_final_plan_addresses = set(re.findall(r'"(aws_[a-z0-9_.\[\]]+)"', final_plan))
     if actual_final_plan_addresses != expected_final_plan_addresses:
         errors.append(
             "production CD final plan does not use the exact reviewed "
@@ -1181,9 +1085,7 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
             r"if\s+!\s+jq\s+-e[\s\S]{0,200}"
             r'--arg\s+expected\s+"\$expected_backend_task_definition"'
         ): "the expected backend task definition in reminder-target validation",
-        r"\(\.Targets\s*\|\s*length\)\s*==\s*1": (
-            "exactly one EventBridge reminder target"
-        ),
+        r"\(\.Targets\s*\|\s*length\)\s*==\s*1": ("exactly one EventBridge reminder target"),
         (
             r"\.Targets\[0\]\.EcsParameters\.TaskDefinitionArn"
             r"\s*==\s*\$expected"
@@ -1208,9 +1110,7 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
             ),
             rf'{prefix}_preflight_status="\$\(': "the HTTP preflight status capture",
             r"--request\s+OPTIONS": "an OPTIONS request",
-            r'--header\s+"Origin:\s*https://\$\{PROD_DOMAIN\}"': (
-                "the canonical frontend origin"
-            ),
+            r'--header\s+"Origin:\s*https://\$\{PROD_DOMAIN\}"': ("the canonical frontend origin"),
             r'--header\s+"Access-Control-Request-Method:\s*PUT"': (
                 "the protected PUT request method"
             ),
@@ -1222,9 +1122,7 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
                 "actual preflight response-header capture"
             ),
             r'--write-out\s+"%\{http_code\}"': "the preflight HTTP status",
-            r'"https://\$\{API_DOMAIN\}/authn/profile/"': (
-                "the direct API protected endpoint"
-            ),
+            r'"https://\$\{API_DOMAIN\}/authn/profile/"': ("the direct API protected endpoint"),
             (
                 rf'if\s+\[\s*"\${prefix}_preflight_status"\s*!=\s*'
                 r'"200"\s*\]\s*\|\|'
@@ -1232,33 +1130,23 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
             r"access-control-allow-origin:\s*https://\$\{PROD_DOMAIN\}": (
                 "exact canonical Access-Control-Allow-Origin enforcement"
             ),
-            r"access-control-allow-credentials:[^\n]*true": (
-                "credentialed CORS enforcement"
-            ),
+            r"access-control-allow-credentials:[^\n]*true": ("credentialed CORS enforcement"),
         }
         for pattern, description in preflight_patterns.items():
             if not re.search(pattern, section, re.MULTILINE | re.IGNORECASE):
-                errors.append(
-                    f"production CD omits {description} in {scope} CORS preflight"
-                )
+                errors.append(f"production CD omits {description} in {scope} CORS preflight")
 
     retirement_start = final_verification.find("legacy_urls=(")
-    retirement_verification = (
-        final_verification[retirement_start:] if retirement_start >= 0 else ""
-    )
+    retirement_verification = final_verification[retirement_start:] if retirement_start >= 0 else ""
     stable_retirement_patterns = {
         r"legacy_urls=\(": "the complete retired-route URL set",
-        r"for\s+attempt\s+in\s+\$\(seq\s+1\s+30\)": (
-            "a bounded retired-route convergence window"
-        ),
+        r"for\s+attempt\s+in\s+\$\(seq\s+1\s+30\)": ("a bounded retired-route convergence window"),
         r'for\s+legacy_url\s+in\s+"\$\{legacy_urls\[@\]\}"': (
             "every retired route in each stability cycle"
         ),
         r"https://\$\{PROD_DOMAIN\}/api/health": "the retired frontend API route",
         r"https://\$\{PROD_DOMAIN\}/admin/": "the retired frontend admin route",
-        r"https://\$\{PROD_DOMAIN\}/authn/public-key/": (
-            "the retired frontend auth route"
-        ),
+        r"https://\$\{PROD_DOMAIN\}/authn/public-key/": ("the retired frontend auth route"),
         r"https://\$\{PROD_DOMAIN\}/static/admin/css/base\.css": (
             "the retired frontend backend-static route"
         ),
@@ -1273,9 +1161,7 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         r'expected_origin="https://\$\{PROD_DOMAIN\}/"': (
             "the canonical frontend same-origin boundary"
         ),
-        r'expected_origin="https://\$\{API_DOMAIN\}/"': (
-            "the canonical API same-origin boundary"
-        ),
+        r'expected_origin="https://\$\{API_DOMAIN\}/"': ("the canonical API same-origin boundary"),
         r'\[\s+-z\s+"\$expected_origin"\s+\]': (
             "fail-closed unknown retired-route origin handling"
         ),
@@ -1287,36 +1173,23 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         r"stable_retired_cycles=\$\(\(stable_retired_cycles \+ 1\)\)": (
             "consecutive retired-route cycle counting"
         ),
-        r'stable_retired_cycles"\s*-ge\s*3': (
-            "three-cycle retired-route stability threshold"
-        ),
-        r'stable_retired_cycles"\s*-lt\s*3': (
-            "fail-closed retired-route stability enforcement"
-        ),
+        r'stable_retired_cycles"\s*-ge\s*3': ("three-cycle retired-route stability threshold"),
+        r'stable_retired_cycles"\s*-lt\s*3': ("fail-closed retired-route stability enforcement"),
         r"Cache-Control:\s*no-cache": "cache bypass on retired-route checks",
         r"Pragma:\s*no-cache": "legacy cache bypass on retired-route checks",
-        r"retired_check=\$\{DEPLOY_SHA\}-\$\{attempt\}": (
-            "per-cycle retired-route cache busting"
-        ),
+        r"retired_check=\$\{DEPLOY_SHA\}-\$\{attempt\}": ("per-cycle retired-route cache busting"),
     }
     for pattern, description in stable_retirement_patterns.items():
         if not re.search(pattern, retirement_verification, re.MULTILINE | re.DOTALL):
             errors.append(f"production CD omits {description}")
     if retirement_verification.count("stable_retired_cycles=0") < 2:
-        errors.append(
-            "production CD does not reset retired-route stability after a non-404 cycle"
-        )
+        errors.append("production CD does not reset retired-route stability after a non-404 cycle")
     retired_status_position = retirement_verification.find('if [ "$status" != "404" ]')
     retired_increment_position = retirement_verification.find(
         "stable_retired_cycles=$((stable_retired_cycles + 1))"
     )
     retired_reset_position = retirement_verification.rfind("stable_retired_cycles=0")
-    if not (
-        0
-        <= retired_status_position
-        < retired_increment_position
-        < retired_reset_position
-    ):
+    if not (0 <= retired_status_position < retired_increment_position < retired_reset_position):
         errors.append(
             "production CD does not require a complete 404 cycle before "
             "advancing retired-route stability"
@@ -1343,9 +1216,7 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
             r'domain_status"\s*=\s*"AVAILABLE"[\s\S]{0,250}'
             r'update_status"\s*=~\s*\^\(NONE\|UPDATE_COMPLETE\)\$'
         ): "the successful Amplify association terminal-state pair",
-        r'update_status"\s*=\s*"UPDATE_FAILED"': (
-            "the failed Amplify update terminal state"
-        ),
+        r'update_status"\s*=\s*"UPDATE_FAILED"': ("the failed Amplify update terminal state"),
         (
             r'domain_status"\s*=\s*"FAILED"[\s\S]{0,150}'
             r'update_status"\s*=\s*"NONE"'
@@ -1360,12 +1231,8 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         r"stable_alias_checks=\$\(\(stable_alias_checks \+ 1\)\)": (
             "consecutive DNS compensation stability counting"
         ),
-        r'stable_alias_checks"\s*-ge\s*6': (
-            "six-check DNS compensation stability threshold"
-        ),
-        r'stable_alias_checks"\s*-lt\s*6': (
-            "fail-closed DNS compensation stability enforcement"
-        ),
+        r'stable_alias_checks"\s*-ge\s*6': ("six-check DNS compensation stability threshold"),
+        r'stable_alias_checks"\s*-lt\s*6': ("fail-closed DNS compensation stability enforcement"),
         r"restore_canonical_alias": "repeatable authoritative alias restoration",
         (
             r'actual_alias"\s*=\s*"\$expected_alias"[\s\S]{0,250}'
@@ -1385,14 +1252,8 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         )
     terminal_position = compensation.find("association_terminal=false")
     restore_position = compensation.find("restore_canonical_alias")
-    if (
-        terminal_position < 0
-        or restore_position < 0
-        or terminal_position > restore_position
-    ):
-        errors.append(
-            "production CD restores DNS before Amplify association activity is terminal"
-        )
+    if terminal_position < 0 or restore_position < 0 or terminal_position > restore_position:
+        errors.append("production CD restores DNS before Amplify association activity is terminal")
 
     final_steps = (
         (
@@ -1422,9 +1283,7 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
             "production CD omits a deployed static asset from candidate or production branch smokes"
         )
     if source.count("terraform -chdir=infra/prod untaint") < 1:
-        errors.append(
-            "production CD omits verified tainted-domain recovery during detection"
-        )
+        errors.append("production CD omits verified tainted-domain recovery during detection")
     if source.count('.change.actions | index("delete")) == null') < 1:
         errors.append("production CD omits a no-destroy gate for domain cutover")
     if source.count("amplify-apex-target.sh") < 3:
@@ -1441,39 +1300,23 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         r"amplify delete-domain-association": (
             "a destructive automated Amplify domain disassociation"
         ),
-        r"amplify\s+start-job|--job-type\s+RETRY": (
-            "unsupported Amplify StartJob retry rollback"
-        ),
+        r"amplify\s+start-job|--job-type\s+RETRY": ("unsupported Amplify StartJob retry rollback"),
         r"origin_restricted_to_cloudfront": (
             "retired CloudFront origin-restriction state detection"
         ),
-        r"trust_cloudfront_proxy_chain": (
-            "retired CloudFront proxy-chain state detection"
-        ),
-        r"TF_VAR_restrict_origin_to_cloudfront": (
-            "retired CloudFront origin-hardening input"
-        ),
-        r"TF_VAR_trust_cloudfront_proxy_chain": (
-            "retired CloudFront proxy-chain input"
-        ),
+        r"trust_cloudfront_proxy_chain": ("retired CloudFront proxy-chain state detection"),
+        r"TF_VAR_restrict_origin_to_cloudfront": ("retired CloudFront origin-hardening input"),
+        r"TF_VAR_trust_cloudfront_proxy_chain": ("retired CloudFront proxy-chain input"),
         r"An ALB canonical alias requires public ingress and one-hop proxy trust": (
             "retired CloudFront fallback state coupling"
         ),
-        r"Allow legacy Route53 alias caches to expire": (
-            "retired CloudFront hardening delay"
-        ),
-        r"Plan CloudFront-only origin hardening": (
-            "retired CloudFront-only origin hardening"
-        ),
+        r"Allow legacy Route53 alias caches to expire": ("retired CloudFront hardening delay"),
+        r"Plan CloudFront-only origin hardening": ("retired CloudFront-only origin hardening"),
         r"Verify production through the CloudFront-only origin": (
             "retired CloudFront-only origin verification"
         ),
-        r"Plan trusted CloudFront proxy chain": (
-            "retired CloudFront proxy-chain rollout"
-        ),
-        r"Wait for trusted-proxy backend rollout": (
-            "retired trusted-proxy backend rollout"
-        ),
+        r"Plan trusted CloudFront proxy chain": ("retired CloudFront proxy-chain rollout"),
+        r"Wait for trusted-proxy backend rollout": ("retired trusted-proxy backend rollout"),
         r"Verify trusted-proxy backend target health": (
             "retired trusted-proxy backend verification"
         ),
@@ -1550,9 +1393,7 @@ def amplify_deploy_script_errors(root: Path = ROOT) -> list[str]:
         r"AMPLIFY_UPLOAD_CONNECT_TIMEOUT_SECONDS": (
             "a configurable presigned-upload connection timeout"
         ),
-        r"AMPLIFY_UPLOAD_MAX_TIME_SECONDS": (
-            "a configurable presigned-upload maximum time"
-        ),
+        r"AMPLIFY_UPLOAD_MAX_TIME_SECONDS": ("a configurable presigned-upload maximum time"),
         r"AMPLIFY_UPLOAD_RETRY_MAX_TIME_SECONDS": (
             "a configurable presigned-upload retry maximum time"
         ),
@@ -1566,9 +1407,7 @@ def amplify_deploy_script_errors(root: Path = ROOT) -> list[str]:
         r"amplify start-deployment": "start-deployment call",
         r"amplify get-job": "deployment status polling",
         r"amplify stop-job": "failed or interrupted deployment cancellation",
-        r'stop_attempts="\$\{AMPLIFY_STOP_ATTEMPTS:-5\}"': (
-            "five bounded cancellation attempts"
-        ),
+        r'stop_attempts="\$\{AMPLIFY_STOP_ATTEMPTS:-5\}"': ("five bounded cancellation attempts"),
         r'cancel_polls_per_attempt="\$\{AMPLIFY_CANCEL_POLLS_PER_ATTEMPT:-12\}"': (
             "twelve bounded terminal polls per cancellation attempt"
         ),
@@ -1581,9 +1420,7 @@ def amplify_deploy_script_errors(root: Path = ROOT) -> list[str]:
         r"AMPLIFY_CANCELLATION_UNCONFIRMED_EXIT_CODE": (
             "a distinct unconfirmed-cancellation failure"
         ),
-        r"Do not start a retry or rollback job": (
-            "an explicit active-job rollback safety warning"
-        ),
+        r"Do not start a retry or rollback job": ("an explicit active-job rollback safety warning"),
         r"trap\s+'exit 130'\s+INT": "interrupt cleanup",
         r"trap\s+'exit 143'\s+TERM": "termination cleanup",
         r"SUCCEED": "successful terminal state",
@@ -1624,9 +1461,7 @@ def production_alb_security_group_errors(terraform_source: str) -> list[str]:
         r"lifecycle\s*\{\s*prevent_destroy\s*=\s*true\s*\}",
         block,
     ):
-        errors.append(
-            "production Terraform omits ALB security-group destroy protection"
-        )
+        errors.append("production Terraform omits ALB security-group destroy protection")
     ingress_blocks = re.findall(r"ingress\s*\{(?P<body>[^{}]*)\}", block)
     public_https_patterns = (
         r"from_port\s*=\s*443",
@@ -1654,27 +1489,19 @@ def production_proxy_configuration_errors(terraform_source: str) -> list[str]:
         terraform_source,
     )
     if trusted_proxy_counts != ["1"]:
-        errors.append(
-            "production Terraform must set AUTH_TRUSTED_PROXY_COUNT exactly once to 1"
-        )
+        errors.append("production Terraform must set AUTH_TRUSTED_PROXY_COUNT exactly once to 1")
 
     forbidden_patterns = {
         r"com\.amazonaws\.global\.cloudfront\.origin-facing": (
             "the retired AWS-managed CloudFront origin prefix list"
         ),
-        r"(?:var\.)?restrict_origin_to_cloudfront": (
-            "the retired CloudFront-only origin gate"
-        ),
+        r"(?:var\.)?restrict_origin_to_cloudfront": ("the retired CloudFront-only origin gate"),
         r"(?:var\.)?trust_cloudfront_proxy_chain": (
             "the retired trusted CloudFront proxy-chain gate"
         ),
         r"AUTH_TRUSTED_PROXY_CIDRS": ("the retired CloudFront CIDR runtime allowlist"),
-        r"AUTH_TRUSTED_PROXY_CIDR_HOPS": (
-            "the retired CIDR-verified proxy-hop configuration"
-        ),
-        r"cloudfront_origin_facing\.entries": (
-            "the retired CloudFront prefix-list CIDR expansion"
-        ),
+        r"AUTH_TRUSTED_PROXY_CIDR_HOPS": ("the retired CIDR-verified proxy-hop configuration"),
+        r"cloudfront_origin_facing\.entries": ("the retired CloudFront prefix-list CIDR expansion"),
     }
     for pattern, description in forbidden_patterns.items():
         if re.search(pattern, terraform_source):
@@ -1690,15 +1517,9 @@ def production_ecs_task_definition_errors(terraform_source: str) -> list[str]:
         r"(?m)^[ \t]*enable_fault_injection\s*=\s*false[ \t]*$": (
             "explicitly disabled ECS fault injection"
         ),
-        r"(?m)^[ \t]*mountPoints\s*=\s*\[\][ \t]*$": (
-            "canonical empty ECS mount points"
-        ),
-        r"(?m)^[ \t]*systemControls\s*=\s*\[\][ \t]*$": (
-            "canonical empty ECS system controls"
-        ),
-        r"(?m)^[ \t]*volumesFrom\s*=\s*\[\][ \t]*$": (
-            "canonical empty ECS volume sources"
-        ),
+        r"(?m)^[ \t]*mountPoints\s*=\s*\[\][ \t]*$": ("canonical empty ECS mount points"),
+        r"(?m)^[ \t]*systemControls\s*=\s*\[\][ \t]*$": ("canonical empty ECS system controls"),
+        r"(?m)^[ \t]*volumesFrom\s*=\s*\[\][ \t]*$": ("canonical empty ECS volume sources"),
     }
     for pattern, description in canonical_defaults.items():
         if len(re.findall(pattern, terraform_source)) != 3:
@@ -1725,9 +1546,7 @@ def _terraform_resource_source(
         terraform_source[start.end() :],
     )
     end = (
-        start.end() + next_resource.start()
-        if next_resource is not None
-        else len(terraform_source)
+        start.end() + next_resource.start() if next_resource is not None else len(terraform_source)
     )
     return terraform_source[start.start() : end]
 
@@ -1757,9 +1576,7 @@ def production_default_admin_task_errors(terraform_source: str) -> list[str]:
     """Keep administrator credentials confined to a create-only one-off task."""
 
     errors: list[str] = []
-    backend = _terraform_resource_source(
-        terraform_source, "aws_ecs_task_definition", "backend"
-    )
+    backend = _terraform_resource_source(terraform_source, "aws_ecs_task_definition", "backend")
     default_admin = _terraform_resource_source(
         terraform_source, "aws_ecs_task_definition", "default_admin"
     )
@@ -1770,9 +1587,7 @@ def production_default_admin_task_errors(terraform_source: str) -> list[str]:
         terraform_source, "default_admin_container_secrets"
     )
     if not default_admin:
-        return [
-            "production Terraform omits the dedicated default-admin task definition"
-        ]
+        return ["production Terraform omits the dedicated default-admin task definition"]
 
     required_resource = {
         r'family\s*=\s*"\$\{local\.prefix\}-default-admin-task"': (
@@ -1834,19 +1649,13 @@ def production_default_admin_task_errors(terraform_source: str) -> list[str]:
             errors.append(f"production Terraform omits {description}")
 
     if re.search(r"(?m)^[ \t]*task_role_arn\s*=", default_admin):
-        errors.append(
-            "the default-admin task must not receive an application task role"
-        )
+        errors.append("the default-admin task must not receive an application task role")
     if "ENABLE_LEGACY_API_PREFIX" in (
         default_admin + default_admin_environment + default_admin_secrets
     ):
-        errors.append(
-            "the default-admin task must not vary with legacy API compatibility"
-        )
+        errors.append("the default-admin task must not vary with legacy API compatibility")
     if "DJANGO_SUPERUSER_PASSWORD" in backend:
-        errors.append(
-            "the long-running backend task must not receive the default-admin password"
-        )
+        errors.append("the long-running backend task must not receive the default-admin password")
     if "DJANGO_SUPERUSER_EMAIL" in backend:
         errors.append(
             "the long-running backend task must not receive default-admin bootstrap inputs"
@@ -1874,13 +1683,9 @@ def production_amplify_custom_headers_policy_errors(source: str) -> list[str]:
         return ["production Amplify custom-header policy is not valid JSON"]
 
     if not isinstance(payload, dict):
-        return [
-            "production Amplify custom-header policy must be a top-level JSON object"
-        ]
+        return ["production Amplify custom-header policy must be a top-level JSON object"]
     if not isinstance(payload.get("customHeaders"), list):
-        return [
-            "production Amplify custom-header policy omits the top-level customHeaders list"
-        ]
+        return ["production Amplify custom-header policy omits the top-level customHeaders list"]
     return []
 
 
@@ -1969,9 +1774,7 @@ def deployment_contract_errors(root: Path = ROOT) -> list[str]:
         provided = terraform_environment_names(candidate.read_text(encoding="utf-8"))
         missing = sorted(required - provided)
         if missing:
-            errors.append(
-                f"{environment} Terraform omits runtime settings: {', '.join(missing)}"
-            )
+            errors.append(f"{environment} Terraform omits runtime settings: {', '.join(missing)}")
 
     errors.extend(production_cd_errors(root))
     errors.extend(amplify_deploy_script_errors(root))
@@ -2002,9 +1805,7 @@ def deployment_contract_errors(root: Path = ROOT) -> list[str]:
         r'resource\s+"aws_amplify_app"\s+"frontend"': "an Amplify frontend app",
         r'platform\s*=\s*"WEB"': "static Amplify hosting",
         r'resource\s+"aws_amplify_branch"\s+"candidate"': "an Amplify candidate branch",
-        r'resource\s+"aws_amplify_branch"\s+"production"': (
-            "an Amplify production branch"
-        ),
+        r'resource\s+"aws_amplify_branch"\s+"production"': ("an Amplify production branch"),
         r'resource\s+"aws_amplify_domain_association"\s+"frontend"': (
             "an Amplify custom-domain association"
         ),
@@ -2024,15 +1825,11 @@ def deployment_contract_errors(root: Path = ROOT) -> list[str]:
         r"amplify-routes\.json": "a shared Amplify static route manifest",
         r"amplify-custom-headers\.json": "a reviewed Amplify security-header policy",
         r'resource\s+"aws_route53_record"\s+"api"': "an API-domain ALB alias",
-        r'resource\s+"aws_lb_listener_certificate"\s+"api"': (
-            "an API-domain ALB certificate"
-        ),
+        r'resource\s+"aws_lb_listener_certificate"\s+"api"': ("an API-domain ALB certificate"),
         r'resource\s+"aws_lb_listener_rule"\s+"backend_api_host"': (
             "host-wide API-domain backend routing"
         ),
-        r"enable_legacy_api_compatibility": (
-            "a bounded first-release compatibility switch"
-        ),
+        r"enable_legacy_api_compatibility": ("a bounded first-release compatibility switch"),
         r'\{\s*name\s*=\s*"BACKEND_URL"\s*,\s*value\s*=\s*local\.api_url\s*\}': (
             "the canonical API URL in the backend runtime"
         ),
@@ -2053,13 +1850,13 @@ def deployment_contract_errors(root: Path = ROOT) -> list[str]:
     errors.extend(production_default_admin_task_errors(production_terraform))
     errors.extend(production_amplify_custom_headers_errors(production_terraform))
 
-    bootstrap_terraform = (root / BOOTSTRAP_TERRAFORM.relative_to(ROOT)).read_text(
-        encoding="utf-8"
-    )
+    bootstrap_terraform = (root / BOOTSTRAP_TERRAFORM.relative_to(ROOT)).read_text(encoding="utf-8")
     for pattern, description in {
         r'backend\s+"s3"\s*\{\s*\}': "an S3 backend declaration for migrated bootstrap state",
         r"existing_github_oidc_provider_arn": "an explicit shared GitHub OIDC provider input",
-        r"from\s*=\s*aws_iam_openid_connect_provider\.github": "a non-destructive legacy OIDC state removal",
+        r"from\s*=\s*aws_iam_openid_connect_provider\.github": (
+            "a non-destructive legacy OIDC state removal"
+        ),
         r"destroy\s*=\s*false": "a shared OIDC provider preservation guard",
         r'"route53:ListHostedZones"': (
             "the observed Amplify Route53 hosted-zone discovery permission"
@@ -2128,9 +1925,7 @@ def deployment_contract_errors(root: Path = ROOT) -> list[str]:
         if not re.search(pattern, bootstrap_terraform):
             errors.append(f"bootstrap Terraform omits {description}")
     if re.search(r'resource\s+"aws_iam_openid_connect_provider"', bootstrap_terraform):
-        errors.append(
-            "bootstrap Terraform must not manage the shared GitHub OIDC provider"
-        )
+        errors.append("bootstrap Terraform must not manage the shared GitHub OIDC provider")
 
     return errors
 

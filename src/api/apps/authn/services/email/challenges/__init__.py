@@ -5,7 +5,6 @@ from __future__ import annotations
 import secrets
 from datetime import timedelta
 
-from .issue import create_challenge_record as _create_challenge_record
 from .issue import issue_email_challenge
 from .verify import (
     consume_login_or_registration_challenge,

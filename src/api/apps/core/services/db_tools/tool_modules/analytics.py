@@ -19,7 +19,12 @@ def get_page_views(params):
         return f"Page view count: {qs.count()}"
     from django.db.models.functions import TruncDate
 
-    by_date = qs.annotate(day=TruncDate("timestamp")).values("day").annotate(views=Count("id")).order_by("-day")[:30]
+    by_date = (
+        qs.annotate(day=TruncDate("timestamp"))
+        .values("day")
+        .annotate(views=Count("id"))
+        .order_by("-day")[:30]
+    )
     top_pages = qs.values("path").annotate(views=Count("id")).order_by("-views")[:20]
     return _truncate(
         f"Total views: {qs.count()}\n\n"

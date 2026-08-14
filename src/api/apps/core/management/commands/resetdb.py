@@ -41,15 +41,27 @@ class Command(BaseCommand):
 
     # noinspection PyMethodMayBeStatic
     def add_arguments(self, parser):
-        parser.add_argument("--force", action="store_true", help="Acknowledge the destructive nature of this command.")
-        parser.add_argument("--confirm", type=str, help='Required confirmation string. Must be "RESET_DB".')
         parser.add_argument(
-            "--database", default=DEFAULT_DB_ALIAS, help=f'The database to reset. Defaults to "{DEFAULT_DB_ALIAS}".'
+            "--force",
+            action="store_true",
+            help="Acknowledge the destructive nature of this command.",
         )
         parser.add_argument(
-            "--keep-migrations", action="store_true", help="Keep existing migration files (only reset database)."
+            "--confirm", type=str, help='Required confirmation string. Must be "RESET_DB".'
         )
-        parser.add_argument("--allow-production", action="store_true", help="Allow running even if DEBUG is False.")
+        parser.add_argument(
+            "--database",
+            default=DEFAULT_DB_ALIAS,
+            help=f'The database to reset. Defaults to "{DEFAULT_DB_ALIAS}".',
+        )
+        parser.add_argument(
+            "--keep-migrations",
+            action="store_true",
+            help="Keep existing migration files (only reset database).",
+        )
+        parser.add_argument(
+            "--allow-production", action="store_true", help="Allow running even if DEBUG is False."
+        )
 
     # noinspection PyUnusedLocal
     def handle(self, *args, **options):
@@ -59,11 +71,15 @@ class Command(BaseCommand):
         allow_production = options["allow_production"]
         keep_migrations = options["keep_migrations"]
         if not settings.DEBUG and not allow_production:
-            raise CommandError("Command restricted to DEBUG=True. Use --allow-production to override.")
+            raise CommandError(
+                "Command restricted to DEBUG=True. Use --allow-production to override."
+            )
         if not force or confirm != "RESET_DB":
             raise CommandError("Destructive command requires --force and --confirm RESET_DB.")
         if not settings.DEBUG and allow_production:
-            self.stdout.write(self.style.WARNING("*** WARNING: RUNNING RESETDB IN PRODUCTION ENVIRONMENT ***"))
+            self.stdout.write(
+                self.style.WARNING("*** WARNING: RUNNING RESETDB IN PRODUCTION ENVIRONMENT ***")
+            )
 
         connection = connections[db_alias]
         self.stdout.write(self.style.NOTICE("=" * 60))

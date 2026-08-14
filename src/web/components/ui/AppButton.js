@@ -9,7 +9,12 @@ function AppButton({
   children,
   ...props
 }) {
-  const classes = ["app-btn", `app-btn-${variant}`, fullWidth ? "app-btn-full" : "", className]
+  const classes = [
+    "app-btn",
+    `app-btn-${variant}`,
+    fullWidth ? "app-btn-full" : "",
+    className,
+  ]
     .filter(Boolean)
     .join(" ");
 

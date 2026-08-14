@@ -9,7 +9,10 @@ const footerLinks = [
 export default function SiteFooter() {
   return (
     <footer className="site-footer">
-      <BrandHomeLink className="site-footer-brand" logoClassName="brand-logo brand-logo--footer" />
+      <BrandHomeLink
+        className="site-footer-brand"
+        logoClassName="brand-logo brand-logo--footer"
+      />
       <nav aria-label="Legal">
         <ul className="site-footer-links">
           {footerLinks.map((link) => (

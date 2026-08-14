@@ -5,7 +5,6 @@ Aggregates commonly used models so callers can import from `authn.models`.
 """
 
 from .contact import ContactEmail
-
 from .members import AdminInvitation, Member
 from .security import EmailAuthChallenge, ImpersonationToken, RSAKeypair
 
