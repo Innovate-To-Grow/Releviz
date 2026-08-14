@@ -103,7 +103,7 @@ def api_participant(
     member = participant.member
     member_email = str(member.email or "").strip().lower()
     if not member_email:
-        member_email = member.get_primary_contact_email()
+        member_email = member.get_primary_email().strip().lower()
     if invitation is _INVITATION_NOT_PROVIDED:
         invitation = (
             participant.event.invitations.filter(member_id=participant.member_id)

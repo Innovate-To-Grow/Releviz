@@ -8,7 +8,7 @@ recommendations, durable invitations, and versioned aggregate snapshots. One eve
 
 ## How to Use
 
-### 1. Create a Draft
+### 1. Create an Active Event
 
 Go to the home page and fill out the event form:
 
@@ -19,21 +19,25 @@ Go to the home page and fill out the event form:
 - **Days** — pick which days of the week are options (defaults to Mon-Fri)
 - **Access** — Invite only (default) or Open link
 
-Create an account or log in before creating an event. New events remain drafts until the organizer
-publishes them.
+Create an account or log in before creating an event. New events are active immediately and can
+accept responses as soon as participants join; creating an event by itself does not send email.
 
-### 2. Import and Publish the Roster
+### 2. Build the Roster
 
 The Roster tab accepts `.xlsx`, `.csv`, or pasted CSV/TSV. Map the required `name` and `email`
 columns and optional `group`, `weight`, and `included` columns, preview and correct rows, then commit
 as:
 
-- **Merge** — add/update people while preserving existing schedules and delivery history.
-- **Rebuild** — type the event code to replace the event roster and return it to draft.
+- **Merge** — add/update people while preserving existing schedules and delivery history. Newly
+  added or restored people receive an invitation automatically.
+- **Rebuild** — type the event code to destructively replace the roster, schedules, invitations,
+  temporary sessions, and pending deliveries. Every person in the rebuilt roster receives a new
+  invitation.
 
-Publishing atomically changes the event from draft to open and queues invitations. The HTTP request
-returns as soon as durable jobs are committed; the Roster tab shows provider-handoff progress and
-allows retrying failed recipients.
+Adding a person or committing an import atomically creates the roster changes and durable invitation
+jobs. The HTTP request returns as soon as those jobs are committed; the Roster tab shows
+provider-handoff progress and allows retrying failed recipients. Closed, finalized, and archived
+events must be reactivated before their roster can change.
 
 Invite-only links are visible only to the organizer, existing participants, temporary recipients
 using their event-scoped code flow, or full accounts whose verified email matches an invitation.
@@ -62,8 +66,8 @@ Roster, Results, and Finalize. The organizer can:
 
 - search/filter a server-paginated roster (50 rows by default, 100 maximum);
 - load one person's schedule only when its edit drawer opens;
-- co-edit a temporary participant in draft/open/closed even after the participant deadline, until
-  that identity upgrades to a verified full account;
+- co-edit a temporary participant while the event is active, until that identity upgrades to a
+  verified full account;
 - apply group/filter/selection weight and included changes, then override an individual;
 - view the top ten meeting-duration candidates ranked by weighted availability, unweighted
   availability, fully available count, and configured-time order;
@@ -86,10 +90,12 @@ required/mandatory participants.
 | IaC            | Terraform (versioned encrypted S3 state with native lock files)                          |
 | CI/CD          | GitHub Actions (required CI and protected manual Amplify/ECS production CD)              |
 
-The 1,000-person roster-scale release assumes a newly initialized database. Existing accounts,
-events, feedback, email providers, and queued work are not migrated or restored across this release;
-there is no historical-data compatibility layer. This code change does not itself deploy an
-environment, apply Terraform, or validate real SES delivery.
+The Active-status release intentionally purges existing scheduling events, rosters, responses,
+invitations, temporary event identities, and event-owned delivery work during its coordinated
+maintenance cutover. Full accounts, administrator access, AWS credentials, email providers, and
+non-scheduling mail history are retained. There is no historical scheduling-data compatibility
+layer. This code change does not itself deploy an environment, apply Terraform, or validate real
+SES delivery.
 
 ## Project Structure
 
@@ -237,12 +243,12 @@ Temporary/full identity rules, the restricted link session, shared versioned edi
 rollback behavior are enforced by the authn app.
 
 Email delivery is configured in Django admin under **Email Delivery**. Authentication messages,
-final notifications, invitations, and reminders use persisted retryable jobs. Event launch,
-invitation, reminder, and finalization requests return `202` after enqueueing; the email worker
-performs provider calls. Add an active AWS SES provider with region, sender email, IAM access key id,
-and IAM secret access key. Provider secrets and queued authentication content are encrypted in the
-database and are not stored in Terraform or GitHub secrets. SES identities/domains and IAM
-permissions must already be configured in AWS.
+final notifications, invitations, and reminders use persisted retryable jobs. Roster mutation,
+invitation, reminder, and finalization requests return after enqueueing; the email worker performs
+provider calls. Add an active AWS SES provider with region, sender email, IAM access key id, and IAM
+secret access key. Provider secrets and queued authentication content are encrypted in the database
+and are not stored in Terraform or GitHub secrets. SES identities/domains and IAM permissions must
+already be configured in AWS.
 
 ## Docker
 

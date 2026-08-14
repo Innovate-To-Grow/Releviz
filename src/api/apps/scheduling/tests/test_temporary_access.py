@@ -1,6 +1,6 @@
-import re
 import uuid
 from datetime import timedelta
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core import mail
@@ -31,7 +31,7 @@ class TemporaryParticipantAccessTests(TestCase):
             code="TEMP123",
             name="Shared planning",
             organizer=self.organizer,
-            status=Event.Status.OPEN,
+            status=Event.Status.ACTIVE,
             access_mode="open_link",
             opened_at=timezone.now(),
             days=[1],
@@ -43,7 +43,7 @@ class TemporaryParticipantAccessTests(TestCase):
     def create_managed(self, *, name="Managed Person", email="managed@example.com"):
         return self.organizer_client.post(
             f"/events/participants/managed?code={self.event.code}",
-            {"name": name, "email": email},
+            {"name": name, "email": email, "idempotencyKey": str(uuid.uuid4())},
             format="json",
         )
 
@@ -64,7 +64,17 @@ class TemporaryParticipantAccessTests(TestCase):
             email="managed@example.com",
         )
         client = APIClient()
-        with self.captureOnCommitCallbacks(execute=True):
+        verification_code = "123456"
+        with (
+            patch(
+                "apps.authn.services.email.challenges._random_code",
+                return_value=verification_code,
+            ),
+            patch(
+                "apps.authn.services.email.send_email.send_verification_email"
+            ) as send_verification,
+            self.captureOnCommitCallbacks(execute=True),
+        ):
             requested = client.post(
                 "/events/temp-access/request-code",
                 {
@@ -74,27 +84,26 @@ class TemporaryParticipantAccessTests(TestCase):
                 format="json",
             )
         self.assertEqual(requested.status_code, 202)
-        match = re.search(r"\b(\d{6})\b", mail.outbox[-1].body)
-        self.assertIsNotNone(match)
+        send_verification.assert_called_once()
         verified = client.post(
             "/events/temp-access/verify",
             {
                 "code": self.event.code,
                 "invitationToken": str(invitation.access_token),
-                "verificationCode": match.group(1),
+                "verificationCode": verification_code,
             },
             format="json",
         )
         self.assertEqual(verified.status_code, 200, verified.data)
         return client, verified
 
-    def test_managed_creation_reuses_global_identity_without_sending_mail(self):
+    def test_managed_creation_reuses_global_identity_and_queues_one_invitation(self):
         created = self.create_managed()
         self.assertEqual(created.status_code, 201, created.data)
         participant_id = created.data["participant"]["id"]
         self.assertEqual(created.data["participant"]["accountAccess"], "temporary")
         self.assertEqual(created.data["participant"]["email"], "managed@example.com")
-        self.assertEqual(created.data["participant"]["invitationStatus"], "not_sent")
+        self.assertEqual(created.data["autoInvitedCount"], 1)
         self.assertTrue(created.data["participant"]["canOrganizerEditAvailability"])
 
         member = get_user_model().objects.get(pk=participant_id)
@@ -104,7 +113,7 @@ class TemporaryParticipantAccessTests(TestCase):
         self.assertFalse(ContactEmail.objects.get(member=member).verified)
         invitation = EventInvitation.objects.get(event=self.event, member=member)
         self.assertIsNone(invitation.first_sent_at)
-        self.assertEqual(EmailDeliveryJob.objects.count(), 0)
+        self.assertEqual(EmailDeliveryJob.objects.count(), 1)
         self.assertEqual(len(mail.outbox), 0)
 
         immutable = self.organizer_client.put(
@@ -134,7 +143,11 @@ class TemporaryParticipantAccessTests(TestCase):
         )
         reused = self.organizer_client.post(
             f"/events/participants/managed?code={other_event.code}",
-            {"name": "Another display name", "email": "managed@example.com"},
+            {
+                "name": "Another display name",
+                "email": "managed@example.com",
+                "idempotencyKey": str(uuid.uuid4()),
+            },
             format="json",
         )
         self.assertEqual(reused.status_code, 201)
@@ -175,7 +188,7 @@ class TemporaryParticipantAccessTests(TestCase):
         self.assertEqual(first.data["enqueued"], 1)
         self.assertEqual(first.data["delivery"]["pending"], 1)
         self.assertEqual(len(mail.outbox), 0)
-        managed_job = EmailDeliveryJob.objects.get(recipient="managed@example.com")
+        managed_job = EmailDeliveryJob.objects.filter(recipient="managed@example.com").first()
         dispatch_email_job(managed_job.pk)
         self.assertIn("/temp-access?code=TEMP123", mail.outbox[-1].body)
         self.assertIn("six-digit code", mail.outbox[-1].body)
@@ -183,7 +196,7 @@ class TemporaryParticipantAccessTests(TestCase):
 
         full = self.send_invitation("full@example.com")
         self.assertEqual(full.status_code, 202)
-        full_job = EmailDeliveryJob.objects.get(recipient="full@example.com")
+        full_job = EmailDeliveryJob.objects.filter(recipient="full@example.com").first()
         dispatch_email_job(full_job.pk)
         self.assertIn("/event?code=TEMP123", mail.outbox[-1].body)
         self.assertNotIn("/temp-access", mail.outbox[-1].body)
@@ -193,7 +206,7 @@ class TemporaryParticipantAccessTests(TestCase):
         self.assertEqual(resent.data["enqueued"], 1)
         self.assertEqual(
             EmailDeliveryJob.objects.filter(recipient="managed@example.com").count(),
-            2,
+            3,
         )
 
     def test_cross_event_temp_invitation_requires_create_person_and_is_atomic(self):
@@ -202,7 +215,7 @@ class TemporaryParticipantAccessTests(TestCase):
             code="OTHER456",
             name="Other organizer event",
             organizer=self.organizer,
-            status=Event.Status.OPEN,
+            status=Event.Status.ACTIVE,
             access_mode="open_link",
             opened_at=timezone.now(),
             days=[2],
@@ -232,8 +245,6 @@ class TemporaryParticipantAccessTests(TestCase):
     def test_scoped_temp_session_edits_the_shared_participant_with_version_conflicts(self):
         created = self.create_managed()
         participant_id = created.data["participant"]["id"]
-        sent = self.send_invitation()
-        self.assertEqual(sent.status_code, 202)
         dispatch_email_job(EmailDeliveryJob.objects.get(recipient="managed@example.com").pk)
         invalid = APIClient().post(
             "/events/temp-access/request-code",
@@ -337,7 +348,7 @@ class TemporaryParticipantAccessTests(TestCase):
             HTTP_ORIGIN="http://testserver",
         )
         self.assertEqual(locked.status_code, 409)
-        self.event.status = Event.Status.OPEN
+        self.event.status = Event.Status.ACTIVE
         self.event.save(update_fields=["status", "updated_at"])
 
         recompute_event_results(self.event.pk)

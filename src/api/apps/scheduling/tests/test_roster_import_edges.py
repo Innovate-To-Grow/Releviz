@@ -374,6 +374,26 @@ class RosterImportDatabaseEdgeTests(TestCase):
             format="json",
         )
 
+    def test_closed_event_can_cancel_preview_but_cannot_mutate_or_commit_it(self):
+        batch = self.preview()
+        self.event.status = Event.Status.CLOSED
+        self.event.closed_at = timezone.now()
+        self.event.save(update_fields=["status", "closed_at", "updated_at"])
+
+        updated = self.client.put(
+            f"/events/roster-imports/{batch.pk}?code={self.event.code}",
+            {"headerRow": 1},
+            format="json",
+        )
+        self.assertEqual(updated.status_code, 409)
+        committed = self.commit(batch)
+        self.assertEqual(committed.status_code, 409)
+
+        canceled = self.client.delete(f"/events/roster-imports/{batch.pk}?code={self.event.code}")
+        self.assertEqual(canceled.status_code, 200)
+        batch.refresh_from_db()
+        self.assertEqual(batch.status, RosterImportBatch.Status.CANCELED)
+
     def test_preview_update_validation_and_no_selected_worksheet(self):
         batch = self.preview()
         batch.selected_worksheet = ""
@@ -528,7 +548,7 @@ class RosterImportDatabaseEdgeTests(TestCase):
     def test_rebuild_without_temporary_challenges_uses_the_empty_cleanup_path(self):
         self.assertFalse(self.event.result_invalidations.exists())
         roster_imports._rebuild_event_roster(self.event, timezone.now())
-        self.assertEqual(self.event.status, Event.Status.DRAFT)
+        self.assertEqual(self.event.status, Event.Status.ACTIVE)
         self.assertEqual(self.event.version, 2)
 
     def test_member_resolution_rejects_unsafe_identities_and_adopts_orphan(self):
@@ -618,7 +638,7 @@ class RosterImportDatabaseEdgeTests(TestCase):
         committed = self.commit(batch)
         self.assertEqual(committed.status_code, 201, committed.data)
         self.assertEqual(committed.data["event"]["code"], self.event.code)
-        self.assertEqual(committed.data["event"]["status"], Event.Status.DRAFT)
+        self.assertEqual(committed.data["event"]["status"], Event.Status.ACTIVE)
         participant.refresh_from_db()
         invitation.refresh_from_db()
         self.assertEqual(participant.participant_name, "Renamed")
@@ -697,14 +717,17 @@ class RosterImportDatabaseEdgeTests(TestCase):
 
         self.event.status = Event.Status.FINALIZED
         self.event.save(update_fields=["status", "updated_at"])
-        with self.assertRaisesMessage(roster_imports.RosterImportError, "Reopen"):
+        with self.assertRaisesMessage(
+            roster_imports.RosterImportError,
+            "Responses cannot change while the event is finalized",
+        ):
             roster_imports.commit_roster_import(
                 event=self.event,
                 batch_id=batch.pk,
                 organizer=self.organizer,
                 data={"mode": "merge", "idempotencyKey": str(uuid.uuid4())},
             )
-        self.event.status = Event.Status.DRAFT
+        self.event.status = Event.Status.ACTIVE
         self.event.save(update_fields=["status", "updated_at"])
 
         final_meeting = FinalMeeting.objects.create(
@@ -775,7 +798,7 @@ class RosterImportDatabaseEdgeTests(TestCase):
             format="json",
         )
         self.assertEqual(blocked.status_code, 409)
-        self.event.status = Event.Status.DRAFT
+        self.event.status = Event.Status.ACTIVE
         self.event.save(update_fields=["status", "updated_at"])
 
         missing_id = uuid.uuid4()

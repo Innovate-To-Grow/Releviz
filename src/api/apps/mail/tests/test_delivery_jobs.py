@@ -77,6 +77,41 @@ class EmailDeliveryJobTests(TestCase):
 
         self.assertTrue(any("email_message_log_failed" in line for line in logs.output))
 
+    def test_invitation_and_reminder_jobs_are_canceled_if_event_is_not_active(self):
+        invitation = EventInvitation.objects.create(
+            event=self.event,
+            email="inactive-event@example.com",
+            invited_by=self.event.organizer,
+        )
+        jobs = []
+        for message_type in (
+            EmailMessageLog.MessageType.INVITATION,
+            EmailMessageLog.MessageType.REMINDER,
+        ):
+            job, _created = enqueue_email_job(
+                idempotency_key=f"inactive-{message_type}-{uuid.uuid4()}",
+                message_type=message_type,
+                recipient=invitation.email,
+                subject="Subject",
+                body="Body",
+                message_id=f"<inactive-{message_type}-{uuid.uuid4()}@releviz.local>",
+                event=self.event,
+                invitation=invitation,
+            )
+            jobs.append(job)
+        self.event.status = Event.Status.CLOSED
+        self.event.save(update_fields=["status", "updated_at"])
+
+        for job in jobs:
+            result = dispatch_email_job(job.pk)
+            self.assertEqual(
+                result,
+                {"attempted": False, "status": EmailDeliveryJob.Status.CANCELED},
+            )
+            job.refresh_from_db()
+            self.assertEqual(job.status, EmailDeliveryJob.Status.CANCELED)
+            self.assertEqual(job.last_error, "The event is no longer active.")
+
     def test_enqueue_is_idempotent_and_preserves_stable_content(self):
         key = "same-key"
         job, created = self.enqueue(

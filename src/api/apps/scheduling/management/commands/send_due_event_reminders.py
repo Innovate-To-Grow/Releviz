@@ -1,8 +1,6 @@
 from django.core.management.base import BaseCommand, CommandError
-from django.utils import timezone
 
 from apps.authn.security import prune_auth_security_state
-from apps.core.retention import prune_feedback_submissions
 from apps.mail.services import dispatch_due_email_jobs
 from apps.scheduling.services import send_due_event_reminders
 
@@ -38,5 +36,3 @@ class Command(BaseCommand):
             f"auth_challenges={pruned['authChallenges']} "
             f"auth_email_jobs={pruned['authEmailJobs']}."
         )
-        deleted_feedback = prune_feedback_submissions(as_of=timezone.now())
-        self.stdout.write(f"Feedback cleanup: deleted={deleted_feedback}.")

@@ -12,7 +12,9 @@ const ADMIN_PASSWORD = process.env.DJANGO_SUPERUSER_PASSWORD;
 const PYTHON_BIN = process.env.PYTHON_BIN || "python3";
 
 if (!ADMIN_PASSWORD) {
-  throw new Error("DJANGO_SUPERUSER_PASSWORD must be set before running Playwright.");
+  throw new Error(
+    "DJANGO_SUPERUSER_PASSWORD must be set before running Playwright.",
+  );
 }
 
 function decodeQuotedPrintable(value) {
@@ -31,7 +33,7 @@ function decodeQuotedPrintable(value) {
 
 async function latestVerificationCode(email, afterMs) {
   const body = await latestEmailFor(email, afterMs, (message) =>
-    /verification code is \d{6}/i.test(message)
+    /verification code is \d{6}/i.test(message),
   );
   const code = body.match(/verification code is (\d{6})/i)?.[1];
   if (!code) throw new Error(`No verification code email found for ${email}`);
@@ -86,14 +88,18 @@ async function registerAccount(page, email, firstName, lastName) {
   await page.getByLabel("Password", { exact: true }).fill("Password123!");
   await page.getByLabel("Confirm password").fill("Password123!");
   await page.getByRole("button", { name: "Send verification code" }).click();
-  await expect(page.getByText("Enter the email verification code.")).toBeVisible();
+  await expect(
+    page.getByText("Enter the email verification code."),
+  ).toBeVisible();
   const code = await latestVerificationCode(email, startedAt);
   await page.getByLabel("Verification code").fill(code);
   await page.getByRole("button", { name: "Verify and continue" }).click();
   await expect(page).toHaveURL(/\/dashboard$/);
-  await expect(page.getByRole("heading", { name: "My Dashboard" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "My Dashboard" }),
+  ).toBeVisible();
   const welcome = await latestEmailFor(email, startedAt, (body) =>
-    body.includes("Welcome to Releviz")
+    body.includes("Welcome to Releviz"),
   );
   expect(welcome).toContain("Your account is ready");
   const storedCredentials = await page.evaluate(() => ({
@@ -105,7 +111,9 @@ async function registerAccount(page, email, firstName, lastName) {
   expect(storedCredentials.session).toBeNull();
   expect(storedCredentials.visibleCookies).not.toContain("releviz_refresh");
   await page.reload();
-  await expect(page.getByRole("heading", { name: "My Dashboard" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "My Dashboard" }),
+  ).toBeVisible();
 }
 
 async function loginWithEmailCode(page, email) {
@@ -116,35 +124,48 @@ async function loginWithEmailCode(page, email) {
   await page.getByRole("button", { name: "Send login code" }).click();
   await expect(
     page.getByText(
-      "If an existing verified account uses this email, a login code will arrive shortly."
-    )
+      "If an existing verified account uses this email, a login code will arrive shortly.",
+    ),
   ).toBeVisible();
   const code = await latestVerificationCode(email, startedAt);
   await page.getByLabel("Verification code").fill(code);
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/dashboard$/);
-  await expect(page.getByRole("heading", { name: "My Dashboard" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "My Dashboard" }),
+  ).toBeVisible();
   const alert = await latestEmailFor(
     email,
     startedAt,
-    (body) => body.includes("A new login was completed") && body.includes("email verification code")
+    (body) =>
+      body.includes("A new login was completed") &&
+      body.includes("email verification code"),
   );
   expect(alert).toContain("User agent:");
 }
 
-async function loginWithPassword(page, email, password = "Password123!", verifyAlert = true) {
+async function loginWithPassword(
+  page,
+  email,
+  password = "Password123!",
+  verifyAlert = true,
+) {
   const startedAt = Date.now() - 1000;
   await page.goto("/login");
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill(password);
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/dashboard$/);
-  await expect(page.getByRole("heading", { name: "My Dashboard" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "My Dashboard" }),
+  ).toBeVisible();
   if (!verifyAlert) return;
   const alert = await latestEmailFor(
     email,
     startedAt,
-    (body) => body.includes("A new login was completed") && body.includes("Method: password")
+    (body) =>
+      body.includes("A new login was completed") &&
+      body.includes("Method: password"),
   );
   expect(alert).toContain("IP address:");
 }
@@ -167,7 +188,8 @@ async function readSession(page) {
       body: "{}",
       credentials: "include",
     });
-    if (!response.ok) throw new Error(`Unable to refresh test session: ${response.status}`);
+    if (!response.ok)
+      throw new Error(`Unable to refresh test session: ${response.status}`);
     return response.json();
   }, BACKEND_URL);
 }
@@ -209,7 +231,12 @@ async function apiJson(request, method, url, token, body) {
 function runBackendCommand(command, ...args) {
   execFileSync(
     PYTHON_BIN,
-    [path.join(ROOT, "src/api/manage.py"), command, ...args, "--settings=config.settings.e2e"],
+    [
+      path.join(ROOT, "src/api/manage.py"),
+      command,
+      ...args,
+      "--settings=config.settings.e2e",
+    ],
     {
       cwd: ROOT,
       env: {
@@ -218,12 +245,17 @@ function runBackendCommand(command, ...args) {
         DJANGO_SETTINGS_MODULE: "config.settings.e2e",
       },
       stdio: "pipe",
-    }
+    },
   );
 }
 
 function dispatchEmailJobs() {
-  runBackendCommand("dispatch_email_jobs", "--limit=1000", "--concurrency=4", "--rate-limit=1000");
+  runBackendCommand(
+    "dispatch_email_jobs",
+    "--limit=1000",
+    "--concurrency=4",
+    "--rate-limit=1000",
+  );
 }
 
 function recomputeEventResults(eventCode) {
@@ -236,7 +268,7 @@ async function importRoster(request, eventCode, token, pastedText) {
     "POST",
     `/events/roster-imports?code=${eventCode}`,
     token,
-    { sourceType: "paste", pastedText }
+    { sourceType: "paste", pastedText },
   );
   expect(preview.response.status()).toBe(201);
   const committed = await apiJson(
@@ -244,7 +276,7 @@ async function importRoster(request, eventCode, token, pastedText) {
     "POST",
     `/events/roster-imports/${preview.payload.import.id}/commit?code=${eventCode}`,
     token,
-    { mode: "merge", idempotencyKey: crypto.randomUUID() }
+    { mode: "merge", idempotencyKey: crypto.randomUUID() },
   );
   expect(committed.response.status()).toBe(201);
   return committed.payload;
@@ -530,13 +562,14 @@ print(json.dumps({
 
 function temporaryAccessPathFromEmail(body) {
   const rawLink = body.match(/Link:\s*(https?:\/\/[^\s<]+)/i)?.[1];
-  if (!rawLink) throw new Error("No temporary access link found in invitation email");
+  if (!rawLink)
+    throw new Error("No temporary access link found in invitation email");
   const link = new URL(rawLink.replaceAll("&amp;", "&"));
   return `${link.pathname}${link.search}`;
 }
 
 test.describe("Releviz account and scheduling flow", () => {
-  test("imports and launches a roster, shares one temporary response, and upgrades it in place", async ({
+  test("imports and auto-invites a roster, shares one temporary response, and upgrades it in place", async ({
     browser,
     page,
     request,
@@ -555,56 +588,75 @@ test.describe("Releviz account and scheduling flow", () => {
     await page.waitForURL(/\/event\?code=/);
     const eventCode = new URL(page.url()).searchParams.get("code");
     expect(eventCode).toMatch(/^[A-Z0-9]+$/);
-    await expect(page.getByText("Organizer Dashboard")).toBeVisible();
+    await expect(
+      page.getByRole("heading", { level: 2, name: eventName }),
+    ).toBeVisible();
     const organizerSession = await readSession(page);
-    const draftEvent = await apiJson(
+    const activeEvent = await apiJson(
       request,
       "GET",
       `/events?code=${eventCode}`,
-      organizerSession.access
+      organizerSession.access,
     );
-    expect(draftEvent.response.status()).toBe(200);
-    expect(draftEvent.payload.event.status).toBe("draft");
+    expect(activeEvent.response.status()).toBe(200);
+    expect(activeEvent.payload.event.status).toBe("active");
 
-    await page.getByRole("tab", { name: "Roster" }).click();
     await page.getByRole("button", { name: "Import roster" }).click();
     await page.getByRole("button", { name: "Paste spreadsheet" }).click();
     await page
       .getByLabel("Pasted roster rows")
       .fill(
         "name\temail\tgroup\tweight\tincluded\n" +
-          `Temporary Taylor\t${temporaryEmail}\tE2E Group\t0.5\ttrue`
+          `Temporary Taylor\t${temporaryEmail}\tE2E Group\t0.5\ttrue`,
       );
     await page.getByRole("button", { name: "Continue to mapping" }).click();
-    await expect(page.getByText("Choose a worksheet and map its columns.")).toBeVisible();
+    await expect(
+      page.getByText("Choose a worksheet and map its columns."),
+    ).toBeVisible();
     await page.getByRole("button", { name: "Preview rows" }).click();
-    await expect(page.getByLabel("Email for row 2")).toHaveValue(temporaryEmail);
+    await expect(page.getByLabel("Email for row 2")).toHaveValue(
+      temporaryEmail,
+    );
     await expect(page.getByText("Ready", { exact: true })).toBeVisible();
+    const invitationStartedAt = Date.now() - 1000;
     await page.getByRole("button", { name: "Merge roster" }).click();
-    await expect(page.getByText("Imported 1 people: 1 created and 0 updated.")).toBeVisible();
+    await expect(
+      page.getByText(
+        "Imported 1 people: 1 added, 0 updated. 1 invitation queued.",
+      ),
+    ).toBeVisible();
+    const eventDeliveryProgress = page.getByLabel("Event delivery progress");
+    await expect(eventDeliveryProgress.getByText("1 queued")).toBeVisible();
 
     const createdRoster = await apiJson(
       request,
       "GET",
       `/events/roster?code=${eventCode}`,
-      organizerSession.access
+      organizerSession.access,
     );
     expect(createdRoster.response.status()).toBe(200);
     const managedParticipant = createdRoster.payload.participants.find(
-      (participant) => participant.email === temporaryEmail
+      (participant) => participant.email === temporaryEmail,
     );
     expect(managedParticipant).toEqual(
       expect.objectContaining({
         accountAccess: "temporary",
         canOrganizerEditAvailability: true,
         invitationStatus: "not_sent",
-      })
+      }),
     );
-    const participantCard = page.locator(`[data-roster-participant-id="${managedParticipant.id}"]`);
+    const participantCard = page.locator(
+      `[data-roster-participant-id="${managedParticipant.id}"]`,
+    );
     await expect(participantCard.getByText(/Temporary$/)).toBeVisible();
-    await expect(participantCard.getByText("Not sent", { exact: true })).toBeVisible();
+    await expect(
+      participantCard.getByText("Not sent", { exact: true }),
+    ).toBeVisible();
 
-    const createdState = temporaryAccountState({ code: eventCode, email: temporaryEmail });
+    const createdState = temporaryAccountState({
+      code: eventCode,
+      email: temporaryEmail,
+    });
     expect(createdState).toEqual(
       expect.objectContaining({
         memberId: managedParticipant.memberId,
@@ -613,30 +665,33 @@ test.describe("Releviz account and scheduling flow", () => {
         contactVerified: false,
         hasUsablePassword: false,
         invitationFirstSent: false,
-        invitationJobCount: 0,
+        invitationJobCount: 1,
         userEventVisible: true,
         tempSessionCount: 0,
-      })
+      }),
     );
 
-    const invitationStartedAt = Date.now() - 1000;
-    await page.getByRole("tab", { name: "Overview" }).click();
-    await page.getByRole("button", { name: "Launch and send invitations" }).click();
-    await expect(page.getByText("Event launched. 1 invitation emails were queued.")).toBeVisible();
-    await expect(page.getByLabel("Delivery progress").getByText("1 queued")).toBeVisible();
     dispatchEmailJobs();
-    await page.getByRole("button", { name: "Refresh progress" }).click();
-    await expect(page.getByLabel("Delivery progress").getByText("1 sent")).toBeVisible();
-    const invitationEmail = await latestEmailFor(temporaryEmail, invitationStartedAt, (body) =>
-      body.includes(`/temp-access?code=${eventCode}`)
+    await eventDeliveryProgress
+      .getByRole("button", { name: "Refresh progress" })
+      .click();
+    await expect(eventDeliveryProgress.getByText("1 sent")).toBeVisible();
+    const invitationEmail = await latestEmailFor(
+      temporaryEmail,
+      invitationStartedAt,
+      (body) => body.includes(`/temp-access?code=${eventCode}`),
     );
     const accessPath = temporaryAccessPathFromEmail(invitationEmail);
-    const sentState = temporaryAccountState({ code: eventCode, email: temporaryEmail });
+    const sentState = temporaryAccountState({
+      code: eventCode,
+      email: temporaryEmail,
+    });
     expect(sentState.invitationFirstSent).toBe(true);
     expect(sentState.invitationJobCount).toBe(1);
 
-    await page.getByRole("tab", { name: "Roster" }).click();
-    await participantCard.getByRole("button", { name: "Edit schedule" }).click();
+    await participantCard
+      .getByRole("button", { name: "Edit schedule" })
+      .click();
     const organizerDrawer = page.getByRole("dialog", {
       name: "Edit Temporary Taylor's schedule",
     });
@@ -646,40 +701,68 @@ test.describe("Releviz account and scheduling flow", () => {
     const temporaryPage = await temporaryContext.newPage();
     const accessCodeStartedAt = Date.now() - 1000;
     await temporaryPage.goto(accessPath);
-    await expect(temporaryPage.getByRole("heading", { name: "Check your email" })).toBeVisible();
-    const accessCode = await latestVerificationCode(temporaryEmail, accessCodeStartedAt);
+    await expect(
+      temporaryPage.getByRole("heading", { name: "Check your email" }),
+    ).toBeVisible();
+    const accessCode = await latestVerificationCode(
+      temporaryEmail,
+      accessCodeStartedAt,
+    );
     await temporaryPage.getByLabel("Verification code").fill(accessCode);
-    await temporaryPage.getByRole("button", { name: "Verify and open schedule" }).click();
-    await expect(temporaryPage.getByRole("heading", { name: eventName })).toBeVisible();
-    await expect(temporaryPage.getByText("You are responding as Temporary Taylor")).toBeVisible();
+    await temporaryPage
+      .getByRole("button", { name: "Verify and open schedule" })
+      .click();
+    await expect(
+      temporaryPage.getByRole("heading", { name: eventName }),
+    ).toBeVisible();
+    await expect(
+      temporaryPage.getByText("You are responding as Temporary Taylor"),
+    ).toBeVisible();
 
     await temporaryPage.getByRole("button", { name: "Apply to all" }).click();
     await expect(temporaryPage.getByText("Saving draft…")).toBeVisible();
-    await expect(temporaryPage.getByText("Draft saved. Submit when you are ready.")).toBeVisible();
-    await temporaryPage.getByRole("button", { name: "Submit availability" }).click();
+    await expect(
+      temporaryPage.getByText("Draft saved. Submit when you are ready."),
+    ).toBeVisible();
+    await temporaryPage
+      .getByRole("button", { name: "Submit availability" })
+      .click();
     await expect(temporaryPage.getByText("Schedule submitted.")).toBeVisible();
 
     await organizerDrawer.getByRole("button", { name: "Save draft" }).click();
     await expect(
-      organizerDrawer.getByText(/This response changed after you opened it/)
+      organizerDrawer.getByText(/This response changed after you opened it/),
     ).toBeVisible();
-    await organizerDrawer.getByRole("button", { name: "Reload latest response" }).click();
-    await expect(organizerDrawer.getByText("Latest response loaded.")).toBeVisible();
-    await organizerDrawer.getByRole("button", { name: "Busy", exact: true }).click();
+    await organizerDrawer
+      .getByRole("button", { name: "Reload latest response" })
+      .click();
+    await expect(
+      organizerDrawer.getByText("Latest response loaded."),
+    ).toBeVisible();
+    await organizerDrawer
+      .getByRole("button", { name: "Busy", exact: true })
+      .click();
     await organizerDrawer.locator('[data-cell-idx="0"]').first().click();
-    await organizerDrawer.getByRole("button", { name: "Submit on behalf" }).click();
-    await expect(organizerDrawer.getByText("Schedule submitted.")).toBeVisible();
+    await organizerDrawer
+      .getByRole("button", { name: "Submit on behalf" })
+      .click();
+    await expect(
+      organizerDrawer.getByText("Schedule submitted."),
+    ).toBeVisible();
 
     recomputeEventResults(eventCode);
     const resultsBeforeUpgrade = await apiJson(
       request,
       "GET",
       `/events/results?code=${eventCode}`,
-      organizerSession.access
+      organizerSession.access,
     );
     expect(resultsBeforeUpgrade.response.status()).toBe(200);
     expect(resultsBeforeUpgrade.payload.results.countedResponseTotal).toBe(1);
-    const beforeUpgrade = temporaryAccountState({ code: eventCode, email: temporaryEmail });
+    const beforeUpgrade = temporaryAccountState({
+      code: eventCode,
+      email: temporaryEmail,
+    });
     expect(beforeUpgrade).toEqual(
       expect.objectContaining({
         memberId: managedParticipant.memberId,
@@ -694,19 +777,23 @@ test.describe("Releviz account and scheduling flow", () => {
         weightMemberId: managedParticipant.memberId,
         weightValue: 0.5,
         weightIncluded: true,
-      })
+      }),
     );
 
     const upgradeStartedAt = Date.now() - 1000;
-    const upgradeLink = temporaryPage.getByRole("link", { name: "Upgrade to full access" });
+    const upgradeLink = temporaryPage.getByRole("link", {
+      name: "Upgrade to full access",
+    });
     await expect(upgradeLink).toHaveAttribute(
       "href",
-      `/signup?upgrade=temporary&code=${eventCode}&next=%2Fevent%3Fcode%3D${eventCode}`
+      `/signup?upgrade=temporary&code=${eventCode}&next=%2Fevent%3Fcode%3D${eventCode}`,
     );
     await upgradeLink.click();
     await expect(temporaryPage).toHaveURL(/\/signup\?.*upgrade=temporary/);
     expect(new URL(temporaryPage.url()).searchParams.has("email")).toBe(false);
-    expect(new URL(temporaryPage.url()).searchParams.has("lockedEmail")).toBe(false);
+    expect(new URL(temporaryPage.url()).searchParams.has("lockedEmail")).toBe(
+      false,
+    );
     const lockedEmail = temporaryPage.getByLabel("Email");
     await expect(lockedEmail).toHaveValue(temporaryEmail);
     await expect(lockedEmail).toHaveJSProperty("readOnly", true);
@@ -714,52 +801,80 @@ test.describe("Releviz account and scheduling flow", () => {
     await temporaryPage.getByLabel("Last name").fill("Upgraded");
     await temporaryPage.getByLabel("Organization").fill("Releviz E2E");
     await temporaryPage.getByLabel("Title").fill("Full participant");
-    await temporaryPage.getByLabel("Password", { exact: true }).fill("Password123!");
+    await temporaryPage
+      .getByLabel("Password", { exact: true })
+      .fill("Password123!");
     await temporaryPage.getByLabel("Confirm password").fill("Password123!");
-    await temporaryPage.getByRole("button", { name: "Send verification code" }).click();
-    await expect(temporaryPage.getByText("Enter the email verification code.")).toBeVisible();
-    const upgradeCode = await latestVerificationCode(temporaryEmail, upgradeStartedAt);
+    await temporaryPage
+      .getByRole("button", { name: "Send verification code" })
+      .click();
+    await expect(
+      temporaryPage.getByText("Enter the email verification code."),
+    ).toBeVisible();
+    const upgradeCode = await latestVerificationCode(
+      temporaryEmail,
+      upgradeStartedAt,
+    );
     await temporaryPage.getByLabel("Verification code").fill(upgradeCode);
-    await temporaryPage.getByRole("button", { name: "Verify and continue" }).click();
-    await expect(temporaryPage).toHaveURL(new RegExp(`/event\\?code=${eventCode}$`));
+    await temporaryPage
+      .getByRole("button", { name: "Verify and continue" })
+      .click();
+    await expect(temporaryPage).toHaveURL(
+      new RegExp(`/event\\?code=${eventCode}$`),
+    );
     const fullSession = await readSession(temporaryPage);
     expect(fullSession.user.id).toBe(beforeUpgrade.memberId);
     expect(fullSession.user.accessLevel).toBe("full");
 
     const oldTemporarySession = await temporaryPage.evaluate(
       async ({ backendUrl, code }) => {
-        const response = await fetch(`${backendUrl}/events/temp-access/session?code=${code}`, {
-          credentials: "include",
-        });
+        const response = await fetch(
+          `${backendUrl}/events/temp-access/session?code=${code}`,
+          {
+            credentials: "include",
+          },
+        );
         return { status: response.status, payload: await response.json() };
       },
-      { backendUrl: BACKEND_URL, code: eventCode }
+      { backendUrl: BACKEND_URL, code: eventCode },
     );
     expect(oldTemporarySession).toEqual(
       expect.objectContaining({
         status: 403,
-        payload: expect.objectContaining({ errorCode: "temp_account_upgraded" }),
-      })
+        payload: expect.objectContaining({
+          errorCode: "temp_account_upgraded",
+        }),
+      }),
     );
     const clearedTemporarySessionStatus = await temporaryPage.evaluate(
       async ({ backendUrl, code }) => {
-        const response = await fetch(`${backendUrl}/events/temp-access/session?code=${code}`, {
-          credentials: "include",
-        });
+        const response = await fetch(
+          `${backendUrl}/events/temp-access/session?code=${code}`,
+          {
+            credentials: "include",
+          },
+        );
         return response.status;
       },
-      { backendUrl: BACKEND_URL, code: eventCode }
+      { backendUrl: BACKEND_URL, code: eventCode },
     );
     expect(clearedTemporarySessionStatus).toBe(401);
 
-    const fullDashboard = await apiJson(request, "GET", "/dashboard/events", fullSession.access);
+    const fullDashboard = await apiJson(
+      request,
+      "GET",
+      "/dashboard/events",
+      fullSession.access,
+    );
     expect(fullDashboard.response.status()).toBe(200);
-    expect(fullDashboard.payload.participating.map((event) => event.code)).toContain(eventCode);
+    expect(
+      fullDashboard.payload.participating.map((event) => event.code),
+    ).toContain(eventCode);
     const fullParticipantView = await apiJson(
       request,
       "GET",
       `/events/participants?code=${eventCode}`,
-      fullSession.access
+      fullSession.access,
     );
     expect(fullParticipantView.response.status()).toBe(200);
     expect(fullParticipantView.payload.participants).toHaveLength(1);
@@ -768,20 +883,24 @@ test.describe("Releviz account and scheduling flow", () => {
         id: beforeUpgrade.memberId,
         submitted: 1,
         availabilityInperson: beforeUpgrade.availabilityInperson,
-      })
+      }),
     );
 
     await organizerDrawer.getByRole("button", { name: "Save draft" }).click();
     await expect(page.getByRole("dialog")).toHaveCount(0);
-    const fullAccessCard = page.locator(`[data-roster-participant-id="${managedParticipant.id}"]`);
+    const fullAccessCard = page.locator(
+      `[data-roster-participant-id="${managedParticipant.id}"]`,
+    );
     await expect(fullAccessCard.getByText(/Full account$/)).toBeVisible();
-    await expect(fullAccessCard.getByRole("button", { name: "Edit schedule" })).toHaveCount(0);
+    await expect(
+      fullAccessCard.getByRole("button", { name: "Edit schedule" }),
+    ).toHaveCount(0);
 
     const organizerRosterAfterUpgrade = await apiJson(
       request,
       "GET",
       `/events/roster?code=${eventCode}`,
-      organizerSession.access
+      organizerSession.access,
     );
     expect(organizerRosterAfterUpgrade.response.status()).toBe(200);
     expect(organizerRosterAfterUpgrade.payload.participants).toHaveLength(1);
@@ -794,19 +913,22 @@ test.describe("Releviz account and scheduling flow", () => {
         submitted: true,
         weight: 0.5,
         included: true,
-      })
+      }),
     );
     recomputeEventResults(eventCode);
     const resultsAfterUpgrade = await apiJson(
       request,
       "GET",
       `/events/results?code=${eventCode}`,
-      organizerSession.access
+      organizerSession.access,
     );
     expect(resultsAfterUpgrade.response.status()).toBe(200);
     expect(resultsAfterUpgrade.payload.results.countedResponseTotal).toBe(1);
 
-    const afterUpgrade = temporaryAccountState({ code: eventCode, email: temporaryEmail });
+    const afterUpgrade = temporaryAccountState({
+      code: eventCode,
+      email: temporaryEmail,
+    });
     expect(afterUpgrade).toEqual(
       expect.objectContaining({
         memberId: beforeUpgrade.memberId,
@@ -825,10 +947,12 @@ test.describe("Releviz account and scheduling flow", () => {
         tempSessionCount: 1,
         activeTempSessionCount: 0,
         revokedTempSessionCount: 1,
-      })
+      }),
     );
     expect(afterUpgrade.participantName).toBe("Taylor Upgraded");
-    expect(afterUpgrade.availabilityInperson).toEqual(beforeUpgrade.availabilityInperson);
+    expect(afterUpgrade.availabilityInperson).toEqual(
+      beforeUpgrade.availabilityInperson,
+    );
 
     await temporaryContext.close();
   });
@@ -842,24 +966,31 @@ test.describe("Releviz account and scheduling flow", () => {
     const organizerEmail = `organizer-${runId}@example.com`;
     const participantEmail = `participant-${runId}@example.com`;
     const manualEmail = `manual-${runId}@example.com`;
+    const eventName = `E2E Planning ${runId}`;
 
     await registerAccount(page, organizerEmail, "Olivia", "Organizer");
     await expectAccessible(page, "organizer dashboard");
     await page.getByRole("link", { name: "Create New Event" }).click();
     await expect(page).toHaveURL(/\/create$/);
-    await expect(page.getByRole("heading", { name: "Create event" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Create event" }),
+    ).toBeVisible();
     await expectAccessible(page, "create event");
-    await fillTextbox(page, "Event Name", `E2E Planning ${runId}`);
-    await expandAdvancedOptions(page);
+    await fillTextbox(page, "Event Name", eventName);
     await fillTextbox(page, "Location / Address", "E2E Room");
     await page.getByLabel("Event timezone").fill("UTC");
     await page.getByLabel("Meeting Duration").fill("60");
-    await page.locator('input[type="datetime-local"]').fill(datetimeLocalHoursFromNow(48));
+    await expandAdvancedOptions(page);
+    await page
+      .getByLabel("Response Deadline")
+      .fill(datetimeLocalHoursFromNow(48));
     await page.getByRole("button", { name: "Create Event" }).click();
     await page.waitForURL(/\/event\?code=/);
     const eventCode = new URL(page.url()).searchParams.get("code");
     expect(eventCode).toMatch(/^[A-Z0-9]+$/);
-    await expect(page.getByText("Organizer Dashboard")).toBeVisible();
+    await expect(
+      page.getByRole("heading", { level: 2, name: eventName }),
+    ).toBeVisible();
     await expectAccessible(page, "organizer event");
 
     const organizerSession = await readSession(page);
@@ -867,20 +998,25 @@ test.describe("Releviz account and scheduling flow", () => {
       request,
       "GET",
       `/events?code=${eventCode}`,
-      organizerSession.access
+      organizerSession.access,
     );
     expect(eventDefinitionResponse.response.status()).toBe(200);
     const eventDefinition = eventDefinitionResponse.payload.event;
     expect(eventDefinition.slotMinutes).toBe(30);
     expect(eventDefinition.meetingDurationMinutes).toBe(60);
-    expect(eventDefinition.status).toBe("draft");
+    expect(eventDefinition.status).toBe("active");
     expect(eventDefinition.slotCount).toBeGreaterThan(0);
     const participantContext = await browser.newContext({
       hasTouch: true,
       viewport: { width: 320, height: 720 },
     });
     const participantPage = await participantContext.newPage();
-    await registerAccount(participantPage, participantEmail, "Pat", "Participant");
+    await registerAccount(
+      participantPage,
+      participantEmail,
+      "Pat",
+      "Participant",
+    );
 
     const codeLoginContext = await browser.newContext();
     const codeLoginPage = await codeLoginContext.newPage();
@@ -892,59 +1028,70 @@ test.describe("Releviz account and scheduling flow", () => {
     await loginWithPassword(passwordLoginPage, organizerEmail);
     await passwordLoginContext.close();
 
+    const inviteStartedAt = Date.now() - 1000;
     const imported = await importRoster(
       request,
       eventCode,
       organizerSession.access,
       "name,email,group,weight,included\n" +
         `Pat Participant,${participantEmail},E2E Group,1,true\n` +
-        `Manual Participant,${manualEmail},E2E Group,1,true`
+        `Manual Participant,${manualEmail},E2E Group,1,true`,
     );
     expect(imported.receipt).toEqual(
-      expect.objectContaining({ importedCount: 2, createdCount: 2, updatedCount: 0 })
+      expect.objectContaining({
+        importedCount: 2,
+        createdCount: 2,
+        updatedCount: 0,
+      }),
+    );
+    expect(imported.autoInvitedCount).toBe(2);
+    expect(imported.deliveryRequest).toEqual(
+      expect.objectContaining({
+        operation: "invitation",
+        recipientCount: 2,
+        enqueued: 2,
+      }),
     );
 
-    const inviteStartedAt = Date.now() - 1000;
-    const launchResponsePromise = page.waitForResponse(
-      (response) =>
-        response.request().method() === "POST" &&
-        response.url().includes(`/events/launch?code=${eventCode}`)
-    );
-    await page.getByRole("button", { name: "Launch and send invitations" }).click();
-    expect((await launchResponsePromise).status()).toBe(202);
-    await expect(page.getByText("Event launched. 2 invitation emails were queued.")).toBeVisible();
-    await expect(page.getByLabel("Delivery progress").getByText("2 queued")).toBeVisible();
     dispatchEmailJobs();
-    await page.getByRole("button", { name: "Refresh progress" }).click();
-    await expect(page.getByLabel("Delivery progress").getByText("2 sent")).toBeVisible();
     const registeredInvite = await latestEmailFor(
       participantEmail,
       inviteStartedAt,
-      (body) => body.includes(`event?code=${eventCode}`) && body.includes("BEGIN:VCALENDAR")
+      (body) =>
+        body.includes(`event?code=${eventCode}`) &&
+        body.includes("BEGIN:VCALENDAR"),
     );
     expect(registeredInvite).toContain("Share your availability");
-    const registeredInvitationLink = registeredInvite.match(/^Link: (.+)$/m)?.[1]?.trim();
+    const registeredInvitationLink = registeredInvite
+      .match(/^Link: (.+)$/m)?.[1]
+      ?.trim();
     expect(registeredInvitationLink).toMatch(
-      new RegExp(`/event\\?code=${eventCode}&invitation=[0-9a-f-]+$`, "i")
+      new RegExp(`/event\\?code=${eventCode}&invitation=[0-9a-f-]+$`, "i"),
     );
     const manualInvite = await latestEmailFor(
       manualEmail,
       inviteStartedAt,
-      (body) => body.includes(`/temp-access?code=${eventCode}`) && body.includes("BEGIN:VCALENDAR")
+      (body) =>
+        body.includes(`/temp-access?code=${eventCode}`) &&
+        body.includes("BEGIN:VCALENDAR"),
     );
     expect(manualInvite).toContain("Share your availability");
 
     await participantPage.goto(registeredInvitationLink);
-    await expect(participantPage.getByText(/Welcome, Pat Participant/)).toBeVisible();
-    await expect(participantPage.getByRole("heading", { name: "Join Event" })).toHaveCount(0);
+    await expect(
+      participantPage.getByText(/Welcome, Pat Participant/),
+    ).toBeVisible();
+    await expect(
+      participantPage.getByRole("heading", { name: "Join Event" }),
+    ).toHaveCount(0);
     let invitationState = await apiJson(
       request,
       "GET",
       `/events/invitations?code=${eventCode}`,
-      organizerSession.access
+      organizerSession.access,
     );
     let registeredInvitation = invitationState.payload.invitations.find(
-      (invitation) => invitation.email === participantEmail
+      (invitation) => invitation.email === participantEmail,
     );
     expect(registeredInvitation.status).toBe("opened");
     expect(registeredInvitation.openedAt).toBeTruthy();
@@ -955,25 +1102,32 @@ test.describe("Releviz account and scheduling flow", () => {
       request,
       "GET",
       `/events/participants?code=${eventCode}`,
-      participantSession.access
+      participantSession.access,
     );
     expect(participantState.response.status()).toBe(200);
     const initialParticipant = participantState.payload.participants.find(
-      (participant) => participant.id === participantSession.user.id
+      (participant) => participant.id === participantSession.user.id,
     );
     expect(initialParticipant).toBeTruthy();
 
-    const savedStatus = participantPage.getByText("Draft saved. Submit when you are ready.");
+    const savedStatus = participantPage.getByText(
+      "Draft saved. Submit when you are ready.",
+    );
     const allSlotIndexes = eventDefinition.slotGroups.flatMap((group) =>
-      group.slots.map((slot) => slot.index)
+      group.slots.map((slot) => slot.index),
     );
     expect(allSlotIndexes.length).toBeGreaterThan(3);
-    const [touchSlotIndex, keyboardSlotIndex, serverSlotIndex, conflictLocalSlotIndex] =
-      allSlotIndexes;
+    const [
+      touchSlotIndex,
+      keyboardSlotIndex,
+      serverSlotIndex,
+      conflictLocalSlotIndex,
+    ] = allSlotIndexes;
     const availabilityGrid = participantPage.getByRole("grid", {
       name: "Availability",
     });
-    const cell = (index) => availabilityGrid.locator(`[data-cell-idx="${index}"]`);
+    const cell = (index) =>
+      availabilityGrid.locator(`[data-cell-idx="${index}"]`);
     const beforeUnloadIsBlocked = () =>
       participantPage.evaluate(() => {
         const event = new Event("beforeunload", { cancelable: true });
@@ -981,45 +1135,53 @@ test.describe("Releviz account and scheduling flow", () => {
         return event.defaultPrevented;
       });
 
-    await participantPage.getByRole("button", { name: "Apply Available to all" }).click();
+    await participantPage
+      .getByRole("button", { name: "Apply Available to all" })
+      .click();
     await expect(participantPage.getByText("Saving draft…")).toBeVisible();
     await expect(savedStatus).toBeVisible();
     let draftState = await apiJson(
       request,
       "GET",
       `/events/participants?code=${eventCode}`,
-      participantSession.access
+      participantSession.access,
     );
     let currentParticipant = draftState.payload.participants.find(
-      (participant) => participant.id === participantSession.user.id
+      (participant) => participant.id === participantSession.user.id,
     );
-    expect(currentParticipant.availabilityInperson.every((value) => value === 1)).toBe(true);
+    expect(
+      currentParticipant.availabilityInperson.every((value) => value === 1),
+    ).toBe(true);
     expect(currentParticipant.submitted).toBe(0);
     invitationState = await apiJson(
       request,
       "GET",
       `/events/invitations?code=${eventCode}`,
-      organizerSession.access
+      organizerSession.access,
     );
     registeredInvitation = invitationState.payload.invitations.find(
-      (invitation) => invitation.email === participantEmail
+      (invitation) => invitation.email === participantEmail,
     );
     expect(registeredInvitation.status).toBe("draft_saved");
     expect(registeredInvitation.draftSavedAt).toBeTruthy();
 
-    await participantPage.getByRole("button", { name: "Mark all Busy" }).click();
+    await participantPage
+      .getByRole("button", { name: "Mark all Busy" })
+      .click();
     await expect(participantPage.getByText("Saving draft…")).toBeVisible();
     await expect(savedStatus).toBeVisible();
     draftState = await apiJson(
       request,
       "GET",
       `/events/participants?code=${eventCode}`,
-      participantSession.access
+      participantSession.access,
     );
     currentParticipant = draftState.payload.participants.find(
-      (participant) => participant.id === participantSession.user.id
+      (participant) => participant.id === participantSession.user.id,
     );
-    expect(currentParticipant.availabilityInperson.every((value) => value === 0)).toBe(true);
+    expect(
+      currentParticipant.availabilityInperson.every((value) => value === 0),
+    ).toBe(true);
 
     await cell(touchSlotIndex).tap();
     await expect(participantPage.getByText("Saving draft…")).toBeVisible();
@@ -1029,17 +1191,21 @@ test.describe("Releviz account and scheduling flow", () => {
       request,
       "GET",
       `/events/participants?code=${eventCode}`,
-      participantSession.access
+      participantSession.access,
     );
     currentParticipant = draftState.payload.participants.find(
-      (participant) => participant.id === participantSession.user.id
+      (participant) => participant.id === participantSession.user.id,
     );
     expect(currentParticipant.availabilityInperson[touchSlotIndex]).toBe(1);
     expect(currentParticipant.submitted).toBe(0);
-    expect(currentParticipant.version).toBeGreaterThan(initialParticipant.version);
+    expect(currentParticipant.version).toBeGreaterThan(
+      initialParticipant.version,
+    );
 
     await participantPage.reload();
-    await expect(participantPage.getByText(/Welcome, Pat Participant/)).toBeVisible();
+    await expect(
+      participantPage.getByText(/Welcome, Pat Participant/),
+    ).toBeVisible();
     await expect(cell(touchSlotIndex)).toHaveAttribute("aria-selected", "true");
 
     const updateRoutePattern = /\/events\/participants\/update\?.*/;
@@ -1060,7 +1226,9 @@ test.describe("Releviz account and scheduling flow", () => {
     await cell(keyboardSlotIndex).focus();
     await participantPage.keyboard.press("Enter");
     await expect(participantPage.getByText("Saving draft…")).toBeVisible();
-    await expect(participantPage.getByText("Temporary autosave outage")).toBeVisible();
+    await expect(
+      participantPage.getByText("Temporary autosave outage"),
+    ).toBeVisible();
     expect(await beforeUnloadIsBlocked()).toBe(true);
     await participantPage.getByRole("button", { name: "Retry save" }).click();
     await expect(savedStatus).toBeVisible();
@@ -1071,10 +1239,10 @@ test.describe("Releviz account and scheduling flow", () => {
       request,
       "GET",
       `/events/participants?code=${eventCode}`,
-      participantSession.access
+      participantSession.access,
     );
     currentParticipant = draftState.payload.participants.find(
-      (participant) => participant.id === participantSession.user.id
+      (participant) => participant.id === participantSession.user.id,
     );
     expect(currentParticipant.availabilityInperson[keyboardSlotIndex]).toBe(1);
 
@@ -1089,28 +1257,38 @@ test.describe("Releviz account and scheduling flow", () => {
         availabilityInperson: concurrentSchedule,
         submitted: 0,
         expectedVersion: currentParticipant.version,
-      }
+      },
     );
     expect(concurrentUpdate.response.status()).toBe(200);
 
     await cell(conflictLocalSlotIndex).focus();
     await participantPage.keyboard.press("Enter");
-    await expect(participantPage.getByText(/changed in another session/i)).toBeVisible();
+    await expect(
+      participantPage.getByText(/changed in another session/i),
+    ).toBeVisible();
     expect(await beforeUnloadIsBlocked()).toBe(true);
-    await participantPage.getByRole("button", { name: "Reload latest response" }).click();
+    await participantPage
+      .getByRole("button", { name: "Reload latest response" })
+      .click();
     await expect(savedStatus).toBeVisible();
-    await expect(cell(serverSlotIndex)).toHaveAttribute("aria-selected", "true");
-    await expect(cell(conflictLocalSlotIndex)).toHaveAttribute("aria-selected", "false");
+    await expect(cell(serverSlotIndex)).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await expect(cell(conflictLocalSlotIndex)).toHaveAttribute(
+      "aria-selected",
+      "false",
+    );
     expect(await beforeUnloadIsBlocked()).toBe(false);
 
     const finalDate = nextWeekdayDate();
     const finalDayIndex = new Date(`${finalDate}T00:00:00Z`).getUTCDay();
     const finalDayGroup = eventDefinition.slotGroups.find(
-      (group) => group.weekday === finalDayIndex
+      (group) => group.weekday === finalDayIndex,
     );
     expect(finalDayGroup).toBeTruthy();
     const availableSlots = finalDayGroup.slots.filter(
-      (slot) => slot.localStart >= "09:00" && slot.localStart < "11:00"
+      (slot) => slot.localStart >= "09:00" && slot.localStart < "11:00",
     );
     expect(availableSlots).toHaveLength(4);
     const schedule = Array(eventDefinition.slotCount).fill(0);
@@ -1125,24 +1303,33 @@ test.describe("Releviz account and scheduling flow", () => {
         availabilityVirtual: schedule,
         submitted: 0,
         expectedVersion: concurrentUpdate.payload.participant.version,
-      }
+      },
     );
     expect(savedFinalDraft.response.status()).toBe(200);
     await participantPage.reload();
-    await expect(participantPage.getByText(/Welcome, Pat Participant/)).toBeVisible();
-    await expect(cell(availableSlots[0].index)).toHaveAttribute("aria-selected", "true");
-    await participantPage.getByRole("button", { name: "Submit Availability" }).click();
-    await expect(participantPage.getByText("Schedule submitted.")).toBeVisible();
+    await expect(
+      participantPage.getByText(/Welcome, Pat Participant/),
+    ).toBeVisible();
+    await expect(cell(availableSlots[0].index)).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await participantPage
+      .getByRole("button", { name: "Submit Availability" })
+      .click();
+    await expect(
+      participantPage.getByText("Schedule submitted."),
+    ).toBeVisible();
 
     const submittedSchedule = await apiJson(
       request,
       "GET",
       `/events/participants?code=${eventCode}`,
-      participantSession.access
+      participantSession.access,
     );
     expect(submittedSchedule.response.status()).toBe(200);
     const submittedParticipant = submittedSchedule.payload.participants.find(
-      (participant) => participant.id === participantSession.user.id
+      (participant) => participant.id === participantSession.user.id,
     );
     expect(submittedParticipant.submitted).toBe(1);
     expect(submittedParticipant.availabilityInperson).toEqual(schedule);
@@ -1150,10 +1337,10 @@ test.describe("Releviz account and scheduling flow", () => {
       request,
       "GET",
       `/events/invitations?code=${eventCode}`,
-      organizerSession.access
+      organizerSession.access,
     );
     registeredInvitation = invitationState.payload.invitations.find(
-      (invitation) => invitation.email === participantEmail
+      (invitation) => invitation.email === participantEmail,
     );
     expect(registeredInvitation.status).toBe("submitted");
     expect(registeredInvitation.submittedAt).toBeTruthy();
@@ -1163,13 +1350,15 @@ test.describe("Releviz account and scheduling flow", () => {
       request,
       "GET",
       `/events/results?code=${eventCode}`,
-      organizerSession.access
+      organizerSession.access,
     );
     expect(officialResults.response.status()).toBe(200);
     expect(officialResults.payload.results.countedResponseTotal).toBe(1);
     expect(officialResults.payload.results.unansweredParticipantTotal).toBe(1);
     expect(
-      officialResults.payload.results.channels.inperson.weighted[availableSlots[0].index]
+      officialResults.payload.results.channels.inperson.weighted[
+        availableSlots[0].index
+      ],
     ).toBe(1);
     expect(officialResults.payload.results.recommendations[0]).toEqual(
       expect.objectContaining({
@@ -1179,54 +1368,63 @@ test.describe("Releviz account and scheduling flow", () => {
         endSlotIndex: availableSlots[1].index,
         durationMinutes: 60,
         weightedAvailability: 1,
-      })
+      }),
     );
 
     const participantOwnOnlyResults = await apiJson(
       request,
       "GET",
       `/events/results?code=${eventCode}`,
-      participantSession.access
+      participantSession.access,
     );
     expect(participantOwnOnlyResults.response.status()).toBe(403);
     const participantOwnOnlySchedules = await apiJson(
       request,
       "GET",
       `/events/participants?code=${eventCode}`,
-      participantSession.access
+      participantSession.access,
     );
     expect(participantOwnOnlySchedules.response.status()).toBe(200);
     expect(participantOwnOnlySchedules.payload.participants).toHaveLength(1);
-    expect(participantOwnOnlySchedules.payload.participants[0].id).toBe(participantSession.user.id);
+    expect(participantOwnOnlySchedules.payload.participants[0].id).toBe(
+      participantSession.user.id,
+    );
 
     const reminderStartedAt = Date.now() - 1000;
     await page.getByRole("button", { name: "Queue reminders" }).click();
-    await expect(page.getByText("1 reminder emails were queued.")).toBeVisible();
-    await expect(page.getByLabel("Delivery progress").getByText("1 queued")).toBeVisible();
+    await expect(
+      page.getByText("1 reminder emails were queued."),
+    ).toBeVisible();
+    const reminderDeliveryProgress = page.getByLabel("Event delivery progress");
+    await expect(reminderDeliveryProgress.getByText("1 queued")).toBeVisible();
     dispatchEmailJobs();
-    await page.getByRole("button", { name: "Refresh progress" }).click();
-    await expect(page.getByLabel("Delivery progress").getByText("1 sent")).toBeVisible();
+    await reminderDeliveryProgress
+      .getByRole("button", { name: "Refresh progress" })
+      .click();
+    await expect(reminderDeliveryProgress.getByText("1 sent")).toBeVisible();
     const reminder = await latestEmailFor(
       manualEmail,
       reminderStartedAt,
-      (body) => body.includes("Reminder:") && body.includes("BEGIN:VCALENDAR")
+      (body) => body.includes("Reminder:") && body.includes("BEGIN:VCALENDAR"),
     );
     expect(reminder).toContain(`/temp-access?code=${eventCode}`);
     invitationState = await apiJson(
       request,
       "GET",
       `/events/invitations?code=${eventCode}`,
-      organizerSession.access
+      organizerSession.access,
     );
     const manualInvitation = invitationState.payload.invitations.find(
-      (invitation) => invitation.email === manualEmail
+      (invitation) => invitation.email === manualEmail,
     );
     expect(manualInvitation.reminderSentAt).toBeTruthy();
     expect(manualInvitation.awaitingReminder).toBe(false);
 
     await participantPage.goto("/dashboard");
-    await expect(participantPage.getByText("Events I Participate In (1)")).toBeVisible();
-    await expect(participantPage.getByText(`E2E Planning ${runId}`)).toBeVisible();
+    await expect(
+      participantPage.getByText("Events I Participate In (1)"),
+    ).toBeVisible();
+    await expect(participantPage.getByText(eventName)).toBeVisible();
     await participantPage.goto("/settings");
     await participantPage.getByLabel("Title").fill("Availability Tester");
     await participantPage.getByRole("button", { name: "Save" }).click();
@@ -1234,26 +1432,35 @@ test.describe("Releviz account and scheduling flow", () => {
 
     await page.goto("/dashboard");
     await expect(page.getByText("My Events (1)")).toBeVisible();
-    await expect(page.getByText(`E2E Planning ${runId}`)).toBeVisible();
+    await expect(page.getByText(eventName)).toBeVisible();
     await page.goto(`/event?code=${eventCode}`);
-    await expect(page.getByText("Organizer Dashboard")).toBeVisible();
-    await page.getByRole("tab", { name: "Roster" }).click();
+    await expect(
+      page.getByRole("heading", { level: 2, name: eventName }),
+    ).toBeVisible();
     const registeredParticipantCard = page
       .locator("tbody tr")
       .filter({ hasText: participantEmail });
     await expect(registeredParticipantCard).toContainText(participantEmail);
     await expect(registeredParticipantCard).toContainText("Submitted");
 
-    const bulkControls = page.locator("details").filter({ hasText: "Bulk weight and inclusion" });
+    const bulkControls = page.locator(
+      'details[aria-label="Bulk roster actions"]',
+    );
     await bulkControls.locator("summary").click();
     await bulkControls.getByLabel("Bulk update scope").selectOption("group");
-    await bulkControls.getByLabel("Bulk update group").selectOption("E2E Group");
+    await bulkControls
+      .getByLabel("Bulk update group")
+      .selectOption("E2E Group");
     await bulkControls.getByLabel("Apply bulk weight").check();
-    await bulkControls.getByRole("spinbutton", { name: "Bulk weight", exact: true }).fill("0.75");
+    await bulkControls
+      .getByRole("spinbutton", { name: "Bulk weight", exact: true })
+      .fill("0.75");
     await bulkControls.getByRole("button", { name: "Apply update" }).click();
     await expect(page.getByText("Updated 2 roster entries.")).toBeVisible();
 
-    const participantWeight = registeredParticipantCard.getByLabel("Weight for Pat Participant");
+    const participantWeight = registeredParticipantCard.getByLabel(
+      "Weight for Pat Participant",
+    );
     await participantWeight.fill("0.5");
     await participantWeight.press("Tab");
     await expect(page.getByText("Pat Participant was updated.")).toBeVisible();
@@ -1262,18 +1469,23 @@ test.describe("Releviz account and scheduling flow", () => {
       request,
       "GET",
       `/events/roster?code=${eventCode}`,
-      organizerSession.access
+      organizerSession.access,
     );
     expect(rosterAfterWeights.response.status()).toBe(200);
     const rosterParticipant = rosterAfterWeights.payload.participants.find(
-      (participant) => participant.memberId === participantSession.user.id
+      (participant) => participant.memberId === participantSession.user.id,
     );
     expect(rosterParticipant).toEqual(
-      expect.objectContaining({ group: "E2E Group", weight: 0.5, included: true })
+      expect.objectContaining({
+        group: "E2E Group",
+        weight: 0.5,
+        included: true,
+      }),
     );
-    const manualRosterParticipant = rosterAfterWeights.payload.participants.find(
-      (participant) => participant.email === manualEmail
-    );
+    const manualRosterParticipant =
+      rosterAfterWeights.payload.participants.find(
+        (participant) => participant.email === manualEmail,
+      );
     expect(manualRosterParticipant.weight).toBe(0.75);
 
     const deniedRosterPatch = await apiJson(
@@ -1281,7 +1493,7 @@ test.describe("Releviz account and scheduling flow", () => {
       "PATCH",
       `/events/roster/${rosterParticipant.id}?code=${eventCode}`,
       participantSession.access,
-      { weight: 0.25, expectedVersion: rosterParticipant.version }
+      { weight: 0.25, expectedVersion: rosterParticipant.version },
     );
     expect(deniedRosterPatch.response.status()).toBe(403);
     const organizerParticipantVersion = rosterParticipant.version;
@@ -1290,7 +1502,7 @@ test.describe("Releviz account and scheduling flow", () => {
       request,
       "GET",
       `/events?code=${eventCode}`,
-      organizerSession.access
+      organizerSession.access,
     );
     const closedEvent = await apiJson(
       request,
@@ -1300,7 +1512,7 @@ test.describe("Releviz account and scheduling flow", () => {
       {
         status: "closed",
         expectedVersion: eventState.payload.event.version,
-      }
+      },
     );
     expect(closedEvent.response.status()).toBe(200);
     expect(closedEvent.payload.event.status).toBe("closed");
@@ -1312,10 +1524,12 @@ test.describe("Releviz account and scheduling flow", () => {
       {
         status: "closed",
         expectedVersion: eventState.payload.event.version,
-      }
+      },
     );
     expect(duplicateClose.response.status()).toBe(200);
-    expect(duplicateClose.payload.event.version).toBe(closedEvent.payload.event.version);
+    expect(duplicateClose.payload.event.version).toBe(
+      closedEvent.payload.event.version,
+    );
     const lockedResponse = await apiJson(
       request,
       "PUT",
@@ -1324,59 +1538,77 @@ test.describe("Releviz account and scheduling flow", () => {
       {
         availabilityInperson: schedule,
         expectedVersion: organizerParticipantVersion,
-      }
+      },
     );
     expect(lockedResponse.response.status()).toBe(409);
-    const reopenedEvent = await apiJson(
+    const reactivatedEvent = await apiJson(
       request,
       "PUT",
       `/events/lifecycle?code=${eventCode}`,
       organizerSession.access,
       {
-        status: "open",
+        status: "active",
         expectedVersion: closedEvent.payload.event.version,
         responseDeadline: datetimeLocalHoursFromNow(72),
-      }
+      },
     );
-    expect(reopenedEvent.response.status()).toBe(200);
-    expect(reopenedEvent.payload.event.status).toBe("open");
+    expect(reactivatedEvent.response.status()).toBe(200);
+    expect(reactivatedEvent.payload.event.status).toBe("active");
 
     recomputeEventResults(eventCode);
     await page.goto(`/event?code=${eventCode}`);
-    await expect(page.getByText("Organizer Dashboard")).toBeVisible();
-    await page.getByRole("tab", { name: "Results" }).click();
+    await expect(
+      page.getByRole("heading", { level: 2, name: eventName }),
+    ).toBeVisible();
     await expect(page.getByRole("heading", { name: "Results" })).toBeVisible();
-    await expect(page.getByText("Top continuous windows for a 60-minute meeting.")).toBeVisible();
-    await expect(page.getByText(/Results are current at revision/)).toBeVisible();
-    await page.getByRole("button", { name: "Choose this time" }).first().click();
-    await expect(page.getByRole("tab", { name: "Finalize" })).toHaveAttribute(
-      "aria-selected",
-      "true"
-    );
+    await expect(
+      page.getByText("Top continuous windows for a 60-minute meeting."),
+    ).toBeVisible();
+    await expect(
+      page.getByText(/Results are current at revision/),
+    ).toBeVisible();
+    await page
+      .getByRole("button", { name: "Choose this time" })
+      .first()
+      .click();
+    await expect(page.getByRole("heading", { name: "Finalize" })).toBeFocused();
     await page.getByRole("button", { name: "Review attendance" }).click();
-    await expect(page.getByText("Attendance review is current for this candidate.")).toBeVisible();
+    await expect(
+      page.getByText("Attendance review is current for this candidate."),
+    ).toBeVisible();
     await expect(page.getByText("Available", { exact: true })).toBeVisible();
 
     const firstFinalStartedAt = Date.now() - 1000;
     const firstFinalResponsePromise = page.waitForResponse(
       (response) =>
         response.request().method() === "PUT" &&
-        response.url().includes(`/events/finalization?code=${eventCode}`)
+        response.url().includes(`/events/finalization?code=${eventCode}`),
     );
     await page.getByRole("button", { name: "Finalize meeting" }).click();
     expect((await firstFinalResponsePromise).status()).toBe(202);
     await expect(
-      page.getByText("The meeting is finalized and calendar invitations are queued.")
+      page.getByText(
+        "The meeting is finalized and calendar invitations are queued.",
+      ),
     ).toBeVisible();
-    await expect(page.getByLabel("Delivery progress").getByText("2 queued")).toBeVisible();
+    const finalizationDeliveryProgress = page.getByLabel(
+      "Finalization delivery progress",
+    );
+    await expect(
+      finalizationDeliveryProgress.getByText("2 queued"),
+    ).toBeVisible();
     dispatchEmailJobs();
-    await page.getByRole("button", { name: "Refresh progress" }).click();
-    await expect(page.getByLabel("Delivery progress").getByText("2 sent")).toBeVisible();
+    await finalizationDeliveryProgress
+      .getByRole("button", { name: "Refresh progress" })
+      .click();
+    await expect(
+      finalizationDeliveryProgress.getByText("2 sent"),
+    ).toBeVisible();
     const firstFinalEvent = await apiJson(
       request,
       "GET",
       `/events?code=${eventCode}`,
-      organizerSession.access
+      organizerSession.access,
     );
     expect(firstFinalEvent.payload.event.status).toBe("finalized");
     expect(firstFinalEvent.payload.event.finalMeeting.calendarSequence).toBe(0);
@@ -1384,78 +1616,111 @@ test.describe("Releviz account and scheduling flow", () => {
     const participantFinal = await latestEmailFor(
       participantEmail,
       firstFinalStartedAt,
-      (body) => body.includes("The final meeting time") && body.includes("METHOD:REQUEST")
+      (body) =>
+        body.includes("The final meeting time") &&
+        body.includes("METHOD:REQUEST"),
     );
     expect(participantFinal).toContain(`UID:${calendarUid}`);
     const manualFinal = await latestEmailFor(
       manualEmail,
       firstFinalStartedAt,
-      (body) => body.includes("The final meeting time") && body.includes("METHOD:REQUEST")
+      (body) =>
+        body.includes("The final meeting time") &&
+        body.includes("METHOD:REQUEST"),
     );
     expect(manualFinal).toContain("X-WR-TIMEZONE:UTC");
 
     const downloadPromise = page.waitForEvent("download");
-    await page.getByRole("button", { name: "Download calendar (.ics)" }).click();
+    await page
+      .getByRole("button", { name: "Download calendar (.ics)" })
+      .click();
     const calendarDownload = await downloadPromise;
     expect(calendarDownload.suggestedFilename()).toMatch(/\.ics$/);
-    expect(await fs.readFile(await calendarDownload.path(), "utf8")).toContain("METHOD:REQUEST");
+    expect(await fs.readFile(await calendarDownload.path(), "utf8")).toContain(
+      "METHOD:REQUEST",
+    );
 
     const cancellationStartedAt = Date.now() - 1000;
-    await page.getByRole("tab", { name: "Overview" }).click();
     const cancellationResponsePromise = page.waitForResponse(
       (response) =>
         response.request().method() === "PUT" &&
-        response.url().includes(`/events/lifecycle?code=${eventCode}`)
+        response.url().includes(`/events/lifecycle?code=${eventCode}`),
     );
-    await page.getByRole("button", { name: "Reopen event" }).click();
+    await page.getByRole("button", { name: "Reactivate event" }).click();
     expect((await cancellationResponsePromise).status()).toBe(202);
-    await expect(page.getByText("Event is now open.")).toBeVisible();
-    await expect(page.getByLabel("Delivery progress").getByText("2 queued")).toBeVisible();
+    await expect(
+      page.getByText("This event is active and accepting responses."),
+    ).toBeVisible();
+    const cancellationDeliveryProgress = page.getByLabel(
+      "Event delivery progress",
+    );
+    await expect(
+      cancellationDeliveryProgress.getByText("2 queued"),
+    ).toBeVisible();
     dispatchEmailJobs();
-    await page.getByRole("button", { name: "Refresh progress" }).click();
-    await expect(page.getByLabel("Delivery progress").getByText("2 sent")).toBeVisible();
+    await cancellationDeliveryProgress
+      .getByRole("button", { name: "Refresh progress" })
+      .click();
+    await expect(
+      cancellationDeliveryProgress.getByText("2 sent"),
+    ).toBeVisible();
     const cancellation = await latestEmailFor(
       participantEmail,
       cancellationStartedAt,
-      (body) => body.includes("Scheduling for") && body.includes("METHOD:CANCEL")
+      (body) =>
+        body.includes("Scheduling for") && body.includes("METHOD:CANCEL"),
     );
     expect(cancellation).toContain(`UID:${calendarUid}`);
     expect(cancellation).toContain("SEQUENCE:1");
 
     recomputeEventResults(eventCode);
-    await page.getByRole("tab", { name: "Results" }).click();
-    const candidateButtons = page.getByRole("button", { name: "Choose this time" });
+    const candidateButtons = page.getByRole("button", {
+      name: "Choose this time",
+    });
     await expect(candidateButtons.first()).toBeVisible();
     expect(await candidateButtons.count()).toBeGreaterThanOrEqual(3);
     await candidateButtons.nth(2).click();
     await page.getByRole("button", { name: "Review attendance" }).click();
-    await expect(page.getByText("Attendance review is current for this candidate.")).toBeVisible();
+    await expect(
+      page.getByText("Attendance review is current for this candidate."),
+    ).toBeVisible();
     const secondFinalStartedAt = Date.now() - 1000;
     const secondFinalResponsePromise = page.waitForResponse(
       (response) =>
         response.request().method() === "PUT" &&
-        response.url().includes(`/events/finalization?code=${eventCode}`)
+        response.url().includes(`/events/finalization?code=${eventCode}`),
     );
     await page.getByRole("button", { name: "Finalize meeting" }).click();
     expect((await secondFinalResponsePromise).status()).toBe(202);
     await expect(
-      page.getByText("The meeting is finalized and calendar invitations are queued.")
+      page.getByText(
+        "The meeting is finalized and calendar invitations are queued.",
+      ),
     ).toBeVisible();
     dispatchEmailJobs();
-    await page.getByRole("button", { name: "Refresh progress" }).click();
-    await expect(page.getByLabel("Delivery progress").getByText("2 sent")).toBeVisible();
+    await finalizationDeliveryProgress
+      .getByRole("button", { name: "Refresh progress" })
+      .click();
+    await expect(
+      finalizationDeliveryProgress.getByText("2 sent"),
+    ).toBeVisible();
     const reconfirmedEvent = await apiJson(
       request,
       "GET",
       `/events?code=${eventCode}`,
-      organizerSession.access
+      organizerSession.access,
     );
-    expect(reconfirmedEvent.payload.event.finalMeeting.calendarUid).toBe(calendarUid);
-    expect(reconfirmedEvent.payload.event.finalMeeting.calendarSequence).toBe(2);
+    expect(reconfirmedEvent.payload.event.finalMeeting.calendarUid).toBe(
+      calendarUid,
+    );
+    expect(reconfirmedEvent.payload.event.finalMeeting.calendarSequence).toBe(
+      2,
+    );
     const reconfirmation = await latestEmailFor(
       participantEmail,
       secondFinalStartedAt,
-      (body) => body.includes("The final meeting time") && body.includes("SEQUENCE:2")
+      (body) =>
+        body.includes("The final meeting time") && body.includes("SEQUENCE:2"),
     );
     expect(reconfirmation).toContain(`UID:${calendarUid}`);
 
@@ -1467,14 +1732,14 @@ test.describe("Releviz account and scheduling flow", () => {
       {
         availabilityInperson: schedule,
         expectedVersion: organizerParticipantVersion,
-      }
+      },
     );
     expect(finalizedLock.response.status()).toBe(409);
     const participantCalendar = await request.get(
       `${BACKEND_URL}/events/finalization/calendar?code=${eventCode}`,
       {
         headers: { Authorization: `Bearer ${participantSession.access}` },
-      }
+      },
     );
     expect(participantCalendar.status()).toBe(200);
     expect(await participantCalendar.text()).toContain(`UID:${calendarUid}`);
@@ -1504,10 +1769,8 @@ test.describe("Releviz account and scheduling flow", () => {
     await registerAccount(page, email, "Morgan", "Manager");
     await page.getByRole("link", { name: "Create New Event" }).click();
     await fillTextbox(page, "Event Name", originalName);
-    await expandAdvancedOptions(page);
     await fillTextbox(page, "Location / Address", "Lifecycle Room");
     await page.getByLabel("Event timezone").fill("UTC");
-    await page.locator('input[type="datetime-local"]').fill(datetimeLocalHoursFromNow(48));
     await page.getByRole("button", { name: "Create Event" }).click();
     await page.waitForURL(/\/event\?code=/);
     const originalCode = new URL(page.url()).searchParams.get("code");
@@ -1517,7 +1780,7 @@ test.describe("Releviz account and scheduling flow", () => {
       request,
       "GET",
       `/events?code=${originalCode}`,
-      organizerSession.access
+      organizerSession.access,
     );
     expect(eventDefinition.response.status()).toBe(200);
 
@@ -1526,12 +1789,16 @@ test.describe("Releviz account and scheduling flow", () => {
       request,
       originalCode,
       organizerSession.access,
-      `name,email,group\nLifecycle Seed,${launchSeedEmail},Lifecycle`
+      `name,email,group\nLifecycle Seed,${launchSeedEmail},Lifecycle`,
     );
     expect(launchSeed.receipt).toEqual(
-      expect.objectContaining({ importedCount: 1, createdCount: 1, updatedCount: 0 })
+      expect.objectContaining({
+        importedCount: 1,
+        createdCount: 1,
+        updatedCount: 0,
+      }),
     );
-    const launched = await apiJson(
+    const removedLaunchEndpoint = await apiJson(
       request,
       "POST",
       `/events/launch?code=${originalCode}`,
@@ -1540,16 +1807,16 @@ test.describe("Releviz account and scheduling flow", () => {
         expectedVersion: eventDefinition.payload.event.version,
         idempotencyKey: crypto.randomUUID(),
         selection: { allEligible: true },
-      }
+      },
     );
-    expect(launched.response.status()).toBe(202);
+    expect(removedLaunchEndpoint.response.status()).toBe(404);
 
     const joined = await apiJson(
       request,
       "POST",
       `/events/participants?code=${originalCode}`,
       organizerSession.access,
-      {}
+      {},
     );
     expect(joined.response.status()).toBe(201);
     const schedule = Array(eventDefinition.payload.event.slotCount).fill(1);
@@ -1563,7 +1830,7 @@ test.describe("Releviz account and scheduling flow", () => {
         availabilityVirtual: schedule,
         submitted: 1,
         expectedVersion: joined.payload.participant.version,
-      }
+      },
     );
     expect(submitted.response.status()).toBe(200);
 
@@ -1573,14 +1840,20 @@ test.describe("Releviz account and scheduling flow", () => {
       .locator("xpath=ancestor::article");
     await originalCard.getByRole("link", { name: "Edit" }).click();
     await expect(page).toHaveURL(new RegExp(`/edit\\?code=${originalCode}$`));
-    await expect(page.getByRole("heading", { name: "Edit event" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Edit event" }),
+    ).toBeVisible();
     await fillTextbox(page, "Event Name", updatedName);
     await page.getByLabel("End Time").fill("17:30");
     await page.getByRole("button", { name: "Save changes" }).click();
-    await expect(page.getByText("Schedule changes require a response reset")).toBeVisible();
+    await expect(
+      page.getByText("Schedule changes require a response reset"),
+    ).toBeVisible();
     const saveButton = page.getByRole("button", { name: "Save changes" });
     await expect(saveButton).toBeDisabled();
-    await page.getByLabel("I understand that participant availability will be reset.").check();
+    await page
+      .getByLabel("I understand that participant availability will be reset.")
+      .check();
     await expect(saveButton).toBeEnabled();
     await saveButton.click();
     await expect(page).toHaveURL(new RegExp(`/event\\?code=${originalCode}$`));
@@ -1589,11 +1862,11 @@ test.describe("Releviz account and scheduling flow", () => {
       request,
       "GET",
       `/events/roster?code=${originalCode}`,
-      organizerSession.access
+      organizerSession.access,
     );
     expect(resetRoster.response.status()).toBe(200);
     const resetOrganizer = resetRoster.payload.participants.find(
-      (participant) => participant.memberId === organizerSession.user.id
+      (participant) => participant.memberId === organizerSession.user.id,
     );
     expect(resetOrganizer).toBeTruthy();
     expect(resetOrganizer.submitted).toBe(false);
@@ -1602,32 +1875,38 @@ test.describe("Releviz account and scheduling flow", () => {
       request,
       "GET",
       `/events/roster/${resetOrganizer.id}/schedule?code=${originalCode}`,
-      organizerSession.access
+      organizerSession.access,
     );
     expect(resetSchedule.response.status()).toBe(200);
     expect(resetSchedule.payload.schedule.availabilityInperson).toHaveLength(
-      eventDefinition.payload.event.slotCount + 5
+      eventDefinition.payload.event.slotCount + 5,
     );
-    expect(resetSchedule.payload.schedule.availabilityInperson.every((value) => !value)).toBe(true);
+    expect(
+      resetSchedule.payload.schedule.availabilityInperson.every(
+        (value) => !value,
+      ),
+    ).toBe(true);
 
     await page.goto("/dashboard");
     const updatedCard = page
       .getByRole("link", { name: updatedName, exact: true })
       .locator("xpath=ancestor::article");
     await updatedCard.getByRole("button", { name: "Duplicate" }).click();
-    await expect(page.getByText(`${updatedName} was duplicated as a draft.`)).toBeVisible();
+    await expect(
+      page.getByText(`${updatedName} was duplicated as a new active event.`),
+    ).toBeVisible();
     const copyName = `${updatedName} (copy)`;
     const copyCard = page
       .getByRole("link", { name: copyName, exact: true })
       .locator("xpath=ancestor::article");
-    await expect(copyCard.getByText("Status: draft")).toBeVisible();
+    await expect(copyCard.getByText("Status: active")).toBeVisible();
     const copyCodeText = await copyCard.getByText(/^Code: /).textContent();
     const copyCode = copyCodeText.replace("Code: ", "").trim();
     const copyRoster = await apiJson(
       request,
       "GET",
       `/events/roster?code=${copyCode}`,
-      organizerSession.access
+      organizerSession.access,
     );
     expect(copyRoster.response.status()).toBe(200);
     expect(copyRoster.payload.participants).toEqual([]);
@@ -1635,25 +1914,30 @@ test.describe("Releviz account and scheduling flow", () => {
     await updatedCard.getByRole("button", { name: "Archive" }).click();
     await expect(page.getByText(`${updatedName} was archived.`)).toBeVisible();
     await expect(updatedCard.getByText("Status: archived")).toBeVisible();
-    await expect(updatedCard.getByRole("link", { name: "Edit" })).toHaveAttribute(
-      "aria-disabled",
-      "true"
-    );
+    await expect(
+      updatedCard.getByRole("link", { name: "Edit" }),
+    ).toHaveAttribute("aria-disabled", "true");
 
     await copyCard.getByRole("button", { name: "Delete" }).click();
-    const deleteButton = page.getByRole("button", { name: "Delete event permanently" });
+    const deleteButton = page.getByRole("button", {
+      name: "Delete event permanently",
+    });
     await expect(deleteButton).toBeDisabled();
     await page.getByLabel("Event code confirmation").fill(copyCode);
     await expect(deleteButton).toBeEnabled();
     await deleteButton.click();
-    await expect(page.getByText(`${copyName} was permanently deleted.`)).toBeVisible();
-    await expect(page.getByRole("link", { name: copyName, exact: true })).toHaveCount(0);
+    await expect(
+      page.getByText(`${copyName} was permanently deleted.`),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: copyName, exact: true }),
+    ).toHaveCount(0);
 
     const deletedCopy = await apiJson(
       request,
       "GET",
       `/events?code=${copyCode}`,
-      organizerSession.access
+      organizerSession.access,
     );
     expect(deletedCopy.response.status()).toBe(404);
     assertManagedEventState({
@@ -1689,8 +1973,8 @@ test.describe("Releviz account and scheduling flow", () => {
     await page.getByRole("button", { name: "Send reset code" }).click();
     await expect(
       page.getByText(
-        "If an account exists for that email, a reset code has been sent. Check your inbox."
-      )
+        "If an account exists for that email, a reset code has been sent. Check your inbox.",
+      ),
     ).toBeVisible();
     const resetCode = await latestVerificationCode(email, resetStartedAt);
     await page.getByLabel("Reset code").fill(resetCode);
@@ -1699,7 +1983,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await page.getByRole("button", { name: "Reset password" }).click();
     await expect(page).toHaveURL(/\/login\?status=password-reset$/);
     await expect(
-      page.getByText("Password reset complete. Log in with your new password.")
+      page.getByText("Password reset complete. Log in with your new password."),
     ).toBeVisible();
 
     for (const access of [memberSession.access, otherOriginalSession.access]) {
@@ -1710,18 +1994,24 @@ test.describe("Releviz account and scheduling flow", () => {
     await loginWithPassword(page, email, resetPassword, false);
     const resetSession = await readSession(page);
     await page.goto("/settings");
-    const passwordForm = page.getByRole("heading", { name: "Change password" }).locator("..");
+    const passwordForm = page
+      .getByRole("heading", { name: "Change password" })
+      .locator("..");
     await passwordForm.getByLabel("Current password").fill(resetPassword);
-    await passwordForm.getByLabel("New password", { exact: true }).fill(finalPassword);
+    await passwordForm
+      .getByLabel("New password", { exact: true })
+      .fill(finalPassword);
     await passwordForm.getByLabel("Confirm new password").fill(finalPassword);
     await passwordForm.getByRole("button", { name: "Change password" }).click();
     await expect(page).toHaveURL(/\/login\?status=password-changed$/);
-    await expect(page.getByText("Password changed. Log in again on this device.")).toBeVisible();
+    await expect(
+      page.getByText("Password changed. Log in again on this device."),
+    ).toBeVisible();
     const changedSessionRejected = await apiJson(
       request,
       "GET",
       "/authn/profile/",
-      resetSession.access
+      resetSession.access,
     );
     expect(changedSessionRejected.response.status()).toBe(401);
 
@@ -1737,21 +2027,32 @@ test.describe("Releviz account and scheduling flow", () => {
     await page.goto("/settings");
     await page.getByRole("button", { name: "Sign out all devices" }).click();
     await expect(page).toHaveURL(/\/login\?status=signed-out-all$/);
-    await expect(page.getByText("All devices have been signed out.")).toBeVisible();
+    await expect(
+      page.getByText("All devices have been signed out."),
+    ).toBeVisible();
 
-    for (const access of [primaryFinalSession.access, otherFinalSession.access]) {
+    for (const access of [
+      primaryFinalSession.access,
+      otherFinalSession.access,
+    ]) {
       const revoked = await apiJson(request, "GET", "/authn/profile/", access);
       expect(revoked.response.status()).toBe(401);
     }
 
     await loginWithPassword(page, email, finalPassword, false);
     await page.goto("/settings");
-    const deleteForm = page.getByRole("heading", { name: "Delete account" }).locator("..");
+    const deleteForm = page
+      .getByRole("heading", { name: "Delete account" })
+      .locator("..");
     await deleteForm.getByLabel("Current password").fill(finalPassword);
     await deleteForm.getByLabel("Type DELETE to confirm").fill("DELETE");
-    await deleteForm.getByRole("button", { name: "Delete account permanently" }).click();
+    await deleteForm
+      .getByRole("button", { name: "Delete account permanently" })
+      .click();
     await expect(page).toHaveURL(/\/login\?status=account-deleted$/);
-    await expect(page.getByText("Your account has been deleted.")).toBeVisible();
+    await expect(
+      page.getByText("Your account has been deleted."),
+    ).toBeVisible();
 
     const deletedLogin = await request.post(`${BACKEND_URL}/authn/login/`, {
       data: { email, password: finalPassword },
@@ -1763,22 +2064,33 @@ test.describe("Releviz account and scheduling flow", () => {
 });
 
 test.describe("Releviz admin", () => {
-  test("renders the themed admin login and authenticated sidebar", async ({ page }) => {
+  test("renders the themed admin login and authenticated sidebar", async ({
+    page,
+  }) => {
     await page.goto(`${BACKEND_URL}/admin/login/?next=/admin/`);
     await expect(page.locator(".login-box")).toBeVisible();
-    await expect(page.locator("img.login-logo")).toHaveAttribute("src", /releviz-mark\.png/);
+    await expect(page.locator("img.login-logo")).toHaveAttribute(
+      "src",
+      /releviz-mark\.png/,
+    );
     await expect(page.getByText("Releviz Admin")).toBeVisible();
     await page.locator("#id_email").fill(ADMIN_EMAIL);
     await page.locator("#id_password").fill(ADMIN_PASSWORD);
     await page.getByRole("button", { name: "Sign In" }).click();
     await expect(page).toHaveURL(/\/admin\/$/);
     await expect(
-      page.locator("#nav-sidebar-apps").getByRole("heading", { name: "Scheduling" })
+      page
+        .locator("#nav-sidebar-apps")
+        .getByRole("heading", { name: "Scheduling" }),
     ).toBeVisible();
     await expect(
-      page.locator("#nav-sidebar-apps").getByRole("heading", { name: "Members & Authentication" })
+      page
+        .locator("#nav-sidebar-apps")
+        .getByRole("heading", { name: "Members & Authentication" }),
     ).toBeVisible();
-    await expect(page.locator('[data-admin-theme-choice="dark"]').first()).toBeAttached();
+    await expect(
+      page.locator('[data-admin-theme-choice="dark"]').first(),
+    ).toBeAttached();
 
     const sidebar = page.locator("#nav-sidebar-apps");
     const activeSidebarLinks = sidebar.locator("a.active");

@@ -18,10 +18,13 @@ async function jsonOrError(res) {
     payload = null;
   }
   const error = new Error(
-    payload?.error || payload?.detail || (payload ? "Request failed" : `HTTP ${res.status}`)
+    payload?.error ||
+      payload?.detail ||
+      (payload ? "Request failed" : `HTTP ${res.status}`),
   );
   error.status = res.status;
   error.code = payload?.errorCode || payload?.code || null;
+  error.event = payload?.event || null;
   error.participant = payload?.participant || null;
   error.import = payload?.import || null;
   throw error;
@@ -35,7 +38,10 @@ export async function createRosterImport(code, source, token) {
         form.append("file", source.file);
         return form;
       })()
-    : JSON.stringify({ sourceType: "paste", pastedText: source?.pastedText || "" });
+    : JSON.stringify({
+        sourceType: "paste",
+        pastedText: source?.pastedText || "",
+      });
   const res = await apiFetch(
     `${API_BASE}/events/roster-imports?code=${encodeURIComponent(code)}`,
     {
@@ -43,7 +49,7 @@ export async function createRosterImport(code, source, token) {
       ...(isFile ? {} : { headers: { "Content-Type": "application/json" } }),
       body,
     },
-    token
+    token,
   );
   return jsonOrError(res);
 }
@@ -56,7 +62,7 @@ export async function configureRosterImport(code, importId, payload, token) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     },
-    token
+    token,
   );
   return jsonOrError(res);
 }
@@ -65,13 +71,13 @@ export async function fetchRosterImportRows(
   code,
   importId,
   { page = 1, pageSize = 50 } = {},
-  token
+  token,
 ) {
   const query = queryString({ code, page, pageSize });
   const res = await apiFetch(
     `${API_BASE}/events/roster-imports/${encodeURIComponent(importId)}/rows?${query}`,
     {},
-    token
+    token,
   );
   return jsonOrError(res);
 }
@@ -84,7 +90,7 @@ export async function commitRosterImport(code, importId, payload, token) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     },
-    token
+    token,
   );
   return jsonOrError(res);
 }
@@ -93,7 +99,7 @@ export async function cancelRosterImport(code, importId, token) {
   const res = await apiFetch(
     `${API_BASE}/events/roster-imports/${encodeURIComponent(importId)}?code=${encodeURIComponent(code)}`,
     { method: "DELETE" },
-    token
+    token,
   );
   return jsonOrError(res);
 }
@@ -110,7 +116,7 @@ export async function fetchRoster(
     accountAccess,
     included,
   } = {},
-  token
+  token,
 ) {
   const query = queryString({
     code,
@@ -131,12 +137,17 @@ export async function fetchRosterSchedule(code, participantId, token) {
   const res = await apiFetch(
     `${API_BASE}/events/roster/${encodeURIComponent(participantId)}/schedule?code=${encodeURIComponent(code)}`,
     {},
-    token
+    token,
   );
   return jsonOrError(res);
 }
 
-export async function patchRosterParticipant(code, participantId, payload, token) {
+export async function patchRosterParticipant(
+  code,
+  participantId,
+  payload,
+  token,
+) {
   const res = await apiFetch(
     `${API_BASE}/events/roster/${encodeURIComponent(participantId)}?code=${encodeURIComponent(code)}`,
     {
@@ -144,7 +155,7 @@ export async function patchRosterParticipant(code, participantId, payload, token
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     },
-    token
+    token,
   );
   return jsonOrError(res);
 }
@@ -157,7 +168,7 @@ export async function patchRosterBulk(code, payload, token) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     },
-    token
+    token,
   );
   return jsonOrError(res);
 }

@@ -17,12 +17,15 @@ jest.mock("@/components/auth/AuthContext", () => ({
   useAuth: jest.fn(),
 }));
 
-jest.mock("@/lib/navigation", () => ({
-  navigateTo: jest.fn(),
-}));
+jest.mock("@/lib/navigation", () => {
+  const actual = jest.requireActual("@/lib/navigation");
+  return { ...actual, navigateTo: jest.fn() };
+});
 
 import { useAuth } from "@/components/auth/AuthContext";
-import ContinueWithEmailPage from "@/components/auth/ContinueWithEmailPage";
+import ContinueWithEmailPage, {
+  destinationAfterAuthentication,
+} from "@/components/auth/ContinueWithEmailPage";
 import { navigateTo } from "@/lib/navigation";
 
 const requestEmailAuthCode = jest.fn();
@@ -124,5 +127,77 @@ describe("ContinueWithEmailPage", () => {
       await screen.findByRole("button", { name: "Use a different email" }),
     );
     expect(screen.getByLabelText("Email")).toHaveValue("ada@example.com");
+  });
+
+  test("redirects an authenticated account instead of rendering the login form", async () => {
+    useAuth.mockReturnValue({
+      user: { id: "member-1" },
+      loading: false,
+      nextStep: null,
+      requiresProfileCompletion: false,
+      requestEmailAuthCode,
+      verifyEmailAuthCode,
+    });
+
+    render(<ContinueWithEmailPage next="/event?code=ABC123" />);
+
+    expect(screen.queryByLabelText("Email")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Opening your account…",
+    );
+    await waitFor(() =>
+      expect(navigateTo).toHaveBeenCalledWith("/event?code=ABC123"),
+    );
+  });
+
+  test("sends an authenticated incomplete profile to setup and avoids auth-entry loops", async () => {
+    useAuth.mockReturnValue({
+      user: { id: "member-1" },
+      loading: false,
+      nextStep: "complete_profile",
+      requiresProfileCompletion: true,
+      requestEmailAuthCode,
+      verifyEmailAuthCode,
+    });
+
+    render(<ContinueWithEmailPage next="/login" />);
+
+    await waitFor(() =>
+      expect(navigateTo).toHaveBeenCalledWith(
+        "/settings?complete_profile=1&next=%2Fdashboard",
+      ),
+    );
+    expect(destinationAfterAuthentication("//evil.example", {})).toBe(
+      "/dashboard",
+    );
+    expect(
+      destinationAfterAuthentication(
+        "/settings?complete_profile=1&next=%2Fevent%3Fcode%3DABC123",
+        {},
+      ),
+    ).toBe("/event?code=ABC123");
+    expect(
+      destinationAfterAuthentication(
+        "/settings?complete_profile=1&next=%2Fevent%3Fcode%3DABC123",
+        { requires_profile_completion: true },
+      ),
+    ).toBe("/settings?complete_profile=1&next=%2Fevent%3Fcode%3DABC123");
+  });
+
+  test("does not flash the email form while the session is loading", () => {
+    useAuth.mockReturnValue({
+      user: null,
+      loading: true,
+      requestEmailAuthCode,
+      verifyEmailAuthCode,
+    });
+
+    render(<ContinueWithEmailPage />);
+
+    expect(screen.queryByLabelText("Email")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Checking your session…",
+    );
+    expect(navigateTo).not.toHaveBeenCalled();
   });
 });

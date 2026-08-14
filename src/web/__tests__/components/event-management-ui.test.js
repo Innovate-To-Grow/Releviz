@@ -96,7 +96,7 @@ const baseEvent = {
   timezone: "UTC",
   remindersEnabled: true,
   reminderHoursBefore: 24,
-  status: "open",
+  status: "active",
   version: 3,
 };
 
@@ -135,7 +135,7 @@ describe("organizer event management UI", () => {
       ...baseEvent,
       code: "COPY0001",
       name: "Planning session (copy)",
-      status: "draft",
+      status: "active",
       version: 1,
       responseDeadline: null,
     };
@@ -178,7 +178,9 @@ describe("organizer event management UI", () => {
       await screen.findByRole("link", { name: duplicate.name }),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("Planning session was duplicated as a draft."),
+      screen.getByText(
+        "Planning session was duplicated as a new active event.",
+      ),
     ).toBeInTheDocument();
 
     await userEvent.click(
@@ -258,7 +260,7 @@ describe("organizer event management UI", () => {
           ...baseEvent,
           code: "RETRYCPY",
           name: "Retry copy",
-          status: "draft",
+          status: "active",
         },
       });
 
@@ -372,6 +374,60 @@ describe("organizer event management UI", () => {
     expect(replace).toHaveBeenCalledWith("/event?code=EVENT123");
   });
 
+  test("inline edit reuses initial values and reports saves without navigation", async () => {
+    const onCancel = jest.fn();
+    const onSaved = jest.fn();
+    const result = {
+      event: { ...baseEvent, name: "Inline update", version: 4 },
+      responsesReset: 0,
+    };
+    updateEvent.mockResolvedValue(result);
+
+    const first = render(
+      <CreateEvent
+        operation="edit"
+        presentation="inline"
+        initialEvent={baseEvent}
+        onSaved={onSaved}
+        onCancel={onCancel}
+      />,
+    );
+
+    const inlineForm = screen
+      .getByRole("button", { name: "Save changes" })
+      .closest("form");
+    expect(inlineForm).toHaveClass("create-event-form--inline");
+    expect(fetchEvent).not.toHaveBeenCalled();
+    expect(
+      document.querySelector('md-outlined-text-field[label="Event Name"]'),
+    ).toHaveAttribute("value", baseEvent.name);
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(replace).not.toHaveBeenCalled();
+    first.unmount();
+
+    render(
+      <CreateEvent
+        operation="edit"
+        presentation="inline"
+        initialEvent={baseEvent}
+        onSaved={onSaved}
+        onCancel={onCancel}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() =>
+      expect(updateEvent).toHaveBeenCalledWith(
+        baseEvent.code,
+        expect.objectContaining({ expectedVersion: baseEvent.version }),
+        "token",
+      ),
+    );
+    expect(onSaved).toHaveBeenCalledWith(result);
+    expect(replace).not.toHaveBeenCalled();
+  });
+
   test("edit form exposes conflicts, load errors, and authentication recovery", async () => {
     searchParams = new URLSearchParams("code=EVENT123");
     fetchEvent.mockResolvedValueOnce({ event: baseEvent });
@@ -438,20 +494,46 @@ describe("organizer event management UI", () => {
     expect(createForm).toHaveClass("create-event-form");
     expect(createForm).not.toHaveClass("md-card");
     expect(createForm.closest("main")).toHaveClass("create-event-shell");
+    expect(
+      screen.getByRole("heading", { name: "Meeting & access" }),
+    ).toBeInTheDocument();
     const advancedOptions = screen
       .getByText("Advanced options")
       .closest("details");
     expect(advancedOptions).not.toHaveAttribute("open");
+
+    const locationField = document.querySelector(
+      'md-outlined-text-field[label="Location / Address"]',
+    );
+    const timezoneField = screen.getByLabelText("Event timezone");
+    const meetingDurationField = screen.getByLabelText("Meeting Duration");
+    const accessField = screen.getByLabelText("Event Access");
+    expect(screen.getByRole("button", { name: "In-Person" })).toBeVisible();
+    expect(locationField).toBeVisible();
+    expect(timezoneField).toBeVisible();
+    expect(meetingDurationField).toBeVisible();
+    expect(accessField).toBeVisible();
+    expect(advancedOptions).not.toContainElement(locationField);
+    expect(advancedOptions).not.toContainElement(timezoneField);
+    expect(advancedOptions).not.toContainElement(meetingDurationField);
+    expect(advancedOptions).not.toContainElement(accessField);
+
+    expect(advancedOptions).toContainElement(
+      screen.getByLabelText("Slot Duration"),
+    );
+    expect(advancedOptions).toContainElement(
+      screen.getByLabelText("Participant View"),
+    );
+    expect(advancedOptions).toContainElement(
+      screen.getByLabelText("Response Deadline"),
+    );
+    expect(advancedOptions).toContainElement(
+      screen.getByLabelText("Reminder Hours Before Deadline"),
+    );
     await userEvent.click(screen.getByText("Advanced options"));
     expect(advancedOptions).toHaveAttribute("open");
     expect(
-      screen.getByRole("heading", { name: "Meeting details" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("heading", { name: "Time settings" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("heading", { name: "Response settings" }),
+      screen.getByRole("heading", { name: "Fine tuning" }),
     ).toBeInTheDocument();
     await userEvent.click(createButton);
     const nameError = await screen.findByText("Event name is required");
@@ -488,13 +570,13 @@ describe("organizer event management UI", () => {
         accessMode: "open_link",
         timezone: "America/Los_Angeles",
         meetingDurationMinutes: 60,
-        status: "draft",
+        status: "active",
       }),
     );
     expect(replace).toHaveBeenCalledWith("/event?code=CREATED1");
   });
 
-  test("opens advanced options and places advanced validation beside its field", async () => {
+  test("keeps common validation visible without opening advanced options", async () => {
     render(<CreateEvent />);
     const advancedOptions = screen
       .getByText("Advanced options")
@@ -511,7 +593,7 @@ describe("organizer event management UI", () => {
       screen.getByRole("button", { name: "Create Event" }).closest("form"),
     );
 
-    expect(advancedOptions).toHaveAttribute("open");
+    expect(advancedOptions).not.toHaveAttribute("open");
     const durationError = await screen.findByText(
       "Meeting duration must be 15–480 minutes and align to 30-minute slots",
     );
@@ -519,6 +601,38 @@ describe("organizer event management UI", () => {
       durationError.closest('[data-error-field="meetingDuration"]'),
     ).toContainElement(meetingDuration);
     expect(meetingDuration).toHaveAttribute("aria-invalid", "true");
+    expect(
+      document.querySelector(".create-event-feedback .create-event-error"),
+    ).not.toBeInTheDocument();
+  });
+
+  test("opens advanced options and places advanced validation beside its field", async () => {
+    render(<CreateEvent />);
+    const advancedOptions = screen
+      .getByText("Advanced options")
+      .closest("details");
+    const nameField = document.querySelector(
+      'md-outlined-text-field[label="Event Name"]',
+    );
+    const reminderHours = screen.getByLabelText(
+      "Reminder Hours Before Deadline",
+    );
+
+    expect(advancedOptions).not.toHaveAttribute("open");
+    setCustomElementValue(nameField, "Reminder validation");
+    fireEvent.change(reminderHours, { target: { value: "721" } });
+    fireEvent.submit(
+      screen.getByRole("button", { name: "Create Event" }).closest("form"),
+    );
+
+    expect(advancedOptions).toHaveAttribute("open");
+    const reminderError = await screen.findByText(
+      "Reminder timing must be between 0 and 720 hours",
+    );
+    expect(
+      reminderError.closest('[data-error-field="reminderHours"]'),
+    ).toContainElement(reminderHours);
+    expect(reminderHours).toHaveAttribute("aria-invalid", "true");
     expect(
       document.querySelector(".create-event-feedback .create-event-error"),
     ).not.toBeInTheDocument();

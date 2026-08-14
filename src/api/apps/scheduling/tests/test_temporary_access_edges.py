@@ -15,7 +15,6 @@ from apps.authn.models import ContactEmail, EmailAuthChallenge
 from apps.authn.security import RateLimitDecision
 from apps.authn.services import start_registration
 from apps.authn.tests.helpers import create_member, token_for
-from apps.authn.tests.test_auth_edges import latest_code
 from apps.mail.services import EmailDeliveryError
 from apps.scheduling.models import (
     Event,
@@ -51,7 +50,7 @@ class TemporaryAccessEdgeFixture(TestCase):
             code="TEDGE123",
             name="Temporary access edge cases",
             organizer=self.organizer,
-            status=Event.Status.OPEN,
+            status=Event.Status.ACTIVE,
             access_mode="open_link",
             opened_at=timezone.now(),
             days=[1],
@@ -214,12 +213,16 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
             404,
         )
         with patch(
-            "apps.scheduling.views.create_or_reuse_managed_participant",
+            "apps.scheduling.views.create_or_reuse_managed_participant_and_send",
             side_effect=ManagedParticipantError("Organizer only", status_code=403),
         ):
             denied = client.post(
                 f"/events/participants/managed?code={self.event.code}",
-                {"name": "Name", "email": "name@example.com"},
+                {
+                    "name": "Name",
+                    "email": "name@example.com",
+                    "idempotencyKey": str(uuid.uuid4()),
+                },
                 format="json",
             )
         self.assertEqual(denied.status_code, 403)
@@ -231,11 +234,15 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
                 "apps.scheduling.views.consume_request_rate_limit",
                 return_value=quota_denied,
             ),
-            patch("apps.scheduling.views.create_or_reuse_managed_participant") as create,
+            patch("apps.scheduling.views.create_or_reuse_managed_participant_and_send") as create,
         ):
             throttled = client.post(
                 f"/events/participants/managed?code={self.event.code}",
-                {"name": "New person", "email": "new-person@example.com"},
+                {
+                    "name": "New person",
+                    "email": "new-person@example.com",
+                    "idempotencyKey": str(uuid.uuid4()),
+                },
                 format="json",
             )
         self.assertEqual(throttled.status_code, 429)
@@ -258,7 +265,11 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
         ):
             client.post(
                 f"/events/participants/managed?code={self.event.code}",
-                {"name": "Managed Atomicity", "email": email},
+                {
+                    "name": "Managed Atomicity",
+                    "email": email,
+                    "idempotencyKey": str(uuid.uuid4()),
+                },
                 format="json",
             )
 
@@ -457,12 +468,24 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
         endpoint = f"/events/temp-access/upgrade-registration?code={self.event.code}"
         client = self.temp_client()
         untrusted_email = "untrusted@example.com"
+        verification_code = "123456"
         with (
             patch(
                 "apps.scheduling.views.start_registration",
                 wraps=start_registration,
             ) as registration_start,
             patch("apps.scheduling.views.security_logger.info") as log_info,
+            patch(
+                "apps.authn.services.email.challenges._random_code",
+                return_value=verification_code,
+            ),
+            patch(
+                "apps.authn.services.email.send_email.send_verification_email"
+            ) as send_verification,
+            patch(
+                "apps.authn.services.members.register.decrypt_password",
+                return_value="new-password-123",
+            ),
         ):
             response = client.post(
                 endpoint,
@@ -479,6 +502,7 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
 
         self.assertEqual(response.status_code, 202, response.data)
         registration_start.assert_called_once()
+        send_verification.assert_called_once()
         self.assertEqual(
             registration_start.call_args.kwargs,
             {"_temporary_upgrade_member_id": self.temporary.pk},
@@ -522,13 +546,13 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
             "/authn/register/verify-code/",
             {
                 "email": "edge-temp@example.com",
-                "code": latest_code(),
+                "code": verification_code,
                 "temporaryUpgrade": True,
             },
             format="json",
         )
         self.assertEqual(verified.status_code, 200, verified.data)
-        self.assertEqual(verified.data["user"]["id"], str(self.temporary.pk))
+        self.assertEqual(verified.data["user"]["member_uuid"], str(self.temporary.pk))
         self.temporary.refresh_from_db()
         self.session.refresh_from_db()
         self.participant.refresh_from_db()
