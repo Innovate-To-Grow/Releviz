@@ -6,6 +6,7 @@ from .helpers import (
     consume_request_rate_limit,
     enforce_cookie_request_origin,
     normalize_security_identity,
+    prune_auth_security_state,
     request_user_agent,
     security_log_key,
 )
@@ -30,6 +31,7 @@ __all__ = [
     "consume_request_rate_limit",
     "enforce_cookie_request_origin",
     "normalize_security_identity",
+    "prune_auth_security_state",
     "request_user_agent",
     "security_log_key",
 ]

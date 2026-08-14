@@ -80,7 +80,7 @@ function ParticipantView() {
     Boolean(event.responseDeadline) &&
     Date.now() >= new Date(event.responseDeadline).getTime();
   const responseChangesDisabled =
-    event.status !== "open" || responseDeadlinePassed;
+    event.status !== "active" || responseDeadlinePassed;
 
   const applyParticipantResponse = useCallback((participant) => {
     const inperson = participant.availabilityInperson.map(Number);
@@ -577,7 +577,7 @@ function ParticipantView() {
             )}
             {responseChangesDisabled && (
               <p className="participant-error">
-                {event.status !== "open"
+                {event.status !== "active"
                   ? `Responses are locked while this event is ${event.status}.`
                   : "The response deadline has passed."}
               </p>

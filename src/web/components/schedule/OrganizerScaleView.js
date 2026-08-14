@@ -1,29 +1,20 @@
 "use client";
 
-import {
-  useCallback,
-  useContext,
-  useEffect,
-  useId,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { useAuth } from "@/components/auth/AuthContext";
 import EventContext from "@/components/event/EventContext";
 import { OrganizerHeader } from "@/components/schedule/OrganizerPanels";
 import {
+  DeliveryRequestProgress,
+  EventControls,
   FinalizeScalePanel,
   OverviewPanel,
   ResultsSnapshotPanel,
 } from "@/components/schedule/OrganizerScalePanels";
 import RosterPanel from "@/components/schedule/RosterPanel";
+import { fetchEvent } from "@/lib/api/events";
 
-const TABS = [
-  ["overview", "Overview"],
-  ["roster", "Roster"],
-  ["results", "Results"],
-  ["finalize", "Finalize"],
-];
+const SECTION_IDS = ["overview", "roster", "results", "finalize"];
 
 function deliveryStorageKey(eventCode) {
   return `releviz.delivery-request.${eventCode}`;
@@ -43,17 +34,43 @@ function readStoredDeliveryRequest(eventCode) {
   }
 }
 
+function selectedRecommendationKey(recommendation) {
+  if (!recommendation) return null;
+  return (
+    recommendation.id ||
+    [
+      recommendation.suggestedStartsAt || recommendation.startsAt,
+      recommendation.suggestedEndsAt || recommendation.endsAt,
+      recommendation.channel,
+    ].join("-")
+  );
+}
+
+function focusSection(sectionId, headingRef) {
+  const reducedMotion =
+    typeof window !== "undefined" &&
+    window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  document.getElementById(sectionId)?.scrollIntoView({
+    behavior: reducedMotion ? "auto" : "smooth",
+    block: "start",
+  });
+  headingRef.current?.focus({ preventScroll: true });
+}
+
 export default function OrganizerScaleView() {
   const { event, setEvent } = useContext(EventContext);
   const { user, loading, getToken } = useAuth();
-  const [tab, setTab] = useState("overview");
-  const tabGroupId = useId().replace(/:/g, "");
-  const tabRefs = useRef([]);
   const [deliveryRequest, setDeliveryRequestState] = useState(null);
-  const [launchParticipantIds, setLaunchParticipantIds] = useState([]);
-  const [launchSelectionMode, setLaunchSelectionMode] = useState("all");
   const [selectedRecommendation, setSelectedRecommendation] = useState(null);
   const [resultsInvalidationKey, setResultsInvalidationKey] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshStatus, setRefreshStatus] = useState("");
+  const [refreshError, setRefreshError] = useState("");
+  const refreshInFlight = useRef(false);
+  const rosterRef = useRef(null);
+  const resultsRef = useRef(null);
+  const resultsHeadingRef = useRef(null);
+  const finalizeHeadingRef = useRef(null);
 
   const setDeliveryRequest = useCallback(
     (value) => {
@@ -78,38 +95,92 @@ export default function OrganizerScaleView() {
     return () => clearTimeout(timer);
   }, [event.code]);
 
-  const activateTab = useCallback((index) => {
-    const nextIndex = (index + TABS.length) % TABS.length;
-    setTab(TABS[nextIndex][0]);
-    tabRefs.current[nextIndex]?.focus();
+  useEffect(() => {
+    if (!selectedRecommendation) return;
+    focusSection("organizer-finalize", finalizeHeadingRef);
+  }, [selectedRecommendation]);
+
+  useEffect(() => {
+    const syncSectionFromHash = () => {
+      const section = window.location.hash.replace("#organizer-", "");
+      if (!SECTION_IDS.includes(section)) return;
+      document.getElementById(`organizer-${section}`)?.scrollIntoView({
+        behavior: "auto",
+        block: "start",
+      });
+    };
+
+    syncSectionFromHash();
+    window.addEventListener("hashchange", syncSectionFromHash);
+    return () => window.removeEventListener("hashchange", syncSectionFromHash);
   }, []);
 
-  const handleTabKeyDown = useCallback(
-    (keyboardEvent, index) => {
-      switch (keyboardEvent.key) {
-        case "ArrowRight":
-        case "ArrowDown":
-          keyboardEvent.preventDefault();
-          activateTab(index + 1);
-          break;
-        case "ArrowLeft":
-        case "ArrowUp":
-          keyboardEvent.preventDefault();
-          activateTab(index - 1);
-          break;
-        case "Home":
-          keyboardEvent.preventDefault();
-          activateTab(0);
-          break;
-        case "End":
-          keyboardEvent.preventDefault();
-          activateTab(TABS.length - 1);
-          break;
-        default:
-          break;
+  const refreshWorkspace = useCallback(async () => {
+    if (refreshInFlight.current) return;
+    refreshInFlight.current = true;
+    setRefreshing(true);
+    setRefreshStatus("");
+    setRefreshError("");
+    setSelectedRecommendation(null);
+
+    try {
+      const token = await getToken();
+      const tasks = [
+        fetchEvent(event.code, token),
+        rosterRef.current?.refresh(token) || Promise.resolve(null),
+        resultsRef.current?.refresh(token) || Promise.resolve(null),
+      ];
+      const [eventResult, rosterResult, resultsResult] =
+        await Promise.allSettled(tasks);
+      if (eventResult.status === "fulfilled" && eventResult.value?.event) {
+        setEvent(eventResult.value.event);
+      }
+
+      const failed = [
+        ["event", eventResult],
+        ["roster", rosterResult],
+        ["results", resultsResult],
+      ].filter(([, result]) => result.status === "rejected");
+      if (failed.length) {
+        setRefreshError(
+          `Unable to refresh ${failed.map(([name]) => name).join(", ")}. Other workspace sections were updated.`,
+        );
+      } else {
+        setRefreshStatus("Workspace updated.");
+      }
+    } catch (requestError) {
+      setRefreshError(
+        requestError.message || "Unable to refresh this workspace.",
+      );
+    } finally {
+      refreshInFlight.current = false;
+      setRefreshing(false);
+    }
+  }, [event.code, getToken, setEvent]);
+
+  const invalidateResults = useCallback(() => {
+    setSelectedRecommendation(null);
+    setResultsInvalidationKey((current) => current + 1);
+  }, []);
+
+  const handleEventSaved = useCallback(
+    async (result) => {
+      if (result?.event) setEvent(result.event);
+      invalidateResults();
+
+      if (result?.responsesReset) {
+        try {
+          const token = await getToken();
+          await rosterRef.current?.refresh(token);
+        } catch (requestError) {
+          setRefreshError(
+            requestError.message ||
+              "The event was saved, but the roster could not be refreshed.",
+          );
+        }
       }
     },
-    [activateTab],
+    [getToken, invalidateResults, setEvent],
   );
 
   if (loading || !user) {
@@ -124,96 +195,105 @@ export default function OrganizerScaleView() {
     <main className="page-pad organizer-workspace">
       <OrganizerHeader
         event={event}
-        onRefresh={() => setResultsInvalidationKey((current) => current + 1)}
-      />
-      <nav
-        className="organizer-tabs"
-        role="tablist"
-        aria-label="Organizer sections"
-      >
-        {TABS.map(([value, label], index) => (
-          <button
-            key={value}
-            ref={(node) => {
-              tabRefs.current[index] = node;
-            }}
-            id={`${tabGroupId}-tab-${value}`}
-            type="button"
-            role="tab"
-            aria-selected={tab === value}
-            aria-controls={`${tabGroupId}-panel-${value}`}
-            tabIndex={tab === value ? 0 : -1}
-            onClick={() => setTab(value)}
-            onKeyDown={(keyboardEvent) =>
-              handleTabKeyDown(keyboardEvent, index)
-            }
-          >
-            {label}
-          </button>
-        ))}
-      </nav>
-
-      <div
-        className="organizer-tab-panel"
-        id={`${tabGroupId}-panel-${tab}`}
-        role="tabpanel"
-        aria-label={TABS.find(([value]) => value === tab)?.[1]}
-        aria-labelledby={`${tabGroupId}-tab-${tab}`}
-        tabIndex={0}
-      >
-        {tab === "overview" && (
-          <OverviewPanel
+        onRefresh={refreshWorkspace}
+        refreshing={refreshing}
+        controls={
+          <EventControls
             event={event}
             setEvent={setEvent}
             getToken={getToken}
-            deliveryRequest={deliveryRequest}
             setDeliveryRequest={setDeliveryRequest}
-            launchParticipantIds={launchParticipantIds}
-            launchSelectionMode={launchSelectionMode}
-            setLaunchSelectionMode={setLaunchSelectionMode}
           />
-        )}
-        {tab === "roster" && (
-          <RosterPanel
-            event={event}
-            setEvent={setEvent}
+        }
+      />
+
+      {(refreshStatus || refreshError) && (
+        <p
+          className="organizer-workspace__refresh-feedback"
+          role={refreshError ? "alert" : "status"}
+        >
+          {refreshError || refreshStatus}
+        </p>
+      )}
+
+      {deliveryRequest && (
+        <div className="organizer-workspace__delivery">
+          <DeliveryRequestProgress
+            key={deliveryRequest.id || "event-delivery"}
+            initialRequest={deliveryRequest}
             getToken={getToken}
-            onResultsInvalidated={() =>
-              setResultsInvalidationKey((current) => current + 1)
-            }
-            initialSelectedParticipantIds={launchParticipantIds}
-            onSelectionChange={setLaunchParticipantIds}
-            onRosterRebuilt={() => setLaunchSelectionMode("all")}
-            deliveryRequest={deliveryRequest}
-            onDeliveryRequestChange={setDeliveryRequest}
+            onChange={setDeliveryRequest}
+            ariaLabel="Event delivery progress"
           />
-        )}
-        {tab === "results" && (
-          <ResultsSnapshotPanel
-            event={event}
-            getToken={getToken}
-            invalidationKey={resultsInvalidationKey}
-            onChoose={(recommendation) => {
-              setSelectedRecommendation(recommendation);
-              setTab("finalize");
-            }}
-          />
-        )}
-        {tab === "finalize" && (
-          <FinalizeScalePanel
-            key={
-              selectedRecommendation?.id ||
-              selectedRecommendation?.suggestedStartsAt ||
-              selectedRecommendation?.startsAt ||
-              "no-recommendation"
-            }
-            event={event}
-            setEvent={setEvent}
-            getToken={getToken}
-            recommendation={selectedRecommendation}
-            onBrowseResults={() => setTab("results")}
-          />
-        )}
+        </div>
+      )}
+
+      <div className="organizer-workspace-layout">
+        <div className="organizer-workspace-sections">
+          <div className="organizer-workspace-column organizer-workspace-column--primary">
+            <section
+              id="organizer-overview"
+              className="organizer-workspace-section"
+              aria-labelledby="organizer-overview-heading"
+            >
+              <OverviewPanel event={event} onEventSaved={handleEventSaved} />
+            </section>
+
+            <section
+              id="organizer-roster"
+              className="organizer-workspace-section"
+              aria-labelledby="organizer-roster-heading"
+            >
+              <RosterPanel
+                ref={rosterRef}
+                event={event}
+                setEvent={setEvent}
+                getToken={getToken}
+                onResultsInvalidated={invalidateResults}
+                onDeliveryRequestChange={setDeliveryRequest}
+              />
+            </section>
+          </div>
+
+          <div className="organizer-workspace-column organizer-workspace-column--secondary">
+            <section
+              id="organizer-results"
+              className="organizer-workspace-section"
+              aria-labelledby="organizer-results-heading"
+            >
+              <ResultsSnapshotPanel
+                ref={resultsRef}
+                event={event}
+                getToken={getToken}
+                invalidationKey={resultsInvalidationKey}
+                selectedRecommendationKey={selectedRecommendationKey(
+                  selectedRecommendation,
+                )}
+                headingRef={resultsHeadingRef}
+                onChoose={(recommendation) => {
+                  setSelectedRecommendation(recommendation);
+                }}
+              />
+            </section>
+
+            <section
+              id="organizer-finalize"
+              className="organizer-workspace-section"
+              aria-labelledby="organizer-finalize-heading"
+            >
+              <FinalizeScalePanel
+                event={event}
+                setEvent={setEvent}
+                getToken={getToken}
+                recommendation={selectedRecommendation}
+                headingRef={finalizeHeadingRef}
+                onBrowseResults={() =>
+                  focusSection("organizer-results", resultsHeadingRef)
+                }
+              />
+            </section>
+          </div>
+        </div>
       </div>
     </main>
   );

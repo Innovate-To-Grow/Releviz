@@ -38,7 +38,7 @@ class TemporaryScheduleLockOrderTests(TransactionTestCase):
             code="TMPLOCK1",
             name="Temporary lock order",
             organizer=self.organizer,
-            status=Event.Status.OPEN,
+            status=Event.Status.ACTIVE,
             opened_at=timezone.now(),
             days=[1],
             start_minutes=9 * 60,

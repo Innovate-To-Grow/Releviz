@@ -48,7 +48,6 @@ import {
   previewFinalMeeting,
   sendInvitations,
   sendReminders,
-  launchEvent,
   retryDeliveryRequest,
   updateEvent,
   updateEventLifecycle,
@@ -903,15 +902,6 @@ describe("business API helpers", () => {
       "tok",
     );
     await sendReminders("ABC 123", { idempotencyKey: "reminder-key" }, "tok");
-    await launchEvent(
-      "ABC 123",
-      {
-        expectedVersion: 3,
-        idempotencyKey: "launch-key",
-        selection: { participantIds: ["participant 1"] },
-      },
-      "tok",
-    );
     await fetchDeliveryRequest("delivery 1", "tok");
     await retryDeliveryRequest("delivery 1", "tok");
     await createRosterImport(
@@ -973,7 +963,11 @@ describe("business API helpers", () => {
     await joinEvent("ABC 123", "tok");
     await createManagedParticipant(
       "ABC 123",
-      { name: "Temporary Person", email: "temp@example.com" },
+      {
+        name: "Temporary Person",
+        email: "temp@example.com",
+        idempotencyKey: "managed-key",
+      },
       "tok",
     );
     await updateParticipant("ABC 123", "user 1", { submitted: 1 }, "tok");
@@ -992,12 +986,25 @@ describe("business API helpers", () => {
     expect(urls).toContain("/events?code=ABC%20123");
     expect(urls).toContain("/events/duplicate?code=ABC%20123");
     expect(global.fetch).toHaveBeenCalledWith(
+      "/events",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          name: "Minimal",
+          accessMode: "invite_only",
+          meetingDurationMinutes: 30,
+          status: "active",
+        }),
+      }),
+    );
+    expect(global.fetch).toHaveBeenCalledWith(
       "/events/participants/managed?code=ABC%20123",
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({
           name: "Temporary Person",
           email: "temp@example.com",
+          idempotencyKey: "managed-key",
         }),
       }),
     );
@@ -1049,17 +1056,6 @@ describe("business API helpers", () => {
       }),
     );
     expect(urls).toContain("/events/reminders?code=ABC%20123");
-    expect(urls).toContain("/events/launch?code=ABC%20123");
-    expect(global.fetch).toHaveBeenCalledWith(
-      "/events/launch?code=ABC%20123",
-      expect.objectContaining({
-        body: JSON.stringify({
-          expectedVersion: 3,
-          idempotencyKey: "launch-key",
-          selection: { participantIds: ["participant 1"] },
-        }),
-      }),
-    );
     expect(urls).toContain("/events/delivery-requests/delivery%201");
     expect(urls).toContain("/events/roster-imports?code=ABC%20123");
     expect(urls).toContain("/events/roster-imports/import%201?code=ABC%20123");
@@ -1138,7 +1134,6 @@ describe("business API helpers", () => {
     await expect(
       sendReminders("BAD", { idempotencyKey: "reminder-key" }),
     ).rejects.toThrow("nope");
-    await expect(launchEvent("BAD", {})).rejects.toThrow("nope");
     await expect(fetchDeliveryRequest("bad-request")).rejects.toThrow("nope");
     await expect(retryDeliveryRequest("bad-request")).rejects.toThrow("nope");
     await expect(

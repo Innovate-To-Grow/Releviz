@@ -81,7 +81,7 @@ export async function createEvent(
     reminderHoursBefore,
     accessMode = "invite_only",
     meetingDurationMinutes = 30,
-    status = "draft",
+    status = "active",
   },
   token,
 ) {
@@ -283,24 +283,6 @@ export async function sendReminders(code, { idempotencyKey }, token) {
     token,
   );
   if (!res.ok) throw new Error(await extractError(res));
-  return res.json();
-}
-
-export async function launchEvent(
-  code,
-  { expectedVersion, idempotencyKey, selection },
-  token,
-) {
-  const res = await apiFetch(
-    `${API_BASE}/events/launch?code=${encodeURIComponent(code)}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ expectedVersion, idempotencyKey, selection }),
-    },
-    token,
-  );
-  if (!res.ok) throw await eventMutationError(res);
   return res.json();
 }
 

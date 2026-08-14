@@ -28,7 +28,7 @@ class TemporaryAccountCoverageTests(TestCase):
         self.outsider = create_member("outsider@example.com", "Other", "Member")
         self.event = self.create_event("COVER001")
 
-    def create_event(self, code, *, status=Event.Status.OPEN):
+    def create_event(self, code, *, status=Event.Status.ACTIVE):
         return Event.objects.create(
             code=code,
             name="Coverage planning",

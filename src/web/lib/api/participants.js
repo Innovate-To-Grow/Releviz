@@ -78,13 +78,17 @@ export async function joinEvent(code, token) {
   return res.json();
 }
 
-export async function createManagedParticipant(code, { name, email }, token) {
+export async function createManagedParticipant(
+  code,
+  { name, email, idempotencyKey },
+  token,
+) {
   const res = await apiFetch(
     `${API_BASE}/events/participants/managed?code=${encodeURIComponent(code)}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, email }),
+      body: JSON.stringify({ name, email, idempotencyKey }),
     },
     token,
   );

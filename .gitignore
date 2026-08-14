@@ -50,7 +50,10 @@ yarn-debug.log*
 yarn-error.log*
 
 # Editor directories and files
-.idea
+# Keep JetBrains project metadata local, except for portable run configurations.
+.idea/*
+!.idea/runConfigurations/
+!.idea/runConfigurations/*.xml
 .vscode
 *.suo
 *.ntvs*

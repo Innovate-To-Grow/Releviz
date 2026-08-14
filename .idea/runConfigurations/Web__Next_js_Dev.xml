@@ -1,0 +1,14 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Web: Next.js Dev" type="js.build_tools.npm" nameIsGenerated="false">
+    <package-json value="$PROJECT_DIR$/src/web/package.json" />
+    <command value="run" />
+    <scripts>
+      <script value="dev" />
+    </scripts>
+    <node-interpreter value="project" />
+    <envs>
+      <env name="NEXT_PUBLIC_API_BASE_URL" value="http://localhost:4000" />
+    </envs>
+    <method v="2" />
+  </configuration>
+</component>

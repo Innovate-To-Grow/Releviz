@@ -10,12 +10,10 @@ from apps.mail.models import EmailDeliveryJob, EmailDeliveryRequest, EmailMessag
 from apps.scheduling.models import (
     Event,
     EventInvitation,
-    EventResultInvalidation,
     Participant,
     ScheduleEditRecord,
     UserEvent,
 )
-from apps.scheduling.result_snapshots import flush_event_result_invalidations
 
 
 class ScaleOperationApiTests(TestCase):
@@ -26,7 +24,7 @@ class ScaleOperationApiTests(TestCase):
             code="SCALEOPS",
             name="Scale operations",
             organizer=self.organizer,
-            status=Event.Status.DRAFT,
+            status=Event.Status.ACTIVE,
             access_mode="invite_only",
             start_minutes=9 * 60,
             end_minutes=10 * 60,
@@ -62,21 +60,10 @@ class ScaleOperationApiTests(TestCase):
         self.event.refresh_from_db()
         return committed
 
-    def launch(self, *, key=None, **extra):
-        return self.client.post(
-            f"/events/launch?code={self.event.code}",
-            {
-                "expectedVersion": self.event.version,
-                "idempotencyKey": str(key or uuid.uuid4()),
-                **extra,
-            },
-            format="json",
-        )
-
     def test_invite_only_access_and_open_link_capacity(self):
         invited = create_member("invited-scale@example.com", "Invited", "Person")
         outsider = create_member("outsider-scale@example.com", "Outside", "Person")
-        self.event.status = Event.Status.OPEN
+        self.event.status = Event.Status.ACTIVE
         self.event.opened_at = timezone.now()
         self.event.save(update_fields=["status", "opened_at", "updated_at"])
         EventInvitation.objects.create(
@@ -102,7 +89,7 @@ class ScaleOperationApiTests(TestCase):
             code="OPENLIMIT",
             name="Open link capacity",
             organizer=self.organizer,
-            status=Event.Status.OPEN,
+            status=Event.Status.ACTIVE,
             access_mode="open_link",
             start_minutes=9 * 60,
             end_minutes=10 * 60,
@@ -123,15 +110,13 @@ class ScaleOperationApiTests(TestCase):
             capped = self.client.post(f"/events/participants?code={open_event.code}")
         self.assertEqual(capped.status_code, 409)
 
-    def test_organizer_can_fill_temporary_schedule_after_deadline_and_edit_is_audited(self):
+    def test_closed_event_blocks_organizer_entered_temporary_schedule(self):
         self.import_roster([("Temporary", "temporary-scale@example.com")])
         participant = self.event.participants.select_related("member").get()
         self.event.status = Event.Status.CLOSED
         self.event.response_deadline = timezone.now() - timedelta(days=1)
         self.event.closed_at = timezone.now()
         self.event.save(update_fields=["status", "response_deadline", "closed_at", "updated_at"])
-        previous_revision = self.event.results_revision
-
         updated = self.client.put(
             (
                 f"/events/participants/update?code={self.event.code}"
@@ -145,69 +130,32 @@ class ScaleOperationApiTests(TestCase):
             },
             format="json",
         )
-        self.assertEqual(updated.status_code, 200, updated.data)
-        participant.refresh_from_db()
-        self.assertEqual(
-            EventResultInvalidation.objects.filter(
-                event=self.event,
-                processed_at__isnull=True,
-            ).count(),
-            1,
-        )
-        flush_event_result_invalidations(self.event)
-        self.event.refresh_from_db()
-        self.assertTrue(participant.submitted)
-        self.assertEqual(self.event.results_revision, previous_revision + 1)
-        audit = ScheduleEditRecord.objects.get(participant=participant)
-        self.assertEqual(audit.actor, self.organizer)
-        self.assertEqual(audit.source, ScheduleEditRecord.Source.ORGANIZER)
-        self.assertEqual(audit.action, ScheduleEditRecord.Action.SUBMIT)
-        self.assertEqual(audit.participant_version, participant.version)
+        self.assertEqual(updated.status_code, 409, updated.data)
+        self.assertEqual(updated.data["errorCode"], "participant_response_locked")
+        self.assertFalse(ScheduleEditRecord.objects.filter(participant=participant).exists())
 
-        participant.member.access_level = "full"
-        participant.member.save(update_fields=["access_level"])
-        forbidden = self.client.put(
-            (
-                f"/events/participants/update?code={self.event.code}"
-                f"&participantId={participant.member_id}"
-            ),
-            {
-                "availabilityInperson": [0, 0],
-                "submitted": 0,
-                "expectedVersion": participant.version,
-            },
-            format="json",
-        )
-        self.assertEqual(forbidden.status_code, 403)
-        self.assertEqual(forbidden.data["errorCode"], "organizer_edit_full_account")
-
-    def test_launch_is_atomic_idempotent_and_delivery_failures_can_be_retried(self):
-        self.import_roster(
+    def test_import_auto_invites_and_delivery_failures_can_be_retried(self):
+        committed = self.import_roster(
             [
                 ("One", "launch-one@example.com"),
                 ("Two", "launch-two@example.com"),
             ]
         )
-        key = uuid.uuid4()
-        selected = self.event.participants.order_by("created_at").first()
-        selection = {"participantIds": [str(selected.pk)]}
-        launched = self.launch(key=key, selection=selection)
-        self.assertEqual(launched.status_code, 202, launched.data)
         self.event.refresh_from_db()
-        self.assertEqual(self.event.status, Event.Status.OPEN)
-        request_id = launched.data["deliveryRequest"]["id"]
+        self.assertEqual(self.event.status, Event.Status.ACTIVE)
+        request_id = committed.data["deliveryRequest"]["id"]
         delivery_request = EmailDeliveryRequest.objects.get(pk=request_id)
         self.assertEqual(delivery_request.operation, EmailDeliveryRequest.Operation.INVITATION)
-        self.assertEqual(delivery_request.jobs.count(), 1)
+        self.assertEqual(delivery_request.jobs.count(), 2)
         self.assertEqual(
             delivery_request.jobs.filter(status=EmailDeliveryJob.Status.PENDING).count(),
-            1,
+            2,
         )
         self.assertEqual(EmailMessageLog.objects.count(), 0)
 
         progress = self.client.get(f"/events/delivery-requests/{request_id}")
         self.assertEqual(progress.status_code, 200)
-        self.assertEqual(progress.data["deliveryRequest"]["delivery"]["pending"], 1)
+        self.assertEqual(progress.data["deliveryRequest"]["delivery"]["pending"], 2)
 
         failed_job = delivery_request.jobs.first()
         failed_job.status = EmailDeliveryJob.Status.PERMANENT_FAILURE
@@ -221,18 +169,10 @@ class ScaleOperationApiTests(TestCase):
         self.assertEqual(failed_job.status, EmailDeliveryJob.Status.PENDING)
         self.assertEqual(failed_job.attempt_count, 0)
 
-        replay = self.launch(key=key, selection=selection)
-        self.assertEqual(replay.status_code, 202)
-        self.assertTrue(replay.data["idempotent"])
-        conflict = self.launch(key=key, selection=selection, message="different launch")
-        self.assertEqual(conflict.status_code, 409)
-
     def test_obsolete_invitation_delivery_request_is_canceled_instead_of_retried(self):
-        self.import_roster([("Obsolete", "obsolete-delivery@example.com")])
-        launched = self.launch()
-        self.assertEqual(launched.status_code, 202, launched.data)
+        committed = self.import_roster([("Obsolete", "obsolete-delivery@example.com")])
         delivery_request = EmailDeliveryRequest.objects.get(
-            pk=launched.data["deliveryRequest"]["id"]
+            pk=committed.data["deliveryRequest"]["id"]
         )
         failed_job = delivery_request.jobs.get()
         failed_job.status = EmailDeliveryJob.Status.PERMANENT_FAILURE
@@ -273,45 +213,13 @@ class ScaleOperationApiTests(TestCase):
         self.assertIsNone(failed_job.locked_at)
         self.assertIsNone(failed_job.lock_token)
 
-    def test_launch_selection_is_event_scoped_and_open_link_can_publish_empty(self):
-        other_event = Event.objects.create(
-            code="OTHERSEL",
-            name="Other selection",
-            organizer=self.organizer,
+    def test_legacy_launch_route_is_removed(self):
+        response = self.client.post(
+            f"/events/launch?code={self.event.code}",
+            {},
+            format="json",
         )
-        foreign_member = create_member("foreign-selection@example.com", "Foreign", "Person")
-        foreign = Participant.objects.create(
-            event=other_event,
-            member=foreign_member,
-            participant_name="Foreign Person",
-            availability_inperson=[],
-            availability_virtual=[],
-        )
-        EventInvitation.objects.create(
-            event=other_event,
-            member=foreign_member,
-            email=foreign_member.email,
-            invited_by=self.organizer,
-        )
-
-        rejected = self.launch(selection={"participantIds": [str(foreign.pk)]})
-        self.assertEqual(rejected.status_code, 400, rejected.data)
-        self.assertIn("Select at least one", rejected.data["error"])
-        self.event.refresh_from_db()
-        self.assertEqual(self.event.status, Event.Status.DRAFT)
-        self.assertFalse(self.event.email_delivery_requests.exists())
-
-        self.event.access_mode = "open_link"
-        self.event.save(update_fields=["access_mode", "updated_at"])
-        launched = self.launch()
-        self.assertEqual(launched.status_code, 202, launched.data)
-        self.assertEqual(launched.data["event"]["status"], Event.Status.OPEN)
-        delivery_request = EmailDeliveryRequest.objects.get(
-            pk=launched.data["deliveryRequest"]["id"]
-        )
-        self.assertEqual(delivery_request.recipient_count, 0)
-        self.assertEqual(delivery_request.created_job_count, 0)
-        self.assertEqual(delivery_request.jobs.count(), 0)
+        self.assertEqual(response.status_code, 404)
 
     def test_final_request_and_reopen_cancellation_are_trackable_and_calendar_downloads(self):
         target_date = (timezone.now() + timedelta(days=2)).date()
@@ -322,8 +230,6 @@ class ScaleOperationApiTests(TestCase):
             update_fields=["day_selection_type", "specific_dates", "days", "updated_at"]
         )
         self.import_roster([("Final", "final-scale@example.com")])
-        launched = self.launch()
-        self.assertEqual(launched.status_code, 202)
         participant = self.event.participants.get()
         participant.availability_inperson = [1, 1]
         participant.submitted = True
@@ -371,7 +277,7 @@ class ScaleOperationApiTests(TestCase):
         reopened = self.client.put(
             f"/events/lifecycle?code={self.event.code}",
             {
-                "status": "open",
+                "status": "active",
                 "expectedVersion": self.event.version,
                 "responseDeadline": None,
             },
@@ -389,15 +295,12 @@ class ScaleOperationApiTests(TestCase):
         cancellation = cancellation_request.jobs.get()
         self.assertIn("METHOD:CANCEL", cancellation.attachments[0]["content"])
 
-    def test_launch_queues_one_thousand_invitations_without_sending_them(self):
+    def test_import_queues_one_thousand_invitations_without_sending_them(self):
         rows = [(f"Person {index}", f"person-{index}@example.com") for index in range(1000)]
-        self.import_roster(rows)
+        committed = self.import_roster(rows)
 
-        launched = self.launch()
-
-        self.assertEqual(launched.status_code, 202, launched.data)
         delivery_request = EmailDeliveryRequest.objects.get(
-            pk=launched.data["deliveryRequest"]["id"]
+            pk=committed.data["deliveryRequest"]["id"]
         )
         self.assertEqual(delivery_request.recipient_count, 1000)
         self.assertEqual(delivery_request.jobs.count(), 1000)

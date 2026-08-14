@@ -567,7 +567,7 @@ def confirm_final_meeting(
             "The event changed in another session. Refresh and review the final time again.",
             status_code=409,
         )
-    if event.status not in {Event.Status.OPEN, Event.Status.CLOSED}:
+    if event.status not in {Event.Status.ACTIVE, Event.Status.CLOSED}:
         raise FinalizationError(
             f"An event cannot be finalized while it is {event.status}.",
             status_code=409,

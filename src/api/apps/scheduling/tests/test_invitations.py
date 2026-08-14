@@ -9,7 +9,8 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from apps.authn.models import AuthRateLimitBucket, ContactEmail
+from apps.authn.models import ContactEmail
+from apps.authn.security import RateLimitDecision
 from apps.authn.tests.helpers import create_member, token_for
 from apps.mail.models import (
     EmailDeliveryJob,
@@ -500,7 +501,7 @@ class InvitationApiTests(TestCase):
             start_minutes=9 * 60,
             end_minutes=10 * 60,
             response_deadline=timezone.now() + timedelta(hours=24),
-            status=Event.Status.OPEN,
+            status=Event.Status.ACTIVE,
             access_mode="open_link",
         )
 
@@ -960,26 +961,11 @@ class InvitationApiTests(TestCase):
             )
         self.assertEqual(capped.status_code, 400)
 
-        AuthRateLimitBucket.objects.all().delete()
-        recipient_limits = {
-            "invitation_request": {
-                "ip": {"limit": 100, "window": 60, "block": 30},
-                "identity": {"limit": 100, "window": 60, "block": 30},
-            },
-            "invitation_recipient": {
-                "ip": {"limit": 100, "window": 60, "block": 30},
-                "identity": {"limit": 1, "window": 60, "block": 30},
-            },
-            "reminder_request": {
-                "ip": {"limit": 100, "window": 60, "block": 30},
-                "identity": {"limit": 100, "window": 60, "block": 30},
-            },
-            "reminder_recipient": {
-                "ip": {"limit": 100, "window": 60, "block": 30},
-                "identity": {"limit": 1, "window": 60, "block": 30},
-            },
-        }
-        with override_settings(AUTH_RATE_LIMITS=recipient_limits):
+        denied = RateLimitDecision(allowed=False, retry_after=30)
+        with patch(
+            "apps.scheduling.views.consume_request_rate_limit",
+            return_value=denied,
+        ):
             limited = self.client.post(
                 self.invitation_url(),
                 request_payload(["one@example.com", "two@example.com"]),
@@ -987,8 +973,10 @@ class InvitationApiTests(TestCase):
             )
         self.assertEqual(limited.status_code, 429)
 
-        AuthRateLimitBucket.objects.all().delete()
-        with override_settings(AUTH_RATE_LIMITS=recipient_limits):
+        with patch(
+            "apps.scheduling.views.consume_request_rate_limit",
+            return_value=denied,
+        ):
             limited = self.client.post(
                 self.reminder_url(),
                 {"idempotencyKey": str(uuid.uuid4())},
@@ -996,18 +984,10 @@ class InvitationApiTests(TestCase):
             )
         self.assertEqual(limited.status_code, 429)
 
-        AuthRateLimitBucket.objects.all().delete()
-        request_limits = {
-            "invitation_request": {
-                "ip": {"limit": 1, "window": 60, "block": 30},
-                "identity": {"limit": 100, "window": 60, "block": 30},
-            },
-            "invitation_recipient": {
-                "ip": {"limit": 100, "window": 60, "block": 30},
-                "identity": {"limit": 100, "window": 60, "block": 30},
-            },
-        }
-        with override_settings(AUTH_RATE_LIMITS=request_limits):
+        with patch(
+            "apps.scheduling.views.consume_request_rate_limit",
+            side_effect=[RateLimitDecision(), denied],
+        ):
             first = self.client.post(
                 self.invitation_url(),
                 request_payload(["allowed@example.com"]),

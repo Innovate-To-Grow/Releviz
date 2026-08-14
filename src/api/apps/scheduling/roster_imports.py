@@ -21,7 +21,8 @@ from django.db.models import Q
 from django.utils import timezone
 
 from apps.authn.models import ContactEmail, EmailAuthChallenge
-from apps.mail.models import EmailDeliveryJob, EmailMessageLog
+from apps.mail.models import EmailDeliveryJob, EmailDeliveryRequest, EmailMessageLog
+from apps.scheduling.lifecycle import response_write_error
 from apps.scheduling.models import (
     Event,
     EventInvitation,
@@ -34,6 +35,7 @@ from apps.scheduling.models import (
     UserEvent,
     Weight,
 )
+from apps.scheduling.services import EventEmailRequestError, upsert_and_send_invitations
 from apps.scheduling.utils import default_availability
 
 MAX_UPLOAD_BYTES = settings.ROSTER_IMPORT_MAX_FILE_BYTES
@@ -891,12 +893,12 @@ def _rebuild_event_roster(event: Event, now) -> None:
     # session, then invitation. Schedule writes that already own one
     # participant can finish without forming Participant <-> Invitation cycles.
     participants = list(event.participants.select_for_update().order_by("pk"))
-    challenge_scope_prefix = f"temp-event:{event.pk}:invitation:"
+    participant_member_ids = [participant.member_id for participant in participants]
     challenges = list(
         EmailAuthChallenge.objects.select_for_update()
         .filter(
             purpose=EmailAuthChallenge.Purpose.TEMP_EVENT_ACCESS,
-            scope_key__startswith=challenge_scope_prefix,
+            member_id__in=participant_member_ids,
         )
         .order_by("pk")
     )
@@ -963,11 +965,6 @@ def _rebuild_event_roster(event: Event, now) -> None:
         ).delete()
     if participants:
         Participant.objects.filter(pk__in=[participant.pk for participant in participants]).delete()
-    event.status = Event.Status.DRAFT
-    event.opened_at = None
-    event.finalized_at = None
-    event.closed_at = None
-    event.archived_at = None
     event.version += 1
 
 
@@ -1005,6 +1002,7 @@ def _write_roster(
 
     new_participants = []
     changed_participants = []
+    invitation_emails = []
     participant_by_email = {}
     for sort_order, row in enumerate(rows, 1):
         member = members[row.email]
@@ -1020,7 +1018,9 @@ def _write_roster(
                 sort_order=sort_order,
             )
             new_participants.append(participant)
+            invitation_emails.append(row.email)
         else:
+            restored = participant.hidden
             changed = False
             values = {
                 "participant_name": row.name,
@@ -1034,6 +1034,8 @@ def _write_roster(
             if changed:
                 participant.version += 1
                 changed_participants.append(participant)
+            if restored:
+                invitation_emails.append(row.email)
         participant_by_email[row.email] = participant
 
     if new_participants:
@@ -1118,7 +1120,11 @@ def _write_roster(
         Weight.objects.bulk_create(new_weights)
     if changed_weights:
         Weight.objects.bulk_update(changed_weights, ["weight", "included", "updated_at"])
-    return len(new_participants), len(rows) - len(new_participants)
+    return (
+        len(new_participants),
+        len(rows) - len(new_participants),
+        invitation_emails,
+    )
 
 
 def commit_roster_import(*, event: Event, batch_id, organizer, data):
@@ -1151,7 +1157,21 @@ def commit_roster_import(*, event: Event, batch_id, organizer, data):
                         "This idempotency key was already used for a different import.",
                         status_code=409,
                     )
-                return previous, True
+                delivery_request = (
+                    EmailDeliveryRequest.objects.prefetch_related("jobs")
+                    .filter(
+                        event=event,
+                        operation=EmailDeliveryRequest.Operation.INVITATION,
+                        idempotency_key=idempotency_key,
+                    )
+                    .first()
+                )
+                return (
+                    previous,
+                    True,
+                    delivery_request,
+                    delivery_request.recipient_count if delivery_request else 0,
+                )
 
             _require_preview(batch)
             if event.organizer_id != organizer.pk:
@@ -1159,9 +1179,10 @@ def commit_roster_import(*, event: Event, batch_id, organizer, data):
                     "Only the organizer can commit a roster import.",
                     status_code=403,
                 )
-            if event.status in {Event.Status.FINALIZED, Event.Status.ARCHIVED}:
+            write_error = response_write_error(event)
+            if write_error:
                 raise RosterImportError(
-                    "Reopen this event before changing its roster.",
+                    write_error,
                     status_code=409,
                 )
             if getattr(event, "final_meeting", None) is not None and event.final_meeting.active:
@@ -1205,7 +1226,7 @@ def commit_roster_import(*, event: Event, batch_id, organizer, data):
             members = _resolve_members(rows)
             if mode == RosterImportReceipt.Mode.REBUILD:
                 _rebuild_event_roster(event, now)
-            created_count, updated_count = _write_roster(
+            created_count, updated_count, invitation_emails = _write_roster(
                 event,
                 organizer,
                 rows,
@@ -1214,16 +1235,7 @@ def commit_roster_import(*, event: Event, batch_id, organizer, data):
             event.results_revision += 1
             event_update_fields = ["results_revision", "updated_at"]
             if mode == RosterImportReceipt.Mode.REBUILD:
-                event_update_fields.extend(
-                    [
-                        "status",
-                        "opened_at",
-                        "finalized_at",
-                        "closed_at",
-                        "archived_at",
-                        "version",
-                    ]
-                )
+                event_update_fields.append("version")
             event.save(update_fields=event_update_fields)
             EventResultSnapshot.objects.update_or_create(
                 event=event,
@@ -1233,6 +1245,16 @@ def commit_roster_import(*, event: Event, batch_id, organizer, data):
                     "last_error": "",
                 },
             )
+            delivery_request = None
+            if invitation_emails:
+                delivery_result = upsert_and_send_invitations(
+                    event=event,
+                    emails=invitation_emails,
+                    invited_by=organizer,
+                    idempotency_key=idempotency_key,
+                    hydrate_result=False,
+                )
+                delivery_request = delivery_result["request"]
             receipt = RosterImportReceipt.objects.create(
                 event=event,
                 batch=batch,
@@ -1255,7 +1277,9 @@ def commit_roster_import(*, event: Event, batch_id, organizer, data):
                     "updated": updated_count,
                 },
             )
-            return receipt, False
+            return receipt, False, delivery_request, len(invitation_emails)
+    except EventEmailRequestError as exc:
+        raise RosterImportError(str(exc), status_code=exc.status_code) from exc
     except IntegrityError as exc:
         raise RosterImportError(
             "The roster changed concurrently; refresh the preview and try again.",

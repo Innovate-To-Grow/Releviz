@@ -34,7 +34,7 @@ function renderWizard(props = {}) {
       onCommitted={jest.fn()}
       onClose={jest.fn()}
       {...props}
-    />
+    />,
   );
 }
 
@@ -49,19 +49,30 @@ beforeEach(() => {
 
 test("validates file type and size before creating a preview", async () => {
   renderWizard();
-  await userEvent.click(screen.getByRole("button", { name: "Continue to mapping" }));
-  expect(screen.getByRole("alert")).toHaveTextContent("Choose a .csv or .xlsx file");
+  await userEvent.click(
+    screen.getByRole("button", { name: "Continue to mapping" }),
+  );
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    "Choose a .csv or .xlsx file",
+  );
 
   const input = screen.getByLabelText("CSV or XLSX file");
   fireEvent.change(input, {
     target: { files: [new File(["legacy"], "people.xls")] },
   });
-  await userEvent.click(screen.getByRole("button", { name: "Continue to mapping" }));
+  await userEvent.click(
+    screen.getByRole("button", { name: "Continue to mapping" }),
+  );
   expect(screen.getByRole("alert")).toHaveTextContent("Only .csv and .xlsx");
 
-  const oversized = new File([new Uint8Array(5 * 1024 * 1024 + 1)], "people.xlsx");
+  const oversized = new File(
+    [new Uint8Array(5 * 1024 * 1024 + 1)],
+    "people.xlsx",
+  );
   fireEvent.change(input, { target: { files: [oversized] } });
-  await userEvent.click(screen.getByRole("button", { name: "Continue to mapping" }));
+  await userEvent.click(
+    screen.getByRole("button", { name: "Continue to mapping" }),
+  );
   expect(screen.getByRole("alert")).toHaveTextContent("5 MiB or smaller");
   expect(createRosterImport).not.toHaveBeenCalled();
 });
@@ -143,18 +154,33 @@ test("supports multi-sheet headers, editable preview rows, pagination, and cance
   const file = new File(["xlsx"], "people.xlsx", {
     type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   });
-  fireEvent.change(screen.getByLabelText("CSV or XLSX file"), { target: { files: [file] } });
-  await userEvent.click(screen.getByRole("button", { name: "Continue to mapping" }));
-  await userEvent.selectOptions(await screen.findByLabelText("Worksheet"), "People");
-  fireEvent.change(screen.getByLabelText("Header row"), { target: { value: "2" } });
+  fireEvent.change(screen.getByLabelText("CSV or XLSX file"), {
+    target: { files: [file] },
+  });
+  await userEvent.click(
+    screen.getByRole("button", { name: "Continue to mapping" }),
+  );
+  await userEvent.selectOptions(
+    await screen.findByLabelText("Worksheet"),
+    "People",
+  );
+  fireEvent.change(screen.getByLabelText("Header row"), {
+    target: { value: "2" },
+  });
   await userEvent.click(screen.getByRole("button", { name: "Preview rows" }));
   expect(await screen.findByRole("status")).toHaveTextContent("Columns loaded");
 
-  fireEvent.change(screen.getByLabelText("Default group"), { target: { value: "Guests" } });
-  fireEvent.change(screen.getByLabelText("Default weight"), { target: { value: "0.75" } });
+  fireEvent.change(screen.getByLabelText("Default group"), {
+    target: { value: "Guests" },
+  });
+  fireEvent.change(screen.getByLabelText("Default weight"), {
+    target: { value: "0.75" },
+  });
   await userEvent.click(screen.getByLabelText("Include by default"));
   await userEvent.click(screen.getByRole("button", { name: "Preview rows" }));
-  expect(await screen.findByDisplayValue("ada@example.com")).toBeInTheDocument();
+  expect(
+    await screen.findByDisplayValue("ada@example.com"),
+  ).toBeInTheDocument();
   expect(screen.getByText("Identical duplicate merged")).toBeInTheDocument();
   expect(screen.getByText("Conflicting duplicate email.")).toBeInTheDocument();
 
@@ -166,8 +192,8 @@ test("supports multi-sheet headers, editable preview rows, pagination, and cance
       event.code,
       "import-2",
       { rowUpdates: [{ id: "row-1", name: "Ada Lovelace" }] },
-      "token"
-    )
+      "token",
+    ),
   );
   await userEvent.click(screen.getByLabelText("Included for row 3"));
   await waitFor(() =>
@@ -175,8 +201,8 @@ test("supports multi-sheet headers, editable preview rows, pagination, and cance
       event.code,
       "import-2",
       { rowUpdates: [{ id: "row-1", included: false }] },
-      "token"
-    )
+      "token",
+    ),
   );
   await userEvent.click(screen.getByRole("button", { name: "Next" }));
   await waitFor(() =>
@@ -184,13 +210,17 @@ test("supports multi-sheet headers, editable preview rows, pagination, and cance
       event.code,
       "import-2",
       { page: 2, pageSize: 50 },
-      "token"
-    )
+      "token",
+    ),
   );
 
   await userEvent.click(screen.getByRole("button", { name: "Close" }));
   await waitFor(() =>
-    expect(cancelRosterImport).toHaveBeenCalledWith(event.code, "import-2", "token")
+    expect(cancelRosterImport).toHaveBeenCalledWith(
+      event.code,
+      "import-2",
+      "token",
+    ),
   );
   expect(onClose).toHaveBeenCalled();
 });
@@ -218,7 +248,9 @@ test("surfaces source and mapping failures", async () => {
   fireEvent.change(screen.getByLabelText("CSV or XLSX file"), {
     target: { files: [new File(["name,email"], "people.csv")] },
   });
-  await userEvent.click(screen.getByRole("button", { name: "Continue to mapping" }));
+  await userEvent.click(
+    screen.getByRole("button", { name: "Continue to mapping" }),
+  );
   expect(await screen.findByRole("alert")).toHaveTextContent("source failed");
   unmount();
 
@@ -228,8 +260,12 @@ test("surfaces source and mapping failures", async () => {
   fireEvent.change(screen.getByLabelText("CSV or XLSX file"), {
     target: { files: [new File(["name,email"], "people.csv")] },
   });
-  await userEvent.click(screen.getByRole("button", { name: "Continue to mapping" }));
-  await userEvent.click(await screen.findByRole("button", { name: "Preview rows" }));
+  await userEvent.click(
+    screen.getByRole("button", { name: "Continue to mapping" }),
+  );
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Preview rows" }),
+  );
   expect(await screen.findByRole("alert")).toHaveTextContent("mapping failed");
 });
 
@@ -275,17 +311,25 @@ test("surfaces preview-row, commit, and cancel failures", async () => {
   commitRosterImport.mockRejectedValueOnce(new Error("commit failed"));
   cancelRosterImport.mockRejectedValueOnce(new Error("cancel failed"));
   renderWizard();
-  await userEvent.click(screen.getByRole("button", { name: "Paste spreadsheet" }));
+  await userEvent.click(
+    screen.getByRole("button", { name: "Paste spreadsheet" }),
+  );
   fireEvent.change(screen.getByLabelText("Pasted roster rows"), {
     target: { value: "name\temail\nAda\tada@example.com" },
   });
-  await userEvent.click(screen.getByRole("button", { name: "Continue to mapping" }));
-  await userEvent.click(await screen.findByRole("button", { name: "Preview rows" }));
+  await userEvent.click(
+    screen.getByRole("button", { name: "Continue to mapping" }),
+  );
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Preview rows" }),
+  );
   await screen.findByDisplayValue("ada@example.com");
 
   await userEvent.click(screen.getByLabelText("Select row 2"));
   expect(await screen.findByRole("alert")).toHaveTextContent("row failed");
-  await userEvent.click(screen.getByRole("button", { name: "Merge roster" }));
+  await userEvent.click(
+    screen.getByRole("button", { name: "Merge roster and invite new people" }),
+  );
   expect(await screen.findByRole("alert")).toHaveTextContent("commit failed");
   await userEvent.click(screen.getByRole("button", { name: "Close" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("cancel failed");

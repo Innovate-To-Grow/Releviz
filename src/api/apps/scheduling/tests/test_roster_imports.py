@@ -2,6 +2,7 @@ import io
 import uuid
 import zipfile
 from datetime import timedelta
+from unittest.mock import patch
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
@@ -69,7 +70,7 @@ class RosterImportApiTests(TestCase):
         )
 
     def test_model_defaults_match_scaled_event_contract(self):
-        self.assertEqual(self.event.status, Event.Status.DRAFT)
+        self.assertEqual(self.event.status, Event.Status.ACTIVE)
         self.assertEqual(self.event.access_mode, "invite_only")
         self.assertEqual(self.event.meeting_duration_minutes, 30)
         self.assertEqual(self.event.results_revision, 1)
@@ -232,6 +233,8 @@ class RosterImportApiTests(TestCase):
 
         self.assertEqual(committed.status_code, 201)
         self.assertFalse(committed.data["idempotent"])
+        self.assertEqual(committed.data["autoInvitedCount"], 2)
+        self.assertEqual(committed.data["deliveryRequest"]["recipientCount"], 2)
         self.assertEqual(committed.data["receipt"]["createdCount"], 2)
         self.assertEqual(self.event.participants.count(), 2)
         temporary = Participant.objects.select_related("member").get(
@@ -265,6 +268,11 @@ class RosterImportApiTests(TestCase):
         replay = self.commit(import_id, key=key)
         self.assertEqual(replay.status_code, 200)
         self.assertTrue(replay.data["idempotent"])
+        self.assertEqual(
+            replay.data["deliveryRequest"]["id"],
+            committed.data["deliveryRequest"]["id"],
+        )
+        self.assertEqual(replay.data["autoInvitedCount"], 2)
         self.assertEqual(RosterImportReceipt.objects.count(), 1)
         self.assertEqual(self.event.participants.count(), 2)
 
@@ -275,6 +283,30 @@ class RosterImportApiTests(TestCase):
             confirmation=self.event.code,
         )
         self.assertEqual(conflict.status_code, 409)
+
+    def test_import_invitation_enqueue_failure_rolls_back_the_full_commit(self):
+        email = "import-rollback@example.com"
+        preview = self.paste(f"name,email\nRollback Person,{email}")
+        import_id = preview.data["import"]["id"]
+
+        with (
+            patch(
+                "apps.scheduling.services._enqueue_invitation_job",
+                side_effect=RuntimeError("queue unavailable"),
+            ),
+            self.assertRaisesMessage(RuntimeError, "queue unavailable"),
+        ):
+            self.commit(import_id)
+
+        batch = RosterImportBatch.objects.get(pk=import_id)
+        self.assertEqual(batch.status, RosterImportBatch.Status.PREVIEW)
+        self.assertTrue(batch.rows.exists())
+        self.assertFalse(ContactEmail.objects.filter(email_address=email).exists())
+        self.assertFalse(Participant.objects.filter(event=self.event).exists())
+        self.assertFalse(EventInvitation.objects.filter(event=self.event).exists())
+        self.assertFalse(EmailDeliveryRequest.objects.filter(event=self.event).exists())
+        self.assertFalse(EmailDeliveryJob.objects.filter(event=self.event).exists())
+        self.assertFalse(RosterImportReceipt.objects.filter(event=self.event).exists())
 
     def test_merge_preserves_existing_schedule_and_rebuild_replaces_roster(self):
         first = self.paste("name,email,weight\nPerson,person@example.com,1")
@@ -304,7 +336,6 @@ class RosterImportApiTests(TestCase):
             member=participant.member,
             purpose=EmailAuthChallenge.Purpose.TEMP_EVENT_ACCESS,
             target_email=participant.member.email,
-            scope_key=f"temp-event:{self.event.pk}:invitation:{invitation.pk}",
             code_hash="challenge-hash",
             expires_at=timezone.now() + timedelta(minutes=10),
         )
@@ -365,10 +396,8 @@ class RosterImportApiTests(TestCase):
             updated_count=1,
             results_revision=self.event.results_revision,
         )
-        self.event.status = Event.Status.CLOSED
-        self.event.closed_at = timezone.now()
-        self.event.save(update_fields=["status", "closed_at", "updated_at"])
         replacement = self.paste("name,email\nReplacement,replacement@example.com")
+        self.assertEqual(replacement.status_code, 201, replacement.data)
         import_id = replacement.data["import"]["id"]
 
         wrong_confirmation = self.commit(
@@ -405,7 +434,7 @@ class RosterImportApiTests(TestCase):
         self.assertEqual(invitation_job.status, EmailDeliveryJob.Status.PROCESSING)
         self.assertEqual(invitation_job.lock_token, processing_token)
         self.assertEqual(challenge.status, EmailAuthChallenge.Status.PENDING)
-        self.assertEqual(self.event.status, Event.Status.CLOSED)
+        self.assertEqual(self.event.status, Event.Status.ACTIVE)
         self.assertTrue(TemporaryEventSession.objects.filter(participant=participant).exists())
         self.assertTrue(Participant.objects.filter(pk=participant.pk).exists())
 
@@ -427,7 +456,7 @@ class RosterImportApiTests(TestCase):
         )
         self.assertEqual(rebuilt.status_code, 201)
         self.event.refresh_from_db()
-        self.assertEqual(self.event.status, Event.Status.DRAFT)
+        self.assertEqual(self.event.status, Event.Status.ACTIVE)
         self.assertIsNone(self.event.closed_at)
         self.assertEqual(
             list(self.event.participants.values_list("participant_name", flat=True)),

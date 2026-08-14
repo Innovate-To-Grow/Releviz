@@ -83,6 +83,7 @@ function Pagination({ pagination, onPage }) {
 export default function RosterImportWizard({
   event,
   getToken,
+  onEventChange,
   onCommitted,
   onClose,
 }) {
@@ -302,13 +303,26 @@ export default function RosterImportWizard({
         token,
       );
       const receipt = data.receipt || {};
+      const importedCount = receipt.importedCount || 0;
+      const createdCount = receipt.createdCount || 0;
+      const updatedCount = receipt.updatedCount || 0;
+      const invitedCount =
+        data.autoInvitedCount ?? receipt.invitedCount ?? createdCount;
       setStatus(
-        `Imported ${receipt.importedCount ?? receipt.createdCount ?? 0} people: ${receipt.createdCount || 0} created and ${receipt.updatedCount || 0} updated.`,
+        createdCount > 0 || invitedCount > 0
+          ? `Imported ${importedCount} people: ${createdCount} added, ${updatedCount} updated. ${invitedCount} invitation${invitedCount === 1 ? "" : "s"} queued.`
+          : `Imported ${importedCount} people: no new participants were added, so no invitations were sent.`,
       );
       setPhase("complete");
       onCommitted?.(data);
     } catch (requestError) {
-      setError(requestError.message || "Unable to commit this roster.");
+      if (requestError.event) onEventChange?.(requestError.event);
+      setError(
+        requestError.code === "event_not_active" ||
+          requestError.event?.status === "closed"
+          ? "This event is closed. Reactivate it before committing this roster."
+          : requestError.message || "Unable to commit this roster.",
+      );
     } finally {
       setBusy(false);
     }
@@ -664,6 +678,10 @@ export default function RosterImportWizard({
           />
           <fieldset className="roster-import__mode-options">
             <legend>Import behavior</legend>
+            <p className="roster-import__hint">
+              New participants receive an invitation automatically. Existing
+              participants are updated without another email.
+            </p>
             <label>
               <input
                 type="radio"
@@ -686,15 +704,24 @@ export default function RosterImportWizard({
               delivery
             </label>
             {mode === "rebuild" && (
-              <label className="roster-import__field roster-import__confirmation-field">
-                <strong>Type {event.code} to confirm</strong>
-                <input
-                  aria-label="Rebuild confirmation code"
-                  value={confirmationCode}
-                  onChange={(event) => setConfirmationCode(event.target.value)}
-                  autoComplete="off"
-                />
-              </label>
+              <>
+                <p className="roster-import__warning" role="note">
+                  Rebuilding clears schedules, invitations, and pending
+                  delivery, then sends a new invitation to every imported
+                  participant.
+                </p>
+                <label className="roster-import__field roster-import__confirmation-field">
+                  <strong>Type {event.code} to confirm</strong>
+                  <input
+                    aria-label="Rebuild confirmation code"
+                    value={confirmationCode}
+                    onChange={(event) =>
+                      setConfirmationCode(event.target.value)
+                    }
+                    autoComplete="off"
+                  />
+                </label>
+              </>
             )}
           </fieldset>
           <div className="roster-import__actions">
@@ -716,8 +743,8 @@ export default function RosterImportWizard({
               {busy
                 ? "Importing…"
                 : mode === "rebuild"
-                  ? "Rebuild roster"
-                  : "Merge roster"}
+                  ? "Rebuild roster and send invitations"
+                  : "Merge roster and invite new people"}
             </AppButton>
           </div>
         </>

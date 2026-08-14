@@ -17,8 +17,13 @@ from django.utils import timezone
 from apps.authn.models import ContactEmail
 from apps.mail.email_templates import render_branded_email
 from apps.mail.models import EmailDeliveryJob, EmailDeliveryRequest, EmailMessageLog
-from apps.mail.services import EmailAttachment, enqueue_email_job, frontend_url
-from apps.scheduling.lifecycle import event_configuration_write_error, response_write_error
+from apps.mail.services import (
+    EmailAttachment,
+    email_delivery_summary,
+    enqueue_email_job,
+    frontend_url,
+)
+from apps.scheduling.lifecycle import response_write_error
 from apps.scheduling.models import Event, EventInvitation, Participant, UserEvent
 from apps.scheduling.utils import default_availability
 
@@ -84,7 +89,7 @@ def create_or_reuse_managed_participant(*, event: Event, organizer, name: str, e
             "Only the organizer can create managed participants.",
             status_code=403,
         )
-    write_error = None if event.status == Event.Status.DRAFT else response_write_error(event)
+    write_error = response_write_error(event)
     if write_error:
         raise ManagedParticipantError(write_error, status_code=409)
 
@@ -198,6 +203,18 @@ def create_or_reuse_managed_participant(*, event: Event, organizer, name: str, e
             "availability_virtual": default_availability(event),
         },
     )
+    participant_restored = not participant_created and participant.hidden
+    participant_updates = []
+    if participant_restored:
+        participant.hidden = False
+        participant_updates.append("hidden")
+        if participant.participant_name != normalized_name:
+            participant.participant_name = normalized_name
+            participant_updates.append("participant_name")
+        participant.version += 1
+        participant_updates.append("version")
+    if participant_updates:
+        participant.save(update_fields=[*participant_updates, "updated_at"])
     UserEvent.objects.get_or_create(member=member, event=event, role="participant")
     invitation, invitation_created = EventInvitation.objects.get_or_create(
         event=event,
@@ -218,7 +235,13 @@ def create_or_reuse_managed_participant(*, event: Event, organizer, name: str, e
         invitation.save(update_fields=[*invitation_updates, "updated_at"])
 
     security_logger.info(
-        "managed_participant_created" if participant_created else "managed_participant_reused",
+        (
+            "managed_participant_created"
+            if participant_created
+            else "managed_participant_restored"
+            if participant_restored
+            else "managed_participant_reused"
+        ),
         extra={
             "event_id": str(event.pk),
             "organizer_id": str(organizer.pk),
@@ -232,6 +255,7 @@ def create_or_reuse_managed_participant(*, event: Event, organizer, name: str, e
         "participant": participant,
         "invitation": invitation,
         "participantCreated": participant_created,
+        "participantRestored": participant_restored,
         "memberCreated": member_created,
     }
 
@@ -367,7 +391,7 @@ def final_meeting_ics(
             f"({meeting.timezone}). Event page: {link}"
         )
     )
-    organizer_email = event.organizer.get_primary_contact_email()
+    organizer_email = event.organizer.get_primary_email()
     lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
@@ -699,6 +723,25 @@ def _request_result(
     }
 
 
+def email_delivery_request_payload(
+    request_record: EmailDeliveryRequest | None,
+    *,
+    jobs=None,
+) -> dict | None:
+    if request_record is None:
+        return None
+    delivery_jobs = list(jobs) if jobs is not None else list(request_record.jobs.all())
+    return {
+        "id": str(request_record.pk),
+        "operation": request_record.operation,
+        "recipientCount": request_record.recipient_count,
+        "enqueued": request_record.created_job_count,
+        "createdAt": request_record.created_at.isoformat(),
+        "updatedAt": request_record.updated_at.isoformat(),
+        "delivery": email_delivery_summary(delivery_jobs),
+    }
+
+
 @transaction.atomic
 def upsert_and_send_invitations(
     *,
@@ -708,6 +751,7 @@ def upsert_and_send_invitations(
     idempotency_key,
     message: str = "",
     hydrate_result: bool = True,
+    request_fingerprint: str | None = None,
 ) -> dict:
     event = Event.objects.select_for_update().get(pk=event.pk)
     if event.organizer_id != invited_by.pk:
@@ -715,11 +759,11 @@ def upsert_and_send_invitations(
             "Only the organizer can manage invitations.",
             status_code=403,
         )
-    write_error = event_configuration_write_error(event)
+    write_error = response_write_error(event)
     if write_error:
         raise EventEmailRequestError(write_error, status_code=409)
 
-    fingerprint = _request_fingerprint(
+    fingerprint = request_fingerprint or _request_fingerprint(
         {
             "emails": sorted(emails),
             "message": message,
@@ -858,6 +902,78 @@ def upsert_and_send_invitations(
 
 
 @transaction.atomic
+def create_or_reuse_managed_participant_and_send(
+    *,
+    event: Event,
+    organizer,
+    name: str,
+    email: str,
+    idempotency_key,
+) -> dict:
+    """Create/restore one roster person and atomically queue their invitation.
+
+    A participant that is already visible is a no-op for a new idempotency key.
+    Replaying the original key still returns the original delivery request.
+    """
+
+    normalized_name = str(name or "").strip()
+    normalized_email = str(email or "").strip().lower()
+    managed_fingerprint = _request_fingerprint(
+        {
+            "operation": "managed_participant",
+            "name": normalized_name,
+            "email": normalized_email,
+        }
+    )
+    previous = EmailDeliveryRequest.objects.filter(
+        event=event,
+        operation=EmailDeliveryRequest.Operation.INVITATION,
+        idempotency_key=idempotency_key,
+    ).first()
+    if previous is not None and previous.request_fingerprint != managed_fingerprint:
+        raise EventEmailRequestError(
+            "This idempotency key was already used with different participant details.",
+            status_code=409,
+        )
+
+    result = create_or_reuse_managed_participant(
+        event=event,
+        organizer=organizer,
+        name=normalized_name,
+        email=normalized_email,
+    )
+    previous_exists = previous is not None
+    should_send = result["participantCreated"] or result["participantRestored"] or previous_exists
+    delivery_result = None
+    if should_send:
+        delivery_result = upsert_and_send_invitations(
+            event=event,
+            emails=[normalized_email],
+            invited_by=organizer,
+            idempotency_key=idempotency_key,
+            request_fingerprint=managed_fingerprint,
+        )
+    else:
+        request_record = EmailDeliveryRequest.objects.create(
+            event=event,
+            requested_by=organizer,
+            operation=EmailDeliveryRequest.Operation.INVITATION,
+            idempotency_key=idempotency_key,
+            request_fingerprint=managed_fingerprint,
+            recipient_count=0,
+            created_job_count=0,
+        )
+        delivery_result = _request_result(
+            request_record,
+            event=event,
+            idempotent=False,
+            hydrate=True,
+        )
+    result["deliveryResult"] = delivery_result
+    return result
+
+
+@transaction.atomic
 def enqueue_manual_reminders(
     *,
     event: Event,
@@ -870,7 +986,7 @@ def enqueue_manual_reminders(
             "Only the organizer can send reminders.",
             status_code=403,
         )
-    write_error = event_configuration_write_error(event)
+    write_error = response_write_error(event)
     if write_error:
         raise EventEmailRequestError(write_error, status_code=409)
 
@@ -1061,9 +1177,9 @@ def mark_invitation_response_withdrawn(*, event: Event, member) -> None:
 
 @transaction.atomic
 def send_event_reminders(event: Event, *, force: bool = False) -> int:
-    if not event.reminders_enabled:
-        return 0
     event = Event.objects.select_for_update().get(pk=event.pk)
+    if response_write_error(event) or not event.reminders_enabled:
+        return 0
     invitations = event.invitations.filter(first_sent_at__isnull=False).exclude(
         status=EventInvitation.Status.SUBMITTED
     )
@@ -1081,6 +1197,7 @@ def send_due_event_reminders(*, window_minutes: int) -> int:
     window_end = now + timedelta(minutes=window_minutes)
     count = 0
     events = Event.objects.filter(
+        status=Event.Status.ACTIVE,
         reminders_enabled=True,
         response_deadline__isnull=False,
         response_deadline__gt=now,

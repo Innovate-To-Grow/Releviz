@@ -1,14 +1,23 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { MdEdit } from "react-icons/md";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import AppButton from "@/components/ui/AppButton";
+import CreateEventClient from "@/components/event/CreateEventClient";
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
 import {
   confirmFinalMeeting,
   downloadFinalCalendar,
   fetchDeliveryRequest,
   fetchEventResults,
-  launchEvent,
   previewFinalMeeting,
   retryDeliveryRequest,
   sendReminders,
@@ -31,6 +40,7 @@ export function DeliveryRequestProgress({
   initialRequest,
   getToken,
   onChange,
+  ariaLabel = "Delivery progress",
 }) {
   const [request, setRequest] = useState(initialRequest || null);
   const [error, setError] = useState("");
@@ -80,7 +90,7 @@ export function DeliveryRequestProgress({
   };
 
   return (
-    <div aria-label="Delivery progress" className="delivery-progress">
+    <div aria-label={ariaLabel} className="delivery-progress">
       <div className="delivery-progress__header">
         <strong>
           {request.operation
@@ -129,60 +139,16 @@ export function DeliveryRequestProgress({
   );
 }
 
-export function OverviewPanel({
+export function EventControls({
   event,
   setEvent,
   getToken,
-  deliveryRequest,
   setDeliveryRequest,
-  launchParticipantIds = [],
-  launchSelectionMode = "all",
-  setLaunchSelectionMode,
 }) {
   const [changing, setChanging] = useState(false);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
-  const launchKey = useRef("");
   const reminderKey = useRef("");
-
-  const launch = async () => {
-    if (!launchKey.current) launchKey.current = crypto.randomUUID();
-    setChanging(true);
-    setError("");
-    setStatus("");
-    try {
-      const token = await getToken();
-      const selection =
-        launchSelectionMode === "selected"
-          ? { participantIds: launchParticipantIds }
-          : launchSelectionMode === "exclude_selected"
-            ? {
-                allEligible: true,
-                excludedParticipantIds: launchParticipantIds,
-              }
-            : { allEligible: true };
-      const data = await launchEvent(
-        event.code,
-        {
-          expectedVersion: event.version,
-          idempotencyKey: launchKey.current,
-          selection,
-        },
-        token,
-      );
-      setEvent(data.event);
-      setDeliveryRequest(data.deliveryRequest || null);
-      setStatus(
-        `Event launched. ${data.deliveryRequest?.recipientCount || 0} invitation emails were queued.`,
-      );
-      launchKey.current = "";
-    } catch (requestError) {
-      if (requestError.event) setEvent(requestError.event);
-      setError(requestError.message || "Unable to launch this event.");
-    } finally {
-      setChanging(false);
-    }
-  };
 
   const changeLifecycle = async (nextStatus) => {
     setChanging(true);
@@ -191,7 +157,7 @@ export function OverviewPanel({
     try {
       const token = await getToken();
       const responseDeadline =
-        nextStatus === "open" &&
+        nextStatus === "active" &&
         event.responseDeadline &&
         Date.parse(event.responseDeadline) <= Date.now()
           ? null
@@ -217,7 +183,15 @@ export function OverviewPanel({
           },
         });
       }
-      setStatus(`Event is now ${nextStatus}.`);
+      setStatus(
+        nextStatus === "active"
+          ? "This event is active and accepting responses."
+          : nextStatus === "closed"
+            ? "Responses are now closed."
+            : nextStatus === "archived"
+              ? "Event archived."
+              : `Event is now ${nextStatus}.`,
+      );
     } catch (requestError) {
       setError(requestError.message || "Unable to change the event status.");
     } finally {
@@ -259,144 +233,54 @@ export function OverviewPanel({
   };
 
   return (
-    <div className="organizer-panel-stack">
-      <div className="organizer-overview-layout">
-        <section className="md-card organizer-panel organizer-overview-panel">
-          <header className="organizer-panel__header">
-            <div>
-              <h2 className="organizer-panel__title">Overview</h2>
-              <p className="organizer-panel__description">
-                Prepare the roster while the event is a draft, then launch
-                invitations atomically.
-              </p>
-            </div>
-          </header>
-          <div className="organizer-overview-panel__snapshot">
-            <EventDetailsGrid
-              event={event}
-              variant="organizer"
-              extraCards={[
-                {
-                  label: "Access",
-                  value:
-                    event.accessMode === "open_link"
-                      ? "Anyone with code"
-                      : "Invite only",
-                },
-                {
-                  label: "Meeting duration",
-                  value: `${event.meetingDurationMinutes || event.slotMinutes || 30} minutes`,
-                },
-                { label: "Result revision", value: event.resultsRevision ?? 1 },
-              ]}
-            />
-          </div>
-        </section>
+    <section
+      className="organizer-event-controls"
+      aria-labelledby="organizer-lifecycle-title"
+    >
+      <div className="organizer-event-controls__label">
+        <span className="organizer-lifecycle-panel__status">
+          {event.status || "unknown"}
+        </span>
+        <h3 id="organizer-lifecycle-title">Event controls</h3>
+      </div>
 
-        <aside
-          className="md-card organizer-panel organizer-lifecycle-panel"
-          aria-labelledby="organizer-lifecycle-title"
-        >
-          <header className="organizer-panel__header organizer-lifecycle-panel__header">
-            <div>
-              <span className="organizer-lifecycle-panel__status">
-                {event.status || "draft"}
-              </span>
-              <h2
-                id="organizer-lifecycle-title"
-                className="organizer-panel__title"
-              >
-                Event controls
-              </h2>
-            </div>
-          </header>
+      <div className="organizer-event-controls__actions">
+        {event.status === "active" && (
+          <>
+            <AppButton variant="outlined" onClick={remind} disabled={changing}>
+              Queue reminders
+            </AppButton>
+            <AppButton
+              variant="outlined"
+              onClick={() => changeLifecycle("closed")}
+              disabled={changing}
+            >
+              Close responses
+            </AppButton>
+          </>
+        )}
+        {["closed", "finalized", "archived"].includes(event.status) && (
+          <AppButton
+            variant="outlined"
+            onClick={() => changeLifecycle("active")}
+            disabled={changing}
+          >
+            Reactivate event
+          </AppButton>
+        )}
+        {["active", "closed", "finalized"].includes(event.status) && (
+          <AppButton
+            variant="outlined"
+            onClick={() => changeLifecycle("archived")}
+            disabled={changing}
+          >
+            Archive event
+          </AppButton>
+        )}
+      </div>
 
-          {event.status === "draft" && (
-            <div className="organizer-launch-form">
-              <label className="organizer-field">
-                Invitation audience
-                <select
-                  aria-label="Invitation audience"
-                  value={launchSelectionMode}
-                  onChange={(changeEvent) =>
-                    setLaunchSelectionMode?.(changeEvent.target.value)
-                  }
-                >
-                  <option value="all">All eligible roster members</option>
-                  <option value="selected">Only selected roster members</option>
-                  <option value="exclude_selected">
-                    All except selected roster members
-                  </option>
-                </select>
-              </label>
-              <span className="organizer-selection-count">
-                {launchParticipantIds.length} selected in Roster
-              </span>
-              <div className="organizer-launch-form__actions">
-                <AppButton
-                  onClick={launch}
-                  disabled={
-                    changing ||
-                    (launchSelectionMode !== "all" &&
-                      launchParticipantIds.length === 0)
-                  }
-                >
-                  {changing ? "Launching…" : "Launch and send invitations"}
-                </AppButton>
-              </div>
-            </div>
-          )}
-
-          {event.status !== "draft" && (
-            <div className="organizer-panel__actions organizer-lifecycle-panel__actions">
-              {event.status === "open" && (
-                <>
-                  <AppButton
-                    variant="outlined"
-                    onClick={remind}
-                    disabled={changing}
-                  >
-                    Queue reminders
-                  </AppButton>
-                  <AppButton
-                    variant="outlined"
-                    onClick={() => changeLifecycle("closed")}
-                    disabled={changing}
-                  >
-                    Close responses
-                  </AppButton>
-                </>
-              )}
-              {event.status === "closed" && (
-                <AppButton
-                  variant="outlined"
-                  onClick={() => changeLifecycle("open")}
-                  disabled={changing}
-                >
-                  Reopen responses
-                </AppButton>
-              )}
-              {["finalized", "archived"].includes(event.status) && (
-                <AppButton
-                  variant="outlined"
-                  onClick={() => changeLifecycle("open")}
-                  disabled={changing}
-                >
-                  Reopen event
-                </AppButton>
-              )}
-              {!["archived", "draft"].includes(event.status) && (
-                <AppButton
-                  variant="outlined"
-                  onClick={() => changeLifecycle("archived")}
-                  disabled={changing}
-                >
-                  Archive event
-                </AppButton>
-              )}
-            </div>
-          )}
-
+      {(status || error) && (
+        <div className="organizer-event-controls__feedback">
           {status && (
             <p
               role="status"
@@ -413,15 +297,152 @@ export function OverviewPanel({
               {error}
             </p>
           )}
-        </aside>
+        </div>
+      )}
+    </section>
+  );
+}
+
+export function OverviewPanel({ event, onEventSaved }) {
+  const [editing, setEditing] = useState(false);
+  const [editingEvent, setEditingEvent] = useState(null);
+  const [saveStatus, setSaveStatus] = useState("");
+  const panelRef = useRef(null);
+  const editorHeadingRef = useRef(null);
+  const editLocked =
+    ["finalized", "archived"].includes(event.status) ||
+    Boolean(event.finalMeeting);
+  const editLockReason = event.finalMeeting
+    ? "Reactivate the event before editing a confirmed meeting."
+    : `Reactivate this ${event.status} event before editing it.`;
+
+  const focusEditButton = () => {
+    window.setTimeout(
+      () =>
+        panelRef.current
+          ?.querySelector(".organizer-overview-edit-link")
+          ?.focus(),
+      0,
+    );
+  };
+
+  const openEditor = () => {
+    setSaveStatus("");
+    setEditingEvent(event);
+    setEditing(true);
+    window.setTimeout(() => editorHeadingRef.current?.focus(), 0);
+  };
+
+  const closeEditor = () => {
+    setEditing(false);
+    setEditingEvent(null);
+    focusEditButton();
+  };
+
+  const handleSaved = async (result) => {
+    await onEventSaved?.(result);
+    setSaveStatus("Event changes saved.");
+    closeEditor();
+  };
+
+  return (
+    <section
+      ref={panelRef}
+      className="md-card organizer-panel organizer-overview-panel"
+    >
+      <header className="organizer-panel__header">
+        <div>
+          <h3
+            id="organizer-overview-heading"
+            className="organizer-panel__title"
+          >
+            Overview
+          </h3>
+          <p className="organizer-panel__description">
+            Review the event schedule and response settings.
+          </p>
+        </div>
+        {editLocked ? (
+          <AppButton
+            variant="outlined"
+            className="organizer-overview-edit-link"
+            icon={<MdEdit />}
+            disabled
+            title={editLockReason}
+          >
+            Edit event
+          </AppButton>
+        ) : (
+          <AppButton
+            variant="outlined"
+            className="organizer-overview-edit-link"
+            icon={<MdEdit />}
+            onClick={openEditor}
+            disabled={editing}
+            aria-expanded={editing}
+            aria-controls="organizer-inline-event-editor"
+          >
+            Edit event
+          </AppButton>
+        )}
+      </header>
+      <div className="organizer-overview-panel__snapshot">
+        <EventDetailsGrid
+          event={event}
+          variant="organizer"
+          extraCards={[
+            {
+              label: "Access",
+              value:
+                event.accessMode === "open_link"
+                  ? "Anyone with code"
+                  : "Invite only",
+            },
+            {
+              label: "Meeting duration",
+              value: `${event.meetingDurationMinutes || event.slotMinutes || 30} minutes`,
+            },
+            { label: "Result revision", value: event.resultsRevision ?? 1 },
+          ]}
+        />
       </div>
-      <DeliveryRequestProgress
-        key={deliveryRequest?.id || "no-delivery"}
-        initialRequest={deliveryRequest}
-        getToken={getToken}
-        onChange={setDeliveryRequest}
-      />
-    </div>
+      {saveStatus && (
+        <p
+          className="organizer-message organizer-message--success organizer-overview-edit-status"
+          role="status"
+        >
+          {saveStatus}
+        </p>
+      )}
+      {editing && editingEvent && (
+        <div
+          id="organizer-inline-event-editor"
+          className="organizer-overview-editor"
+          role="region"
+          aria-labelledby="organizer-inline-event-editor-heading"
+        >
+          <header className="organizer-overview-editor__header">
+            <div>
+              <h4
+                id="organizer-inline-event-editor-heading"
+                ref={editorHeadingRef}
+                tabIndex={-1}
+              >
+                Edit event
+              </h4>
+              <p>Update this event without leaving the workspace.</p>
+            </div>
+          </header>
+          <CreateEventClient
+            operation="edit"
+            presentation="inline"
+            initialEvent={editingEvent}
+            onSaved={handleSaved}
+            onCancel={closeEditor}
+          />
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -444,31 +465,70 @@ function recommendationKey(recommendation, index) {
   );
 }
 
-export function ResultsSnapshotPanel({
-  event,
-  getToken,
-  invalidationKey,
-  onChoose,
-}) {
+function recommendationSelectionKey(recommendation) {
+  if (!recommendation) return null;
+  return (
+    recommendation.id ||
+    [
+      recommendation.suggestedStartsAt || recommendation.startsAt,
+      recommendation.suggestedEndsAt || recommendation.endsAt,
+      recommendation.channel,
+    ].join("-")
+  );
+}
+
+export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
+  {
+    event,
+    getToken,
+    invalidationKey,
+    onChoose,
+    selectedRecommendationKey,
+    headingRef,
+  },
+  forwardedRef,
+) {
   const [snapshot, setSnapshot] = useState({
     status: "refreshing",
     results: null,
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [sectionVisible, setSectionVisible] = useState(false);
+  const [documentVisible, setDocumentVisible] = useState(
+    () =>
+      typeof document === "undefined" || document.visibilityState === "visible",
+  );
+  const sectionRef = useRef(null);
 
-  const load = useCallback(async () => {
-    try {
-      const token = await getToken();
-      const data = await fetchEventResults(event.code, token);
-      setSnapshot(resultEnvelope(data));
-      setError("");
-    } catch (requestError) {
-      setError(requestError.message || "Unable to load results.");
-    } finally {
-      setLoading(false);
-    }
-  }, [event.code, getToken]);
+  const load = useCallback(
+    async (providedToken, { throwOnError = false } = {}) => {
+      setLoading(true);
+      try {
+        const token =
+          providedToken === undefined ? await getToken() : providedToken;
+        const data = await fetchEventResults(event.code, token);
+        setSnapshot(resultEnvelope(data));
+        setError("");
+        return data;
+      } catch (requestError) {
+        setError(requestError.message || "Unable to load results.");
+        if (throwOnError) throw requestError;
+        return null;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [event.code, getToken],
+  );
+
+  useImperativeHandle(
+    forwardedRef,
+    () => ({
+      refresh: (token) => load(token, { throwOnError: true }),
+    }),
+    [load],
+  );
 
   useEffect(() => {
     const timer = setTimeout(load, 0);
@@ -476,25 +536,60 @@ export function ResultsSnapshotPanel({
   }, [invalidationKey, load]);
 
   useEffect(() => {
-    if (snapshot.status !== "refreshing") return undefined;
+    const section = sectionRef.current;
+    if (!section || typeof IntersectionObserver === "undefined") {
+      setSectionVisible(true);
+      return undefined;
+    }
+    const observer = new IntersectionObserver(
+      ([entry]) => setSectionVisible(entry.isIntersecting),
+      { threshold: 0.01 },
+    );
+    observer.observe(section);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return undefined;
+    const updateVisibility = () =>
+      setDocumentVisible(document.visibilityState === "visible");
+    updateVisibility();
+    document.addEventListener("visibilitychange", updateVisibility);
+    return () =>
+      document.removeEventListener("visibilitychange", updateVisibility);
+  }, []);
+
+  useEffect(() => {
+    if (snapshot.status !== "refreshing" || !sectionVisible || !documentVisible)
+      return undefined;
     const timer = setInterval(load, 2000);
     return () => clearInterval(timer);
-  }, [load, snapshot.status]);
+  }, [documentVisible, load, sectionVisible, snapshot.status]);
 
   const results = snapshot.results || {};
   const recommendations = (results.recommendations || []).slice(0, 10);
 
   return (
-    <section className="md-card organizer-panel organizer-results-panel">
+    <section
+      ref={sectionRef}
+      className="md-card organizer-panel organizer-results-panel"
+    >
       <div className="organizer-panel__header">
         <div>
-          <h2 className="organizer-panel__title">Results</h2>
+          <h3
+            ref={headingRef}
+            id="organizer-results-heading"
+            className="organizer-panel__title"
+            tabIndex={-1}
+          >
+            Results
+          </h3>
           <p className="organizer-panel__description">
             Top continuous windows for a{" "}
             {event.meetingDurationMinutes || event.slotMinutes}-minute meeting.
           </p>
         </div>
-        <AppButton variant="outlined" onClick={load} disabled={loading}>
+        <AppButton variant="outlined" onClick={() => load()} disabled={loading}>
           Refresh results
         </AppButton>
       </div>
@@ -528,6 +623,10 @@ export function ResultsSnapshotPanel({
       {recommendations.length > 0 ? (
         <ol className="results-list">
           {recommendations.map((recommendation, index) => {
+            const key = recommendationKey(recommendation, index);
+            const selected =
+              selectedRecommendationKey ===
+              recommendationSelectionKey(recommendation);
             const weighted =
               recommendation.weightedAvailability ??
               recommendation.weightedScore ??
@@ -542,8 +641,8 @@ export function ResultsSnapshotPanel({
               recommendation.suggestedEndsAt || recommendation.endsAt;
             return (
               <li
-                key={recommendationKey(recommendation, index)}
-                className="result-option"
+                key={key}
+                className={`result-option${selected ? " result-option--selected" : ""}`}
               >
                 <div className="result-option__content">
                   <div className="result-option__heading">
@@ -593,9 +692,10 @@ export function ResultsSnapshotPanel({
                 </div>
                 <AppButton
                   variant="outlined"
+                  aria-pressed={selected}
                   onClick={() => onChoose(recommendation)}
                 >
-                  Choose this time
+                  {selected ? "Selected time" : "Choose this time"}
                 </AppButton>
               </li>
             );
@@ -603,12 +703,12 @@ export function ResultsSnapshotPanel({
         </ol>
       ) : loading || snapshot.status === "refreshing" ? (
         <div className="organizer-empty-state organizer-empty-state--loading">
-          <h3>Calculating the best options</h3>
+          <h4>Calculating the best options</h4>
           <p>Recommendations will appear here as responses arrive.</p>
         </div>
       ) : (
         <div className="organizer-empty-state">
-          <h3>No recommendation yet</h3>
+          <h4>No recommendation yet</h4>
           <p>No valid meeting window is available yet.</p>
         </div>
       )}
@@ -619,14 +719,25 @@ export function ResultsSnapshotPanel({
       )}
     </section>
   );
+});
+
+export function FinalizeScalePanel(props) {
+  const selectedRecommendationKey = props.recommendation
+    ? recommendationKey(props.recommendation, 0)
+    : "no-recommendation";
+
+  return (
+    <FinalizeScalePanelContent key={selectedRecommendationKey} {...props} />
+  );
 }
 
-export function FinalizeScalePanel({
+function FinalizeScalePanelContent({
   event,
   setEvent,
   getToken,
   recommendation,
   onBrowseResults,
+  headingRef,
 }) {
   const [location, setLocation] = useState(event.location || "");
   const [review, setReview] = useState(null);
@@ -727,13 +838,20 @@ export function FinalizeScalePanel({
   };
 
   const meeting = event.finalMeeting;
-  const canFinalize = ["open", "closed"].includes(event.status);
+  const canFinalize = ["active", "closed"].includes(event.status);
   return (
     <div className="organizer-panel-stack">
       <section className="md-card organizer-panel organizer-finalize-panel">
         <header className="organizer-panel__header">
           <div>
-            <h2 className="organizer-panel__title">Finalize</h2>
+            <h3
+              ref={headingRef}
+              id="organizer-finalize-heading"
+              className="organizer-panel__title"
+              tabIndex={-1}
+            >
+              Finalize
+            </h3>
             <p className="organizer-panel__description">
               Confirm one ranked, continuous window and send an iCalendar update
               to invited people.
@@ -824,15 +942,15 @@ export function FinalizeScalePanel({
               </div>
               {!canFinalize && (
                 <p role="note" className="organizer-message">
-                  Launch this event before reviewing and finalizing a meeting
-                  time.
+                  Reactivate this event before reviewing and finalizing a
+                  meeting time.
                 </p>
               )}
             </div>
           </div>
         ) : (
           <div className="organizer-empty-state organizer-empty-state--finalize">
-            <h3>No time selected yet</h3>
+            <h4>No time selected yet</h4>
             <p>Choose a recommended window before finalizing.</p>
             <div className="organizer-empty-state__actions">
               <AppButton onClick={onBrowseResults}>Browse results</AppButton>
@@ -880,6 +998,7 @@ export function FinalizeScalePanel({
         initialRequest={deliveryRequest}
         getToken={getToken}
         onChange={setDeliveryRequest}
+        ariaLabel="Finalization delivery progress"
       />
     </div>
   );

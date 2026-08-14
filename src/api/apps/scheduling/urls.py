@@ -76,24 +76,23 @@ urlpatterns = [
     ),
     path("events/lifecycle", views.EventLifecycleView.as_view(), name="api-event-lifecycle"),
     path("events/reminders", views.EventRemindersView.as_view(), name="api-event-reminders"),
-    path("events/launch", operations_views.EventLaunchView.as_view(), name="api-event-launch"),
     path(
-        "events/delivery-requests/<uuid:request_id>",
+        "events/delivery-requests/<int:request_id>",
         operations_views.DeliveryRequestView.as_view(),
         name="api-event-delivery-request",
     ),
     path(
-        "events/roster-imports/<uuid:import_id>/rows",
+        "events/roster-imports/<int:import_id>/rows",
         roster_views.RosterImportRowsView.as_view(),
         name="api-roster-import-rows",
     ),
     path(
-        "events/roster-imports/<uuid:import_id>/commit",
+        "events/roster-imports/<int:import_id>/commit",
         roster_views.RosterImportCommitView.as_view(),
         name="api-roster-import-commit",
     ),
     path(
-        "events/roster-imports/<uuid:import_id>",
+        "events/roster-imports/<int:import_id>",
         roster_views.RosterImportDetailView.as_view(),
         name="api-roster-import-detail",
     ),
@@ -104,12 +103,12 @@ urlpatterns = [
     ),
     path("events/roster/bulk", roster_views.RosterBulkView.as_view(), name="api-roster-bulk"),
     path(
-        "events/roster/<uuid:participant_id>/schedule",
+        "events/roster/<str:participant_id>/schedule",
         roster_views.RosterParticipantScheduleView.as_view(),
         name="api-roster-participant-schedule",
     ),
     path(
-        "events/roster/<uuid:participant_id>",
+        "events/roster/<str:participant_id>",
         roster_views.RosterParticipantView.as_view(),
         name="api-roster-participant",
     ),
