@@ -10,7 +10,7 @@ from django.test import TestCase
 from apps.authn.models import Member
 from apps.core.admin.common.base import BaseModelAdmin, ReadOnlyModelAdmin
 from apps.core.admin.registrations.log_entry import LogEntryAdmin
-from apps.event.tests.helpers import make_superuser
+from apps.core.tests.helpers import make_superuser
 
 
 class BaseModelAdminPermissionTest(TestCase):

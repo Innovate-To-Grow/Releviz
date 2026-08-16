@@ -6,8 +6,23 @@ from django.contrib.staticfiles import finders
 from django.test import TestCase
 from django.urls import reverse
 
+from apps.authn.models import ContactEmail, Member
 from apps.core.models import SiteMaintenanceControl
-from apps.event.tests.helpers import make_superuser
+
+
+def make_superuser():
+    member = Member.objects.create_superuser(
+        password="testpass123",
+        first_name="Admin",
+        last_name="User",
+    )
+    ContactEmail.objects.create(
+        member=member,
+        email_address="admin@example.com",
+        email_type="primary",
+        verified=True,
+    )
+    return member
 
 
 class AdminThemeRenderingTests(TestCase):
@@ -142,10 +157,16 @@ class AdminThemeRenderingTests(TestCase):
             with self.subTest(style_path=style_path):
                 self.assertIsNotNone(finders.find(style_path))
 
-    def test_configured_unfold_scripts_are_resolvable_static_assets(self):
-        for script_factory in settings.UNFOLD["SCRIPTS"]:
-            script_path = script_factory(None).removeprefix("/static/")
+    def test_admin_template_scripts_are_resolvable_static_assets(self):
+        response = self.client.get(reverse("admin:index"))
+        for script_path in (
+            "admin/js/i2g-admin-theme-runtime.js",
+            "admin/js/csp-actions.js",
+            "admin/js/sidebar-scroll.js",
+            "admin/js/material-web-text-field.js",
+        ):
             with self.subTest(script_path=script_path):
+                self.assertContains(response, f"/static/{script_path}")
                 self.assertIsNotNone(finders.find(script_path))
 
     def test_htmx_csp_bootstrap_disables_dynamic_code_paths(self):

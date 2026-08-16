@@ -86,6 +86,22 @@ class ActiveInvitationPipelineTests(TestCase):
         self.assertFalse(restored["participant"].hidden)
         self.assertEqual(restored["deliveryResult"]["request"].recipient_count, 1)
 
+        restored_participant = restored["participant"]
+        restored_version = restored_participant.version
+        restored_participant.hidden = True
+        restored_participant.save(update_fields=["hidden", "updated_at"])
+        same_name = create_or_reuse_managed_participant_and_send(
+            event=self.event,
+            organizer=self.organizer,
+            name="Restored Person",
+            email="hidden@example.com",
+            idempotency_key=uuid.uuid4(),
+        )
+        same_name["participant"].refresh_from_db()
+        self.assertTrue(same_name["participantRestored"])
+        self.assertEqual(same_name["participant"].participant_name, "Restored Person")
+        self.assertEqual(same_name["participant"].version, restored_version + 1)
+
     def test_invitation_enqueue_failure_rolls_back_the_entire_managed_add(self):
         email = "rollback@example.com"
         baseline_user_events = UserEvent.objects.filter(event=self.event).count()

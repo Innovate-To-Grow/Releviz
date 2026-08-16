@@ -63,6 +63,7 @@ class MemberChangeFormProfileImageTest(TestCase):
             "first_name": member.first_name,
             "middle_name": member.middle_name or "",
             "last_name": member.last_name,
+            "access_level": member.access_level,
             "profile_image": "",
             "is_active": "on" if member.is_active else "",
             "is_staff": "on" if member.is_staff else "",

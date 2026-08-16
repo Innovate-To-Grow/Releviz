@@ -10,18 +10,10 @@ is genuinely shared. Consumers below are the apps that import each path today
 ======================  ==================================================  ==================================================
 Subsystem               What it is                                          Importing apps
 ======================  ==================================================  ==================================================
-``aws/``                Shared AWS credential resolution + SNS SMS send      ``authn``, ``event``, ``mail``
-``background_jobs/``    Durable outbox: queue, worker, retry, rate limit     ``authn``, ``cms``, ``event``, ``mail``
-``bedrock/``            Amazon Bedrock LLM client (converse + streaming)     ``mail``, ``projects``, ``system_intelligence``
-``db_tools/``           Read-only ORM sandbox exposed as AI assistant tools  ``cli_admin``, ``system_intelligence``
-``helpers/``            In-process task runner + sheet formula safety       ``authn``, ``event``, ``mail``, ``system_intelligence``
+``aws/``                Shared AWS credential resolution + SES delivery      ``authn``, ``mail``
+``background_jobs/``    Durable outbox: queue, worker, retry, rate limit     ``authn``
+``helpers/``            In-process task runner + sheet formula safety       ``authn``
 ======================  ==================================================  ==================================================
-
-Extracting ``background_jobs``, ``bedrock`` and ``db_tools`` into their own apps
-would be a cleaner layering, but it needs new Django app labels — and app labels
-are stored **in the database** (``Member.admin_apps``, read by
-``apps.core.utils.access``), so it requires a data migration. See
-``docs/architecture/repository-structure.md`` for the deferred plan.
 
 Structure limits are enforced by
 ``apps/core/tests/services/test_core_services_structure.py``: at most 200 lines

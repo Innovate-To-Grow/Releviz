@@ -1289,4 +1289,38 @@ describe("business API helpers", () => {
       participant: null,
     });
   });
+
+  test("managed participant mutations preserve structured error details", async () => {
+    global.fetch.mockResolvedValueOnce({
+      ok: false,
+      status: 409,
+      text: jest.fn().mockResolvedValue(
+        JSON.stringify({
+          detail: "Participant already exists",
+          code: "participant_exists",
+          event: { code: "ABC", version: 4 },
+          participant: { id: "participant-1", version: 2 },
+        }),
+      ),
+    });
+
+    await expect(
+      createManagedParticipant(
+        "ABC",
+        {
+          name: "Existing Person",
+          email: "existing@example.com",
+          idempotencyKey: "managed-key",
+        },
+        "tok",
+      ),
+    ).rejects.toMatchObject({
+      message: "Participant already exists",
+      status: 409,
+      errorCode: "participant_exists",
+      event: { code: "ABC", version: 4 },
+      participant: { id: "participant-1", version: 2 },
+      payload: expect.objectContaining({ code: "participant_exists" }),
+    });
+  });
 });

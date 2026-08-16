@@ -4,7 +4,6 @@ from datetime import timedelta
 
 from django.db import OperationalError, connection, transaction
 from django.utils import timezone
-from gspread.exceptions import APIError as GspreadAPIError
 
 from apps.core.models import BackgroundJob
 
@@ -64,7 +63,11 @@ def _is_known_transient(exc: BaseException) -> bool:
             or item.__class__.__name__ in transient_names
         ):
             return True
-        if isinstance(item, GspreadAPIError):
+        # Google Sheets jobs used to make ``gspread`` a hard dependency solely
+        # so this generic worker could classify its APIError. Keep the worker
+        # provider-neutral: the exception's stable public shape is sufficient
+        # and lets deployments without a Sheets integration start normally.
+        if item.__class__.__name__ == "APIError":
             status_code = getattr(getattr(item, "response", None), "status_code", None)
             if status_code in {408, 429} or (
                 isinstance(status_code, int) and 500 <= status_code <= 599

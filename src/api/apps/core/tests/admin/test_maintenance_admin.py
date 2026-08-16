@@ -3,7 +3,7 @@ from django.urls import reverse
 
 from apps.core.admin.registrations.maintenance import SiteMaintenanceControlAdminForm
 from apps.core.models import SiteMaintenanceControl
-from apps.event.tests.helpers import make_superuser
+from apps.core.tests.helpers import make_superuser
 
 
 class SiteMaintenanceControlAdminFormTests(TestCase):

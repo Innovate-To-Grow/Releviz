@@ -41,8 +41,7 @@ class Command(MigrateCommand):
             )
 
         deadline = time.monotonic() + lock_timeout
-        acquired = False
-        while not acquired:
+        while True:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT pg_try_advisory_lock(%s)", [MIGRATION_LOCK_ID])
                 acquired = bool(cursor.fetchone()[0])

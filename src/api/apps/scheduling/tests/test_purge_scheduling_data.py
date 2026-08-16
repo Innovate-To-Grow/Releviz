@@ -1,11 +1,15 @@
 import io
 import uuid
 from datetime import timedelta
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 from django.contrib.admin.models import ADDITION, LogEntry
 from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
 from django.core.management.base import CommandError
+from django.db import connections
+from django.db.models.query import QuerySet
 from django.test import TestCase
 from django.utils import timezone
 
@@ -18,6 +22,7 @@ from apps.mail.models import (
     EmailMessageLog,
     EmailProviderConfig,
 )
+from apps.scheduling.management.commands import purge_scheduling_data
 from apps.scheduling.models import (
     Event,
     EventDeletionRecord,
@@ -207,6 +212,47 @@ class PurgeSchedulingDataCommandTests(TestCase):
             self.execute(expected=2)
         self.assertTrue(Event.objects.filter(pk=self.event.pk).exists())
 
+    def test_execution_rejects_unknown_database_and_invalid_expected_counts(self):
+        with self.assertRaisesMessage(CommandError, "Unknown database alias"):
+            call_command("purge_scheduling_data", database="missing")
+
+        for expected in (None, -1):
+            with (
+                self.subTest(expected=expected),
+                self.assertRaisesMessage(CommandError, "non-negative --expected-event-count"),
+            ):
+                call_command(
+                    "purge_scheduling_data",
+                    execute=True,
+                    confirm="PURGE-SCHEDULING-DATA",
+                    expected_event_count=expected,
+                )
+
+    def test_postgresql_execution_takes_an_exclusive_event_table_lock(self):
+        SiteMaintenanceControl.objects.create(is_maintenance=True)
+        real_connection = connections["default"]
+        lock_cursor = MagicMock()
+        lock_cursor.__enter__.return_value = lock_cursor
+        postgres_connection = SimpleNamespace(
+            vendor="postgresql",
+            ops=real_connection.ops,
+            cursor=MagicMock(return_value=lock_cursor),
+        )
+
+        with (
+            patch.object(
+                purge_scheduling_data,
+                "connections",
+                {"default": postgres_connection},
+            ),
+            self.assertRaisesMessage(CommandError, "expected 2, found 1"),
+        ):
+            self.execute(expected=2)
+
+        lock_cursor.execute.assert_called_once_with(
+            'LOCK TABLE "scheduling_event" IN ACCESS EXCLUSIVE MODE'
+        )
+
     def test_execution_refuses_a_targeted_processing_email_job(self):
         SiteMaintenanceControl.objects.create(is_maintenance=True)
         self.job.status = EmailDeliveryJob.Status.PROCESSING
@@ -223,6 +269,100 @@ class PurgeSchedulingDataCommandTests(TestCase):
             self.execute()
         self.assertTrue(Event.objects.filter(pk=self.event.pk).exists())
         self.assertTrue(Member.objects.filter(pk=self.temp_member.pk).exists())
+
+    def test_post_purge_guards_reject_remaining_dependent_records(self):
+        SiteMaintenanceControl.objects.create(is_maintenance=True)
+        original_exists = QuerySet.exists
+
+        def assert_guard(model, message, *, predicate=None):
+            def forced_exists(queryset):
+                matches = queryset.model is model and (predicate is None or predicate(queryset))
+                return True if matches else original_exists(queryset)
+
+            with (
+                patch.object(QuerySet, "exists", new=forced_exists),
+                self.assertRaisesMessage(CommandError, message),
+            ):
+                self.execute()
+
+        cases = [
+            (EmailDeliveryRequest, "email delivery requests remain", None),
+            (
+                EmailDeliveryJob,
+                "Targeted email delivery jobs remain",
+                lambda queryset: "Status.PROCESSING" not in str(queryset.query.where),
+            ),
+            (EmailMessageLog, "Scheduling email logs remain", None),
+            (EmailAuthChallenge, "Temporary access challenges remain", None),
+            (
+                Member,
+                "Temporary members remain",
+                lambda queryset: "is_staff" not in str(queryset.query.where),
+            ),
+        ]
+        for model, message, predicate in cases:
+            with self.subTest(model=model._meta.label):
+                assert_guard(model, message, predicate=predicate)
+
+    def test_post_purge_guard_rejects_remaining_scheduling_rows(self):
+        SiteMaintenanceControl.objects.create(is_maintenance=True)
+        fake_query = SimpleNamespace(count=lambda: 1, exists=lambda: True)
+        fake_model = SimpleNamespace(
+            _meta=SimpleNamespace(label="scheduling.OrphanedRow"),
+            objects=SimpleNamespace(using=lambda _database: fake_query),
+        )
+
+        with (
+            patch.object(
+                purge_scheduling_data,
+                "_scheduling_models",
+                return_value=(fake_model,),
+            ),
+            self.assertRaisesMessage(CommandError, "Scheduling rows remain after purge"),
+        ):
+            self.execute()
+
+    def test_post_purge_guards_reject_changes_to_preserved_configuration(self):
+        SiteMaintenanceControl.objects.create(is_maintenance=True)
+        original_values_list = QuerySet.values_list
+
+        def assert_guard(model, message, *, predicate=None):
+            matching_calls = 0
+
+            def changed_values(queryset, *fields, **kwargs):
+                nonlocal matching_calls
+                values = original_values_list(queryset, *fields, **kwargs)
+                matches = (
+                    queryset.model is model
+                    and fields == ("pk",)
+                    and (predicate is None or predicate(queryset))
+                )
+                if not matches:
+                    return values
+                matching_calls += 1
+                materialized = list(values)
+                if matching_calls == 2:
+                    materialized.append("unexpected-preserved-record")
+                return materialized
+
+            with (
+                patch.object(QuerySet, "values_list", new=changed_values),
+                self.assertRaisesMessage(CommandError, message),
+            ):
+                self.execute()
+
+        cases = [
+            (
+                Member,
+                "Full member records changed",
+                lambda queryset: "NOT" in str(queryset.query.where),
+            ),
+            (AWSCredentialConfig, "AWS credential configuration changed", None),
+            (EmailProviderConfig, "Email provider configuration changed", None),
+        ]
+        for model, message, predicate in cases:
+            with self.subTest(model=model._meta.label):
+                assert_guard(model, message, predicate=predicate)
 
     def test_execution_clears_scheduling_and_temporary_members_only(self):
         SiteMaintenanceControl.objects.create(is_maintenance=True)

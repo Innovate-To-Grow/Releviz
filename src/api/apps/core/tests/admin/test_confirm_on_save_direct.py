@@ -20,9 +20,9 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.http import HttpResponseRedirect, QueryDict
 from django.test import RequestFactory, TestCase, override_settings
 
-from apps.cms.models import CMSAsset, CMSEmbedAllowedHost
 from apps.core.admin.mixins.confirm_on_save import CACHE_FILE_PREFIX
-from apps.projects.models import Semester
+from apps.core.models import AWSCredentialConfig, BackgroundJob
+from apps.core.services.background_jobs import enqueue_job
 
 User = get_user_model()
 
@@ -35,15 +35,22 @@ def _wire_request(request):
 
 
 def _host_admin():
-    return admin.site._registry[CMSEmbedAllowedHost]
+    return admin.site._registry[AWSCredentialConfig]
 
 
 def _semester_admin():
-    return admin.site._registry[Semester]
+    return admin.site._registry[BackgroundJob]
 
 
 def _asset_admin():
-    return admin.site._registry[CMSAsset]
+    return admin.site._registry[AWSCredentialConfig]
+
+
+def _failed_job(key="job"):
+    job, _created = enqueue_job(kind="test.echo", dedupe_key=key, payload={})
+    BackgroundJob.objects.filter(pk=job.pk).update(status=BackgroundJob.Status.FAILED)
+    job.refresh_from_db()
+    return job
 
 
 class ShouldSkipConfirmationTest(TestCase):
@@ -75,7 +82,7 @@ class ChangeformObjectMissingTest(TestCase):
 
     def test_confirmed_save_key_routes_to_executor(self):
         request = _wire_request(
-            self.factory.post("/admin/", {"_confirmed_save": "1", "hostname": "z.com"})
+            self.factory.post("/admin/", {"_confirmed_save": "1", "name": "Config Z"})
         )
         pending = {"token": "keep-this-token", "file_keys": {}}
         request.session[self.admin._session_key()] = pending
@@ -92,7 +99,7 @@ class ChangeformObjectMissingTest(TestCase):
         request = _wire_request(
             self.factory.post(
                 "/admin/",
-                {"_saveasnew": "1", "hostname": "copy.com", "is_active": "on"},
+                {"_saveasnew": "1", "name": "Copy", "is_active": "on"},
             )
         )
 
@@ -111,11 +118,11 @@ class ChangeformObjectMissingTest(TestCase):
         diff_hook.assert_not_called()
 
     def test_change_checks_permission_before_constructing_formsets(self):
-        host = CMSEmbedAllowedHost.objects.create(hostname="readonly.com", is_active=True)
+        host = AWSCredentialConfig.objects.create(name="Read only", is_active=True)
         request = _wire_request(
             self.factory.post(
                 "/admin/",
-                {"hostname": "changed.com", "is_active": "on"},
+                {"name": "Changed", "is_active": "on"},
             )
         )
 
@@ -136,8 +143,8 @@ class ChangeformObjectMissingTest(TestCase):
             self.factory.post(
                 "/admin/",
                 {
-                    TO_FIELD_VAR: "hostname",
-                    "hostname": "changed.com",
+                    TO_FIELD_VAR: "name",
+                    "name": "Changed",
                     "is_active": "on",
                 },
             )
@@ -152,13 +159,13 @@ class ChangeformObjectMissingTest(TestCase):
             with self.assertRaises(DisallowedModelAdminToField):
                 self.admin.changeform_view(request, object_id="existing-object")
 
-        allowed.assert_called_once_with(request, "hostname")
+        allowed.assert_called_once_with(request, "name")
         get_object.assert_not_called()
         create_formsets.assert_not_called()
         diff_hook.assert_not_called()
 
     def test_missing_object_defers_to_super(self):
-        request = _wire_request(self.factory.post("/admin/", {"hostname": "x.com"}))
+        request = _wire_request(self.factory.post("/admin/", {"name": "Missing"}))
         sentinel = object()
         with (
             patch.object(self.admin, "get_object", return_value=None),
@@ -182,7 +189,7 @@ class ChangeformInlineValidationTest(TestCase):
         request = _wire_request(
             self.factory.post(
                 "/admin/",
-                {"hostname": "hook-arguments.com", "is_active": "on"},
+                {"name": "Hook arguments", "is_active": "on"},
             )
         )
         formset = MagicMock()
@@ -214,7 +221,7 @@ class ChangeformInlineValidationTest(TestCase):
         request = _wire_request(
             self.factory.post(
                 "/admin/",
-                {"hostname": "invalid-inline.com", "is_active": "on"},
+                {"name": "Invalid inline", "is_active": "on"},
             )
         )
         invalid_formset = MagicMock()
@@ -317,7 +324,7 @@ class FileUploadCachingTest(TestCase):
         first_request = _wire_request(
             factory.post(
                 "/admin/",
-                {"hostname": "first-valid.com", "is_active": "on"},
+                {"name": "First valid", "is_active": "on"},
             )
         )
         first_request.FILES["attachment"] = SimpleUploadedFile(
@@ -338,7 +345,7 @@ class FileUploadCachingTest(TestCase):
         second_request = _wire_request(
             factory.post(
                 "/admin/",
-                {"hostname": "", "is_active": "on"},
+                {"name": "", "is_active": "on"},
             )
         )
         second_request.session = first_request.session
@@ -360,7 +367,7 @@ class DeleteViewBranchesTest(TestCase):
     def setUp(self):
         self.factory = RequestFactory()
         self.admin = _host_admin()
-        self.host = CMSEmbedAllowedHost.objects.create(hostname="del.com", is_active=True)
+        self.host = AWSCredentialConfig.objects.create(name="Delete", is_active=False)
 
     def test_skip_confirmation_defers_to_super(self):
         request = _wire_request(self.factory.post("/admin/", {"_autosave": "1", "post": "yes"}))
@@ -408,7 +415,7 @@ class ExecuteConfirmedTest(TestCase):
 
     def test_execute_confirmed_save_strips_marker(self):
         request = _wire_request(
-            self.factory.post("/admin/", {"_confirmed_save": "1", "hostname": "y.com"})
+            self.factory.post("/admin/", {"_confirmed_save": "1", "name": "Config Y"})
         )
         captured = {}
 
@@ -419,7 +426,7 @@ class ExecuteConfirmedTest(TestCase):
         with patch("django.contrib.admin.options.ModelAdmin.changeform_view", side_effect=capture):
             self.admin._execute_confirmed_save(request, None, "", None)
         self.assertNotIn("_confirmed_save", captured["post"])
-        self.assertIn("hostname", captured["post"])
+        self.assertIn("name", captured["post"])
 
     def test_execute_confirmed_delete_strips_marker(self):
         request = _wire_request(
@@ -461,7 +468,7 @@ class ResponseActionBranchesTest(TestCase):
             "django.contrib.admin.options.ModelAdmin.response_action",
             return_value=sentinel,
         ) as super_action:
-            result = self.admin.response_action(request, Semester.objects.all())
+            result = self.admin.response_action(request, BackgroundJob.objects.all())
         self.assertIs(result, sentinel)
         super_action.assert_called_once()
 
@@ -473,7 +480,7 @@ class ResponseActionBranchesTest(TestCase):
             "django.contrib.admin.options.ModelAdmin.response_action",
             return_value=sentinel,
         ) as super_action:
-            result = self.admin.response_action(request, Semester.objects.all())
+            result = self.admin.response_action(request, BackgroundJob.objects.all())
         self.assertIs(result, sentinel)
         super_action.assert_called_once()
 
@@ -490,14 +497,14 @@ class ResponseActionBranchesTest(TestCase):
             "django.contrib.admin.options.ModelAdmin.response_action",
             return_value=sentinel,
         ) as super_action:
-            result = self.admin.response_action(request, Semester.objects.all())
+            result = self.admin.response_action(request, BackgroundJob.objects.all())
         self.assertIs(result, sentinel)
         super_action.assert_called_once()
 
     def test_no_selection_no_select_across_defers(self):
         request = self._request(
             {
-                "action": ["publish_selected"],
+                "action": ["retry_selected_jobs"],
                 "index": "0",
                 "select_across": "0",
                 helpers.ACTION_CHECKBOX_NAME: [],
@@ -508,7 +515,7 @@ class ResponseActionBranchesTest(TestCase):
             "django.contrib.admin.options.ModelAdmin.response_action",
             return_value=sentinel,
         ) as super_action:
-            result = self.admin.response_action(request, Semester.objects.all())
+            result = self.admin.response_action(request, BackgroundJob.objects.all())
         self.assertIs(result, sentinel)
         super_action.assert_called_once()
 
@@ -516,7 +523,7 @@ class ResponseActionBranchesTest(TestCase):
         # A valid selection that filters to zero rows -> super() at the action_pks guard.
         request = self._request(
             {
-                "action": ["publish_selected"],
+                "action": ["retry_selected_jobs"],
                 "index": "0",
                 "select_across": "0",
                 helpers.ACTION_CHECKBOX_NAME: ["00000000-0000-0000-0000-000000000000"],
@@ -527,19 +534,19 @@ class ResponseActionBranchesTest(TestCase):
             "django.contrib.admin.options.ModelAdmin.response_action",
             return_value=sentinel,
         ) as super_action:
-            result = self.admin.response_action(request, Semester.objects.none())
+            result = self.admin.response_action(request, BackgroundJob.objects.none())
         self.assertIs(result, sentinel)
         super_action.assert_called_once()
 
     def test_action_removed_after_validation_defers(self):
         """If the action vanishes from get_actions after form validation, defer to super."""
-        semester = Semester.objects.create(year=2025, season=1, is_published=False)
+        job = _failed_job("removed-action")
         request = self._request(
             {
-                "action": ["publish_selected"],
+                "action": ["retry_selected_jobs"],
                 "index": "0",
                 "select_across": "0",
-                helpers.ACTION_CHECKBOX_NAME: [str(semester.pk)],
+                helpers.ACTION_CHECKBOX_NAME: [str(job.pk)],
             }
         )
         sentinel = object()
@@ -552,7 +559,7 @@ class ResponseActionBranchesTest(TestCase):
             # guard at line ~324 sees it gone.
             actions = dict(real_get_actions(req))
             if calls["n"] >= 3:
-                actions.pop("publish_selected", None)
+                actions.pop("retry_selected_jobs", None)
             return actions
 
         with (
@@ -562,19 +569,19 @@ class ResponseActionBranchesTest(TestCase):
                 return_value=sentinel,
             ) as super_action,
         ):
-            result = self.admin.response_action(request, Semester.objects.all())
+            result = self.admin.response_action(request, BackgroundJob.objects.all())
         self.assertIs(result, sentinel)
         super_action.assert_called_once()
 
     def test_description_format_error_falls_back_to_plain(self):
         """A description with an unmappable %-placeholder uses the raw description."""
-        semester = Semester.objects.create(year=2025, season=1, is_published=False)
+        job = _failed_job("bad-description")
         request = self._request(
             {
-                "action": ["publish_selected"],
+                "action": ["retry_selected_jobs"],
                 "index": "0",
                 "select_across": "0",
-                helpers.ACTION_CHECKBOX_NAME: [str(semester.pk)],
+                helpers.ACTION_CHECKBOX_NAME: [str(job.pk)],
             }
         )
         real_get_actions = self.admin.get_actions
@@ -587,31 +594,31 @@ class ResponseActionBranchesTest(TestCase):
 
         def bad_description(req):
             actions = dict(real_get_actions(req))
-            func, name, _desc = actions["publish_selected"]
-            actions["publish_selected"] = (func, name, bad_desc)
+            func, name, _desc = actions["retry_selected_jobs"]
+            actions["retry_selected_jobs"] = (func, name, bad_desc)
             return actions
 
         with patch.object(self.admin, "get_actions", side_effect=bad_description):
-            response = self.admin.response_action(request, Semester.objects.all())
+            response = self.admin.response_action(request, BackgroundJob.objects.all())
         self.assertIsInstance(response, HttpResponseRedirect)
         pending = request.session[self.admin._session_action_key()]
         # KeyError on the format -> stored description is the raw string.
         self.assertEqual(pending["action_description"], bad_desc)
 
     def test_action_with_no_confirmation_attr_skips(self):
-        semester = Semester.objects.create(year=2025, season=1, is_published=False)
+        job = _failed_job("no-confirmation-attribute")
         request = self._request(
             {
-                "action": ["publish_selected"],
+                "action": ["retry_selected_jobs"],
                 "index": "0",
                 "select_across": "0",
-                helpers.ACTION_CHECKBOX_NAME: [str(semester.pk)],
+                helpers.ACTION_CHECKBOX_NAME: [str(job.pk)],
             }
         )
         sentinel = object()
         # Patch the action func to carry no_confirmation = True so it skips.
         actions = dict(self.admin.get_actions(request))
-        func = actions["publish_selected"][0]
+        func = actions["retry_selected_jobs"][0]
         with (
             patch.object(func, "no_confirmation", True, create=True),
             patch(
@@ -619,7 +626,7 @@ class ResponseActionBranchesTest(TestCase):
                 return_value=sentinel,
             ) as super_action,
         ):
-            result = self.admin.response_action(request, Semester.objects.all())
+            result = self.admin.response_action(request, BackgroundJob.objects.all())
         self.assertIs(result, sentinel)
         super_action.assert_called_once()
 
@@ -645,52 +652,56 @@ class ExecuteConfirmedActionTest(TestCase):
         self.assertIn("Action no longer available.", messages_list)
 
     def test_falls_back_to_changelist_when_action_returns_none(self):
-        semester = Semester.objects.create(year=2025, season=1, is_published=False)
+        job = _failed_job("execute")
         request = _wire_request(self.factory.post("/admin/"))
         pending = {
-            "action_name": "publish_selected",
-            "selected_pks": [str(semester.pk)],
+            "action_name": "retry_selected_jobs",
+            "selected_pks": [str(job.pk)],
             "select_across": False,
-            "queryset_pks": [str(semester.pk)],
+            "queryset_pks": [str(job.pk)],
         }
-        # publish_selected returns None -> redirect to changelist.
+        # retry_selected_jobs returns None -> redirect to changelist.
         response = self.admin._execute_confirmed_action(request, pending)
         self.assertIsInstance(response, HttpResponseRedirect)
-        semester.refresh_from_db()
-        self.assertTrue(semester.is_published)
+        job.refresh_from_db()
+        self.assertEqual(job.status, BackgroundJob.Status.RETRY)
 
     def test_queryset_pks_none_uses_selected(self):
-        semester = Semester.objects.create(year=2025, season=1, is_published=False)
+        job = _failed_job("selected-fallback")
         request = _wire_request(self.factory.post("/admin/"))
         pending = {
-            "action_name": "publish_selected",
-            "selected_pks": [str(semester.pk)],
+            "action_name": "retry_selected_jobs",
+            "selected_pks": [str(job.pk)],
             "select_across": False,
             "queryset_pks": None,
         }
         self.admin._execute_confirmed_action(request, pending)
-        semester.refresh_from_db()
-        self.assertTrue(semester.is_published)
+        job.refresh_from_db()
+        self.assertEqual(job.status, BackgroundJob.Status.RETRY)
 
     def test_action_returning_http_response_is_passed_through(self):
         """When the action returns an HttpResponse, it is returned directly."""
         from django.http import HttpResponse
 
-        semester = Semester.objects.create(year=2025, season=1, is_published=False)
+        job = _failed_job("http-response")
         request = _wire_request(self.factory.post("/admin/"))
         pending = {
-            "action_name": "publish_selected",
-            "selected_pks": [str(semester.pk)],
+            "action_name": "retry_selected_jobs",
+            "selected_pks": [str(job.pk)],
             "select_across": False,
-            "queryset_pks": [str(semester.pk)],
+            "queryset_pks": [str(job.pk)],
         }
         custom_response = HttpResponse("custom body")
         real_get_actions = self.admin.get_actions
 
         def with_response_action(req):
             actions = dict(real_get_actions(req))
-            _func, name, desc = actions["publish_selected"]
-            actions["publish_selected"] = (lambda admin, r, qs: custom_response, name, desc)
+            _func, name, desc = actions["retry_selected_jobs"]
+            actions["retry_selected_jobs"] = (
+                lambda admin, r, qs: custom_response,
+                name,
+                desc,
+            )
             return actions
 
         with patch.object(self.admin, "get_actions", side_effect=with_response_action):

@@ -7,8 +7,7 @@ from django.core.management.base import CommandError
 from django.test import TestCase
 
 from apps.authn.models import ContactEmail
-from apps.event.models import Event, Question, Ticket
-from apps.projects.models import Project, Semester
+from apps.scheduling.models import Event, Participant, UserEvent, Weight
 
 
 class SeedAdminE2ECommandTests(TestCase):
@@ -32,7 +31,7 @@ class SeedAdminE2ECommandTests(TestCase):
                 action_email="action-e2e-test@example.com",
             )
 
-    def test_seeds_idempotent_admin_nonstaff_action_contact_and_project_data(self):
+    def test_seeds_idempotent_admin_nonstaff_action_contact_and_scheduling_data(self):
         out = io.StringIO()
         options = {
             "email": "admin-e2e-test@example.com",
@@ -70,28 +69,25 @@ class SeedAdminE2ECommandTests(TestCase):
         self.assertFalse(action_contact.verified)
         self.assertTrue(action_contact.subscribe)
 
-        semester = Semester.objects.get(year=2099, season=Semester.Season.FALL)
-        project = Project.objects.get(semester=semester, team_number="E2E-1")
-        self.assertEqual(str(semester), "2099-2 Fall")
-        self.assertEqual(project.project_title, "E2E Solar Orchard Dashboard")
-        self.assertEqual(project.organization, "Innovate To Grow QA")
+        event = Event.objects.get(code="E2EADMIN")
+        self.assertEqual(event.name, "E2E Design Review")
+        self.assertEqual(event.organizer, admin_member)
+        self.assertEqual(event.mode, "mixed")
+        self.assertEqual(event.location, "Design Studio")
+        self.assertEqual(event.status, Event.Status.ACTIVE)
+        self.assertEqual(event.access_mode, "open_link")
 
-        event = Event.objects.get(slug="e2e-event-copy-template")
-        self.assertEqual(event.name, "E2E Event Copy Template")
-        self.assertEqual(event.end_date.isoformat(), "2099-05-16")
-        self.assertFalse(event.registration_open)
-        self.assertTrue(event.collect_phone)
-        self.assertTrue(event.verify_phone)
+        participant = Participant.objects.get(event=event, member=nonstaff_member)
+        self.assertEqual(participant.participant_name, "Nonstaff E2E")
+        self.assertTrue(participant.submitted)
+        self.assertEqual(len(participant.availability_inperson), 80)
+        self.assertEqual(participant.group_name, "Design Review")
+        weight = Weight.objects.get(event=event, participant=participant)
+        self.assertEqual(weight.weight, 0.75)
+        self.assertTrue(weight.included)
         self.assertEqual(
-            list(Ticket.objects.filter(event=event).values_list("name", "order")),
-            [("E2E General Admission", 1), ("E2E VIP Admission", 2)],
-        )
-        self.assertEqual(
-            list(Question.objects.filter(event=event).values_list("text", "is_required", "order")),
-            [
-                ("What brings you to the E2E Event?", True, 1),
-                ("Do you need accessibility accommodations?", False, 2),
-            ],
+            set(UserEvent.objects.filter(event=event).values_list("member_id", "role")),
+            {(admin_member.pk, "organizer"), (nonstaff_member.pk, "participant")},
         )
 
         seeded_member_count = Member.objects.filter(
@@ -99,3 +95,39 @@ class SeedAdminE2ECommandTests(TestCase):
         ).count()
         self.assertEqual(seeded_member_count, 2)
         self.assertIn("Seeded admin E2E data", out.getvalue())
+        self.assertEqual(Event.objects.filter(code="E2EADMIN").count(), 1)
+        self.assertEqual(Participant.objects.filter(event=event).count(), 1)
+
+    def test_reseed_replaces_mutated_event_and_stale_identity_links(self):
+        first_options = {
+            "email": "first-admin-e2e@example.com",
+            "password": "safe-test-password",
+            "nonstaff_email": "first-member-e2e@example.com",
+            "action_email": "first-action-e2e@example.com",
+        }
+        call_command("seed_admin_e2e", "--yes", **first_options)
+        old_event = Event.objects.get(code="E2EADMIN")
+        old_event.status = Event.Status.FINALIZED
+        old_event.save(update_fields=["status"])
+        old_participant_id = Participant.objects.get(event=old_event).pk
+
+        second_options = {
+            "email": "second-admin-e2e@example.com",
+            "password": "safe-test-password",
+            "nonstaff_email": "second-member-e2e@example.com",
+            "action_email": "second-action-e2e@example.com",
+        }
+        call_command("seed_admin_e2e", "--yes", **second_options)
+
+        new_event = Event.objects.get(code="E2EADMIN")
+        second_admin = ContactEmail.objects.get(email_address="second-admin-e2e@example.com").member
+        second_member = ContactEmail.objects.get(
+            email_address="second-member-e2e@example.com"
+        ).member
+        self.assertNotEqual(new_event.pk, old_event.pk)
+        self.assertEqual(new_event.status, Event.Status.ACTIVE)
+        self.assertFalse(Participant.objects.filter(pk=old_participant_id).exists())
+        self.assertEqual(
+            set(UserEvent.objects.filter(event=new_event).values_list("member_id", "role")),
+            {(second_admin.pk, "organizer"), (second_member.pk, "participant")},
+        )

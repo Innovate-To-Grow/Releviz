@@ -1,9 +1,4 @@
-"""Tests for ContentSecurityPolicyMiddleware.
-
-These tests lock in the `frame-src` allowlist so a regression that silently
-drops an embed provider (YouTube, Google Docs, Calendly, etc.) fails CI
-instead of only being caught by a report-uri violation in production.
-"""
+"""Tests for ContentSecurityPolicyMiddleware."""
 
 import json
 import re
@@ -14,8 +9,6 @@ from django.core.cache import cache
 from django.http import HttpResponse
 from django.test import Client, RequestFactory, TestCase, override_settings
 
-from apps.cms.models import CMSEmbedAllowedHost
-from apps.cms.services.sanitization.embed_hosts import invalidate_cache
 from apps.core.middleware import ContentSecurityPolicyMiddleware, csp_report
 
 
@@ -42,29 +35,16 @@ class CSPHeaderTests(TestCase):
         self.assertNotIn("Content-Security-Policy", response)
         self.assertTrue(header, "Report-only header must be non-empty")
 
-    def test_frame_src_allows_seeded_hosts(self):
+    @override_settings(FRONTEND_URL="")
+    def test_frame_src_defaults_to_same_origin(self):
         _, header = self._header()
-        expected_frame_src_entries = [
-            "'self'",
-            "https://youtube.com",
-            "https://*.youtube.com",
-            "https://youtube-nocookie.com",
-            "https://*.youtube-nocookie.com",
-            "https://player.vimeo.com",
-            "https://*.vimeo.com",
-            "https://docs.google.com",
-            "https://forms.google.com",
-            "https://www.google.com",
-            "https://calendly.com",
-            "https://*.calendly.com",
-            "https://www.figma.com",
-            "https://codesandbox.io",
-            "https://*.codesandbox.io",
-            "https://www.typeform.com",
-            "https://form.typeform.com",
-        ]
-        for entry in expected_frame_src_entries:
-            self.assertIn(entry, header, f"{entry!r} must be allowed by frame-src")
+        directives = {
+            part.strip().split(" ", 1)[0]: part.strip()
+            for part in header.split(";")
+            if part.strip()
+        }
+
+        self.assertEqual(directives["frame-src"], "frame-src 'self'")
 
     def test_reports_violations_to_local_endpoint(self):
         _, header = self._header()
@@ -80,6 +60,7 @@ class CSPHeaderTests(TestCase):
         STATIC_URL="https://static.example.test/static/",
         MEDIA_URL="https://media.example.test/media/",
         FRONTEND_URL="https://frontend.example.test/app/",
+        CSP_FRAME_SOURCES=("'self'", "https://video.example.test"),
         CSP_STYLE_SOURCES=("'self'", "https://fonts.googleapis.com"),
         CSP_FONT_SOURCES=("'self'", "data:", "https://fonts.gstatic.com"),
         CSP_CONNECT_SOURCES=(
@@ -95,7 +76,10 @@ class CSPHeaderTests(TestCase):
         self.assertIn("https://media.example.test", header)
         self.assertIn("style-src 'self' https://fonts.googleapis.com", header)
         self.assertIn("font-src 'self' data: https://fonts.gstatic.com", header)
-        self.assertIn("frame-src 'self' https://frontend.example.test", header)
+        self.assertIn(
+            "frame-src 'self' https://video.example.test https://frontend.example.test",
+            header,
+        )
         self.assertIn(
             "connect-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com https://frontend.example.test",
             header,
@@ -230,22 +214,6 @@ class CSPHeaderTests(TestCase):
         self.assertEqual(response["Content-Security-Policy"], "default-src 'none'")
         self.assertNotIn("Content-Security-Policy-Report-Only", response)
 
-    def test_uses_active_cms_embed_hosts_and_ignores_inactive_hosts(self):
-        CMSEmbedAllowedHost.objects.all().delete()
-        CMSEmbedAllowedHost.objects.create(hostname="video.example.com", is_active=True)
-        CMSEmbedAllowedHost.objects.create(hostname="*.widgets.example.com", is_active=True)
-        CMSEmbedAllowedHost.objects.create(hostname="bad..example.com", is_active=True)
-        CMSEmbedAllowedHost.objects.create(hostname="inactive.example.com", is_active=False)
-        invalidate_cache()
-        self.addCleanup(invalidate_cache)
-
-        _, header = self._header()
-
-        self.assertIn("https://video.example.com", header)
-        self.assertIn("https://*.widgets.example.com", header)
-        self.assertNotIn("https://bad..example.com", header)
-        self.assertNotIn("https://inactive.example.com", header)
-
     @override_settings(CSP_REPORT_ONLY=False)
     def test_can_promote_to_enforcing_header(self):
         response, _ = self._header()
@@ -278,39 +246,11 @@ class CSPHeaderTests(TestCase):
         )
         self.assertNotRegex(html, r"\son[a-z]+\s*=\s*[\"']")
         self.assertNotIn("'unsafe-eval'", header)
-        self.assertIn("/static/admin/js/htmx-csp-config.js", html)
+        self.assertIn("/static/admin/js/i2g-admin-theme-runtime.js", html)
         self.assertLess(
             html.index("/static/unfold/js/htmx/htmx.js"),
-            html.index("/static/admin/js/htmx-csp-config.js"),
-        )
-        self.assertLess(
-            html.index("/static/admin/js/htmx-csp-config.js"),
             html.index("/static/unfold/js/app.js"),
         )
-
-    @override_settings(
-        CSP_REPORT_ONLY=False,
-        MIDDLEWARE=[*settings.MIDDLEWARE, "apps.core.middleware.ContentSecurityPolicyMiddleware"],
-    )
-    def test_enforcing_policy_nonces_standalone_subscription_pages(self):
-        client = Client()
-        responses = [
-            client.get("/mail/unsubscribe/invalid-token/"),
-            client.post("/mail/resubscribe/invalid-token/"),
-        ]
-
-        for response in responses:
-            with self.subTest(path=response.request["PATH_INFO"]):
-                self.assertEqual(response.status_code, 400)
-                header = response["Content-Security-Policy"]
-                nonce = re.search(r"'nonce-([^']+)'", header).group(1)
-                style_elements = re.findall(
-                    r"<style\b[^>]*>",
-                    response.content.decode(),
-                    flags=re.IGNORECASE,
-                )
-                self.assertTrue(style_elements)
-                self.assertTrue(all(f'nonce="{nonce}"' in tag for tag in style_elements))
 
 
 class CSPReportEndpointTests(TestCase):

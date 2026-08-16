@@ -5,11 +5,10 @@ an admin member carries a list of app labels (``Member.admin_apps``) and may
 view/add/change/delete every model in any app on that list. ``is_superuser`` (the
 I2G Master account) bypasses the list entirely.
 
-This helper is the single source of truth for that decision and is enforced at every
-gate (the Django admin base class, the shared ``safe_orm`` layer / AI action engine,
-and the ``/admin-api/`` CLI). It deliberately *duck-types* the user object — it only
-reads attributes and never imports ``Member`` — so ``apps.core`` keeps no import
-dependency on ``apps.authn``.
+This helper is the single source of truth for that decision across the Django admin,
+admin navigation, and member permission helpers. It deliberately *duck-types* the
+user object — it only reads attributes and never imports ``Member`` — so ``apps.core``
+keeps no import dependency on ``apps.authn``.
 """
 
 

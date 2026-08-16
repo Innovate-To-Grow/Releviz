@@ -7,11 +7,9 @@ const ROOT = path.resolve(__dirname, "../..");
 const RESOURCE_AUDIT_MANIFEST = [
   ".github/dependabot.yml",
   ".github/workflows/ci.yml",
-  ".github/workflows/deploy-prod.yml",
+  ".github/workflows/deploy-prod.yml.disabled",
   ".gitignore",
   ".pre-commit-config.yaml",
-  ".prettierignore",
-  ".prettierrc",
   "README.md",
   "Screenshoot.png",
   "src/api/Dockerfile",
@@ -21,24 +19,51 @@ const RESOURCE_AUDIT_MANIFEST = [
   "src/api/requirements/base.txt",
   "src/api/requirements/local.txt",
   "src/api/requirements/production.txt",
+  "src/api/apps/authn/templates/admin/authn/member/change_form.html",
+  "src/api/apps/authn/templates/admin/authn/member/change_list.html",
+  "src/api/apps/authn/templates/admin/authn/member/import_excel.html",
+  "src/api/apps/authn/templates/authn/email/admin_invitation.html",
+  "src/api/apps/authn/templates/authn/email/email_claim_notification.html",
+  "src/api/apps/authn/templates/authn/email/verification_code.html",
+  "src/api/apps/authn/templates/authn/invitation/accept.html",
+  "src/api/apps/authn/templates/authn/invitation/already_registered.html",
+  "src/api/apps/authn/templates/authn/invitation/invalid.html",
+  "src/api/apps/authn/templates/authn/invitation/success.html",
   "src/api/apps/core/static/admin/css/file-input.css",
   "src/api/apps/core/static/admin/css/google-material-admin-overrides.css",
   "src/api/apps/core/static/admin/css/google-material-admin.css",
+  "src/api/apps/core/static/admin/css/ip-geo-popup.css",
+  "src/api/apps/core/static/admin/css/style-sheet-code-editor.css",
   "src/api/apps/core/static/admin/css/tabs.css",
   "src/api/apps/core/static/admin/js/i2g-admin-theme-runtime.js",
   "src/api/apps/core/static/admin/js/material-web-text-field.js",
-  "src/api/apps/core/static/images/releviz-logo.svg",
+  "src/api/apps/core/static/images/i2glogo.png",
   "src/api/apps/core/static/images/releviz-mark.png",
+  "src/api/apps/core/templates/404.html",
+  "src/api/apps/core/templates/admin/actions.html",
   "src/api/apps/core/templates/admin/base_site.html",
+  "src/api/apps/core/templates/admin/core/confirm_action.html",
+  "src/api/apps/core/templates/admin/core/confirm_change.html",
+  "src/api/apps/core/templates/admin/core/export_columns.html",
+  "src/api/apps/core/templates/admin/core/test_send_form.html",
   "src/api/apps/core/templates/admin/includes/i2g_admin_theme_toggle.html",
+  "src/api/apps/core/templates/admin/includes/itg_submit_line_autosave_script.html",
+  "src/api/apps/core/templates/admin/includes/itg_submit_line_autosave_style.html",
   "src/api/apps/core/templates/admin/includes/itg_login_styles.html",
   "src/api/apps/core/templates/admin/index.html",
   "src/api/apps/core/templates/admin/login.html",
+  "src/api/apps/core/templates/admin/material_password_widget.html",
+  "src/api/apps/core/templates/admin/submit_line.html",
+  "src/api/apps/core/templates/index.html",
+  "src/api/apps/core/templates/unfold/helpers/app_list_default.html",
   "src/api/apps/core/templates/unfold/helpers/navigation_header.html",
   "src/api/apps/core/templates/unfold/helpers/site_branding.html",
+  "src/api/apps/core/templates/unfold/helpers/site_icon.html",
   "src/api/apps/core/templates/unfold/helpers/site_logo.html",
   "src/api/apps/core/templates/unfold/helpers/theme_switch_dropdown.html",
   "src/api/apps/core/templates/unfold/helpers/userlinks.html",
+  "src/api/apps/mail/templates/admin/mail/emailproviderconfig/send_test_email.html",
+  "src/api/apps/mail/templates/mail/email/branded.html",
   "docker-compose.e2e.yml",
   "src/e2e/accessibility.spec.js",
   "src/e2e/helpers/accessibility.js",
@@ -47,6 +72,7 @@ const RESOURCE_AUDIT_MANIFEST = [
   "src/web/.dockerignore",
   "src/web/@next/package.json",
   "src/web/Dockerfile",
+  "src/web/app/apple-design.css",
   "src/web/app/apple-icon.png",
   "src/web/app/globals.css",
   "src/web/app/icon.png",
@@ -85,6 +111,10 @@ const RESOURCE_AUDIT_MANIFEST = [
   "infra/prod/versions.tf",
   "package-lock.json",
   "package.json",
+  "scripts/db/backup-restore-drill.sh",
+  "scripts/db/postgres-backup.sh",
+  "scripts/db/postgres-restore.sh",
+  "scripts/deploy/ecs-service-rollout.sh",
   "scripts/quality-gate.sh",
   "scripts/ci/check_bundle_size.py",
   "scripts/ci/check_npm_licenses.py",
@@ -119,13 +149,18 @@ test.describe("repository resource audit", () => {
   });
 
   test("CI requires an Amplify static export", async () => {
-    const ci = fs.readFileSync(path.join(ROOT, ".github/workflows/ci.yml"), "utf8");
+    const ci = fs.readFileSync(
+      path.join(ROOT, ".github/workflows/ci.yml"),
+      "utf8",
+    );
     expect(ci).toContain("Frontend Amplify Static Export");
     expect(ci).toContain("run build:amplify");
     expect(ci).toContain("- frontend-amplify-build");
   });
 
-  test("frontend static images and admin logo are loadable", async ({ page }) => {
+  test("frontend static images and admin logo are loadable", async ({
+    page,
+  }) => {
     for (const asset of [
       "/favicon.ico",
       "/homepage.png",
@@ -145,7 +180,7 @@ test.describe("repository resource audit", () => {
     }
 
     const adminMark = fs.readFileSync(
-      path.join(ROOT, "src/api/apps/core/static/images/releviz-mark.png")
+      path.join(ROOT, "src/api/apps/core/static/images/releviz-mark.png"),
     );
     expect(adminMark.subarray(1, 4).toString("ascii")).toBe("PNG");
   });

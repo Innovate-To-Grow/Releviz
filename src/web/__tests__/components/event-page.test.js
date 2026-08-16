@@ -146,6 +146,21 @@ describe("event page routing", () => {
     );
   });
 
+  test("clears a response intent when the current user is the organizer", async () => {
+    searchParams = new URLSearchParams("code=EVENT123&respond=1");
+    window.history.replaceState({}, "", "/event?code=EVENT123&respond=1");
+    fetchEvent.mockResolvedValue({
+      event: { ...event, organizerUserId: user.id },
+    });
+
+    render(<EventPage />);
+
+    expect(await screen.findByText("Organizer workflow")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(replaceUrl).toHaveBeenCalledWith("/event?code=EVENT123"),
+    );
+  });
+
   test("marks an invitation opened, removes the capability token, and loads organizer tools", async () => {
     searchParams = new URLSearchParams(
       "code=EVENT123&invitation=private-token",
