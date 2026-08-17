@@ -2,8 +2,10 @@
 :root {
   color-scheme: light;
   --rv-accent: #0071e3;
-  --rv-accent-hover: #0077ed;
-  --rv-accent-pressed: #0068d1;
+  /* The interaction ramp darkens rather than lightens: the old #0077ed hover
+     dropped white button text to 4.32:1, under the WCAG AA 4.5:1 minimum. */
+  --rv-accent-hover: #0069d4;
+  --rv-accent-pressed: #005cb8;
   /* --rv-accent only reaches 4.31:1 on --rv-background, short of the WCAG AA
      4.5:1 minimum. Small bold accent text uses this darker tone instead. */
   --rv-accent-text: #0064c8;
