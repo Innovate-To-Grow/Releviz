@@ -198,14 +198,28 @@ export async function confirmPasswordReset({
   password,
   passwordConfirm,
 }) {
+  // Resetting takes two calls: the code is exchanged for a short-lived
+  // verification token, which then authorizes the new password.
+  const verifyRes = await fetch(
+    `${API_BASE}/authn/password-reset/verify-code/`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, code }),
+      credentials: "include",
+    },
+  );
+  if (!verifyRes.ok) throw new Error(await extractError(verifyRes));
+  const { verification_token: verificationToken } = await verifyRes.json();
+
   const payload = await securePasswordPayload(
     {
       email,
-      code,
-      password,
-      password_confirm: passwordConfirm,
+      verification_token: verificationToken,
+      new_password: password,
+      new_password_confirm: passwordConfirm,
     },
-    ["password", "password_confirm"],
+    ["new_password", "new_password_confirm"],
   );
   const res = await fetch(`${API_BASE}/authn/password-reset/confirm/`, {
     method: "POST",
@@ -286,14 +300,34 @@ export async function changePasswordApi({
   return data;
 }
 
-export async function deleteAccountApi({ password, confirmation }) {
-  const payload = await securePasswordPayload({ password, confirmation }, [
-    "password",
-  ]);
-  const res = await apiFetch(`${API_BASE}/authn/delete-account/`, {
+export async function requestAccountDeletionCode() {
+  const res = await apiFetch(`${API_BASE}/authn/delete-account/request-code/`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    body: "{}",
+  });
+  if (!res.ok) throw new Error(await extractError(res));
+  return res.json();
+}
+
+// Deleting is code-confirmed: the emailed code is exchanged for a short-lived
+// verification token, which then authorizes the irreversible delete.
+export async function deleteAccountApi({ code }) {
+  const verifyRes = await apiFetch(
+    `${API_BASE}/authn/delete-account/verify-code/`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    },
+  );
+  if (!verifyRes.ok) throw new Error(await extractError(verifyRes));
+  const { verification_token: verificationToken } = await verifyRes.json();
+
+  const res = await apiFetch(`${API_BASE}/authn/delete-account/confirm/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ verification_token: verificationToken }),
   });
   if (!res.ok) throw new Error(await extractError(res));
   const data = await res.json();

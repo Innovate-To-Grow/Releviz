@@ -16,6 +16,7 @@ from .senders import (
 )
 
 _render_email_body = actions.render_email_body
+_send_via_django_backend = transport._send_via_django_backend
 _send_via_ses = transport._send_via_ses
 
 __all__ = [

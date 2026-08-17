@@ -4,6 +4,7 @@ import uuid
 from unittest.mock import patch
 
 from django.core.cache import cache
+from django.test import override_settings
 from rest_framework.test import APITestCase
 
 from apps.authn.models import RSAKeypair
@@ -47,3 +48,22 @@ class PublicKeyViewTests(APITestCase):
         response = self.client.get("/authn/public-key/")
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.data, {"detail": "Failed to retrieve public key."})
+
+
+class PublicKeyEncryptionContractTests(APITestCase):
+    """Clients only encrypt when the endpoint says encryption is required."""
+
+    # noinspection PyMethodMayBeStatic,PyPep8Naming
+    def setUp(self):
+        cache.clear()
+        RSAKeypair.objects.all().delete()
+
+    @override_settings(REQUIRE_ENCRYPTED_PASSWORDS=False)
+    def test_reports_encryption_optional(self):
+        response = self.client.get("/authn/public-key/")
+        self.assertIs(response.data["password_encryption_required"], False)
+
+    @override_settings(REQUIRE_ENCRYPTED_PASSWORDS=True)
+    def test_reports_encryption_required(self):
+        response = self.client.get("/authn/public-key/")
+        self.assertIs(response.data["password_encryption_required"], True)

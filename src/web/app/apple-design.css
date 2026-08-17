@@ -4,6 +4,9 @@
   --rv-accent: #0071e3;
   --rv-accent-hover: #0077ed;
   --rv-accent-pressed: #0068d1;
+  /* --rv-accent only reaches 4.31:1 on --rv-background, short of the WCAG AA
+     4.5:1 minimum. Small bold accent text uses this darker tone instead. */
+  --rv-accent-text: #0064c8;
   --rv-label: #1d1d1f;
   --rv-secondary-label: #6e6e73;
   --rv-tertiary-label: #86868b;
@@ -225,7 +228,7 @@ select option {
 
 .event-role-badge-organizer {
   background: rgba(0, 113, 227, 0.1);
-  color: var(--rv-accent);
+  color: var(--rv-accent-text);
 }
 
 .event-header h1 {
@@ -905,7 +908,7 @@ select[aria-invalid="true"] {
 }
 
 .organizer-eyebrow {
-  color: var(--rv-accent);
+  color: var(--rv-accent-text);
   font-size: 0.72rem;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -2818,8 +2821,19 @@ md-select-option {
     white-space: nowrap;
   }
 
+  /* The icon is aria-hidden, so hiding the label outright would leave these
+     buttons with no accessible name. Keep it for screen readers only. */
   .event-header-actions > .app-btn .app-btn-label {
-    display: none;
+    border: 0;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    padding: 0;
+    position: absolute;
+    white-space: nowrap;
+    width: 1px;
   }
 
   .event-header-actions > .app-btn {

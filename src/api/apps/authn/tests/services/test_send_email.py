@@ -2,11 +2,13 @@
 
 from unittest.mock import MagicMock, patch
 
+from django.core import mail
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from apps.authn.services.email.send_email import (
     _render_email_body,
+    _send_via_django_backend,
     _send_via_ses,
     send_admin_invitation_email,
     send_notification_email,
@@ -291,3 +293,78 @@ class SendAdminInvitationEmailTests(TestCase):
         send_admin_invitation_email(invitation=self._invitation())
 
         mock_ses.assert_called_once()
+
+
+class DjangoBackendFallbackTests(TestCase):
+    """The Django email backend stands in wherever SES is deliberately absent."""
+
+    def _invitation(self):
+        invitation = MagicMock()
+        invitation.email = "new-admin@example.com"
+        invitation.expires_at = timezone.now() + timezone.timedelta(days=7)
+        invitation.invited_by = None
+        invitation.message = "Please help manage the spring event."
+        invitation.get_acceptance_url.return_value = "https://admin.example.com/authn/invite/token/"
+        invitation.get_role_display.return_value = "Admin"
+        return invitation
+
+    def test_disabled_by_default(self):
+        self.assertFalse(
+            _send_via_django_backend(recipient="a@b.com", subject="Hi", html_body="<p>Hi</p>")
+        )
+
+    @override_settings(AUTH_EMAIL_DJANGO_BACKEND_FALLBACK=True)
+    def test_sends_html_and_plain_text_alternatives(self):
+        sent = _send_via_django_backend(
+            recipient="a@b.com", subject="Your code", html_body="<p>Code 123456</p>"
+        )
+
+        self.assertTrue(sent)
+        self.assertEqual(len(mail.outbox), 1)
+        message = mail.outbox[0]
+        self.assertEqual(message.subject, "Your code")
+        self.assertEqual(message.to, ["a@b.com"])
+        self.assertIn("Code 123456", message.body)
+        self.assertEqual(message.alternatives[0][1], "text/html")
+
+    @override_settings(AUTH_EMAIL_DJANGO_BACKEND_FALLBACK=True)
+    def test_reports_failure_when_the_backend_sends_nothing(self):
+        with patch(
+            "apps.authn.services.email.send_email.transport.EmailMultiAlternatives.send",
+            return_value=0,
+        ):
+            self.assertFalse(
+                _send_via_django_backend(recipient="a@b.com", subject="Hi", html_body="<p>Hi</p>")
+            )
+
+    @override_settings(AUTH_EMAIL_DJANGO_BACKEND_FALLBACK=True)
+    @patch("apps.authn.services.email.send_email._send_via_ses", return_value=False)
+    def test_verification_email_falls_back(self, mock_ses):
+        send_verification_email(recipient="a@b.com", code="123456", purpose="login")
+
+        mock_ses.assert_called_once()
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn("123456", mail.outbox[0].body)
+
+    @override_settings(AUTH_EMAIL_DJANGO_BACKEND_FALLBACK=True)
+    @patch("apps.authn.services.email.send_email._send_via_ses", return_value=False)
+    def test_notification_email_falls_back(self, mock_ses):
+        sent = send_notification_email(
+            recipient="a@b.com",
+            subject="Notice",
+            template="authn/email/email_claim_notification.html",
+            context={},
+        )
+
+        self.assertTrue(sent)
+        mock_ses.assert_called_once()
+        self.assertEqual(len(mail.outbox), 1)
+
+    @override_settings(AUTH_EMAIL_DJANGO_BACKEND_FALLBACK=True)
+    @patch("apps.authn.services.email.send_email._send_via_ses", return_value=False)
+    def test_admin_invitation_email_falls_back(self, mock_ses):
+        send_admin_invitation_email(invitation=self._invitation())
+
+        mock_ses.assert_called_once()
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["new-admin@example.com"])

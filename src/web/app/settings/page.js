@@ -4,6 +4,7 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import AppButton from "@/components/ui/AppButton";
 import AppHeader from "@/components/ui/AppHeader";
 import { useAuth } from "@/components/auth/AuthContext";
+import { requestAccountDeletionCode } from "@/lib/api/auth";
 import { navigateTo, safeNextPath } from "@/lib/navigation";
 
 function completionDestination(value) {
@@ -88,8 +89,10 @@ export default function SettingsPage() {
   const [newPasswordConfirm, setNewPasswordConfirm] = useState("");
   const [passwordError, setPasswordError] = useState("");
   const [passwordAction, setPasswordAction] = useState(false);
-  const [deletePassword, setDeletePassword] = useState("");
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [deleteCode, setDeleteCode] = useState("");
+  const [deleteCodeSent, setDeleteCodeSent] = useState(false);
+  const [deleteStatus, setDeleteStatus] = useState("");
   const [deleteError, setDeleteError] = useState("");
   const [deleteAction, setDeleteAction] = useState(false);
   const search = useSyncExternalStore(
@@ -225,12 +228,19 @@ export default function SettingsPage() {
   const handleDeleteAccount = async (event) => {
     event.preventDefault();
     setDeleteError("");
+    setDeleteStatus("");
     setDeleteAction(true);
     try {
-      await deleteAccount({
-        password: deletePassword,
-        confirmation: deleteConfirmation,
-      });
+      if (!deleteCodeSent) {
+        await requestAccountDeletionCode();
+        setDeleteCodeSent(true);
+        setDeleteStatus(
+          "We emailed a confirmation code. Enter it to delete your account.",
+        );
+        setDeleteAction(false);
+        return;
+      }
+      await deleteAccount({ code: deleteCode });
     } catch (err) {
       setDeleteError(err.message || "Unable to delete your account.");
       setDeleteAction(false);
@@ -619,19 +629,32 @@ export default function SettingsPage() {
                         {deleteError}
                       </div>
                     )}
+                    {deleteStatus && (
+                      <div
+                        className="auth-status"
+                        role="status"
+                        aria-live="polite"
+                      >
+                        {deleteStatus}
+                      </div>
+                    )}
                     <div className="settings-fields-grid">
-                      <label className="field-label">
-                        Current password
-                        <input
-                          value={deletePassword}
-                          onChange={(event) =>
-                            setDeletePassword(event.target.value)
-                          }
-                          type="password"
-                          autoComplete="current-password"
-                          required
-                        />
-                      </label>
+                      {deleteCodeSent && (
+                        <label className="field-label">
+                          Confirmation code
+                          <input
+                            value={deleteCode}
+                            onChange={(event) =>
+                              setDeleteCode(event.target.value)
+                            }
+                            inputMode="numeric"
+                            autoComplete="one-time-code"
+                            pattern="[0-9]{6}"
+                            maxLength={6}
+                            required
+                          />
+                        </label>
+                      )}
                       <label className="field-label">
                         Type DELETE to confirm
                         <input
@@ -652,13 +675,17 @@ export default function SettingsPage() {
                         className="app-btn-danger"
                         disabled={
                           deleteAction ||
-                          !deletePassword ||
-                          deleteConfirmation !== "DELETE"
+                          deleteConfirmation !== "DELETE" ||
+                          (deleteCodeSent && deleteCode.length !== 6)
                         }
                       >
                         {deleteAction
-                          ? "Deleting..."
-                          : "Delete account permanently"}
+                          ? deleteCodeSent
+                            ? "Deleting..."
+                            : "Sending code..."
+                          : deleteCodeSent
+                            ? "Delete account permanently"
+                            : "Email a confirmation code"}
                       </AppButton>
                     </div>
                   </div>

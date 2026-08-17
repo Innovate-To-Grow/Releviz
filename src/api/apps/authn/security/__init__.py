@@ -8,6 +8,7 @@ from .helpers import (
     normalize_security_identity,
     prune_auth_security_state,
     request_user_agent,
+    revoke_all_refresh_sessions,
     security_log_key,
 )
 from .throttles import (
@@ -33,5 +34,6 @@ __all__ = [
     "normalize_security_identity",
     "prune_auth_security_state",
     "request_user_agent",
+    "revoke_all_refresh_sessions",
     "security_log_key",
 ]
