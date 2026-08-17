@@ -1,6 +1,6 @@
 from django.core.management.base import BaseCommand
 
-from apps.scheduling.roster_imports import expire_stale_roster_imports
+from apps.scheduling.services.roster_imports import expire_stale_roster_imports
 
 
 class Command(BaseCommand):

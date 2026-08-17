@@ -88,7 +88,7 @@ def run(args: argparse.Namespace) -> dict:
     from apps.messaging.models import EmailDeliveryJob
     from apps.messaging.services import dispatch_due_email_jobs, email_delivery_summary
     from apps.scheduling.models import Event
-    from apps.scheduling.services import upsert_and_send_invitations
+    from apps.scheduling.services.invitations import upsert_and_send_invitations
 
     event = Event.objects.select_related("organizer").filter(code=args.event_code).first()
     if event is None:

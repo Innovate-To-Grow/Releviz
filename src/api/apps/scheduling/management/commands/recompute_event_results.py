@@ -7,7 +7,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
 from apps.scheduling.models import Event
-from apps.scheduling.result_snapshots import (
+from apps.scheduling.services.results import (
     recompute_due_event_results,
     recompute_event_results,
 )

@@ -2,7 +2,7 @@ from django.core.management.base import BaseCommand, CommandError
 
 from apps.authn.security import prune_auth_security_state
 from apps.mail.services import dispatch_due_email_jobs
-from apps.scheduling.services import send_due_event_reminders
+from apps.scheduling.services.invitations import send_due_event_reminders
 
 
 class Command(BaseCommand):
