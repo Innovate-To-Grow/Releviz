@@ -1,20 +1,67 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@/components/auth/AuthContext";
 import AppButton from "@/components/ui/AppButton";
 import AppHeader from "@/components/ui/AppHeader";
-import { navigateTo } from "@/lib/navigation";
+import { navigateTo, safeNextPath } from "@/lib/navigation";
+
+const AUTH_ENTRY_PATHS = new Set([
+  "/email-auth-link",
+  "/login",
+  "/recover",
+  "/sign-in",
+  "/sign-up",
+  "/signup",
+]);
+
+export function destinationAfterAuthentication(next, data = {}) {
+  const safeDestination = safeNextPath(next);
+  const destinationUrl = new URL(safeDestination, "https://releviz.invalid");
+  let destination = AUTH_ENTRY_PATHS.has(destinationUrl.pathname)
+    ? "/dashboard"
+    : safeDestination;
+  const profileIncomplete =
+    data?.requires_profile_completion || data?.next_step === "complete_profile";
+  const completionUrl = new URL(destination, "https://releviz.invalid");
+
+  if (
+    completionUrl.pathname === "/settings" &&
+    completionUrl.searchParams.get("complete_profile") === "1"
+  ) {
+    const nestedDestination = safeNextPath(
+      completionUrl.searchParams.get("next"),
+    );
+    const nestedUrl = new URL(nestedDestination, "https://releviz.invalid");
+    destination = AUTH_ENTRY_PATHS.has(nestedUrl.pathname)
+      ? "/dashboard"
+      : nestedDestination;
+    if (profileIncomplete) {
+      return `/settings?complete_profile=1&next=${encodeURIComponent(destination)}`;
+    }
+    return destination;
+  }
+
+  if (profileIncomplete) {
+    return `/settings?complete_profile=1&next=${encodeURIComponent(destination)}`;
+  }
+
+  return destination;
+}
 
 export default function ContinueWithEmailPage({
   next = "/dashboard",
   initialStatus = "",
 }) {
   const {
+    user,
     requestEmailAuthCode,
     verifyEmailAuthCode,
     loading: authLoading,
+    nextStep,
+    requiresProfileCompletion,
   } = useAuth();
+  const redirectStarted = useRef(false);
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
   const [codeSent, setCodeSent] = useState(false);
@@ -22,22 +69,20 @@ export default function ContinueWithEmailPage({
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const handlePostAuthRedirect = (data) => {
-    if (
-      data?.requires_profile_completion ||
-      data?.next_step === "complete_profile"
-    ) {
-      navigateTo(
-        `/settings?complete_profile=1&next=${encodeURIComponent(next)}`,
-      );
-      return;
-    }
-    navigateTo(next);
-  };
+  useEffect(() => {
+    if (authLoading || !user || redirectStarted.current) return;
+    redirectStarted.current = true;
+    navigateTo(
+      destinationAfterAuthentication(next, {
+        next_step: nextStep,
+        requires_profile_completion: requiresProfileCompletion,
+      }),
+    );
+  }, [authLoading, next, nextStep, requiresProfileCompletion, user]);
 
   const handleSubmit = async (event) => {
     event.preventDefault();
-    if (authLoading) return;
+    if (authLoading || redirectStarted.current) return;
     setError("");
     setStatus("");
     setLoading(true);
@@ -59,7 +104,8 @@ export default function ContinueWithEmailPage({
         setCodeSent(true);
       } else {
         const data = await verifyEmailAuthCode({ email, code });
-        handlePostAuthRedirect(data);
+        redirectStarted.current = true;
+        navigateTo(destinationAfterAuthentication(next, data));
       }
     } catch (err) {
       setError(
@@ -79,6 +125,19 @@ export default function ContinueWithEmailPage({
     setError("");
     setStatus("");
   };
+
+  if (authLoading || user) {
+    return (
+      <>
+        <AppHeader />
+        <main className="auth-page auth-page-with-header">
+          <div className="auth-panel" role="status" aria-live="polite">
+            {authLoading ? "Checking your session…" : "Opening your account…"}
+          </div>
+        </main>
+      </>
+    );
+  }
 
   return (
     <>

@@ -42,7 +42,12 @@ export function BrandHomeLink({
 }) {
   return (
     <Link href="/" className={className} aria-label="Releviz home">
-      <BrandLogo variant={variant} alt="" className={logoClassName} priority={priority} />
+      <BrandLogo
+        variant={variant}
+        alt=""
+        className={logoClassName}
+        priority={priority}
+      />
     </Link>
   );
 }

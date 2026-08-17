@@ -16,6 +16,7 @@ from scripts.ci.validate_deployment_contract import (
     production_amplify_custom_headers_errors,
     production_amplify_custom_headers_policy_errors,
     production_cd_errors,
+    production_cd_path,
     production_default_admin_task_errors,
     production_ecs_task_definition_errors,
     production_proxy_configuration_errors,
@@ -33,12 +34,8 @@ class BundleBudgetTests(TestCase):
             (root / "ignored.map").write_bytes(b"x" * 100)
             assets = collect_assets(root)
             self.assertEqual(sum(size for _, size in assets), 15)
-            self.assertEqual(
-                check_budgets(assets, max_total_bytes=20, max_file_bytes=10), []
-            )
-            self.assertEqual(
-                len(check_budgets(assets, max_total_bytes=14, max_file_bytes=9)), 2
-            )
+            self.assertEqual(check_budgets(assets, max_total_bytes=20, max_file_bytes=10), [])
+            self.assertEqual(len(check_budgets(assets, max_total_bytes=14, max_file_bytes=9)), 2)
 
 
 class LicenseReportTests(TestCase):
@@ -142,18 +139,11 @@ class AmplifyStaticExportTests(TestCase):
                 "Amplify static export has unlisted root route HTML: ['unlisted']",
                 errors,
             )
-            self.assertIn(
-                "Amplify static export has no _next/static JavaScript asset", errors
-            )
+            self.assertIn("Amplify static export has no _next/static JavaScript asset", errors)
 
 
 class AmplifyApexTargetTests(TestCase):
-    script = (
-        Path(__file__).resolve().parents[3]
-        / "scripts"
-        / "deploy"
-        / "amplify-apex-target.sh"
-    )
+    script = Path(__file__).resolve().parents[3] / "scripts" / "deploy" / "amplify-apex-target.sh"
 
     def extract(self, subdomains, branch="main"):
         return subprocess.run(
@@ -284,41 +274,57 @@ resource "aws_amplify_branch" "candidate" {
             (
                 "ignore_changes = [custom_headers]",
                 "ignore_changes = []",
-                "production Terraform does not suppress provider-only Amplify custom-header formatting drift",
+                (
+                    "production Terraform does not suppress provider-only Amplify "
+                    "custom-header formatting drift"
+                ),
             ),
             (
                 "yamldecode(self.custom_headers).customHeaders",
                 "yamldecode(self.custom_headers).unexpected",
-                "production Terraform does not reject semantic JSON or YAML drift in live Amplify custom headers",
+                (
+                    "production Terraform does not reject semantic JSON or YAML drift in live "
+                    "Amplify custom headers"
+                ),
             ),
             (
                 "yamldecode(self.custom_headers),",
                 "[],",
-                "production Terraform does not reject semantic JSON or YAML drift in live Amplify custom headers",
+                (
+                    "production Terraform does not reject semantic JSON or YAML drift in live "
+                    "Amplify custom headers"
+                ),
             ),
             (
                 "yamldecode(self.custom_headers),",
                 "yamldecode(self.custom_headers).customHeaders,",
-                "production Terraform does not reject semantic JSON or YAML drift in live Amplify custom headers",
+                (
+                    "production Terraform does not reject semantic JSON or YAML drift in live "
+                    "Amplify custom headers"
+                ),
             ),
             (
                 'custom_headers = file("${path.module}/amplify-custom-headers.json")',
                 "custom_headers = jsonencode(local.amplify_custom_headers)",
-                "production Terraform does not render Amplify custom headers from the reviewed policy file",
+                (
+                    "production Terraform does not render Amplify custom headers from the "
+                    "reviewed policy file"
+                ),
             ),
             (
                 "false,\n      )",
                 "true,\n      )",
-                "production Terraform does not reject semantic JSON or YAML drift in live Amplify custom headers",
+                (
+                    "production Terraform does not reject semantic JSON or YAML drift in live "
+                    "Amplify custom headers"
+                ),
             ),
         )
         for expected, replacement, error in cases:
             with self.subTest(expected=expected):
                 self.assertIn(
                     error,
-                    production_amplify_custom_headers_errors(
-                        source.replace(expected, replacement)
-                    ),
+                    production_amplify_custom_headers_errors(source.replace(expected, replacement)),
                 )
 
         misplaced_guard = (
@@ -351,19 +357,23 @@ resource "terraform_data" "decoy" {
         )
         misplaced_errors = production_amplify_custom_headers_errors(misplaced_guard)
         self.assertIn(
-            "production Terraform does not suppress provider-only Amplify custom-header formatting drift",
+            (
+                "production Terraform does not suppress provider-only Amplify "
+                "custom-header formatting drift"
+            ),
             misplaced_errors,
         )
         self.assertIn(
-            "production Terraform does not reject semantic JSON or YAML drift in live Amplify custom headers",
+            (
+                "production Terraform does not reject semantic JSON or YAML drift in live "
+                "Amplify custom headers"
+            ),
             misplaced_errors,
         )
 
     def test_production_amplify_headers_policy_has_top_level_custom_headers(self):
         self.assertEqual(
-            production_amplify_custom_headers_policy_errors(
-                json.dumps({"customHeaders": []})
-            ),
+            production_amplify_custom_headers_policy_errors(json.dumps({"customHeaders": []})),
             [],
         )
         self.assertEqual(
@@ -375,12 +385,8 @@ resource "terraform_data" "decoy" {
             ["production Amplify custom-header policy must be a top-level JSON object"],
         )
         self.assertEqual(
-            production_amplify_custom_headers_policy_errors(
-                json.dumps({"headers": []})
-            ),
-            [
-                "production Amplify custom-header policy omits the top-level customHeaders list"
-            ],
+            production_amplify_custom_headers_policy_errors(json.dumps({"headers": []})),
+            ["production Amplify custom-header policy omits the top-level customHeaders list"],
         )
 
     def test_production_alb_security_group_is_in_place_only(self):
@@ -439,15 +445,15 @@ environment = [
         self.assertEqual(production_proxy_configuration_errors(source), [])
         self.assertIn(
             "production Terraform must set AUTH_TRUSTED_PROXY_COUNT exactly once to 1",
-            production_proxy_configuration_errors(
-                source.replace('value = "1"', 'value = "2"')
-            ),
+            production_proxy_configuration_errors(source.replace('value = "1"', 'value = "2"')),
         )
 
         retired_inputs = {
             'data "aws_ec2_managed_prefix_list" "cloudfront" {\n'
             '  name = "com.amazonaws.global.cloudfront.origin-facing"\n'
-            "}": "production Terraform retains the retired AWS-managed CloudFront origin prefix list",
+            "}": (
+                "production Terraform retains the retired AWS-managed CloudFront origin prefix list"
+            ),
             "var.restrict_origin_to_cloudfront": (
                 "production Terraform retains the retired CloudFront-only origin gate"
             ),
@@ -468,9 +474,7 @@ environment = [
             with self.subTest(expected_error=expected_error):
                 self.assertIn(
                     expected_error,
-                    production_proxy_configuration_errors(
-                        f"{source}\n{retired_source}\n"
-                    ),
+                    production_proxy_configuration_errors(f"{source}\n{retired_source}\n"),
                 )
 
     def test_production_ecs_task_definitions_pin_provider_defaults(self):
@@ -549,7 +553,8 @@ resource "aws_ecs_task_definition" "frontend" {}
                 "production Terraform omits startup-task suppression in the default-admin task"
             ),
             '"DJANGO_SUPERUSER_PASSWORD"': (
-                "production Terraform omits Secrets Manager password injection in the dedicated task"
+                "production Terraform omits Secrets Manager password injection in the "
+                "dedicated task"
             ),
             "environment = local.default_admin_container_environment": (
                 "production Terraform omits the dedicated default-admin environment reference"
@@ -558,7 +563,8 @@ resource "aws_ecs_task_definition" "frontend" {}
                 "production Terraform omits the dedicated default-admin secrets reference"
             ),
             "image = local.backend_image_uri": (
-                "production Terraform omits the immutable backend image in the dedicated default-admin task"
+                "production Terraform omits the immutable backend image in the dedicated "
+                "default-admin task"
             ),
             "var.default_admin_password_secret_arn,\n  ])": (
                 "the ECS execution role secret allowlist omits the default-admin password ARN"
@@ -568,9 +574,7 @@ resource "aws_ecs_task_definition" "frontend" {}
             with self.subTest(needle=needle):
                 self.assertIn(
                     expected_error,
-                    production_default_admin_task_errors(
-                        source.replace(needle, "missing", 1)
-                    ),
+                    production_default_admin_task_errors(source.replace(needle, "missing", 1)),
                 )
 
     def test_required_runtime_environment_reads_required_calls_and_security_lists(self):
@@ -674,7 +678,10 @@ steps:
       echo "Verify base ECS services use Terraform-selected task definitions"
       terraform -chdir=infra/prod output -raw "${role}_task_definition_arn"
       echo '.services[0].taskDefinition == $expected'
-      echo '[.services[0].deployments[] | select(.status == "PRIMARY") | .taskDefinition] == [$expected]'
+"""
+                '      echo \'[.services[0].deployments[] | select(.status == "PRIMARY") | '
+                ".taskDefinition] == [$expected]'"
+                """
       echo 'all(.tasks[]; .lastStatus == "RUNNING" and .taskDefinitionArn == $expected)'
       terraform -chdir=infra/prod state list
       echo "Detect API-subdomain transition state"
@@ -686,7 +693,10 @@ steps:
       echo '.status // "ready"'
       terraform -chdir=infra/prod untaint 'aws_amplify_domain_association.frontend[0]'
       echo "Recovered the verified Amplify domain association from tainted Terraform state"
-      terraform -chdir=infra/prod import 'aws_amplify_domain_association.frontend[0]' "${app_id}/${domain_name}"
+"""
+                "      terraform -chdir=infra/prod import "
+                "'aws_amplify_domain_association.frontend[0]' \"${app_id}/${domain_name}\""
+                """
       echo "Recovered the existing Amplify domain association into Terraform state"
       echo "Capture pre-release canonical Route53 alias"
       echo "bash scripts/deploy/amplify-apex-target.sh"
@@ -1248,7 +1258,10 @@ steps:
                 (
                     ".tasks[0].containers[0].exitCode == 0",
                     ".tasks[0].containers[0].exitCode != 0",
-                    "production CD omits stopped-task dataflow and successful container exit verification",
+                    (
+                        "production CD omits stopped-task dataflow and successful container "
+                        "exit verification"
+                    ),
                 ),
                 (
                     "[$django, $field, $metrics, $admin]",
@@ -1293,7 +1306,10 @@ steps:
                 (
                     '<<<"$backend_task_state"',
                     '<<<"$task_definition_state"',
-                    "production CD omits runtime isolation of administrator inputs from the deployed backend task",
+                    (
+                        "production CD omits runtime isolation of administrator inputs from "
+                        "the deployed backend task"
+                    ),
                 ),
                 (
                     "steps.default_admin.outputs.started_by != ''",
@@ -1313,7 +1329,10 @@ steps:
                 (
                     "timeout --signal=TERM 180s",
                     "timeout --signal=TERM 0s",
-                    "production CD omits bounded verification of compensating default-admin cleanup",
+                    (
+                        "production CD omits bounded verification of compensating "
+                        "default-admin cleanup"
+                    ),
                 ),
             )
             for needle, replacement, expected_error in default_admin_guards:
@@ -1480,8 +1499,7 @@ steps:
             )
             workflow.write_text(canonical_deadline_source, encoding="utf-8")
             self.assertIn(
-                "production CD omits a 600-second hard deadline in "
-                "canonical production smoke",
+                "production CD omits a 600-second hard deadline in canonical production smoke",
                 production_cd_errors(root),
             )
 
@@ -1546,8 +1564,7 @@ steps:
                 encoding="utf-8",
             )
             self.assertIn(
-                "production CD omits exact reminder-target backend "
-                "task-definition ARN equality",
+                "production CD omits exact reminder-target backend task-definition ARN equality",
                 production_cd_errors(root),
             )
 
@@ -1565,9 +1582,9 @@ steps:
                 production_cd_errors(root),
             )
 
-            canonical_cors_source = protected_source[
-                :canonical_smoke_position
-            ] + protected_source[canonical_smoke_position:].replace(
+            canonical_cors_source = protected_source[:canonical_smoke_position] + protected_source[
+                canonical_smoke_position:
+            ].replace(
                 '--header "Access-Control-Request-Method: PUT"',
                 '--header "Access-Control-Request-Method: GET"',
                 1,
@@ -1579,12 +1596,10 @@ steps:
                 production_cd_errors(root),
             )
 
-            final_marker_position = protected_source.index(
-                "Verify final API-only backend topology"
-            )
-            final_cors_source = protected_source[
-                :final_marker_position
-            ] + protected_source[final_marker_position:].replace(
+            final_marker_position = protected_source.index("Verify final API-only backend topology")
+            final_cors_source = protected_source[:final_marker_position] + protected_source[
+                final_marker_position:
+            ].replace(
                 "access-control-allow-credentials: true",
                 "access-control-allow-credentials: false",
                 1,
@@ -1660,7 +1675,10 @@ steps:
                 encoding="utf-8",
             )
             self.assertIn(
-                "production CD must resolve and verify rollback artifacts before candidate, production, and custom-domain stages",
+                (
+                    "production CD must resolve and verify rollback artifacts before candidate, "
+                    "production, and custom-domain stages"
+                ),
                 production_cd_errors(root),
             )
 
@@ -1681,7 +1699,10 @@ steps:
                     'echo "Plan reviewed Amplify domain association"\n'
                     "      echo 'TF_VAR_enable_amplify_domain: \"true\"'\n"
                     "      echo 'TF_VAR_frontend_image_tag: ${{ github.sha }}'",
-                    "production CD omits the deployed ECS frontend SHA in the domain Terraform plan",
+                    (
+                        "production CD omits the deployed ECS frontend SHA in the domain "
+                        "Terraform plan"
+                    ),
                 ),
                 (
                     "echo 'TF_VAR_frontend_image_tag: ${{ github.sha }}'\n"
@@ -1696,7 +1717,10 @@ steps:
                 (
                     "echo \"steps.canonical_smoke.outcome != 'success'\"",
                     "echo \"steps.canonical_smoke.outcome == 'success'\"",
-                    "production CD omits a canonical-smoke failure guard on first-cutover DNS compensation",
+                    (
+                        "production CD omits a canonical-smoke failure guard on first-cutover "
+                        "DNS compensation"
+                    ),
                 ),
                 (
                     "      echo '<form'\n",
@@ -1810,11 +1834,17 @@ steps:
                     )
                     errors = production_cd_errors(root)
                     self.assertIn(
-                        f"production CD omits the {header} check on actual candidate Amplify responses",
+                        (
+                            f"production CD omits the {header} check on actual candidate "
+                            "Amplify responses"
+                        ),
                         errors,
                     )
                     self.assertIn(
-                        f"production CD omits the {header} check on actual canonical Amplify responses",
+                        (
+                            f"production CD omits the {header} check on actual canonical "
+                            "Amplify responses"
+                        ),
                         errors,
                     )
 
@@ -1840,7 +1870,10 @@ steps:
                 encoding="utf-8",
             )
             self.assertIn(
-                "production CD final plan does not use the exact reviewed unexpected_changes address allowlist",
+                (
+                    "production CD final plan does not use the exact reviewed "
+                    "unexpected_changes address allowlist"
+                ),
                 production_cd_errors(root),
             )
 
@@ -1906,7 +1939,8 @@ steps:
                         protected_source.replace(
                             f'echo "{marker}"\n',
                             f'echo "{marker}"\n'
-                            "      if: ${{ steps.api_transition.outputs.compatibility == 'true' }}\n",
+                            "      if: ${{ steps.api_transition.outputs.compatibility "
+                            "== 'true' }}\n",
                             1,
                         ),
                         encoding="utf-8",
@@ -2088,7 +2122,10 @@ steps:
                 (
                     'for base_url in "$production_url" "https://${PROD_DOMAIN}"; do',
                     'for base_url in "$production_url"; do',
-                    "production CD omits rollback release identity checks on both default and production domains",
+                    (
+                        "production CD omits rollback release identity checks on both default "
+                        "and production domains"
+                    ),
                 ),
             )
             for needle, replacement, expected_error in required_rollback_contract:
@@ -2099,8 +2136,8 @@ steps:
                     )
                     self.assertIn(expected_error, production_cd_errors(root))
 
-            before_rollback_helper, separator, after_rollback_helper = (
-                protected_source.rpartition("scripts/deploy/amplify-static-deploy.sh")
+            before_rollback_helper, separator, after_rollback_helper = protected_source.rpartition(
+                "scripts/deploy/amplify-static-deploy.sh"
             )
             self.assertTrue(separator)
             workflow.write_text(
@@ -2128,9 +2165,7 @@ steps:
             )
 
             workflow.write_text("name: Deploy\n", encoding="utf-8")
-            self.assertIn(
-                "production CD omits manual dispatch", production_cd_errors(root)
-            )
+            self.assertIn("production CD omits manual dispatch", production_cd_errors(root))
 
     def test_production_cd_rejects_legacy_dns_and_requires_api_aware_frontend_docker(
         self,
@@ -2153,9 +2188,7 @@ terraform -chdir=infra/prod plan -out=production-restore-origin.tfplan
                 encoding="utf-8",
             )
             errors = production_cd_errors(root)
-            self.assertIn(
-                "production CD retains legacy DNS-disable cutover flow", errors
-            )
+            self.assertIn("production CD retains legacy DNS-disable cutover flow", errors)
             self.assertIn(
                 "production CD omits an API-aware ECS frontend fallback build",
                 errors,
@@ -2588,3 +2621,58 @@ fi
                 "terminal_confirmed=false\n"
                 "cancellation_confirmed=false\n",
             )
+
+
+class ProductionCdResolutionTests(TestCase):
+    """A parked production CD stays under contract without becoming dispatchable."""
+
+    def workflows(self, root: Path) -> Path:
+        workflows = root / ".github/workflows"
+        workflows.mkdir(parents=True)
+        return workflows
+
+    def test_missing_production_cd_is_reported(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.workflows(root)
+            self.assertIsNone(production_cd_path(root))
+            self.assertEqual(
+                production_cd_errors(root),
+                ["production CD workflow is missing"],
+            )
+
+    def test_parked_production_cd_is_validated(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            parked = self.workflows(root) / "deploy-prod.yml.disabled"
+            parked.write_text("on:\n  workflow_dispatch:\n", encoding="utf-8")
+
+            self.assertEqual(production_cd_path(root), parked)
+            errors = production_cd_errors(root)
+            self.assertNotIn("production CD workflow is missing", errors)
+            # A parked definition is still held to the release invariants.
+            self.assertIn(
+                "production CD omits the reviewed 160-minute production job limit",
+                errors,
+            )
+
+    def test_active_production_cd_wins_over_parked(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflows = self.workflows(root)
+            active = workflows / "deploy-prod.yml"
+            active.write_text("on:\n  workflow_dispatch:\n", encoding="utf-8")
+            (workflows / "deploy-prod.yml.disabled").write_text(
+                "on:\n  workflow_dispatch:\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(production_cd_path(root), active)
+
+    def test_repository_parks_production_cd_under_contract(self):
+        self.assertEqual(
+            production_cd_path().name,
+            "deploy-prod.yml.disabled",
+            "production CD is expected to stay parked until CD is enabled",
+        )
+        self.assertEqual(production_cd_errors(), [])

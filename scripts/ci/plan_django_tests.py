@@ -8,8 +8,7 @@ import json
 import re
 from pathlib import Path
 
-
-APPS = ("authn", "core", "messaging", "scheduling")
+APPS = ("authn", "core", "mail", "scheduling")
 APP_PATTERN = re.compile(r"^src/api/apps/([^/]+)/")
 FULL_SUITE_PREFIXES = (
     ".github/",
@@ -33,9 +32,9 @@ FULL_SUITE_FILES = {
 # did not change directly. The full 100% coverage job still runs as a final
 # safety net; this matrix provides focused PostgreSQL coverage and diagnostics.
 IMPACT = {
-    "authn": {"authn", "messaging", "scheduling"},
+    "authn": {"authn", "mail", "scheduling"},
     "core": set(APPS),
-    "messaging": {"messaging", "scheduling"},
+    "mail": {"mail", "scheduling"},
     "scheduling": {"scheduling"},
 }
 
@@ -43,11 +42,7 @@ IMPACT = {
 def read_changed_files(path: Path) -> list[str]:
     if not path.exists():
         return []
-    return [
-        line.strip()
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
+    return [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def select_apps(event_name: str, changed_files: list[str]) -> list[str]:
@@ -55,8 +50,7 @@ def select_apps(event_name: str, changed_files: list[str]) -> list[str]:
         return list(APPS)
 
     if any(
-        path in FULL_SUITE_FILES or path.startswith(FULL_SUITE_PREFIXES)
-        for path in changed_files
+        path in FULL_SUITE_FILES or path.startswith(FULL_SUITE_PREFIXES) for path in changed_files
     ):
         return list(APPS)
 

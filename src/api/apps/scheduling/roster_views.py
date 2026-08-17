@@ -27,6 +27,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.mail.models import EmailDeliveryJob
+from apps.scheduling.lifecycle import response_write_error
 from apps.scheduling.models import (
     Event,
     EventInvitation,
@@ -48,6 +49,7 @@ from apps.scheduling.roster_imports import (
     roster_import_row_payload,
     update_roster_import,
 )
+from apps.scheduling.services import email_delivery_request_payload
 from apps.scheduling.utils import api_event
 
 
@@ -81,6 +83,13 @@ def _event_for_organizer(request, *, lock=False):
     return event, None
 
 
+def _roster_write_error(event):
+    write_error = response_write_error(event)
+    if write_error:
+        return Response({"error": write_error}, status=409)
+    return None
+
+
 def _batch_for_event(event, import_id):
     return RosterImportBatch.objects.filter(pk=import_id, event=event).first()
 
@@ -112,11 +121,9 @@ class RosterImportCollectionView(PrivateAPIView):
         event, error = _event_for_organizer(request)
         if error:
             return error
-        if event.status in {Event.Status.FINALIZED, Event.Status.ARCHIVED}:
-            return Response(
-                {"error": "Reopen this event before changing its roster."},
-                status=409,
-            )
+        write_error = _roster_write_error(event)
+        if write_error:
+            return write_error
         try:
             batch = create_roster_import(
                 event=event,
@@ -135,6 +142,9 @@ class RosterImportDetailView(PrivateAPIView):
         event, error = _event_for_organizer(request)
         if error:
             return error
+        write_error = _roster_write_error(event)
+        if write_error:
+            return write_error
         batch = _batch_for_event(event, import_id)
         if batch is None:
             return Response({"error": "Roster import not found"}, status=404)
@@ -200,8 +210,11 @@ class RosterImportCommitView(PrivateAPIView):
         event, error = _event_for_organizer(request)
         if error:
             return error
+        write_error = _roster_write_error(event)
+        if write_error:
+            return write_error
         try:
-            receipt, idempotent = commit_roster_import(
+            receipt, idempotent, delivery_request, auto_invited_count = commit_roster_import(
                 event=event,
                 batch_id=import_id,
                 organizer=request.user,
@@ -215,6 +228,8 @@ class RosterImportCommitView(PrivateAPIView):
                 "receipt": roster_import_receipt_payload(receipt),
                 "idempotent": idempotent,
                 "event": api_event(receipt.event),
+                "deliveryRequest": email_delivery_request_payload(delivery_request),
+                "autoInvitedCount": auto_invited_count,
             },
             status=200 if idempotent else 201,
         )
@@ -370,7 +385,13 @@ def _roster_stats(queryset) -> dict:
 
 
 def _latest_delivery_request(event) -> dict | None:
-    request_record = event.email_delivery_requests.order_by("-created_at").first()
+    # Managed-participant idempotency records may intentionally contain zero
+    # recipients when the person is already visible in the roster.  Those
+    # receipts must not hide the most recent real delivery (including a failed
+    # delivery that still needs an organizer retry).
+    request_record = (
+        event.email_delivery_requests.filter(recipient_count__gt=0).order_by("-created_at").first()
+    )
     if request_record is None:
         return None
     counts = {
@@ -429,7 +450,44 @@ def _participant_for_path(event, participant_id, *, lock=False):
     queryset = Participant.objects.select_related("member").filter(event=event)
     if lock:
         queryset = queryset.select_for_update()
-    return queryset.filter(Q(pk=participant_id) | Q(member_id=participant_id)).first()
+    participant_pk, member_id = _participant_identifiers(participant_id)
+    identity = Q()
+    if participant_pk is not None:
+        identity |= Q(pk=participant_pk)
+    if member_id is not None:
+        identity |= Q(member_id=member_id)
+    if not identity:
+        return None
+    return queryset.filter(identity).first()
+
+
+def _participant_identifiers(value):
+    normalized = str(value or "").strip()
+    participant_pk = int(normalized) if normalized.isdecimal() else None
+    try:
+        member_id = uuid.UUID(normalized)
+    except (ValueError, TypeError, AttributeError):
+        member_id = None
+    return participant_pk, member_id
+
+
+def _participant_identity_query(values):
+    participant_pks = []
+    member_ids = []
+    for value in values:
+        participant_pk, member_id = _participant_identifiers(value)
+        if participant_pk is None and member_id is None:
+            raise RosterImportError("A participant id is invalid.")
+        if participant_pk is not None:
+            participant_pks.append(participant_pk)
+        if member_id is not None:
+            member_ids.append(member_id)
+    identity = Q()
+    if participant_pks:
+        identity |= Q(pk__in=participant_pks)
+    if member_ids:
+        identity |= Q(member_id__in=member_ids)
+    return identity
 
 
 class RosterParticipantScheduleView(PrivateAPIView):
@@ -485,11 +543,9 @@ class RosterParticipantView(PrivateAPIView):
                 event, error = _event_for_organizer(request, lock=True)
                 if error:
                     return error
-                if event.status in {Event.Status.FINALIZED, Event.Status.ARCHIVED}:
-                    return Response(
-                        {"error": "Reopen this event before changing its roster."},
-                        status=409,
-                    )
+                write_error = _roster_write_error(event)
+                if write_error:
+                    return write_error
                 participant = _participant_for_path(event, participant_id, lock=True)
                 if participant is None:
                     return Response({"error": "Participant not found"}, status=404)
@@ -592,7 +648,7 @@ def _bulk_selector(queryset, data):
             raise RosterImportError(
                 f"participantIds may contain at most {MAX_ROSTER_ROWS} entries."
             )
-        queryset = queryset.filter(Q(pk__in=participant_ids) | Q(member_id__in=participant_ids))
+        queryset = queryset.filter(_participant_identity_query(participant_ids))
     if "group" in data:
         has_selector = True
         group_name = str(data.get("group") or "").strip()
@@ -634,11 +690,9 @@ class RosterBulkView(PrivateAPIView):
                 event, error = _event_for_organizer(request, lock=True)
                 if error:
                     return error
-                if event.status in {Event.Status.FINALIZED, Event.Status.ARCHIVED}:
-                    return Response(
-                        {"error": "Reopen this event before changing its roster."},
-                        status=409,
-                    )
+                write_error = _roster_write_error(event)
+                if write_error:
+                    return write_error
                 allowed_request_fields = {
                     "participantIds",
                     "group",

@@ -15,7 +15,11 @@ import AppButton from "@/components/ui/AppButton";
 import AppHeader from "@/components/ui/AppHeader";
 import { useAuth } from "@/components/auth/AuthContext";
 import { fetchDashboardEvents } from "@/lib/api/dashboard";
-import { deleteEvent, duplicateEvent, updateEventLifecycle } from "@/lib/api/events";
+import {
+  deleteEvent,
+  duplicateEvent,
+  updateEventLifecycle,
+} from "@/lib/api/events";
 import { formatMode } from "@/lib/format";
 import { navigateTo } from "@/lib/navigation";
 import "@material/web/textfield/outlined-text-field.js";
@@ -45,21 +49,30 @@ function EventCard({
           <span>Status: {event.status || "unknown"}</span>
           <span>Code: {event.code}</span>
           {event.responseDeadline && (
-            <span>Deadline: {new Date(event.responseDeadline).toLocaleString()}</span>
+            <span>
+              Deadline: {new Date(event.responseDeadline).toLocaleString()}
+            </span>
           )}
-          {event.location && event.location !== "TBD" && <span>{event.location}</span>}
+          {event.location && event.location !== "TBD" && (
+            <span>{event.location}</span>
+          )}
         </div>
       </div>
 
       {organizerActions && (
-        <div className="dashboard-event-actions" aria-label={`Actions for ${event.name}`}>
+        <div
+          className="dashboard-event-actions"
+          aria-label={`Actions for ${event.name}`}
+        >
           <Link href={eventUrl} className="dashboard-action-link">
             <MdOpenInNew aria-hidden="true" /> View
           </Link>
           <Link
             href={`/edit?code=${encodeURIComponent(event.code)}`}
             className="dashboard-action-link"
-            aria-disabled={event.status === "finalized" || event.status === "archived"}
+            aria-disabled={
+              event.status === "finalized" || event.status === "archived"
+            }
             onClick={(clickEvent) => {
               if (event.status === "finalized" || event.status === "archived") {
                 clickEvent.preventDefault();
@@ -127,13 +140,17 @@ function DashboardPage() {
         setOrganized(data.organized || []);
         setParticipating(data.participating || []);
       })
-      .catch(() => setError("Failed to load your events. Please refresh and try again."))
+      .catch(() =>
+        setError("Failed to load your events. Please refresh and try again."),
+      )
       .finally(() => setLoading(false));
   }, [user, authLoading, getToken]);
 
   const replaceOrganizedEvent = (event) => {
     setOrganized((current) =>
-      current.map((candidate) => (candidate.code === event.code ? event : candidate))
+      current.map((candidate) =>
+        candidate.code === event.code ? event : candidate,
+      ),
     );
   };
 
@@ -150,7 +167,7 @@ function DashboardPage() {
           expectedVersion: event.version,
           responseDeadline: event.responseDeadline,
         },
-        token
+        token,
       );
       replaceOrganizedEvent(data.event);
       setStatus(`${event.name} was archived.`);
@@ -163,7 +180,8 @@ function DashboardPage() {
 
   const handleDuplicate = async (event) => {
     const fingerprint = `${event.code}:${event.version}`;
-    const idempotencyKey = duplicateRequestKeys.current.get(fingerprint) || newRequestKey();
+    const idempotencyKey =
+      duplicateRequestKeys.current.get(fingerprint) || newRequestKey();
     duplicateRequestKeys.current.set(fingerprint, idempotencyKey);
     setActionCode(event.code);
     setError("");
@@ -176,14 +194,14 @@ function DashboardPage() {
           expectedVersion: event.version,
           idempotencyKey,
         },
-        token
+        token,
       );
       duplicateRequestKeys.current.delete(fingerprint);
       setOrganized((current) => [
         data.event,
         ...current.filter((candidate) => candidate.code !== data.event.code),
       ]);
-      setStatus(`${event.name} was duplicated as a draft.`);
+      setStatus(`${event.name} was duplicated as a new active event.`);
     } catch (err) {
       if (err.event) replaceOrganizedEvent(err.event);
       setError(err.message || "Unable to duplicate this event.");
@@ -221,10 +239,10 @@ function DashboardPage() {
           idempotencyKey: deleteRequestKey,
           confirmation: deleteConfirmation,
         },
-        token
+        token,
       );
       setOrganized((current) =>
-        current.filter((candidate) => candidate.code !== deleteTarget.code)
+        current.filter((candidate) => candidate.code !== deleteTarget.code),
       );
       setStatus(`${deleteTarget.name} was permanently deleted.`);
       closeDeletePanel();
@@ -242,7 +260,9 @@ function DashboardPage() {
   if (authLoading || loading) {
     return (
       <div className="center-page">
-        <p style={{ color: "var(--md-sys-color-on-surface-variant)" }}>Loading...</p>
+        <p style={{ color: "var(--md-sys-color-on-surface-variant)" }}>
+          Loading...
+        </p>
       </div>
     );
   }
@@ -282,7 +302,11 @@ function DashboardPage() {
             onKeyDown={(event) => event.key === "Enter" && handleGoToEvent()}
             style={{ flex: 1 }}
           ></md-outlined-text-field>
-          <AppButton onClick={handleGoToEvent} variant="outlined" icon={<MdSearch />}>
+          <AppButton
+            onClick={handleGoToEvent}
+            variant="outlined"
+            icon={<MdSearch />}
+          >
             Go
           </AppButton>
         </div>
@@ -295,8 +319,9 @@ function DashboardPage() {
           >
             <h2 id="delete-event-heading">Delete {deleteTarget.name}?</h2>
             <p>
-              This permanently removes the event, participant responses, invitations, final meeting,
-              and queued event emails. This action cannot be undone.
+              This permanently removes the event, participant responses,
+              invitations, final meeting, and queued event emails. This action
+              cannot be undone.
             </p>
             <label className="field-label">
               Type <strong>{deleteTarget.code}</strong> to confirm
@@ -317,10 +342,13 @@ function DashboardPage() {
                 className="app-btn-danger"
                 icon={<MdDeleteOutline />}
                 disabled={
-                  actionCode === deleteTarget.code || deleteConfirmation !== deleteTarget.code
+                  actionCode === deleteTarget.code ||
+                  deleteConfirmation !== deleteTarget.code
                 }
               >
-                {actionCode === deleteTarget.code ? "Deleting..." : "Delete event permanently"}
+                {actionCode === deleteTarget.code
+                  ? "Deleting..."
+                  : "Delete event permanently"}
               </AppButton>
             </div>
           </form>
@@ -356,7 +384,9 @@ function DashboardPage() {
               ))}
             </div>
           ) : (
-            <p className="dashboard-empty">Not participating in any events yet.</p>
+            <p className="dashboard-empty">
+              Not participating in any events yet.
+            </p>
           )}
         </section>
       </main>

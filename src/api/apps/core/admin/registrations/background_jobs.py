@@ -9,6 +9,9 @@ from ..common.base import ReadOnlyModelAdmin
 
 @admin.register(BackgroundJob)
 class BackgroundJobAdmin(ReadOnlyModelAdmin):
+    # Explicit retries alter durable delivery state and therefore keep the
+    # shared typed-confirmation guard even though ordinary fields are read-only.
+    require_confirmation = True
     list_display = (
         "kind",
         "dedupe_key",
@@ -47,7 +50,9 @@ class BackgroundJobAdmin(ReadOnlyModelAdmin):
             if retry_job(job):
                 retried += 1
         if retried:
-            self.message_user(request, f"Queued {retried} job(s) for explicit retry.", messages.SUCCESS)
+            self.message_user(
+                request, f"Queued {retried} job(s) for explicit retry.", messages.SUCCESS
+            )
         else:
             self.message_user(
                 request,

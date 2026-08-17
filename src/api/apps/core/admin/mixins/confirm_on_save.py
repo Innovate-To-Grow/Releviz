@@ -4,6 +4,7 @@ from django.contrib import messages
 from django.contrib.admin import helpers
 from django.contrib.admin.exceptions import DisallowedModelAdminToField
 from django.contrib.admin.options import TO_FIELD_VAR
+from django.contrib.admin.utils import model_format_dict
 from django.core.cache import cache
 from django.core.exceptions import PermissionDenied
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -341,12 +342,76 @@ class ConfirmOnSaveMixin:
 
     # --- Bulk action confirmation ---
 
-    def response_action(self, request, queryset):
-        if self._should_skip_confirmation(request):
+    def _super_response_action(self, request, queryset, action_location):
+        """Call Django's version-specific ``response_action`` signature."""
+        if action_location is None:
             return super().response_action(request, queryset)
+        return super().response_action(
+            request,
+            queryset,
+            action_location=action_location,
+        )
+
+    def _get_actions_for_location(self, request, action_location):
+        """Return actions using the Django 6.0 or 6.1 call signature."""
+        if action_location is None:
+            return self.get_actions(request)
+        return self.get_actions(request, action_location=action_location)
+
+    def _get_action_choices_for_location(self, request, action_location):
+        """Build choices for the action location without tuple-only assumptions."""
+        if action_location is None or getattr(action_location, "value", None) == "CHANGE_LIST":
+            return self.get_action_choices(request)
+
+        choices = [("", "---------")]
+        for action in self._get_actions_for_location(request, action_location).values():
+            _func, name, description = self._action_parts(action, action_location)
+            try:
+                description = str(description) % model_format_dict(self.opts)
+            except (KeyError, TypeError, ValueError):
+                description = str(description)
+            choices.append((name, description))
+        return choices
+
+    @staticmethod
+    def _action_parts(action, action_location=None):
+        """Normalize Django 6.0 action tuples and Django 6.1 Action objects."""
+        if not hasattr(action, "func"):
+            return action
+
+        description = action.description
+        if action_location is None or getattr(action_location, "value", None) == "CHANGE_LIST":
+            description = action.plural_description
+        return action.func, action.name, description
+
+    @classmethod
+    def _action_func(cls, action):
+        return cls._action_parts(action)[0]
+
+    @staticmethod
+    def _serialize_action_location(action_location):
+        return getattr(action_location, "value", None)
+
+    @staticmethod
+    def _deserialize_action_location(value):
+        if not value:
+            return None
+        from django.contrib.admin import options
+
+        action_location_type = getattr(options, "ActionLocation", None)
+        if action_location_type is None:
+            return None
+        try:
+            return action_location_type(value)
+        except ValueError:
+            return None
+
+    def response_action(self, request, queryset, action_location=None):
+        if self._should_skip_confirmation(request):
+            return self._super_response_action(request, queryset, action_location)
 
         if "_confirmed_action" in request.POST:
-            return super().response_action(request, queryset)
+            return self._super_response_action(request, queryset, action_location)
 
         try:
             action_index = int(request.POST.get("index", 0))
@@ -360,32 +425,43 @@ class ConfirmOnSaveMixin:
         try:
             data.update({"action": data.getlist("action")[action_index]})
         except IndexError:
-            return super().response_action(request, queryset)
+            return self._super_response_action(request, queryset, action_location)
 
-        action_form = self.action_form(data, auto_id=None)
-        action_form.fields["action"].choices = self.get_action_choices(request)
+        prefix = getattr(action_location, "value", "")
+        if prefix == "CHANGE_LIST":
+            prefix = ""
+        action_form = self.action_form(data, auto_id=None, prefix=prefix)
+        action_form.fields["action"].choices = self._get_action_choices_for_location(
+            request,
+            action_location,
+        )
 
         if not action_form.is_valid():
-            return super().response_action(request, queryset)
+            return self._super_response_action(request, queryset, action_location)
 
         action_name = action_form.cleaned_data["action"]
         select_across = action_form.cleaned_data["select_across"]
 
         selected = request.POST.getlist(helpers.ACTION_CHECKBOX_NAME)
         if not selected and not select_across:
-            return super().response_action(request, queryset)
+            return self._super_response_action(request, queryset, action_location)
 
-        if self._action_skips_confirmation(action_name, request):
-            return super().response_action(request, queryset)
+        if self._action_skips_confirmation(action_name, request, action_location):
+            return self._super_response_action(request, queryset, action_location)
 
-        actions = self.get_actions(request)
+        actions = self._get_actions_for_location(request, action_location)
         if action_name not in actions:
-            return super().response_action(request, queryset)
+            return self._super_response_action(request, queryset, action_location)
 
-        _func, _name, description = actions[action_name]
+        _func, _name, description = self._action_parts(
+            actions[action_name],
+            action_location,
+        )
 
         try:
-            description_str = str(description) % {"verbose_name_plural": self.opts.verbose_name_plural}
+            description_str = str(description) % {
+                "verbose_name_plural": self.opts.verbose_name_plural
+            }
         except (KeyError, TypeError, ValueError):
             description_str = str(description)
 
@@ -396,7 +472,7 @@ class ConfirmOnSaveMixin:
 
         action_pks = [str(pk) for pk in action_queryset.values_list("pk", flat=True)]
         if not action_pks:
-            return super().response_action(request, queryset)
+            return self._super_response_action(request, queryset, action_location)
 
         request.session[self._session_action_key()] = {
             "token": str(uuid.uuid4()),
@@ -407,20 +483,21 @@ class ConfirmOnSaveMixin:
             "queryset_pks": action_pks,
             "item_count": len(action_pks),
             "post_data": serialize_post_data(request.POST),
+            "action_location": self._serialize_action_location(action_location),
         }
 
         confirm_url = reverse(f"admin:{self.opts.app_label}_{self.opts.model_name}_confirm_action")
         return HttpResponseRedirect(confirm_url)
 
-    def _action_skips_confirmation(self, action_name, request):
+    def _action_skips_confirmation(self, action_name, request, action_location=None):
         exempt = set()
         for cls in type(self).__mro__:
             exempt.update(getattr(cls, "actions_no_confirmation", []))
         if action_name in exempt:
             return True
-        actions = self.get_actions(request)
+        actions = self._get_actions_for_location(request, action_location)
         if action_name in actions:
-            func = actions[action_name][0]
+            func = self._action_func(actions[action_name])
             if getattr(func, "no_confirmation", False):
                 return True
         return False
@@ -469,13 +546,14 @@ class ConfirmOnSaveMixin:
 
     def _execute_confirmed_action(self, request, pending):
         action_name = pending["action_name"]
-        actions = self.get_actions(request)
+        action_location = self._deserialize_action_location(pending.get("action_location"))
+        actions = self._get_actions_for_location(request, action_location)
         if action_name not in actions:
             messages.error(request, "Action no longer available.")
             request.session.pop(self._session_action_key(), None)
             return HttpResponseRedirect(self._changelist_url())
 
-        func = actions[action_name][0]
+        func = self._action_func(actions[action_name])
         queryset_pks = pending.get("queryset_pks")
         if queryset_pks is None:
             queryset_pks = pending["selected_pks"] if not pending["select_across"] else []

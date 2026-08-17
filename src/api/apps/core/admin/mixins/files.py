@@ -49,7 +49,9 @@ def generate_excel_response(admin_obj, request, queryset, columns):
     wb.save(output)
     output.seek(0)
 
-    filename = f"{admin_obj._get_base_filename(request)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    filename = (
+        f"{admin_obj._get_base_filename(request)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    )
     response = HttpResponse(
         output.getvalue(),
         content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -68,7 +70,9 @@ def generate_json_response(admin_obj, request, queryset, columns):
         data.append(item)
 
     body = json.dumps(data, indent=2, ensure_ascii=False, default=str)
-    filename = f"{admin_obj._get_base_filename(request)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    filename = (
+        f"{admin_obj._get_base_filename(request)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    )
     response = HttpResponse(body, content_type="application/json")
     response["Content-Disposition"] = f'attachment; filename="{filename}"'
     return response

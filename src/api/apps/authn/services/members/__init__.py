@@ -5,7 +5,6 @@ from .export_excel import export_members_to_excel
 from .export_vcf import export_members_to_vcard
 from .import_ import ImportResult, generate_template_excel, import_members_from_excel
 
-
 __all__ = [
     # Member CRUD
     "CreateMemberService",

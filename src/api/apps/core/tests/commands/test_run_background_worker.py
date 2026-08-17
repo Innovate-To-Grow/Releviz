@@ -3,7 +3,7 @@ from io import StringIO
 from types import SimpleNamespace
 from unittest.mock import call, patch
 
-from django.test import SimpleTestCase, TestCase, override_settings
+from django.test import SimpleTestCase, TestCase
 
 from apps.core.management.commands import run_background_worker
 from apps.core.models import BackgroundJob
@@ -13,14 +13,11 @@ from apps.core.services.background_jobs import enqueue_job
 class RunBackgroundWorkerCommandTests(SimpleTestCase):
     def _run_once(self, *, purged_row_count=0, batch_size=10):
         command = run_background_worker.Command(stdout=StringIO())
-        with (
-            patch.object(
-                run_background_worker,
-                "purge_retired_auth_keypairs",
-                return_value=purged_row_count,
-            ) as purge,
-            patch.object(run_background_worker, "schedule_startup_reconciliation"),
-        ):
+        with patch.object(
+            run_background_worker,
+            "purge_retired_auth_keypairs",
+            return_value=purged_row_count,
+        ) as purge:
             command.handle(
                 once=True,
                 batch_size=batch_size,
@@ -46,7 +43,10 @@ class RunBackgroundWorkerCommandTests(SimpleTestCase):
 
         purge.assert_called_once_with()
         self.assertEqual(
-            logs.output, ["INFO:apps.core.management.commands.run_background_worker:Purged retired RSA keypair rows"]
+            logs.output,
+            [
+                "INFO:apps.core.management.commands.run_background_worker:Purged retired RSA keypair rows"
+            ],
         )
 
     @patch.object(run_background_worker, "publish_worker_metrics")
@@ -153,46 +153,6 @@ class RunBackgroundWorkerCommandTests(SimpleTestCase):
         publish.assert_called_once_with({"heartbeat": 1})
 
 
-class RunBackgroundWorkerStartupTests(SimpleTestCase):
-    @override_settings(BACKGROUND_JOBS_ENABLED=False, AMPLIFY_APP_ID="app-123")
-    def test_startup_reconciliation_respects_background_jobs_rollout_flag(self):
-        with patch(
-            "apps.cms.services.amplify.amplify_redirects.schedule_amplify_redirect_sync",
-        ) as schedule:
-            self.assertFalse(run_background_worker.schedule_startup_reconciliation())
-
-        schedule.assert_not_called()
-
-    @override_settings(BACKGROUND_JOBS_ENABLED=True, AMPLIFY_APP_ID="")
-    def test_startup_reconciliation_requires_amplify_app(self):
-        with patch(
-            "apps.cms.services.amplify.amplify_redirects.schedule_amplify_redirect_sync",
-        ) as schedule:
-            self.assertFalse(run_background_worker.schedule_startup_reconciliation())
-
-        schedule.assert_not_called()
-
-    @override_settings(BACKGROUND_JOBS_ENABLED=True, AMPLIFY_APP_ID="app-123")
-    def test_startup_reconciliation_is_immediate(self):
-        with patch(
-            "apps.cms.services.amplify.amplify_redirects.schedule_amplify_redirect_sync",
-            return_value=SimpleNamespace(pk=1),
-        ) as schedule:
-            with self.assertLogs(run_background_worker.logger, level="INFO"):
-                self.assertTrue(run_background_worker.schedule_startup_reconciliation())
-
-        schedule.assert_called_once_with(immediate=True)
-
-    @override_settings(BACKGROUND_JOBS_ENABLED=True, AMPLIFY_APP_ID="app-123")
-    def test_startup_reconciliation_failure_does_not_stop_worker(self):
-        with patch(
-            "apps.cms.services.amplify.amplify_redirects.schedule_amplify_redirect_sync",
-            side_effect=RuntimeError("provider unavailable"),
-        ):
-            with self.assertLogs(run_background_worker.logger, level="ERROR"):
-                self.assertFalse(run_background_worker.schedule_startup_reconciliation())
-
-
 class RunBackgroundWorkerShutdownTests(TestCase):
     def test_sigterm_does_not_claim_unstarted_jobs_or_consume_attempts(self):
         first, _created = enqueue_job(kind="test.echo", dedupe_key="shutdown-first", payload={})
@@ -209,7 +169,6 @@ class RunBackgroundWorkerShutdownTests(TestCase):
         with (
             patch.object(run_background_worker.signal, "signal", side_effect=install_handler),
             patch.object(run_background_worker, "purge_retired_auth_keypairs", return_value=0),
-            patch.object(run_background_worker, "schedule_startup_reconciliation"),
             patch.object(run_background_worker, "recover_stale_jobs"),
             patch.object(run_background_worker, "worker_metrics", return_value={"heartbeat": 1}),
             patch.object(run_background_worker, "publish_worker_metrics"),

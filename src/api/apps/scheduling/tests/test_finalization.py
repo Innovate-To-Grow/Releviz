@@ -56,7 +56,7 @@ class FinalizationDomainTests(TestCase):
             meeting_duration_minutes=120,
             day_selection_type="specific_dates",
             specific_dates=["2026-07-20", "2026-07-21"],
-            status=Event.Status.OPEN,
+            status=Event.Status.ACTIVE,
             opened_at=timezone.now(),
         )
         self.members = {}
@@ -293,7 +293,7 @@ class FinalizationDomainTests(TestCase):
                 location="Room 101",
             )
 
-        self.event.status = Event.Status.OPEN
+        self.event.status = Event.Status.ACTIVE
         self.event.version = 3
         self.event.save(update_fields=["status", "version", "updated_at"])
         reconfirmed = confirm_final_meeting(
@@ -439,7 +439,7 @@ class FinalizationDomainTests(TestCase):
         pending.refresh_from_db()
         retry.refresh_from_db()
         processing.refresh_from_db()
-        self.assertEqual(self.event.status, Event.Status.OPEN)
+        self.assertEqual(self.event.status, Event.Status.ACTIVE)
         self.assertFalse(FinalMeeting.objects.filter(event=self.event).exists())
         self.assertEqual(pending.status, EmailDeliveryJob.Status.PENDING)
         self.assertEqual(retry.status, EmailDeliveryJob.Status.RETRY)
@@ -516,9 +516,9 @@ class FinalizationDomainTests(TestCase):
                 location="",
             )
 
-        self.event.status = Event.Status.DRAFT
+        self.event.status = Event.Status.ARCHIVED
         self.event.save(update_fields=["status", "updated_at"])
-        with self.assertRaisesMessage(FinalizationError, "while it is draft"):
+        with self.assertRaisesMessage(FinalizationError, "while it is archived"):
             confirm_final_meeting(
                 event_code=self.event.code,
                 organizer=self.organizer,
@@ -860,7 +860,7 @@ class FinalizationApiTests(TestCase):
             meeting_duration_minutes=120,
             day_selection_type="specific_dates",
             specific_dates=["2026-07-20"],
-            status=Event.Status.OPEN,
+            status=Event.Status.ACTIVE,
             opened_at=timezone.now(),
         )
         self.participant_record = Participant.objects.create(
@@ -1073,14 +1073,14 @@ class FinalizationApiTests(TestCase):
             reopened = self.client.put(
                 f"/events/lifecycle?code={self.event.code}",
                 {
-                    "status": "open",
+                    "status": "active",
                     "expectedVersion": finalized_version,
                     "responseDeadline": (timezone.now() + timedelta(days=1)).isoformat(),
                 },
                 format="json",
             )
         self.assertEqual(reopened.status_code, 202)
-        self.assertEqual(reopened.data["event"]["status"], "open")
+        self.assertEqual(reopened.data["event"]["status"], "active")
         self.assertIsNone(reopened.data["event"]["finalMeeting"])
         meeting = FinalMeeting.objects.get(event=self.event)
         self.assertFalse(meeting.active)

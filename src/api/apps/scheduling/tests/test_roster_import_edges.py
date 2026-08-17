@@ -18,7 +18,7 @@ from apps.authn.models import ContactEmail
 from apps.authn.tests.helpers import create_member, token_for
 from apps.mail.models import EmailDeliveryRequest, EmailMessageLog
 from apps.mail.services import enqueue_email_job
-from apps.scheduling import roster_imports
+from apps.scheduling import roster_imports, roster_views
 from apps.scheduling.models import (
     Event,
     EventInvitation,
@@ -374,6 +374,26 @@ class RosterImportDatabaseEdgeTests(TestCase):
             format="json",
         )
 
+    def test_closed_event_can_cancel_preview_but_cannot_mutate_or_commit_it(self):
+        batch = self.preview()
+        self.event.status = Event.Status.CLOSED
+        self.event.closed_at = timezone.now()
+        self.event.save(update_fields=["status", "closed_at", "updated_at"])
+
+        updated = self.client.put(
+            f"/events/roster-imports/{batch.pk}?code={self.event.code}",
+            {"headerRow": 1},
+            format="json",
+        )
+        self.assertEqual(updated.status_code, 409)
+        committed = self.commit(batch)
+        self.assertEqual(committed.status_code, 409)
+
+        canceled = self.client.delete(f"/events/roster-imports/{batch.pk}?code={self.event.code}")
+        self.assertEqual(canceled.status_code, 200)
+        batch.refresh_from_db()
+        self.assertEqual(batch.status, RosterImportBatch.Status.CANCELED)
+
     def test_preview_update_validation_and_no_selected_worksheet(self):
         batch = self.preview()
         batch.selected_worksheet = ""
@@ -528,7 +548,7 @@ class RosterImportDatabaseEdgeTests(TestCase):
     def test_rebuild_without_temporary_challenges_uses_the_empty_cleanup_path(self):
         self.assertFalse(self.event.result_invalidations.exists())
         roster_imports._rebuild_event_roster(self.event, timezone.now())
-        self.assertEqual(self.event.status, Event.Status.DRAFT)
+        self.assertEqual(self.event.status, Event.Status.ACTIVE)
         self.assertEqual(self.event.version, 2)
 
     def test_member_resolution_rejects_unsafe_identities_and_adopts_orphan(self):
@@ -618,7 +638,7 @@ class RosterImportDatabaseEdgeTests(TestCase):
         committed = self.commit(batch)
         self.assertEqual(committed.status_code, 201, committed.data)
         self.assertEqual(committed.data["event"]["code"], self.event.code)
-        self.assertEqual(committed.data["event"]["status"], Event.Status.DRAFT)
+        self.assertEqual(committed.data["event"]["status"], Event.Status.ACTIVE)
         participant.refresh_from_db()
         invitation.refresh_from_db()
         self.assertEqual(participant.participant_name, "Renamed")
@@ -697,14 +717,17 @@ class RosterImportDatabaseEdgeTests(TestCase):
 
         self.event.status = Event.Status.FINALIZED
         self.event.save(update_fields=["status", "updated_at"])
-        with self.assertRaisesMessage(roster_imports.RosterImportError, "Reopen"):
+        with self.assertRaisesMessage(
+            roster_imports.RosterImportError,
+            "Responses cannot change while the event is finalized",
+        ):
             roster_imports.commit_roster_import(
                 event=self.event,
                 batch_id=batch.pk,
                 organizer=self.organizer,
                 data={"mode": "merge", "idempotencyKey": str(uuid.uuid4())},
             )
-        self.event.status = Event.Status.DRAFT
+        self.event.status = Event.Status.ACTIVE
         self.event.save(update_fields=["status", "updated_at"])
 
         final_meeting = FinalMeeting.objects.create(
@@ -750,6 +773,25 @@ class RosterImportDatabaseEdgeTests(TestCase):
         row.validation_errors = []
         row.save(update_fields=["validation_errors", "updated_at"])
 
+        with patch(
+            "apps.scheduling.roster_imports.upsert_and_send_invitations",
+            side_effect=roster_imports.EventEmailRequestError(
+                "Invitation delivery is unavailable.",
+                status_code=503,
+            ),
+        ):
+            with self.assertRaisesMessage(
+                roster_imports.RosterImportError,
+                "Invitation delivery is unavailable.",
+            ) as delivery_error:
+                roster_imports.commit_roster_import(
+                    event=self.event,
+                    batch_id=batch.pk,
+                    organizer=self.organizer,
+                    data={"mode": "merge", "idempotencyKey": str(uuid.uuid4())},
+                )
+        self.assertEqual(delivery_error.exception.status_code, 503)
+
         with patch("apps.scheduling.roster_imports._write_roster", side_effect=IntegrityError):
             with self.assertRaisesMessage(roster_imports.RosterImportError, "changed concurrently"):
                 roster_imports.commit_roster_import(
@@ -775,10 +817,10 @@ class RosterImportDatabaseEdgeTests(TestCase):
             format="json",
         )
         self.assertEqual(blocked.status_code, 409)
-        self.event.status = Event.Status.DRAFT
+        self.event.status = Event.Status.ACTIVE
         self.event.save(update_fields=["status", "updated_at"])
 
-        missing_id = uuid.uuid4()
+        missing_id = 9_999_999
         self.assertEqual(
             self.client.put(
                 f"/events/roster-imports/{missing_id}?code={self.event.code}", {}, format="json"
@@ -865,6 +907,9 @@ class RosterImportDatabaseEdgeTests(TestCase):
         self.assertEqual([response.status_code for response in requests], [403] * len(requests))
 
     def test_roster_filters_schedule_and_participant_patch_edge_contracts(self):
+        self.assertIsNone(roster_views._latest_delivery_request(self.event))
+        self.assertIsNone(roster_views._participant_for_path(self.event, "not-an-identity"))
+
         batch = self.preview(
             "name,email,group,included\n"
             "Ada,ada-filter-edge@example.com,Faculty,true\n"
@@ -873,6 +918,11 @@ class RosterImportDatabaseEdgeTests(TestCase):
         self.assertEqual(self.commit(batch).status_code, 201)
         ada = self.event.participants.get(participant_name="Ada")
         grace = self.event.participants.get(participant_name="Grace")
+        member_identity = roster_views._participant_identity_query([str(ada.member_id)])
+        self.assertEqual(
+            Participant.objects.filter(event=self.event).filter(member_identity).get(),
+            ada,
+        )
         ada.submitted = True
         ada.save(update_fields=["submitted", "updated_at"])
         invitation = self.event.invitations.get(member=grace.member)
@@ -936,6 +986,12 @@ class RosterImportDatabaseEdgeTests(TestCase):
         self.assertEqual(
             self.client.get(
                 f"/events/roster/{missing}/schedule?code={self.event.code}"
+            ).status_code,
+            404,
+        )
+        self.assertEqual(
+            self.client.get(
+                f"/events/roster/not-an-identity/schedule?code={self.event.code}"
             ).status_code,
             404,
         )
@@ -1068,6 +1124,22 @@ class RosterImportDatabaseEdgeTests(TestCase):
         )
         self.assertEqual(invalid_uuid.status_code, 400)
         self.assertIn("invalid", invalid_uuid.data["error"])
+
+        with patch(
+            "apps.scheduling.roster_views._bulk_selector",
+            side_effect=ValueError("invalid participant identifier"),
+        ):
+            invalid_value = self.client.patch(
+                f"/events/roster/bulk?code={self.event.code}",
+                {
+                    "group": "A",
+                    "updates": {"group": "X"},
+                    "idempotencyKey": str(uuid.uuid4()),
+                },
+                format="json",
+            )
+        self.assertEqual(invalid_value.status_code, 400)
+        self.assertEqual(invalid_value.data["error"], "A participant id is invalid.")
 
         with patch("apps.scheduling.roster_views.MAX_ROSTER_ROWS", 1):
             too_many = self.client.patch(

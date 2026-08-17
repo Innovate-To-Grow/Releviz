@@ -27,9 +27,13 @@ class CoreServicesStructureTests(SimpleTestCase):
         for directory in sorted(directories):
             if "__pycache__" in directory.parts:
                 continue
-            python_files = sorted(path.name for path in directory.iterdir() if path.is_file() and path.suffix == ".py")
+            python_files = sorted(
+                path.name for path in directory.iterdir() if path.is_file() and path.suffix == ".py"
+            )
             if len(python_files) > MAX_DIRECT_PYTHON_FILES:
                 relative = directory.relative_to(SERVICE_ROOT)
-                offenders.append(f"{relative}: {len(python_files)} files ({', '.join(python_files)})")
+                offenders.append(
+                    f"{relative}: {len(python_files)} files ({', '.join(python_files)})"
+                )
 
         self.assertEqual([], offenders)

@@ -7,7 +7,6 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     initial = True
 
     dependencies = [
@@ -365,14 +364,10 @@ class Migration(migrations.Migration):
         ),
         migrations.AddIndex(
             model_name="emailmessagelog",
-            index=models.Index(
-                fields=["recipient"], name="mail_emailm_recipie_85e8b1_idx"
-            ),
+            index=models.Index(fields=["recipient"], name="mail_emailm_recipie_85e8b1_idx"),
         ),
         migrations.AddIndex(
             model_name="emailmessagelog",
-            index=models.Index(
-                fields=["created_at"], name="mail_emailm_created_aaaeec_idx"
-            ),
+            index=models.Index(fields=["created_at"], name="mail_emailm_created_aaaeec_idx"),
         ),
     ]

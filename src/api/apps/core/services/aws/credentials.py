@@ -28,8 +28,8 @@ def aws_credentials_available() -> bool:
 def resolve_aws_credentials(service: str = "default") -> AwsCredentials:
     """Resolve AWS credentials from the active AWSCredentialConfig.
 
-    The ``service`` argument is kept for call-site readability (SES, SNS,
-    Bedrock) but all services share the same region.
+    The ``service`` argument is kept for call-site readability and future AWS
+    integrations; current callers use the shared configuration for SES.
     """
     from apps.core.models import AWSCredentialConfig
 

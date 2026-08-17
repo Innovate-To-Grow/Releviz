@@ -7,8 +7,9 @@ test.describe("automated accessibility baseline", () => {
   test("public entry pages meet WCAG A/AA checks at 320px", async ({ page }) => {
     for (const [path, heading] of [
       ["/", "Find a time that works for everyone."],
-      ["/login", "Log in"],
-      ["/signup", "Create account"],
+      // Both entry points render the same passwordless panel.
+      ["/login", "Continue with email"],
+      ["/signup", "Continue with email"],
       ["/recover", "Recover your account"],
       ["/privacy", "Privacy notice"],
       ["/terms", "Terms of service"],

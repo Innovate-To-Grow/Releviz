@@ -5,9 +5,7 @@ from django.core.cache import cache
 from rest_framework.test import APITestCase
 
 from apps.authn.models import ContactEmail
-# FIXME(stale): apps.event removed during restructuring — test needs updating
-# from apps.event.models import EventRegistration
-# from apps.event.tests.helpers import make_event, make_ticket
+from apps.scheduling.models import Event, UserEvent
 
 Member = get_user_model()
 
@@ -30,10 +28,12 @@ class EmailCodeDeleteAccountTests(APITestCase):
             email_type="primary",
             verified=True,
         )
-        event = make_event()
-        ticket = make_ticket(event)
-        self.registration = EventRegistration.objects.create(
-            member=self.member, event=event, ticket=ticket
+        organizer = Member.objects.create_user(password="OrganizerPass123!", is_active=True)
+        event = Event.objects.create(code="DELETE1", name="Deletion cascade", organizer=organizer)
+        self.user_event = UserEvent.objects.create(
+            member=self.member,
+            event=event,
+            role="participant",
         )
         self.client.force_authenticate(user=self.member)
 
@@ -76,7 +76,7 @@ class EmailCodeDeleteAccountTests(APITestCase):
 
         self.assertFalse(Member.objects.filter(pk=self.member.pk).exists())
         self.assertFalse(ContactEmail.objects.filter(pk=self.primary_email.pk).exists())
-        self.assertFalse(EventRegistration.objects.filter(pk=self.registration.pk).exists())
+        self.assertFalse(UserEvent.objects.filter(pk=self.user_event.pk).exists())
 
     def test_confirm_delete_account_rejects_other_users_token(self, _mock_code, _mock_send):
         self.client.post("/authn/delete-account/request-code/", {}, format="json")

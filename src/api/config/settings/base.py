@@ -224,6 +224,9 @@ DATA_UPLOAD_MAX_NUMBER_FIELDS = 100000
 DATA_UPLOAD_MAX_MEMORY_SIZE = ROSTER_IMPORT_MAX_UNCOMPRESSED_BYTES + 1024 * 1024
 FIELD_ENCRYPTION_KEY = os.environ.get("DJANGO_FIELD_ENCRYPTION_KEY", "")
 USE_SES_EMAIL_PROVIDER = False
+# Authentication emails send via SES. Environments without SES credentials set
+# this to fall back to EMAIL_BACKEND so verification codes remain observable.
+AUTH_EMAIL_DJANGO_BACKEND_FALLBACK = False
 DEFAULT_FROM_EMAIL = "noreply@releviz.local"
 METRICS_BEARER_TOKEN = os.environ.get("METRICS_BEARER_TOKEN", "").strip()
 FEEDBACK_SUBMISSION_RETENTION = timedelta(days=730)

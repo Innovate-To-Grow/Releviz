@@ -3,7 +3,8 @@ export function navigateTo(url, locationObject = window.location) {
 }
 
 export function safeNextPath(value, fallback = "/dashboard") {
-  if (!value || !value.startsWith("/") || value.startsWith("//")) return fallback;
+  if (!value || !value.startsWith("/") || value.startsWith("//"))
+    return fallback;
   try {
     const baseUrl = "https://releviz.invalid";
     const resolved = new URL(value, baseUrl);

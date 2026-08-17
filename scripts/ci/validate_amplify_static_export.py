@@ -9,7 +9,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MANIFEST = ROOT / "src/web/amplify-routes.json"
 DEFAULT_OUTPUT = ROOT / "src/web/out"
@@ -18,9 +17,7 @@ EXCLUDED_ROOT_HTML = {"404", "_not-found", "index"}
 
 def _route_errors(routes: Any, label: str) -> tuple[set[str], list[str]]:
     errors: list[str] = []
-    if not isinstance(routes, list) or not all(
-        isinstance(route, str) for route in routes
-    ):
+    if not isinstance(routes, list) or not all(isinstance(route, str) for route in routes):
         return set(), [f"{label} must be an array of strings"]
 
     route_set = set(routes)
@@ -28,9 +25,7 @@ def _route_errors(routes: Any, label: str) -> tuple[set[str], list[str]]:
         errors.append(f"{label} contains duplicate routes")
     for route in sorted(route_set):
         if not route or route != route.strip("/") or "/" in route or "." in route:
-            errors.append(
-                f"{label} route {route!r} must be a non-empty root route name"
-            )
+            errors.append(f"{label} route {route!r} must be a non-empty root route name")
     return route_set, errors
 
 
@@ -51,9 +46,7 @@ def _load_manifest(manifest_path: Path) -> tuple[set[str], dict[str, str], list[
         if unexpected_keys
         else []
     )
-    static_routes, route_errors = _route_errors(
-        manifest.get("static_routes"), "static_routes"
-    )
+    static_routes, route_errors = _route_errors(manifest.get("static_routes"), "static_routes")
     errors.extend(route_errors)
 
     legacy_redirects = manifest.get("legacy_redirects")
@@ -64,18 +57,14 @@ def _load_manifest(manifest_path: Path) -> tuple[set[str], dict[str, str], list[
         errors.append("legacy_redirects must be an object of string route mappings")
         legacy_redirects = {}
 
-    legacy_sources, source_errors = _route_errors(
-        list(legacy_redirects), "legacy_redirects"
-    )
+    legacy_sources, source_errors = _route_errors(list(legacy_redirects), "legacy_redirects")
     errors.extend(source_errors)
     overlap = static_routes & legacy_sources
     if overlap:
         errors.append(f"static_routes and legacy_redirects overlap: {sorted(overlap)}")
     unknown_targets = set(legacy_redirects.values()) - static_routes
     if unknown_targets:
-        errors.append(
-            f"legacy_redirects targets are not static routes: {sorted(unknown_targets)}"
-        )
+        errors.append(f"legacy_redirects targets are not static routes: {sorted(unknown_targets)}")
 
     return static_routes, legacy_redirects, errors
 
@@ -99,20 +88,15 @@ def amplify_static_export_errors(
     missing_routes = expected_routes - actual_routes
     unexpected_routes = actual_routes - expected_routes
     if missing_routes:
-        errors.append(
-            f"Amplify static export is missing route HTML: {sorted(missing_routes)}"
-        )
+        errors.append(f"Amplify static export is missing route HTML: {sorted(missing_routes)}")
     if unexpected_routes:
         errors.append(
-            "Amplify static export has unlisted root route HTML: "
-            f"{sorted(unexpected_routes)}"
+            f"Amplify static export has unlisted root route HTML: {sorted(unexpected_routes)}"
         )
 
     if not (output_path / "index.html").is_file():
         errors.append("Amplify static export is missing index.html")
-    if not any(
-        asset.is_file() for asset in (output_path / "_next/static").glob("**/*.js")
-    ):
+    if not any(asset.is_file() for asset in (output_path / "_next/static").glob("**/*.js")):
         errors.append("Amplify static export has no _next/static JavaScript asset")
     return errors
 

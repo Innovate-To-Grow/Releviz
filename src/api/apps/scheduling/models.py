@@ -16,8 +16,7 @@ def default_weekdays():
 
 class Event(TimestampedModel):
     class Status(models.TextChoices):
-        DRAFT = "draft", "Draft"
-        OPEN = "open", "Open"
+        ACTIVE = "active", "Active"
         FINALIZED = "finalized", "Finalized"
         CLOSED = "closed", "Closed"
         ARCHIVED = "archived", "Archived"
@@ -85,7 +84,7 @@ class Event(TimestampedModel):
     )
     meeting_duration_minutes = models.PositiveSmallIntegerField(default=30)
     results_revision = models.PositiveBigIntegerField(default=1)
-    status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.ACTIVE)
     version = models.PositiveBigIntegerField(default=1)
     opened_at = models.DateTimeField(null=True, blank=True)
     finalized_at = models.DateTimeField(null=True, blank=True)
@@ -96,7 +95,7 @@ class Event(TimestampedModel):
         ordering = ["-created_at"]
         constraints = [
             models.CheckConstraint(
-                condition=models.Q(status__in=["draft", "open", "finalized", "closed", "archived"]),
+                condition=models.Q(status__in=["active", "finalized", "closed", "archived"]),
                 name="event_status_is_valid",
             ),
             models.CheckConstraint(

@@ -2,14 +2,22 @@
  * @jest-environment jsdom
  */
 
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 
 jest.mock("@material/web/checkbox/checkbox.js", () => ({}), { virtual: true });
 jest.mock("@material/web/dialog/dialog.js", () => ({}), { virtual: true });
 jest.mock("@material/web/slider/slider.js", () => ({}), { virtual: true });
-jest.mock("@material/web/textfield/outlined-text-field.js", () => ({}), { virtual: true });
+jest.mock("@material/web/textfield/outlined-text-field.js", () => ({}), {
+  virtual: true,
+});
 
 jest.mock("@/components/auth/AuthContext", () => ({
   useAuth: jest.fn(),
@@ -35,7 +43,11 @@ jest.mock("@/components/schedule/ScheduleGrid", () => ({
     <div data-testid={`grid-${label}`}>
       <span>{schedule.join(",")}</span>
       {onCellPaint && (
-        <button type="button" disabled={readOnly} onMouseDown={(event) => onCellPaint(0, event)}>
+        <button
+          type="button"
+          disabled={readOnly}
+          onMouseDown={(event) => onCellPaint(0, event)}
+        >
           Paint {label}
         </button>
       )}
@@ -68,7 +80,11 @@ jest.mock("@/lib/api/events", () => ({
 import { useAuth } from "@/components/auth/AuthContext";
 import EventContext from "@/components/event/EventContext";
 import ParticipantView from "@/components/schedule/ParticipantView";
-import { fetchCurrentParticipant, joinEvent, updateParticipant } from "@/lib/api/participants";
+import {
+  fetchCurrentParticipant,
+  joinEvent,
+  updateParticipant,
+} from "@/lib/api/participants";
 import { fetchEventResults } from "@/lib/api/events";
 
 const member = { id: "member-1", displayName: "Morgan Member" };
@@ -77,8 +93,16 @@ const slots = [
     key: "2026-08-18",
     label: "Tuesday",
     slots: [
-      { index: 0, startsAt: "2026-08-18T09:00:00Z", endsAt: "2026-08-18T09:30:00Z" },
-      { index: 1, startsAt: "2026-08-18T09:30:00Z", endsAt: "2026-08-18T10:00:00Z" },
+      {
+        index: 0,
+        startsAt: "2026-08-18T09:00:00Z",
+        endsAt: "2026-08-18T09:30:00Z",
+      },
+      {
+        index: 1,
+        startsAt: "2026-08-18T09:30:00Z",
+        endsAt: "2026-08-18T10:00:00Z",
+      },
     ],
   },
 ];
@@ -87,7 +111,7 @@ const baseEvent = {
   name: "Planning session",
   mode: "mixed",
   location: "Room 4",
-  status: "open",
+  status: "active",
   version: 3,
   timezone: "UTC",
   slotMinutes: 30,
@@ -164,7 +188,10 @@ describe("participant workflow", () => {
     jest.resetAllMocks();
     auth();
     fetchEventResults.mockRejectedValue(new Error("Not available yet"));
-    fetchCurrentParticipant.mockResolvedValue({ participant: null, scheduleDataIncluded: false });
+    fetchCurrentParticipant.mockResolvedValue({
+      participant: null,
+      scheduleDataIncluded: false,
+    });
     joinEvent.mockResolvedValue({
       participant: participant("mine", member.id, member.displayName),
     });
@@ -235,6 +262,22 @@ describe("participant workflow", () => {
     expect(joinEvent).toHaveBeenCalledTimes(1);
   });
 
+  test("reports a failed manual join", async () => {
+    joinEvent.mockRejectedValue(new Error("Membership expired"));
+
+    renderParticipant();
+
+    expect(
+      await screen.findByRole("heading", { name: "Join Event" }),
+    ).toBeInTheDocument();
+    await userEvent.click(
+      screen.getByRole("button", { name: `Join as ${member.displayName}` }),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Failed to join: Membership expired",
+    );
+  });
+
   test("does not auto-join when an event is no longer accepting responses", async () => {
     const consumeRespondIntent = jest.fn();
 
@@ -269,12 +312,22 @@ describe("participant workflow", () => {
       });
 
     renderParticipant();
-    expect(await screen.findByRole("heading", { name: "Join Event" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "Join Event" }),
+    ).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: `Join as ${member.displayName}` }));
-    expect(await screen.findByText(`Welcome, ${member.displayName}`)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Apply Available to all" }));
-    await userEvent.click(screen.getByRole("button", { name: "Submit Availability" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: `Join as ${member.displayName}` }),
+    );
+    expect(
+      await screen.findByText(`Welcome, ${member.displayName}`),
+    ).toBeInTheDocument();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Apply Available to all" }),
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Submit Availability" }),
+    );
 
     await waitFor(() => expect(updateParticipant).toHaveBeenCalledTimes(2));
     expect(updateParticipant.mock.calls[0][2]).toEqual({
@@ -303,16 +356,30 @@ describe("participant workflow", () => {
 
     renderParticipant();
     await screen.findByRole("heading", { name: "Join Event" });
-    await userEvent.click(screen.getByRole("button", { name: `Join as ${member.displayName}` }));
+    await userEvent.click(
+      screen.getByRole("button", { name: `Join as ${member.displayName}` }),
+    );
     await screen.findByText(`Welcome, ${member.displayName}`);
-    await userEvent.click(screen.getByRole("button", { name: "Mark all Busy" }));
-    await userEvent.click(screen.getByRole("button", { name: "Submit Availability" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Mark all Busy" }),
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Submit Availability" }),
+    );
 
-    expect(await screen.findByText("A newer response exists.")).toBeInTheDocument();
-    expect(screen.getByText("Save the draft successfully before submitting.")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Reload latest response" }));
+    expect(
+      await screen.findByText("A newer response exists."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Save the draft successfully before submitting."),
+    ).toBeInTheDocument();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Reload latest response" }),
+    );
     expect(screen.getByTestId("grid-In-Person")).toHaveTextContent("0.5,0");
-    expect(screen.getByText("Draft saved. Submit when you are ready.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Draft saved. Submit when you are ready."),
+    ).toBeInTheDocument();
   });
 
   test("copies mixed-mode availability and autosaves the target channel", async () => {
@@ -332,9 +399,13 @@ describe("participant workflow", () => {
 
     renderParticipant();
     await screen.findByRole("heading", { name: "Join Event" });
-    await userEvent.click(screen.getByRole("button", { name: `Join as ${member.displayName}` }));
+    await userEvent.click(
+      screen.getByRole("button", { name: `Join as ${member.displayName}` }),
+    );
     await screen.findByText(`Welcome, ${member.displayName}`);
-    await userEvent.click(screen.getByRole("button", { name: "Copy In-Person to Virtual" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Copy In-Person to Virtual" }),
+    );
     expect(screen.getByTestId("grid-Virtual")).toHaveTextContent("1,0.5");
 
     await waitFor(() =>
@@ -346,8 +417,8 @@ describe("participant workflow", () => {
           availabilityVirtual: [1, 0.5],
           submitted: 0,
         }),
-        "token"
-      )
+        "token",
+      ),
     );
   });
 
@@ -369,23 +440,35 @@ describe("participant workflow", () => {
     });
 
     const view = renderParticipant();
-    expect(await screen.findByText(/Based on 2 submitted response/)).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Individual Schedules" })).not.toBeInTheDocument();
+    expect(
+      await screen.findByText(/Based on 2 submitted response/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Individual Schedules" }),
+    ).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
-    await waitFor(() => expect(fetchCurrentParticipant).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(fetchCurrentParticipant).toHaveBeenCalledTimes(2),
+    );
     view.unmount();
 
     renderParticipant({ ...baseEvent, status: "finalized" });
     expect(
-      await screen.findByText("Responses are locked while this event is finalized.")
+      await screen.findByText(
+        "Responses are locked while this event is finalized.",
+      ),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Update Availability" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Update Availability" }),
+    ).toBeDisabled();
   });
 
   test("polls versioned group results until the requested revision is fresh", async () => {
     jest.useFakeTimers();
     fetchCurrentParticipant.mockResolvedValue({
-      participant: participant("mine", member.id, member.displayName, { submitted: true }),
+      participant: participant("mine", member.id, member.displayName, {
+        submitted: true,
+      }),
       scheduleDataIncluded: true,
     });
     fetchEventResults
@@ -406,14 +489,20 @@ describe("participant workflow", () => {
     await act(async () => {
       jest.advanceTimersByTime(0);
     });
-    expect(screen.getByText(/Group availability is updating for revision 5/)).toBeInTheDocument();
-    expect(screen.getByText(/Based on 2 submitted response/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Group availability is updating for revision 5/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Based on 2 submitted response/),
+    ).toBeInTheDocument();
 
     await act(async () => {
       jest.advanceTimersByTime(2000);
     });
     expect(fetchEventResults).toHaveBeenCalledTimes(2);
-    expect(screen.queryByText(/Group availability is updating/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Group availability is updating/),
+    ).not.toBeInTheDocument();
     view.unmount();
     jest.useRealTimers();
   });
@@ -436,7 +525,9 @@ describe("participant workflow", () => {
     await waitFor(() => expect(fetchCurrentParticipant).toHaveBeenCalled());
     expect(fetchEventResults).not.toHaveBeenCalled();
     expect(
-      screen.getByText("Choose a status, then click or drag across the times below.")
+      screen.getByText(
+        "Choose a status, then click or drag across the times below.",
+      ),
     ).toBeInTheDocument();
     expect(screen.queryByText("Group Availability")).not.toBeInTheDocument();
   });

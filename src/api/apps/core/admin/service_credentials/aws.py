@@ -117,7 +117,10 @@ class AWSCredentialConfigAdmin(BaseModelAdmin):
             return False
         return super().has_delete_permission(request, obj)
 
-    def get_actions(self, request):
-        actions = super().get_actions(request)
+    def get_actions(self, request, action_location=None):
+        if action_location is None:
+            actions = super().get_actions(request)
+        else:
+            actions = super().get_actions(request, action_location=action_location)
         actions.pop("delete_selected", None)
         return actions

@@ -1,9 +1,5 @@
-import hashlib
-import json
-import uuid
-
 from django.db import transaction
-from django.db.models import Count, Q
+from django.db.models import Count
 from django.utils import timezone
 from django.utils.cache import patch_cache_control, patch_vary_headers
 from rest_framework.permissions import IsAuthenticated
@@ -11,10 +7,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.mail.models import EmailDeliveryJob, EmailDeliveryRequest, EmailMessageLog
-from apps.scheduling.lifecycle import LifecycleError, transition_event
 from apps.scheduling.models import Event, FinalMeeting
-from apps.scheduling.services import EventEmailRequestError, upsert_and_send_invitations
-from apps.scheduling.utils import api_event
 
 
 def _private(data, *, status=200):
@@ -86,7 +79,7 @@ def _retryable_job_ids(
         for job in jobs:
             invitation = job.invitation
             is_current = bool(
-                event.status == Event.Status.OPEN
+                event.status == Event.Status.ACTIVE
                 and job.message_type == expected_type
                 and invitation is not None
                 and invitation.event_id == event.pk
@@ -113,160 +106,6 @@ def _retryable_job_ids(
         )
         (eligible if is_current else obsolete).append(job.pk)
     return eligible, obsolete
-
-
-class EventLaunchView(APIView):
-    """Atomically open a draft event and enqueue its selected invitations."""
-
-    permission_classes = [IsAuthenticated]
-
-    @transaction.atomic
-    def post(self, request):
-        code = str(request.query_params.get("code") or "").strip()
-        if not code:
-            return Response({"error": "code is required"}, status=400)
-        try:
-            idempotency_key = uuid.UUID(str(request.data.get("idempotencyKey") or ""))
-        except (TypeError, ValueError, AttributeError):
-            return Response({"error": "idempotencyKey must be a UUID"}, status=400)
-
-        event = Event.objects.select_for_update().filter(code=code).first()
-        if event is None:
-            return Response({"error": "Event not found"}, status=404)
-        if event.organizer_id != request.user.pk:
-            return Response({"error": "Only the organizer can publish this event"}, status=403)
-
-        active_participants = event.participants.filter(hidden=False)
-        active_member_ids = active_participants.values_list("member_id", flat=True)
-        invitations = event.invitations.filter(member_id__in=active_member_ids)
-        selection = (
-            {"allEligible": True}
-            if "selection" not in request.data or request.data.get("selection") is None
-            else request.data.get("selection")
-        )
-        if not isinstance(selection, dict):
-            return Response({"error": "selection must be an object"}, status=400)
-        participant_ids = selection.get("participantIds")
-        if participant_ids is not None:
-            if not isinstance(participant_ids, list) or len(participant_ids) > 1000:
-                return Response(
-                    {"error": "selection.participantIds must contain at most 1000 IDs"},
-                    status=400,
-                )
-            try:
-                participant_ids = [uuid.UUID(str(value)) for value in participant_ids]
-            except (TypeError, ValueError, AttributeError):
-                return Response(
-                    {"error": "selection.participantIds contains an invalid ID"},
-                    status=400,
-                )
-            selected_member_ids = active_participants.filter(
-                Q(pk__in=participant_ids) | Q(member_id__in=participant_ids)
-            ).values_list("member_id", flat=True)
-            invitations = invitations.filter(member_id__in=selected_member_ids)
-        elif not selection.get("allEligible", False):
-            return Response(
-                {"error": "Select all eligible participants or provide participantIds"},
-                status=400,
-            )
-
-        excluded_ids = selection.get("excludedParticipantIds") or []
-        if not isinstance(excluded_ids, list) or len(excluded_ids) > 1000:
-            return Response(
-                {"error": "selection.excludedParticipantIds must be an array"},
-                status=400,
-            )
-        if excluded_ids:
-            try:
-                excluded_ids = [uuid.UUID(str(value)) for value in excluded_ids]
-            except (TypeError, ValueError, AttributeError):
-                return Response(
-                    {"error": "selection.excludedParticipantIds contains an invalid ID"},
-                    status=400,
-                )
-            excluded_member_ids = active_participants.filter(
-                Q(pk__in=excluded_ids) | Q(member_id__in=excluded_ids)
-            ).values_list("member_id", flat=True)
-            invitations = invitations.exclude(member_id__in=excluded_member_ids)
-        emails = list(invitations.order_by("email").values_list("email", flat=True))
-        if not emails and event.access_mode != "open_link":
-            return Response({"error": "Select at least one roster participant"}, status=400)
-        message = str(request.data.get("message") or "").strip()
-
-        replay = EmailDeliveryRequest.objects.filter(
-            event=event,
-            operation=EmailDeliveryRequest.Operation.INVITATION,
-            idempotency_key=idempotency_key,
-        ).first()
-        if replay is not None:
-            replay_fingerprint = hashlib.sha256(
-                json.dumps(
-                    {"emails": sorted(emails), "message": message},
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                    sort_keys=True,
-                ).encode()
-            ).hexdigest()
-            if replay.request_fingerprint != replay_fingerprint:
-                return Response(
-                    {"error": "This idempotency key was used with a different launch."},
-                    status=409,
-                )
-            return _private(
-                {
-                    "event": api_event(event),
-                    "deliveryRequest": _request_payload(replay),
-                    "idempotent": True,
-                },
-                status=202,
-            )
-
-        expected_version = request.data.get("expectedVersion")
-        if isinstance(expected_version, bool) or not isinstance(expected_version, int):
-            return Response({"error": "expectedVersion is required"}, status=428)
-        if event.version != expected_version:
-            return _private(
-                {
-                    "error": "The event changed. Reload it before publishing.",
-                    "event": api_event(event),
-                },
-                status=409,
-            )
-        if event.status != Event.Status.DRAFT:
-            return Response({"error": "Only a draft event can be published"}, status=409)
-
-        try:
-            changed_fields = transition_event(
-                event,
-                Event.Status.OPEN,
-                response_deadline=event.response_deadline,
-                now=timezone.now(),
-            )
-        except LifecycleError as exc:
-            return Response({"error": str(exc)}, status=400)
-        event.save(update_fields=changed_fields)
-
-        try:
-            result = upsert_and_send_invitations(
-                event=event,
-                emails=emails,
-                invited_by=request.user,
-                idempotency_key=idempotency_key,
-                message=message,
-                hydrate_result=False,
-            )
-        except EventEmailRequestError as exc:
-            transaction.set_rollback(True)
-            return Response({"error": str(exc)}, status=exc.status_code)
-
-        return _private(
-            {
-                "event": api_event(event),
-                "deliveryRequest": _request_payload(result["request"]),
-                "idempotent": result["idempotent"],
-            },
-            status=202,
-        )
 
 
 class DeliveryRequestView(APIView):

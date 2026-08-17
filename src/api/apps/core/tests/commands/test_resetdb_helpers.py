@@ -1,6 +1,5 @@
 """Tests for resetdb_helpers — exercised without mutating the real DB/filesystem."""
 
-import json
 import os
 from unittest.mock import MagicMock, patch
 
@@ -64,14 +63,20 @@ class DeleteMigrationFilesTest(TestCase):
         with (
             patch.object(helpers.apps, "get_app_configs", return_value=[app_config]),
             patch.object(helpers.settings, "BASE_DIR", "/fake"),
-            patch("apps.core.management.commands.resetdb_helpers.os.path.exists", return_value=True),
+            patch(
+                "apps.core.management.commands.resetdb_helpers.os.path.exists", return_value=True
+            ),
             patch(
                 "apps.core.management.commands.resetdb_helpers.os.listdir",
                 return_value=["0001_initial.py", "__init__.py", "__pycache__", "notes.txt"],
             ),
-            patch("apps.core.management.commands.resetdb_helpers.os.path.isfile", return_value=True),
+            patch(
+                "apps.core.management.commands.resetdb_helpers.os.path.isfile", return_value=True
+            ),
             patch("apps.core.management.commands.resetdb_helpers.os.remove") as remove,
-            patch("apps.core.management.commands.resetdb_helpers._remove_pycache") as remove_pycache,
+            patch(
+                "apps.core.management.commands.resetdb_helpers._remove_pycache"
+            ) as remove_pycache,
         ):
             helpers.delete_migration_files(cmd)
 
@@ -103,7 +108,9 @@ class DeleteMigrationFilesTest(TestCase):
         with (
             patch.object(helpers.apps, "get_app_configs", return_value=[app_config]),
             patch.object(helpers.settings, "BASE_DIR", "/fake"),
-            patch("apps.core.management.commands.resetdb_helpers.os.path.exists", return_value=False),
+            patch(
+                "apps.core.management.commands.resetdb_helpers.os.path.exists", return_value=False
+            ),
             patch("apps.core.management.commands.resetdb_helpers.os.remove") as remove,
         ):
             helpers.delete_migration_files(cmd)
@@ -169,7 +176,9 @@ class ResetSqliteTest(TestCase):
         connection.settings_dict = {"NAME": "/tmp/dev.sqlite3"}
 
         with (
-            patch("apps.core.management.commands.resetdb_helpers.os.path.exists", return_value=True),
+            patch(
+                "apps.core.management.commands.resetdb_helpers.os.path.exists", return_value=True
+            ),
             patch("apps.core.management.commands.resetdb_helpers.os.remove") as remove,
         ):
             helpers.reset_sqlite(cmd, connection)
@@ -184,7 +193,9 @@ class ResetSqliteTest(TestCase):
         connection.settings_dict = {"NAME": "/tmp/dev.sqlite3"}
 
         with (
-            patch("apps.core.management.commands.resetdb_helpers.os.path.exists", return_value=True),
+            patch(
+                "apps.core.management.commands.resetdb_helpers.os.path.exists", return_value=True
+            ),
             patch(
                 "apps.core.management.commands.resetdb_helpers.os.remove",
                 side_effect=OSError("locked"),
@@ -201,14 +212,18 @@ class ResetSqliteTest(TestCase):
         connection = MagicMock()
         connection.settings_dict = {"NAME": "/tmp/missing.sqlite3"}
 
-        with patch("apps.core.management.commands.resetdb_helpers.os.path.exists", return_value=False):
+        with patch(
+            "apps.core.management.commands.resetdb_helpers.os.path.exists", return_value=False
+        ):
             helpers.reset_sqlite(cmd, connection)
 
         self.assertIn("SQLite file not found at /tmp/missing.sqlite3", cmd.stdout.text)
 
     def test_drop_sqlite_tables_skips_sequence_table(self):
         connection, cursor = _cursor_mock()
-        connection.ops.quote_name.side_effect = lambda name: f'"{name.replace(chr(34), chr(34) * 2)}"'
+        connection.ops.quote_name.side_effect = lambda name: (
+            f'"{name.replace(chr(34), chr(34) * 2)}"'
+        )
         cursor.fetchall.return_value = [("members",), ("sqlite_sequence",)]
 
         helpers.drop_sqlite_tables(connection)
@@ -223,7 +238,9 @@ class ResetSqliteTest(TestCase):
 class RemovePycacheTest(TestCase):
     def test_removes_existing_pycache(self):
         with (
-            patch("apps.core.management.commands.resetdb_helpers.os.path.exists", return_value=True),
+            patch(
+                "apps.core.management.commands.resetdb_helpers.os.path.exists", return_value=True
+            ),
             patch("apps.core.management.commands.resetdb_helpers.shutil.rmtree") as rmtree,
         ):
             helpers._remove_pycache("/fake/app/migrations")
@@ -232,7 +249,9 @@ class RemovePycacheTest(TestCase):
 
     def test_noop_when_pycache_absent(self):
         with (
-            patch("apps.core.management.commands.resetdb_helpers.os.path.exists", return_value=False),
+            patch(
+                "apps.core.management.commands.resetdb_helpers.os.path.exists", return_value=False
+            ),
             patch("apps.core.management.commands.resetdb_helpers.shutil.rmtree") as rmtree,
         ):
             helpers._remove_pycache("/fake/app/migrations")
@@ -280,153 +299,3 @@ class CreateDefaultAdminTest(TestCase):
         self.assertIn("already exists", cmd.stdout.text)
         # No new superuser was created.
         self.assertFalse(Member.objects.filter(first_name="Dev", last_name="Admin").exists())
-
-
-class SeedArchiveDataTest(TestCase):
-    def test_missing_directory_warns_and_returns(self):
-        cmd = FakeCommand()
-        with patch("apps.core.management.commands.resetdb_helpers.os.path.isdir", return_value=False):
-            helpers.seed_archive_data(cmd)
-        self.assertIn("Archive data directory not found", cmd.stdout.text)
-
-    def test_dispatches_to_each_seeder(self):
-        cmd = FakeCommand()
-        with (
-            patch("apps.core.management.commands.resetdb_helpers.os.path.isdir", return_value=True),
-            patch("apps.core.management.commands.resetdb_helpers._seed_cms_pages") as cms,
-            patch("apps.core.management.commands.resetdb_helpers._seed_menus") as menus,
-            patch("apps.core.management.commands.resetdb_helpers._seed_footer") as footer,
-        ):
-            helpers.seed_archive_data(cmd)
-        cms.assert_called_once_with(cmd)
-        menus.assert_called_once_with(cmd)
-        footer.assert_called_once_with(cmd)
-
-
-class SeedCmsPagesTest(TestCase):
-    def test_no_export_files(self):
-        cmd = FakeCommand()
-        with patch("apps.core.management.commands.resetdb_helpers.glob.glob", return_value=[]):
-            helpers._seed_cms_pages(cmd)
-        self.assertIn("No cms_export_*.json found", cmd.stdout.text)
-
-    def test_export_with_no_pages(self):
-        cmd = FakeCommand()
-        bundle = json.dumps({"pages": []})
-        with (
-            patch(
-                "apps.core.management.commands.resetdb_helpers.glob.glob",
-                return_value=["/a/cms_export_1.json"],
-            ),
-            patch("builtins.open", new=_string_open(bundle)),
-        ):
-            helpers._seed_cms_pages(cmd)
-        self.assertIn("No pages found in export file.", cmd.stdout.text)
-
-    def test_processes_pages_and_reports_counts(self):
-        cmd = FakeCommand()
-        bundle = json.dumps({"pages": [{"slug": "a"}, {"slug": "b"}]})
-        process_results = [
-            {"success": True, "action": "create"},
-            {"success": True, "action": "update"},
-            {"errors": ["boom"]},
-        ]
-        with (
-            patch(
-                "apps.core.management.commands.resetdb_helpers.glob.glob",
-                return_value=["/a/cms_export_1.json", "/a/cms_export_2.json"],
-            ),
-            patch("builtins.open", new=_string_open(bundle)),
-            patch(
-                "apps.cms.admin.cms.page_admin.import_export.process_page_data",
-                return_value=process_results,
-            ) as process,
-        ):
-            helpers._seed_cms_pages(cmd)
-
-        # latest file (sorted) selected
-        process.assert_called_once()
-        self.assertIn("1 created, 1 updated, 1 errors.", cmd.stdout.text)
-
-
-class SeedMenusTest(TestCase):
-    def test_missing_file(self):
-        cmd = FakeCommand()
-        with patch("apps.core.management.commands.resetdb_helpers.os.path.exists", return_value=False):
-            helpers._seed_menus(cmd)
-        self.assertIn("No menus.json found", cmd.stdout.text)
-
-    def test_creates_menu(self):
-        from apps.cms.models import Menu
-
-        cmd = FakeCommand()
-        items = [{"label": "Home", "url": "/"}]
-        with (
-            patch("apps.core.management.commands.resetdb_helpers.os.path.exists", return_value=True),
-            patch("builtins.open", new=_string_open(json.dumps(items))),
-        ):
-            helpers._seed_menus(cmd)
-
-        menu = Menu.objects.get(name="main_nav")
-        self.assertEqual(menu.items, items)
-        self.assertTrue(menu.is_active)
-        self.assertIn("Created menu 'main_nav' with 1 top-level items.", cmd.stdout.text)
-
-    def test_updates_existing_menu(self):
-        from apps.cms.models import Menu
-
-        Menu.objects.create(name="main_nav", display_name="Old", items=[], is_active=False)
-        cmd = FakeCommand()
-        items = [{"label": "A"}, {"label": "B"}]
-        with (
-            patch("apps.core.management.commands.resetdb_helpers.os.path.exists", return_value=True),
-            patch("builtins.open", new=_string_open(json.dumps(items))),
-        ):
-            helpers._seed_menus(cmd)
-
-        self.assertIn("Updated menu 'main_nav' with 2 top-level items.", cmd.stdout.text)
-
-
-class SeedFooterTest(TestCase):
-    def test_missing_file(self):
-        cmd = FakeCommand()
-        with patch("apps.core.management.commands.resetdb_helpers.os.path.exists", return_value=False):
-            helpers._seed_footer(cmd)
-        self.assertIn("No footer.json found", cmd.stdout.text)
-
-    def test_creates_footer(self):
-        from apps.cms.models import FooterContent
-
-        cmd = FakeCommand()
-        content = {"columns": [{"title": "About"}]}
-        with (
-            patch("apps.core.management.commands.resetdb_helpers.os.path.exists", return_value=True),
-            patch("builtins.open", new=_string_open(json.dumps(content))),
-        ):
-            helpers._seed_footer(cmd)
-
-        footer = FooterContent.objects.get(slug="default")
-        self.assertEqual(footer.content, content)
-        self.assertTrue(footer.is_active)
-        self.assertIn("Created footer 'default'.", cmd.stdout.text)
-
-    def test_updates_existing_footer(self):
-        from apps.cms.models import FooterContent
-
-        FooterContent.objects.create(slug="default", name="Old", content={}, is_active=False)
-        cmd = FakeCommand()
-        content = {"columns": []}
-        with (
-            patch("apps.core.management.commands.resetdb_helpers.os.path.exists", return_value=True),
-            patch("builtins.open", new=_string_open(json.dumps(content))),
-        ):
-            helpers._seed_footer(cmd)
-
-        self.assertIn("Updated footer 'default'.", cmd.stdout.text)
-
-
-def _string_open(text):
-    """Return a context-manager-friendly mock_open producing the given text."""
-    from unittest.mock import mock_open
-
-    return mock_open(read_data=text)

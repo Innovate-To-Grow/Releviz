@@ -1,4 +1,3 @@
-import json
 import threading
 from datetime import timedelta
 from types import SimpleNamespace
@@ -8,8 +7,6 @@ from unittest.mock import patch
 from django.db import OperationalError, close_old_connections, connection
 from django.test import TestCase, TransactionTestCase
 from django.utils import timezone
-from gspread.exceptions import APIError as GspreadAPIError
-from requests import Response
 
 from apps.core.models import BackgroundJob, DeliveryRateLimit
 from apps.core.services.aws.provider_outcomes import (
@@ -30,19 +27,16 @@ from apps.core.services.background_jobs import (
 )
 
 
-def _gspread_api_error(status_code: int) -> GspreadAPIError:
-    response = Response()
-    response.status_code = status_code
-    response._content = json.dumps(  # noqa: SLF001 - build the response gspread expects.
-        {
-            "error": {
-                "code": status_code,
-                "message": "Google Sheets request failed",
-                "status": "UNAVAILABLE",
-            }
-        }
-    ).encode()
-    return GspreadAPIError(response)
+class APIError(Exception):
+    """Minimal provider error exposing the public response status shape."""
+
+    def __init__(self, status_code: int):
+        self.response = SimpleNamespace(status_code=status_code)
+        super().__init__("Google Sheets request failed")
+
+
+def _provider_api_error(status_code: int) -> APIError:
+    return APIError(status_code)
 
 
 class BackgroundJobQueueTests(TestCase):
@@ -103,6 +97,23 @@ class BackgroundJobQueueTests(TestCase):
         self.assertIsNotNone(job.completed_at)
         self.assertIsNone(job.claim_token)
 
+    def test_removed_application_jobs_fail_permanently_without_importing_legacy_apps(self):
+        for kind in (
+            "cms.amplify_redirects",
+            "event.registration_sheet_sync",
+            "event.ticket_email",
+            "mail.email_recipient",
+        ):
+            with self.subTest(kind=kind):
+                job, _created = enqueue_job(kind=kind, dedupe_key=kind, payload={})
+
+                self.assertFalse(process_claimed_job(claim_jobs(batch_size=1)[0]))
+
+                job.refresh_from_db()
+                self.assertEqual(job.status, BackgroundJob.Status.FAILED)
+                self.assertEqual(job.attempts, 1)
+                self.assertIn("belongs to a removed application", job.last_error)
+
     @patch(
         "apps.core.services.background_jobs.worker.notify_job_state",
         side_effect=RuntimeError("mirror unavailable"),
@@ -134,15 +145,15 @@ class BackgroundJobQueueTests(TestCase):
         self.assertEqual(job.last_error, "temporary")
 
     @patch("apps.core.services.background_jobs.worker.get_handler")
-    def test_transient_gspread_http_statuses_retry(self, get_handler):
+    def test_transient_provider_http_statuses_retry(self, get_handler):
         for status_code in (408, 429, 500, 503, 599):
             with self.subTest(status_code=status_code):
                 get_handler.return_value = lambda _job, status=status_code: (_ for _ in ()).throw(
-                    _gspread_api_error(status)
+                    _provider_api_error(status)
                 )
                 job, _created = enqueue_job(
                     kind="test.sheet",
-                    dedupe_key=f"gspread-{status_code}",
+                    dedupe_key=f"provider-{status_code}",
                     payload={},
                 )
 
@@ -152,11 +163,11 @@ class BackgroundJobQueueTests(TestCase):
                 self.assertEqual(job.status, BackgroundJob.Status.RETRY)
 
     @patch("apps.core.services.background_jobs.worker.get_handler")
-    def test_permanent_gspread_http_status_fails(self, get_handler):
-        get_handler.return_value = lambda _job: (_ for _ in ()).throw(_gspread_api_error(400))
+    def test_permanent_provider_http_status_fails(self, get_handler):
+        get_handler.return_value = lambda _job: (_ for _ in ()).throw(_provider_api_error(400))
         job, _created = enqueue_job(
             kind="test.sheet",
-            dedupe_key="gspread-400",
+            dedupe_key="provider-400",
             payload={},
         )
 
@@ -171,7 +182,9 @@ class BackgroundJobQueueTests(TestCase):
     )
     @patch("apps.core.services.background_jobs.worker.get_handler")
     def test_failed_state_mirror_does_not_escape_job_boundary(self, get_handler, _notify):
-        get_handler.return_value = lambda _job: (_ for _ in ()).throw(TransientJobError("temporary"))
+        get_handler.return_value = lambda _job: (_ for _ in ()).throw(
+            TransientJobError("temporary")
+        )
         job, _created = enqueue_job(kind="test.echo", dedupe_key="failed-mirror", payload={})
 
         self.assertFalse(process_claimed_job(claim_jobs()[0]))
@@ -361,7 +374,9 @@ class BackgroundJobQueueTests(TestCase):
     def test_metrics_report_queue_and_terminal_counts(self):
         enqueue_job(kind="test.echo", dedupe_key="pending", payload={})
         failed, _created = enqueue_job(kind="test.echo", dedupe_key="failed", payload={})
-        uncertain, _created = enqueue_job(kind="test.echo", dedupe_key="uncertain-metric", payload={})
+        uncertain, _created = enqueue_job(
+            kind="test.echo", dedupe_key="uncertain-metric", payload={}
+        )
         BackgroundJob.objects.filter(pk=failed.pk).update(status=BackgroundJob.Status.FAILED)
         BackgroundJob.objects.filter(pk=uncertain.pk).update(status=BackgroundJob.Status.UNCERTAIN)
 
@@ -408,7 +423,6 @@ class BackgroundJobQueueTests(TestCase):
             current_time + timedelta(milliseconds=100),
         )
 
-    @patch("apps.core.services.background_jobs.handlers._wait_for_ses_slot")
     @patch(
         "apps.authn.services.email.send_email.send_notification_email",
         side_effect=ProviderDeliveryError(
@@ -419,7 +433,6 @@ class BackgroundJobQueueTests(TestCase):
     def test_notification_handler_preserves_definitive_transient_outcome(
         self,
         send_notification,
-        wait_for_slot,
     ):
         from apps.core.services.background_jobs.handlers import send_notification_email_job
 
@@ -436,7 +449,6 @@ class BackgroundJobQueueTests(TestCase):
         with self.assertRaises(TransientJobError):
             send_notification_email_job(job)
 
-        wait_for_slot.assert_called_once_with()
         self.assertTrue(send_notification.call_args.kwargs["raise_provider_errors"])
 
 

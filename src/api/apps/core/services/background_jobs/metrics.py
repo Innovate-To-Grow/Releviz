@@ -17,11 +17,15 @@ def worker_metrics() -> dict[str, float | int]:
             filter=Q(status__in=[BackgroundJob.Status.PENDING, BackgroundJob.Status.RETRY]),
         )
     )
-    counts = {row["status"]: row["count"] for row in BackgroundJob.objects.values("status").annotate(count=Count("id"))}
+    counts = {
+        row["status"]: row["count"]
+        for row in BackgroundJob.objects.values("status").annotate(count=Count("id"))
+    }
     oldest = aggregates["oldest"]
     return {
         "heartbeat": 1,
-        "queue_depth": counts.get(BackgroundJob.Status.PENDING, 0) + counts.get(BackgroundJob.Status.RETRY, 0),
+        "queue_depth": counts.get(BackgroundJob.Status.PENDING, 0)
+        + counts.get(BackgroundJob.Status.RETRY, 0),
         "oldest_job_age_seconds": max(0, (now - oldest).total_seconds()) if oldest else 0,
         "failed_jobs": counts.get(BackgroundJob.Status.FAILED, 0),
         "uncertain_jobs": counts.get(BackgroundJob.Status.UNCERTAIN, 0),

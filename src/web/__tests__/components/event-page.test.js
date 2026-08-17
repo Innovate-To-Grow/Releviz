@@ -106,8 +106,13 @@ describe("event page routing", () => {
     render(<EventPage />);
 
     expect(await screen.findByText("Participant workflow")).toBeInTheDocument();
-    expect(screen.getByTestId("event-header")).toHaveTextContent("Planning session:EVENT123");
-    expect(screen.getByTestId("event-header")).toHaveAttribute("data-organizer", "false");
+    expect(screen.getByTestId("event-header")).toHaveTextContent(
+      "Planning session:EVENT123",
+    );
+    expect(screen.getByTestId("event-header")).toHaveAttribute(
+      "data-organizer",
+      "false",
+    );
     expect(fetchEvent).toHaveBeenCalledWith("EVENT123", "token");
   });
 
@@ -141,12 +146,29 @@ describe("event page routing", () => {
     );
   });
 
+  test("clears a response intent when the current user is the organizer", async () => {
+    searchParams = new URLSearchParams("code=EVENT123&respond=1");
+    window.history.replaceState({}, "", "/event?code=EVENT123&respond=1");
+    fetchEvent.mockResolvedValue({
+      event: { ...event, organizerUserId: user.id },
+    });
+
+    render(<EventPage />);
+
+    expect(await screen.findByText("Organizer workflow")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(replaceUrl).toHaveBeenCalledWith("/event?code=EVENT123"),
+    );
+  });
+
   test("marks an invitation opened, removes the capability token, and loads organizer tools", async () => {
-    searchParams = new URLSearchParams("code=EVENT123&invitation=private-token");
+    searchParams = new URLSearchParams(
+      "code=EVENT123&invitation=private-token",
+    );
     window.history.replaceState(
       {},
       "",
-      "/event?code=EVENT123&invitation=private-token#availability"
+      "/event?code=EVENT123&invitation=private-token#availability",
     );
     markInvitationOpened.mockRejectedValue(new Error("tracking unavailable"));
     fetchEvent.mockResolvedValue({
@@ -156,9 +178,17 @@ describe("event page routing", () => {
     render(<EventPage />);
 
     expect(await screen.findByText("Organizer workflow")).toBeInTheDocument();
-    expect(screen.getByTestId("event-header")).toHaveAttribute("data-organizer", "true");
-    expect(markInvitationOpened).toHaveBeenCalledWith("EVENT123", "private-token");
-    expect(replaceUrl).toHaveBeenCalledWith("/event?code=EVENT123#availability");
+    expect(screen.getByTestId("event-header")).toHaveAttribute(
+      "data-organizer",
+      "true",
+    );
+    expect(markInvitationOpened).toHaveBeenCalledWith(
+      "EVENT123",
+      "private-token",
+    );
+    expect(replaceUrl).toHaveBeenCalledWith(
+      "/event?code=EVENT123#availability",
+    );
   });
 
   test("redirects unauthenticated users without retaining invitation credentials", async () => {
@@ -167,7 +197,9 @@ describe("event page routing", () => {
     render(<EventPage />);
 
     await waitFor(() =>
-      expect(navigateTo).toHaveBeenCalledWith("/login?next=%2Fevent%3Fcode%3DEVENT123")
+      expect(navigateTo).toHaveBeenCalledWith(
+        "/login?next=%2Fevent%3Fcode%3DEVENT123",
+      ),
     );
     expect(fetchEvent).not.toHaveBeenCalled();
   });

@@ -189,7 +189,7 @@ class AccountEmailCodeViewEdgeTests(APITestCase):
         # channel (the member's verified email here).
         resp = self.client.post("/authn/change-password/request-code/", {}, format="json")
         self.assertEqual(resp.status_code, 202)
-        self.assertEqual(resp.data["channel"], "email")
+        self.assertEqual(resp.data["destination"], "u•••@example.com")
 
     def test_change_password_request_without_recovery_contact_returns_400(self):
         # A member with no verified email or phone has no channel to verify through.

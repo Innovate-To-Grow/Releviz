@@ -10,7 +10,7 @@ from django.test import TestCase
 from apps.authn.models import Member
 from apps.core.admin.common.base import BaseModelAdmin, ReadOnlyModelAdmin
 from apps.core.admin.registrations.log_entry import LogEntryAdmin
-from apps.event.tests.helpers import make_superuser
+from apps.core.tests.helpers import make_superuser
 
 
 class BaseModelAdminPermissionTest(TestCase):
@@ -70,11 +70,30 @@ class ReadOnlyModelAdminTest(TestCase):
         # the `del actions["delete_selected"]` branch executes.
         with patch(
             "apps.core.admin.common.base.BaseModelAdmin.get_actions",
-            return_value={"delete_selected": ("f", "delete_selected", "Delete"), "export_data": ("g", "x", "y")},
+            return_value={
+                "delete_selected": ("f", "delete_selected", "Delete"),
+                "export_data": ("g", "x", "y"),
+            },
         ):
             actions = self.admin.get_actions(request)
         self.assertNotIn("delete_selected", actions)
         self.assertIn("export_data", actions)
+
+    def test_get_actions_forwards_action_location(self):
+        request = MagicMock()
+        action_location = object()
+        with patch(
+            "apps.core.admin.common.base.BaseModelAdmin.get_actions",
+            return_value={},
+        ) as get_actions:
+            self.assertEqual(
+                self.admin.get_actions(request, action_location=action_location),
+                {},
+            )
+        get_actions.assert_called_once_with(
+            request,
+            action_location=action_location,
+        )
 
     def test_permission_methods_all_false(self):
         request = MagicMock()

@@ -17,6 +17,7 @@ from apps.core.admin.mixins.confirm_on_save_utils import (
     format_field_value,
     serialize_post_data,
 )
+from apps.core.models import AWSCredentialConfig
 
 
 class SerializePostDataTest(TestCase):
@@ -140,63 +141,53 @@ class ComputeAddDiffTest(TestCase):
 
 class ComputeChangeDiffTest(TestCase):
     def test_returns_changed_fields_only(self):
-        from apps.cms.models import CMSEmbedAllowedHost
-
-        obj = CMSEmbedAllowedHost.objects.create(hostname="old.com", is_active=True)
+        obj = AWSCredentialConfig.objects.create(name="Old", is_active=True)
 
         form = MagicMock()
-        form.changed_data = ["hostname"]
-        form.fields = {"hostname": MagicMock(label="Hostname")}
-        form.cleaned_data = {"hostname": "new.com"}
+        form.changed_data = ["name"]
+        form.fields = {"name": MagicMock(label="Name")}
+        form.cleaned_data = {"name": "New"}
 
-        diff = compute_change_diff(CMSEmbedAllowedHost, obj.pk, form)
+        diff = compute_change_diff(AWSCredentialConfig, obj.pk, form)
 
         self.assertEqual(len(diff), 1)
-        self.assertEqual(diff[0]["old_value"], "old.com")
-        self.assertEqual(diff[0]["new_value"], "new.com")
+        self.assertEqual(diff[0]["old_value"], "Old")
+        self.assertEqual(diff[0]["new_value"], "New")
 
     def test_empty_changed_data_returns_empty(self):
-        from apps.cms.models import CMSEmbedAllowedHost
-
         form = MagicMock()
         form.changed_data = []
 
-        diff = compute_change_diff(CMSEmbedAllowedHost, "fake-id", form)
+        diff = compute_change_diff(AWSCredentialConfig, "fake-id", form)
 
         self.assertEqual(diff, [])
 
     def test_nonexistent_object_returns_empty(self):
-        from apps.cms.models import CMSEmbedAllowedHost
-
         form = MagicMock()
-        form.changed_data = ["hostname"]
-        form.fields = {"hostname": MagicMock(label="Hostname")}
-        form.cleaned_data = {"hostname": "new.com"}
+        form.changed_data = ["name"]
+        form.fields = {"name": MagicMock(label="Name")}
+        form.cleaned_data = {"name": "New"}
 
-        diff = compute_change_diff(CMSEmbedAllowedHost, uuid.uuid4(), form)
+        diff = compute_change_diff(AWSCredentialConfig, 999999, form)
 
         self.assertEqual(diff, [])
 
 
 class ComputeDeleteDiffTest(TestCase):
     def test_returns_field_values_for_object(self):
-        from apps.cms.models import CMSEmbedAllowedHost
-
-        obj = CMSEmbedAllowedHost.objects.create(hostname="delete-me.com", is_active=True)
+        obj = AWSCredentialConfig.objects.create(name="Delete me", is_active=True)
 
         diff = compute_delete_diff(obj)
 
         field_names = [d["field"] for d in diff]
-        self.assertIn("hostname", field_names)
+        self.assertIn("name", field_names)
         self.assertIn("is_active", field_names)
 
-        hostname_entry = next(d for d in diff if d["field"] == "hostname")
-        self.assertEqual(hostname_entry["value"], "delete-me.com")
+        name_entry = next(d for d in diff if d["field"] == "name")
+        self.assertEqual(name_entry["value"], "Delete me")
 
     def test_excludes_id_field(self):
-        from apps.cms.models import CMSEmbedAllowedHost
-
-        obj = CMSEmbedAllowedHost.objects.create(hostname="no-id.com", is_active=True)
+        obj = AWSCredentialConfig.objects.create(name="No id", is_active=True)
 
         diff = compute_delete_diff(obj)
 
@@ -205,21 +196,15 @@ class ComputeDeleteDiffTest(TestCase):
 
     def test_skips_reverse_relations_without_column(self):
         """Reverse relations (no `column` attr) are skipped in the delete diff."""
-        from apps.event.models import Event
+        from apps.core.tests.helpers import make_member
 
-        event = Event.objects.create(
-            name="E",
-            slug="del-rev",
-            date="2025-06-15",
-            end_date="2025-06-15",
-            location="L",
-        )
-        diff = compute_delete_diff(event)
+        member = make_member(email="reverse@example.com")
+        diff = compute_delete_diff(member)
         field_names = [d["field"] for d in diff]
         # Concrete columns appear...
-        self.assertIn("name", field_names)
-        # ...but the reverse "registrations" relation (no column) is skipped.
-        self.assertNotIn("registrations", field_names)
+        self.assertIn("first_name", field_names)
+        # ...but the reverse contact relation (no column) is skipped.
+        self.assertNotIn("contact_emails", field_names)
 
     def test_skips_fields_that_raise(self):
         """A field whose value access raises is skipped (logged at debug)."""
@@ -260,29 +245,25 @@ class ComputeDeleteDiffTest(TestCase):
 
 class ComputeChangeDiffExtraTest(TestCase):
     def test_skips_changed_field_not_in_form_fields(self):
-        from apps.cms.models import CMSEmbedAllowedHost
-
-        obj = CMSEmbedAllowedHost.objects.create(hostname="x.com", is_active=True)
+        obj = AWSCredentialConfig.objects.create(name="X", is_active=True)
         form = MagicMock()
-        form.changed_data = ["hostname", "phantom"]
-        form.fields = {"hostname": MagicMock(label="Hostname")}
-        form.cleaned_data = {"hostname": "y.com", "phantom": "z"}
+        form.changed_data = ["name", "phantom"]
+        form.fields = {"name": MagicMock(label="Name")}
+        form.cleaned_data = {"name": "Y", "phantom": "z"}
 
-        diff = compute_change_diff(CMSEmbedAllowedHost, obj.pk, form)
+        diff = compute_change_diff(AWSCredentialConfig, obj.pk, form)
         fields = [d["field"] for d in diff]
-        self.assertIn("hostname", fields)
+        self.assertIn("name", fields)
         self.assertNotIn("phantom", fields)
 
     def test_get_field_exception_falls_back_to_getattr(self):
-        from apps.cms.models import CMSEmbedAllowedHost
-
-        obj = CMSEmbedAllowedHost.objects.create(hostname="x.com", is_active=True)
+        obj = AWSCredentialConfig.objects.create(name="X", is_active=True)
         form = MagicMock()
         form.changed_data = ["is_active"]
         form.fields = {"is_active": MagicMock(label="Active")}
         form.cleaned_data = {"is_active": False}
 
-        real_get_field = CMSEmbedAllowedHost._meta.get_field
+        real_get_field = AWSCredentialConfig._meta.get_field
 
         def selective(name, *args, **kwargs):
             # Only blow up for the diff lookup of "is_active"; let the ORM's
@@ -291,51 +272,41 @@ class ComputeChangeDiffExtraTest(TestCase):
                 raise Exception("no field")
             return real_get_field(name, *args, **kwargs)
 
-        with patch.object(CMSEmbedAllowedHost._meta, "get_field", side_effect=selective):
-            diff = compute_change_diff(CMSEmbedAllowedHost, obj.pk, form)
+        with patch.object(AWSCredentialConfig._meta, "get_field", side_effect=selective):
+            diff = compute_change_diff(AWSCredentialConfig, obj.pk, form)
         self.assertEqual(diff[0]["old_value"], "Yes")  # original is_active=True
 
     def test_foreign_key_old_value(self):
         """A changed FK field resolves the related object via getattr."""
-        from apps.event.models import CheckIn, Event
+        from apps.core.tests.helpers import make_member
+        from apps.scheduling.models import Event, Participant
 
-        event = Event.objects.create(
-            name="E",
-            slug="e-fk",
-            date="2025-06-15",
-            end_date="2025-06-15",
-            location="L",
+        member = make_member(email="fk@example.com")
+        event = Event.objects.create(code="FK1", name="E", organizer=member)
+        participant = Participant.objects.create(
+            event=event,
+            member=member,
+            participant_name="Door",
         )
-        check_in = CheckIn.objects.create(event=event, name="Door")
         form = MagicMock()
         form.changed_data = ["event"]
         form.fields = {"event": MagicMock(label="Event")}
-        new_event = Event.objects.create(
-            name="E2",
-            slug="e2-fk",
-            date="2025-06-16",
-            end_date="2025-06-16",
-            location="L2",
-        )
+        new_event = Event.objects.create(code="FK2", name="E2", organizer=member)
         form.cleaned_data = {"event": new_event}
 
-        diff = compute_change_diff(CheckIn, check_in.pk, form)
+        diff = compute_change_diff(Participant, participant.pk, form)
         self.assertEqual(diff[0]["old_value"], str(event))
 
 
 class FormatFieldValueExtraTest(TestCase):
     def test_real_model_instance(self):
-        from apps.projects.models import Semester
-
-        semester = Semester.objects.create(year=2025, season=1, is_published=True)
-        self.assertEqual(format_field_value(semester), str(semester))
+        config = AWSCredentialConfig.objects.create(name="Instance", is_active=True)
+        self.assertEqual(format_field_value(config), str(config))
 
     def test_queryset_joined(self):
-        from apps.projects.models import Semester
-
-        Semester.objects.create(year=2025, season=1, is_published=True)
-        Semester.objects.create(year=2024, season=1, is_published=True)
-        result = format_field_value(Semester.objects.all())
+        AWSCredentialConfig.objects.create(name="First", is_active=False)
+        AWSCredentialConfig.objects.create(name="Second", is_active=False)
+        result = format_field_value(AWSCredentialConfig.objects.all())
         self.assertIn(",", result)
 
     def test_unserializable_list_falls_back_to_str(self):

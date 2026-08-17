@@ -1,0 +1,1627 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PYTHON_VERSION: "3.14"
+  NODE_VERSION: "24"
+  TERRAFORM_VERSION: "1.15.8"
+  COVERAGE_VERSION: "7.15.2"
+  BACKEND_COVERAGE_FAIL_UNDER: "100"
+  APP_COVERAGE_FAIL_UNDER: "95"
+  PIP_AUDIT_VERSION: "2.10.1"
+  SEMGREP_VERSION: "1.170.0"
+  ACTIONLINT_VERSION: "1.7.7"
+  ACTIONLINT_SHA256: "023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757"
+  GITLEAKS_VERSION: "8.21.2"
+  GITLEAKS_SHA256: "5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba"
+
+jobs:
+  preflight:
+    name: Preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            src/api/requirements/*.txt
+            .pre-commit-config.yaml
+
+      - name: Install preflight tools
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install "pre-commit==4.0.1" "PyYAML==6.0.2"
+          curl -sSL -o /tmp/actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  /tmp/actionlint.tar.gz" | sha256sum --check --strict -
+          tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint
+          sudo mv /tmp/actionlint /usr/local/bin/actionlint
+
+      - name: Validate workflow syntax
+        run: actionlint
+
+      - name: Validate YAML, TOML, and JSON
+        run: |
+          pre-commit run check-yaml --all-files --show-diff-on-failure
+          pre-commit run check-toml --all-files --show-diff-on-failure
+          pre-commit run check-json --all-files --show-diff-on-failure
+
+      - name: Validate tool version pins
+        run: python scripts/ci/validate_tool_versions.py
+
+      - name: Validate deployment contract
+        run: python scripts/ci/validate_deployment_contract.py
+
+      - name: Validate CI helper scripts
+        run: python -m unittest discover -s scripts/ci/tests
+
+      - name: Validate Dependabot labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/ci/validate_dependabot_labels.py
+
+  changes:
+    name: Detect changed areas
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      e2e: ${{ steps.filter.outputs.e2e }}
+      infra: ${{ steps.filter.outputs.infra }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed areas from the diff
+        id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "${EVENT_NAME}" != "pull_request" ]; then
+            echo "Push/non-PR event (${EVENT_NAME}); running the full suite."
+            {
+              echo "backend=true"
+              echo "frontend=true"
+              echo "e2e=true"
+              echo "infra=true"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ -z "${BASE_SHA:-}" ] || [ -z "${HEAD_SHA:-}" ] \
+            || ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            echo "No usable PR base SHA; running the full suite."
+            {
+              echo "backend=true"
+              echo "frontend=true"
+              echo "e2e=true"
+              echo "infra=true"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          files="$(git diff --name-only "$BASE_SHA...$HEAD_SHA")"
+          echo "Changed files:"
+          echo "$files"
+          match() { grep -qE "$1" <<< "$files"; }
+
+          backend=false
+          frontend=false
+          e2e=false
+          infra=false
+          if match '^(src/api/|scripts/|\.github/|\.pre-commit-config\.yaml|package(-lock)?\.json|docker-compose\.e2e\.yml)'; then backend=true; fi
+          if match '^(src/api/|src/web/|src/e2e/|scripts/|\.github/|\.pre-commit-config\.yaml|package(-lock)?\.json|docker-compose\.e2e\.yml)'; then frontend=true; fi
+          if match '^(src/api/|src/web/|src/e2e/|scripts/|\.github/|package(-lock)?\.json|docker-compose\.e2e\.yml)'; then e2e=true; fi
+          if match '^(infra/|scripts/ci/terraform-check\.sh|\.github/|\.pre-commit-config\.yaml)'; then infra=true; fi
+          {
+            echo "backend=$backend"
+            echo "frontend=$frontend"
+            echo "e2e=$e2e"
+            echo "infra=$infra"
+          } >> "$GITHUB_OUTPUT"
+
+  backend-lint:
+    name: Backend Lint and Format
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [preflight, changes]
+    if: ${{ needs.changes.outputs.backend == 'true' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: src/api/requirements/local.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install -r src/api/requirements/local.txt
+
+      - name: Check Python formatting
+        run: ruff format --check src/api scripts/ci
+
+      - name: Run Python lint
+        run: ruff check src/api scripts/ci
+
+  backend-full-coverage:
+    name: Backend - Lint & Test (100% Coverage)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [backend-lint, changes]
+    if: ${{ needs.changes.outputs.backend == 'true' }}
+    defaults:
+      run:
+        working-directory: src/api
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: src/api/requirements/local.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install -r requirements/local.txt "coverage[toml]==${COVERAGE_VERSION}"
+
+      - name: Run complete Django suite with strict coverage
+        run: |
+          coverage run manage.py test --settings=config.settings.test
+          coverage xml -o coverage.xml
+          coverage json --pretty-print -o coverage.json
+          coverage report -m --fail-under="${BACKEND_COVERAGE_FAIL_UNDER}"
+
+      - name: Summarize backend coverage
+        if: ${{ always() }}
+        run: |
+          if [ ! -f coverage.json ]; then
+            echo "::warning::Backend coverage summary was not generated."
+            exit 0
+          fi
+          python - <<'PY'
+          import json
+          import os
+
+          with open("coverage.json", encoding="utf-8") as fh:
+              totals = json.load(fh)["totals"]
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              with open(summary, "a", encoding="utf-8") as fh:
+                  fh.write("## Backend aggregate coverage\n\n")
+                  fh.write("| Metric | Covered | Total | Percent |\n")
+                  fh.write("|---|---:|---:|---:|\n")
+                  fh.write(
+                      f"| Lines | {totals['covered_lines']} | {totals['num_statements']} | "
+                      f"{totals['percent_covered_display']}% |\n"
+                  )
+          PY
+
+      - name: Check Django configuration
+        run: python manage.py check --settings=config.settings.test
+
+      - name: Upload backend aggregate coverage
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: backend-coverage
+          path: |
+            src/api/coverage.xml
+            src/api/coverage.json
+          if-no-files-found: warn
+
+  backend-db-migration:
+    name: Backend DB Migration Test (PostgreSQL)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [backend-lint, changes]
+    if: ${{ needs.changes.outputs.backend == 'true' }}
+    services:
+      postgres:
+        image: public.ecr.aws/docker/library/postgres:16
+        env:
+          POSTGRES_DB: releviz_test
+          POSTGRES_USER: releviz
+          POSTGRES_PASSWORD: releviz
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U releviz -d releviz_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    defaults:
+      run:
+        working-directory: src/api
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: 5432
+      DB_NAME: releviz_test
+      DB_USER: releviz
+      DB_PASSWORD: releviz
+      DB_TEST_NAME: test_releviz
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: src/api/requirements/local.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install -r requirements/local.txt
+
+      - name: Check migration files are current
+        run: python manage.py makemigrations --check --dry-run --settings=config.settings.test_postgres
+
+      - name: Apply migrations on PostgreSQL
+        run: python manage.py migrate --noinput --settings=config.settings.test_postgres
+
+      - name: Ensure no pending migrations remain
+        run: python manage.py migrate --check --settings=config.settings.test_postgres
+
+  backend-static-and-prod-check:
+    name: Backend Static and Production Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [backend-lint, changes]
+    if: ${{ needs.changes.outputs.backend == 'true' }}
+    defaults:
+      run:
+        working-directory: src/api
+    env:
+      DJANGO_SECRET_KEY: ci-production-smoke-secret-key-with-enough-entropy-for-deploy-checks-2026
+      DJANGO_FIELD_ENCRYPTION_KEY: ci-field-encryption-key-with-enough-entropy-2026
+      METRICS_BEARER_TOKEN: ci-metrics-token-with-enough-entropy-2026
+      DJANGO_ALLOWED_HOSTS: api.example.com
+      BACKEND_URL: https://api.example.com
+      FRONTEND_URL: https://app.example.com
+      DB_NAME: releviz_ci
+      DB_USER: releviz_ci
+      DB_PASSWORD: releviz_ci_password
+      DB_HOST: db.example.com
+      DB_PORT: 5432
+      DB_SSLMODE: require
+      CORS_ALLOWED_ORIGINS: https://app.example.com
+      CSRF_TRUSTED_ORIGINS: https://app.example.com
+      USE_SES_EMAIL_PROVIDER: "0"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: src/api/requirements/local.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install -r requirements/local.txt
+
+      - name: Import production settings
+        run: DJANGO_SETTINGS_MODULE=config.settings.production python -c "import django; django.setup()"
+
+      - name: Run Django deploy checks
+        run: python manage.py check --deploy --settings=config.settings.production
+
+      - name: Dry-run collectstatic with CI settings
+        run: python manage.py collectstatic --dry-run --noinput --settings=config.settings.test
+
+  django-test-plan:
+    name: Plan Django Test Matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [changes]
+    if: ${{ needs.changes.outputs.backend == 'true' }}
+    outputs:
+      apps: ${{ steps.plan.outputs.apps }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Capture changed files
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "${EVENT_NAME}" != "pull_request" ]; then
+            : > changed-files.txt
+            exit 0
+          fi
+          if [ -z "${BASE_SHA:-}" ] || [ -z "${HEAD_SHA:-}" ] \
+            || ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            : > changed-files.txt
+            exit 0
+          fi
+          git diff --name-only "$BASE_SHA...$HEAD_SHA" > changed-files.txt
+          cat changed-files.txt
+
+      - name: Select changed Django apps
+        id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          python scripts/ci/plan_django_tests.py \
+            --event-name "$EVENT_NAME" \
+            --changed-files changed-files.txt \
+            >> "$GITHUB_OUTPUT"
+
+  django-app-coverage:
+    name: Django PostgreSQL Coverage (${{ matrix.app }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs:
+      - backend-db-migration
+      - backend-static-and-prod-check
+      - django-test-plan
+      - changes
+    if: ${{ needs.changes.outputs.backend == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        app: ${{ fromJson(needs.django-test-plan.outputs.apps) }}
+    services:
+      postgres:
+        image: public.ecr.aws/docker/library/postgres:16
+        env:
+          POSTGRES_DB: releviz_test
+          POSTGRES_USER: releviz
+          POSTGRES_PASSWORD: releviz
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U releviz -d releviz_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    defaults:
+      run:
+        working-directory: src/api
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: 5432
+      DB_NAME: releviz_test
+      DB_USER: releviz
+      DB_PASSWORD: releviz
+      DB_TEST_NAME: test_releviz
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: src/api/requirements/local.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install -r requirements/local.txt "coverage[toml]==${COVERAGE_VERSION}"
+
+      - name: Run app tests against PostgreSQL
+        env:
+          APP_UNDER_TEST: ${{ matrix.app }}
+        run: |
+          coverage run \
+            --source="apps.${APP_UNDER_TEST}" \
+            --omit="*/migrations/*,*/tests/*" \
+            manage.py test "apps.${APP_UNDER_TEST}" \
+            --settings=config.settings.test_postgres
+          coverage xml --fail-under=0 -o "coverage-${APP_UNDER_TEST}.xml"
+          coverage json --fail-under=0 --pretty-print -o "coverage-${APP_UNDER_TEST}.json"
+          coverage report -m --fail-under="${APP_COVERAGE_FAIL_UNDER}"
+
+      - name: Summarize app coverage
+        if: ${{ always() }}
+        env:
+          APP_UNDER_TEST: ${{ matrix.app }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          app = os.environ["APP_UNDER_TEST"]
+          path = Path(f"coverage-{app}.json")
+          if not path.exists():
+              print(f"::warning::Coverage summary for {app} was not generated.")
+              raise SystemExit(0)
+          totals = json.loads(path.read_text(encoding="utf-8"))["totals"]
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              with open(summary, "a", encoding="utf-8") as fh:
+                  fh.write(f"## Django PostgreSQL coverage: {app}\n\n")
+                  fh.write("| Metric | Covered | Total | Percent |\n")
+                  fh.write("|---|---:|---:|---:|\n")
+                  fh.write(
+                      f"| Lines | {totals['covered_lines']} | {totals['num_statements']} | "
+                      f"{totals['percent_covered_display']}% |\n"
+                  )
+          PY
+
+      - name: Upload app coverage
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: backend-coverage-${{ matrix.app }}
+          path: |
+            src/api/coverage-${{ matrix.app }}.xml
+            src/api/coverage-${{ matrix.app }}.json
+          if-no-files-found: warn
+
+  frontend-lint:
+    name: Frontend Lint and Format
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [preflight, changes]
+    if: ${{ needs.changes.outputs.frontend == 'true' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci --workspace=releviz-web
+
+      - name: Check frontend formatting
+        run: npm --workspace=releviz-web run format:check
+
+      - name: Run ESLint
+        run: npm --workspace=releviz-web run lint
+
+  frontend-unit-coverage:
+    name: Frontend Unit Test Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [preflight, changes]
+    if: ${{ needs.changes.outputs.frontend == 'true' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci --workspace=releviz-web
+
+      - name: Run frontend tests with coverage
+        run: npm --workspace=releviz-web run test:coverage -- --runInBand
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+
+      - name: Summarize frontend coverage
+        if: ${{ always() }}
+        run: |
+          if [ ! -f src/web/coverage/coverage-summary.json ]; then
+            echo "::warning::Frontend coverage summary was not generated."
+            exit 0
+          fi
+          node - <<'NODE'
+          const fs = require("node:fs");
+          const summary = JSON.parse(
+            fs.readFileSync("src/web/coverage/coverage-summary.json", "utf8"),
+          ).total;
+          const rows = [
+            ["Statements", summary.statements],
+            ["Branches", summary.branches],
+            ["Functions", summary.functions],
+            ["Lines", summary.lines],
+          ];
+          const target = process.env.GITHUB_STEP_SUMMARY;
+          if (target) {
+            const body = [
+              "## Frontend coverage",
+              "",
+              "| Metric | Covered | Total | Percent |",
+              "|---|---:|---:|---:|",
+              ...rows.map(([name, metric]) =>
+                `| ${name} | ${metric.covered} | ${metric.total} | ${metric.pct}% |`,
+              ),
+              "",
+            ].join("\n");
+            fs.appendFileSync(target, body);
+          }
+          NODE
+
+      - name: Upload frontend coverage
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: frontend-coverage
+          path: src/web/coverage
+          if-no-files-found: warn
+
+  frontend-build:
+    name: Frontend CI Build Artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [preflight, changes]
+    if: ${{ needs.changes.outputs.frontend == 'true' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci --workspace=releviz-web
+
+      - name: Build frontend for CI and E2E
+        run: npm --workspace=releviz-web run build
+        env:
+          NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:4100
+
+      - name: Upload frontend build
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: frontend-next-ci
+          path: |
+            src/web/.next
+            !src/web/.next/cache
+            !src/web/.next/standalone
+          include-hidden-files: true
+          if-no-files-found: warn
+
+  frontend-amplify-build:
+    name: Frontend Amplify Static Export
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [preflight, changes]
+    if: ${{ needs.changes.outputs.frontend == 'true' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci --workspace=releviz-web
+
+      - name: Build static Amplify artifact
+        env:
+          NEXT_PUBLIC_API_BASE_URL: https://api.releviz.com
+        run: |
+          set -euo pipefail
+          npm --workspace=releviz-web run build:amplify
+          python3 scripts/ci/validate_amplify_static_export.py \
+            --out src/web/out \
+            --manifest src/web/amplify-routes.json
+          server_only="$(
+            find src/web/out -type f \
+              \( -name 'server.js' -o -name '*.nft.json' \) \
+              -print
+          )"
+          if [ -n "$server_only" ]; then
+            echo "::error::Static Amplify output contains server-only artifacts:"
+            echo "$server_only"
+            exit 1
+          fi
+
+      - name: Upload Amplify static export
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: frontend-amplify-static
+          path: src/web/out
+          if-no-files-found: error
+
+  frontend-bundle-size:
+    name: Frontend Bundle Size
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [frontend-build, changes]
+    if: ${{ needs.changes.outputs.frontend == 'true' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Download CI frontend build
+        uses: actions/download-artifact@v8
+        with:
+          name: frontend-next-ci
+          path: src/web/.next
+
+      - name: Enforce frontend bundle budgets
+        run: python3 scripts/ci/check_bundle_size.py src/web/.next/static
+
+  frontend-security-audit:
+    name: Frontend npm Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [preflight, changes]
+    if: ${{ needs.changes.outputs.frontend == 'true' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci --workspace=releviz-web
+
+      - name: Audit npm dependencies
+        run: npm audit --audit-level=low
+
+  frontend-supply-chain-report:
+    name: Frontend SBOM and License Report
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [preflight, changes]
+    if: ${{ needs.changes.outputs.frontend == 'true' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Generate npm SBOM
+        run: npm sbom --sbom-format cyclonedx --json > npm-sbom.cdx.json
+
+      - name: Check npm licenses
+        run: python3 scripts/ci/check_npm_licenses.py --package-lock package-lock.json --output npm-license-report.json
+
+      - name: Upload frontend supply-chain artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: frontend-supply-chain-reports
+          path: |
+            npm-sbom.cdx.json
+            npm-license-report.json
+          if-no-files-found: warn
+
+  frontend-required:
+    name: Frontend Required Result
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs:
+      - frontend-lint
+      - frontend-unit-coverage
+      - frontend-build
+      - frontend-amplify-build
+      - frontend-bundle-size
+      - frontend-security-audit
+      - frontend-supply-chain-report
+      - changes
+    if: ${{ always() && needs.changes.outputs.frontend == 'true' }}
+    steps:
+      - name: Summarize frontend required checks
+        env:
+          NEEDS_CONTEXT: ${{ toJson(needs) }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+
+          needs = json.loads(os.environ["NEEDS_CONTEXT"])
+          failed = {
+              name: data["result"]
+              for name, data in needs.items()
+              if name != "changes" and data["result"] != "success"
+          }
+          if failed:
+              for name, result in failed.items():
+                  print(f"{name}: {result}")
+              sys.exit(1)
+          print("All frontend required checks passed.")
+          PY
+
+  secrets-scan:
+    name: Secrets Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: preflight
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        run: |
+          set -euo pipefail
+          curl -sSL -o /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum --check --strict -
+          mkdir -p /tmp/gitleaks
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp/gitleaks
+
+      - name: Scan the PR or push commit range
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "${BASE_SHA:-}" ] && [ -n "${PR_HEAD_SHA:-}" ]; then
+            RANGE="${BASE_SHA}..${PR_HEAD_SHA}"
+          elif [ -n "${PUSH_BEFORE:-}" ] && [ "$PUSH_BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            RANGE="${PUSH_BEFORE}..${PUSH_HEAD}"
+          elif git rev-parse HEAD^ >/dev/null 2>&1; then
+            RANGE="HEAD^..HEAD"
+          else
+            RANGE="HEAD"
+          fi
+          echo "Scanning commit range: $RANGE"
+          /tmp/gitleaks/gitleaks detect \
+            --source . \
+            --redact \
+            --verbose \
+            --no-banner \
+            --log-opts "$RANGE" \
+            --exit-code 1
+
+  python-security-audit:
+    name: Python Security Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [preflight, changes]
+    if: ${{ needs.changes.outputs.backend == 'true' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: src/api/requirements/production.txt
+
+      - name: Install pip-audit
+        run: pip install "pip-audit[cyclonedx]==${PIP_AUDIT_VERSION}"
+
+      - name: Audit Python dependencies
+        run: |
+          set -o pipefail
+          python -m pip_audit \
+            --requirement src/api/requirements/production.txt \
+            --progress-spinner off \
+            --format columns \
+            | tee "$GITHUB_STEP_SUMMARY"
+
+  semgrep-sast:
+    name: Semgrep SAST
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [preflight, changes]
+    if: ${{ needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install Semgrep
+        # Semgrep 1.107 imports pkg_resources; keep setuptools below the
+        # release that removes that compatibility module.
+        run: pip install "setuptools<81" "semgrep==${SEMGREP_VERSION}"
+
+      - name: Run Semgrep
+        env:
+          RUN_BACKEND: ${{ needs.changes.outputs.backend }}
+          RUN_FRONTEND: ${{ needs.changes.outputs.frontend }}
+        run: |
+          set -euo pipefail
+          targets=()
+          if [ "$RUN_BACKEND" = "true" ]; then targets+=(src/api); fi
+          if [ "$RUN_FRONTEND" = "true" ]; then targets+=(src/web); fi
+          semgrep scan \
+            --config p/default \
+            --config p/python \
+            --config p/javascript \
+            --metrics=off \
+            --sarif \
+            --output semgrep.sarif \
+            "${targets[@]}"
+
+      - name: Upload Semgrep SARIF
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: semgrep-sarif
+          path: semgrep.sarif
+          if-no-files-found: warn
+
+  security-required-result:
+    name: Security Required Result
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs:
+      - secrets-scan
+      - python-security-audit
+      - frontend-security-audit
+      - semgrep-sast
+      - changes
+    if: ${{ always() }}
+    steps:
+      - name: Summarize security checks
+        env:
+          NEEDS_CONTEXT: ${{ toJson(needs) }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+
+          needs = json.loads(os.environ["NEEDS_CONTEXT"])
+          ok = {"success", "skipped"}
+          failed = {
+              name: data["result"]
+              for name, data in needs.items()
+              if name != "changes" and data["result"] not in ok
+          }
+          if failed:
+              for name, result in failed.items():
+                  print(f"{name}: {result}")
+              sys.exit(1)
+          print("All applicable security checks passed.")
+          PY
+
+  python-supply-chain-report:
+    name: Python Supply Chain Report
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [python-security-audit, changes]
+    if: ${{ always() && needs.changes.outputs.backend == 'true' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: src/api/requirements/production.txt
+
+      - name: Install Python SBOM tools
+        run: pip install "pip-audit[cyclonedx]==${PIP_AUDIT_VERSION}"
+
+      - name: Generate Python SBOM
+        run: |
+          python -m pip_audit \
+            --requirement src/api/requirements/production.txt \
+            --progress-spinner off \
+            --format cyclonedx-json \
+            --output python-sbom.cdx.json \
+            || true
+          test -s python-sbom.cdx.json
+
+      - name: Upload Python supply-chain artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-supply-chain-report
+          path: python-sbom.cdx.json
+          if-no-files-found: warn
+
+  supply-chain-result:
+    name: Supply Chain Result
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs:
+      - python-supply-chain-report
+      - frontend-supply-chain-report
+      - changes
+    if: ${{ always() }}
+    steps:
+      - name: Summarize supply-chain checks
+        env:
+          NEEDS_CONTEXT: ${{ toJson(needs) }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+
+          needs = json.loads(os.environ["NEEDS_CONTEXT"])
+          ok = {"success", "skipped"}
+          failed = {
+              name: data["result"]
+              for name, data in needs.items()
+              if name != "changes" and data["result"] not in ok
+          }
+          if failed:
+              for name, result in failed.items():
+                  print(f"{name}: {result}")
+              sys.exit(1)
+          print("All applicable supply-chain checks passed.")
+          PY
+
+  infrastructure-plan:
+    name: Terraform - Format, Validate & Mock Plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [preflight, changes]
+    if: ${{ needs.changes.outputs.infra == 'true' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Check Terraform configuration and tests
+        run: scripts/ci/terraform-check.sh
+
+  repository-audit:
+    name: Repository Resource Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: preflight
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Audit tracked resources
+        run: python scripts/ci/audit-test-surface.py
+
+  backend-docker-build:
+    name: Backend Docker Build and Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [backend-lint, changes]
+    if: ${{ needs.changes.outputs.backend == 'true' }}
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Lint backend Dockerfile
+        uses: hadolint/hadolint-action@2332a7b74a6de0dda2e2221d575162eba76ba5e5 # v3.3.0
+        with:
+          dockerfile: src/api/Dockerfile
+          failure-threshold: error
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Build backend image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: src/api
+          pull: true
+          load: true
+          tags: releviz-api-ci:${{ github.sha }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      - name: Cache Trivy vulnerability database
+        uses: actions/cache@v6
+        with:
+          path: ${{ github.workspace }}/.cache/trivy
+          key: trivy-backend-${{ github.run_id }}
+          restore-keys: trivy-backend-
+
+      - name: Scan backend image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_CACHE_DIR: ${{ github.workspace }}/.cache/trivy
+        with:
+          image-ref: releviz-api-ci:${{ github.sha }}
+          format: sarif
+          output: trivy-backend.sarif
+          severity: CRITICAL,HIGH
+          limit-severities-for-sarif: true
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: Upload backend Trivy SARIF artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: trivy-backend-sarif
+          path: trivy-backend.sarif
+          if-no-files-found: warn
+
+      - name: Publish backend findings to GitHub Security
+        if: ${{ github.event_name == 'push' && !cancelled() }}
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        with:
+          sarif_file: trivy-backend.sarif
+          category: trivy-backend-image
+
+  frontend-docker-build:
+    name: Frontend Docker Build and Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [frontend-build, changes]
+    if: ${{ needs.changes.outputs.frontend == 'true' }}
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Lint frontend Dockerfile
+        uses: hadolint/hadolint-action@2332a7b74a6de0dda2e2221d575162eba76ba5e5 # v3.3.0
+        with:
+          dockerfile: src/web/Dockerfile
+          failure-threshold: error
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Build frontend image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: src/web
+          pull: true
+          load: true
+          tags: releviz-web-ci:${{ github.sha }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+      - name: Cache Trivy vulnerability database
+        uses: actions/cache@v6
+        with:
+          path: ${{ github.workspace }}/.cache/trivy
+          key: trivy-frontend-${{ github.run_id }}
+          restore-keys: trivy-frontend-
+
+      - name: Scan frontend image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_CACHE_DIR: ${{ github.workspace }}/.cache/trivy
+        with:
+          image-ref: releviz-web-ci:${{ github.sha }}
+          format: sarif
+          output: trivy-frontend.sarif
+          severity: CRITICAL,HIGH
+          limit-severities-for-sarif: true
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: Upload frontend Trivy SARIF artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: trivy-frontend-sarif
+          path: trivy-frontend.sarif
+          if-no-files-found: warn
+
+      - name: Publish frontend findings to GitHub Security
+        if: ${{ github.event_name == 'push' && !cancelled() }}
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        with:
+          sarif_file: trivy-frontend.sarif
+          category: trivy-frontend-image
+
+  backend-required-result:
+    name: Backend Required Result
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs:
+      - backend-lint
+      - backend-full-coverage
+      - backend-db-migration
+      - backend-static-and-prod-check
+      - django-test-plan
+      - django-app-coverage
+      - changes
+    if: ${{ always() && needs.changes.outputs.backend == 'true' }}
+    steps:
+      - name: Summarize backend required checks
+        env:
+          NEEDS_CONTEXT: ${{ toJson(needs) }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+
+          needs = json.loads(os.environ["NEEDS_CONTEXT"])
+          ok = {"success", "skipped"}
+          failed = {
+              name: data["result"]
+              for name, data in needs.items()
+              if name != "changes" and data["result"] not in ok
+          }
+          if failed:
+              for name, result in failed.items():
+                  print(f"{name}: {result}")
+              sys.exit(1)
+          print("All backend required checks passed.")
+          PY
+
+  deployment-readiness-result:
+    name: Deployment Readiness Result
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs:
+      - backend-docker-build
+      - frontend-docker-build
+      - frontend-amplify-build
+      - infrastructure-plan
+      - changes
+    if: ${{ always() }}
+    steps:
+      - name: Summarize deployment readiness
+        env:
+          NEEDS_CONTEXT: ${{ toJson(needs) }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+
+          needs = json.loads(os.environ["NEEDS_CONTEXT"])
+          ok = {"success", "skipped"}
+          failed = {
+              name: data["result"]
+              for name, data in needs.items()
+              if name != "changes" and data["result"] not in ok
+          }
+          if failed:
+              for name, result in failed.items():
+                  print(f"{name}: {result}")
+              sys.exit(1)
+          print("Docker, Amplify, and infrastructure checks passed or were not required.")
+          PY
+
+  e2e-plan:
+    name: Plan E2E Matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: changes
+    if: ${{ needs.changes.outputs.e2e == 'true' }}
+    outputs:
+      projects: ${{ steps.plan.outputs.projects }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Capture changed files
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "${EVENT_NAME}" != "pull_request" ]; then
+            : > changed-files.txt
+            exit 0
+          fi
+          if [ -z "${BASE_SHA:-}" ] || [ -z "${HEAD_SHA:-}" ] \
+            || ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            : > changed-files.txt
+            exit 0
+          fi
+          git diff --name-only "$BASE_SHA...$HEAD_SHA" > changed-files.txt
+          cat changed-files.txt
+
+      - name: Select browser and spec coverage
+        id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          python scripts/ci/plan_e2e_tests.py \
+            --event-name "$EVENT_NAME" \
+            --changed-files changed-files.txt \
+            >> "$GITHUB_OUTPUT"
+
+  e2e:
+    name: E2E (${{ matrix.project }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    needs:
+      - e2e-plan
+      - frontend-required
+      - secrets-scan
+      - changes
+    if: ${{ needs.changes.outputs.e2e == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.e2e-plan.outputs.matrix) }}
+    services:
+      postgres:
+        image: public.ecr.aws/docker/library/postgres:16
+        env:
+          POSTGRES_DB: releviz_test
+          POSTGRES_USER: releviz
+          POSTGRES_PASSWORD: releviz
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U releviz -d releviz_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: 5432
+      DB_NAME: releviz_test
+      DB_USER: releviz
+      DB_PASSWORD: releviz
+      DB_TEST_NAME: releviz_test
+      BACKEND_URL: http://127.0.0.1:4100
+      FRONTEND_URL: http://127.0.0.1:3100
+      EMAIL_FILE_PATH: /tmp/releviz-e2e-mail
+      DJANGO_SUPERUSER_EMAIL: admin@releviz.local
+      PW_PROJECT: ${{ matrix.project }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: src/api/requirements/local.txt
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install backend dependencies
+        run: python -m pip install -r src/api/requirements/local.txt
+
+      - name: Install frontend dependencies
+        run: npm ci --workspace=releviz-web
+
+      - name: Download CI frontend build
+        uses: actions/download-artifact@v8
+        with:
+          name: frontend-next-ci
+          path: src/web/.next
+
+      - name: Resolve Playwright version
+        id: playwright-version
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}-cfw
+
+      - name: Install Playwright browsers on cache miss
+        if: ${{ steps.playwright-cache.outputs.cache-hit != 'true' }}
+        run: npx playwright install --with-deps chromium firefox webkit
+
+      - name: Install Playwright system dependencies on cache hit
+        if: ${{ steps.playwright-cache.outputs.cache-hit == 'true' }}
+        run: npx playwright install-deps chromium firefox webkit
+
+      - name: Generate ephemeral E2E administrator password
+        run: |
+          python - <<'PY'
+          import os
+          import secrets
+
+          password = f"E2E-Aa1!{secrets.token_hex(24)}"
+          print(f"::add-mask::{password}")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as github_env:
+              github_env.write(f"DJANGO_SUPERUSER_PASSWORD={password}\n")
+          PY
+
+      - name: Prepare backend database and email sink
+        run: |
+          rm -rf "$EMAIL_FILE_PATH"
+          mkdir -p "$EMAIL_FILE_PATH"
+          python src/api/manage.py migrate --noinput --settings=config.settings.e2e
+          python src/api/manage.py seed_admin_e2e \
+            --yes \
+            --email "$DJANGO_SUPERUSER_EMAIL" \
+            --password "$DJANGO_SUPERUSER_PASSWORD" \
+            --settings=config.settings.e2e
+
+      - name: Run Playwright tests
+        env:
+          PLAYWRIGHT_SPEC_ARGS: ${{ matrix.spec_args }}
+          PLAYWRIGHT_BLOB_OUTPUT_DIR: blob-report
+        run: |
+          args=()
+          if [ -n "$PLAYWRIGHT_SPEC_ARGS" ]; then
+            read -r -a args <<< "$PLAYWRIGHT_SPEC_ARGS"
+          fi
+          npx playwright test \
+            --config=src/e2e/playwright.config.js \
+            "${args[@]}" \
+            --project="$PW_PROJECT" \
+            --reporter=blob
+
+      - name: Upload Playwright blob report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: blob-${{ matrix.project }}
+          path: blob-report
+          if-no-files-found: warn
+
+      - name: Upload E2E diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-diagnostics-${{ matrix.project }}
+          path: |
+            test-results
+            src/e2e/test-results
+          if-no-files-found: ignore
+
+  e2e-report:
+    name: E2E Report
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [e2e, changes]
+    if: ${{ always() && needs.changes.outputs.e2e == 'true' }}
+    continue-on-error: true
+    permissions:
+      checks: write
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci --workspace=releviz-web
+
+      - name: Download blob reports
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          path: all-blob-reports
+          pattern: blob-*
+          merge-multiple: true
+
+      - name: Merge blob reports
+        env:
+          PLAYWRIGHT_JUNIT_OUTPUT_NAME: results.xml
+        run: |
+          set -euo pipefail
+          if [ ! -d all-blob-reports ] || [ -z "$(ls -A all-blob-reports 2>/dev/null)" ]; then
+            echo "::notice::No blob reports to merge."
+            exit 0
+          fi
+          npx playwright merge-reports --reporter html,github,junit all-blob-reports
+
+      - name: Write E2E summary
+        if: ${{ always() }}
+        run: |
+          python3 - <<'PY'
+          import glob
+          import os
+          import xml.etree.ElementTree as ET
+
+          total = fail = err = skip = 0
+          duration = 0.0
+          for filename in sorted(glob.glob("results*.xml")):
+              try:
+                  root = ET.parse(filename).getroot()
+              except Exception:
+                  continue
+              suites = [root] if root.tag == "testsuite" else root.iter("testsuite")
+              for suite in suites:
+                  total += int(suite.get("tests", 0))
+                  fail += int(suite.get("failures", 0))
+                  err += int(suite.get("errors", 0))
+                  skip += int(suite.get("skipped", 0))
+                  duration += float(suite.get("time", 0) or 0)
+          passed = total - fail - err - skip
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              with open(summary, "a", encoding="utf-8") as fh:
+                  fh.write("## Playwright E2E\n\n")
+                  fh.write("| Total | Passed | Failed | Skipped | Duration |\n")
+                  fh.write("|---:|---:|---:|---:|---:|\n")
+                  fh.write(f"| {total} | {passed} | {fail + err} | {skip} | {duration:.1f}s |\n")
+          PY
+
+      - name: Annotate test results
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: mikepenz/action-junit-report@v6
+        with:
+          report_paths: results.xml
+          detailed_summary: true
+          include_passed: false
+          fail_on_failure: false
+
+      - name: Upload merged E2E report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-html-report
+          path: |
+            playwright-report
+            results.xml
+          if-no-files-found: warn
+
+  e2e-required-result:
+    name: E2E Required Result
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [e2e-plan, e2e, changes]
+    if: ${{ always() }}
+    steps:
+      - name: Enforce E2E result
+        env:
+          NEEDS_CONTEXT: ${{ toJson(needs) }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+
+          needs = json.loads(os.environ["NEEDS_CONTEXT"])
+          required = needs["changes"].get("outputs", {}).get("e2e") == "true"
+          results = {
+              "e2e-plan": needs["e2e-plan"]["result"],
+              "e2e": needs["e2e"]["result"],
+          }
+          expected = {"success"} if required else {"success", "skipped"}
+          failed = {name: result for name, result in results.items() if result not in expected}
+          if failed:
+              for name, result in failed.items():
+                  print(f"{name}: {result}")
+              sys.exit(1)
+          print("E2E passed or was not required for this change.")
+          PY
+
+  ci-result:
+    name: CI Result
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs:
+      - preflight
+      - changes
+      - backend-required-result
+      - frontend-required
+      - security-required-result
+      - supply-chain-result
+      - deployment-readiness-result
+      - repository-audit
+      - e2e-required-result
+    if: ${{ always() }}
+    steps:
+      - name: Summarize required jobs
+        env:
+          NEEDS_CONTEXT: ${{ toJson(needs) }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+
+          needs = json.loads(os.environ["NEEDS_CONTEXT"])
+          ok = {"success", "skipped"}
+          failed = {name: data["result"] for name, data in needs.items() if data["result"] not in ok}
+          if failed:
+              for name, result in failed.items():
+                  print(f"{name}: {result}")
+              sys.exit(1)
+          print("All required CI jobs passed.")
+          PY
+
+  ci-timing-report:
+    name: CI Timing Report
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [ci-result]
+    if: ${{ always() }}
+    continue-on-error: true
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Fetch current workflow jobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" > workflow-jobs.json
+
+      - name: Write CI timing summary
+        run: python scripts/ci/summarize_workflow_jobs.py < workflow-jobs.json >> "$GITHUB_STEP_SUMMARY"

@@ -1,9 +1,7 @@
+from .feedback import FeedbackView
 from .maintenance import MaintenanceBypassView
-from .system import custom_404, robots_txt, root_index
 
 __all__ = [
+    "FeedbackView",
     "MaintenanceBypassView",
-    "custom_404",
-    "robots_txt",
-    "root_index",
 ]

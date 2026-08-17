@@ -9,9 +9,8 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework_simplejwt.exceptions import TokenError
-from rest_framework_simplejwt.tokens import RefreshToken
 
+from apps.authn.security import revoke_all_refresh_sessions
 from apps.authn.serializers import ChangePasswordSerializer
 
 logger = logging.getLogger(__name__)
@@ -21,7 +20,7 @@ class ChangePasswordView(APIView):
     """
     API endpoint for changing the authenticated user's password.
     POST: Change password with current password verification.
-    Accepts optional `refresh` token in body to blacklist the old session.
+    Every session is signed out, so the caller must authenticate again.
     """
 
     permission_classes = [IsAuthenticated]
@@ -40,27 +39,16 @@ class ChangePasswordView(APIView):
         request.user.set_password(new_password)
         request.user.save()
 
-        # Blacklist the provided refresh token so the old session is invalidated
-        refresh_token = request.data.get("refresh")
-        new_access = None
-        new_refresh = None
-        if refresh_token:
-            try:
-                old_token = RefreshToken(refresh_token)
-                old_token.blacklist()
-                # Issue a fresh token pair so the current session continues
-                fresh = RefreshToken.for_user(request.user)
-                new_access = str(fresh.access_token)
-                new_refresh = str(fresh)
-            except TokenError:
-                logger.warning(
-                    "Unable to invalidate the prior session after account update for member %s",
-                    request.user.pk,
-                )
+        # Changing a password signs out every device, including this one, so no
+        # replacement token pair is issued.
+        revoked = revoke_all_refresh_sessions(request.user)
+        logger.info(
+            "Revoked %s refresh session(s) after a password change for member %s",
+            revoked,
+            request.user.pk,
+        )
 
-        response_data = {"message": "Password changed successfully."}
-        if new_access and new_refresh:
-            response_data["access"] = new_access
-            response_data["refresh"] = new_refresh
-
-        return Response(response_data, status=status.HTTP_200_OK)
+        return Response(
+            {"message": "Password changed successfully."},
+            status=status.HTTP_200_OK,
+        )

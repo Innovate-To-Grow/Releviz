@@ -15,14 +15,14 @@ class LifecycleDomainTests(TestCase):
         self.organizer = create_member("lifecycle-domain@example.com")
         self.now = timezone.now()
 
-    def event(self, *, code, status=Event.Status.OPEN, deadline=None):
+    def event(self, *, code, status=Event.Status.ACTIVE, deadline=None):
         return Event.objects.create(
             code=code,
             name=code,
             organizer=self.organizer,
             status=status,
             response_deadline=deadline,
-            opened_at=self.now if status == Event.Status.OPEN else None,
+            opened_at=self.now if status == Event.Status.ACTIVE else None,
         )
 
     def test_response_write_rules(self):
@@ -42,69 +42,69 @@ class LifecycleDomainTests(TestCase):
         )
 
     def test_legal_transitions_timestamps_deadlines_and_errors(self):
-        draft = self.event(code="DRAFT", status=Event.Status.DRAFT)
+        active = self.event(code="ACTIVE")
         future = self.now + timedelta(days=1)
         changed = transition_event(
-            draft,
-            Event.Status.OPEN,
+            active,
+            Event.Status.ACTIVE,
             response_deadline=future,
             now=self.now,
         )
-        self.assertEqual(draft.status, Event.Status.OPEN)
-        self.assertEqual(draft.version, 2)
-        self.assertEqual(draft.opened_at, self.now)
+        self.assertEqual(active.status, Event.Status.ACTIVE)
+        self.assertEqual(active.version, 2)
+        self.assertEqual(active.opened_at, self.now)
         self.assertIn("response_deadline", changed)
 
         self.assertEqual(
             transition_event(
-                draft,
-                Event.Status.OPEN,
+                active,
+                Event.Status.ACTIVE,
                 response_deadline=future,
                 now=self.now,
             ),
             set(),
         )
         changed = transition_event(
-            draft,
-            Event.Status.OPEN,
+            active,
+            Event.Status.ACTIVE,
             response_deadline=None,
             now=self.now,
         )
         self.assertEqual(changed, {"response_deadline", "updated_at", "version"})
 
         changed = transition_event(
-            draft,
+            active,
             Event.Status.CLOSED,
             response_deadline=None,
             now=self.now,
         )
-        self.assertEqual(draft.closed_at, self.now)
+        self.assertEqual(active.closed_at, self.now)
         self.assertIn("closed_at", changed)
 
-        draft.finalized_at = self.now
-        draft.archived_at = self.now
+        active.finalized_at = self.now
+        active.archived_at = self.now
         changed = transition_event(
-            draft,
-            Event.Status.OPEN,
+            active,
+            Event.Status.ACTIVE,
             response_deadline=future,
             now=self.now + timedelta(minutes=1),
         )
-        self.assertIsNone(draft.finalized_at)
-        self.assertIsNone(draft.closed_at)
-        self.assertIsNone(draft.archived_at)
+        self.assertIsNone(active.finalized_at)
+        self.assertIsNone(active.closed_at)
+        self.assertIsNone(active.archived_at)
         self.assertIn("opened_at", changed)
 
         changed = transition_event(
-            draft,
+            active,
             Event.Status.ARCHIVED,
             response_deadline=future,
             now=self.now,
         )
-        self.assertEqual(draft.archived_at, self.now)
+        self.assertEqual(active.archived_at, self.now)
         self.assertIn("archived_at", changed)
         transition_event(
-            draft,
-            Event.Status.OPEN,
+            active,
+            Event.Status.ACTIVE,
             response_deadline=future,
             now=self.now,
         )
@@ -119,25 +119,25 @@ class LifecycleDomainTests(TestCase):
             )
         transition_event(
             finalized,
-            Event.Status.OPEN,
+            Event.Status.ACTIVE,
             response_deadline=future,
             now=self.now,
         )
-        self.assertEqual(finalized.status, Event.Status.OPEN)
+        self.assertEqual(finalized.status, Event.Status.ACTIVE)
 
         with self.assertRaisesMessage(LifecycleError, "Invalid event status"):
-            transition_event(draft, "unknown", response_deadline=future, now=self.now)
+            transition_event(active, "unknown", response_deadline=future, now=self.now)
         with self.assertRaisesMessage(LifecycleError, "Confirm a final meeting time"):
             transition_event(
-                draft,
+                active,
                 Event.Status.FINALIZED,
                 response_deadline=future,
                 now=self.now,
             )
-        with self.assertRaisesMessage(LifecycleError, "Cannot transition"):
+        with self.assertRaisesMessage(LifecycleError, "Invalid event status"):
             transition_event(
-                draft,
-                Event.Status.DRAFT,
+                active,
+                "draft",
                 response_deadline=future,
                 now=self.now,
             )
@@ -145,7 +145,7 @@ class LifecycleDomainTests(TestCase):
         with self.assertRaisesMessage(LifecycleError, "future response deadline"):
             transition_event(
                 closed,
-                Event.Status.OPEN,
+                Event.Status.ACTIVE,
                 response_deadline=self.now,
                 now=self.now,
             )
@@ -161,7 +161,7 @@ class LifecycleApiTests(TestCase):
             code="LIFECYCLE",
             name="Lifecycle",
             organizer=self.organizer,
-            status=Event.Status.OPEN,
+            status=Event.Status.ACTIVE,
             access_mode="open_link",
             start_minutes=9 * 60,
             end_minutes=10 * 60,
@@ -194,22 +194,24 @@ class LifecycleApiTests(TestCase):
 
     def test_event_creation_status_and_deadline_validation(self):
         self.authenticate(self.organizer)
-        draft = self.client.post(
+        active = self.client.post(
             "/events",
-            {"name": "Draft", "status": "draft"},
+            {"name": "Active", "status": "active"},
             format="json",
         )
-        self.assertEqual(draft.status_code, 201)
-        self.assertEqual(draft.data["event"]["status"], "draft")
-        self.assertIsNone(draft.data["event"]["openedAt"])
+        self.assertEqual(active.status_code, 201)
+        self.assertEqual(active.data["event"]["status"], "active")
+        self.assertIsNotNone(active.data["event"]["openedAt"])
 
-        open_event = self.client.post(
-            "/events",
-            {"name": "Open", "status": "open"},
-            format="json",
-        )
-        self.assertEqual(open_event.status_code, 400)
-        self.assertIn("start as draft", open_event.data["error"])
+        for legacy_status in ("draft", "open"):
+            with self.subTest(status=legacy_status):
+                legacy = self.client.post(
+                    "/events",
+                    {"name": "Legacy", "status": legacy_status},
+                    format="json",
+                )
+                self.assertEqual(legacy.status_code, 400)
+                self.assertIn("start as active", legacy.data["error"])
         naive_future = (timezone.now() + timedelta(days=1)).replace(tzinfo=None)
         naive_deadline = self.client.post(
             "/events",
@@ -228,7 +230,7 @@ class LifecycleApiTests(TestCase):
             "/events",
             {
                 "name": "Past",
-                "status": "open",
+                "status": "active",
                 "responseDeadline": (timezone.now() - timedelta(minutes=1)).isoformat(),
             },
             format="json",
@@ -261,14 +263,14 @@ class LifecycleApiTests(TestCase):
         bool_version = self.transition(Event.Status.CLOSED, True)
         self.assertEqual(bool_version.status_code, 428)
         invalid_deadline = self.transition(
-            Event.Status.OPEN,
+            Event.Status.ACTIVE,
             self.event.version,
             deadline_marker=True,
             deadline="not-a-date",
         )
         self.assertEqual(invalid_deadline.status_code, 400)
         list_deadline = self.transition(
-            Event.Status.OPEN,
+            Event.Status.ACTIVE,
             self.event.version,
             deadline_marker=True,
             deadline=[],
@@ -297,7 +299,7 @@ class LifecycleApiTests(TestCase):
         self.event.response_deadline = past
         self.event.save(update_fields=["response_deadline"])
         failed_reopen = self.transition(
-            Event.Status.OPEN,
+            Event.Status.ACTIVE,
             self.event.version,
             deadline_marker=True,
             deadline=past.isoformat(),
@@ -306,17 +308,17 @@ class LifecycleApiTests(TestCase):
 
         future = timezone.now() + timedelta(days=1)
         reopened = self.transition(
-            Event.Status.OPEN,
+            Event.Status.ACTIVE,
             self.event.version,
             deadline_marker=True,
             deadline=future.isoformat(),
         )
         self.assertEqual(reopened.status_code, 200)
-        self.assertEqual(reopened.data["event"]["status"], "open")
+        self.assertEqual(reopened.data["event"]["status"], "active")
         self.assertEqual(reopened.data["event"]["version"], self.event.version + 1)
 
         removed_deadline = self.transition(
-            Event.Status.OPEN,
+            Event.Status.ACTIVE,
             reopened.data["event"]["version"],
             deadline_marker=True,
             deadline=None,
@@ -325,7 +327,7 @@ class LifecycleApiTests(TestCase):
 
         naive_extension = (future + timedelta(days=1)).replace(tzinfo=None)
         extended = self.transition(
-            Event.Status.OPEN,
+            Event.Status.ACTIVE,
             removed_deadline.data["event"]["version"],
             deadline_marker=True,
             deadline=naive_extension.isoformat(),
@@ -525,7 +527,7 @@ class LifecycleApiTests(TestCase):
             )
             self.assertEqual(locked.status_code, 409)
 
-        self.event.status = Event.Status.OPEN
+        self.event.status = Event.Status.ACTIVE
         self.event.response_deadline = timezone.now() - timedelta(seconds=1)
         self.event.save(update_fields=["status", "response_deadline"])
         expired = self.client.put(

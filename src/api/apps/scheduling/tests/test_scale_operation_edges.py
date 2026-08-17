@@ -17,7 +17,6 @@ from apps.scheduling.finalization import (
     FinalizationError,
     _ensure_final_delivery_request,
 )
-from apps.scheduling.lifecycle import LifecycleError
 from apps.scheduling.management.commands.recompute_event_results import (
     Command as ResultWorkerCommand,
 )
@@ -37,7 +36,6 @@ from apps.scheduling.permissions import (
     can_join_event,
     verified_invitation_emails,
 )
-from apps.scheduling.services import EventEmailRequestError
 from apps.scheduling.slots import SlotConfigurationError, validate_minute_configuration
 from apps.scheduling.views import organizer_response_write_error
 
@@ -52,7 +50,7 @@ class ScaleOperationEdgeTests(TestCase):
             code="OPSEDGE",
             name="Operation edge cases",
             organizer=self.organizer,
-            status=Event.Status.DRAFT,
+            status=Event.Status.ACTIVE,
             days=[1],
             start_minutes=9 * 60,
             end_minutes=10 * 60,
@@ -76,115 +74,17 @@ class ScaleOperationEdgeTests(TestCase):
     def authenticate(self, member):
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token_for(member)}")
 
-    def launch(self, payload=None, *, code=None):
-        return self.client.post(
-            f"/events/launch?code={self.event.code if code is None else code}",
-            payload or {},
-            format="json",
-        )
-
-    def valid_launch(self, **extra):
-        return self.launch(
-            {
-                "idempotencyKey": str(uuid.uuid4()),
-                "expectedVersion": self.event.version,
-                **extra,
-            }
-        )
-
-    def test_launch_rejects_identity_selection_and_exclusion_errors(self):
-        self.assertEqual(self.client.post("/events/launch", {}, format="json").status_code, 400)
-        self.assertEqual(
-            self.launch({"idempotencyKey": "bad"}).status_code,
-            400,
-        )
-        self.assertEqual(
-            self.client.post(
-                "/events/launch?code=MISSING",
-                {"idempotencyKey": str(uuid.uuid4())},
-                format="json",
-            ).status_code,
-            404,
-        )
-
-        self.authenticate(self.outsider)
-        self.assertEqual(
-            self.launch({"idempotencyKey": str(uuid.uuid4())}).status_code,
-            403,
-        )
-        self.authenticate(self.organizer)
-
-        cases = [
-            ({"selection": "all"}, "selection must be an object"),
-            (
-                {"selection": {"participantIds": [str(self.participant.pk)] * 1001}},
-                "at most 1000",
-            ),
-            ({"selection": {"participantIds": ["bad"]}}, "invalid ID"),
-            ({"selection": {"allEligible": False}}, "Select all eligible"),
-            (
-                {"selection": {"allEligible": True, "excludedParticipantIds": "bad"}},
-                "must be an array",
-            ),
-            (
-                {"selection": {"allEligible": True, "excludedParticipantIds": ["bad"]}},
-                "invalid ID",
-            ),
-            (
-                {"selection": {"participantIds": [str(uuid.uuid4())]}},
-                "Select at least one",
-            ),
-        ]
-        for extra, message in cases:
-            with self.subTest(extra=extra):
-                response = self.valid_launch(**extra)
-                self.assertEqual(response.status_code, 400, response.data)
-                self.assertIn(message, response.data["error"])
-
-        excluded = self.valid_launch(
-            selection={
-                "allEligible": True,
-                "excludedParticipantIds": [str(self.participant.pk)],
-            }
-        )
-        self.assertEqual(excluded.status_code, 400)
-        self.assertIn("Select at least one", excluded.data["error"])
-
-    def test_launch_rejects_version_status_lifecycle_and_queue_failures_atomically(self):
-        missing_version = self.launch({"idempotencyKey": str(uuid.uuid4())})
-        self.assertEqual(missing_version.status_code, 428)
-        stale = self.launch(
-            {"idempotencyKey": str(uuid.uuid4()), "expectedVersion": self.event.version + 1}
-        )
-        self.assertEqual(stale.status_code, 409)
-        self.assertIn("private", stale["Cache-Control"])
-
-        self.event.status = Event.Status.OPEN
-        self.event.save(update_fields=["status", "updated_at"])
-        wrong_status = self.valid_launch()
-        self.assertEqual(wrong_status.status_code, 409)
-        self.event.status = Event.Status.DRAFT
-        self.event.save(update_fields=["status", "updated_at"])
-
-        with patch(
-            "apps.scheduling.operations_views.transition_event",
-            side_effect=LifecycleError("deadline is invalid"),
+    def test_legacy_launch_route_is_removed_for_all_request_shapes(self):
+        for path, payload in (
+            ("/events/launch", {}),
+            (f"/events/launch?code={self.event.code}", {"idempotencyKey": "bad"}),
+            ("/events/launch?code=MISSING", {"idempotencyKey": str(uuid.uuid4())}),
         ):
-            lifecycle = self.valid_launch()
-        self.assertEqual(lifecycle.status_code, 400)
-        self.assertIn("deadline", lifecycle.data["error"])
-
-        with patch(
-            "apps.scheduling.operations_views.upsert_and_send_invitations",
-            side_effect=EventEmailRequestError("queue rejected", status_code=409),
-        ):
-            queue_failure = self.valid_launch()
-        self.assertEqual(queue_failure.status_code, 409)
-        self.event.refresh_from_db()
-        self.assertEqual(self.event.status, Event.Status.DRAFT)
+            with self.subTest(path=path):
+                self.assertEqual(self.client.post(path, payload, format="json").status_code, 404)
 
     def test_delivery_request_privacy_missing_and_noop_retry(self):
-        missing = uuid.uuid4()
+        missing = 9_999_999
         self.assertEqual(self.client.get(f"/events/delivery-requests/{missing}").status_code, 404)
         self.assertEqual(
             self.client.post(f"/events/delivery-requests/{missing}", {}, format="json").status_code,
@@ -338,7 +238,7 @@ class ScaleOperationEdgeTests(TestCase):
         with self.assertRaisesMessage(SlotConfigurationError, "15 or 30"):
             validate_minute_configuration(invalid_slot_event)
 
-    def test_access_paths_organizer_edit_guards_and_draft_direct_invites(self):
+    def test_access_paths_and_organizer_edit_guards(self):
         self.assertTrue(can_access_event(self.event, self.invitee))
         self.assertTrue(can_join_event(self.event, self.invitee))
         self.event.access_mode = "open_link"
@@ -354,18 +254,10 @@ class ScaleOperationEdgeTests(TestCase):
             organizer_response_write_error(SimpleNamespace(status=Event.Status.ARCHIVED)),
         )
         finalized = SimpleNamespace(
-            status=Event.Status.OPEN,
+            status=Event.Status.ACTIVE,
             final_meeting=SimpleNamespace(active=True),
         )
         self.assertIn("Reopen", organizer_response_write_error(finalized))
-
-        blocked = self.client.post(
-            f"/events/invitations?code={self.event.code}",
-            {"idempotencyKey": str(uuid.uuid4()), "emails": ["new@example.com"]},
-            format="json",
-        )
-        self.assertEqual(blocked.status_code, 409)
-        self.assertIn("Publish", blocked.data["error"])
 
     def test_final_delivery_request_rejects_idempotency_fingerprint_conflicts(self):
         key = uuid.uuid4()

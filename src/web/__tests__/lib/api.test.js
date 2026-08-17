@@ -48,7 +48,6 @@ import {
   previewFinalMeeting,
   sendInvitations,
   sendReminders,
-  launchEvent,
   retryDeliveryRequest,
   updateEvent,
   updateEventLifecycle,
@@ -583,11 +582,16 @@ describe("auth API helpers", () => {
       .mockResolvedValueOnce(
         jsonResponse({ message: "code sent" }, { status: 202 }),
       )
+      .mockResolvedValueOnce(
+        jsonResponse({ verification_token: "reset-token" }),
+      )
       .mockResolvedValueOnce(passwordKeyResponse())
       .mockResolvedValueOnce(jsonResponse({ message: "reset" }))
       .mockResolvedValueOnce(passwordKeyResponse())
       .mockResolvedValueOnce(jsonResponse({ message: "changed" }))
-      .mockResolvedValueOnce(passwordKeyResponse())
+      .mockResolvedValueOnce(
+        jsonResponse({ verification_token: "delete-token" }),
+      )
       .mockResolvedValueOnce(jsonResponse({ message: "deleted" }));
 
     await expect(
@@ -617,9 +621,9 @@ describe("auth API helpers", () => {
     expect(readAuthSession()).toBeNull();
 
     writeAuthSession({ access: "before-delete" });
-    await expect(
-      deleteAccountApi({ password: "password789", confirmation: "DELETE" }),
-    ).resolves.toEqual({ message: "deleted" });
+    await expect(deleteAccountApi({ code: "654321" })).resolves.toEqual({
+      message: "deleted",
+    });
     expect(readAuthSession()).toBeNull();
 
     expect(global.fetch).toHaveBeenNthCalledWith(
@@ -630,30 +634,38 @@ describe("auth API helpers", () => {
         credentials: "include",
       }),
     );
+    // Resetting exchanges the emailed code for a verification token first.
     expect(global.fetch).toHaveBeenNthCalledWith(
       2,
+      "/authn/password-reset/verify-code/",
+      expect.objectContaining({
+        body: JSON.stringify({ email: "ada@example.com", code: "123456" }),
+      }),
+    );
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      3,
       "/authn/public-key/",
       expect.objectContaining({ credentials: "include" }),
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
-      3,
+      4,
       "/authn/password-reset/confirm/",
       expect.objectContaining({
         body: JSON.stringify({
           email: "ada@example.com",
-          code: "123456",
-          password: "password456",
-          password_confirm: "password456",
+          verification_token: "reset-token",
+          new_password: "password456",
+          new_password_confirm: "password456",
         }),
       }),
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
-      4,
+      5,
       "/authn/public-key/",
       expect.objectContaining({ credentials: "include" }),
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
-      5,
+      6,
       "/authn/change-password/",
       expect.objectContaining({
         body: JSON.stringify({
@@ -663,19 +675,19 @@ describe("auth API helpers", () => {
         }),
       }),
     );
-    expect(global.fetch).toHaveBeenNthCalledWith(
-      6,
-      "/authn/public-key/",
-      expect.objectContaining({ credentials: "include" }),
-    );
+    // Deleting is code-confirmed, so no password is encrypted for it.
     expect(global.fetch).toHaveBeenNthCalledWith(
       7,
-      "/authn/delete-account/",
+      "/authn/delete-account/verify-code/",
       expect.objectContaining({
-        body: JSON.stringify({
-          password: "password789",
-          confirmation: "DELETE",
-        }),
+        body: JSON.stringify({ code: "654321" }),
+      }),
+    );
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      8,
+      "/authn/delete-account/confirm/",
+      expect.objectContaining({
+        body: JSON.stringify({ verification_token: "delete-token" }),
       }),
     );
   });
@@ -903,15 +915,6 @@ describe("business API helpers", () => {
       "tok",
     );
     await sendReminders("ABC 123", { idempotencyKey: "reminder-key" }, "tok");
-    await launchEvent(
-      "ABC 123",
-      {
-        expectedVersion: 3,
-        idempotencyKey: "launch-key",
-        selection: { participantIds: ["participant 1"] },
-      },
-      "tok",
-    );
     await fetchDeliveryRequest("delivery 1", "tok");
     await retryDeliveryRequest("delivery 1", "tok");
     await createRosterImport(
@@ -973,7 +976,11 @@ describe("business API helpers", () => {
     await joinEvent("ABC 123", "tok");
     await createManagedParticipant(
       "ABC 123",
-      { name: "Temporary Person", email: "temp@example.com" },
+      {
+        name: "Temporary Person",
+        email: "temp@example.com",
+        idempotencyKey: "managed-key",
+      },
       "tok",
     );
     await updateParticipant("ABC 123", "user 1", { submitted: 1 }, "tok");
@@ -992,12 +999,25 @@ describe("business API helpers", () => {
     expect(urls).toContain("/events?code=ABC%20123");
     expect(urls).toContain("/events/duplicate?code=ABC%20123");
     expect(global.fetch).toHaveBeenCalledWith(
+      "/events",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          name: "Minimal",
+          accessMode: "invite_only",
+          meetingDurationMinutes: 30,
+          status: "active",
+        }),
+      }),
+    );
+    expect(global.fetch).toHaveBeenCalledWith(
       "/events/participants/managed?code=ABC%20123",
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({
           name: "Temporary Person",
           email: "temp@example.com",
+          idempotencyKey: "managed-key",
         }),
       }),
     );
@@ -1049,17 +1069,6 @@ describe("business API helpers", () => {
       }),
     );
     expect(urls).toContain("/events/reminders?code=ABC%20123");
-    expect(urls).toContain("/events/launch?code=ABC%20123");
-    expect(global.fetch).toHaveBeenCalledWith(
-      "/events/launch?code=ABC%20123",
-      expect.objectContaining({
-        body: JSON.stringify({
-          expectedVersion: 3,
-          idempotencyKey: "launch-key",
-          selection: { participantIds: ["participant 1"] },
-        }),
-      }),
-    );
     expect(urls).toContain("/events/delivery-requests/delivery%201");
     expect(urls).toContain("/events/roster-imports?code=ABC%20123");
     expect(urls).toContain("/events/roster-imports/import%201?code=ABC%20123");
@@ -1138,7 +1147,6 @@ describe("business API helpers", () => {
     await expect(
       sendReminders("BAD", { idempotencyKey: "reminder-key" }),
     ).rejects.toThrow("nope");
-    await expect(launchEvent("BAD", {})).rejects.toThrow("nope");
     await expect(fetchDeliveryRequest("bad-request")).rejects.toThrow("nope");
     await expect(retryDeliveryRequest("bad-request")).rejects.toThrow("nope");
     await expect(
@@ -1292,6 +1300,40 @@ describe("business API helpers", () => {
       status: 502,
       errorCode: null,
       participant: null,
+    });
+  });
+
+  test("managed participant mutations preserve structured error details", async () => {
+    global.fetch.mockResolvedValueOnce({
+      ok: false,
+      status: 409,
+      text: jest.fn().mockResolvedValue(
+        JSON.stringify({
+          detail: "Participant already exists",
+          code: "participant_exists",
+          event: { code: "ABC", version: 4 },
+          participant: { id: "participant-1", version: 2 },
+        }),
+      ),
+    });
+
+    await expect(
+      createManagedParticipant(
+        "ABC",
+        {
+          name: "Existing Person",
+          email: "existing@example.com",
+          idempotencyKey: "managed-key",
+        },
+        "tok",
+      ),
+    ).rejects.toMatchObject({
+      message: "Participant already exists",
+      status: 409,
+      errorCode: "participant_exists",
+      event: { code: "ABC", version: 4 },
+      participant: { id: "participant-1", version: 2 },
+      payload: expect.objectContaining({ code: "participant_exists" }),
     });
   });
 });

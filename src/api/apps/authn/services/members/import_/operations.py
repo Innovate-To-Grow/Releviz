@@ -116,3 +116,5 @@ def update_single_member(member, parsed, claimed_contact_emails):
             claimed_contact_emails.add(secondary_key)
     else:
         member.contact_emails.filter(email_type="secondary").delete()
+
+    return member

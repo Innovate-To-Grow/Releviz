@@ -9,6 +9,7 @@ import hashlib
 import hmac
 import ipaddress
 import logging
+from datetime import timedelta
 from urllib.parse import urlsplit
 
 from django.conf import settings
@@ -129,6 +130,83 @@ def consume_request_rate_limit(scope, request, identity="", *, cost=1):
         },
     )
     return RateLimitDecision(allowed=True)
+
+
+def revoke_all_refresh_sessions(member) -> int:
+    """Blacklist every outstanding refresh token owned by *member*.
+
+    Changing or resetting a password promises to sign out every device. Access
+    tokens already fail on their password-hash claim, but refresh tokens keep
+    working until they are blacklisted, so a stolen session would survive the
+    very action taken to shut it out.
+    """
+    from rest_framework_simplejwt.token_blacklist.models import (
+        BlacklistedToken,
+        OutstandingToken,
+    )
+
+    revoked = 0
+    for token in OutstandingToken.objects.filter(user=member):
+        _, created = BlacklistedToken.objects.get_or_create(token=token)
+        revoked += int(created)
+    return revoked
+
+
+def prune_auth_security_state(*, now=None) -> dict:
+    """Prune retained auth state after the legacy rate/session models were removed."""
+    from django.apps import apps
+    from django.db.models import Q
+    from django.utils import timezone
+    from rest_framework_simplejwt.token_blacklist.models import OutstandingToken
+
+    from apps.authn.models import EmailAuthChallenge
+    from apps.mail.models import EmailDeliveryJob
+
+    now = now or timezone.now()
+    session_retention = getattr(
+        settings,
+        "AUTH_SESSION_RECORD_RETENTION",
+        timedelta(days=30),
+    )
+    session_cutoff = now - session_retention
+    expired_challenge_ids = list(
+        EmailAuthChallenge.objects.filter(
+            status=EmailAuthChallenge.Status.PENDING,
+            expires_at__lte=now,
+        ).values_list("pk", flat=True)
+    )
+    expired_challenges = EmailAuthChallenge.objects.filter(pk__in=expired_challenge_ids).update(
+        status=EmailAuthChallenge.Status.EXPIRED,
+        updated_at=now,
+    )
+    canceled_auth_jobs = EmailDeliveryJob.objects.filter(
+        auth_challenge_id__in=expired_challenge_ids,
+        status__in=[
+            EmailDeliveryJob.Status.PENDING,
+            EmailDeliveryJob.Status.PROCESSING,
+            EmailDeliveryJob.Status.RETRY,
+        ],
+    ).update(
+        status=EmailDeliveryJob.Status.CANCELED,
+        last_error="Authentication challenge expired before delivery.",
+        locked_at=None,
+        lock_token=None,
+        updated_at=now,
+    )
+    TemporaryEventSession = apps.get_model("scheduling", "TemporaryEventSession")
+    deleted_temp_sessions = TemporaryEventSession.objects.filter(
+        Q(expires_at__lt=session_cutoff)
+        | Q(revoked_at__isnull=False, revoked_at__lt=session_cutoff)
+    ).delete()[0]
+    deleted_tokens = OutstandingToken.objects.filter(expires_at__lte=now).delete()[0]
+    return {
+        "rateLimitBuckets": 0,
+        "sessions": 0,
+        "temporaryEventSessions": deleted_temp_sessions,
+        "outstandingTokens": deleted_tokens,
+        "authChallenges": expired_challenges,
+        "authEmailJobs": canceled_auth_jobs,
+    }
 
 
 class AuthRateThrottle(BaseThrottle):

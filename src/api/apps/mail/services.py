@@ -362,6 +362,29 @@ def _claim_email_job(job_id, *, now) -> tuple[EmailDeliveryJob | None, uuid.UUID
             EmailDeliveryJob.Status.CANCELED,
         }:
             return job, None
+        if job.event_id is not None and job.message_type in {
+            EmailMessageLog.MessageType.INVITATION,
+            EmailMessageLog.MessageType.REMINDER,
+        }:
+            from apps.scheduling.models import Event
+
+            event_status = (
+                Event.objects.filter(pk=job.event_id).values_list("status", flat=True).first()
+            )
+            if event_status != Event.Status.ACTIVE:
+                job.status = EmailDeliveryJob.Status.CANCELED
+                job.last_error = "The event is no longer active."
+                job.reset_lock()
+                job.save(
+                    update_fields=[
+                        "status",
+                        "last_error",
+                        "locked_at",
+                        "lock_token",
+                        "updated_at",
+                    ]
+                )
+                return job, None
         predecessor, has_dependency = _final_cancellation_predecessor(job)
         if has_dependency:
             if predecessor is not None and predecessor.status == EmailDeliveryJob.Status.PROCESSING:

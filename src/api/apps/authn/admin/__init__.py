@@ -11,7 +11,6 @@ Organized into modules by functionality:
 from django.contrib import admin
 from django.contrib.auth.models import Group
 
-
 from .members.contact import ContactEmailAdmin
 from .members.invitation import AdminInvitationAdmin
 from .members.member import MemberAdmin

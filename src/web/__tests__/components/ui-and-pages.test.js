@@ -2,7 +2,14 @@
  * @jest-environment jsdom
  */
 
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 
@@ -15,9 +22,15 @@ import EventHeader from "@/components/event/EventHeader";
 import { DAY_LABELS, DAYS_PER_WEEK } from "@/lib/constants";
 import { formatHour, formatMode, formatTime } from "@/lib/format";
 
-jest.mock("@material/web/textfield/outlined-text-field.js", () => ({}), { virtual: true });
-jest.mock("@material/web/select/outlined-select.js", () => ({}), { virtual: true });
-jest.mock("@material/web/select/select-option.js", () => ({}), { virtual: true });
+jest.mock("@material/web/textfield/outlined-text-field.js", () => ({}), {
+  virtual: true,
+});
+jest.mock("@material/web/select/outlined-select.js", () => ({}), {
+  virtual: true,
+});
+jest.mock("@material/web/select/select-option.js", () => ({}), {
+  virtual: true,
+});
 jest.mock("@material/web/slider/slider.js", () => ({}), { virtual: true });
 jest.mock("@material/web/checkbox/checkbox.js", () => ({}), { virtual: true });
 
@@ -43,7 +56,9 @@ jest.mock("next/link", () => ({
 
 jest.mock("next/image", () => ({
   __esModule: true,
-  default: ({ alt, priority: _priority, ...props }) => <img alt={alt || ""} {...props} />,
+  default: ({ alt, priority: _priority, ...props }) => (
+    <img alt={alt || ""} {...props} />
+  ),
 }));
 
 jest.mock("@/components/auth/AuthContext", () => ({
@@ -56,6 +71,7 @@ jest.mock("@/components/auth/AuthContext", () => ({
 jest.mock("@/lib/api/auth", () => ({
   confirmPasswordReset: jest.fn(),
   requestPasswordResetCode: jest.fn(),
+  requestAccountDeletionCode: jest.fn(),
 }));
 
 jest.mock("@/lib/api/feedback", () => ({
@@ -65,7 +81,8 @@ jest.mock("@/lib/api/feedback", () => ({
 jest.mock("@/lib/navigation", () => ({
   navigateTo: jest.fn(),
   safeNextPath: (value, fallback = "/dashboard") => {
-    if (!value || !value.startsWith("/") || value.startsWith("//")) return fallback;
+    if (!value || !value.startsWith("/") || value.startsWith("//"))
+      return fallback;
     const baseUrl = "https://releviz.invalid";
     const resolved = new URL(value, baseUrl);
     return resolved.origin === baseUrl
@@ -79,28 +96,30 @@ jest.mock(
   () =>
     function MockHomePageClient() {
       return <div>home client</div>;
-    }
+    },
 );
 jest.mock(
   "@/components/event/CreateEventClient",
   () =>
     function MockCreateEventClient({ operation }) {
-      return <div>{operation === "edit" ? "edit client" : "create client"}</div>;
-    }
+      return (
+        <div>{operation === "edit" ? "edit client" : "create client"}</div>
+      );
+    },
 );
 jest.mock(
   "@/components/dashboard/DashboardPageClient",
   () =>
     function MockDashboardPageClient() {
       return <div>dashboard client</div>;
-    }
+    },
 );
 jest.mock(
   "@/components/event/EventPageClient",
   () =>
     function MockEventPageClient() {
       return <div>event client</div>;
-    }
+    },
 );
 
 import { useAuth } from "@/components/auth/AuthContext";
@@ -125,7 +144,11 @@ import SignInPage, {
 import SignUpPage, {
   generateStaticParams as generateSignUpStaticParams,
 } from "@/app/sign-up/[[...sign-up]]/page";
-import { confirmPasswordReset, requestPasswordResetCode } from "@/lib/api/auth";
+import {
+  confirmPasswordReset,
+  requestAccountDeletionCode,
+  requestPasswordResetCode,
+} from "@/lib/api/auth";
 import { submitFeedback } from "@/lib/api/feedback";
 import { navigateTo } from "@/lib/navigation";
 
@@ -156,32 +179,44 @@ describe("small UI modules", () => {
   test("AppButton renders variants and optional icon", () => {
     render(
       <>
-        <AppButton icon={<span data-testid="icon" />} fullWidth className="extra">
+        <AppButton
+          icon={<span data-testid="icon" />}
+          fullWidth
+          className="extra"
+        >
           Save
         </AppButton>
         <AppButton variant="outlined">Cancel</AppButton>
-      </>
+      </>,
     );
-    expect(screen.getByText("Save").closest("button")).toHaveClass("app-btn-full", "extra");
+    expect(screen.getByText("Save").closest("button")).toHaveClass(
+      "app-btn-full",
+      "extra",
+    );
     expect(screen.getByTestId("icon")).toBeInTheDocument();
-    expect(screen.getByText("Cancel").closest("button")).toHaveClass("app-btn-outlined");
+    expect(screen.getByText("Cancel").closest("button")).toHaveClass(
+      "app-btn-outlined",
+    );
   });
 
   test("brand logo exposes wordmark and square assets", () => {
     const { rerender } = render(<BrandLogo />);
     expect(screen.getByRole("img", { name: "Releviz" })).toHaveAttribute(
       "src",
-      "/brand/releviz-logo.png"
+      "/brand/releviz-logo.png",
     );
 
     rerender(<BrandLogo variant="mark" />);
     expect(screen.getByRole("img", { name: "Releviz" })).toHaveAttribute(
       "src",
-      "/brand/releviz-mark.png"
+      "/brand/releviz-mark.png",
     );
 
     rerender(<BrandHomeLink logoClassName="brand-logo--footer" />);
-    expect(screen.getByRole("link", { name: "Releviz home" })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("link", { name: "Releviz home" })).toHaveAttribute(
+      "href",
+      "/",
+    );
     expect(rootMetadata.manifest).toBe("/manifest.json");
     expect(rootMetadata.icons.icon[1].url).toBe("/brand/releviz-mark.png");
   });
@@ -244,13 +279,20 @@ describe("small UI modules", () => {
         onCellPaint={painted}
         label="Availability"
         participantDetails={[{ name: "Ada", schedule }]}
-      />
+      />,
     );
     const cell = document.querySelector("[data-cell-idx='1']");
     const otherCell = document.querySelector("[data-cell-idx='2']");
     document.elementFromPoint.mockReturnValue(cell);
-    fireEvent.pointerDown(cell, { button: 0, pointerId: 7, pointerType: "pen" });
-    expect(painted).toHaveBeenCalledWith(1, expect.objectContaining({ phase: "start" }));
+    fireEvent.pointerDown(cell, {
+      button: 0,
+      pointerId: 7,
+      pointerType: "pen",
+    });
+    expect(painted).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ phase: "start" }),
+    );
     fireEvent.pointerMove(cell, {
       clientX: 1,
       clientY: 1,
@@ -265,7 +307,10 @@ describe("small UI modules", () => {
       pointerId: 7,
       pointerType: "pen",
     });
-    expect(painted).toHaveBeenLastCalledWith(2, expect.objectContaining({ phase: "move" }));
+    expect(painted).toHaveBeenLastCalledWith(
+      2,
+      expect.objectContaining({ phase: "move" }),
+    );
     fireEvent.pointerCancel(cell, { pointerId: 7, pointerType: "pen" });
     fireEvent.pointerMove(cell, {
       clientX: 1,
@@ -277,12 +322,12 @@ describe("small UI modules", () => {
     expect(screen.getByText("Availability")).toBeInTheDocument();
     expect(document.querySelector("[data-cell-idx='1']")).toHaveAttribute(
       "title",
-      expect.stringContaining("Ada: 1.00")
+      expect.stringContaining("Ada: 1.00"),
     );
     fireEvent.keyDown(cell, { key: "Enter" });
     expect(painted).toHaveBeenCalledWith(
       1,
-      expect.objectContaining({ phase: "keyboard", type: "keydown" })
+      expect.objectContaining({ phase: "keyboard", type: "keydown" }),
     );
   });
 
@@ -326,7 +371,7 @@ describe("small UI modules", () => {
         readOnly
         showValues
         onCellPaint={painted}
-      />
+      />,
     );
     fireEvent.pointerDown(document.querySelector("[data-cell-idx='0']"), {
       button: 0,
@@ -361,7 +406,7 @@ describe("small UI modules", () => {
         readOnly={false}
         showValues={false}
         onCellPaint={painted}
-      />
+      />,
     );
     const emptyTargetCell = document.querySelector("[data-cell-idx='0']");
     fireEvent.pointerDown(emptyTargetCell, {
@@ -382,11 +427,17 @@ describe("small UI modules", () => {
   test("ScheduleGrid handles empty, invalid, sparse, overnight, and offset slot groups", () => {
     const painted = jest.fn();
     const first = render(<ScheduleGrid readOnly />);
-    expect(screen.getByText("No schedule slots are configured.")).toBeInTheDocument();
+    expect(
+      screen.getByText("No schedule slots are configured."),
+    ).toBeInTheDocument();
     first.unmount();
 
-    const invalid = render(<ScheduleGrid schedule={[]} slotGroups={{ invalid: true }} readOnly />);
-    expect(screen.getByText("No schedule slots are configured.")).toBeInTheDocument();
+    const invalid = render(
+      <ScheduleGrid schedule={[]} slotGroups={{ invalid: true }} readOnly />,
+    );
+    expect(
+      screen.getByText("No schedule slots are configured."),
+    ).toBeInTheDocument();
     invalid.unmount();
 
     render(
@@ -435,13 +486,19 @@ describe("small UI modules", () => {
         readOnly={false}
         showValues={false}
         onCellPaint={painted}
-      />
+      />,
     );
     const overnightCell = document.querySelector("[data-cell-idx='0']");
-    expect(overnightCell).toHaveAttribute("title", expect.stringContaining("+1d"));
+    expect(overnightCell).toHaveAttribute(
+      "title",
+      expect.stringContaining("+1d"),
+    );
     fireEvent.keyDown(overnightCell, { key: " " });
     fireEvent.keyDown(overnightCell, { key: "Escape" });
-    expect(painted).toHaveBeenCalledWith(0, expect.objectContaining({ type: "keydown" }));
+    expect(painted).toHaveBeenCalledWith(
+      0,
+      expect.objectContaining({ type: "keydown" }),
+    );
   });
 
   test("EventDetailsGrid renders defaults, dates, and extra cards", () => {
@@ -459,7 +516,7 @@ describe("small UI modules", () => {
           daySelectionType: "specific_dates",
           specificDates: ["2026-07-08"],
           timezone: "UTC",
-          status: "open",
+          status: "active",
           responseDeadline: "2026-07-08T12:00:00.000Z",
           finalMeeting: {
             startsAt: "2026-07-20T09:00:00.000Z",
@@ -469,13 +526,13 @@ describe("small UI modules", () => {
           },
         }}
         extraCards={[{ label: "Participants", value: 3 }]}
-      />
+      />,
     );
     expect(screen.getByText("Planning")).toBeInTheDocument();
     expect(screen.getByText("Mixed")).toBeInTheDocument();
     expect(screen.getByText("2026-07-08")).toBeInTheDocument();
     expect(screen.getByText("UTC")).toBeInTheDocument();
-    expect(screen.getByText("Open")).toBeInTheDocument();
+    expect(screen.getByText("Active")).toBeInTheDocument();
     expect(screen.getByText("Virtual · Meet link")).toBeInTheDocument();
     expect(screen.queryByText("No deadline")).not.toBeInTheDocument();
     expect(screen.getByText("3")).toBeInTheDocument();
@@ -494,13 +551,15 @@ describe("small UI modules", () => {
             slotMinutes: 15,
           }}
         />
-      </>
+      </>,
     );
     expect(screen.getAllByText("In-Person")[0]).toBeInTheDocument();
     expect(screen.getAllByText("Not set")[0]).toBeInTheDocument();
     expect(screen.getAllByText("N/A")[0]).toBeInTheDocument();
     expect(screen.getByText("Mon, Tue")).toBeInTheDocument();
-    expect(screen.getByText("11:00 PM - 1:00 AM (next day)")).toBeInTheDocument();
+    expect(
+      screen.getByText("11:00 PM - 1:00 AM (next day)"),
+    ).toBeInTheDocument();
   });
 });
 
@@ -551,7 +610,10 @@ describe("role-aware headers", () => {
     expect(screen.getByText("/ Create event")).toBeInTheDocument();
     expect(screen.getByText("Organizer")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Prachi" }));
-    expect(screen.getByRole("menuitem", { name: "Settings" })).toHaveAttribute("href", "/settings");
+    expect(screen.getByRole("menuitem", { name: "Settings" })).toHaveAttribute(
+      "href",
+      "/settings",
+    );
     fireEvent.click(screen.getByRole("menuitem", { name: "Log out" }));
     await waitFor(() => expect(logout).toHaveBeenCalled());
   });
@@ -602,7 +664,7 @@ describe("app pages", () => {
     render(
       <RootLayout>
         <main>child</main>
-      </RootLayout>
+      </RootLayout>,
     );
     expect(screen.getByTestId("provider")).toBeInTheDocument();
     render(<Home />);
@@ -617,8 +679,15 @@ describe("app pages", () => {
     expect(screen.getByText("edit client")).toBeInTheDocument();
     expect(screen.getByText("event client")).toBeInTheDocument();
     expect(screen.getByText("Page not found")).toBeInTheDocument();
-    expect(screen.getByRole("navigation", { name: "Product and support" })).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Report a problem" })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("navigation", { name: "Legal" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "Support" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "Report a problem" }),
+    ).not.toBeInTheDocument();
     SignInPage();
     SignUpPage();
     expect(redirect).toHaveBeenCalledWith("/login");
@@ -630,18 +699,16 @@ describe("app pages", () => {
   test("legacy auth pages use client redirects in the Amplify static export", async () => {
     process.env.AMPLIFY_STATIC_EXPORT = "1";
     const signIn = render(<SignInPage />);
-    expect(screen.getByRole("link", { name: "Continue to log in" })).toHaveAttribute(
-      "href",
-      "/login"
-    );
+    expect(
+      screen.getByRole("link", { name: "Continue to log in" }),
+    ).toHaveAttribute("href", "/login");
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/login"));
     signIn.unmount();
 
     render(<SignUpPage />);
-    expect(screen.getByRole("link", { name: "Continue to sign up" })).toHaveAttribute(
-      "href",
-      "/signup"
-    );
+    expect(
+      screen.getByRole("link", { name: "Continue to sign up" }),
+    ).toHaveAttribute("href", "/signup");
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/signup"));
   });
 
@@ -650,28 +717,34 @@ describe("app pages", () => {
     expect(termsMetadata.title).toBe("Terms | Releviz");
     expect(supportMetadata.title).toBe("Support | Releviz");
     const privacy = render(<PrivacyPage />);
-    expect(screen.getByRole("heading", { name: "Privacy notice" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "support page" })).toHaveAttribute("href", "/support");
+    expect(
+      screen.getByRole("heading", { name: "Privacy notice" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "support page" })).toHaveAttribute(
+      "href",
+      "/support",
+    );
     privacy.unmount();
 
     const terms = render(<TermsPage />);
-    expect(screen.getByRole("heading", { name: "Terms of service" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "privacy notice" })).toHaveAttribute(
-      "href",
-      "/privacy"
-    );
+    expect(
+      screen.getByRole("heading", { name: "Terms of service" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "privacy notice" }),
+    ).toHaveAttribute("href", "/privacy");
     terms.unmount();
 
     render(<SupportPage />);
-    expect(screen.getByRole("heading", { name: "How can we help?" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Open feedback form" })).toHaveAttribute(
-      "href",
-      "/feedback?from=/support"
-    );
-    expect(screen.getByRole("link", { name: "account recovery" })).toHaveAttribute(
-      "href",
-      "/recover"
-    );
+    expect(
+      screen.getByRole("heading", { name: "How can we help?" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "Open feedback form" }),
+    ).toHaveAttribute("href", "/feedback?from=/support");
+    expect(
+      screen.getByRole("link", { name: "account recovery" }),
+    ).toHaveAttribute("href", "/recover");
   });
 
   test("feedback path sanitization excludes origins and URL secrets", () => {
@@ -687,20 +760,27 @@ describe("app pages", () => {
     submitFeedback.mockReturnValueOnce(
       new Promise((resolve) => {
         resolveFeedback = resolve;
-      })
+      }),
     );
     searchParams = new URLSearchParams("from=%2Fevent%3Fcode%3DSECRET");
     render(<FeedbackPage />);
 
-    await userEvent.selectOptions(screen.getByLabelText("Feedback type"), "usability");
+    await userEvent.selectOptions(
+      screen.getByLabelText("Feedback type"),
+      "usability",
+    );
     await userEvent.type(
       screen.getByLabelText("What happened, or what would you change?"),
-      "The save state was hard to understand."
+      "The save state was hard to understand.",
     );
     await userEvent.click(
-      screen.getByLabelText(/service team may follow up using my account contact information/i)
+      screen.getByLabelText(
+        /service team may follow up using my account contact information/i,
+      ),
     );
-    await userEvent.click(screen.getByRole("button", { name: "Send feedback" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Send feedback" }),
+    );
     expect(screen.getByRole("button", { name: "Sending…" })).toBeDisabled();
     expect(submitFeedback).toHaveBeenCalledWith({
       category: "usability",
@@ -712,33 +792,47 @@ describe("app pages", () => {
     await act(async () => {
       resolveFeedback({ status: "received" });
     });
-    expect(await screen.findByText("Thank you. Your feedback was received.")).toBeInTheDocument();
-    expect(screen.getByLabelText("What happened, or what would you change?")).toHaveValue("");
     expect(
-      screen.getByLabelText(/service team may follow up using my account contact information/i)
+      await screen.findByText("Thank you. Your feedback was received."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("What happened, or what would you change?"),
+    ).toHaveValue("");
+    expect(
+      screen.getByLabelText(
+        /service team may follow up using my account contact information/i,
+      ),
     ).not.toBeChecked();
   });
 
   test("feedback form exposes specific and generic retryable failures", async () => {
-    submitFeedback.mockRejectedValueOnce(new Error("Feedback service unavailable"));
+    submitFeedback.mockRejectedValueOnce(
+      new Error("Feedback service unavailable"),
+    );
     const first = render(<FeedbackPage />);
     await userEvent.type(
       screen.getByLabelText("What happened, or what would you change?"),
-      "A useful report"
+      "A useful report",
     );
-    await userEvent.click(screen.getByRole("button", { name: "Send feedback" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Feedback service unavailable");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Send feedback" }),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Feedback service unavailable",
+    );
     first.unmount();
 
     submitFeedback.mockRejectedValueOnce(new Error());
     render(<FeedbackPage />);
     await userEvent.type(
       screen.getByLabelText("What happened, or what would you change?"),
-      "Another useful report"
+      "Another useful report",
     );
-    await userEvent.click(screen.getByRole("button", { name: "Send feedback" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Send feedback" }),
+    );
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Unable to send feedback. Please try again."
+      "Unable to send feedback. Please try again.",
     );
   });
 
@@ -775,16 +869,17 @@ describe("app pages", () => {
     expect(await screen.findByText("No code")).toBeInTheDocument();
   });
 
-  test("Login and signup wait for auth hydration before allowing submission", () => {
+  test("Login and signup hide authentication forms while hydrating the session", () => {
     useAuth.mockReturnValue({
       loading: true,
       requestEmailAuthCode: jest.fn(),
       verifyEmailAuthCode: jest.fn(),
     });
     const login = render(<LoginPage />);
-    expect(
-      screen.getByRole("button", { name: "Continue with email" }),
-    ).toBeDisabled();
+    expect(screen.queryByLabelText("Email")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Checking your session…",
+    );
     login.unmount();
 
     useAuth.mockReturnValue({
@@ -793,9 +888,10 @@ describe("app pages", () => {
       verifyEmailAuthCode: jest.fn(),
     });
     render(<SignupPage />);
-    expect(
-      screen.getByRole("button", { name: "Continue with email" }),
-    ).toBeDisabled();
+    expect(screen.queryByLabelText("Email")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Checking your session…",
+    );
   });
 
   test("Login preserves next and sends new accounts to profile completion", async () => {
@@ -882,39 +978,52 @@ describe("app pages", () => {
     const recovery = render(<RecoverAccountPage />);
 
     await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
-    await userEvent.click(screen.getByRole("button", { name: "Send reset code" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Send reset code" }),
+    );
     await waitFor(() =>
-      expect(requestPasswordResetCode).toHaveBeenCalledWith({ email: "ada@example.com" })
+      expect(requestPasswordResetCode).toHaveBeenCalledWith({
+        email: "ada@example.com",
+      }),
     );
     expect(
       await screen.findByText(
-        "If an account exists for that email, a reset code has been sent. Check your inbox."
-      )
+        "If an account exists for that email, a reset code has been sent. Check your inbox.",
+      ),
     ).toBeInTheDocument();
     expect(screen.getByLabelText("Email")).toBeDisabled();
 
     await userEvent.type(screen.getByLabelText("Reset code"), "123456");
     await userEvent.type(screen.getByLabelText("New password"), "password456");
-    await userEvent.type(screen.getByLabelText("Confirm new password"), "different456");
-    await userEvent.click(screen.getByRole("button", { name: "Reset password" }));
+    await userEvent.type(
+      screen.getByLabelText("Confirm new password"),
+      "different456",
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Reset password" }),
+    );
     expect(screen.getByText("Passwords do not match.")).toBeInTheDocument();
     expect(confirmPasswordReset).not.toHaveBeenCalled();
 
     fireEvent.change(screen.getByLabelText("Confirm new password"), {
       target: { value: "password456" },
     });
-    await userEvent.click(screen.getByRole("button", { name: "Reset password" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Reset password" }),
+    );
     await waitFor(() =>
       expect(confirmPasswordReset).toHaveBeenCalledWith({
         email: "ada@example.com",
         code: "123456",
         password: "password456",
         passwordConfirm: "password456",
-      })
+      }),
     );
     expect(navigateTo).toHaveBeenCalledWith("/login?status=password-reset");
 
-    await userEvent.click(screen.getByRole("button", { name: "Use a different email" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Use a different email" }),
+    );
     expect(screen.getByLabelText("Email")).not.toBeDisabled();
     expect(screen.queryByLabelText("Reset code")).not.toBeInTheDocument();
     recovery.unmount();
@@ -922,26 +1031,39 @@ describe("app pages", () => {
     requestPasswordResetCode.mockRejectedValueOnce(new Error("No request"));
     const requestFailure = render(<RecoverAccountPage />);
     await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
-    await userEvent.click(screen.getByRole("button", { name: "Send reset code" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Send reset code" }),
+    );
     expect(await screen.findByText("No request")).toBeInTheDocument();
     requestFailure.unmount();
 
     requestPasswordResetCode.mockRejectedValueOnce(new Error());
     const genericRequestFailure = render(<RecoverAccountPage />);
     await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
-    await userEvent.click(screen.getByRole("button", { name: "Send reset code" }));
-    expect(await screen.findByText("Unable to request a reset code.")).toBeInTheDocument();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Send reset code" }),
+    );
+    expect(
+      await screen.findByText("Unable to request a reset code."),
+    ).toBeInTheDocument();
     genericRequestFailure.unmount();
 
     requestPasswordResetCode.mockResolvedValueOnce({ message: "sent" });
     confirmPasswordReset.mockRejectedValueOnce(new Error("Bad reset"));
     const resetFailure = render(<RecoverAccountPage />);
     await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
-    await userEvent.click(screen.getByRole("button", { name: "Send reset code" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Send reset code" }),
+    );
     await userEvent.type(await screen.findByLabelText("Reset code"), "000000");
     await userEvent.type(screen.getByLabelText("New password"), "password456");
-    await userEvent.type(screen.getByLabelText("Confirm new password"), "password456");
-    await userEvent.click(screen.getByRole("button", { name: "Reset password" }));
+    await userEvent.type(
+      screen.getByLabelText("Confirm new password"),
+      "password456",
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Reset password" }),
+    );
     expect(await screen.findByText("Bad reset")).toBeInTheDocument();
     resetFailure.unmount();
 
@@ -949,12 +1071,21 @@ describe("app pages", () => {
     confirmPasswordReset.mockRejectedValueOnce(new Error());
     render(<RecoverAccountPage />);
     await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
-    await userEvent.click(screen.getByRole("button", { name: "Send reset code" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Send reset code" }),
+    );
     await userEvent.type(await screen.findByLabelText("Reset code"), "000000");
     await userEvent.type(screen.getByLabelText("New password"), "password456");
-    await userEvent.type(screen.getByLabelText("Confirm new password"), "password456");
-    await userEvent.click(screen.getByRole("button", { name: "Reset password" }));
-    expect(await screen.findByText("Unable to reset your password.")).toBeInTheDocument();
+    await userEvent.type(
+      screen.getByLabelText("Confirm new password"),
+      "password456",
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Reset password" }),
+    );
+    expect(
+      await screen.findByText("Unable to reset your password."),
+    ).toBeInTheDocument();
   });
 
   test("Signup route uses the same passwordless email flow", async () => {
@@ -1226,19 +1357,39 @@ describe("app pages", () => {
     expect(deleteDetails).not.toHaveAttribute("open");
     fireEvent.click(deleteDetails.querySelector("summary"));
     expect(deleteDetails).toHaveAttribute("open");
+    // Deleting starts by emailing a confirmation code.
+    const requestCodeButton = within(deleteForm).getByRole("button", {
+      name: "Email a confirmation code",
+    });
+    expect(requestCodeButton).toBeDisabled();
+    await userEvent.type(
+      within(deleteForm).getByLabelText("Type DELETE to confirm"),
+      "DELETE",
+    );
+    expect(requestCodeButton).not.toBeDisabled();
+
+    requestAccountDeletionCode.mockRejectedValueOnce(new Error("No code"));
+    fireEvent.submit(deleteForm);
+    expect(await screen.findByText("No code")).toBeInTheDocument();
+
+    requestAccountDeletionCode.mockResolvedValueOnce({ message: "sent" });
+    fireEvent.submit(deleteForm);
+    expect(
+      await screen.findByText(
+        "We emailed a confirmation code. Enter it to delete your account.",
+      ),
+    ).toBeInTheDocument();
+
     const deleteButton = within(deleteForm).getByRole("button", {
       name: "Delete account permanently",
     });
     expect(deleteButton).toBeDisabled();
     await userEvent.type(
-      within(deleteForm).getByLabelText("Current password"),
-      "passwordABC",
-    );
-    await userEvent.type(
-      within(deleteForm).getByLabelText("Type DELETE to confirm"),
-      "DELETE",
+      within(deleteForm).getByLabelText("Confirmation code"),
+      "654321",
     );
     expect(deleteButton).not.toBeDisabled();
+
     deleteAccount.mockRejectedValueOnce(new Error("No deletion"));
     fireEvent.submit(deleteForm);
     expect(await screen.findByText("No deletion")).toBeInTheDocument();
@@ -1250,10 +1401,7 @@ describe("app pages", () => {
     deleteAccount.mockResolvedValueOnce({ message: "deleted" });
     fireEvent.submit(deleteForm);
     await waitFor(() =>
-      expect(deleteAccount).toHaveBeenLastCalledWith({
-        password: "passwordABC",
-        confirmation: "DELETE",
-      }),
+      expect(deleteAccount).toHaveBeenLastCalledWith({ code: "654321" }),
     );
     authenticated.unmount();
 

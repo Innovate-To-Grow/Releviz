@@ -1,4 +1,3 @@
-import uuid
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -37,25 +36,14 @@ class RelevizApiTests(TestCase):
                 "days": [1, 2],
                 "mode": "mixed",
                 "location": "Room 1",
-                "status": "draft",
+                "status": "active",
                 "accessMode": "open_link",
             },
             format="json",
         )
         self.assertEqual(res.status_code, 201)
         event = res.data["event"]
-        self.assertEqual(event["status"], "draft")
-        launched = self.client.post(
-            f"/events/launch?code={event['code']}",
-            {
-                "expectedVersion": event["version"],
-                "idempotencyKey": str(uuid.uuid4()),
-            },
-            format="json",
-        )
-        self.assertEqual(launched.status_code, 202, launched.data)
-        self.assertEqual(launched.data["event"]["status"], "open")
-        self.assertEqual(launched.data["deliveryRequest"]["recipientCount"], 0)
+        self.assertEqual(event["status"], "active")
         return event["code"]
 
     def test_missing_auth_returns_401(self):

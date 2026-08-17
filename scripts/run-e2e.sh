@@ -28,6 +28,10 @@ fi
 
 scripts/db/wait-for-postgres.sh
 python3 src/api/manage.py migrate --noinput --settings=config.settings.e2e
-python3 src/api/manage.py ensure_default_admin --yes --settings=config.settings.e2e
+python3 src/api/manage.py seed_admin_e2e \
+  --yes \
+  --email "${DJANGO_SUPERUSER_EMAIL}" \
+  --password "${DJANGO_SUPERUSER_PASSWORD}" \
+  --settings=config.settings.e2e
 npm --workspace=releviz-web run build
 npm exec --workspace=releviz-web -- playwright test --config=../e2e/playwright.config.js

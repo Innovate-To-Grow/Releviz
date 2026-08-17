@@ -53,7 +53,6 @@ class ResetDBCommandTest(TestCase):
             patch("apps.core.management.commands.resetdb.reset_mysql"),
             patch("apps.core.management.commands.resetdb.reset_sqlite"),
             patch("apps.core.management.commands.resetdb.create_default_admin"),
-            patch("apps.core.management.commands.resetdb.seed_archive_data"),
             patch("apps.core.management.commands.resetdb.call_command"),
         ):
             out = StringIO()
@@ -81,7 +80,6 @@ class ResetDBCommandTest(TestCase):
             patch("apps.core.management.commands.resetdb.reset_mysql") as mysql,
             patch("apps.core.management.commands.resetdb.reset_sqlite") as sqlite,
             patch("apps.core.management.commands.resetdb.create_default_admin"),
-            patch("apps.core.management.commands.resetdb.seed_archive_data"),
             patch("apps.core.management.commands.resetdb.call_command"),
         ):
             call_command("resetdb", "--force", "--confirm=RESET_DB", stdout=StringIO())
@@ -102,7 +100,6 @@ class ResetDBCommandTest(TestCase):
             patch("apps.core.management.commands.resetdb.connections", {"default": conn}),
             patch("apps.core.management.commands.resetdb.reset_mysql") as mysql,
             patch("apps.core.management.commands.resetdb.create_default_admin"),
-            patch("apps.core.management.commands.resetdb.seed_archive_data"),
             patch("apps.core.management.commands.resetdb.call_command"),
         ):
             call_command("resetdb", "--force", "--confirm=RESET_DB", stdout=StringIO())
@@ -158,7 +155,6 @@ class ResetDBCommandTest(TestCase):
             patch("apps.core.management.commands.resetdb.connections", {"default": conn}),
             patch("apps.core.management.commands.resetdb.reset_sqlite"),
             patch("apps.core.management.commands.resetdb.create_default_admin"),
-            patch("apps.core.management.commands.resetdb.seed_archive_data"),
             patch("apps.core.management.commands.resetdb.call_command"),
         ):
             call_command(

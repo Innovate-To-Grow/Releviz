@@ -8,14 +8,10 @@ from scripts.ci.plan_e2e_tests import ALL_PROJECTS, read_changed_files, select_m
 
 class DjangoPlannerTests(TestCase):
     def test_push_runs_every_app(self):
-        self.assertEqual(
-            select_apps("push", ["src/api/apps/core/views.py"]), list(APPS)
-        )
+        self.assertEqual(select_apps("push", ["src/api/apps/core/views.py"]), list(APPS))
 
     def test_shared_backend_change_runs_every_app(self):
-        self.assertEqual(
-            select_apps("pull_request", ["src/api/config/urls.py"]), list(APPS)
-        )
+        self.assertEqual(select_apps("pull_request", ["src/api/config/urls.py"]), list(APPS))
 
     def test_scheduling_change_is_focused(self):
         self.assertEqual(
@@ -26,7 +22,13 @@ class DjangoPlannerTests(TestCase):
     def test_auth_change_includes_dependent_apps(self):
         self.assertEqual(
             select_apps("pull_request", ["src/api/apps/authn/models.py"]),
-            ["authn", "messaging", "scheduling"],
+            ["authn", "mail", "scheduling"],
+        )
+
+    def test_mail_change_uses_current_app_name_and_includes_scheduling(self):
+        self.assertEqual(
+            select_apps("pull_request", ["src/api/apps/mail/services.py"]),
+            ["mail", "scheduling"],
         )
 
 

@@ -44,12 +44,12 @@ from .email.challenges import (
     verify_email_code_for_purposes,
 )
 from .members.create import CreateMemberService
-from .members.register import start_registration
 from .members.import_ import (
     ImportResult,
     generate_template_excel,
     import_members_from_excel,
 )
+from .members.register import start_registration
 from .security import (
     RSADecryptionError,
     decrypt_password,

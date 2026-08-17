@@ -6,45 +6,34 @@ import { MdClose, MdRefresh, MdSave } from "react-icons/md";
 import AppButton from "@/components/ui/AppButton";
 import ScheduleChannelEditor from "@/components/schedule/ScheduleChannelEditor";
 
-function formatStatus(status) {
-  const normalized = status || "draft";
-  return normalized
-    .split("_")
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-export function OrganizerHeader({ event, onRefresh }) {
-  const status = event?.status || "draft";
-  const statusClass = status.toLowerCase().replace(/[^a-z0-9-]/g, "-");
-  const meetingDuration =
-    event?.meetingDurationMinutes || event?.slotMinutes || 30;
-
+export function OrganizerHeader({
+  event,
+  onRefresh,
+  refreshing = false,
+  controls = null,
+}) {
   return (
     <header className="organizer-heading">
       <div className="organizer-heading__content">
         <span className="organizer-eyebrow">Event workspace</span>
-        <h2 className="organizer-title">Organizer Dashboard</h2>
-        <p>Manage participants and find the best meeting time.</p>
-        <div className="organizer-heading__meta" aria-label="Event summary">
-          <span
-            className={`organizer-status organizer-status--${statusClass}`}
-            aria-label={`Event status: ${formatStatus(status)}`}
-          >
-            {formatStatus(status)}
-          </span>
-          <span className="organizer-heading__meta-item">
-            {event?.timezone || "UTC"} timezone
-          </span>
-          <span className="organizer-heading__meta-item">
-            {meetingDuration}-minute meeting
-          </span>
-        </div>
+        <h2 className="organizer-title">
+          {event?.name?.trim() || "Untitled event"}
+        </h2>
       </div>
-      <div className="organizer-heading__actions">
-        <AppButton onClick={onRefresh} variant="outlined" icon={<MdRefresh />}>
-          Refresh
+      <div
+        className="organizer-heading__actions"
+        role="group"
+        aria-label="Workspace actions"
+      >
+        {controls}
+        <AppButton
+          onClick={onRefresh}
+          variant="outlined"
+          icon={<MdRefresh />}
+          disabled={refreshing}
+          aria-busy={refreshing}
+        >
+          {refreshing ? "Refreshing…" : "Refresh"}
         </AppButton>
       </div>
     </header>
@@ -221,7 +210,7 @@ export function ManagedScheduleDrawer({
 
           {!responsesOpen && (
             <p className="managed-participants__error" role="note">
-              Availability is locked while this event is finalized or archived.
+              Availability can only be edited while this event is active.
             </p>
           )}
           {error && (

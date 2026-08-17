@@ -42,6 +42,13 @@ def send_notification_email(
         logger.info("Notification email sent via SES")
         return True
 
+    if email_api._send_via_django_backend(
+        recipient=recipient,
+        subject=subject,
+        html_body=html_body,
+    ):
+        return True
+
     logger.error("Notification email was not sent: %s", SES_DELIVERY_ERROR)
     return False
 
@@ -74,6 +81,13 @@ def send_admin_invitation_email(*, invitation, request=None):
         html_body=html_body,
     ):
         logger.info("Admin invitation email sent via SES")
+        return
+
+    if email_api._send_via_django_backend(
+        recipient=invitation.email,
+        subject=subject,
+        html_body=html_body,
+    ):
         return
 
     raise RuntimeError(SES_DELIVERY_ERROR)
@@ -111,6 +125,13 @@ def send_verification_email(
         html_body=html_body,
     ):
         logger.info("Verification email sent via SES")
+        return
+
+    if email_api._send_via_django_backend(
+        recipient=recipient,
+        subject=subject,
+        html_body=html_body,
+    ):
         return
 
     raise RuntimeError(SES_DELIVERY_ERROR)

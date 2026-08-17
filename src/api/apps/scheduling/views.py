@@ -47,7 +47,6 @@ from apps.scheduling.finalization import (
 )
 from apps.scheduling.lifecycle import (
     LifecycleError,
-    event_configuration_write_error,
     response_write_error,
     transition_event,
 )
@@ -69,7 +68,8 @@ from apps.scheduling.services import (
     EventEmailRequestError,
     ManagedParticipantError,
     api_invitation,
-    create_or_reuse_managed_participant,
+    create_or_reuse_managed_participant_and_send,
+    email_delivery_request_payload,
     enqueue_manual_reminders,
     final_meeting_ics,
     mark_invitation_for_member,
@@ -150,7 +150,7 @@ def temp_access_payload(session):
     payload = {
         "event": api_event(event),
         "participant": api_participant(session.participant),
-        "email": session.member.get_primary_contact_email(),
+        "email": session.member.get_primary_email(),
         "canViewResults": can_view_results,
         "sessionExpiresAt": session.expires_at.isoformat(),
     }
@@ -164,11 +164,7 @@ def temp_access_payload(session):
 def organizer_response_write_error(event) -> str | None:
     """Organizers may fill temporary schedules outside the participant deadline."""
 
-    if event.status not in {
-        Event.Status.DRAFT,
-        Event.Status.OPEN,
-        Event.Status.CLOSED,
-    }:
+    if event.status != Event.Status.ACTIVE:
         return f"Organizer-entered responses cannot change while the event is {event.status}."
     if hasattr(event, "final_meeting") and event.final_meeting.active:
         return "Reopen the event before changing an organizer-entered response."
@@ -376,7 +372,7 @@ class EventLifecycleView(APIView):
                 status=409,
             )
 
-        if target_status != event.status and target_status != Event.Status.OPEN:
+        if target_status != event.status and target_status != Event.Status.ACTIVE:
             # Wait for in-flight participant writes before closing or archiving.
             # Response writes lock only their own Participant row at scale.
             list(event.participants.select_for_update().order_by("pk").values_list("pk", flat=True))
@@ -393,7 +389,7 @@ class EventLifecycleView(APIView):
             event.save(update_fields=changed_fields)
         cancellation_jobs = []
         cancellation_request = None
-        if target_status == Event.Status.OPEN and "status" in changed_fields:
+        if target_status == Event.Status.ACTIVE and "status" in changed_fields:
             cancellation_jobs = cancel_active_final_meeting(event)
             cancellation_request = (
                 EmailDeliveryRequest.objects.filter(
@@ -565,10 +561,19 @@ class ManagedParticipantView(APIView):
         event = Event.objects.filter(code=code).first()
         if event is None:
             return Response({"error": "Event not found"}, status=404)
+        try:
+            idempotency_key = uuid.UUID(str(request.data.get("idempotencyKey") or ""))
+        except (ValueError, TypeError, AttributeError):
+            return Response({"error": "idempotencyKey must be a UUID"}, status=400)
         normalized_email = str(request.data.get("email") or "").strip().lower()
         if (
             normalized_email
             and not event.invitations.filter(email__iexact=normalized_email).exists()
+            and not EmailDeliveryRequest.objects.filter(
+                event=event,
+                operation=EmailDeliveryRequest.Operation.INVITATION,
+                idempotency_key=idempotency_key,
+            ).exists()
         ):
             quota = consume_request_rate_limit(
                 "invitation_recipient",
@@ -579,17 +584,27 @@ class ManagedParticipantView(APIView):
             if not quota.allowed:
                 raise Throttled(wait=quota.retry_after)
         try:
-            result = create_or_reuse_managed_participant(
+            result = create_or_reuse_managed_participant_and_send(
                 event=event,
                 organizer=request.user,
                 name=request.data.get("name"),
                 email=request.data.get("email"),
+                idempotency_key=idempotency_key,
             )
-        except ManagedParticipantError as exc:
+        except (ManagedParticipantError, EventEmailRequestError) as exc:
             return Response({"error": str(exc)}, status=exc.status_code)
         participant = result["participant"]
-        if result["participantCreated"]:
+        if result["participantCreated"] or result["participantRestored"]:
             mark_event_results_dirty(event)
+        delivery_result = result["deliveryResult"]
+        delivery_request = (
+            email_delivery_request_payload(
+                delivery_result["request"],
+                jobs=delivery_result["jobs"],
+            )
+            if delivery_result
+            else None
+        )
         return private_response(
             {
                 "participant": api_participant(
@@ -598,7 +613,11 @@ class ManagedParticipantView(APIView):
                     invitation=result["invitation"],
                 ),
                 "created": result["participantCreated"],
+                "restored": result["participantRestored"],
                 "memberCreated": result["memberCreated"],
+                "idempotent": delivery_result["idempotent"] if delivery_result else False,
+                "deliveryRequest": delivery_request,
+                "autoInvitedCount": delivery_request["recipientCount"] if delivery_request else 0,
             },
             status=201 if result["participantCreated"] else 200,
         )
@@ -644,6 +663,9 @@ class ParticipantUpdateView(APIView):
         response_fields = {"availabilityInperson", "availabilityVirtual", "submitted"}
         is_response_mutation = any(field in request.data for field in response_fields)
         is_name_mutation = "name" in request.data
+        is_roster_metadata_mutation = any(
+            field in request.data for field in ("groupName", "sortOrder")
+        )
         is_versioned_mutation = is_response_mutation or is_name_mutation
 
         if is_organizer and not is_temporary and is_versioned_mutation:
@@ -697,6 +719,16 @@ class ParticipantUpdateView(APIView):
                 },
                 status=403,
             )
+        if is_organizer and is_roster_metadata_mutation:
+            write_error = organizer_response_write_error(event)
+            if write_error:
+                return Response(
+                    {
+                        "error": write_error,
+                        "errorCode": "participant_roster_locked",
+                    },
+                    status=409,
+                )
         if "email" in request.data or "contactEmail" in request.data:
             return Response(
                 {
@@ -938,7 +970,7 @@ class ParticipantUpdateView(APIView):
             return error
         if event.organizer_id != request.user.pk:
             return Response({"error": "Only the organizer can hide participants"}, status=403)
-        write_error = event_configuration_write_error(event)
+        write_error = response_write_error(event)
         if write_error:
             return Response({"error": write_error}, status=409)
         participant.hidden = True
@@ -962,7 +994,7 @@ class ParticipantUnhideView(APIView):
             return Response({"error": "Event not found"}, status=404)
         if event.organizer_id != request.user.pk:
             return Response({"error": "Only the organizer can unhide participants"}, status=403)
-        write_error = event_configuration_write_error(event)
+        write_error = response_write_error(event)
         if write_error:
             return Response({"error": write_error}, status=409)
         participant = (
@@ -1531,12 +1563,7 @@ class EventInvitationsView(APIView):
         event, error = self._event_for_organizer(request)
         if error:
             return error
-        if event.status == Event.Status.DRAFT:
-            return Response(
-                {"error": "Publish the draft event to send its first invitations"},
-                status=409,
-            )
-        write_error = event_configuration_write_error(event)
+        write_error = response_write_error(event)
         if write_error:
             return Response({"error": write_error}, status=409)
         try:
@@ -1599,6 +1626,10 @@ class EventInvitationsView(APIView):
                 "deduplicated": recipient_count - result["createdJobCount"],
                 "idempotent": result["idempotent"],
                 "deliveryRequestId": str(result["request"].pk),
+                "deliveryRequest": email_delivery_request_payload(
+                    result["request"],
+                    jobs=result["jobs"],
+                ),
             },
             status=202,
         )
@@ -1622,7 +1653,7 @@ class EventRemindersView(APIView):
             return Response({"error": "Event not found"}, status=404)
         if event.organizer_id != request.user.pk:
             return Response({"error": "Only the organizer can send reminders"}, status=403)
-        write_error = event_configuration_write_error(event)
+        write_error = response_write_error(event)
         if write_error:
             return Response({"error": write_error}, status=409)
         try:
@@ -1672,6 +1703,10 @@ class EventRemindersView(APIView):
                 "deduplicated": recipient_count - result["createdJobCount"],
                 "idempotent": result["idempotent"],
                 "deliveryRequestId": str(result["request"].pk),
+                "deliveryRequest": email_delivery_request_payload(
+                    result["request"],
+                    jobs=result["jobs"],
+                ),
             },
             status=202,
         )
@@ -1692,7 +1727,7 @@ class EventFinalizationPreviewView(APIView):
                 {"error": "Only the organizer can review a final meeting time"},
                 status=403,
             )
-        if event.status not in {Event.Status.OPEN, Event.Status.CLOSED}:
+        if event.status not in {Event.Status.ACTIVE, Event.Status.CLOSED}:
             return Response(
                 {"error": f"An event cannot be finalized while it is {event.status}."},
                 status=409,

@@ -54,7 +54,10 @@ function forgetInvitation(code) {
 }
 
 function unwrapAccessPayload(payload = {}) {
-  const session = payload.session && typeof payload.session === "object" ? payload.session : {};
+  const session =
+    payload.session && typeof payload.session === "object"
+      ? payload.session
+      : {};
   return {
     event: payload.event || session.event || null,
     participant: payload.participant || session.participant || null,
@@ -65,19 +68,22 @@ function unwrapAccessPayload(payload = {}) {
 }
 
 function scheduleLength(event, participant) {
-  if (Number.isInteger(event?.slotCount) && event.slotCount >= 0) return event.slotCount;
+  if (Number.isInteger(event?.slotCount) && event.slotCount >= 0)
+    return event.slotCount;
   const largestIndex = (event?.slotGroups || []).reduce(
     (largest, group) =>
       Math.max(
         largest,
-        ...(group?.slots || []).map((slot) => (Number.isInteger(slot?.index) ? slot.index : -1))
+        ...(group?.slots || []).map((slot) =>
+          Number.isInteger(slot?.index) ? slot.index : -1,
+        ),
       ),
-    -1
+    -1,
   );
   return Math.max(
     largestIndex + 1,
     participant?.availabilityInperson?.length || 0,
-    participant?.availabilityVirtual?.length || 0
+    participant?.availabilityVirtual?.length || 0,
   );
 }
 
@@ -139,8 +145,14 @@ export default function TempAccessClient() {
     (participant, event = access?.event) => {
       if (!participant || !event) return;
       const length = scheduleLength(event, participant);
-      const inperson = normalizedSchedule(participant.availabilityInperson, length);
-      const virtual = normalizedSchedule(participant.availabilityVirtual, length);
+      const inperson = normalizedSchedule(
+        participant.availabilityInperson,
+        length,
+      );
+      const virtual = normalizedSchedule(
+        participant.availabilityVirtual,
+        length,
+      );
       participantVersionRef.current = participant.version;
       scheduleInpersonRef.current = inperson;
       scheduleVirtualRef.current = virtual;
@@ -155,7 +167,7 @@ export default function TempAccessClient() {
       setConflictReloadPending(false);
       setAccess((current) => (current ? { ...current, participant } : current));
     },
-    [access?.event]
+    [access?.event],
   );
 
   const applyAccessPayload = useCallback((payload) => {
@@ -164,8 +176,14 @@ export default function TempAccessClient() {
       throw new Error("Temporary access response is incomplete.");
     }
     const length = scheduleLength(next.event, next.participant);
-    const inperson = normalizedSchedule(next.participant.availabilityInperson, length);
-    const virtual = normalizedSchedule(next.participant.availabilityVirtual, length);
+    const inperson = normalizedSchedule(
+      next.participant.availabilityInperson,
+      length,
+    );
+    const virtual = normalizedSchedule(
+      next.participant.availabilityVirtual,
+      length,
+    );
     participantVersionRef.current = next.participant.version;
     scheduleInpersonRef.current = inperson;
     scheduleVirtualRef.current = virtual;
@@ -214,7 +232,7 @@ export default function TempAccessClient() {
         endTemporaryAccess(
           accountUpgraded
             ? "This account now has full access. Sign in with the full account to continue."
-            : "This temporary session has expired. Reopen the invitation email to verify again."
+            : "This temporary session has expired. Reopen the invitation email to verify again.",
         );
         return;
       }
@@ -223,40 +241,50 @@ export default function TempAccessClient() {
       // latest payload fails. Lock first so the page cannot keep queuing writes.
       resultsRefreshRevisionRef.current += 1;
       setAccess((current) =>
-        current ? { ...current, canViewResults: false, results: null } : current
+        current
+          ? { ...current, canViewResults: false, results: null }
+          : current,
       );
-      setServerWriteLock(error.message || "This response can no longer be changed.");
+      setServerWriteLock(
+        error.message || "This response can no longer be changed.",
+      );
 
       try {
         const payload = await fetchTempAccessSession(eventCode);
         applyAccessPayload(payload);
-        setServerWriteLock(error.message || "This response can no longer be changed.");
+        setServerWriteLock(
+          error.message || "This response can no longer be changed.",
+        );
         return;
       } catch (sessionError) {
         if (sessionError.status === 401 || sessionError.status === 403) {
           endTemporaryAccess(
             error.status === 403
               ? "This temporary access is no longer active. Sign in with the full account or reopen the invitation email."
-              : "This temporary session has expired. Reopen the invitation email to verify again."
+              : "This temporary session has expired. Reopen the invitation email to verify again.",
           );
           return;
         }
       }
 
       setDraftSaveState("failed");
-      setDraftSaveError(error.message || "This response can no longer be changed.");
+      setDraftSaveError(
+        error.message || "This response can no longer be changed.",
+      );
     },
-    [applyAccessPayload, endTemporaryAccess, eventCode]
+    [applyAccessPayload, endTemporaryAccess, eventCode],
   );
 
   const refreshResultsAfterDraft = useCallback(async () => {
     const revision = resultsRefreshRevisionRef.current + 1;
     resultsRefreshRevisionRef.current = revision;
     setAccess((current) =>
-      current ? { ...current, canViewResults: false, results: null } : current
+      current ? { ...current, canViewResults: false, results: null } : current,
     );
     try {
-      const latest = unwrapAccessPayload(await fetchTempAccessSession(eventCode));
+      const latest = unwrapAccessPayload(
+        await fetchTempAccessSession(eventCode),
+      );
       if (resultsRefreshRevisionRef.current !== revision) return;
       setAccess((current) =>
         current
@@ -265,7 +293,7 @@ export default function TempAccessClient() {
               canViewResults: latest.canViewResults,
               results: latest.canViewResults ? latest.results : null,
             }
-          : current
+          : current,
       );
     } catch {
       // The conservative state above prevents stale or no-longer-authorized results.
@@ -279,10 +307,13 @@ export default function TempAccessClient() {
       setRequestMessage("");
       setVerificationError("");
       try {
-        await requestTempAccessCode({ code: eventCode, invitationToken: token });
+        await requestTempAccessCode({
+          code: eventCode,
+          invitationToken: token,
+        });
         setRequestState("sent");
         setRequestMessage(
-          "If this access link is valid, a six-digit code has been sent to its email address."
+          "If this access link is valid, a six-digit code has been sent to its email address.",
         );
         return true;
       } catch {
@@ -290,12 +321,12 @@ export default function TempAccessClient() {
         setRequestMessage(
           automatic
             ? "We could not start verification. Try sending the code again."
-            : "We could not send a new code. Wait a moment and try again."
+            : "We could not send a new code. Wait a moment and try again.",
         );
         return false;
       }
     },
-    [eventCode]
+    [eventCode],
   );
 
   useEffect(() => {
@@ -347,7 +378,10 @@ export default function TempAccessClient() {
   useEffect(() => {
     const deadline = access?.event?.responseDeadline;
     if (!deadline) {
-      const timer = window.setTimeout(() => setResponseDeadlinePassed(false), 0);
+      const timer = window.setTimeout(
+        () => setResponseDeadlinePassed(false),
+        0,
+      );
       return () => window.clearTimeout(timer);
     }
     let timer;
@@ -358,7 +392,10 @@ export default function TempAccessClient() {
         return;
       }
       setResponseDeadlinePassed(false);
-      timer = window.setTimeout(refreshDeadline, Math.min(remaining, 2_147_483_647));
+      timer = window.setTimeout(
+        refreshDeadline,
+        Math.min(remaining, 2_147_483_647),
+      );
     };
     timer = window.setTimeout(refreshDeadline, 0);
     return () => window.clearTimeout(timer);
@@ -366,7 +403,7 @@ export default function TempAccessClient() {
 
   const responseChangesDisabled =
     !access?.event ||
-    access.event.status !== "open" ||
+    access.event.status !== "active" ||
     responseDeadlinePassed ||
     Boolean(serverWriteLock);
 
@@ -378,7 +415,9 @@ export default function TempAccessClient() {
     if (!draftDirtyRef.current) return true;
     if (responseChangesDisabled) {
       setDraftSaveState("failed");
-      setDraftSaveError("Responses are locked, so this draft could not be saved.");
+      setDraftSaveError(
+        "Responses are locked, so this draft could not be saved.",
+      );
       return false;
     }
     if (participantVersionRef.current === null) return false;
@@ -404,8 +443,11 @@ export default function TempAccessClient() {
         setSubmitted(false);
         setAccess((current) =>
           current
-            ? { ...current, participant: { ...current.participant, ...participant } }
-            : current
+            ? {
+                ...current,
+                participant: { ...current.participant, ...participant },
+              }
+            : current,
         );
         void refreshResultsAfterDraft();
         const currentFingerprint = JSON.stringify([
@@ -422,11 +464,13 @@ export default function TempAccessClient() {
         if (error.status === 409 && error.participant) {
           resultsRefreshRevisionRef.current += 1;
           setAccess((current) =>
-            current ? { ...current, canViewResults: false, results: null } : current
+            current
+              ? { ...current, canViewResults: false, results: null }
+              : current,
           );
           setSaveConflict(error.participant);
           setDraftSaveError(
-            "This schedule changed somewhere else. Reload the latest response before editing again."
+            "This schedule changed somewhere else. Reload the latest response before editing again.",
           );
         } else if (
           error.status === 401 ||
@@ -450,7 +494,12 @@ export default function TempAccessClient() {
       }, 0);
     }
     return saved;
-  }, [eventCode, reconcileRejectedWrite, refreshResultsAfterDraft, responseChangesDisabled]);
+  }, [
+    eventCode,
+    reconcileRejectedWrite,
+    refreshResultsAfterDraft,
+    responseChangesDisabled,
+  ]);
 
   useEffect(() => {
     autosaveRunnerRef.current = runAutosave;
@@ -500,7 +549,8 @@ export default function TempAccessClient() {
     window.addEventListener("beforeunload", warnBeforeUnload);
     return () => {
       window.removeEventListener("beforeunload", warnBeforeUnload);
-      if (autosaveTimerRef.current) window.clearTimeout(autosaveTimerRef.current);
+      if (autosaveTimerRef.current)
+        window.clearTimeout(autosaveTimerRef.current);
     };
   }, []);
 
@@ -527,14 +577,15 @@ export default function TempAccessClient() {
       setVerificationError(
         error.status === 429
           ? "Too many attempts. Request a new code after waiting a moment."
-          : "That code could not be verified. Check the code or request a new one."
+          : "That code could not be verified. Check the code or request a new one.",
       );
     }
   };
 
   const paintCell = useCallback(
     (channel, index) => {
-      const scheduleRef = channel === "inperson" ? scheduleInpersonRef : scheduleVirtualRef;
+      const scheduleRef =
+        channel === "inperson" ? scheduleInpersonRef : scheduleVirtualRef;
       if (Number(scheduleRef.current[index]) === availabilityValue) return;
       const next = [...scheduleRef.current];
       next[index] = availabilityValue;
@@ -543,15 +594,23 @@ export default function TempAccessClient() {
       else setScheduleVirtual(next);
       queueAutosave();
     },
-    [availabilityValue, queueAutosave]
+    [availabilityValue, queueAutosave],
   );
 
-  const handleInpersonPaint = useCallback((index) => paintCell("inperson", index), [paintCell]);
-  const handleVirtualPaint = useCallback((index) => paintCell("virtual", index), [paintCell]);
+  const handleInpersonPaint = useCallback(
+    (index) => paintCell("inperson", index),
+    [paintCell],
+  );
+  const handleVirtualPaint = useCallback(
+    (index) => paintCell("virtual", index),
+    [paintCell],
+  );
 
   const copySchedule = (source, target) => {
     const sourceValues =
-      source === "inperson" ? scheduleInpersonRef.current : scheduleVirtualRef.current;
+      source === "inperson"
+        ? scheduleInpersonRef.current
+        : scheduleVirtualRef.current;
     const next = [...sourceValues];
     if (target === "inperson") {
       scheduleInpersonRef.current = next;
@@ -589,7 +648,7 @@ export default function TempAccessClient() {
     } catch (error) {
       if (error.status === 401 || error.status === 403) {
         endTemporaryAccess(
-          "This temporary access is no longer active. Reopen the invitation email or sign in with the full account."
+          "This temporary access is no longer active. Reopen the invitation email or sign in with the full account.",
         );
         return;
       }
@@ -599,7 +658,9 @@ export default function TempAccessClient() {
       // permission-derived results when their refresh could not be verified.
       resultsRefreshRevisionRef.current += 1;
       setAccess((current) =>
-        current ? { ...current, canViewResults: false, results: null } : current
+        current
+          ? { ...current, canViewResults: false, results: null }
+          : current,
       );
       applyParticipant(conflictParticipant, access?.event);
     } finally {
@@ -632,12 +693,14 @@ export default function TempAccessClient() {
       if (error.status === 409 && error.participant) {
         resultsRefreshRevisionRef.current += 1;
         setAccess((current) =>
-          current ? { ...current, canViewResults: false, results: null } : current
+          current
+            ? { ...current, canViewResults: false, results: null }
+            : current,
         );
         setSaveConflict(error.participant);
         setDraftSaveState("failed");
         setDraftSaveError(
-          "This schedule changed somewhere else. Reload the latest response before submitting."
+          "This schedule changed somewhere else. Reload the latest response before submitting.",
         );
       } else if (
         error.status === 401 ||
@@ -661,7 +724,7 @@ export default function TempAccessClient() {
     const saved = await flushPendingDraft();
     if (!saved) {
       setSubmitError(
-        "Your latest changes could not be saved. Resolve the save error before signing out."
+        "Your latest changes could not be saved. Resolve the save error before signing out.",
       );
       setLogoutPending(false);
       return;
@@ -670,7 +733,7 @@ export default function TempAccessClient() {
       await logoutTempAccess(eventCode);
     } catch {
       setSubmitError(
-        "Sign out could not be confirmed. This temporary session may still be active; try again before leaving this device."
+        "Sign out could not be confirmed. This temporary session may still be active; try again before leaving this device.",
       );
       setLogoutPending(false);
       return;
@@ -694,7 +757,11 @@ export default function TempAccessClient() {
     return <CenteredStatus title="Opening event access…" />;
   }
 
-  if (phase === "unavailable" || phase === "logged-out" || phase === "session-ended") {
+  if (
+    phase === "unavailable" ||
+    phase === "logged-out" ||
+    phase === "session-ended"
+  ) {
     return (
       <CenteredStatus
         title={
@@ -718,31 +785,42 @@ export default function TempAccessClient() {
   if (phase === "code") {
     return (
       <main className={styles.authPage}>
-        <section className={styles.authCard} aria-labelledby="temp-access-heading">
+        <section
+          className={styles.authCard}
+          aria-labelledby="temp-access-heading"
+        >
           <BrandLogo alt="Releviz" className={styles.authLogo} priority />
           <div>
             <p className={styles.eyebrow}>Temporary event access</p>
             <h1 id="temp-access-heading">Check your email</h1>
             <p className={styles.muted}>
-              Enter the six-digit code sent to the email address connected to this invitation. The
-              code expires after 10 minutes.
+              Enter the six-digit code sent to the email address connected to
+              this invitation. The code expires after 10 minutes.
             </p>
           </div>
           {requestMessage && (
             <p
-              className={requestState === "error" ? styles.errorNotice : styles.infoNotice}
+              className={
+                requestState === "error"
+                  ? styles.errorNotice
+                  : styles.infoNotice
+              }
               role={requestState === "error" ? "alert" : "status"}
             >
               {requestMessage}
             </p>
           )}
           <form className={styles.codeForm} onSubmit={verifyCode}>
-            <label htmlFor="temporary-verification-code">Verification code</label>
+            <label htmlFor="temporary-verification-code">
+              Verification code
+            </label>
             <input
               id="temporary-verification-code"
               value={verificationCode}
               onChange={(event) =>
-                setVerificationCode(event.target.value.replace(/\D/g, "").slice(0, 6))
+                setVerificationCode(
+                  event.target.value.replace(/\D/g, "").slice(0, 6),
+                )
               }
               autoComplete="one-time-code"
               inputMode="numeric"
@@ -759,22 +837,28 @@ export default function TempAccessClient() {
             <AppButton
               type="submit"
               fullWidth
-              disabled={requestState === "sending" || requestState === "verifying"}
+              disabled={
+                requestState === "sending" || requestState === "verifying"
+              }
             >
-              {requestState === "verifying" ? "Verifying…" : "Verify and open schedule"}
+              {requestState === "verifying"
+                ? "Verifying…"
+                : "Verify and open schedule"}
             </AppButton>
           </form>
           <AppButton
             variant="outlined"
             fullWidth
-            disabled={requestState === "sending" || requestState === "verifying"}
+            disabled={
+              requestState === "sending" || requestState === "verifying"
+            }
             onClick={() => void sendCode(invitationToken)}
           >
             {requestState === "sending" ? "Sending…" : "Send a new code"}
           </AppButton>
           <p className={styles.securityNote}>
-            This verification only grants access to this event. It does not sign you in to a full
-            Releviz account.
+            This verification only grants access to this event. It does not sign
+            you in to a full Releviz account.
           </p>
         </section>
       </main>
@@ -786,9 +870,11 @@ export default function TempAccessClient() {
   const mode = event.mode || "inperson";
   const results = access.results;
   const avgInperson =
-    results?.channels?.inperson?.unweighted || Array(scheduleLength(event, participant)).fill(0);
+    results?.channels?.inperson?.unweighted ||
+    Array(scheduleLength(event, participant)).fill(0);
   const avgVirtual =
-    results?.channels?.virtual?.unweighted || Array(scheduleLength(event, participant)).fill(0);
+    results?.channels?.virtual?.unweighted ||
+    Array(scheduleLength(event, participant)).fill(0);
   const upgradeHref = event.code ? makeUpgradeHref(event.code) : "";
   const leavingPage = logoutPending || upgradePending;
 
@@ -800,7 +886,7 @@ export default function TempAccessClient() {
     const saved = await flushPendingDraft();
     if (!saved) {
       setSubmitError(
-        "Your latest changes could not be saved. Resolve the save error before upgrading."
+        "Your latest changes could not be saved. Resolve the save error before upgrading.",
       );
       setUpgradePending(false);
       return;
@@ -828,10 +914,13 @@ export default function TempAccessClient() {
       <div className={styles.content}>
         <section className={styles.hero}>
           <div>
-            <p className={styles.eyebrow}>You are responding as {participant.name}</p>
+            <p className={styles.eyebrow}>
+              You are responding as {participant.name}
+            </p>
             <h1>{event.name}</h1>
             <p className={styles.muted}>
-              Choose a status, then click or drag across the times that work for you.
+              Choose a status, then click or drag across the times that work for
+              you.
             </p>
           </div>
           {upgradeHref && (
@@ -842,30 +931,49 @@ export default function TempAccessClient() {
               onClick={(clickEvent) => void upgradeToFullAccess(clickEvent)}
             >
               <MdUpgrade aria-hidden="true" />
-              {upgradePending ? "Saving before upgrade…" : "Upgrade to full access"}
+              {upgradePending
+                ? "Saving before upgrade…"
+                : "Upgrade to full access"}
             </Link>
           )}
         </section>
 
         <EventDetailsGrid event={event} />
 
-        <div className={access.canViewResults && results ? styles.twoPane : undefined}>
-          <section className={styles.scheduleCard} aria-labelledby="your-schedule-heading">
+        <div
+          className={
+            access.canViewResults && results ? styles.twoPane : undefined
+          }
+        >
+          <section
+            className={styles.scheduleCard}
+            aria-labelledby="your-schedule-heading"
+          >
             <div className={styles.sectionHeading}>
               <div>
                 <h2 id="your-schedule-heading">Your schedule</h2>
-                <p className={styles.muted}>Changes save automatically to the shared response.</p>
+                <p className={styles.muted}>
+                  Changes save automatically to the shared response.
+                </p>
               </div>
-              {submitted && <span className={styles.submittedBadge}>Submitted</span>}
+              {submitted && (
+                <span className={styles.submittedBadge}>Submitted</span>
+              )}
             </div>
 
             <div className={styles.controls}>
               <p>Mark times as</p>
-              <div className={styles.choiceRow} role="group" aria-label="Availability status">
+              <div
+                className={styles.choiceRow}
+                role="group"
+                aria-label="Availability status"
+              >
                 {AVAILABILITY_CHOICES.map((choice) => (
                   <AppButton
                     key={choice.value}
-                    variant={availabilityValue === choice.value ? "filled" : "outlined"}
+                    variant={
+                      availabilityValue === choice.value ? "filled" : "outlined"
+                    }
                     aria-pressed={availabilityValue === choice.value}
                     disabled={responseChangesDisabled || leavingPage}
                     onClick={() => setAvailabilityValue(choice.value)}
@@ -897,7 +1005,9 @@ export default function TempAccessClient() {
               slotGroups={event.slotGroups || []}
               inperson={scheduleInperson}
               virtual={scheduleVirtual}
-              readOnly={responseChangesDisabled || leavingPage || Boolean(saveConflict)}
+              readOnly={
+                responseChangesDisabled || leavingPage || Boolean(saveConflict)
+              }
               onInpersonPaint={handleInpersonPaint}
               onVirtualPaint={handleVirtualPaint}
               onCopy={copySchedule}
@@ -905,15 +1015,21 @@ export default function TempAccessClient() {
 
             {draftSaveState !== "idle" && (
               <div
-                className={draftSaveState === "failed" ? styles.errorNotice : styles.saveNotice}
+                className={
+                  draftSaveState === "failed"
+                    ? styles.errorNotice
+                    : styles.saveNotice
+                }
                 role={draftSaveState === "failed" ? "alert" : "status"}
                 aria-live={draftSaveState === "failed" ? "assertive" : "polite"}
               >
                 <span>
                   {draftSaveState === "saving" && "Saving draft…"}
-                  {draftSaveState === "saved" && "Draft saved. Submit when you are ready."}
+                  {draftSaveState === "saved" &&
+                    "Draft saved. Submit when you are ready."}
                   {draftSaveState === "submitted" && "Schedule submitted."}
-                  {draftSaveState === "failed" && (draftSaveError || "Draft autosave failed.")}
+                  {draftSaveState === "failed" &&
+                    (draftSaveError || "Draft autosave failed.")}
                 </span>
                 {draftSaveState === "failed" &&
                   (saveConflict ? (
@@ -923,10 +1039,15 @@ export default function TempAccessClient() {
                       disabled={conflictReloadPending}
                       onClick={() => void reloadLatestResponse()}
                     >
-                      {conflictReloadPending ? "Reloading…" : "Reload latest response"}
+                      {conflictReloadPending
+                        ? "Reloading…"
+                        : "Reload latest response"}
                     </AppButton>
                   ) : !responseChangesDisabled ? (
-                    <AppButton variant="outlined" onClick={() => void runAutosave()}>
+                    <AppButton
+                      variant="outlined"
+                      onClick={() => void runAutosave()}
+                    >
                       Retry save
                     </AppButton>
                   ) : null)}
@@ -937,7 +1058,7 @@ export default function TempAccessClient() {
               <p className={styles.fieldError} role="status">
                 {serverWriteLock
                   ? serverWriteLock
-                  : event.status !== "open"
+                  : event.status !== "active"
                     ? `Responses are locked while this event is ${event.status}.`
                     : "The response deadline has passed."}
               </p>
@@ -951,7 +1072,10 @@ export default function TempAccessClient() {
               <AppButton
                 icon={<MdSend />}
                 disabled={
-                  isSubmitting || responseChangesDisabled || leavingPage || Boolean(saveConflict)
+                  isSubmitting ||
+                  responseChangesDisabled ||
+                  leavingPage ||
+                  Boolean(saveConflict)
                 }
                 onClick={() => void submitSchedule()}
               >
@@ -965,11 +1089,15 @@ export default function TempAccessClient() {
           </section>
 
           {access.canViewResults && results && (
-            <section className={styles.resultsCard} aria-labelledby="group-availability-heading">
+            <section
+              className={styles.resultsCard}
+              aria-labelledby="group-availability-heading"
+            >
               <h2 id="group-availability-heading">Group availability</h2>
               <p className={styles.muted}>
-                Based on {results.countedResponseTotal || 0} submitted response(s).{" "}
-                {results.unansweredParticipantTotal || 0} participant(s) are still unanswered.
+                Based on {results.countedResponseTotal || 0} submitted
+                response(s). {results.unansweredParticipantTotal || 0}{" "}
+                participant(s) are still unanswered.
               </p>
               <div className={styles.resultGrids}>
                 {mode !== "virtual" && (
@@ -978,7 +1106,11 @@ export default function TempAccessClient() {
                     slotGroups={event.slotGroups || []}
                     readOnly
                     showValues
-                    label={mode === "mixed" ? "In-Person Availability" : "Availability"}
+                    label={
+                      mode === "mixed"
+                        ? "In-Person Availability"
+                        : "Availability"
+                    }
                   />
                 )}
                 {mode !== "inperson" && (
@@ -987,7 +1119,9 @@ export default function TempAccessClient() {
                     slotGroups={event.slotGroups || []}
                     readOnly
                     showValues
-                    label={mode === "mixed" ? "Virtual Availability" : "Availability"}
+                    label={
+                      mode === "mixed" ? "Virtual Availability" : "Availability"
+                    }
                     virtual
                   />
                 )}
@@ -997,15 +1131,18 @@ export default function TempAccessClient() {
         </div>
 
         <aside className={styles.restrictedNote}>
-          This session can only access this event. Create a full account to manage all of your
-          events in one place.
+          This session can only access this event. Create a full account to
+          manage all of your events in one place.
         </aside>
       </div>
     </main>
   );
 }
 
-function CenteredStatus({ title, message = "Please wait while we check this event link." }) {
+function CenteredStatus({
+  title,
+  message = "Please wait while we check this event link.",
+}) {
   return (
     <main className={styles.authPage}>
       <section className={styles.authCard}>

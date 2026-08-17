@@ -9,12 +9,8 @@ logger = logging.getLogger(__name__)
 
 
 class ContentSecurityPolicyMiddleware:
-    """Add the configured CSP using the CMS iframe policy as its source of truth."""
+    """Add the configured content security policy to application responses."""
 
-    _HOST_PATTERN = re.compile(
-        r"^(?:\*\.)?[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
-        r"(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$"
-    )
     _UNFOLD_THEME_STYLE_PATTERN = re.compile(
         r"<style\b(?P<attrs>[^>]*\bid=[\"']unfold-theme-colors[\"'][^>]*)>",
         flags=re.IGNORECASE,
@@ -34,11 +30,16 @@ class ContentSecurityPolicyMiddleware:
         # to two unavoidable styles from the upstream admin theme.
         request.csp_nonce = secrets.token_urlsafe(24)
         response = self.get_response(request)
-        if "Content-Security-Policy" in response or "Content-Security-Policy-Report-Only" in response:
+        if (
+            "Content-Security-Policy" in response
+            or "Content-Security-Policy-Report-Only" in response
+        ):
             return response
 
         report_only = getattr(settings, "CSP_REPORT_ONLY", True)
-        header_name = "Content-Security-Policy-Report-Only" if report_only else "Content-Security-Policy"
+        header_name = (
+            "Content-Security-Policy-Report-Only" if report_only else "Content-Security-Policy"
+        )
         response[header_name] = self._build_policy(
             request.csp_nonce,
             allow_framing=bool(getattr(response, "xframe_options_exempt", False)),
@@ -48,7 +49,11 @@ class ContentSecurityPolicyMiddleware:
 
     @staticmethod
     def _configured_sources(setting_name: str, default: tuple[str, ...]) -> list[str]:
-        return [str(source).strip() for source in getattr(settings, setting_name, default) if str(source).strip()]
+        return [
+            str(source).strip()
+            for source in getattr(settings, setting_name, default)
+            if str(source).strip()
+        ]
 
     @staticmethod
     def _url_origin(value: object) -> str | None:
@@ -101,23 +106,11 @@ class ContentSecurityPolicyMiddleware:
             "CSP_CONNECT_SOURCES",
             ("'self'", "https://fonts.googleapis.com", "https://fonts.gstatic.com"),
         )
-        frame_sources = ["'self'"]
+        frame_sources = self._configured_sources("CSP_FRAME_SOURCES", ("'self'",))
         frontend_origin = self._url_origin(getattr(settings, "FRONTEND_URL", ""))
         if frontend_origin:
             frame_sources.append(frontend_origin)
             connect_sources.append(frontend_origin)
-        try:
-            from apps.cms.services.sanitization.embed_hosts import get_allowed_hosts
-
-            for host in get_allowed_hosts():
-                normalized = host.strip().lower()
-                if self._HOST_PATTERN.fullmatch(normalized):
-                    frame_sources.append(f"https://{normalized}")
-        except Exception:
-            # A policy lookup must never take the application down. Failing
-            # closed leaves only same-origin frames until the cache/database
-            # becomes healthy again.
-            logger.exception("Unable to load CMS embed hosts for CSP; using same-origin only")
 
         nonce_source = f"'nonce-{nonce}'"
         media_sources = list(dict.fromkeys(["'self'", "blob:", *storage_origins]))

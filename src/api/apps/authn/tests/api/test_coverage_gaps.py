@@ -12,12 +12,13 @@ Member = get_user_model()
 
 
 # ---------------------------------------------------------------------------
-# views/account/change_password.py:53-54  (TokenError on blacklist)
+# views/account/change_password.py  (a supplied refresh token is not consulted)
 # ---------------------------------------------------------------------------
-class ChangePasswordTokenErrorTests(TestCase):
-    def test_invalid_refresh_token_logs_warning_and_succeeds(self):
-        """change_password.py:53-54 — bad refresh token logs warning, password still changes."""
+class ChangePasswordIgnoresSuppliedRefreshTests(TestCase):
+    def test_unparseable_refresh_token_is_ignored_and_password_still_changes(self):
+        """Every session is revoked wholesale, so the body's refresh value is irrelevant."""
         from rest_framework.test import APIClient
+        from rest_framework_simplejwt.tokens import RefreshToken
 
         member = Member.objects.create_user(
             first_name="CP", last_name="User", password="OldPass123!", is_active=True
@@ -25,6 +26,7 @@ class ChangePasswordTokenErrorTests(TestCase):
         ContactEmail.objects.create(
             member=member, email_address="cp@example.com", email_type="primary", verified=True
         )
+        live_session = RefreshToken.for_user(member)
         client = APIClient()
         client.force_authenticate(member)
 
@@ -38,7 +40,6 @@ class ChangePasswordTokenErrorTests(TestCase):
                 new={"_decrypted_new_password": "BrandNewPass123!"},
                 create=True,
             ),
-            self.assertLogs("apps.authn.views.account.change_password", level="WARNING") as logs,
         ):
             response = client.post(
                 "/authn/change-password/",
@@ -48,9 +49,11 @@ class ChangePasswordTokenErrorTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertNotIn("access", response.data)
-        self.assertTrue(any("Unable to invalidate the prior session" in m for m in logs.output))
         member.refresh_from_db()
         self.assertTrue(member.check_password("BrandNewPass123!"))
+        # The genuine session was revoked even though the body's token was junk.
+        refreshed = client.post("/authn/refresh/", {"refresh": str(live_session)}, format="json")
+        self.assertEqual(refreshed.status_code, 401)
 
 
 # ---------------------------------------------------------------------------

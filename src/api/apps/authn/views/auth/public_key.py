@@ -4,6 +4,7 @@ Public key API for RSA encryption.
 
 import logging
 
+from django.conf import settings
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -34,6 +35,11 @@ class PublicKeyView(APIView):
                 {
                     "public_key": public_key_pem,
                     "key_id": key_id,
+                    # Clients only encrypt when told to; omitting this made them
+                    # post plaintext to endpoints that reject it.
+                    "password_encryption_required": bool(
+                        getattr(settings, "REQUIRE_ENCRYPTED_PASSWORDS", False)
+                    ),
                 },
                 status=status.HTTP_200_OK,
             )

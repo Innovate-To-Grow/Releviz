@@ -83,4 +83,6 @@ class IsOwnerOrReadOnlyTests(SimpleTestCase):
         owned = Mock(owner=self.user)
         not_owned = Mock(owner=object())
         self.assertTrue(self.permission.has_object_permission(self._request("PUT"), Mock(), owned))
-        self.assertFalse(self.permission.has_object_permission(self._request("PUT"), Mock(), not_owned))
+        self.assertFalse(
+            self.permission.has_object_permission(self._request("PUT"), Mock(), not_owned)
+        )

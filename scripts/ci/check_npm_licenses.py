@@ -9,7 +9,6 @@ import re
 from collections import Counter
 from pathlib import Path
 
-
 DENIED_LICENSES = re.compile(r"(?:^|[^A-Z])(AGPL|GPL|SSPL)(?:-|$)", re.IGNORECASE)
 
 
@@ -48,14 +47,10 @@ def main() -> int:
     }
     args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
-    print(
-        f"Inspected {len(packages)} npm packages across {len(counts)} license expressions."
-    )
+    print(f"Inspected {len(packages)} npm packages across {len(counts)} license expressions.")
     unknown = counts.get("UNKNOWN", 0)
     if unknown:
-        print(
-            f"WARNING: {unknown} package(s) did not declare a license in package-lock.json."
-        )
+        print(f"WARNING: {unknown} package(s) did not declare a license in package-lock.json.")
     if denied:
         for item in denied:
             print(f"ERROR: {item['name']}@{item['version']} uses {item['license']}.")

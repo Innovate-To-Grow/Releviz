@@ -1,0 +1,7 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Releviz: Dev" type="CompoundRunConfigurationType" factoryName="Compound Run Configuration">
+    <toRun type="PythonConfigurationType" name="API: Django Dev" />
+    <toRun type="js.build_tools.npm" name="Web: Next.js Dev" />
+    <method v="2" />
+  </configuration>
+</component>

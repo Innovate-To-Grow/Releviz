@@ -32,10 +32,8 @@ def render(payload: dict) -> str:
     ]
     for job in jobs:
         duration = duration_seconds(job)
-        lines.append(
-            f"| {job.get('name', 'unknown')} | {job.get('conclusion') or job.get('status', 'unknown')} "
-            f"| {duration:.1f}s |"
-        )
+        result = job.get("conclusion") or job.get("status", "unknown")
+        lines.append(f"| {job.get('name', 'unknown')} | {result} | {duration:.1f}s |")
     lines.append("")
     lines.append(
         f"Total runner time across {len(jobs)} jobs: {sum(map(duration_seconds, jobs)):.1f}s."

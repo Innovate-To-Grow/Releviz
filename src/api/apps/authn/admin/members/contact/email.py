@@ -36,7 +36,7 @@ class ContactEmailAdminForm(forms.ModelForm):
 
     class Meta:
         model = ContactEmail
-        fields = "__all__"
+        fields = ("member", "email_address", "email_type", "subscribe", "verified")
 
     def clean(self):
         cleaned_data = super().clean()

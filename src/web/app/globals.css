@@ -1268,7 +1268,7 @@ input {
 }
 
 .create-event-eyebrow {
-  color: var(--md-sys-color-primary);
+  color: var(--rv-accent-text, var(--md-sys-color-primary));
   font-size: 0.72rem;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -1335,7 +1335,7 @@ input {
   border: 1px solid
     color-mix(in srgb, var(--md-sys-color-primary) 28%, transparent);
   border-radius: 8px;
-  color: var(--md-sys-color-primary);
+  color: var(--rv-accent-text, var(--md-sys-color-primary));
   display: inline-flex;
   font-size: 0.72rem;
   font-weight: 700;
@@ -1560,7 +1560,7 @@ input {
 
 .create-event-disclosure-toggle {
   align-items: center;
-  color: var(--md-sys-color-primary);
+  color: var(--rv-accent-text, var(--md-sys-color-primary));
   display: inline-flex;
   font-size: 0.78rem;
   font-weight: 700;

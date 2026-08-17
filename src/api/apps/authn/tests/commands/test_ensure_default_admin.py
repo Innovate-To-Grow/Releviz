@@ -7,7 +7,7 @@ from django.core.management.base import CommandError
 from django.db import IntegrityError
 from django.test import TestCase
 
-from apps.authn.management.ensure_default_admin import Command
+from apps.authn.management.commands.ensure_default_admin import Command
 from apps.authn.models import ContactEmail
 
 
@@ -263,6 +263,27 @@ class EnsureDefaultAdminCommandTests(TestCase):
         member.refresh_from_db()
         self.assertTrue(member.check_password("existing-password"))
 
+    def test_ambiguous_contact_case_variants_are_rejected(self):
+        for address in ("Duplicate@example.com", "duplicate@example.com"):
+            ContactEmail.objects.create(
+                member=None,
+                email_address=address,
+                email_type="other",
+                verified=False,
+                subscribe=False,
+            )
+
+        with patch.dict("os.environ", {"DJANGO_SUPERUSER_PASSWORD": "safe-demo-password"}):
+            with self.assertRaisesMessage(CommandError, "matches multiple contact records"):
+                call_command(
+                    Command(),
+                    yes=True,
+                    email="duplicate@example.com",
+                    stdout=io.StringIO(),
+                )
+
+        self.assertEqual(get_user_model().objects.count(), 0)
+
     def test_existing_admin_with_unverified_contact_is_rejected_unchanged(self):
         Member = get_user_model()
         member = Member.objects.create_user(
@@ -300,3 +321,121 @@ class EnsureDefaultAdminCommandTests(TestCase):
         self.assertTrue(member.check_password("existing-password"))
         self.assertFalse(contact.verified)
         self.assertFalse(contact.subscribe)
+
+
+class EnsureDefaultAdminCreateOnlyTests(TestCase):
+    """``--create-only`` is what production runs, so it may never touch an existing identity."""
+
+    def _make_admin(self, *, email, verified=True, email_type="primary", **member_flags):
+        Member = get_user_model()
+        flags = {"is_active": True, "is_staff": True, "is_superuser": True, **member_flags}
+        member = Member.objects.create_user(
+            password="existing-password",
+            first_name="Existing",
+            last_name="Admin",
+            **flags,
+        )
+        contact = ContactEmail.objects.create(
+            member=member,
+            email_address=email,
+            email_type=email_type,
+            verified=verified,
+            subscribe=True,
+        )
+        return member, contact
+
+    def test_creates_a_missing_admin(self):
+        out = io.StringIO()
+
+        with patch.dict("os.environ", {"DJANGO_SUPERUSER_PASSWORD": "safe-demo-password"}):
+            call_command(
+                Command(),
+                yes=True,
+                create_only=True,
+                email="bootstrap-admin@example.com",
+                stdout=out,
+            )
+
+        contact = ContactEmail.objects.get(email_address="bootstrap-admin@example.com")
+        self.assertTrue(contact.verified)
+        self.assertEqual(contact.email_type, "primary")
+        self.assertTrue(contact.member.is_superuser)
+        self.assertIn("Default admin created", out.getvalue())
+
+    def test_reports_an_existing_bootstrap_ready_admin_without_changing_it(self):
+        member, contact = self._make_admin(email="ready-admin@example.com")
+        out = io.StringIO()
+
+        with patch.dict("os.environ", {}, clear=True):
+            call_command(
+                Command(),
+                yes=True,
+                create_only=True,
+                email="ready-admin@example.com",
+                stdout=out,
+            )
+
+        member.refresh_from_db()
+        contact.refresh_from_db()
+        self.assertTrue(member.check_password("existing-password"))
+        self.assertTrue(contact.verified)
+        self.assertIn("Default admin verified", out.getvalue())
+        self.assertNotIn("left unchanged", out.getvalue())
+
+    def test_rejects_an_existing_admin_that_is_not_bootstrap_ready(self):
+        member, contact = self._make_admin(email="unverified-admin@example.com", verified=False)
+
+        with patch.dict("os.environ", {}, clear=True):
+            with self.assertRaisesMessage(CommandError, "is not bootstrap-ready"):
+                call_command(
+                    Command(),
+                    yes=True,
+                    create_only=True,
+                    email="unverified-admin@example.com",
+                    stdout=io.StringIO(),
+                )
+
+        member.refresh_from_db()
+        contact.refresh_from_db()
+        self.assertTrue(member.check_password("existing-password"))
+        self.assertFalse(contact.verified)
+
+    def test_rejects_an_existing_member_who_is_not_a_superuser(self):
+        member, _contact = self._make_admin(email="ordinary@example.com", is_superuser=False)
+
+        with patch.dict("os.environ", {}, clear=True):
+            with self.assertRaisesMessage(CommandError, "is not bootstrap-ready"):
+                call_command(
+                    Command(),
+                    yes=True,
+                    create_only=True,
+                    email="ordinary@example.com",
+                    stdout=io.StringIO(),
+                )
+
+        member.refresh_from_db()
+        self.assertFalse(member.is_superuser)
+
+    def test_refuses_to_claim_an_unowned_contact(self):
+        contact = ContactEmail.objects.create(
+            member=None,
+            email_address="subscribed@example.com",
+            email_type="other",
+            verified=False,
+            subscribe=True,
+        )
+
+        with patch.dict("os.environ", {"DJANGO_SUPERUSER_PASSWORD": "safe-demo-password"}):
+            with self.assertRaisesMessage(CommandError, "refusing to claim it"):
+                call_command(
+                    Command(),
+                    yes=True,
+                    create_only=True,
+                    email="subscribed@example.com",
+                    stdout=io.StringIO(),
+                )
+
+        contact.refresh_from_db()
+        self.assertIsNone(contact.member)
+        self.assertEqual(contact.email_type, "other")
+        self.assertEqual(get_user_model().objects.count(), 0)

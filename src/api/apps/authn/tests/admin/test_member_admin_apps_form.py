@@ -54,7 +54,7 @@ class MemberChangeFormFieldTests(TestCase):
     def test_admin_apps_choices_include_registered_admin_apps(self):
         form = _admin_change_form(self.member)()
         labels = {value for value, _label in form.fields["admin_apps"].choices}
-        for expected in ("cms", "event", "authn"):
+        for expected in ("scheduling", "mail", "authn"):
             self.assertIn(expected, labels)
 
     def test_admin_app_choices_helper_matches_registry(self):
@@ -75,14 +75,14 @@ class MemberChangeFormFieldTests(TestCase):
                 "last_name": "Field",
                 "is_active": "on",
                 "is_staff": "on",
-                "admin_apps": ["cms", "event"],
+                "admin_apps": ["scheduling", "mail"],
             },
             instance=self.member,
         )
         self.assertTrue(form.is_valid(), form.errors)
         saved = form.save()
         saved.refresh_from_db()
-        self.assertEqual(sorted(saved.admin_apps), ["cms", "event"])
+        self.assertEqual(sorted(saved.admin_apps), ["mail", "scheduling"])
 
     def test_admin_bound_form_rejects_unregistered_app_label(self):
         FormClass = _admin_change_form(self.member)
@@ -100,7 +100,7 @@ class MemberChangeFormFieldTests(TestCase):
         self.assertIn("admin_apps", form.errors)
 
 
-@override_settings(ROOT_URLCONF="config.routing.urls", ADMIN_REQUIRE_CONFIRMATION=False)
+@override_settings(ROOT_URLCONF="config.urls", ADMIN_REQUIRE_CONFIRMATION=False)
 class MemberAdminChangePageTests(TestCase):
     """Exercise the real admin change page through the test client.
 
@@ -151,8 +151,8 @@ class MemberAdminChangePageTests(TestCase):
         content = resp.content.decode()
         # Rendered as named checkbox inputs whose values are app labels.
         self.assertIn('name="admin_apps"', content)
-        self.assertIn('value="cms"', content)
-        self.assertIn('value="event"', content)
+        self.assertIn('value="scheduling"', content)
+        self.assertIn('value="mail"', content)
 
     def test_change_page_omits_user_permissions(self):
         resp = self.client.get(self._change_url())
@@ -162,16 +162,16 @@ class MemberAdminChangePageTests(TestCase):
         self.assertNotIn('id="id_user_permissions"', content)
 
     def test_post_persists_selected_admin_apps(self):
-        data = self._build_post_data({"admin_apps": ["cms", "projects"]})
+        data = self._build_post_data({"admin_apps": ["mail", "scheduling"]})
         resp = self.client.post(self._change_url(), data)
         # 302 = a successful save+redirect; a 200 would mean the form re-rendered
         # with errors and never committed, so assert the redirect explicitly.
         self.assertEqual(resp.status_code, 302, resp.content.decode())
         self.target.refresh_from_db()
-        self.assertEqual(sorted(self.target.admin_apps), ["cms", "projects"])
+        self.assertEqual(sorted(self.target.admin_apps), ["mail", "scheduling"])
 
     def test_post_clearing_admin_apps_persists_empty_list(self):
-        self.target.admin_apps = ["cms"]
+        self.target.admin_apps = ["scheduling"]
         self.target.save(update_fields=["admin_apps"])
         # Omit admin_apps entirely -> the not-required multi-select clears to [].
         data = self._build_post_data()

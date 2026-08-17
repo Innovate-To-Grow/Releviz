@@ -26,7 +26,9 @@ export default function ScheduleChannelEditor({
   onVirtualPaint,
   onCopy,
 }) {
-  const [activeChannel, setActiveChannel] = useState(mode === "virtual" ? "virtual" : "inperson");
+  const [activeChannel, setActiveChannel] = useState(
+    mode === "virtual" ? "virtual" : "inperson",
+  );
   const [pendingCopy, setPendingCopy] = useState(null);
 
   const schedules = { inperson, virtual };
@@ -56,7 +58,11 @@ export default function ScheduleChannelEditor({
     <div className="schedule-channel-editor">
       {mode === "mixed" && (
         <div className="schedule-channel-editor__toolbar">
-          <div className="schedule-channel-tabs" role="tablist" aria-label="Schedule channel">
+          <div
+            className="schedule-channel-tabs"
+            role="tablist"
+            aria-label="Schedule channel"
+          >
             <button
               type="button"
               role="tab"
@@ -98,16 +104,20 @@ export default function ScheduleChannelEditor({
           aria-describedby="schedule-copy-description"
         >
           <div>
-            <strong id="schedule-copy-title">Replace {targetLabel} availability?</strong>
+            <strong id="schedule-copy-title">
+              Replace {targetLabel} availability?
+            </strong>
             <p id="schedule-copy-description">
-              This copies every {channelLabel} value and replaces the current {targetLabel}{" "}
-              schedule.
+              This copies every {channelLabel} value and replaces the current{" "}
+              {targetLabel} schedule.
             </p>
           </div>
           <div>
             <AppButton
               variant="outlined"
-              onClick={() => copySchedule(pendingCopy.source, pendingCopy.target)}
+              onClick={() =>
+                copySchedule(pendingCopy.source, pendingCopy.target)
+              }
             >
               Replace schedule
             </AppButton>

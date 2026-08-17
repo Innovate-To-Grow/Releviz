@@ -35,7 +35,9 @@ export function FeedbackForm() {
       setConsentToFollowUp(false);
       setSent(true);
     } catch (submitError) {
-      setError(submitError.message || "Unable to send feedback. Please try again.");
+      setError(
+        submitError.message || "Unable to send feedback. Please try again.",
+      );
     } finally {
       setSubmitting(false);
     }
@@ -48,8 +50,8 @@ export function FeedbackForm() {
           <p className="legal-eyebrow">Help improve Releviz</p>
           <h1>Send feedback</h1>
           <p>
-            Report a problem, confusing workflow, or idea. Feedback is reviewed by service
-            operators.
+            Report a problem, confusing workflow, or idea. Feedback is reviewed
+            by service operators.
           </p>
         </header>
 
@@ -67,7 +69,10 @@ export function FeedbackForm() {
         <form className="feedback-form" onSubmit={handleSubmit}>
           <label className="field-label">
             Feedback type
-            <select value={category} onChange={(event) => setCategory(event.target.value)}>
+            <select
+              value={category}
+              onChange={(event) => setCategory(event.target.value)}
+            >
               <option value="problem">Problem</option>
               <option value="usability">Something was hard to use</option>
               <option value="idea">Idea</option>
@@ -87,8 +92,9 @@ export function FeedbackForm() {
             />
           </label>
           <p className="field-help">
-            Do not include passwords, verification codes, private invitation links, or detailed
-            participant availability. {message.length}/5000 characters
+            Do not include passwords, verification codes, private invitation
+            links, or detailed participant availability. {message.length}/5000
+            characters
           </p>
 
           <label className="feedback-consent">
@@ -98,8 +104,8 @@ export function FeedbackForm() {
               onChange={(event) => setConsentToFollowUp(event.target.checked)}
             />
             <span>
-              If I am signed in, the service team may follow up using my account contact
-              information.
+              If I am signed in, the service team may follow up using my account
+              contact information.
             </span>
           </label>
 

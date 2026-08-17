@@ -35,7 +35,7 @@ class EventManagementApiTests(TestCase):
             "code": code,
             "name": "Managed event",
             "organizer": self.organizer,
-            "status": Event.Status.OPEN,
+            "status": Event.Status.ACTIVE,
             "opened_at": timezone.now(),
             "start_minutes": 9 * 60,
             "end_minutes": 10 * 60,
@@ -469,13 +469,13 @@ class EventManagementApiTests(TestCase):
         self.assertEqual(created.status_code, 201)
         self.assertFalse(created.data["idempotent"])
         duplicate = Event.objects.get(code=created.data["event"]["code"])
-        self.assertEqual(duplicate.status, Event.Status.DRAFT)
+        self.assertEqual(duplicate.status, Event.Status.ACTIVE)
         self.assertEqual(duplicate.name, "Planning session (copy)")
         self.assertEqual(duplicate.mode, source.mode)
         self.assertEqual(duplicate.location, source.location)
         self.assertEqual(duplicate.specific_dates, source.specific_dates)
         self.assertEqual(duplicate.response_deadline, deadline)
-        self.assertIsNone(duplicate.opened_at)
+        self.assertIsNotNone(duplicate.opened_at)
         self.assertFalse(duplicate.participants.exists())
         self.assertFalse(duplicate.invitations.exists())
         self.assertFalse(duplicate.email_delivery_jobs.exists())

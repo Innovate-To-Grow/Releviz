@@ -59,7 +59,7 @@ def _last_admin_cookie_value(member):
     return response.cookies[LAST_ADMIN_LOGIN_COOKIE_NAME].value
 
 
-@override_settings(ROOT_URLCONF="config.routing.urls")
+@override_settings(ROOT_URLCONF="config.urls")
 class AdminLoginViewTest(TestCase):
     # noinspection PyPep8Naming
     def setUp(self):

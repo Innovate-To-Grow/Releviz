@@ -4,10 +4,9 @@ from django.contrib.staticfiles import finders
 from django.test import TestCase
 from django.urls import reverse
 
-from apps.cms.models import StyleSheet
-from apps.core.models import SiteMaintenanceControl
-from apps.event.tests.helpers import make_superuser
-from apps.mail.models import EmailCampaign
+from apps.core.models import AWSCredentialConfig, SiteMaintenanceControl
+from apps.core.tests.helpers import make_superuser
+from apps.mail.models import EmailProviderConfig
 
 
 class MaterialWebAdminEnhancerTests(TestCase):
@@ -23,7 +22,9 @@ class MaterialWebAdminEnhancerTests(TestCase):
     def test_admin_base_loads_material_web_enhancer(self):
         config = SiteMaintenanceControl.objects.create(is_maintenance=False)
 
-        response = self.client.get(reverse("admin:core_sitemaintenancecontrol_change", args=[config.pk]))
+        response = self.client.get(
+            reverse("admin:core_sitemaintenancecontrol_change", args=[config.pk])
+        )
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "admin/js/material-web-text-field.js")
@@ -32,7 +33,9 @@ class MaterialWebAdminEnhancerTests(TestCase):
     def test_admin_base_loads_post_core_checkbox_overrides(self):
         config = SiteMaintenanceControl.objects.create(is_maintenance=False)
 
-        response = self.client.get(reverse("admin:core_sitemaintenancecontrol_change", args=[config.pk]))
+        response = self.client.get(
+            reverse("admin:core_sitemaintenancecontrol_change", args=[config.pk])
+        )
         html = response.content.decode()
 
         self.assertEqual(response.status_code, 200)
@@ -52,7 +55,7 @@ class MaterialWebAdminEnhancerTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("<h2", html)
-        self.assertIn("Core", html)
+        self.assertIn("Site Settings", html)
         self.assertNotIn("<caption", html)
 
     def test_enhancer_skips_specialized_admin_widgets(self):
@@ -64,21 +67,29 @@ class MaterialWebAdminEnhancerTests(TestCase):
         self.assertIn('field.classList.contains("admin-autocomplete")', source)
         self.assertIn('field.tagName === "SELECT" && field.multiple', source)
 
-    def test_stylesheet_code_editor_page_keeps_code_textarea_available(self):
-        stylesheet = StyleSheet.objects.create(name="admin-test", display_name="Admin Test", css="body { color: red; }")
+    def test_aws_credential_page_keeps_password_widget_available(self):
+        credentials = AWSCredentialConfig.objects.create(name="Admin Test")
 
-        response = self.client.get(reverse("admin:cms_stylesheet_change", args=[stylesheet.pk]))
+        response = self.client.get(
+            reverse("admin:core_awscredentialconfig_change", args=[credentials.pk])
+        )
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "code-editor-field")
+        self.assertContains(response, 'name="secret_access_key"')
         self.assertContains(response, "admin/js/material-web-text-field.js")
 
-    def test_email_campaign_editor_page_keeps_body_editor_hooks_available(self):
-        campaign = EmailCampaign.objects.create(subject="Admin Test", body="<p>Hello</p>")
+    def test_email_provider_page_keeps_current_email_fields_available(self):
+        provider = EmailProviderConfig.objects.create(
+            name="Admin Test",
+            is_active=False,
+            from_email="sender@example.com",
+        )
 
-        response = self.client.get(reverse("admin:mail_emailcampaign_change", args=[campaign.pk]))
+        response = self.client.get(
+            reverse("admin:mail_emailproviderconfig_change", args=[provider.pk])
+        )
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "mail/js/body_html_editor.js")
-        self.assertContains(response, 'name="body_format"')
-        self.assertContains(response, 'name="body"')
+        self.assertContains(response, 'name="from_email"')
+        self.assertContains(response, 'name="reply_to_email"')
+        self.assertContains(response, "admin/js/material-web-text-field.js")

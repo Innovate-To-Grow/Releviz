@@ -237,7 +237,7 @@ class MessagingTests(TestCase):
             fake_boto3 = SimpleNamespace(client=Mock(return_value=ses_client))
             with patch.dict(sys.modules, {"boto3": fake_boto3}):
                 with patch(
-                    "apps.mail.services.resolve_aws_credentials",
+                    "apps.core.services.aws.credentials.resolve_aws_credentials",
                     return_value=mock_creds,
                 ):
                     message_id = send_email_message(
@@ -264,7 +264,7 @@ class MessagingTests(TestCase):
 
         with override_settings(USE_SES_EMAIL_PROVIDER=True):
             with patch(
-                "apps.mail.services.resolve_aws_credentials",
+                "apps.core.services.aws.credentials.resolve_aws_credentials",
                 side_effect=AwsCredentialsError("not configured"),
             ):
                 with self.assertRaisesMessage(
@@ -282,7 +282,7 @@ class MessagingTests(TestCase):
         EmailProviderConfig.objects.update(is_active=False)
         with override_settings(USE_SES_EMAIL_PROVIDER=True):
             with patch(
-                "apps.mail.services.resolve_aws_credentials",
+                "apps.core.services.aws.credentials.resolve_aws_credentials",
                 return_value=mock_creds,
             ):
                 with self.assertRaisesMessage(

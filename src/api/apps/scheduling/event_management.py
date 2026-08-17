@@ -370,7 +370,7 @@ def _insert_event(*, organizer, configuration, status, now) -> Event:
                     code=code,
                     organizer=organizer,
                     status=status,
-                    opened_at=now if status == Event.Status.OPEN else None,
+                    opened_at=now if status == Event.Status.ACTIVE else None,
                     **configuration,
                 )
                 ensure_result_snapshot(event)
@@ -383,10 +383,15 @@ def _insert_event(*, organizer, configuration, status, now) -> Event:
 @transaction.atomic
 def create_event(*, organizer, data) -> Event:
     configuration = parse_event_configuration(data)
-    initial_status = data.get("status") or Event.Status.DRAFT
-    if initial_status != Event.Status.DRAFT:
-        raise EventManagementError("New events must start as draft; publish them with launch.")
+    initial_status = data.get("status", Event.Status.ACTIVE)
+    if initial_status != Event.Status.ACTIVE:
+        raise EventManagementError("New events must start as active.")
     current_time = timezone.now()
+    if (
+        configuration["response_deadline"] is not None
+        and current_time >= configuration["response_deadline"]
+    ):
+        raise EventManagementError("An active event must have a future response deadline")
     event = _insert_event(
         organizer=organizer,
         configuration=configuration,
@@ -441,11 +446,11 @@ def update_event(*, organizer, code, data) -> EventUpdateResult:
         )
     if (
         "response_deadline" in changed_fields
-        and event.status == Event.Status.OPEN
+        and event.status == Event.Status.ACTIVE
         and configuration["response_deadline"] is not None
         and timezone.now() >= configuration["response_deadline"]
     ):
-        raise EventManagementError("An open event must have a future response deadline")
+        raise EventManagementError("An active event must have a future response deadline")
 
     geometry_changed = bool(GEOMETRY_FIELDS.intersection(changed_fields))
     participants = list(event.participants.select_for_update().all()) if geometry_changed else []
@@ -570,11 +575,17 @@ def duplicate_event(*, organizer, code, data) -> EventDuplicateResult:
 
     configuration = {field: getattr(source, field) for field in CONFIGURATION_FIELDS}
     configuration["name"] = requested_name or _copy_name(source.name)
+    current_time = timezone.now()
+    if (
+        configuration["response_deadline"] is not None
+        and configuration["response_deadline"] <= current_time
+    ):
+        configuration["response_deadline"] = None
     duplicate = _insert_event(
         organizer=organizer,
         configuration=configuration,
-        status=Event.Status.DRAFT,
-        now=timezone.now(),
+        status=Event.Status.ACTIVE,
+        now=current_time,
     )
     UserEvent.objects.create(member=organizer, event=duplicate, role="organizer")
     EventDuplicationRequest.objects.create(

@@ -18,7 +18,9 @@ class InProcessTaskStartTests(SimpleTestCase):
             )
 
         self.assertIsNone(thread)
-        self.assertIn("Unable to start best-effort in-process task best-effort-test", logs.output[0])
+        self.assertIn(
+            "Unable to start best-effort in-process task best-effort-test", logs.output[0]
+        )
 
     @patch("apps.core.services.helpers.in_process.threading.Thread")
     def test_required_start_failure_still_reaches_stateful_caller(self, thread_class):
