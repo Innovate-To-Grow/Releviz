@@ -283,7 +283,9 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
                 "apps.scheduling.views.participants.managed.consume_request_rate_limit",
                 return_value=quota_denied,
             ),
-            patch("apps.scheduling.views.participants.managed.create_or_reuse_managed_participant_and_send") as create,
+            patch(
+                "apps.scheduling.views.participants.managed.create_or_reuse_managed_participant_and_send"
+            ) as create,
         ):
             throttled = client.post(
                 f"/events/participants/managed?code={self.event.code}",
@@ -382,7 +384,10 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
     def test_code_endpoints_are_non_enumerating_but_enforce_rate_limits(self):
         client = APIClient()
         denied = RateLimitDecision(allowed=False, retry_after=7)
-        with patch("apps.scheduling.views.temporary_access.codes.consume_request_rate_limit", return_value=denied):
+        with patch(
+            "apps.scheduling.views.temporary_access.codes.consume_request_rate_limit",
+            return_value=denied,
+        ):
             requested = client.post(
                 "/events/temp-access/request-code",
                 {"code": self.event.code, "invitationToken": str(self.invitation.access_token)},
@@ -436,8 +441,13 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
         self.assertEqual(validation_error.data["error"], "Invalid or expired verification code.")
 
         with (
-            patch("apps.scheduling.views.temporary_access.codes.verify_temporary_access_code", return_value=None),
-            patch("apps.scheduling.views.temporary_access.codes.security_logger.warning") as warning,
+            patch(
+                "apps.scheduling.views.temporary_access.codes.verify_temporary_access_code",
+                return_value=None,
+            ),
+            patch(
+                "apps.scheduling.views.temporary_access.codes.security_logger.warning"
+            ) as warning,
         ):
             invalid = client.post("/events/temp-access/verify", payload, format="json")
         self.assertEqual(invalid.status_code, 400)
@@ -484,7 +494,9 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
         )
         self.assertEqual(missing_code.status_code, 400)
 
-        with patch("apps.scheduling.views.temporary_access.registration.consume_request_rate_limit") as consume:
+        with patch(
+            "apps.scheduling.views.temporary_access.registration.consume_request_rate_limit"
+        ) as consume:
             no_session = APIClient().post(
                 endpoint,
                 payload,
@@ -500,7 +512,9 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
                 "apps.scheduling.views.temporary_access.registration.consume_request_rate_limit",
                 return_value=denied,
             ) as consume,
-            patch("apps.scheduling.views.temporary_access.registration.start_registration") as start,
+            patch(
+                "apps.scheduling.views.temporary_access.registration.start_registration"
+            ) as start,
         ):
             throttled = self.temp_client().post(
                 endpoint,
@@ -523,7 +537,9 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
                 "apps.scheduling.views.temporary_access.registration.start_registration",
                 wraps=start_registration,
             ) as registration_start,
-            patch("apps.scheduling.views.temporary_access.registration.security_logger.info") as log_info,
+            patch(
+                "apps.scheduling.views.temporary_access.registration.security_logger.info"
+            ) as log_info,
             patch(
                 "apps.authn.services.email.challenges._random_code",
                 return_value=verification_code,
@@ -647,7 +663,10 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
         self.assertNotIn("edge-temp@example.com", invalid.content.decode())
 
         mismatched_member = create_member("upgrade-mismatch@example.com")
-        with patch("apps.scheduling.views.temporary_access.registration.start_registration", return_value=mismatched_member):
+        with patch(
+            "apps.scheduling.views.temporary_access.registration.start_registration",
+            return_value=mismatched_member,
+        ):
             with self.assertRaisesRegex(
                 RuntimeError,
                 "Temporary upgrade registration identity mismatch",

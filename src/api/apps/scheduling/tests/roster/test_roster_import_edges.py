@@ -51,7 +51,9 @@ class RosterImportParserEdgeTests(SimpleTestCase):
             roster_imports.parsing._serialized_cell(_Cell("SUM(A1)", "f")), {"formula": "SUM(A1)"}
         )
         self.assertEqual(roster_imports.parsing._serialized_cell(_Cell(None)), "")
-        self.assertEqual(roster_imports.parsing._serialized_cell(_Cell(date(2026, 8, 5))), "2026-08-05")
+        self.assertEqual(
+            roster_imports.parsing._serialized_cell(_Cell(date(2026, 8, 5))), "2026-08-05"
+        )
         self.assertEqual(roster_imports.parsing._serialized_cell(_Cell(time(9, 30))), "09:30:00")
         self.assertEqual(
             roster_imports.parsing._serialized_cell(_Cell(datetime(2026, 8, 5, 9, 30))),
@@ -67,7 +69,9 @@ class RosterImportParserEdgeTests(SimpleTestCase):
         self.assertEqual(roster_imports.mapping.display_cell(None), "")
         self.assertEqual(roster_imports.mapping.display_cell(True), "true")
         self.assertEqual(roster_imports.mapping.display_cell(False), "false")
-        self.assertEqual(roster_imports.mapping._canonical_header(" Email_Address "), "email address")
+        self.assertEqual(
+            roster_imports.mapping._canonical_header(" Email_Address "), "email address"
+        )
         self.assertEqual(
             roster_imports.mapping.auto_mapping(["Participant Name", "E-mail", "Team", "Priority"]),
             {"name": 0, "email": 1, "group": 2, "weight": 3},
@@ -151,7 +155,10 @@ class RosterImportParserEdgeTests(SimpleTestCase):
         with self.assertRaisesMessage(roster_imports.RosterImportError, "empty"):
             roster_imports.parsing._parse_delimited(b"\n,\n", worksheet="CSV")
 
-        with patch("apps.scheduling.services.roster_imports.parsing.csv.Sniffer.sniff", side_effect=csv.Error):
+        with patch(
+            "apps.scheduling.services.roster_imports.parsing.csv.Sniffer.sniff",
+            side_effect=csv.Error,
+        ):
             parsed = roster_imports.parsing._parse_delimited(
                 b"name\temail\nAda\tada@example.com", worksheet="P"
             )
@@ -186,7 +193,10 @@ class RosterImportParserEdgeTests(SimpleTestCase):
         fake_archive.__enter__.return_value = fake_archive
         fake_archive.__exit__.return_value = False
         fake_archive.infolist.return_value = [SimpleNamespace(file_size=1, flag_bits=1)]
-        with patch("apps.scheduling.services.roster_imports.parsing.zipfile.ZipFile", return_value=fake_archive):
+        with patch(
+            "apps.scheduling.services.roster_imports.parsing.zipfile.ZipFile",
+            return_value=fake_archive,
+        ):
             with self.assertRaisesMessage(roster_imports.RosterImportError, "Encrypted"):
                 roster_imports.parsing._parse_xlsx(b"zip")
 
@@ -300,7 +310,9 @@ class RosterImportParserEdgeTests(SimpleTestCase):
         self.assertIn("included must be true or false.", row.validation_errors)
 
         missing = RosterImportRow(raw_values=[])
-        roster_imports.normalization._normalize_row(missing, {}, {"group": "", "weight": 1, "included": True})
+        roster_imports.normalization._normalize_row(
+            missing, {}, {"group": "", "weight": 1, "included": True}
+        )
         self.assertIn("Map a name column.", missing.validation_errors)
         self.assertIn("Map an email column.", missing.validation_errors)
 
@@ -322,7 +334,9 @@ class RosterImportParserEdgeTests(SimpleTestCase):
         self.assertEqual(first.duplicate_status, RosterImportRow.DuplicateStatus.UNIQUE)
         self.assertEqual(second.duplicate_status, RosterImportRow.DuplicateStatus.UNIQUE)
         self.assertEqual(second.validation_errors, [])
-        self.assertEqual(roster_imports.normalization.active_rows(SimpleNamespace(selected_worksheet="")), [])
+        self.assertEqual(
+            roster_imports.normalization.active_rows(SimpleNamespace(selected_worksheet="")), []
+        )
 
         formula_options = RosterImportRow(
             raw_values=["Name", "name@example.com", {"formula": "WEIGHT"}, "=INCLUDED"]
@@ -796,7 +810,10 @@ class RosterImportDatabaseEdgeTests(TestCase):
                 )
         self.assertEqual(delivery_error.exception.status_code, 503)
 
-        with patch("apps.scheduling.services.roster_imports.commit._write_roster", side_effect=IntegrityError):
+        with patch(
+            "apps.scheduling.services.roster_imports.commit._write_roster",
+            side_effect=IntegrityError,
+        ):
             with self.assertRaisesMessage(roster_imports.RosterImportError, "changed concurrently"):
                 roster_imports.commit_roster_import(
                     event=self.event,

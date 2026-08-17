@@ -61,9 +61,7 @@ def inactive_session_response(request, *, event_code: str, operation: str):
                 if account_upgraded
                 else "Temporary event access is not active."
             ),
-            "errorCode": (
-                "temp_account_upgraded" if account_upgraded else "temp_session_inactive"
-            ),
+            "errorCode": ("temp_account_upgraded" if account_upgraded else "temp_session_inactive"),
         },
         status=403 if account_upgraded else 401,
     )

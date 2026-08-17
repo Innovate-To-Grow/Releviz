@@ -93,7 +93,9 @@ class DeliveryRequestView(APIView):
         delivery_request, error = self._request(request, request_id)
         if error:
             return error
-        return private_response({"deliveryRequest": delivery_request_status_payload(delivery_request)})
+        return private_response(
+            {"deliveryRequest": delivery_request_status_payload(delivery_request)}
+        )
 
     @transaction.atomic
     def post(self, request, request_id):
