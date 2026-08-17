@@ -203,3 +203,38 @@ class AWSCredentialConfigAdminBehaviorTests(TestCase):
                 request, AWSCredentialConfig(name="Inactive", is_active=False)
             )
         )
+
+    @patch("apps.core.admin.common.base.BaseModelAdmin.get_actions")
+    def test_get_actions_forwards_location_and_removes_delete(self, get_actions):
+        get_actions.return_value = {
+            "delete_selected": (object(), "delete_selected", "Delete selected"),
+            "keep": (object(), "keep", "Keep"),
+        }
+        request = RequestFactory().get("/")
+        action_location = object()
+
+        actions = self.model_admin.get_actions(
+            request,
+            action_location=action_location,
+        )
+
+        self.assertNotIn("delete_selected", actions)
+        self.assertIn("keep", actions)
+        get_actions.assert_called_once_with(
+            request,
+            action_location=action_location,
+        )
+
+    @patch("apps.core.admin.common.base.BaseModelAdmin.get_actions")
+    def test_get_actions_without_location_removes_delete(self, get_actions):
+        get_actions.return_value = {
+            "delete_selected": (object(), "delete_selected", "Delete selected"),
+            "keep": (object(), "keep", "Keep"),
+        }
+        request = RequestFactory().get("/")
+
+        actions = self.model_admin.get_actions(request)
+
+        self.assertNotIn("delete_selected", actions)
+        self.assertIn("keep", actions)
+        get_actions.assert_called_once_with(request)

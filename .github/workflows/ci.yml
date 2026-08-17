@@ -1404,7 +1404,11 @@ jobs:
           rm -rf "$EMAIL_FILE_PATH"
           mkdir -p "$EMAIL_FILE_PATH"
           python src/api/manage.py migrate --noinput --settings=config.settings.e2e
-          python src/api/manage.py ensure_default_admin --yes --settings=config.settings.e2e
+          python src/api/manage.py seed_admin_e2e \
+            --yes \
+            --email "$DJANGO_SUPERUSER_EMAIL" \
+            --password "$DJANGO_SUPERUSER_PASSWORD" \
+            --settings=config.settings.e2e
 
       - name: Run Playwright tests
         env:

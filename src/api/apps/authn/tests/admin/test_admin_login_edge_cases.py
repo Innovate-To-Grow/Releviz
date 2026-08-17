@@ -3,8 +3,8 @@
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
-from django.core import signing
 from django.core.cache import cache
+from django.http import HttpResponse
 from django.test import RequestFactory, TestCase, override_settings
 
 from apps.authn.models import ContactEmail
@@ -22,8 +22,10 @@ PURPOSE = EmailAuthChallenge.Purpose.ADMIN_LOGIN
 
 
 def _signed_cookie_value(value):
-    # Mirror how Django signs cookies for get_signed_cookie.
-    return signing.get_cookie_signer(salt=LAST_ADMIN_LOGIN_COOKIE_NAME).sign(value)
+    # Use Django's public cookie API so the test follows its current signing salt.
+    response = HttpResponse()
+    response.set_signed_cookie(LAST_ADMIN_LOGIN_COOKIE_NAME, value)
+    return response.cookies[LAST_ADMIN_LOGIN_COOKIE_NAME].value
 
 
 @override_settings(ROOT_URLCONF="config.urls")

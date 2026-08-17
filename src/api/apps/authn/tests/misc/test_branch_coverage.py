@@ -784,7 +784,7 @@ class SecurityPruningBranchTests(TestCase):
 
 class EnsureDefaultAdminBranchTests(TestCase):
     def test_missing_email_and_blank_password_env_name_are_rejected(self):
-        from apps.authn.management.ensure_default_admin import Command
+        from apps.authn.management.commands.ensure_default_admin import Command
 
         command = Command()
         with self.assertRaisesMessage(CommandError, "email"):
@@ -805,7 +805,10 @@ class EnsureDefaultAdminBranchTests(TestCase):
             )
 
     def test_concurrent_claim_without_valid_owner_is_rejected(self):
-        from apps.authn.management.ensure_default_admin import Command, _ConcurrentAdminCreated
+        from apps.authn.management.commands.ensure_default_admin import (
+            Command,
+            _ConcurrentAdminCreated,
+        )
 
         command = Command()
         with (
@@ -825,7 +828,7 @@ class EnsureDefaultAdminBranchTests(TestCase):
 
 class MigrateLockedBranchTests(SimpleTestCase):
     def test_add_arguments_registers_lock_timeout(self):
-        from apps.authn.management.migrate_locked import Command
+        from apps.authn.management.commands.migrate_locked import Command
 
         parser = argparse.ArgumentParser()
         Command().add_arguments(parser)
@@ -833,7 +836,7 @@ class MigrateLockedBranchTests(SimpleTestCase):
         self.assertEqual(options.lock_timeout_seconds, 7)
 
     def test_negative_timeout_is_rejected(self):
-        from apps.authn.management.migrate_locked import Command
+        from apps.authn.management.commands.migrate_locked import Command
 
         with self.assertRaisesMessage(CommandError, "non-negative"):
             Command().handle(database="default", lock_timeout_seconds=-1)
@@ -841,7 +844,7 @@ class MigrateLockedBranchTests(SimpleTestCase):
     def test_waits_then_acquires_and_warns_if_release_is_false(self):
         from django.core.management.commands.migrate import Command as MigrateCommand
 
-        from apps.authn.management import migrate_locked
+        from apps.authn.management.commands import migrate_locked
         from apps.authn.tests.commands.test_migrate_locked import _Connection
 
         connection = _Connection(acquire_results=(False, True), release_result=False)
@@ -860,7 +863,7 @@ class MigrateLockedBranchTests(SimpleTestCase):
     def test_lost_connection_needs_no_explicit_unlock(self):
         from django.core.management.commands.migrate import Command as MigrateCommand
 
-        from apps.authn.management import migrate_locked
+        from apps.authn.management.commands import migrate_locked
         from apps.authn.tests.commands.test_migrate_locked import _Connection
 
         connection = _Connection()

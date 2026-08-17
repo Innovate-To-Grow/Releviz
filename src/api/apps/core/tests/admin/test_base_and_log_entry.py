@@ -79,6 +79,22 @@ class ReadOnlyModelAdminTest(TestCase):
         self.assertNotIn("delete_selected", actions)
         self.assertIn("export_data", actions)
 
+    def test_get_actions_forwards_action_location(self):
+        request = MagicMock()
+        action_location = object()
+        with patch(
+            "apps.core.admin.common.base.BaseModelAdmin.get_actions",
+            return_value={},
+        ) as get_actions:
+            self.assertEqual(
+                self.admin.get_actions(request, action_location=action_location),
+                {},
+            )
+        get_actions.assert_called_once_with(
+            request,
+            action_location=action_location,
+        )
+
     def test_permission_methods_all_false(self):
         request = MagicMock()
         self.assertFalse(self.admin.has_add_permission(request))

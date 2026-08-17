@@ -5,10 +5,13 @@ flow: the autosave/popup skips, file-upload caching + restore, and the many
 short-circuit branches inside ``response_action`` / ``_execute_confirmed_action``.
 """
 
+from enum import Enum
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from django.contrib import admin
 from django.contrib.admin import helpers
+from django.contrib.admin import options as admin_options
 from django.contrib.admin.exceptions import DisallowedModelAdminToField
 from django.contrib.admin.options import TO_FIELD_VAR
 from django.contrib.auth import get_user_model
@@ -51,6 +54,12 @@ def _failed_job(key="job"):
     BackgroundJob.objects.filter(pk=job.pk).update(status=BackgroundJob.Status.FAILED)
     job.refresh_from_db()
     return job
+
+
+def _get_actions_for_location(get_actions, request, action_location):
+    if action_location is None:
+        return get_actions(request)
+    return get_actions(request, action_location=action_location)
 
 
 class ShouldSkipConfirmationTest(TestCase):
@@ -472,6 +481,137 @@ class ResponseActionBranchesTest(TestCase):
         self.assertIs(result, sentinel)
         super_action.assert_called_once()
 
+    def test_action_location_is_forwarded_to_django(self):
+        request = self._request({})
+        queryset = BackgroundJob.objects.all()
+        action_location = SimpleNamespace(value="CHANGE_LIST")
+        sentinel = object()
+        with (
+            patch.object(self.admin, "_should_skip_confirmation", return_value=True),
+            patch(
+                "django.contrib.admin.options.ModelAdmin.response_action",
+                return_value=sentinel,
+            ) as super_action,
+        ):
+            result = self.admin.response_action(
+                request,
+                queryset,
+                action_location=action_location,
+            )
+        self.assertIs(result, sentinel)
+        super_action.assert_called_once_with(
+            request,
+            queryset,
+            action_location=action_location,
+        )
+
+    def test_django_61_action_object_shape_is_supported(self):
+        func = object()
+        action = SimpleNamespace(
+            func=func,
+            name="publish",
+            description="Publish item",
+            plural_description="Publish selected items",
+        )
+
+        self.assertEqual(
+            self.admin._action_parts(action, SimpleNamespace(value="CHANGE_LIST")),
+            (func, "publish", "Publish selected items"),
+        )
+        self.assertEqual(
+            self.admin._action_parts(action, SimpleNamespace(value="CHANGE_FORM")),
+            (func, "publish", "Publish item"),
+        )
+
+    def test_action_choices_support_change_form_location_and_bad_description(self):
+        request = self._request({})
+        action_location = SimpleNamespace(value="CHANGE_FORM")
+        action = SimpleNamespace(
+            func=object(),
+            name="publish",
+            description="Publish %(verbose_name)s",
+            plural_description="Publish selected items",
+        )
+        actions = {
+            "publish": action,
+            "bad": (object(), "bad", "Broken %(missing)s"),
+        }
+
+        with patch.object(
+            self.admin,
+            "_get_actions_for_location",
+            return_value=actions,
+        ):
+            choices = self.admin._get_action_choices_for_location(
+                request,
+                action_location,
+            )
+
+        self.assertEqual(choices[0], ("", "---------"))
+        self.assertEqual(choices[1], ("publish", "Publish background job"))
+        self.assertEqual(choices[2], ("bad", "Broken %(missing)s"))
+
+    def test_change_list_location_uses_configured_action_choices(self):
+        request = self._request({})
+        expected = [("", "Select action")]
+        with patch.object(
+            self.admin,
+            "get_action_choices",
+            return_value=expected,
+        ) as get_action_choices:
+            choices = self.admin._get_action_choices_for_location(
+                request,
+                SimpleNamespace(value="CHANGE_LIST"),
+            )
+
+        self.assertEqual(choices, expected)
+        get_action_choices.assert_called_once_with(request)
+
+    def test_action_location_deserialization_handles_all_version_shapes(self):
+        class FakeActionLocation(Enum):
+            CHANGE_LIST = "CHANGE_LIST"
+
+        self.assertIsNone(self.admin._deserialize_action_location(None))
+        with patch.object(admin_options, "ActionLocation", None, create=True):
+            self.assertIsNone(self.admin._deserialize_action_location("CHANGE_LIST"))
+        with patch.object(
+            admin_options,
+            "ActionLocation",
+            FakeActionLocation,
+            create=True,
+        ):
+            self.assertEqual(
+                self.admin._deserialize_action_location("CHANGE_LIST"),
+                FakeActionLocation.CHANGE_LIST,
+            )
+            self.assertIsNone(self.admin._deserialize_action_location("UNKNOWN"))
+
+    def test_explicit_change_list_location_is_stored_for_confirmation(self):
+        job = _failed_job("explicit-location")
+        request = self._request(
+            {
+                "action": ["retry_selected_jobs"],
+                "index": "0",
+                "select_across": "0",
+                helpers.ACTION_CHECKBOX_NAME: [str(job.pk)],
+            }
+        )
+        actions = self.admin.get_actions(request)
+
+        def fixed_actions(_model_admin, _request, action_location=None):
+            return actions
+
+        with patch.object(type(self.admin), "get_actions", new=fixed_actions):
+            response = self.admin.response_action(
+                request,
+                BackgroundJob.objects.all(),
+                action_location=SimpleNamespace(value="CHANGE_LIST"),
+            )
+
+        self.assertIsInstance(response, HttpResponseRedirect)
+        pending = request.session[self.admin._session_action_key()]
+        self.assertEqual(pending["action_location"], "CHANGE_LIST")
+
     def test_non_integer_index_defaults_and_defers(self):
         # Bad index -> action_index 0, but no "action" list -> IndexError -> super().
         request = self._request({"index": "notanint"})
@@ -553,17 +693,17 @@ class ResponseActionBranchesTest(TestCase):
         real_get_actions = self.admin.get_actions
         calls = {"n": 0}
 
-        def shrinking_get_actions(req):
+        def shrinking_get_actions(_model_admin, req, action_location=None):
             calls["n"] += 1
             # First calls (form choices, skip check) keep the action; the membership
             # guard at line ~324 sees it gone.
-            actions = dict(real_get_actions(req))
+            actions = dict(_get_actions_for_location(real_get_actions, req, action_location))
             if calls["n"] >= 3:
                 actions.pop("retry_selected_jobs", None)
             return actions
 
         with (
-            patch.object(self.admin, "get_actions", side_effect=shrinking_get_actions),
+            patch.object(type(self.admin), "get_actions", new=shrinking_get_actions),
             patch(
                 "django.contrib.admin.options.ModelAdmin.response_action",
                 return_value=sentinel,
@@ -592,13 +732,16 @@ class ResponseActionBranchesTest(TestCase):
         # back to the raw description string.
         bad_desc = "Publish %(verbose_name)s now"
 
-        def bad_description(req):
-            actions = dict(real_get_actions(req))
-            func, name, _desc = actions["retry_selected_jobs"]
+        def bad_description(_model_admin, req, action_location=None):
+            actions = dict(_get_actions_for_location(real_get_actions, req, action_location))
+            func, name, _desc = self.admin._action_parts(
+                actions["retry_selected_jobs"],
+                action_location,
+            )
             actions["retry_selected_jobs"] = (func, name, bad_desc)
             return actions
 
-        with patch.object(self.admin, "get_actions", side_effect=bad_description):
+        with patch.object(type(self.admin), "get_actions", new=bad_description):
             response = self.admin.response_action(request, BackgroundJob.objects.all())
         self.assertIsInstance(response, HttpResponseRedirect)
         pending = request.session[self.admin._session_action_key()]
@@ -618,7 +761,7 @@ class ResponseActionBranchesTest(TestCase):
         sentinel = object()
         # Patch the action func to carry no_confirmation = True so it skips.
         actions = dict(self.admin.get_actions(request))
-        func = actions["retry_selected_jobs"][0]
+        func = self.admin._action_func(actions["retry_selected_jobs"])
         with (
             patch.object(func, "no_confirmation", True, create=True),
             patch(
@@ -694,9 +837,12 @@ class ExecuteConfirmedActionTest(TestCase):
         custom_response = HttpResponse("custom body")
         real_get_actions = self.admin.get_actions
 
-        def with_response_action(req):
-            actions = dict(real_get_actions(req))
-            _func, name, desc = actions["retry_selected_jobs"]
+        def with_response_action(_model_admin, req, action_location=None):
+            actions = dict(_get_actions_for_location(real_get_actions, req, action_location))
+            _func, name, desc = self.admin._action_parts(
+                actions["retry_selected_jobs"],
+                action_location,
+            )
             actions["retry_selected_jobs"] = (
                 lambda admin, r, qs: custom_response,
                 name,
@@ -704,6 +850,6 @@ class ExecuteConfirmedActionTest(TestCase):
             )
             return actions
 
-        with patch.object(self.admin, "get_actions", side_effect=with_response_action):
+        with patch.object(type(self.admin), "get_actions", new=with_response_action):
             response = self.admin._execute_confirmed_action(request, pending)
         self.assertIs(response, custom_response)

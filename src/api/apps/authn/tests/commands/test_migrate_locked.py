@@ -4,7 +4,7 @@ from django.core.management.base import CommandError
 from django.core.management.commands.migrate import Command as MigrateCommand
 from django.test import SimpleTestCase
 
-from apps.authn.management import migrate_locked
+from apps.authn.management.commands import migrate_locked
 
 
 class _Cursor:

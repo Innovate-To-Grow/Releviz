@@ -2,7 +2,7 @@
 set -eu
 
 if [ "${DJANGO_SKIP_STARTUP_TASKS:-0}" != "1" ]; then
-  python manage.py migrate_safely --noinput
+  python manage.py migrate_locked --noinput
   python manage.py collectstatic --noinput
 
   if [ "${DJANGO_CREATE_DEFAULT_ADMIN:-0}" = "1" ]; then

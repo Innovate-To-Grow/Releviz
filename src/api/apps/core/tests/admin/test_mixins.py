@@ -3,6 +3,7 @@
 import io
 import json
 from datetime import date
+from unittest.mock import patch
 
 from django.contrib.admin.sites import AdminSite
 from django.forms import Media
@@ -65,8 +66,12 @@ class _MockSuperAdmin:
     def get_readonly_fields(self, request, obj=None):
         return []
 
-    def get_actions(self, request):
+    def get_actions(self, request, action_location=None):
         return {}
+
+    def get_action(self, action, action_location=None):
+        func = getattr(type(self), action)
+        return func, action, getattr(func, "short_description", action)
 
     def save_model(self, request, obj, form, change):
         obj.save()
@@ -125,7 +130,24 @@ class DataExportMixinTest(TestCase):
     def test_actions_include_export_data_as_unbound_method(self):
         actions = self.admin.get_actions(self.request)
         self.assertIn("export_data", actions)
-        self.assertFalse(hasattr(actions["export_data"][0], "__self__"))
+        action = actions["export_data"]
+        func = action.func if hasattr(action, "func") else action[0]
+        self.assertFalse(hasattr(func, "__self__"))
+
+    def test_actions_forward_location_and_omit_unavailable_export(self):
+        action_location = object()
+        actions = self.admin.get_actions(
+            self.request,
+            action_location=action_location,
+        )
+        self.assertIn("export_data", actions)
+
+        with patch.object(self.admin, "get_action", return_value=None):
+            actions = self.admin.get_actions(
+                self.request,
+                action_location=action_location,
+            )
+        self.assertNotIn("export_data", actions)
 
     def test_excel_export_mixin_alias(self):
         self.assertIs(ExcelExportMixin, DataExportMixin)

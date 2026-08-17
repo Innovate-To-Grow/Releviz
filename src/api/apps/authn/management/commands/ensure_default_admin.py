@@ -23,6 +23,11 @@ class Command(BaseCommand):
         parser.add_argument(
             "--yes", action="store_true", help="Confirm that this command may mutate admin users."
         )
+        parser.add_argument(
+            "--create-only",
+            action="store_true",
+            help="Create a missing admin, but never claim or modify an existing identity.",
+        )
         parser.add_argument("--email", default=os.environ.get("DJANGO_SUPERUSER_EMAIL", ""))
         parser.add_argument("--password-env", default="DJANGO_SUPERUSER_PASSWORD")
         parser.add_argument(
@@ -38,6 +43,7 @@ class Command(BaseCommand):
         if not options["yes"]:
             raise CommandError("Refusing to mutate admin users without --yes.")
 
+        create_only = options.get("create_only", False)
         email = (options["email"] or "").strip().lower()
         password_env = (options["password_env"] or "").strip()
         first_name = (options["first_name"] or DEFAULT_FIRST_NAME).strip() or DEFAULT_FIRST_NAME
@@ -52,9 +58,18 @@ class Command(BaseCommand):
             with transaction.atomic():
                 contact = self._find_contact_for_update(email)
                 if contact is not None and contact.member_id is not None:
-                    self._validate_existing_admin(email=email, contact=contact)
-                    self._write_existing_admin(email=email, contact=contact)
+                    self._validate_existing_admin(
+                        email=email, contact=contact, create_only=create_only
+                    )
+                    self._write_existing_admin(
+                        email=email, contact=contact, create_only=create_only
+                    )
                     return
+                if create_only and contact is not None:
+                    raise CommandError(
+                        f"Email {email} already exists without an owner; refusing to claim it "
+                        "in --create-only mode."
+                    )
 
                 password = os.environ.get(password_env, "")
                 if not password:
@@ -76,8 +91,8 @@ class Command(BaseCommand):
                     raise CommandError(
                         f"Email {email} was claimed concurrently without a valid admin owner; refusing to continue."
                     ) from None
-                self._validate_existing_admin(email=email, contact=contact)
-                self._write_existing_admin(email=email, contact=contact)
+                self._validate_existing_admin(email=email, contact=contact, create_only=create_only)
+                self._write_existing_admin(email=email, contact=contact, create_only=create_only)
             return
 
         self.stdout.write(
@@ -88,11 +103,36 @@ class Command(BaseCommand):
     def _find_contact_for_update(email: str):
         # Joining the nullable member relation makes PostgreSQL reject FOR
         # UPDATE on the outer join, so lock the member separately below.
-        return ContactEmail.objects.select_for_update().filter(email_address__iexact=email).first()
+        contacts = list(
+            ContactEmail.objects.select_for_update()
+            .filter(email_address__iexact=email)
+            .order_by("pk")[:2]
+        )
+        if len(contacts) > 1:
+            raise CommandError(
+                f"Email {email} matches multiple contact records; refusing to choose one."
+            )
+        return contacts[0] if contacts else None
 
-    def _validate_existing_admin(self, *, email: str, contact) -> None:
+    def _validate_existing_admin(self, *, email: str, contact, create_only: bool = False) -> None:
         Member = get_user_model()
         member = Member.objects.select_for_update().get(pk=contact.member_id)
+        if create_only:
+            if not all(
+                (
+                    member.is_active,
+                    member.is_staff,
+                    member.is_superuser,
+                    member.has_usable_password(),
+                    contact.email_type == "primary",
+                    contact.verified,
+                )
+            ):
+                raise CommandError(
+                    f"The existing default administrator for {email} is not bootstrap-ready; "
+                    "refusing to modify it in --create-only mode."
+                )
+            return
         if not (member.is_active and member.is_staff and member.is_superuser):
             raise CommandError(
                 f"Email {email} belongs to a member who is not an active staff superuser; "
@@ -104,7 +144,14 @@ class Command(BaseCommand):
                 "refusing to verify or otherwise modify that account."
             )
 
-    def _write_existing_admin(self, *, email: str, contact) -> None:
+    def _write_existing_admin(self, *, email: str, contact, create_only: bool = False) -> None:
+        if create_only:
+            self.stdout.write(
+                self.style.SUCCESS(
+                    f"Default admin verified: email={email}, member={contact.member_id}"
+                )
+            )
+            return
         self.stdout.write(
             self.style.WARNING(
                 f"Default admin already exists; left unchanged: email={email}, member={contact.member_id}"
