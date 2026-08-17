@@ -105,8 +105,9 @@ class ChangePasswordViewTests(APITestCase):
         )
         self.assertEqual(response.status_code, 401)
 
-    def test_with_refresh_token_blacklists_and_returns_new_tokens(self):
+    def test_signs_out_every_session_without_issuing_replacements(self):
         refresh = RefreshToken.for_user(self.member)
+        other_device = RefreshToken.for_user(self.member)
         response = self.client.post(
             "/authn/change-password/",
             {
@@ -118,16 +119,18 @@ class ChangePasswordViewTests(APITestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 200)
-        self.assertIn("access", response.data)
-        self.assertIn("refresh", response.data)
+        # Changing a password signs out every device, so no replacement pair.
+        self.assertNotIn("access", response.data)
+        self.assertNotIn("refresh", response.data)
 
-        # Old refresh token should be blacklisted — using it again should fail
-        old_refresh_response = self.client.post(
-            "/authn/refresh/",
-            {"refresh": str(refresh)},
-            format="json",
-        )
-        self.assertEqual(old_refresh_response.status_code, 401)
+        # Neither this device nor any other may refresh afterwards.
+        for token in (refresh, other_device):
+            refreshed = self.client.post(
+                "/authn/refresh/",
+                {"refresh": str(token)},
+                format="json",
+            )
+            self.assertEqual(refreshed.status_code, 401)
 
     def test_without_refresh_token_no_new_tokens(self):
         response = self.client.post(

@@ -71,6 +71,7 @@ jest.mock("@/components/auth/AuthContext", () => ({
 jest.mock("@/lib/api/auth", () => ({
   confirmPasswordReset: jest.fn(),
   requestPasswordResetCode: jest.fn(),
+  requestAccountDeletionCode: jest.fn(),
 }));
 
 jest.mock("@/lib/api/feedback", () => ({
@@ -143,7 +144,11 @@ import SignInPage, {
 import SignUpPage, {
   generateStaticParams as generateSignUpStaticParams,
 } from "@/app/sign-up/[[...sign-up]]/page";
-import { confirmPasswordReset, requestPasswordResetCode } from "@/lib/api/auth";
+import {
+  confirmPasswordReset,
+  requestAccountDeletionCode,
+  requestPasswordResetCode,
+} from "@/lib/api/auth";
 import { submitFeedback } from "@/lib/api/feedback";
 import { navigateTo } from "@/lib/navigation";
 
@@ -1352,19 +1357,39 @@ describe("app pages", () => {
     expect(deleteDetails).not.toHaveAttribute("open");
     fireEvent.click(deleteDetails.querySelector("summary"));
     expect(deleteDetails).toHaveAttribute("open");
+    // Deleting starts by emailing a confirmation code.
+    const requestCodeButton = within(deleteForm).getByRole("button", {
+      name: "Email a confirmation code",
+    });
+    expect(requestCodeButton).toBeDisabled();
+    await userEvent.type(
+      within(deleteForm).getByLabelText("Type DELETE to confirm"),
+      "DELETE",
+    );
+    expect(requestCodeButton).not.toBeDisabled();
+
+    requestAccountDeletionCode.mockRejectedValueOnce(new Error("No code"));
+    fireEvent.submit(deleteForm);
+    expect(await screen.findByText("No code")).toBeInTheDocument();
+
+    requestAccountDeletionCode.mockResolvedValueOnce({ message: "sent" });
+    fireEvent.submit(deleteForm);
+    expect(
+      await screen.findByText(
+        "We emailed a confirmation code. Enter it to delete your account.",
+      ),
+    ).toBeInTheDocument();
+
     const deleteButton = within(deleteForm).getByRole("button", {
       name: "Delete account permanently",
     });
     expect(deleteButton).toBeDisabled();
     await userEvent.type(
-      within(deleteForm).getByLabelText("Current password"),
-      "passwordABC",
-    );
-    await userEvent.type(
-      within(deleteForm).getByLabelText("Type DELETE to confirm"),
-      "DELETE",
+      within(deleteForm).getByLabelText("Confirmation code"),
+      "654321",
     );
     expect(deleteButton).not.toBeDisabled();
+
     deleteAccount.mockRejectedValueOnce(new Error("No deletion"));
     fireEvent.submit(deleteForm);
     expect(await screen.findByText("No deletion")).toBeInTheDocument();
@@ -1376,10 +1401,7 @@ describe("app pages", () => {
     deleteAccount.mockResolvedValueOnce({ message: "deleted" });
     fireEvent.submit(deleteForm);
     await waitFor(() =>
-      expect(deleteAccount).toHaveBeenLastCalledWith({
-        password: "passwordABC",
-        confirmation: "DELETE",
-      }),
+      expect(deleteAccount).toHaveBeenLastCalledWith({ code: "654321" }),
     );
     authenticated.unmount();
 

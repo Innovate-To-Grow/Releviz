@@ -9,12 +9,8 @@ logger = logging.getLogger(__name__)
 
 
 class ContentSecurityPolicyMiddleware:
-    """Add the configured CSP using the CMS iframe policy as its source of truth."""
+    """Add the configured content security policy to application responses."""
 
-    _HOST_PATTERN = re.compile(
-        r"^(?:\*\.)?[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
-        r"(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$"
-    )
     _UNFOLD_THEME_STYLE_PATTERN = re.compile(
         r"<style\b(?P<attrs>[^>]*\bid=[\"']unfold-theme-colors[\"'][^>]*)>",
         flags=re.IGNORECASE,
@@ -110,23 +106,11 @@ class ContentSecurityPolicyMiddleware:
             "CSP_CONNECT_SOURCES",
             ("'self'", "https://fonts.googleapis.com", "https://fonts.gstatic.com"),
         )
-        frame_sources = ["'self'"]
+        frame_sources = self._configured_sources("CSP_FRAME_SOURCES", ("'self'",))
         frontend_origin = self._url_origin(getattr(settings, "FRONTEND_URL", ""))
         if frontend_origin:
             frame_sources.append(frontend_origin)
             connect_sources.append(frontend_origin)
-        try:
-            from apps.cms.services.sanitization.embed_hosts import get_allowed_hosts
-
-            for host in get_allowed_hosts():
-                normalized = host.strip().lower()
-                if self._HOST_PATTERN.fullmatch(normalized):
-                    frame_sources.append(f"https://{normalized}")
-        except Exception:
-            # A policy lookup must never take the application down. Failing
-            # closed leaves only same-origin frames until the cache/database
-            # becomes healthy again.
-            logger.exception("Unable to load CMS embed hosts for CSP; using same-origin only")
 
         nonce_source = f"'nonce-{nonce}'"
         media_sources = list(dict.fromkeys(["'self'", "blob:", *storage_origins]))

@@ -582,11 +582,16 @@ describe("auth API helpers", () => {
       .mockResolvedValueOnce(
         jsonResponse({ message: "code sent" }, { status: 202 }),
       )
+      .mockResolvedValueOnce(
+        jsonResponse({ verification_token: "reset-token" }),
+      )
       .mockResolvedValueOnce(passwordKeyResponse())
       .mockResolvedValueOnce(jsonResponse({ message: "reset" }))
       .mockResolvedValueOnce(passwordKeyResponse())
       .mockResolvedValueOnce(jsonResponse({ message: "changed" }))
-      .mockResolvedValueOnce(passwordKeyResponse())
+      .mockResolvedValueOnce(
+        jsonResponse({ verification_token: "delete-token" }),
+      )
       .mockResolvedValueOnce(jsonResponse({ message: "deleted" }));
 
     await expect(
@@ -616,9 +621,9 @@ describe("auth API helpers", () => {
     expect(readAuthSession()).toBeNull();
 
     writeAuthSession({ access: "before-delete" });
-    await expect(
-      deleteAccountApi({ password: "password789", confirmation: "DELETE" }),
-    ).resolves.toEqual({ message: "deleted" });
+    await expect(deleteAccountApi({ code: "654321" })).resolves.toEqual({
+      message: "deleted",
+    });
     expect(readAuthSession()).toBeNull();
 
     expect(global.fetch).toHaveBeenNthCalledWith(
@@ -629,30 +634,38 @@ describe("auth API helpers", () => {
         credentials: "include",
       }),
     );
+    // Resetting exchanges the emailed code for a verification token first.
     expect(global.fetch).toHaveBeenNthCalledWith(
       2,
+      "/authn/password-reset/verify-code/",
+      expect.objectContaining({
+        body: JSON.stringify({ email: "ada@example.com", code: "123456" }),
+      }),
+    );
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      3,
       "/authn/public-key/",
       expect.objectContaining({ credentials: "include" }),
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
-      3,
+      4,
       "/authn/password-reset/confirm/",
       expect.objectContaining({
         body: JSON.stringify({
           email: "ada@example.com",
-          code: "123456",
-          password: "password456",
-          password_confirm: "password456",
+          verification_token: "reset-token",
+          new_password: "password456",
+          new_password_confirm: "password456",
         }),
       }),
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
-      4,
+      5,
       "/authn/public-key/",
       expect.objectContaining({ credentials: "include" }),
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
-      5,
+      6,
       "/authn/change-password/",
       expect.objectContaining({
         body: JSON.stringify({
@@ -662,19 +675,19 @@ describe("auth API helpers", () => {
         }),
       }),
     );
-    expect(global.fetch).toHaveBeenNthCalledWith(
-      6,
-      "/authn/public-key/",
-      expect.objectContaining({ credentials: "include" }),
-    );
+    // Deleting is code-confirmed, so no password is encrypted for it.
     expect(global.fetch).toHaveBeenNthCalledWith(
       7,
-      "/authn/delete-account/",
+      "/authn/delete-account/verify-code/",
       expect.objectContaining({
-        body: JSON.stringify({
-          password: "password789",
-          confirmation: "DELETE",
-        }),
+        body: JSON.stringify({ code: "654321" }),
+      }),
+    );
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      8,
+      "/authn/delete-account/confirm/",
+      expect.objectContaining({
+        body: JSON.stringify({ verification_token: "delete-token" }),
       }),
     );
   });
@@ -1287,6 +1300,40 @@ describe("business API helpers", () => {
       status: 502,
       errorCode: null,
       participant: null,
+    });
+  });
+
+  test("managed participant mutations preserve structured error details", async () => {
+    global.fetch.mockResolvedValueOnce({
+      ok: false,
+      status: 409,
+      text: jest.fn().mockResolvedValue(
+        JSON.stringify({
+          detail: "Participant already exists",
+          code: "participant_exists",
+          event: { code: "ABC", version: 4 },
+          participant: { id: "participant-1", version: 2 },
+        }),
+      ),
+    });
+
+    await expect(
+      createManagedParticipant(
+        "ABC",
+        {
+          name: "Existing Person",
+          email: "existing@example.com",
+          idempotencyKey: "managed-key",
+        },
+        "tok",
+      ),
+    ).rejects.toMatchObject({
+      message: "Participant already exists",
+      status: 409,
+      errorCode: "participant_exists",
+      event: { code: "ABC", version: 4 },
+      participant: { id: "participant-1", version: 2 },
+      payload: expect.objectContaining({ code: "participant_exists" }),
     });
   });
 });

@@ -7,10 +7,9 @@ class AWSCredentialConfig(models.Model):
     """
     Unified AWS configuration.
 
-    Stores the IAM access key and AWS region used by SES (email) and
-    Bedrock (System Intelligence). Both services share the same region.
-    Multiple configs can exist but only one may be active at a time.
-    Managed via Django admin under Site Settings.
+    Stores the IAM access key and AWS region used by application services such
+    as SES email delivery. Multiple configs can exist but only one may be active
+    at a time. Managed via Django admin under Site Settings.
     """
 
     name = models.CharField(

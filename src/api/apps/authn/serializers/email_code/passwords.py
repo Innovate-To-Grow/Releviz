@@ -13,6 +13,7 @@ from apps.authn.constants import (
     VERIFICATION_CONFIRM_INVALID,
     VERIFICATION_INVALID,
 )
+from apps.authn.security import revoke_all_refresh_sessions
 from apps.authn.services import (
     AuthChallengeInvalid,
     NoRecoveryChannelError,
@@ -129,6 +130,7 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
         member = challenge.member
         member.set_password(new_password)
         member.save(update_fields=["password"])
+        revoke_all_refresh_sessions(member)
         return {"message": "Password reset successfully."}
 
 

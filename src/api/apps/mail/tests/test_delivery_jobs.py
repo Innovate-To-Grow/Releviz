@@ -10,7 +10,6 @@ from django.test import TestCase
 from django.utils import timezone
 
 from apps.authn.models import EmailAuthChallenge
-from apps.authn.services import issue_email_challenge
 from apps.authn.tests.helpers import create_member
 from apps.core.services.aws.crypto import decrypt_secret
 from apps.mail.models import EmailDeliveryJob, EmailMessageLog
@@ -616,32 +615,54 @@ class EmailDeliveryJobTests(TestCase):
             call_command("dispatch_email_jobs", "--poll-interval=0")
 
     def test_auth_challenge_jobs_cancel_when_inactive_or_expired(self):
-        inactive = issue_email_challenge(
+        inactive_challenge = EmailAuthChallenge.objects.create(
             member=self.event.organizer,
             purpose=EmailAuthChallenge.Purpose.LOGIN,
             target_email="job-organizer@example.com",
+            code_hash="unused",
+            expires_at=timezone.now() + timedelta(minutes=10),
         )
-        inactive.challenge.status = EmailAuthChallenge.Status.CONSUMED
-        inactive.challenge.save(update_fields=["status", "updated_at"])
-        canceled = dispatch_email_job(inactive.delivery_job.pk)
+        inactive_job, _created = enqueue_email_job(
+            idempotency_key="inactive-auth-challenge",
+            message_type=EmailMessageLog.MessageType.VERIFICATION,
+            recipient=inactive_challenge.target_email,
+            subject="Verification code",
+            body="Code",
+            message_id="<inactive-auth-challenge@releviz.local>",
+            member=self.event.organizer,
+            auth_challenge=inactive_challenge,
+        )
+        inactive_challenge.status = EmailAuthChallenge.Status.CONSUMED
+        inactive_challenge.save(update_fields=["status", "updated_at"])
+        canceled = dispatch_email_job(inactive_job.pk)
         self.assertEqual(canceled, {"attempted": False, "status": "canceled"})
-        inactive.delivery_job.refresh_from_db()
-        self.assertIn("no longer active", inactive.delivery_job.last_error)
-        self.assertEqual(email_delivery_summary([inactive.delivery_job])["canceled"], 1)
+        inactive_job.refresh_from_db()
+        self.assertIn("no longer active", inactive_job.last_error)
+        self.assertEqual(email_delivery_summary([inactive_job])["canceled"], 1)
 
-        expired = issue_email_challenge(
+        expired_challenge = EmailAuthChallenge.objects.create(
             member=self.event.organizer,
             purpose=EmailAuthChallenge.Purpose.LOGIN,
             target_email="job-organizer@example.com",
+            code_hash="unused",
+            expires_at=timezone.now() - timedelta(seconds=1),
         )
-        expired.challenge.expires_at = timezone.now() - timedelta(seconds=1)
-        expired.challenge.save(update_fields=["expires_at", "updated_at"])
+        expired_job, _created = enqueue_email_job(
+            idempotency_key="expired-auth-challenge",
+            message_type=EmailMessageLog.MessageType.VERIFICATION,
+            recipient=expired_challenge.target_email,
+            subject="Verification code",
+            body="Code",
+            message_id="<expired-auth-challenge@releviz.local>",
+            member=self.event.organizer,
+            auth_challenge=expired_challenge,
+        )
         summary = dispatch_due_email_jobs(limit=10)
         self.assertEqual(summary["canceled"], 1)
-        expired.challenge.refresh_from_db()
-        expired.delivery_job.refresh_from_db()
-        self.assertEqual(expired.challenge.status, EmailAuthChallenge.Status.EXPIRED)
-        self.assertEqual(expired.delivery_job.status, EmailDeliveryJob.Status.CANCELED)
+        expired_challenge.refresh_from_db()
+        expired_job.refresh_from_db()
+        self.assertEqual(expired_challenge.status, EmailAuthChallenge.Status.EXPIRED)
+        self.assertEqual(expired_job.status, EmailDeliveryJob.Status.CANCELED)
 
     def test_encrypted_content_decryption_failure_is_retryable(self):
         job, _created = enqueue_email_job(

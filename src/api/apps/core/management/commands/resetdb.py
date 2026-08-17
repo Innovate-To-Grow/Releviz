@@ -28,7 +28,6 @@ from .resetdb_helpers import (
     reset_mysql,
     reset_postgresql,
     reset_sqlite,
-    seed_archive_data,
 )
 
 
@@ -112,10 +111,6 @@ class Command(BaseCommand):
         call_command("migrate", database=db_alias, interactive=False)
         self.stdout.write(self.style.SUCCESS("Migrations applied."))
         create_default_admin(self)
-        self.stdout.write(self.style.NOTICE("Seeding service configs..."))
-        call_command("seed_service_configs")
-        self.stdout.write(self.style.NOTICE("Seeding archive data (CMS pages, menus, footer)..."))
-        seed_archive_data(self)
         self.stdout.write("")
         self.stdout.write(self.style.SUCCESS("=" * 60))
         self.stdout.write(self.style.SUCCESS("DATABASE RESET COMPLETE"))

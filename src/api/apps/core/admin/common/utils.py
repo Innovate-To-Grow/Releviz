@@ -150,9 +150,9 @@ def format_duration(seconds):
     minutes = minutes % 60
 
     if hours < 24:
-        parts = []
-        if hours:
-            parts.append(f"{hours}h")
+        # Reaching this branch means at least 60 minutes were supplied, so
+        # ``hours`` is necessarily positive.
+        parts = [f"{hours}h"]
         if minutes:
             parts.append(f"{minutes}m")
         return " ".join(parts)
@@ -160,12 +160,11 @@ def format_duration(seconds):
     days = hours // 24
     hours = hours % 24
 
-    parts = []
-    if days:
-        parts.append(f"{days}d")
+    # Reaching this branch means at least 24 hours were supplied.
+    parts = [f"{days}d"]
     if hours:
         parts.append(f"{hours}h")
     if minutes:
         parts.append(f"{minutes}m")
 
-    return " ".join(parts) if parts else "0m"
+    return " ".join(parts)

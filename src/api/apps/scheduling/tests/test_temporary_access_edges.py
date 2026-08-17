@@ -32,6 +32,11 @@ from apps.scheduling.temp_access import (
     temporary_session_member_has_full_access,
     verify_temporary_access_code,
 )
+from apps.scheduling.views import (
+    EventInvitationsView,
+    EventRemindersView,
+    ManagedParticipantView,
+)
 
 
 class TemporaryAccessEdgeFixture(TestCase):
@@ -182,6 +187,50 @@ class TemporaryAccessServiceEdgeTests(TemporaryAccessEdgeFixture):
 
 
 class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
+    def test_request_throttle_identities_and_managed_idempotency_validation(self):
+        request = SimpleNamespace(user=self.organizer)
+        expected_identity = str(self.organizer.pk)
+        self.assertEqual(
+            ManagedParticipantView().get_auth_rate_identity(request),
+            expected_identity,
+        )
+        self.assertEqual(
+            EventInvitationsView().get_auth_rate_identity(request),
+            expected_identity,
+        )
+        self.assertEqual(
+            EventRemindersView().get_auth_rate_identity(request),
+            expected_identity,
+        )
+
+        invalid_key = self.organizer_client().post(
+            f"/events/participants/managed?code={self.event.code}",
+            {
+                "name": "Invalid key",
+                "email": "invalid-key@example.com",
+                "idempotencyKey": "not-a-uuid",
+            },
+            format="json",
+        )
+        self.assertEqual(invalid_key.status_code, 400)
+        self.assertEqual(invalid_key.data["error"], "idempotencyKey must be a UUID")
+
+    def test_organizer_roster_metadata_is_locked_with_the_event(self):
+        self.event.status = Event.Status.ARCHIVED
+        self.event.save(update_fields=["status", "updated_at"])
+
+        response = self.organizer_client().put(
+            (
+                f"/events/participants/update?code={self.event.code}"
+                f"&participantId={self.temporary.pk}"
+            ),
+            {"groupName": "Locked"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["errorCode"], "participant_roster_locked")
+
     def test_organizer_participant_listing_uses_invitation_private_metadata(self):
         full = create_member("edge-full@example.com", "Full", "Person")
         full_participant = Participant.objects.create(

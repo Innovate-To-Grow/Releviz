@@ -10,6 +10,7 @@ from apps.core.admin.common.utils import (
     get_field_value,
     truncate_text,
 )
+from apps.core.models import AWSCredentialConfig
 
 
 class AdminUrlTest(TestCase):
@@ -17,19 +18,15 @@ class AdminUrlTest(TestCase):
         self.assertEqual(admin_url(None), "-")
 
     def test_generates_link_with_default_label(self):
-        from apps.projects.models import Semester
-
-        semester = Semester.objects.create(year=2025, season=1, is_published=True)
-        html = admin_url(semester)
-        self.assertIn(f"/admin/projects/semester/{semester.pk}/change/", html)
-        self.assertIn(str(semester), html)
+        config = AWSCredentialConfig.objects.create(name="Link target")
+        html = admin_url(config)
+        self.assertIn(f"/admin/core/awscredentialconfig/{config.pk}/change/", html)
+        self.assertIn(str(config), html)
         self.assertIn("<a href=", html)
 
     def test_custom_label(self):
-        from apps.projects.models import Semester
-
-        semester = Semester.objects.create(year=2025, season=1, is_published=True)
-        html = admin_url(semester, label="Click me")
+        config = AWSCredentialConfig.objects.create(name="Custom label")
+        html = admin_url(config, label="Click me")
         self.assertIn("Click me", html)
 
 
@@ -137,8 +134,14 @@ class FormatDurationTest(TestCase):
     def test_hours_and_minutes(self):
         self.assertEqual(format_duration(3600 + 900), "1h 15m")
 
+    def test_exact_hours(self):
+        self.assertEqual(format_duration(3600), "1h")
+
     def test_days(self):
         self.assertEqual(format_duration(86400 + 7200 + 1800), "1d 2h 30m")
+
+    def test_exact_days(self):
+        self.assertEqual(format_duration(86400), "1d")
 
     def test_none_returns_dash(self):
         self.assertEqual(format_duration(None), "-")

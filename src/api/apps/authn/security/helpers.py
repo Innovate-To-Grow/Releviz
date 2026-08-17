@@ -132,6 +132,26 @@ def consume_request_rate_limit(scope, request, identity="", *, cost=1):
     return RateLimitDecision(allowed=True)
 
 
+def revoke_all_refresh_sessions(member) -> int:
+    """Blacklist every outstanding refresh token owned by *member*.
+
+    Changing or resetting a password promises to sign out every device. Access
+    tokens already fail on their password-hash claim, but refresh tokens keep
+    working until they are blacklisted, so a stolen session would survive the
+    very action taken to shut it out.
+    """
+    from rest_framework_simplejwt.token_blacklist.models import (
+        BlacklistedToken,
+        OutstandingToken,
+    )
+
+    revoked = 0
+    for token in OutstandingToken.objects.filter(user=member):
+        _, created = BlacklistedToken.objects.get_or_create(token=token)
+        revoked += int(created)
+    return revoked
+
+
 def prune_auth_security_state(*, now=None) -> dict:
     """Prune retained auth state after the legacy rate/session models were removed."""
     from django.apps import apps

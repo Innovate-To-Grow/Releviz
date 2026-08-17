@@ -114,7 +114,7 @@ releviz-monorepo/
     performance/    # Pure aggregation and guarded PostgreSQL/HTTP scale tools
   .github/workflows/
     ci.yml          # Parallel CI for both workspaces
-    deploy-prod.yml # Protected, operator-confirmed production release
+    deploy-prod.yml.disabled # Parked production release; CD is intentionally disabled
 ```
 
 ## Local Development

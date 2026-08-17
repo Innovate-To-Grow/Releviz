@@ -5,7 +5,7 @@ from django.contrib.auth import get_user_model
 from django.core.management import CommandError, call_command
 from django.test import TestCase
 
-from apps.authn.management.createsuperuser import Command
+from apps.authn.management.commands.createsuperuser import Command
 from apps.authn.models import ContactEmail
 
 Member = get_user_model()

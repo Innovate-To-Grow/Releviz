@@ -1094,6 +1094,7 @@ jobs:
           format: sarif
           output: trivy-backend.sarif
           severity: CRITICAL,HIGH
+          limit-severities-for-sarif: true
           exit-code: "1"
           ignore-unfixed: true
 
@@ -1161,6 +1162,7 @@ jobs:
           format: sarif
           output: trivy-frontend.sarif
           severity: CRITICAL,HIGH
+          limit-severities-for-sarif: true
           exit-code: "1"
           ignore-unfixed: true
 
@@ -1402,7 +1404,11 @@ jobs:
           rm -rf "$EMAIL_FILE_PATH"
           mkdir -p "$EMAIL_FILE_PATH"
           python src/api/manage.py migrate --noinput --settings=config.settings.e2e
-          python src/api/manage.py ensure_default_admin --yes --settings=config.settings.e2e
+          python src/api/manage.py seed_admin_e2e \
+            --yes \
+            --email "$DJANGO_SUPERUSER_EMAIL" \
+            --password "$DJANGO_SUPERUSER_PASSWORD" \
+            --settings=config.settings.e2e
 
       - name: Run Playwright tests
         env:
@@ -1536,7 +1542,7 @@ jobs:
     name: E2E Required Result
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [e2e, changes]
+    needs: [e2e-plan, e2e, changes]
     if: ${{ always() }}
     steps:
       - name: Enforce E2E result
@@ -1549,9 +1555,16 @@ jobs:
           import sys
 
           needs = json.loads(os.environ["NEEDS_CONTEXT"])
-          result = needs["e2e"]["result"]
-          if result not in {"success", "skipped"}:
-              print(f"e2e: {result}")
+          required = needs["changes"].get("outputs", {}).get("e2e") == "true"
+          results = {
+              "e2e-plan": needs["e2e-plan"]["result"],
+              "e2e": needs["e2e"]["result"],
+          }
+          expected = {"success"} if required else {"success", "skipped"}
+          failed = {name: result for name, result in results.items() if result not in expected}
+          if failed:
+              for name, result in failed.items():
+                  print(f"{name}: {result}")
               sys.exit(1)
           print("E2E passed or was not required for this change.")
           PY

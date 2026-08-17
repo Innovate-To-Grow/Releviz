@@ -262,6 +262,22 @@ describe("participant workflow", () => {
     expect(joinEvent).toHaveBeenCalledTimes(1);
   });
 
+  test("reports a failed manual join", async () => {
+    joinEvent.mockRejectedValue(new Error("Membership expired"));
+
+    renderParticipant();
+
+    expect(
+      await screen.findByRole("heading", { name: "Join Event" }),
+    ).toBeInTheDocument();
+    await userEvent.click(
+      screen.getByRole("button", { name: `Join as ${member.displayName}` }),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Failed to join: Membership expired",
+    );
+  });
+
   test("does not auto-join when an event is no longer accepting responses", async () => {
     const consumeRespondIntent = jest.fn();
 

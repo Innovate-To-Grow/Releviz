@@ -19,7 +19,7 @@ from apps.authn.serializers.helpers import decrypt_field, decrypt_password_pair
 Member = get_user_model()
 
 
-def _member(email=None, **kw):
+def _member(email=None, *, contact_verified=True, **kw):
     member = Member.objects.create_user(
         password="StrongPass123!",
         first_name=kw.pop("first_name", "A"),
@@ -28,7 +28,10 @@ def _member(email=None, **kw):
     )
     if email:
         ContactEmail.objects.create(
-            member=member, email_address=email, email_type="primary", verified=True
+            member=member,
+            email_address=email,
+            email_type="primary",
+            verified=contact_verified,
         )
     return member
 
@@ -134,7 +137,7 @@ class RegisterSerializerValidationTests(TestCase):
 
     @patch("apps.authn.serializers.auth.register.issue_email_challenge")
     def test_create_reuses_pending_member(self, _mock_issue):
-        pending = _member(email="pending@example.com", is_active=False)
+        pending = _member(email="pending@example.com", is_active=False, contact_verified=False)
         serializer = RegisterSerializer(data=self._payload(email="pending@example.com"))
         self.assertTrue(serializer.is_valid(), serializer.errors)
         member = serializer.save()
@@ -211,7 +214,7 @@ class RegisterResendCodeTests(TestCase):
 
     @patch("apps.authn.serializers.email_code.auth.issue_email_challenge")
     def test_resend_for_pending_member_succeeds(self, mock_issue):
-        _member(email="pending2@example.com", is_active=False)
+        _member(email="pending2@example.com", is_active=False, contact_verified=False)
         serializer = RegisterResendCodeSerializer(data={"email": "pending2@example.com"})
         self.assertTrue(serializer.is_valid())
         result = serializer.save()

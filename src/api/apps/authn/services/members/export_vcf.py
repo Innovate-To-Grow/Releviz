@@ -112,8 +112,9 @@ def _fold(line: str) -> str:
         else:
             current.append(char)
             current_octets += char_octets
-    if current:
-        pieces.append("".join(current))
+    # Reaching this point means ``line`` exceeded the short-line return above,
+    # so the final chunk is necessarily non-empty.
+    pieces.append("".join(current))
 
     folded = pieces[0]
     for piece in pieces[1:]:

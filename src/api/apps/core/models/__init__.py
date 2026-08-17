@@ -8,7 +8,7 @@ from .base import (
 )
 from .managers import ProjectControlManager, ProjectControlQuerySet
 from .mixins import ActiveModel, AuthoredModel, OrderedModel
-from .records import BackgroundJob, DeliveryRateLimit
+from .records import BackgroundJob, DeliveryRateLimit, FeedbackSubmission
 
 # Backward-compatible alias: the class was renamed from TimestampedModel → TimeStampedModel
 TimestampedModel = TimeStampedModel
@@ -19,6 +19,7 @@ __all__ = [
     "AuthoredModel",
     "BackgroundJob",
     "DeliveryRateLimit",
+    "FeedbackSubmission",
     "OrderedModel",
     "ProjectControlManager",
     "ProjectControlModel",

@@ -9,6 +9,9 @@ from ..common.base import ReadOnlyModelAdmin
 
 @admin.register(BackgroundJob)
 class BackgroundJobAdmin(ReadOnlyModelAdmin):
+    # Explicit retries alter durable delivery state and therefore keep the
+    # shared typed-confirmation guard even though ordinary fields are read-only.
+    require_confirmation = True
     list_display = (
         "kind",
         "dedupe_key",

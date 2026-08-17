@@ -68,6 +68,9 @@ CLAUDE.md
 # Codex
 .codex/
 
+# Agent instructions
+agents/
+
 # Terraform
 **/.terraform/*
 *.tfstate

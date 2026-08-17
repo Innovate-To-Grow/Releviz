@@ -174,7 +174,7 @@ class PrivilegeFieldEditTests(TestCase):
         self.assertIn("admin_apps", form_class.base_fields)
 
 
-@override_settings(ROOT_URLCONF="config.routing.urls", ADMIN_REQUIRE_CONFIRMATION=False)
+@override_settings(ROOT_URLCONF="config.urls", ADMIN_REQUIRE_CONFIRMATION=False)
 class PrivilegeFieldPostTests(TestCase):
     """End-to-end: a non-superoperator cannot widen their own privileges by
     POSTing is_staff / admin_apps to their own change page."""

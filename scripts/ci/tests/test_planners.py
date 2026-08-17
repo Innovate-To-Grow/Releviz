@@ -22,7 +22,13 @@ class DjangoPlannerTests(TestCase):
     def test_auth_change_includes_dependent_apps(self):
         self.assertEqual(
             select_apps("pull_request", ["src/api/apps/authn/models.py"]),
-            ["authn", "messaging", "scheduling"],
+            ["authn", "mail", "scheduling"],
+        )
+
+    def test_mail_change_uses_current_app_name_and_includes_scheduling(self):
+        self.assertEqual(
+            select_apps("pull_request", ["src/api/apps/mail/services.py"]),
+            ["mail", "scheduling"],
         )
 
 

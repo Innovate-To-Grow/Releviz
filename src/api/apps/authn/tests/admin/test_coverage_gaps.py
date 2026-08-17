@@ -90,6 +90,7 @@ class MemberChangeFormClearImageTests(TestCase):
             "first_name": member.first_name,
             "middle_name": "",
             "last_name": member.last_name,
+            "access_level": member.access_level,
             "profile_image": "",
             clear_name: "on",
             "is_active": "on",
@@ -199,7 +200,7 @@ class UUIDInlineMixinTests(TestCase):
         self.assertEqual(normalized.get("contact_emails-0-id"), "")
 
 
-@override_settings(ROOT_URLCONF="config.routing.urls", ADMIN_REQUIRE_CONFIRMATION=False)
+@override_settings(ROOT_URLCONF="config.urls", ADMIN_REQUIRE_CONFIRMATION=False)
 class ContactEmailInlinePrimaryFormsetTests(TestCase):
     """inlines.py:116 — submitting two primary emails through the admin is rejected."""
 
@@ -330,7 +331,7 @@ class UnfoldContextTests(SimpleTestCase):
 # ---------------------------------------------------------------------------
 # views/admin/login/password.py:36 and views/admin/login/email_code.py:112-113
 # ---------------------------------------------------------------------------
-@override_settings(ROOT_URLCONF="config.routing.urls")
+@override_settings(ROOT_URLCONF="config.urls")
 class AdminPasswordFormInvalidTests(TestCase):
     def setUp(self):
         from django.core.cache import cache
@@ -353,7 +354,7 @@ class AdminPasswordFormInvalidTests(TestCase):
         self.assertFalse(response.wsgi_request.user.is_authenticated)
 
 
-@override_settings(ROOT_URLCONF="config.routing.urls")
+@override_settings(ROOT_URLCONF="config.urls")
 class AdminEmailCodeStateMissingTests(TestCase):
     def setUp(self):
         from django.core.cache import cache

@@ -82,9 +82,12 @@ class ReadOnlyModelAdmin(BaseModelAdmin):
         """Prevent deleting objects."""
         return False
 
-    def get_actions(self, request):
+    def get_actions(self, request, action_location=None):
         """Remove all actions."""
-        actions = super().get_actions(request)
+        if action_location is None:
+            actions = super().get_actions(request)
+        else:
+            actions = super().get_actions(request, action_location=action_location)
         if actions and "delete_selected" in actions:
             del actions["delete_selected"]
         return actions

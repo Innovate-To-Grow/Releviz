@@ -32,7 +32,7 @@ def _create_pending_challenge(member, email, code="123456"):
     )
 
 
-@override_settings(ROOT_URLCONF="config.routing.urls")
+@override_settings(ROOT_URLCONF="config.urls")
 class AdminPasswordLoginTest(TestCase):
     # noinspection PyPep8Naming
     def setUp(self):

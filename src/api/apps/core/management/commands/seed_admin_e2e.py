@@ -1,7 +1,6 @@
 """Seed deterministic records for browser-driven Django admin E2E tests."""
 
 import os
-from datetime import date
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
@@ -10,8 +9,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 from apps.authn.models import ContactEmail
-from apps.event.models import Event, Question, Ticket
-from apps.projects.models import Project, Semester
+from apps.scheduling.models import Event, Participant, UserEvent, Weight
 
 DEFAULT_EMAIL = "admin-e2e@example.com"
 DEFAULT_PASSWORD = "admin-e2e-password"
@@ -19,7 +17,8 @@ DEFAULT_NONSTAFF_EMAIL = "admin-e2e-nonstaff@example.com"
 DEFAULT_ACTION_EMAIL = "action-e2e@example.com"
 DEFAULT_FIRST_NAME = "Admin"
 DEFAULT_LAST_NAME = "E2E"
-DEFAULT_EVENT_NAME = "E2E Event Copy Template"
+DEFAULT_EVENT_CODE = "E2EADMIN"
+DEFAULT_EVENT_NAME = "E2E Design Review"
 
 
 class Command(BaseCommand):
@@ -65,17 +64,15 @@ class Command(BaseCommand):
 
         with transaction.atomic():
             member = self._upsert_admin_member(email, password, first_name, last_name)
-            self._upsert_nonstaff_member(nonstaff_email, password)
+            nonstaff_member = self._upsert_nonstaff_member(nonstaff_email, password)
             self._upsert_action_contact_email(action_email)
-            semester = self._upsert_sample_semester()
-            project = self._upsert_sample_project(semester)
-            event = self._upsert_sample_event()
+            event = self._reset_sample_event(member)
+            self._upsert_sample_participant(event, nonstaff_member)
 
         self.stdout.write(
             self.style.SUCCESS(
                 "Seeded admin E2E data: "
-                f"email={email}, member={member.pk}, semester={semester.label}, "
-                f"project={project.project_title}, event={event.name}"
+                f"email={email}, member={member.pk}, event={event.name} ({event.code})"
             )
         )
 
@@ -199,62 +196,60 @@ class Command(BaseCommand):
         )
         return contact
 
-    def _upsert_sample_semester(self):
-        semester, _ = Semester.objects.update_or_create(
-            year=2099,
-            season=Semester.Season.FALL,
-            defaults={"is_published": False},
+    def _reset_sample_event(self, organizer):
+        # The reserved event may have been edited, finalized, or seeded with
+        # different identities during a previous browser run. Recreating it
+        # gives every E2E run the same complete relation graph; cascading
+        # deletes remove stale participants, memberships, results, and meetings.
+        Event.objects.filter(code=DEFAULT_EVENT_CODE).delete()
+        event = Event.objects.create(
+            code=DEFAULT_EVENT_CODE,
+            name=DEFAULT_EVENT_NAME,
+            organizer=organizer,
+            start_minutes=9 * 60,
+            end_minutes=17 * 60,
+            slot_minutes=30,
+            days=[1, 2, 3, 4, 5],
+            mode="mixed",
+            location="Design Studio",
+            participant_view_permission="realtime",
+            day_selection_type="days_of_week",
+            specific_dates=None,
+            timezone="UTC",
+            reminders_enabled=False,
+            access_mode="open_link",
+            meeting_duration_minutes=60,
+            status=Event.Status.ACTIVE,
         )
-        return semester
-
-    def _upsert_sample_project(self, semester):
-        project, _ = Project.objects.update_or_create(
-            semester=semester,
-            team_number="E2E-1",
-            defaults={
-                "class_code": "E2E",
-                "team_name": "Admin Browser Team",
-                "project_title": "E2E Solar Orchard Dashboard",
-                "organization": "Innovate To Grow QA",
-                "industry": "Testing",
-                "abstract": "Seed project used by browser-driven Django admin tests.",
-                "student_names": "Ada Lovelace; Grace Hopper",
-                "track": 1,
-                "presentation_order": 1,
-            },
+        UserEvent.objects.update_or_create(
+            member=organizer,
+            event=event,
+            role="organizer",
         )
-        return project
-
-    def _upsert_sample_event(self):
-        event, _ = Event.objects.update_or_create(
-            slug="e2e-event-copy-template",
-            defaults={
-                "name": DEFAULT_EVENT_NAME,
-                "date": date(2099, 5, 14),
-                "end_date": date(2099, 5, 16),
-                "location": "E2E Event Hall",
-                "description": "Seed Event used to verify the safe Add Event copy flow.",
-                "registration_open": False,
-                "allow_secondary_email": True,
-                "collect_phone": True,
-                "verify_phone": True,
-                "ticket_login_validity_days": 45,
-                "ticket_login_reusable": False,
-            },
-        )
-        ticket_templates = {
-            "E2E General Admission": {"order": 1},
-            "E2E VIP Admission": {"order": 2},
-        }
-        event.tickets.exclude(name__in=ticket_templates).delete()
-        for name, defaults in ticket_templates.items():
-            Ticket.objects.update_or_create(event=event, name=name, defaults=defaults)
-
-        question_templates = {
-            "What brings you to the E2E Event?": {"is_required": True, "order": 1},
-            "Do you need accessibility accommodations?": {"is_required": False, "order": 2},
-        }
-        event.questions.exclude(text__in=question_templates).delete()
-        for text, defaults in question_templates.items():
-            Question.objects.update_or_create(event=event, text=text, defaults=defaults)
         return event
+
+    def _upsert_sample_participant(self, event, member):
+        availability = [1 if index % 3 else 0 for index in range(80)]
+        participant, _ = Participant.objects.update_or_create(
+            event=event,
+            member=member,
+            defaults={
+                "participant_name": "Nonstaff E2E",
+                "availability_inperson": availability,
+                "availability_virtual": list(reversed(availability)),
+                "submitted": True,
+                "group_name": "Design Review",
+                "sort_order": 1,
+            },
+        )
+        UserEvent.objects.update_or_create(
+            member=member,
+            event=event,
+            role="participant",
+        )
+        Weight.objects.update_or_create(
+            event=event,
+            participant=participant,
+            defaults={"weight": 0.75, "included": True},
+        )
+        return participant

@@ -84,7 +84,7 @@ class ScaleOperationEdgeTests(TestCase):
                 self.assertEqual(self.client.post(path, payload, format="json").status_code, 404)
 
     def test_delivery_request_privacy_missing_and_noop_retry(self):
-        missing = uuid.uuid4()
+        missing = 9_999_999
         self.assertEqual(self.client.get(f"/events/delivery-requests/{missing}").status_code, 404)
         self.assertEqual(
             self.client.post(f"/events/delivery-requests/{missing}", {}, format="json").status_code,

@@ -86,13 +86,18 @@ class DataExportMixin:
             return self._generate_json(request, queryset)
         return self._generate_excel(request, queryset)
 
-    def get_actions(self, request):
-        actions = super().get_actions(request)
-        actions["export_data"] = (
-            type(self).export_data,
-            "export_data",
-            "Export selected data",
-        )
+    def get_actions(self, request, action_location=None):
+        if action_location is None:
+            actions = super().get_actions(request)
+            export_action = self.get_action("export_data")
+        else:
+            actions = super().get_actions(request, action_location=action_location)
+            export_action = self.get_action(
+                "export_data",
+                action_location=action_location,
+            )
+        if export_action is not None:
+            actions["export_data"] = export_action
         return actions
 
     def _get_base_filename(self, request):

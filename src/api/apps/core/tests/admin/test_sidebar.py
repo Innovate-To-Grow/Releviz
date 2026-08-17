@@ -2,7 +2,7 @@ from django.conf import settings
 from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
 
-from apps.event.tests.helpers import make_superuser
+from apps.core.tests.helpers import make_superuser
 
 
 class AdminSidebarNavigationTest(SimpleTestCase):
@@ -207,7 +207,7 @@ class AdminIndexNavigationTest(TestCase):
         self.assertTemplateUsed(response, "admin/index.html")
         self.assertContains(response, "Scheduling")
         self.assertContains(response, "Email Delivery")
-        self.assertContains(response, "Members & Authentication")
+        self.assertContains(response, "Members &amp; Authentication", html=True)
         self.assertContains(response, "Site Settings")
         self.assertContains(response, "Events")
         self.assertContains(response, "Members")
@@ -221,7 +221,7 @@ class AdminIndexNavigationTest(TestCase):
         self.assertContains(response, 'id="tabs-items"')
         self.assertContains(response, 'href="/admin/authn/member/"')
 
-    def test_member_detail_pages_render_tabs(self):
+    def test_member_detail_page_renders_current_fieldset_tabs(self):
         member_model = __import__("django.contrib.auth").contrib.auth.get_user_model()
         member = member_model.objects.create_user(
             email="member@example.com", password="testpass123"
@@ -231,7 +231,8 @@ class AdminIndexNavigationTest(TestCase):
         response = self.client.get(url)
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'id="tabs-items"')
+        self.assertContains(response, "member_form")
+        self.assertIn("x-data=\"{ activeTab: 'general', }\"", response.content.decode())
 
     def test_email_providers_page_render_as_admin_tabs(self):
         url = reverse("admin:mail_emailproviderconfig_changelist")

@@ -582,6 +582,21 @@ describe("scaled organizer workspace", () => {
     ).toHaveAttribute("role", "alert");
   });
 
+  test("reports a workspace refresh when authentication fails", async () => {
+    const getToken = jest.fn().mockResolvedValue("token");
+    useAuth.mockReturnValue({ user: organizer, loading: false, getToken });
+    renderView();
+    await screen.findByText("Ada Faculty");
+    await screen.findByText(/Results are current at revision 3/);
+    getToken.mockRejectedValueOnce(new Error(""));
+
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    expect(
+      await screen.findByText("Unable to refresh this workspace."),
+    ).toHaveAttribute("role", "alert");
+  });
+
   test("validates required invite fields and invalid email locally", async () => {
     renderView();
     const invite = await openInvitePersonForm();
@@ -1352,6 +1367,43 @@ describe("scaled organizer workspace", () => {
     );
     expect(setEvent).toHaveBeenCalledWith(
       expect.objectContaining({ status: "finalized" }),
+    );
+  });
+
+  test("selects a legacy recommendation and honors reduced motion", async () => {
+    window.matchMedia = jest.fn().mockReturnValue({ matches: true });
+    fetchEventResults.mockResolvedValueOnce({
+      status: "fresh",
+      requestedRevision: 3,
+      computedRevision: 3,
+      results: {
+        recommendations: [
+          {
+            rank: 1,
+            label: "Legacy result",
+            channel: "virtual",
+            startsAt: "2026-08-20T09:00:00Z",
+            endsAt: "2026-08-20T10:00:00Z",
+            weightedAvailability: 0.8,
+            unweightedAvailability: 0.7,
+            fullyAvailableParticipantTotal: 600,
+          },
+        ],
+      },
+    });
+    renderView();
+
+    await screen.findByText("Legacy result");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Choose this time" }),
+    );
+
+    expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledWith({
+      behavior: "auto",
+      block: "start",
+    });
+    expect(document.getElementById("organizer-finalize")).toHaveTextContent(
+      "Legacy result",
     );
   });
 

@@ -1,6 +1,9 @@
 import logging
 
 from botocore.exceptions import BotoCoreError, ClientError
+from django.conf import settings
+from django.core.mail import EmailMultiAlternatives
+from django.utils.html import strip_tags
 
 from apps.core.services.aws.credentials import AwsCredentialsError, resolve_aws_credentials
 from apps.core.services.aws.provider_outcomes import (
@@ -18,6 +21,31 @@ def _active_source_address() -> str:
 
     provider = EmailProviderConfig.objects.filter(is_active=True).first()
     return provider.from_email if provider is not None else ""
+
+
+def _send_via_django_backend(*, recipient: str, subject: str, html_body: str) -> bool:
+    """Deliver through ``EMAIL_BACKEND`` when SES is deliberately unavailable.
+
+    Production always sends via SES. Environments without SES credentials --
+    E2E, which writes to a file sink, and local development -- opt in with
+    ``AUTH_EMAIL_DJANGO_BACKEND_FALLBACK`` so verification codes are still
+    delivered somewhere observable instead of failing the request.
+    """
+    if not getattr(settings, "AUTH_EMAIL_DJANGO_BACKEND_FALLBACK", False):
+        return False
+
+    message = EmailMultiAlternatives(
+        subject=subject,
+        body=strip_tags(html_body),
+        from_email=getattr(settings, "DEFAULT_FROM_EMAIL", None),
+        to=[recipient],
+    )
+    message.attach_alternative(html_body, "text/html")
+    if message.send(fail_silently=False) == 0:
+        logger.error("Django email backend did not send the message")
+        return False
+    logger.info("Email sent via the Django email backend")
+    return True
 
 
 def _send_via_ses(

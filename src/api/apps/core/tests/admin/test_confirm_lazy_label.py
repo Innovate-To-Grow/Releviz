@@ -18,7 +18,7 @@ from django.utils.translation import gettext_lazy as _
 
 from apps.authn.models import Member
 from apps.core.admin.mixins.confirm_on_save_utils import compute_add_diff, compute_change_diff
-from apps.event.tests.helpers import make_member
+from apps.core.tests.helpers import make_member
 
 
 class _LazyLabelForm(forms.Form):

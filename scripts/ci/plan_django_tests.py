@@ -8,7 +8,7 @@ import json
 import re
 from pathlib import Path
 
-APPS = ("authn", "core", "messaging", "scheduling")
+APPS = ("authn", "core", "mail", "scheduling")
 APP_PATTERN = re.compile(r"^src/api/apps/([^/]+)/")
 FULL_SUITE_PREFIXES = (
     ".github/",
@@ -32,9 +32,9 @@ FULL_SUITE_FILES = {
 # did not change directly. The full 100% coverage job still runs as a final
 # safety net; this matrix provides focused PostgreSQL coverage and diagnostics.
 IMPACT = {
-    "authn": {"authn", "messaging", "scheduling"},
+    "authn": {"authn", "mail", "scheduling"},
     "core": set(APPS),
-    "messaging": {"messaging", "scheduling"},
+    "mail": {"mail", "scheduling"},
     "scheduling": {"scheduling"},
 }
 

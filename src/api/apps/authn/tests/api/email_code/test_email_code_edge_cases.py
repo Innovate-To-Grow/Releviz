@@ -256,17 +256,22 @@ class PublicEmailCodeViewEdgeTests(APITestCase):
         )
 
     def test_email_auth_request_reuses_pending_member(self, _c, mock_send):
+        pending = Member.objects.create_user(password="StrongPass123!", is_active=False)
+        ContactEmail.objects.create(
+            member=pending,
+            email_address="pending@example.com",
+            email_type="primary",
+            verified=False,
+        )
         resp = self.client.post(
             "/authn/email-auth/request-code/",
-            {"email": "inactive@example.com"},
+            {"email": "pending@example.com"},
             format="json",
         )
-        # inactive member already owns a primary contact -> pending_member path reused.
+        # An inactive member with an unverified primary contact is a pending registration.
         self.assertEqual(resp.status_code, 202)
         self.assertTrue(
-            EmailAuthChallenge.objects.filter(
-                member=self.inactive, purpose=PURPOSE_REGISTER
-            ).exists()
+            EmailAuthChallenge.objects.filter(member=pending, purpose=PURPOSE_REGISTER).exists()
         )
 
 

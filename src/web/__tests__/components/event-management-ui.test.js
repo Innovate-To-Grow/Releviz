@@ -549,6 +549,14 @@ describe("organizer event management UI", () => {
     expect(
       screen.queryByText("Event name is required"),
     ).not.toBeInTheDocument();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Specific Dates" }),
+    );
+    fireEvent.change(screen.getByLabelText("Specific event date"), {
+      target: { value: "2026-08-21" },
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Add date" }));
+    expect(screen.getByText("2026-08-21")).toBeInTheDocument();
     setCustomElementValue(screen.getByLabelText("Event Access"), "open_link");
     const timezoneSelect = screen.getByLabelText("Event timezone");
     expect(timezoneSelect.tagName).toBe("MD-OUTLINED-SELECT");
@@ -570,6 +578,8 @@ describe("organizer event management UI", () => {
         accessMode: "open_link",
         timezone: "America/Los_Angeles",
         meetingDurationMinutes: 60,
+        daySelectionType: "specific_dates",
+        specificDates: ["2026-08-21"],
         status: "active",
       }),
     );

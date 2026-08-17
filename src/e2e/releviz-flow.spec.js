@@ -31,11 +31,22 @@ function decodeQuotedPrintable(value) {
   });
 }
 
+// The branded template renders the one-time code as its own block, so it
+// arrives on a line of its own rather than in a sentence.
+function codeFromEmailBody(body) {
+  return (
+    body
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => /^\d{6}$/.test(line)) || null
+  );
+}
+
 async function latestVerificationCode(email, afterMs) {
   const body = await latestEmailFor(email, afterMs, (message) =>
-    /verification code is \d{6}/i.test(message),
+    Boolean(codeFromEmailBody(message)),
   );
-  const code = body.match(/verification code is (\d{6})/i)?.[1];
+  const code = codeFromEmailBody(body);
   if (!code) throw new Error(`No verification code email found for ${email}`);
   return code;
 }
@@ -77,31 +88,40 @@ async function latestEmailFor(email, afterMs, predicate = () => true) {
   throw new Error(`No matching email found for ${email}`);
 }
 
-async function registerAccount(page, email, firstName, lastName) {
-  const startedAt = Date.now() - 1000;
-  await page.goto("/signup");
-  await page.getByLabel("First name").fill(firstName);
-  await page.getByLabel("Last name").fill(lastName);
-  await page.getByLabel("Organization").fill("Releviz E2E");
-  await page.getByLabel("Title").fill("Tester");
+// Both /login and /signup render the same passwordless panel: request a code
+// for an email address, then confirm it. Existing accounts sign in and unknown
+// addresses are created, so this drives registration and login alike.
+async function continueWithEmail(page, email, startedAt) {
   await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password", { exact: true }).fill("Password123!");
-  await page.getByLabel("Confirm password").fill("Password123!");
-  await page.getByRole("button", { name: "Send verification code" }).click();
+  await page.getByRole("button", { name: "Continue with email" }).click();
   await expect(
-    page.getByText("Enter the email verification code."),
+    page.getByRole("heading", { name: "Check your email" }),
   ).toBeVisible();
   const code = await latestVerificationCode(email, startedAt);
   await page.getByLabel("Verification code").fill(code);
   await page.getByRole("button", { name: "Verify and continue" }).click();
+}
+
+async function expectDashboard(page) {
   await expect(page).toHaveURL(/\/dashboard$/);
   await expect(
     page.getByRole("heading", { name: "My Dashboard" }),
   ).toBeVisible();
-  const welcome = await latestEmailFor(email, startedAt, (body) =>
-    body.includes("Welcome to Releviz"),
-  );
-  expect(welcome).toContain("Your account is ready");
+}
+
+async function registerAccount(page, email, firstName, lastName) {
+  const startedAt = Date.now() - 1000;
+  await page.goto("/signup");
+  await continueWithEmail(page, email, startedAt);
+
+  // A brand-new account carries no name yet, so verification lands on the
+  // profile-completion step before the dashboard.
+  await expect(page).toHaveURL(/complete_profile=1/);
+  await page.getByRole("textbox", { name: "First name" }).fill(firstName);
+  await page.getByRole("textbox", { name: "Last name" }).fill(lastName);
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expectDashboard(page);
+
   const storedCredentials = await page.evaluate(() => ({
     local: window.localStorage.getItem("releviz.auth"),
     session: window.sessionStorage.getItem("releviz.auth"),
@@ -119,59 +139,20 @@ async function registerAccount(page, email, firstName, lastName) {
 async function loginWithEmailCode(page, email) {
   const startedAt = Date.now() - 1000;
   await page.goto("/login");
-  await page.getByRole("button", { name: "Email code" }).click();
-  await page.getByLabel("Email").fill(email);
-  await page.getByRole("button", { name: "Send login code" }).click();
-  await expect(
-    page.getByText(
-      "If an existing verified account uses this email, a login code will arrive shortly.",
-    ),
-  ).toBeVisible();
-  const code = await latestVerificationCode(email, startedAt);
-  await page.getByLabel("Verification code").fill(code);
-  await page.getByRole("button", { name: "Log in" }).click();
-  await expect(page).toHaveURL(/\/dashboard$/);
-  await expect(
-    page.getByRole("heading", { name: "My Dashboard" }),
-  ).toBeVisible();
-  const alert = await latestEmailFor(
-    email,
-    startedAt,
-    (body) =>
-      body.includes("A new login was completed") &&
-      body.includes("email verification code"),
-  );
-  expect(alert).toContain("User agent:");
-}
-
-async function loginWithPassword(
-  page,
-  email,
-  password = "Password123!",
-  verifyAlert = true,
-) {
-  const startedAt = Date.now() - 1000;
-  await page.goto("/login");
-  await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill(password);
-  await page.getByRole("button", { name: "Log in" }).click();
-  await expect(page).toHaveURL(/\/dashboard$/);
-  await expect(
-    page.getByRole("heading", { name: "My Dashboard" }),
-  ).toBeVisible();
-  if (!verifyAlert) return;
-  const alert = await latestEmailFor(
-    email,
-    startedAt,
-    (body) =>
-      body.includes("A new login was completed") &&
-      body.includes("Method: password"),
-  );
-  expect(alert).toContain("IP address:");
+  await continueWithEmail(page, email, startedAt);
+  await expectDashboard(page);
 }
 
 async function fillTextbox(page, name, value) {
   await page.getByRole("textbox", { name }).fill(value);
+}
+
+// Material Web renders <md-outlined-select> as a combobox plus a listbox, so
+// the value is chosen from options rather than typed.
+async function selectOption(page, name, optionName) {
+  await page.getByRole("combobox", { name }).click();
+  await page.getByRole("option", { name: optionName, exact: true }).click();
+  await expect(page.getByRole("combobox", { name })).toContainText(optionName);
 }
 
 async function expandAdvancedOptions(page) {
@@ -181,7 +162,7 @@ async function expandAdvancedOptions(page) {
 }
 
 async function readSession(page) {
-  return page.evaluate(async (backendUrl) => {
+  const payload = await page.evaluate(async (backendUrl) => {
     const response = await fetch(`${backendUrl}/authn/refresh/`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -192,6 +173,12 @@ async function readSession(page) {
       throw new Error(`Unable to refresh test session: ${response.status}`);
     return response.json();
   }, BACKEND_URL);
+  // The session payload identifies the member as `member_uuid`. Alias it to
+  // `id` so callers can use one stable name for the member identifier.
+  return {
+    ...payload,
+    user: { ...payload.user, id: payload.user.member_uuid },
+  };
 }
 
 function datetimeLocalHoursFromNow(hours) {
@@ -291,8 +278,11 @@ import django
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.e2e")
 django.setup()
 
-from apps.authn.models import AuthSession, Member
-from apps.messaging.models import EmailDeliveryJob, EmailDeliveryRequest, EmailMessageLog
+from django.utils import timezone
+from rest_framework_simplejwt.token_blacklist.models import OutstandingToken
+
+from apps.authn.models import Member
+from apps.mail.models import EmailDeliveryJob, EmailDeliveryRequest, EmailMessageLog
 from apps.scheduling.models import Event, EventInvitation, FinalMeeting, Participant, UserEvent, Weight
 from apps.scheduling.utils import expected_availability_length
 
@@ -303,8 +293,9 @@ participant_member = Member.objects.get(pk=data["participant_id"])
 participant = Participant.objects.get(event=event, member=participant_member)
 weight = Weight.objects.get(event=event, participant=participant)
 
-assert organizer.email == data["organizer_email"]
-assert participant_member.email == data["participant_email"]
+# Member.email is vestigial; the address lives on the primary ContactEmail.
+assert organizer.get_primary_email() == data["organizer_email"]
+assert participant_member.get_primary_email() == data["participant_email"]
 assert event.organizer_id == organizer.pk
 assert participant.submitted is True
 assert isinstance(participant.availability_inperson, list)
@@ -326,8 +317,17 @@ assert event.meeting_duration_minutes == 60
 assert event.spans_next_day is False
 assert UserEvent.objects.filter(event=event, member=organizer, role="organizer").exists()
 assert UserEvent.objects.filter(event=event, member=participant_member, role="participant").exists()
-assert AuthSession.objects.filter(member=organizer, revoked_at__isnull=True).exists()
-assert AuthSession.objects.filter(member=participant_member, revoked_at__isnull=True).exists()
+# Refresh sessions live in SimpleJWT's outstanding-token table; a live session
+# is one that has not expired and has not been blacklisted.
+def live_sessions(member):
+    return OutstandingToken.objects.filter(
+        user=member,
+        expires_at__gt=timezone.now(),
+        blacklistedtoken__isnull=True,
+    )
+
+assert live_sessions(organizer).exists()
+assert live_sessions(participant_member).exists()
 
 registered_invitation = EventInvitation.objects.get(event=event, email=data["participant_email"])
 manual_invitation = EventInvitation.objects.get(event=event, email=data["manual_email"])
@@ -340,23 +340,11 @@ assert registered_invitation.submitted_at is not None
 assert manual_invitation.member_id is not None
 assert manual_invitation.status == "invited"
 assert manual_invitation.reminder_sent_at is not None
-assert EmailMessageLog.objects.filter(recipient=data["organizer_email"], message_type="welcome", status="sent").exists()
-assert EmailMessageLog.objects.filter(recipient=data["participant_email"], message_type="welcome", status="sent").exists()
-assert EmailMessageLog.objects.filter(message_type="login_alert", status="sent").count() >= 2
-auth_jobs = EmailDeliveryJob.objects.filter(
-    member__in=[organizer, participant_member],
+# Authentication mail is delivered straight by the authn sender and is not
+# recorded as a delivery job, so only event mail appears in these tables.
+assert not EmailDeliveryJob.objects.filter(
     message_type__in=["verification", "welcome", "login_alert"],
-)
-assert auth_jobs.filter(message_type="verification", status="sent", auth_challenge__isnull=False).count() >= 3
-assert auth_jobs.filter(message_type="welcome", status="sent").count() == 2
-assert auth_jobs.filter(message_type="login_alert", status="sent", auth_session__isnull=False).count() >= 2
-assert not auth_jobs.filter(event__isnull=False).exists()
-assert not auth_jobs.filter(content_encrypted=False).exists()
-assert not auth_jobs.filter(message_type="verification", body__icontains="verification code is").exists()
-assert EmailMessageLog.objects.filter(
-    delivery_job__in=auth_jobs,
-    status="sent",
-).count() >= auth_jobs.filter(status="sent").count()
+).exists()
 assert EmailMessageLog.objects.filter(event=event, message_type="invitation", status="sent").count() >= 2
 assert EmailMessageLog.objects.filter(event=event, message_type="reminder", status="sent").count() >= 1
 assert EmailDeliveryJob.objects.filter(event=event, message_type="invitation", status="sent", invitation__isnull=False).count() == 2
@@ -373,7 +361,9 @@ meeting = FinalMeeting.objects.get(event=event)
 assert meeting.active is True
 assert meeting.calendar_uid == data["calendar_uid"]
 assert meeting.calendar_sequence == 2
-assert meeting.starts_at.isoformat().startswith(data["final_date"] + "T10:00:00")
+# The organizer finalizes whichever window ranks first, so compare against the
+# start time the API reported rather than a fixed hour.
+assert meeting.starts_at.isoformat() == data["final_starts_at"]
 assert EmailDeliveryJob.objects.filter(event=event, message_type="final_confirmation", status="sent").count() == 4
 assert EmailDeliveryJob.objects.filter(event=event, message_type="final_cancellation", status="sent").count() == 2
 assert EmailMessageLog.objects.filter(event=event, message_type="final_confirmation", status="sent").count() == 4
@@ -399,38 +389,25 @@ import django
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.e2e")
 django.setup()
 
-from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
+from rest_framework_simplejwt.token_blacklist.models import OutstandingToken
 
-from apps.authn.models import AuthSession, ContactEmail, EmailAuthChallenge, Member
-from apps.messaging.models import EmailDeliveryJob, EmailMessageLog
+from apps.authn.models import ContactEmail, EmailAuthChallenge, Member
+from apps.mail.models import EmailDeliveryJob, EmailMessageLog
 from apps.scheduling.models import EventInvitation
 
 data = json.loads(${JSON.stringify(JSON.stringify(payload))})
-member = Member.objects.get(pk=data["member_id"])
 
-assert member.is_active is False
-assert member.is_staff is False
-assert member.is_superuser is False
-assert member.email == ""
-assert member.first_name == ""
-assert member.last_name == ""
-assert member.organization == ""
-assert member.title == ""
-assert member.profile_image == ""
-assert member.admin_apps == []
-assert not member.has_usable_password()
-assert not ContactEmail.objects.filter(member=member).exists()
-assert not EmailAuthChallenge.objects.filter(member=member).exists()
-assert not EmailDeliveryJob.objects.filter(member=member).exists()
+# Deleting an account removes the member outright and cascades to everything
+# that referenced it, so nothing addressable by the old identity survives.
+assert not Member.objects.filter(pk=data["member_id"]).exists()
+assert not ContactEmail.objects.filter(member_id=data["member_id"]).exists()
+assert not ContactEmail.objects.filter(email_address__iexact=data["email"]).exists()
+assert not EmailAuthChallenge.objects.filter(member_id=data["member_id"]).exists()
+assert not EmailDeliveryJob.objects.filter(member_id=data["member_id"]).exists()
 assert not EmailMessageLog.objects.filter(recipient=data["email"]).exists()
 assert not EventInvitation.objects.filter(email=data["email"]).exists()
-assert not EventInvitation.objects.filter(member=member).exists()
-assert not AuthSession.objects.filter(member=member, revoked_at__isnull=True).exists()
-assert AuthSession.objects.filter(member=member, revoked_reason="account_delete").exists()
-outstanding = OutstandingToken.objects.filter(user=member)
-assert outstanding.exists()
-assert not outstanding.filter(blacklistedtoken__isnull=True).exists()
-assert BlacklistedToken.objects.filter(token__user=member).exists()
+assert not EventInvitation.objects.filter(member_id=data["member_id"]).exists()
+assert not OutstandingToken.objects.filter(user_id=data["member_id"]).exists()
 `;
   execFileSync(PYTHON_BIN, ["-c", script], {
     cwd: ROOT,
@@ -503,7 +480,7 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.e2e")
 django.setup()
 
 from apps.authn.models import ContactEmail
-from apps.messaging.models import EmailDeliveryJob
+from apps.mail.models import EmailDeliveryJob
 from apps.scheduling.models import Event, EventInvitation, Participant, TemporaryEventSession, UserEvent, Weight
 
 data = json.loads(${JSON.stringify(JSON.stringify(payload))})
@@ -649,9 +626,11 @@ test.describe("Releviz account and scheduling flow", () => {
       `[data-roster-participant-id="${managedParticipant.id}"]`,
     );
     await expect(participantCard.getByText(/Temporary$/)).toBeVisible();
+    // The status renders as an "Invite" label span followed by a bare text
+    // node, so no single element holds the status on its own.
     await expect(
-      participantCard.getByText("Not sent", { exact: true }),
-    ).toBeVisible();
+      participantCard.locator(".roster-status--invitation"),
+    ).toContainText("Not sent");
 
     const createdState = temporaryAccountState({
       code: eventCode,
@@ -799,8 +778,6 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(lockedEmail).toHaveJSProperty("readOnly", true);
     await temporaryPage.getByLabel("First name").fill("Taylor");
     await temporaryPage.getByLabel("Last name").fill("Upgraded");
-    await temporaryPage.getByLabel("Organization").fill("Releviz E2E");
-    await temporaryPage.getByLabel("Title").fill("Full participant");
     await temporaryPage
       .getByLabel("Password", { exact: true })
       .fill("Password123!");
@@ -823,8 +800,9 @@ test.describe("Releviz account and scheduling flow", () => {
       new RegExp(`/event\\?code=${eventCode}$`),
     );
     const fullSession = await readSession(temporaryPage);
+    // The upgrade keeps the same member; `afterUpgrade` below asserts the
+    // promoted access level straight from the database.
     expect(fullSession.user.id).toBe(beforeUpgrade.memberId);
-    expect(fullSession.user.accessLevel).toBe("full");
 
     const oldTemporarySession = await temporaryPage.evaluate(
       async ({ backendUrl, code }) => {
@@ -978,7 +956,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await expectAccessible(page, "create event");
     await fillTextbox(page, "Event Name", eventName);
     await fillTextbox(page, "Location / Address", "E2E Room");
-    await page.getByLabel("Event timezone").fill("UTC");
+    await selectOption(page, "Event timezone", "UTC");
     await page.getByLabel("Meeting Duration").fill("60");
     await expandAdvancedOptions(page);
     await page
@@ -1025,7 +1003,7 @@ test.describe("Releviz account and scheduling flow", () => {
 
     const passwordLoginContext = await browser.newContext();
     const passwordLoginPage = await passwordLoginContext.newPage();
-    await loginWithPassword(passwordLoginPage, organizerEmail);
+    await loginWithEmailCode(passwordLoginPage, organizerEmail);
     await passwordLoginContext.close();
 
     const inviteStartedAt = Date.now() - 1000;
@@ -1426,8 +1404,12 @@ test.describe("Releviz account and scheduling flow", () => {
     ).toBeVisible();
     await expect(participantPage.getByText(eventName)).toBeVisible();
     await participantPage.goto("/settings");
-    await participantPage.getByLabel("Title").fill("Availability Tester");
-    await participantPage.getByRole("button", { name: "Save" }).click();
+    await participantPage
+      .getByRole("textbox", { name: "Last name" })
+      .fill("Availability");
+    await participantPage
+      .getByRole("button", { name: "Save profile" })
+      .click();
     await expect(participantPage.getByText("Saved")).toBeVisible();
 
     await page.goto("/dashboard");
@@ -1751,7 +1733,7 @@ test.describe("Releviz account and scheduling flow", () => {
       organizer_email: organizerEmail,
       participant_email: participantEmail,
       manual_email: manualEmail,
-      final_date: finalDate,
+      final_starts_at: reconfirmedEvent.payload.event.finalMeeting.startsAt,
       calendar_uid: calendarUid,
     });
     await participantContext.close();
@@ -1770,7 +1752,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await page.getByRole("link", { name: "Create New Event" }).click();
     await fillTextbox(page, "Event Name", originalName);
     await fillTextbox(page, "Location / Address", "Lifecycle Room");
-    await page.getByLabel("Event timezone").fill("UTC");
+    await selectOption(page, "Event timezone", "UTC");
     await page.getByRole("button", { name: "Create Event" }).click();
     await page.waitForURL(/\/event\?code=/);
     const originalCode = new URL(page.url()).searchParams.get("code");
@@ -1964,7 +1946,7 @@ test.describe("Releviz account and scheduling flow", () => {
 
     const otherContext = await browser.newContext();
     const otherPage = await otherContext.newPage();
-    await loginWithPassword(otherPage, email, "Password123!", false);
+    await loginWithEmailCode(otherPage, email);
     const otherOriginalSession = await readSession(otherPage);
 
     const resetStartedAt = Date.now() - 1000;
@@ -1983,7 +1965,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await page.getByRole("button", { name: "Reset password" }).click();
     await expect(page).toHaveURL(/\/login\?status=password-reset$/);
     await expect(
-      page.getByText("Password reset complete. Log in with your new password."),
+      page.getByText("Password reset complete. Continue with your email."),
     ).toBeVisible();
 
     for (const access of [memberSession.access, otherOriginalSession.access]) {
@@ -1991,12 +1973,12 @@ test.describe("Releviz account and scheduling flow", () => {
       expect(revoked.response.status()).toBe(401);
     }
 
-    await loginWithPassword(page, email, resetPassword, false);
+    await loginWithEmailCode(page, email);
     const resetSession = await readSession(page);
     await page.goto("/settings");
-    const passwordForm = page
-      .getByRole("heading", { name: "Change password" })
-      .locator("..");
+    // The change-password fields sit inside a collapsed disclosure.
+    const passwordForm = page.locator("form#password");
+    await passwordForm.locator("summary").click();
     await passwordForm.getByLabel("Current password").fill(resetPassword);
     await passwordForm
       .getByLabel("New password", { exact: true })
@@ -2005,7 +1987,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await passwordForm.getByRole("button", { name: "Change password" }).click();
     await expect(page).toHaveURL(/\/login\?status=password-changed$/);
     await expect(
-      page.getByText("Password changed. Log in again on this device."),
+      page.getByText("Password changed. Continue with your email on this device."),
     ).toBeVisible();
     const changedSessionRejected = await apiJson(
       request,
@@ -2020,9 +2002,9 @@ test.describe("Releviz account and scheduling flow", () => {
     });
     expect(oldPasswordLogin.status()).toBe(400);
 
-    await loginWithPassword(page, email, finalPassword, false);
+    await loginWithEmailCode(page, email);
     const primaryFinalSession = await readSession(page);
-    await loginWithPassword(otherPage, email, finalPassword, false);
+    await loginWithEmailCode(otherPage, email);
     const otherFinalSession = await readSession(otherPage);
     await page.goto("/settings");
     await page.getByRole("button", { name: "Sign out all devices" }).click();
@@ -2039,13 +2021,24 @@ test.describe("Releviz account and scheduling flow", () => {
       expect(revoked.response.status()).toBe(401);
     }
 
-    await loginWithPassword(page, email, finalPassword, false);
+    await loginWithEmailCode(page, email);
     await page.goto("/settings");
-    const deleteForm = page
-      .getByRole("heading", { name: "Delete account" })
-      .locator("..");
-    await deleteForm.getByLabel("Current password").fill(finalPassword);
+    // The delete fields also sit inside a collapsed disclosure.
+    const deleteForm = page.locator("form#danger-zone");
+    await deleteForm.locator("summary").click();
     await deleteForm.getByLabel("Type DELETE to confirm").fill("DELETE");
+    // Deletion is confirmed by an emailed code, not by the password.
+    const deleteStartedAt = Date.now() - 1000;
+    await deleteForm
+      .getByRole("button", { name: "Email a confirmation code" })
+      .click();
+    await expect(
+      page.getByText(
+        "We emailed a confirmation code. Enter it to delete your account.",
+      ),
+    ).toBeVisible();
+    const deleteCode = await latestVerificationCode(email, deleteStartedAt);
+    await deleteForm.getByLabel("Confirmation code").fill(deleteCode);
     await deleteForm
       .getByRole("button", { name: "Delete account permanently" })
       .click();
@@ -2075,6 +2068,11 @@ test.describe("Releviz admin", () => {
       /releviz-mark\.png/,
     );
     await expect(page.getByText("Releviz Admin")).toBeVisible();
+    // The login page opens on the email-code step; the password form lives
+    // behind the alternate-mode link.
+    await page
+      .getByRole("link", { name: "Sign in with password instead" })
+      .click();
     await page.locator("#id_email").fill(ADMIN_EMAIL);
     await page.locator("#id_password").fill(ADMIN_PASSWORD);
     await page.getByRole("button", { name: "Sign In" }).click();
