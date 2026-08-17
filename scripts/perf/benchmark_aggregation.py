@@ -24,8 +24,8 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 BACKEND_ROOT = REPOSITORY_ROOT / "src" / "backend"
 sys.path.insert(0, str(BACKEND_ROOT))
 
-from apps.scheduling.recommendations import build_ranked_recommendations  # noqa: E402
-from apps.scheduling.slots import build_event_slot_groups  # noqa: E402
+from apps.scheduling.services.results.recommendations import build_ranked_recommendations  # noqa: E402
+from apps.scheduling.services.slots import build_event_slot_groups  # noqa: E402
 
 
 PARTICIPANT_TOTAL = 1_000
