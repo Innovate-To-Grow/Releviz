@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from apps.authn.models import ContactEmail
-from apps.scheduling.aggregation import (
+from apps.scheduling.services.aggregation import (
     participant_has_valid_submission,
     participant_is_excluded,
 )
