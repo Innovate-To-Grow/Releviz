@@ -386,6 +386,7 @@ class BackgroundJobQueueTests(TestCase):
         self.assertEqual(metrics["queue_depth"], 1)
         self.assertEqual(metrics["failed_jobs"], 1)
         self.assertEqual(metrics["uncertain_jobs"], 1)
+        self.assertEqual(metrics["uncertain_email_jobs"], 0)
 
     def test_delivery_rate_slots_enforce_configured_global_throughput(self):
         now = timezone.now()

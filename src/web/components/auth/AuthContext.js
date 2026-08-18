@@ -45,7 +45,7 @@ function subscribeAuth(callback) {
 }
 
 export function AuthProvider({ children }) {
-  const [session, setSession] = useState(null);
+  const [session, setSession] = useState(() => readAuthSession());
   const [loading, setLoading] = useState(true);
 
   const loadSession = useCallback(() => {
@@ -53,7 +53,6 @@ export function AuthProvider({ children }) {
   }, []);
 
   useEffect(() => {
-    loadSession();
     return subscribeAuth(loadSession);
   }, [loadSession]);
 

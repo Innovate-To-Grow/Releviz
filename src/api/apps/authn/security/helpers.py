@@ -1,20 +1,23 @@
-"""
-Security utility functions extracted from the old security.py.
-
-Rate-limiting functions that depend on the (deleted) AuthRateLimitBucket model
-are no-ops. Restore that model before re-enabling rate limiting.
-"""
+"""Security helpers shared by browser, API, and worker entry points."""
 
 import hashlib
 import hmac
 import ipaddress
 import logging
+from dataclasses import dataclass
 from datetime import timedelta
 from urllib.parse import urlsplit
 
+from django.apps import apps
 from django.conf import settings
+from django.db import transaction
+from django.db.models import Q
+from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.throttling import BaseThrottle
+
+from apps.authn.models import AuthRateLimitBucket, EmailAuthChallenge
+from apps.mail.models import EmailDeliveryJob
 
 logger = logging.getLogger("releviz.security")
 
@@ -106,30 +109,181 @@ def enforce_cookie_request_origin(request) -> None:
         raise PermissionDenied("Request origin is not allowed.")
 
 
-# ---------------------------------------------------------------------------
-# Stub rate-limiting — AuthRateLimitBucket model was removed.
-# Re-enable by restoring the model and the _consume_bucket logic.
-# ---------------------------------------------------------------------------
-
-
+@dataclass(frozen=True)
 class RateLimitDecision:
-    """Stub decision — always allows the request."""
-
-    def __init__(self, allowed: bool = True, retry_after: int = 0):
-        self.allowed = allowed
-        self.retry_after = retry_after
+    allowed: bool
+    retry_after: int = 0
 
 
-def consume_request_rate_limit(scope, request, identity="", *, cost=1):
-    """Stub — the AuthRateLimitBucket model has been deleted."""
-    logger.debug(
-        "auth_rate_limit_bypassed",
-        extra={
-            "auth_scope": scope,
-            "auth_identity": security_log_key(identity) if identity else "anonymous",
-        },
+def _seconds(value, default: int) -> int:
+    try:
+        return max(int(value), 1)
+    except (TypeError, ValueError):
+        return default
+
+
+def _limit_config(setting_name: str, scope: str, dimension: str):
+    scopes = getattr(settings, setting_name, {})
+    config = scopes.get(scope, {}).get(dimension)
+    if not config:
+        return None
+    window = _seconds(config.get("window"), 60)
+    return {
+        "limit": _seconds(config.get("limit"), 1),
+        "window": window,
+        "block": _seconds(config.get("block"), window),
+    }
+
+
+@transaction.atomic
+def _consume_bucket(
+    *,
+    scope: str,
+    dimension: str,
+    raw_key: str,
+    config: dict,
+    block_at_limit: bool,
+    cost: int = 1,
+) -> RateLimitDecision:
+    """Atomically consume capacity from a shared, database-backed bucket."""
+    now = timezone.now()
+    key_hash = _key_hash(scope, dimension, raw_key)
+    bucket, _created = AuthRateLimitBucket.objects.select_for_update().get_or_create(
+        scope=f"{scope}:{dimension}",
+        key_hash=key_hash,
+        defaults={"window_started_at": now},
     )
+
+    if bucket.blocked_until and bucket.blocked_until > now:
+        decision = RateLimitDecision(
+            allowed=False,
+            retry_after=max(int((bucket.blocked_until - now).total_seconds()), 1),
+        )
+        logger.warning(
+            "auth_rate_limit_blocked",
+            extra={
+                "auth_scope": scope,
+                "auth_dimension": dimension,
+                "auth_key": key_hash[:16],
+                "retry_after": decision.retry_after,
+            },
+        )
+        return decision
+
+    window_ends = bucket.window_started_at + timedelta(seconds=config["window"])
+    if window_ends <= now:
+        bucket.request_count = 0
+        bucket.window_started_at = now
+        bucket.blocked_until = None
+
+    bucket.request_count += max(int(cost), 1)
+    threshold_reached = (
+        bucket.request_count >= config["limit"]
+        if block_at_limit
+        else bucket.request_count > config["limit"]
+    )
+    if threshold_reached:
+        bucket.blocked_until = now + timedelta(seconds=config["block"])
+    bucket.save(
+        update_fields=[
+            "request_count",
+            "window_started_at",
+            "blocked_until",
+            "updated_at",
+        ]
+    )
+    if threshold_reached:
+        logger.warning(
+            "auth_rate_limit_threshold_reached",
+            extra={
+                "auth_scope": scope,
+                "auth_dimension": dimension,
+                "auth_key": key_hash[:16],
+                "retry_after": config["block"],
+            },
+        )
+        return RateLimitDecision(allowed=False, retry_after=config["block"])
     return RateLimitDecision(allowed=True)
+
+
+def consume_request_rate_limit(
+    scope: str,
+    request,
+    identity: str = "",
+    *,
+    cost: int = 1,
+) -> RateLimitDecision:
+    """Apply the configured IP and identity limits for one request."""
+    dimensions = [("ip", client_ip(request))]
+    normalized_identity = normalize_security_identity(identity)
+    if normalized_identity:
+        dimensions.append(("identity", normalized_identity))
+
+    for dimension, raw_key in dimensions:
+        config = _limit_config("AUTH_RATE_LIMITS", scope, dimension)
+        if config is None:
+            continue
+        decision = _consume_bucket(
+            scope=scope,
+            dimension=dimension,
+            raw_key=raw_key,
+            config=config,
+            block_at_limit=False,
+            cost=cost,
+        )
+        if not decision.allowed:
+            return decision
+    return RateLimitDecision(allowed=True)
+
+
+def _failure_dimensions(email: str, request):
+    normalized = normalize_security_identity(email)
+    ip_value = client_ip(request)
+    return [
+        ("identity", normalized),
+        ("pair", f"{normalized}|{ip_value}"),
+    ]
+
+
+def password_login_allowed(email: str, request) -> RateLimitDecision:
+    now = timezone.now()
+    for dimension, raw_key in _failure_dimensions(email, request):
+        config = _limit_config("AUTH_FAILURE_LIMITS", "password_login", dimension)
+        if config is None:
+            continue
+        bucket = AuthRateLimitBucket.objects.filter(
+            scope=f"password_login_failure:{dimension}",
+            key_hash=_key_hash("password_login_failure", dimension, raw_key),
+            blocked_until__gt=now,
+        ).first()
+        if bucket is not None:
+            return RateLimitDecision(
+                allowed=False,
+                retry_after=max(int((bucket.blocked_until - now).total_seconds()), 1),
+            )
+    return RateLimitDecision(allowed=True)
+
+
+def record_password_login_failure(email: str, request) -> None:
+    for dimension, raw_key in _failure_dimensions(email, request):
+        config = _limit_config("AUTH_FAILURE_LIMITS", "password_login", dimension)
+        if config is None:
+            continue
+        _consume_bucket(
+            scope="password_login_failure",
+            dimension=dimension,
+            raw_key=raw_key,
+            config=config,
+            block_at_limit=True,
+        )
+
+
+def clear_password_login_failures(email: str, request) -> None:
+    for dimension, raw_key in _failure_dimensions(email, request):
+        AuthRateLimitBucket.objects.filter(
+            scope=f"password_login_failure:{dimension}",
+            key_hash=_key_hash("password_login_failure", dimension, raw_key),
+        ).delete()
 
 
 def revoke_all_refresh_sessions(member) -> int:
@@ -153,16 +307,11 @@ def revoke_all_refresh_sessions(member) -> int:
 
 
 def prune_auth_security_state(*, now=None) -> dict:
-    """Prune retained auth state after the legacy rate/session models were removed."""
-    from django.apps import apps
-    from django.db.models import Q
-    from django.utils import timezone
+    """Prune expired challenges, sessions, tokens, and limiter buckets."""
     from rest_framework_simplejwt.token_blacklist.models import OutstandingToken
 
-    from apps.authn.models import EmailAuthChallenge
-    from apps.mail.models import EmailDeliveryJob
-
     now = now or timezone.now()
+    bucket_cutoff = now - settings.AUTH_RATE_LIMIT_BUCKET_RETENTION
     session_retention = getattr(
         settings,
         "AUTH_SESSION_RECORD_RETENTION",
@@ -198,9 +347,10 @@ def prune_auth_security_state(*, now=None) -> dict:
         Q(expires_at__lt=session_cutoff)
         | Q(revoked_at__isnull=False, revoked_at__lt=session_cutoff)
     ).delete()[0]
+    deleted_buckets = AuthRateLimitBucket.objects.filter(updated_at__lt=bucket_cutoff).delete()[0]
     deleted_tokens = OutstandingToken.objects.filter(expires_at__lte=now).delete()[0]
     return {
-        "rateLimitBuckets": 0,
+        "rateLimitBuckets": deleted_buckets,
         "sessions": 0,
         "temporaryEventSessions": deleted_temp_sessions,
         "outstandingTokens": deleted_tokens,
@@ -210,13 +360,24 @@ def prune_auth_security_state(*, now=None) -> dict:
 
 
 class AuthRateThrottle(BaseThrottle):
-    """Stub — the AuthRateLimitBucket model has been deleted."""
-
     def __init__(self):
         self.retry_after = 0
 
     def allow_request(self, request, view):
-        return True
+        scope = getattr(view, "auth_rate_scope", "")
+        if not scope:
+            return True
+        methods = getattr(view, "auth_rate_methods", None)
+        if methods is not None and request.method not in methods:
+            return True
+        identity_getter = getattr(view, "get_auth_rate_identity", None)
+        if callable(identity_getter):
+            identity = identity_getter(request)
+        else:
+            identity = request.data.get("email", "") if hasattr(request, "data") else ""
+        decision = consume_request_rate_limit(scope, request, identity)
+        self.retry_after = decision.retry_after
+        return decision.allowed
 
     def wait(self):
         return self.retry_after or None

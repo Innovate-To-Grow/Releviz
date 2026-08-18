@@ -20,7 +20,7 @@ import {
   duplicateEvent,
   updateEventLifecycle,
 } from "@/lib/api/events";
-import { formatMode } from "@/lib/format";
+import { formatDateTimeInTimezone, formatMode } from "@/lib/format";
 import { navigateTo } from "@/lib/navigation";
 import "@material/web/textfield/outlined-text-field.js";
 
@@ -50,7 +50,12 @@ function EventCard({
           <span>Code: {event.code}</span>
           {event.responseDeadline && (
             <span>
-              Deadline: {new Date(event.responseDeadline).toLocaleString()}
+              Deadline:{" "}
+              {formatDateTimeInTimezone(
+                event.responseDeadline,
+                event.timezone,
+                { timeZoneName: "short" },
+              )}
             </span>
           )}
           {event.location && event.location !== "TBD" && (

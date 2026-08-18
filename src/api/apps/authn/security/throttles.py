@@ -1,42 +1,64 @@
-"""
-Custom throttle classes for auth endpoints.
-"""
+"""Database-backed throttle classes for authentication endpoints."""
 
-from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
+from rest_framework.throttling import BaseThrottle
+
+from .helpers import consume_request_rate_limit
 
 
-class ContactEmailCreateThrottle(UserRateThrottle):
-    """Throttle for adding contact emails: 5 requests per hour."""
+class DurableAuthThrottle(BaseThrottle):
+    """Apply a shared limiter across every web and worker process."""
+
+    scope = ""
+
+    def __init__(self):
+        self.retry_after = 0
+
+    def get_identity(self, request) -> str:
+        user = getattr(request, "user", None)
+        if user is not None and getattr(user, "is_authenticated", False):
+            return str(user.pk)
+        data = request.data if hasattr(request, "data") else {}
+        return str(data.get("identifier") or data.get("email") or "")
+
+    def allow_request(self, request, view):
+        scope = getattr(view, "auth_rate_scope", self.scope)
+        if not scope:
+            return True
+        decision = consume_request_rate_limit(
+            scope,
+            request,
+            self.get_identity(request),
+        )
+        self.retry_after = decision.retry_after
+        return decision.allowed
+
+    def wait(self):
+        return self.retry_after or None
+
+
+class ContactEmailCreateThrottle(DurableAuthThrottle):
+    """Throttle creation of contact email addresses per IP and member."""
 
     scope = "contact_email_create"
 
 
-class LoginRateThrottle(AnonRateThrottle):
-    """Throttle for login endpoints: 10 requests per minute."""
+class LoginRateThrottle(DurableAuthThrottle):
+    """Throttle password and token-exchange login endpoints."""
 
-    scope = "login"
-
-
-class EmailCodeRequestThrottle(AnonRateThrottle):
-    """Throttle for verification code request endpoints."""
-
-    scope = "email_code_request"
+    scope = "password_login"
 
 
-class EmailCodeVerifyThrottle(AnonRateThrottle):
-    """Throttle for verification code and token confirmation endpoints."""
+class EmailCodeRequestThrottle(DurableAuthThrottle):
+    """Throttle verification-code delivery by IP and target/member."""
 
-    scope = "email_code_verify"
+    scope = "code_request"
 
 
-class EmailCodeUserRequestThrottle(UserRateThrottle):
-    """Per-authenticated-user cap on email verification-code sends.
+class EmailCodeVerifyThrottle(DurableAuthThrottle):
+    """Throttle verification-code attempts by IP and target/member."""
 
-    The shared ``EmailCodeRequestThrottle`` is an ``AnonRateThrottle`` whose key
-    is ``None`` for authenticated requests, so on an ``IsAuthenticated`` resend
-    endpoint it never throttles — letting a logged-in caller bomb an
-    attacker-supplied address (and burn SES budget). This per-user throttle
-    actually applies.
-    """
+    scope = "code_verify"
 
-    scope = "email_code_user_request"
+
+class EmailCodeUserRequestThrottle(EmailCodeRequestThrottle):
+    """Authenticated form of the durable code-request throttle."""

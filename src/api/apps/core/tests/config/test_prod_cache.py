@@ -89,6 +89,18 @@ class ProductionSettingsTests(SimpleTestCase):
         self.assertFalse(settings.SECURE_SSL_REDIRECT)
         self.assertEqual(settings.DEFAULT_FROM_EMAIL, "sender@example.com")
 
+    def test_terminal_email_mode_is_rejected(self):
+        with patch.dict(
+            "os.environ",
+            {**PROD_ENV, "PRINT_EMAILS_TO_TERMINAL": "1"},
+            clear=True,
+        ):
+            with self.assertRaisesMessage(
+                ImproperlyConfigured,
+                "PRINT_EMAILS_TO_TERMINAL cannot be enabled in production.",
+            ):
+                reload_prod_settings()
+
     def test_required_secret_key_is_rejected_when_missing(self):
         env = {key: value for key, value in PROD_ENV.items() if key != "DJANGO_SECRET_KEY"}
         with patch.dict("os.environ", env, clear=True):

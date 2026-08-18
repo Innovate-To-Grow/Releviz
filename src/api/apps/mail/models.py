@@ -107,6 +107,7 @@ class EmailDeliveryJob(TimestampedModel):
         RETRY = "retry", "Retry"
         SENT = "sent", "Sent"
         PERMANENT_FAILURE = "permanent_failure", "Permanent Failure"
+        UNCERTAIN = "uncertain", "Uncertain Delivery"
         CANCELED = "canceled", "Canceled"
 
     idempotency_key = models.CharField(max_length=255, unique=True)
@@ -157,6 +158,7 @@ class EmailDeliveryJob(TimestampedModel):
     next_attempt_at = models.DateTimeField(default=timezone.now)
     locked_at = models.DateTimeField(null=True, blank=True)
     lock_token = models.UUIDField(null=True, blank=True)
+    provider_call_started_at = models.DateTimeField(null=True, blank=True)
     sent_at = models.DateTimeField(null=True, blank=True)
     provider_message_id = models.CharField(max_length=255, blank=True, default="")
     last_error = models.TextField(blank=True, default="")

@@ -10,14 +10,14 @@ const config = [
   {
     rules: {
       "no-unused-vars": [
-        "warn",
+        "error",
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
       ],
-      "no-console": ["warn", { allow: ["error"] }],
-      "react-hooks/exhaustive-deps": "warn",
-      "react-hooks/purity": "warn",
-      "react-hooks/refs": "warn",
-      "react-hooks/set-state-in-effect": "warn",
+      "no-console": ["error", { allow: ["error"] }],
+      "react-hooks/exhaustive-deps": "error",
+      "react-hooks/purity": "error",
+      "react-hooks/refs": "error",
+      "react-hooks/set-state-in-effect": "error",
     },
   },
   {

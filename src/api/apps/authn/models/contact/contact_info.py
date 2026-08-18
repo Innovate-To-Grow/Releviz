@@ -1,5 +1,6 @@
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.db.models.functions import Lower
 
 from apps.core.models import ProjectControlModel
 
@@ -62,11 +63,20 @@ class ContactEmail(ProjectControlModel):
         ]
         constraints = [
             models.UniqueConstraint(
+                Lower("email_address"),
+                name="unique_contact_email_ci",
+            ),
+            models.UniqueConstraint(
                 fields=["member"],
                 condition=models.Q(email_type="primary"),
                 name="one_primary_email_per_member",
             ),
         ]
+
+    def save(self, *args, **kwargs):
+        if self.email_address:
+            self.email_address = self.email_address.strip().lower()
+        return super().save(*args, **kwargs)
 
     def clean(self):
         super().clean()

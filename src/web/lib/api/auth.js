@@ -336,11 +336,12 @@ export async function deleteAccountApi({ code }) {
 }
 
 export async function logoutApi() {
-  await fetch(`${API_BASE}/authn/logout/`, {
+  const res = await fetch(`${API_BASE}/authn/logout/`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: "{}",
     credentials: "include",
-  }).catch(() => {});
+  });
+  if (!res.ok) throw new Error(await extractError(res));
   clearAuthSession();
 }

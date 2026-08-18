@@ -126,7 +126,7 @@ class ResetVendorTest(TestCase):
 
         fake_sql = MagicMock()
         fake_sql.SQL.return_value.format.return_value = "GRANT SQL"
-        with patch.dict("sys.modules", {"psycopg2": MagicMock(sql=fake_sql)}):
+        with patch.dict("sys.modules", {"psycopg": MagicMock(sql=fake_sql)}):
             helpers.reset_postgresql(connection)
 
         executed = [c.args[0] for c in cursor.execute.call_args_list]

@@ -40,6 +40,9 @@ if feedback_retention_days < 1:
     raise ImproperlyConfigured("FEEDBACK_SUBMISSION_RETENTION_DAYS must be a positive integer.")
 FEEDBACK_SUBMISSION_RETENTION = timedelta(days=feedback_retention_days)  # noqa: F405
 USE_SES_EMAIL_PROVIDER = os.environ.get("USE_SES_EMAIL_PROVIDER", "1") != "0"
+if os.environ.get("PRINT_EMAILS_TO_TERMINAL", "0") != "0":
+    raise ImproperlyConfigured("PRINT_EMAILS_TO_TERMINAL cannot be enabled in production.")
+PRINT_EMAILS_TO_TERMINAL = False
 STORAGES = {
     "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
     "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},

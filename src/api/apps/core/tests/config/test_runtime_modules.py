@@ -52,6 +52,7 @@ class RuntimeConfigurationModuleTests(SimpleTestCase):
             [env["FRONTEND_URL"], env["BACKEND_URL"]],
         )
         self.assertEqual(e2e.EMAIL_FILE_PATH, "/tmp/releviz-coverage-mail")
+        self.assertFalse(e2e.PRINT_EMAILS_TO_TERMINAL)
 
     def test_legacy_url_prefix_branch_is_importable(self):
         import config.urls as urls

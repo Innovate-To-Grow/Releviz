@@ -5,7 +5,7 @@ from django.core.cache import cache
 from rest_framework.test import APITestCase
 
 from apps.authn.models import ContactEmail
-from apps.scheduling.models import Event, UserEvent
+from apps.scheduling.models import Event, EventResultInvalidation, Participant, UserEvent
 
 Member = get_user_model()
 
@@ -29,11 +29,26 @@ class EmailCodeDeleteAccountTests(APITestCase):
             verified=True,
         )
         organizer = Member.objects.create_user(password="OrganizerPass123!", is_active=True)
-        event = Event.objects.create(code="DELETE1", name="Deletion cascade", organizer=organizer)
+        self.event = Event.objects.create(
+            code="DELETE1",
+            name="Deletion cascade",
+            organizer=organizer,
+            days=[1],
+            start_minutes=9 * 60,
+            end_minutes=10 * 60,
+        )
         self.user_event = UserEvent.objects.create(
             member=self.member,
-            event=event,
+            event=self.event,
             role="participant",
+        )
+        self.participant = Participant.objects.create(
+            member=self.member,
+            event=self.event,
+            participant_name="Delete Me",
+            availability_inperson=[1, 1],
+            availability_virtual=[1, 1],
+            submitted=True,
         )
         self.client.force_authenticate(user=self.member)
 
@@ -77,6 +92,12 @@ class EmailCodeDeleteAccountTests(APITestCase):
         self.assertFalse(Member.objects.filter(pk=self.member.pk).exists())
         self.assertFalse(ContactEmail.objects.filter(pk=self.primary_email.pk).exists())
         self.assertFalse(UserEvent.objects.filter(pk=self.user_event.pk).exists())
+        self.assertTrue(
+            EventResultInvalidation.objects.filter(
+                event=self.event,
+                processed_at__isnull=True,
+            ).exists()
+        )
 
     def test_confirm_delete_account_rejects_other_users_token(self, _mock_code, _mock_send):
         self.client.post("/authn/delete-account/request-code/", {}, format="json")

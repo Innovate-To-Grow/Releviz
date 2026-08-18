@@ -150,6 +150,10 @@ AUTH_RATE_LIMITS = {
         "ip": {"limit": 30, "window": 600, "block": 900},
         "identity": {"limit": 10, "window": 600, "block": 900},
     },
+    "contact_email_create": {
+        "ip": {"limit": 20, "window": 3600, "block": 3600},
+        "identity": {"limit": 5, "window": 3600, "block": 3600},
+    },
     "temp_access_code_request": {
         "ip": {"limit": 20, "window": 3600, "block": 3600},
         "identity": {"limit": 5, "window": 3600, "block": 3600},
@@ -168,6 +172,10 @@ AUTH_RATE_LIMITS = {
     "admin_login": {
         "ip": {"limit": 20, "window": 300, "block": 900},
         "identity": {"limit": 10, "window": 900, "block": 900},
+    },
+    "admin_invitation_accept": {
+        "ip": {"limit": 30, "window": 3600, "block": 3600},
+        "identity": {"limit": 10, "window": 3600, "block": 3600},
     },
     "invitation_request": {
         "ip": {"limit": 60, "window": 3600, "block": 3600},
@@ -229,7 +237,7 @@ USE_SES_EMAIL_PROVIDER = False
 AUTH_EMAIL_DJANGO_BACKEND_FALLBACK = False
 # When enabled, every outgoing email is printed to the server terminal instead
 # of being delivered through SES or EMAIL_BACKEND. Intended for local
-# development and E2E debugging so verification codes remain observable.
+# development only; production rejects this setting and E2E forces it off.
 PRINT_EMAILS_TO_TERMINAL = os.environ.get("PRINT_EMAILS_TO_TERMINAL", "0") != "0"
 DEFAULT_FROM_EMAIL = "noreply@releviz.local"
 METRICS_BEARER_TOKEN = os.environ.get("METRICS_BEARER_TOKEN", "").strip()

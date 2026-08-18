@@ -6,16 +6,24 @@ from django.shortcuts import redirect
 
 from apps.authn.views.admin.login_helpers import (
     clear_admin_login_session,
-    clear_password_rate_limit,
     get_last_admin_login_member,
     is_password_throttled,
-    record_password_failure,
     render_admin_login,
     safe_admin_next,
     set_last_admin_login_cookie,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _password_throttled_response(request, form):
+    form.add_error(None, "Too many login attempts. Please try again later.")
+    response = render_admin_login(request, step="password", form=form)
+    response.status_code = 429
+    retry_after = int(getattr(request, "auth_rate_retry_after", 0) or 0)
+    if retry_after:
+        response["Retry-After"] = str(retry_after)
+    return response
 
 
 class PasswordLoginMixin:
@@ -28,8 +36,7 @@ class PasswordLoginMixin:
 
         if is_password_throttled(request):
             form = login_api.AdminPasswordForm(request.POST)
-            form.add_error(None, "Too many login attempts. Please try again later.")
-            return render_admin_login(request, step="password", form=form)
+            return _password_throttled_response(request, form)
 
         form = login_api.AdminPasswordForm(request.POST)
         if not form.is_valid():
@@ -41,7 +48,6 @@ class PasswordLoginMixin:
             password=form.cleaned_data["password"],
         )
         if member is None or not member.is_staff or not member.is_active:
-            record_password_failure(request)
             form.add_error(None, "Invalid email or password.")
             return render_admin_login(request, step="password", form=form)
 
@@ -52,8 +58,7 @@ class PasswordLoginMixin:
 
         if is_password_throttled(request):
             form = login_api.AdminRememberedPasswordForm(request.POST)
-            form.add_error(None, "Too many login attempts. Please try again later.")
-            return render_admin_login(request, step="password", form=form)
+            return _password_throttled_response(request, form)
 
         form = login_api.AdminRememberedPasswordForm(request.POST)
         if not form.is_valid():
@@ -69,7 +74,6 @@ class PasswordLoginMixin:
             )
 
         if not member.check_password(form.cleaned_data["password"]):
-            record_password_failure(request)
             form.add_error(None, "Invalid password.")
             return render_admin_login(request, step="password", form=form)
 
@@ -81,7 +85,6 @@ class PasswordLoginMixin:
 
 
 def _finish_password_login(request, member, log_message):
-    clear_password_rate_limit(request)
     auth.login(request, member, backend="apps.authn.security.backends.EmailAuthBackend")
     clear_admin_login_session(request)
     logger.info(log_message, member.get_primary_email())

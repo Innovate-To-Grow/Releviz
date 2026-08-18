@@ -14,6 +14,7 @@ import {
 } from "@/lib/api/participants";
 import { fetchEventResults } from "@/lib/api/events";
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
+import useAutosaveNavigationGuard from "@/components/schedule/useAutosaveNavigationGuard";
 
 const AVAILABILITY_CHOICES = [
   { label: "Busy", value: 0 },
@@ -57,12 +58,15 @@ function ParticipantView() {
     status: "unavailable",
     results: null,
   });
-  const [refreshKey, setRefreshKey] = useState(0);
+  const [participantRefreshKey, setParticipantRefreshKey] = useState(0);
+  const [resultsRefreshKey, setResultsRefreshKey] = useState(0);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [joinError, setJoinError] = useState("");
   const [submitError, setSubmitError] = useState("");
   const [draftSaveState, setDraftSaveState] = useState("idle");
   const [draftSaveError, setDraftSaveError] = useState("");
   const [saveConflict, setSaveConflict] = useState(null);
+  const [deadlineClock, setDeadlineClock] = useState(() => Date.now());
 
   const participantIdRef = useRef(null);
   const participantVersionRef = useRef(null);
@@ -75,14 +79,19 @@ function ParticipantView() {
   const autosaveRunnerRef = useRef(null);
   const draftSaveStateRef = useRef("idle");
   const respondJoinAttemptedRef = useRef(false);
+  const participantLoadGenerationRef = useRef(0);
 
+  const responseDeadline = event.responseDeadline
+    ? new Date(event.responseDeadline).getTime()
+    : Number.NaN;
   const responseDeadlinePassed =
-    Boolean(event.responseDeadline) &&
-    Date.now() >= new Date(event.responseDeadline).getTime();
+    Number.isFinite(responseDeadline) && deadlineClock >= responseDeadline;
   const responseChangesDisabled =
     event.status !== "active" || responseDeadlinePassed;
 
   const applyParticipantResponse = useCallback((participant) => {
+    // Any participant mutation is newer than reads that were already in flight.
+    participantLoadGenerationRef.current += 1;
     const inperson = participant.availabilityInperson.map(Number);
     const virtual = participant.availabilityVirtual.map(Number);
     participantIdRef.current = participant.id;
@@ -171,10 +180,17 @@ function ParticipantView() {
     return saved;
   }, [event.code, getToken, responseChangesDisabled]);
 
-  autosaveRunnerRef.current = runAutosave;
-  draftSaveStateRef.current = draftSaveState;
+  useEffect(() => {
+    autosaveRunnerRef.current = runAutosave;
+  }, [runAutosave]);
+
+  useEffect(() => {
+    draftSaveStateRef.current = draftSaveState;
+  }, [draftSaveState]);
 
   const queueAutosave = useCallback(() => {
+    // Do not let a GET that started before this edit replace the local draft.
+    participantLoadGenerationRef.current += 1;
     draftDirtyRef.current = true;
     autosavePendingRef.current = true;
     setSubmitted(false);
@@ -186,6 +202,55 @@ function ParticipantView() {
       void autosaveRunnerRef.current?.();
     }, 700);
   }, []);
+
+  const flushPendingDraft = useCallback(async () => {
+    if (autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+    while (draftDirtyRef.current || autosaveInFlightRef.current) {
+      const saved = await autosaveRunnerRef.current?.();
+      if (!saved) return false;
+    }
+    return true;
+  }, []);
+
+  const hasPendingDraft = useCallback(
+    () =>
+      draftDirtyRef.current ||
+      Boolean(autosaveInFlightRef.current) ||
+      draftSaveStateRef.current === "saving" ||
+      draftSaveStateRef.current === "failed",
+    [],
+  );
+
+  useAutosaveNavigationGuard({
+    hasPending: hasPendingDraft,
+    flush: flushPendingDraft,
+    pending: draftSaveState === "saving" || draftSaveState === "failed",
+  });
+
+  useEffect(() => {
+    if (!Number.isFinite(responseDeadline)) return undefined;
+    let timer;
+    const refreshDeadline = () => {
+      const now = Date.now();
+      setDeadlineClock(now);
+      const remaining = responseDeadline - now;
+      if (remaining > 0) {
+        timer = window.setTimeout(
+          refreshDeadline,
+          Math.min(remaining, 2_147_483_647),
+        );
+      }
+    };
+    const remaining = responseDeadline - Date.now();
+    timer = window.setTimeout(
+      refreshDeadline,
+      Math.max(0, Math.min(remaining, 2_147_483_647)),
+    );
+    return () => window.clearTimeout(timer);
+  }, [responseDeadline]);
 
   useEffect(() => {
     const warnBeforeUnload = (event) => {
@@ -202,7 +267,10 @@ function ParticipantView() {
     window.addEventListener("beforeunload", warnBeforeUnload);
     return () => {
       window.removeEventListener("beforeunload", warnBeforeUnload);
-      if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -239,12 +307,30 @@ function ParticipantView() {
     }
 
     async function loadCurrentParticipant() {
+      const requestGeneration = ++participantLoadGenerationRef.current;
       let token;
       try {
         token = await getToken();
         const data = await fetchCurrentParticipant(event.code, token);
-        if (!active) return;
+        if (
+          !active ||
+          requestGeneration !== participantLoadGenerationRef.current
+        )
+          return;
         if (data.participant) {
+          const localVersion = Number(participantVersionRef.current);
+          const fetchedVersion = Number(data.participant.version);
+          const responseIsOlder =
+            Number.isFinite(localVersion) &&
+            Number.isFinite(fetchedVersion) &&
+            fetchedVersion < localVersion;
+          if (
+            draftDirtyRef.current ||
+            autosaveInFlightRef.current ||
+            responseIsOlder
+          ) {
+            return;
+          }
           applyParticipantResponse(data.participant);
           if (respondIntent) consumeRespondIntent();
           return;
@@ -252,7 +338,12 @@ function ParticipantView() {
       } catch {
         // A person who has not joined yet has no current participant response.
       }
-      if (!active || !respondIntent) return;
+      if (
+        !active ||
+        requestGeneration !== participantLoadGenerationRef.current ||
+        !respondIntent
+      )
+        return;
       if (!token) {
         try {
           token = await getToken();
@@ -276,7 +367,7 @@ function ParticipantView() {
   }, [
     event?.code,
     user?.id,
-    refreshKey,
+    participantRefreshKey,
     getToken,
     applyParticipantResponse,
     respondIntent,
@@ -301,7 +392,7 @@ function ParticipantView() {
   useEffect(() => {
     const timer = setTimeout(loadResults, 0);
     return () => clearTimeout(timer);
-  }, [loadResults, refreshKey]);
+  }, [loadResults, resultsRefreshKey]);
 
   useEffect(() => {
     if (resultSnapshot.status !== "refreshing") return undefined;
@@ -322,26 +413,36 @@ function ParticipantView() {
       const token = await getToken();
       const { participant } = await joinEvent(event.code, token);
       applyParticipantResponse(participant);
-      setRefreshKey((key) => key + 1);
+      setResultsRefreshKey((key) => key + 1);
     } catch (err) {
       setJoinError(`Failed to join: ${err.message}`);
     }
   };
 
-  const makeCellPaintHandler = (channel) => (idx) => {
-    const scheduleRef =
-      channel === "inperson" ? scheduleInpersonRef : scheduleVirtualRef;
-    if (Number(scheduleRef.current[idx]) === availabilityValue) return;
-    const next = [...scheduleRef.current];
-    next[idx] = availabilityValue;
-    scheduleRef.current = next;
-    if (channel === "inperson") setScheduleInperson(next);
-    else setScheduleVirtual(next);
-    queueAutosave();
-  };
+  const handleInpersonPaint = useCallback(
+    (idx) => {
+      if (Number(scheduleInpersonRef.current[idx]) === availabilityValue)
+        return;
+      const next = [...scheduleInpersonRef.current];
+      next[idx] = availabilityValue;
+      scheduleInpersonRef.current = next;
+      setScheduleInperson(next);
+      queueAutosave();
+    },
+    [availabilityValue, queueAutosave],
+  );
 
-  const handleInpersonPaint = makeCellPaintHandler("inperson");
-  const handleVirtualPaint = makeCellPaintHandler("virtual");
+  const handleVirtualPaint = useCallback(
+    (idx) => {
+      if (Number(scheduleVirtualRef.current[idx]) === availabilityValue) return;
+      const next = [...scheduleVirtualRef.current];
+      next[idx] = availabilityValue;
+      scheduleVirtualRef.current = next;
+      setScheduleVirtual(next);
+      queueAutosave();
+    },
+    [availabilityValue, queueAutosave],
+  );
 
   const handleCopySchedule = (source, target) => {
     const sourceValues =
@@ -381,14 +482,12 @@ function ParticipantView() {
     setSubmitError("");
 
     try {
-      if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
-      while (draftDirtyRef.current || autosaveInFlightRef.current) {
-        const saved = await autosaveRunnerRef.current();
-        if (!saved) {
-          setSubmitError("Save the draft successfully before submitting.");
-          return;
-        }
+      const saved = await flushPendingDraft();
+      if (!saved) {
+        setSubmitError("Save the draft successfully before submitting.");
+        return;
       }
+      participantLoadGenerationRef.current += 1;
       const token = await getToken();
       const { participant } = await updateParticipant(
         event.code,
@@ -400,11 +499,24 @@ function ParticipantView() {
         token,
       );
       applyParticipantResponse(participant);
-      setRefreshKey((key) => key + 1);
+      setResultsRefreshKey((key) => key + 1);
     } catch (err) {
       setSubmitError(`Failed to submit: ${err.message}`);
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleRefresh = async () => {
+    if (isRefreshing) return;
+    setIsRefreshing(true);
+    try {
+      const saved = await flushPendingDraft();
+      if (!saved) return;
+      setParticipantRefreshKey((key) => key + 1);
+      setResultsRefreshKey((key) => key + 1);
+    } finally {
+      setIsRefreshing(false);
     }
   };
 
@@ -462,11 +574,12 @@ function ParticipantView() {
           </p>
         </div>
         <AppButton
-          onClick={() => setRefreshKey((key) => key + 1)}
+          onClick={handleRefresh}
           variant="outlined"
           icon={<MdRefresh />}
+          disabled={isRefreshing}
         >
-          Refresh
+          {isRefreshing ? "Refreshing…" : "Refresh"}
         </AppButton>
       </div>
 

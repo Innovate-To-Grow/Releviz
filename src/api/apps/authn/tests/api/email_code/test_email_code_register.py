@@ -84,7 +84,7 @@ class EmailCodeAuthRegisterTests(APITestCase):
         challenge = member.email_auth_challenges.get()
 
         with patch(
-            "apps.authn.views.helpers.RefreshToken.for_user",
+            "apps.authn.views.helpers.issue_session_refresh_token",
             side_effect=RuntimeError("JWT creation failed"),
         ):
             with self.assertRaisesMessage(RuntimeError, "JWT creation failed"):

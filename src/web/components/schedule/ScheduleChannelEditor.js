@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useRef, useState } from "react";
 import AppButton from "@/components/ui/AppButton";
 import ScheduleGrid from "@/components/schedule/ScheduleGrid";
 
@@ -30,6 +30,8 @@ export default function ScheduleChannelEditor({
     mode === "virtual" ? "virtual" : "inperson",
   );
   const [pendingCopy, setPendingCopy] = useState(null);
+  const tabsId = useId();
+  const tabRefs = useRef({});
 
   const schedules = { inperson, virtual };
   const channel = mode === "mixed" ? activeChannel : mode;
@@ -54,6 +56,31 @@ export default function ScheduleChannelEditor({
     copySchedule(channel, otherChannel);
   };
 
+  const selectChannel = (nextChannel, { focus = false } = {}) => {
+    setActiveChannel(nextChannel);
+    setPendingCopy(null);
+    if (focus) tabRefs.current[nextChannel]?.focus();
+  };
+
+  const handleTabKeyDown = (event) => {
+    const channels = ["inperson", "virtual"];
+    const currentIndex = channels.indexOf(activeChannel);
+    let nextIndex;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+      nextIndex = (currentIndex + 1) % channels.length;
+    } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+      nextIndex = (currentIndex - 1 + channels.length) % channels.length;
+    } else if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = channels.length - 1;
+    } else {
+      return;
+    }
+    event.preventDefault();
+    selectChannel(channels[nextIndex], { focus: true });
+  };
+
   return (
     <div className="schedule-channel-editor">
       {mode === "mixed" && (
@@ -66,22 +93,30 @@ export default function ScheduleChannelEditor({
             <button
               type="button"
               role="tab"
+              id={`${tabsId}-inperson-tab`}
+              aria-controls={`${tabsId}-inperson-panel`}
               aria-selected={activeChannel === "inperson"}
-              onClick={() => {
-                setActiveChannel("inperson");
-                setPendingCopy(null);
+              tabIndex={activeChannel === "inperson" ? 0 : -1}
+              ref={(node) => {
+                tabRefs.current.inperson = node;
               }}
+              onClick={() => selectChannel("inperson")}
+              onKeyDown={handleTabKeyDown}
             >
               In person
             </button>
             <button
               type="button"
               role="tab"
+              id={`${tabsId}-virtual-tab`}
+              aria-controls={`${tabsId}-virtual-panel`}
               aria-selected={activeChannel === "virtual"}
-              onClick={() => {
-                setActiveChannel("virtual");
-                setPendingCopy(null);
+              tabIndex={activeChannel === "virtual" ? 0 : -1}
+              ref={(node) => {
+                tabRefs.current.virtual = node;
               }}
+              onClick={() => selectChannel("virtual")}
+              onKeyDown={handleTabKeyDown}
             >
               Virtual
             </button>
@@ -128,15 +163,23 @@ export default function ScheduleChannelEditor({
         </div>
       )}
 
-      <ScheduleGrid
-        schedule={schedule}
-        slotGroups={slotGroups}
-        readOnly={readOnly}
-        showValues={showValues}
-        onCellPaint={channel === "virtual" ? onVirtualPaint : onInpersonPaint}
-        label={mode === "mixed" ? channelLabel : undefined}
-        virtual={channel === "virtual"}
-      />
+      <div
+        role={mode === "mixed" ? "tabpanel" : undefined}
+        id={mode === "mixed" ? `${tabsId}-${channel}-panel` : undefined}
+        aria-labelledby={
+          mode === "mixed" ? `${tabsId}-${channel}-tab` : undefined
+        }
+      >
+        <ScheduleGrid
+          schedule={schedule}
+          slotGroups={slotGroups}
+          readOnly={readOnly}
+          showValues={showValues}
+          onCellPaint={channel === "virtual" ? onVirtualPaint : onInpersonPaint}
+          label={mode === "mixed" ? channelLabel : undefined}
+          virtual={channel === "virtual"}
+        />
+      </div>
     </div>
   );
 }

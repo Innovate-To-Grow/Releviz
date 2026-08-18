@@ -17,10 +17,16 @@ import AppButton from "@/components/ui/AppButton";
 import AppHeader from "@/components/ui/AppHeader";
 import BrandLogo, { BrandHomeLink } from "@/components/ui/BrandLogo";
 import ScheduleGrid from "@/components/schedule/ScheduleGrid";
+import useAutosaveNavigationGuard from "@/components/schedule/useAutosaveNavigationGuard";
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
 import EventHeader from "@/components/event/EventHeader";
 import { DAY_LABELS, DAYS_PER_WEEK } from "@/lib/constants";
 import { formatHour, formatMode, formatTime } from "@/lib/format";
+
+function PendingDraftGuard({ flush, hasPending = () => true, pending = true }) {
+  useAutosaveNavigationGuard({ hasPending, flush, pending });
+  return null;
+}
 
 jest.mock("@material/web/textfield/outlined-text-field.js", () => ({}), {
   virtual: true,
@@ -329,6 +335,21 @@ describe("small UI modules", () => {
       1,
       expect.objectContaining({ phase: "keyboard", type: "keydown" }),
     );
+
+    const tabbableCells = document.querySelectorAll(
+      "[role='gridcell'][tabindex='0']",
+    );
+    expect(tabbableCells).toHaveLength(1);
+    const firstCell = document.querySelector("[data-cell-idx='0']");
+    firstCell.focus();
+    fireEvent.keyDown(firstCell, { key: "ArrowRight" });
+    expect(document.querySelector("[data-cell-idx='2']")).toHaveFocus();
+    fireEvent.keyDown(document.activeElement, { key: "ArrowDown" });
+    expect(document.querySelector("[data-cell-idx='3']")).toHaveFocus();
+    expect(document.querySelector("[data-cell-idx='3']")).toHaveAttribute(
+      "tabindex",
+      "0",
+    );
   });
 
   test("ScheduleGrid supports read-only specific dates", () => {
@@ -502,6 +523,7 @@ describe("small UI modules", () => {
   });
 
   test("EventDetailsGrid renders defaults, dates, and extra cards", () => {
+    const localeSpy = jest.spyOn(Date.prototype, "toLocaleString");
     render(
       <EventDetailsGrid
         event={{
@@ -536,6 +558,11 @@ describe("small UI modules", () => {
     expect(screen.getByText("Virtual · Meet link")).toBeInTheDocument();
     expect(screen.queryByText("No deadline")).not.toBeInTheDocument();
     expect(screen.getByText("3")).toBeInTheDocument();
+    expect(localeSpy).toHaveBeenCalledWith(
+      [],
+      expect.objectContaining({ timeZone: "UTC", timeZoneName: "short" }),
+    );
+    localeSpy.mockRestore();
   });
 
   test("EventDetailsGrid renders fallback values", () => {
@@ -637,6 +664,81 @@ describe("role-aware headers", () => {
     expect(trigger).toHaveFocus();
   });
 
+  test("holds browser Back on the current entry until pending work is saved", async () => {
+    window.history.replaceState({ page: "previous" }, "", "/previous");
+    window.history.pushState({ page: "event" }, "", "/event");
+    let pending = true;
+    let completeFlush;
+    const flush = jest.fn(
+      () =>
+        new Promise((resolve) => {
+          completeFlush = (saved) => {
+            if (saved) pending = false;
+            resolve(saved);
+          };
+        }),
+    );
+    const view = render(
+      <PendingDraftGuard flush={flush} hasPending={() => pending} />,
+    );
+
+    act(() => window.history.back());
+    await waitFor(() => expect(flush).toHaveBeenCalledTimes(1));
+    expect(window.location.pathname).toBe("/event");
+
+    await act(async () => completeFlush(true));
+    await waitFor(() => expect(window.location.pathname).toBe("/previous"));
+
+    view.unmount();
+    window.history.replaceState({}, "", "/");
+  });
+
+  test("account logout waits for pending schedule work and stays signed in on save failure", async () => {
+    const logout = jest.fn();
+    const flush = jest.fn().mockResolvedValue(false);
+    useAuth.mockReturnValue({
+      user: { displayName: "Prachi", email: "prachi@example.com" },
+      loading: false,
+      logout,
+    });
+    render(
+      <>
+        <PendingDraftGuard flush={flush} />
+        <AppHeader pageTitle="Event" />
+      </>,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Prachi" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Log out" }));
+
+    expect(flush).toHaveBeenCalledTimes(1);
+    expect(logout).not.toHaveBeenCalled();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /latest schedule changes could not be saved/i,
+    );
+  });
+
+  test("account menu does not claim logout when session revocation fails", async () => {
+    const logout = jest
+      .fn()
+      .mockRejectedValue(new Error("Session revocation is unavailable"));
+    useAuth.mockReturnValue({
+      user: { displayName: "Prachi", email: "prachi@example.com" },
+      loading: false,
+      logout,
+    });
+    render(<AppHeader pageTitle="Event" />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Prachi" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Log out" }));
+
+    expect(logout).toHaveBeenCalledTimes(1);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Session revocation is unavailable",
+    );
+    expect(screen.getByRole("button", { name: "Prachi" })).toBeInTheDocument();
+  });
+
   test("AppHeader handles loading and signed-out states", () => {
     useAuth.mockReturnValue({ user: null, loading: true, logout: jest.fn() });
     const loading = render(<AppHeader pageTitle="My Dashboard" />);
@@ -658,6 +760,7 @@ describe("app pages", () => {
     jest.clearAllMocks();
     searchParams = new URLSearchParams();
     delete process.env.AMPLIFY_STATIC_EXPORT;
+    useAuth.mockReturnValue({ user: null, loading: false, logout: jest.fn() });
   });
 
   test("wrapper pages render expected clients and redirects", () => {

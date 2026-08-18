@@ -589,6 +589,7 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
         self.assertEqual(self.temporary.last_name, "Identity")
         self.assertEqual(self.temporary.email, "edge-temp@example.com")
         self.assertEqual(self.temporary.access_level, "temporary")
+        self.assertTrue(self.temporary.is_active)
         self.assertTrue(self.temporary.check_password("new-password-123"))
         self.assertFalse(ContactEmail.objects.filter(email_address=untrusted_email).exists())
         challenge = EmailAuthChallenge.objects.get(
@@ -606,6 +607,9 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
             },
         )
         self.assertNotIn("edge-temp@example.com", str(log_info.call_args))
+
+        pending_session = client.get(f"/events/temp-access/session?code={self.event.code}")
+        self.assertEqual(pending_session.status_code, 200, pending_session.data)
 
         verified = client.post(
             "/authn/register/verify-code/",

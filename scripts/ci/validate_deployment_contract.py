@@ -22,6 +22,7 @@ PRODUCTION_DEPLOY_WORKFLOW = ROOT / ".github/workflows/deploy-prod.yml"
 PRODUCTION_DEPLOY_WORKFLOW_PARKED = ROOT / ".github/workflows/deploy-prod.yml.disabled"
 PRODUCTION_AMPLIFY_CUSTOM_HEADERS = ROOT / "infra/prod/amplify-custom-headers.json"
 AMPLIFY_DEPLOY_SCRIPT = ROOT / "scripts/deploy/amplify-static-deploy.sh"
+BACKEND_ENTRYPOINT = ROOT / "src/api/docker-entrypoint.sh"
 RETIRED_STAGING_PATHS = (
     ".github/workflows/deploy-staging.yml",
     ".github/workflows/retire-staging.yml",
@@ -115,6 +116,9 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         ): "the deployed ECS frontend SHA in the base Terraform plan",
         r"Verify base ECS services use Terraform-selected task definitions": (
             "post-wait base ECS release identity verification"
+        ),
+        r"for\s+role\s+in\s+backend\s+result_worker\s+email_worker\s+frontend": (
+            "base release verification for both durable workers"
         ),
         (
             r"terraform\s+-chdir=infra/prod\s+output\s+-raw\s+"
@@ -990,9 +994,13 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         "aws_amplify_app.frontend",
         "aws_cloudwatch_event_target.event_reminders",
         "aws_ecs_service.backend",
+        "aws_ecs_service.result_worker",
+        "aws_ecs_service.email_worker",
         "aws_ecs_service.frontend",
         "aws_lb_target_group.backend",
         "aws_ecs_task_definition.backend",
+        "aws_ecs_task_definition.result_worker",
+        "aws_ecs_task_definition.email_worker",
         "aws_ecs_task_definition.frontend",
         "aws_acm_certificate.origin[0]",
         "aws_acm_certificate_validation.origin[0]",
@@ -1051,6 +1059,25 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
             r'if\s+\[\s*"\$backend_image"\s*!=\s*'
             r'"\$expected_backend_image"\s*\]\s*;\s*then'
         ): "exact backend runtime image equality",
+        r"for\s+role\s+in\s+result_worker\s+email_worker": (
+            "final runtime verification for both durable workers"
+        ),
+        r'recompute_event_results","--watch","--poll-interval=1': (
+            "the final result-worker command contract"
+        ),
+        (
+            r'dispatch_email_jobs","--watch","--limit=1000",'
+            r'"--concurrency=10","--rate-limit=10","--poll-interval=1'
+        ): "the final email-worker command contract",
+        r"\.taskDefinition\.containerDefinitions\[0\]\.stopTimeout\s*==\s*120": (
+            "worker graceful-stop verification"
+        ),
+        r"\.taskDefinition\.containerDefinitions\[0\]\.healthCheck\.retries\s*==\s*3": (
+            "worker health-check verification"
+        ),
+        r'DJANGO_MIGRATE_ON_START[\s\S]{0,100}\.value\s*==\s*"1"': (
+            "worker locked-migration startup verification"
+        ),
         (
             r'frontend_task_definition="\$\([\s\S]{0,700}'
             r'--services\s+"\$\{\{\s*steps\.terraform\.outputs\.frontend_service'
@@ -1522,10 +1549,163 @@ def production_ecs_task_definition_errors(terraform_source: str) -> list[str]:
         r"(?m)^[ \t]*volumesFrom\s*=\s*\[\][ \t]*$": ("canonical empty ECS volume sources"),
     }
     for pattern, description in canonical_defaults.items():
-        if len(re.findall(pattern, terraform_source)) != 3:
+        if len(re.findall(pattern, terraform_source)) != 5:
             errors.append(
-                f"production Terraform must set {description} on all three ECS task definitions"
+                f"production Terraform must set {description} on all five ECS task definitions"
             )
+    return errors
+
+
+def production_worker_errors(terraform_source: str) -> list[str]:
+    """Require the two database-backed workers to be durable and observable."""
+
+    errors: list[str] = []
+    worker_contracts = {
+        "result_worker": (
+            r'command\s*=\s*\[\s*"python"\s*,\s*"manage\.py"\s*,'
+            r'\s*"recompute_event_results"\s*,\s*"--watch"\s*,'
+            r'\s*"--poll-interval=1"\s*\]'
+        ),
+        "email_worker": (
+            r'command\s*=\s*\[\s*"python"\s*,\s*"manage\.py"\s*,'
+            r'[\s\S]*?"dispatch_email_jobs"\s*,[\s\S]*?"--watch"\s*,'
+            r'[\s\S]*?"--limit=1000"\s*,[\s\S]*?"--concurrency=10"\s*,'
+            r'[\s\S]*?"--rate-limit=10"\s*,[\s\S]*?"--poll-interval=1"\s*,?\s*\]'
+        ),
+    }
+    for name, command_pattern in worker_contracts.items():
+        task = _terraform_resource_source(terraform_source, "aws_ecs_task_definition", name)
+        service = _terraform_resource_source(terraform_source, "aws_ecs_service", name)
+        alarm = _terraform_resource_source(
+            terraform_source, "aws_cloudwatch_metric_alarm", f"{name}_running_tasks"
+        )
+        if not task:
+            errors.append(f"production Terraform omits the {name} task definition")
+            continue
+        for pattern, description in {
+            command_pattern: "reviewed watch command",
+            r"stopTimeout\s*=\s*120": "graceful stop timeout",
+            r"healthCheck\s*=\s*local\.worker_health_check": "database health check",
+            r"execution_role_arn\s*=\s*aws_iam_role\.ecs_execution\.arn": ("execution role"),
+            r"task_role_arn\s*=\s*aws_iam_role\.ecs_task\.arn": "application task role",
+            r"environment\s*=\s*local\.worker_container_environment": (
+                "startup-suppressed worker environment"
+            ),
+            r"secrets\s*=\s*local\.backend_container_secrets": "backend secret allowlist",
+        }.items():
+            if not re.search(pattern, task, re.MULTILINE | re.DOTALL):
+                errors.append(f"production Terraform {name} omits its {description}")
+        if not service:
+            errors.append(f"production Terraform omits the {name} ECS service")
+        else:
+            for pattern, description in {
+                r"desired_count\s*=\s*1": "single durable replica",
+                r"deployment_circuit_breaker\s*\{[\s\S]*?enable\s*=\s*true[\s\S]*?rollback\s*=\s*true": (
+                    "automatic rollback"
+                ),
+                r"assign_public_ip\s*=\s*false": "private networking",
+                r"security_groups\s*=\s*\[aws_security_group\.backend\.id\]": (
+                    "backend security group"
+                ),
+            }.items():
+                if not re.search(pattern, service, re.MULTILINE | re.DOTALL):
+                    errors.append(f"production Terraform {name} service omits {description}")
+        if not alarm or not re.search(
+            r'metric_name\s*=\s*"RunningTaskCount"[\s\S]*?'
+            r'treat_missing_data\s*=\s*"breaching"',
+            alarm,
+            re.MULTILINE | re.DOTALL,
+        ):
+            errors.append(f"production Terraform {name} omits its fail-closed running-task alarm")
+
+    worker_environment = _terraform_local_assignment_source(
+        terraform_source, "worker_container_environment"
+    )
+    worker_health_check = _terraform_local_assignment_source(
+        terraform_source, "worker_health_check"
+    )
+    worker_startup_environment = {
+        "DJANGO_CREATE_DEFAULT_ADMIN": "0",
+        "DJANGO_MIGRATE_ON_START": "1",
+        "DJANGO_SKIP_STARTUP_TASKS": "1",
+    }
+    for name, expected_value in worker_startup_environment.items():
+        if not re.search(
+            rf'\{{\s*name\s*=\s*"{name}"\s*,\s*value\s*=\s*"{expected_value}"\s*\}}',
+            worker_environment,
+        ):
+            errors.append(f"production worker environment omits {name}")
+    if not re.search(
+        r'"python\s+manage\.py\s+migrate\s+--check\s+--noinput"',
+        worker_health_check,
+    ):
+        errors.append("production worker health check does not reject pending migrations")
+
+    email_outcome_contracts = {
+        "permanent_email_failures": (
+            None,
+            "permanent_failure",
+            "PermanentEmailFailures",
+        ),
+        "uncertain_email_outcomes": (
+            "email_delivery_outcome_uncertain",
+            "uncertain",
+            "UncertainEmailOutcomes",
+        ),
+    }
+    for name, (event, status, metric_name) in email_outcome_contracts.items():
+        metric_filter = _terraform_resource_source(
+            terraform_source, "aws_cloudwatch_log_metric_filter", name
+        )
+        alarm = _terraform_resource_source(terraform_source, "aws_cloudwatch_metric_alarm", name)
+        required_filter_patterns = {
+            r"log_group_name\s*=\s*aws_cloudwatch_log_group\.email_worker\.name": (
+                "email-worker log source"
+            ),
+            rf"pattern\s*=[^\n]*{re.escape(status)}": "terminal status filter",
+            rf'name\s*=\s*"{re.escape(metric_name)}"': "reviewed metric name",
+            r'namespace\s*=\s*"Releviz/\$\{var\.environment\}"': ("production metric namespace"),
+        }
+        if event is not None:
+            required_filter_patterns[rf"pattern\s*=[^\n]*{re.escape(event)}"] = (
+                "structured event filter"
+            )
+        for pattern, description in required_filter_patterns.items():
+            if not re.search(pattern, metric_filter, re.MULTILINE | re.DOTALL):
+                errors.append(f"production Terraform {name} metric filter omits its {description}")
+        for pattern, description in {
+            rf'metric_name\s*=\s*"{re.escape(metric_name)}"': "reviewed metric",
+            r'namespace\s*=\s*"Releviz/\$\{var\.environment\}"': ("production metric namespace"),
+            r"threshold\s*=\s*1": "fail-closed threshold",
+            r'treat_missing_data\s*=\s*"notBreaching"': "missing-data policy",
+            r"alarm_actions\s*=\s*var\.alarm_action_arns": "SNS alarm actions",
+        }.items():
+            if not re.search(pattern, alarm, re.MULTILINE | re.DOTALL):
+                errors.append(f"production Terraform {name} alarm omits its {description}")
+    return errors
+
+
+def production_worker_entrypoint_errors(source: str) -> list[str]:
+    """Require worker startup to complete locked migrations without web-only tasks."""
+
+    match = re.search(
+        r'if\s+\[\s*"\$\{DJANGO_MIGRATE_ON_START:-0\}"\s*=\s*"1"\s*\]\s*;\s*then'
+        r"(?P<migration_only>[\s\S]*?)"
+        r'elif\s+\[\s*"\$\{DJANGO_SKIP_STARTUP_TASKS:-0\}"\s*!=\s*"1"\s*\]'
+        r"\s*;\s*then",
+        source,
+    )
+    if match is None:
+        return ["backend entrypoint omits the worker migration-only startup branch"]
+
+    errors: list[str] = []
+    migration_only = match.group("migration_only")
+    if not re.search(r"python\s+manage\.py\s+migrate_locked\s+--noinput", migration_only):
+        errors.append("backend entrypoint worker startup omits locked migrations")
+    if "collectstatic" in migration_only or "ensure_default_admin" in migration_only:
+        errors.append("backend entrypoint worker startup runs web-only mutation tasks")
+    if not re.search(r'(?m)^exec\s+"\$@"\s*$', source):
+        errors.append("backend entrypoint does not exec the worker command after migrations")
     return errors
 
 
@@ -1686,7 +1866,40 @@ def production_amplify_custom_headers_policy_errors(source: str) -> list[str]:
         return ["production Amplify custom-header policy must be a top-level JSON object"]
     if not isinstance(payload.get("customHeaders"), list):
         return ["production Amplify custom-header policy omits the top-level customHeaders list"]
-    return []
+    policies = payload["customHeaders"]
+    if len(policies) != 1 or policies[0].get("pattern") != "**":
+        return ["production Amplify custom-header policy must contain one global policy"]
+    headers = policies[0].get("headers")
+    if not isinstance(headers, list):
+        return ["production Amplify custom-header policy omits its headers list"]
+    csp_values = [
+        header.get("value")
+        for header in headers
+        if isinstance(header, dict) and header.get("key") == "Content-Security-Policy"
+    ]
+    if len(csp_values) != 1 or not isinstance(csp_values[0], str):
+        return ["production Amplify custom-header policy must contain one CSP string"]
+
+    csp = csp_values[0]
+    errors: list[str] = []
+    for forbidden in ("'unsafe-eval'", "esm.run", "blob:", " ws:", " wss:"):
+        if forbidden in csp:
+            errors.append(f"production Amplify CSP retains forbidden source {forbidden.strip()}")
+    required_directives = (
+        "default-src 'self'",
+        "base-uri 'self'",
+        "object-src 'none'",
+        "frame-ancestors 'none'",
+        "script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com",
+        "connect-src 'self' https://api.releviz.com https://challenges.cloudflare.com",
+        "frame-src 'self' https://challenges.cloudflare.com",
+        "form-action 'self'",
+        "upgrade-insecure-requests",
+    )
+    for directive in required_directives:
+        if directive not in csp:
+            errors.append(f"production Amplify CSP omits reviewed directive: {directive}")
+    return errors
 
 
 def production_amplify_custom_headers_errors(terraform_source: str) -> list[str]:
@@ -1796,6 +2009,8 @@ def deployment_contract_errors(root: Path = ROOT) -> list[str]:
     ).read_text(encoding="utf-8")
     production_invariants = {
         r'resource\s+"aws_ecs_service"\s+"backend"': "a backend ECS service",
+        r'resource\s+"aws_ecs_service"\s+"result_worker"': ("a durable result-worker ECS service"),
+        r'resource\s+"aws_ecs_service"\s+"email_worker"': ("a durable email-worker ECS service"),
         r'resource\s+"aws_ecs_service"\s+"frontend"': "a frontend ECS rollback service",
         r"assign_public_ip\s*=\s*false": "private ECS networking",
         r"multi_az\s*=\s*true": "Multi-AZ PostgreSQL",
@@ -1847,6 +2062,14 @@ def deployment_contract_errors(root: Path = ROOT) -> list[str]:
     errors.extend(production_alb_security_group_errors(production_terraform))
     errors.extend(production_proxy_configuration_errors(production_terraform))
     errors.extend(production_ecs_task_definition_errors(production_terraform))
+    errors.extend(production_worker_errors(production_terraform))
+    entrypoint_path = root / BACKEND_ENTRYPOINT.relative_to(ROOT)
+    if entrypoint_path.exists():
+        errors.extend(
+            production_worker_entrypoint_errors(entrypoint_path.read_text(encoding="utf-8"))
+        )
+    else:
+        errors.append("backend entrypoint is missing")
     errors.extend(production_default_admin_task_errors(production_terraform))
     errors.extend(production_amplify_custom_headers_errors(production_terraform))
 

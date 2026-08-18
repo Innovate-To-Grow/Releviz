@@ -9,7 +9,7 @@ import {
   MdSchedule,
 } from "react-icons/md";
 import { DAY_LABELS } from "@/lib/constants";
-import { formatMode, formatTime } from "@/lib/format";
+import { formatDateTimeInTimezone, formatMode, formatTime } from "@/lib/format";
 
 function InfoCard({ label, value }) {
   return (
@@ -64,7 +64,9 @@ function OrganizerEventDetails({ event, extraCards }) {
     event?.endTime,
   )}${event?.crossesMidnight ? " (next day)" : ""}`;
   const responseDeadline = event?.responseDeadline
-    ? new Date(event.responseDeadline).toLocaleString()
+    ? formatDateTimeInTimezone(event.responseDeadline, event?.timezone, {
+        timeZoneName: "short",
+      })
     : "No deadline";
   const extraValue = (label, fallback) =>
     extraCards.find((card) => card.label === label)?.value ?? fallback;
@@ -84,17 +86,11 @@ function OrganizerEventDetails({ event, extraCards }) {
     ? event.status.charAt(0).toUpperCase() + event.status.slice(1)
     : "Unknown";
   const finalMeeting = event?.finalMeeting;
-  const finalTimeOptions = event?.timezone
-    ? { timeZone: event.timezone }
-    : undefined;
   const finalWindow = finalMeeting
-    ? `${new Date(finalMeeting.startsAt).toLocaleString(
-        [],
-        finalTimeOptions,
-      )} - ${new Date(finalMeeting.endsAt).toLocaleString(
-        [],
-        finalTimeOptions,
-      )}`
+    ? `${formatDateTimeInTimezone(
+        finalMeeting.startsAt,
+        event?.timezone,
+      )} - ${formatDateTimeInTimezone(finalMeeting.endsAt, event?.timezone)}`
     : null;
 
   return (
@@ -176,10 +172,6 @@ function EventDetailsGrid({ event, extraCards = [], variant = "default" }) {
             .join(", ")
         : "";
   const finalMeeting = event?.finalMeeting;
-  const finalTimeOptions = event?.timezone
-    ? { timeZone: event.timezone }
-    : undefined;
-
   if (variant === "organizer") {
     return <OrganizerEventDetails event={event} extraCards={extraCards} />;
   }
@@ -219,7 +211,11 @@ function EventDetailsGrid({ event, extraCards = [], variant = "default" }) {
         label="Response Deadline"
         value={
           event?.responseDeadline
-            ? new Date(event.responseDeadline).toLocaleString()
+            ? formatDateTimeInTimezone(
+                event.responseDeadline,
+                event?.timezone,
+                { timeZoneName: "short" },
+              )
             : "No deadline"
         }
       />
@@ -227,16 +223,16 @@ function EventDetailsGrid({ event, extraCards = [], variant = "default" }) {
         <>
           <InfoCard
             label="Final Start"
-            value={new Date(finalMeeting.startsAt).toLocaleString(
-              [],
-              finalTimeOptions,
+            value={formatDateTimeInTimezone(
+              finalMeeting.startsAt,
+              event?.timezone,
             )}
           />
           <InfoCard
             label="Final End"
-            value={new Date(finalMeeting.endsAt).toLocaleString(
-              [],
-              finalTimeOptions,
+            value={formatDateTimeInTimezone(
+              finalMeeting.endsAt,
+              event?.timezone,
             )}
           />
           <InfoCard

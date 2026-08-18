@@ -641,7 +641,7 @@ class InvitationFormBranchTests(SimpleTestCase):
 
 
 class SecurityHelperBranchTests(SimpleTestCase):
-    def test_normalization_hashing_decision_and_rate_limit_stub(self):
+    def test_normalization_hashing_decision_and_unconfigured_rate_limit(self):
         from apps.authn.security.helpers import (
             AuthRateThrottle,
             RateLimitDecision,
@@ -655,10 +655,11 @@ class SecurityHelperBranchTests(SimpleTestCase):
         decision = RateLimitDecision(allowed=False, retry_after=12)
         self.assertFalse(decision.allowed)
         self.assertEqual(decision.retry_after, 12)
+        request = SimpleNamespace(META={"REMOTE_ADDR": "198.51.100.10"})
         self.assertTrue(
-            consume_request_rate_limit("login", object(), identity="user@example.com").allowed
+            consume_request_rate_limit("unconfigured", request, identity="user@example.com").allowed
         )
-        self.assertTrue(consume_request_rate_limit("login", object()).allowed)
+        self.assertTrue(consume_request_rate_limit("unconfigured", request).allowed)
         self.assertTrue(AuthRateThrottle().allow_request(object(), object()))
 
     @override_settings(
@@ -741,9 +742,14 @@ class SecurityHelperBranchTests(SimpleTestCase):
 
 class SecurityPruningBranchTests(TestCase):
     def test_prune_security_state_updates_and_deletes_all_retained_state(self):
+        from apps.authn.models import AuthRateLimitBucket
         from apps.authn.security.helpers import prune_auth_security_state
 
         member = _member()
+        stale_bucket = AuthRateLimitBucket.objects.create(
+            scope="stale:ip",
+            key_hash="a" * 64,
+        )
         challenge = __import__(
             "apps.authn.models", fromlist=["EmailAuthChallenge"]
         ).EmailAuthChallenge.objects.create(
@@ -764,6 +770,9 @@ class SecurityPruningBranchTests(TestCase):
         tokens.delete.return_value = (4, {})
 
         now = timezone.now()
+        AuthRateLimitBucket.objects.filter(pk=stale_bucket.pk).update(
+            updated_at=now - timezone.timedelta(days=8)
+        )
         with (
             patch("django.apps.apps.get_model", return_value=temp_model),
             patch("apps.mail.models.EmailDeliveryJob.objects.filter", return_value=jobs),
@@ -778,6 +787,7 @@ class SecurityPruningBranchTests(TestCase):
         self.assertEqual(challenge.status, "expired")
         self.assertEqual(result["authChallenges"], 1)
         self.assertEqual(result["authEmailJobs"], 2)
+        self.assertEqual(result["rateLimitBuckets"], 1)
         self.assertEqual(result["temporaryEventSessions"], 3)
         self.assertEqual(result["outstandingTokens"], 4)
 

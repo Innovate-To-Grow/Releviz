@@ -86,7 +86,7 @@ required/mandatory participants.
 | Frontend       | [Next.js 16](https://nextjs.org/) static export + React 19 + Material Web components     |
 | Backend        | [Django 6](https://www.djangoproject.com/) + DRF + SimpleJWT                             |
 | Database       | PostgreSQL/RDS in deployed environments; SQLite for local development                    |
-| Infrastructure | AWS Amplify frontend; `api.releviz.com` on a public TLS ALB; private ECS Fargate backend |
+| Infrastructure | AWS Amplify frontend; public TLS ALB; private ECS Fargate API and durable workers       |
 | IaC            | Terraform (versioned encrypted S3 state with native lock files)                          |
 | CI/CD          | GitHub Actions (required CI and protected manual Amplify/ECS production CD)              |
 
@@ -111,7 +111,7 @@ releviz-monorepo/
   scripts/
     quality-gate.sh # Full lint + test + build for both workspaces
     deploy/         # Bounded manual Amplify artifact deployment helper
-    performance/    # Pure aggregation and guarded PostgreSQL/HTTP scale tools
+    perf/           # Pure aggregation and guarded PostgreSQL/HTTP scale tools
   .github/workflows/
     ci.yml          # Parallel CI for both workspaces
     deploy-prod.yml.disabled # Parked production release; CD is intentionally disabled
@@ -119,17 +119,23 @@ releviz-monorepo/
 
 ## Local Development
 
-Use Python 3.12 or newer (Django 6 and the locked backend environment require it). Activate the
-backend virtual environment before running commands that use `python3`.
+Use Python 3.12-3.14 (Django 6 and the hashed backend locks require it). The setup command replaces
+`src/api/.venv` with a clean environment; set `PYTHON_BIN` if `python3` is not the right interpreter.
 
 ```bash
-npm install          # install all workspace dependencies
-python3 -m pip install -r src/api/requirements/local.txt
-python3 src/api/manage.py migrate --settings=config.settings.local
-npm run dev          # start backend (4000) + frontend (3000)
+npm install
+npm run setup:api
+source src/api/.venv/bin/activate
+python src/api/manage.py migrate --settings=config.settings.local
+npm run dev      # backend (4000) + frontend (3000)
 npm run dev:api  # backend only
-npm run dev:web # frontend only
+npm run dev:web  # frontend only
 ```
+
+`src/api/.env.example` documents current local overrides; Django does not implicitly load it, so
+export only the values you need. Backend dependency intent lives in `requirements/*.in`; run
+`npm run lock:api` after changing those inputs and commit all three hashed `.txt` locks. CI checks
+that the locks still reproduce for Python 3.12-3.14 with the pinned resolver.
 
 The frontend calls the Django service directly. Local development defaults to
 `http://localhost:4000`; override `NEXT_PUBLIC_API_BASE_URL` when the backend uses another origin.
@@ -140,9 +146,9 @@ Run the coalescing result worker and durable email worker in separate terminals 
 organizer results or delivery flows:
 
 ```bash
-python3 src/api/manage.py recompute_event_results --watch --poll-interval=1 \
+python src/api/manage.py recompute_event_results --watch --poll-interval=1 \
   --settings=config.settings.local
-python3 src/api/manage.py dispatch_email_jobs --watch --limit=1000 \
+python src/api/manage.py dispatch_email_jobs --watch --limit=1000 \
   --concurrency=10 --rate-limit=10 --poll-interval=1 \
   --settings=config.settings.local
 ```
@@ -159,6 +165,10 @@ npm --workspace=releviz-web run build
 npm --workspace=releviz-web run build:amplify
 npm run quality-gate               # all of the above
 ```
+
+The guarded scale tools resolve application imports from `src/api`. Run them with the activated
+backend environment, for example `python scripts/perf/benchmark_aggregation.py`; database and HTTP
+scenarios retain their explicit confirmation and loopback/test-database safeguards.
 
 Pull requests use diff-scoped GitHub Actions jobs for the backend, frontend, E2E, and Terraform
 areas. Every push to `main` runs the full suite and produces one stable `CI Result` check. The
@@ -190,13 +200,17 @@ branch protection always receives the same required check.
 - `DB_PASSWORD`
 - `DB_HOST`
 - `DB_PORT` (default: `5432`)
+- `DJANGO_MIGRATE_ON_START` (`1` in worker tasks to run only advisory-locked migrations before
+  starting the watch command)
+- `DJANGO_SKIP_STARTUP_TASKS` (`1` in worker tasks so they skip static collection and administrator
+  bootstrap when ECS replaces a worker)
 - `DJANGO_CREATE_DEFAULT_ADMIN` (`1` enables legacy container-start bootstrap; production keeps
   this at `0`)
 - `DJANGO_SUPERUSER_EMAIL`
 - `DJANGO_SUPERUSER_PASSWORD`
 - `USE_SES_EMAIL_PROVIDER` (`1` in deployed environments; local/test email backends bypass SES)
 - `PRINT_EMAILS_TO_TERMINAL` (`1` prints every outgoing email to the server terminal instead of
-  delivering it; useful for local development and E2E debugging)
+  delivering it; local development only, rejected by production settings and forced off in E2E)
 - `REQUIRE_ENCRYPTED_PASSWORDS` (`1` by default in production; password-bearing API requests
   negotiate the active RSA public key and use RSA-OAEP/SHA-256)
 - `AUTH_TRUSTED_PROXY_COUNT` (number of trusted proxies used to resolve the client IP; production
@@ -210,6 +224,11 @@ branch protection always receives the same required check.
 - `SENTRY_ENVIRONMENT`
 - `SENTRY_RELEASE` (use an immutable image digest or Git revision)
 - `SENTRY_TRACES_SAMPLE_RATE` (default: `0.05`, range `0` through `1`)
+- `EMAIL_WORKER_BATCH_SIZE`, `EMAIL_WORKER_CONCURRENCY`, `EMAIL_WORKER_RATE_PER_SECOND`, and
+  `EMAIL_WORKER_POLL_SECONDS` (defaults: `100`, `10`, `10`, and `1`)
+- `RESULT_WORKER_BATCH_SIZE`, `RESULT_WORKER_POLL_SECONDS`,
+  `RESULT_SNAPSHOT_LOCK_TIMEOUT_SECONDS`, and `RESULT_FAILURE_RETRY_DELAY_SECONDS` (defaults:
+  `100`, `1`, `60`, and `30`)
 
 ### Frontend
 
@@ -277,8 +296,14 @@ images, and creates one SHA-identified static ZIP from `src/web/out`. The workfl
 deploys that exact ZIP to an Amplify `candidate` branch, verifies the frontend plus the direct
 `https://api.releviz.com` CORS/auth/admin boundary, promotes the same ZIP to Amplify `main`, and
 only then associates `releviz.com`. The reviewed infrastructure plan preserves the public TLS ALB
-and private ECS boundary and keeps the backend on a fixed one-hop ALB trust model. The Amplify app
-is not connected to GitHub and does not use a PAT or an auto-build webhook.
+and private ECS boundary and keeps the backend on a fixed one-hop ALB trust model. Separate private
+result and email ECS services use the same immutable backend release, database-aware health checks,
+graceful 120-second shutdown, circuit-breaker rollback, retained logs, and fail-closed running-task
+alarms; permanent and uncertain email outcomes also page from the email-worker log stream. Each
+worker completes the same advisory-locked migrations before its watch command, without running
+web-only static or administrator startup tasks. CD waits for both workers and verifies their selected
+task definitions and exact watch commands on every backend image release. The Amplify app is not
+connected to GitHub and does not use a PAT or an auto-build webhook.
 
 The static build must match `src/web/amplify-routes.json`. Candidate smoke tests exercise
 clean and trailing-slash routes, deployed JavaScript, query-preserving redirects, credentialed

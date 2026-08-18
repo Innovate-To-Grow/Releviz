@@ -9,6 +9,7 @@ from django.test import RequestFactory, TestCase, override_settings
 from unfold.enums import ActionVariant
 
 from apps.core.models import AWSCredentialConfig
+from apps.core.services.aws.provider_outcomes import NO_PROVIDER_RETRIES
 from apps.mail.admin import (
     EmailProviderConfigAdmin,
     EmailProviderConfigForm,
@@ -24,6 +25,7 @@ from apps.mail.services import (
     frontend_url,
     send_email_message,
 )
+from apps.mail.terminal_output import print_email_to_terminal
 
 
 class MessagingTests(TestCase):
@@ -212,6 +214,21 @@ class MessagingTests(TestCase):
         self.assertEqual(log.status, EmailMessageLog.Status.SENT)
         self.assertEqual(log.provider_message_id, "terminal")
 
+    def test_terminal_output_supports_reply_to_without_message_bodies(self):
+        with patch("apps.mail.terminal_output.print") as print_mock:
+            print_email_to_terminal(
+                subject="Metadata only",
+                from_email="sender@example.com",
+                recipients=["recipient@example.com"],
+                reply_to="reply@example.com",
+                message_id="message-123",
+            )
+
+        rendered = "\n".join(call.args[0] for call in print_mock.call_args_list)
+        self.assertIn("Reply-To: reply@example.com", rendered)
+        self.assertIn("Message-ID: message-123", rendered)
+        self.assertNotIn("HTML alternative:", rendered)
+
     def test_delivery_failures_are_logged(self):
         with patch("apps.mail.services.EmailMultiAlternatives.send", return_value=0):
             with self.assertRaisesMessage(EmailDeliveryError, "did not send"):
@@ -259,6 +276,7 @@ class MessagingTests(TestCase):
             ses_client = Mock()
             ses_client.send_raw_email.return_value = {"MessageId": "ses-123"}
             fake_boto3 = SimpleNamespace(client=Mock(return_value=ses_client))
+            before_provider_call = Mock()
             with patch.dict(sys.modules, {"boto3": fake_boto3}):
                 with patch(
                     "apps.core.services.aws.credentials.resolve_aws_credentials",
@@ -270,18 +288,40 @@ class MessagingTests(TestCase):
                         recipients=["ses@example.com"],
                         message_type=EmailMessageLog.MessageType.TEST,
                         provider_config=config,
+                        before_provider_call=before_provider_call,
                     )
         self.assertEqual(message_id, "ses-123")
+        before_provider_call.assert_called_once_with()
         fake_boto3.client.assert_called_once_with(
             "ses",
             region_name="us-east-2",
             aws_access_key_id="AKIASES",
             aws_secret_access_key="secret",
+            config=NO_PROVIDER_RETRIES,
         )
         self.assertEqual(
             EmailMessageLog.objects.get(recipient="ses@example.com").provider_message_id,
             "ses-123",
         )
+
+        ses_client.send_raw_email.side_effect = TimeoutError("SES response lost")
+        with override_settings(USE_SES_EMAIL_PROVIDER=True):
+            with (
+                patch.dict(sys.modules, {"boto3": fake_boto3}),
+                patch(
+                    "apps.core.services.aws.credentials.resolve_aws_credentials",
+                    return_value=mock_creds,
+                ),
+                self.assertRaises(EmailDeliveryError) as raised,
+            ):
+                send_email_message(
+                    subject="Uncertain SES",
+                    body="Body",
+                    recipients=["uncertain-ses@example.com"],
+                    message_type=EmailMessageLog.MessageType.TEST,
+                    provider_config=config,
+                )
+        self.assertEqual(raised.exception.outcome, "uncertain")
 
         # Test credential error when resolve_aws_credentials raises
         from apps.core.services.aws.credentials import AwsCredentialsError

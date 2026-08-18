@@ -16,7 +16,7 @@ env:
   PYTHON_VERSION: "3.14"
   NODE_VERSION: "24"
   TERRAFORM_VERSION: "1.15.8"
-  COVERAGE_VERSION: "7.15.2"
+  UV_VERSION: "0.9.26"
   BACKEND_COVERAGE_FAIL_UNDER: "100"
   APP_COVERAGE_FAIL_UNDER: "95"
   PIP_AUDIT_VERSION: "2.10.1"
@@ -53,7 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          pip install "pre-commit==4.0.1" "PyYAML==6.0.2"
+          pip install "pre-commit==4.0.1" "PyYAML==6.0.2" "uv==${UV_VERSION}"
           curl -sSL -o /tmp/actionlint.tar.gz \
             "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
           echo "${ACTIONLINT_SHA256}  /tmp/actionlint.tar.gz" | sha256sum --check --strict -
@@ -61,7 +61,9 @@ jobs:
           sudo mv /tmp/actionlint /usr/local/bin/actionlint
 
       - name: Validate workflow syntax
-        run: actionlint
+        run: |
+          actionlint
+          actionlint .github/workflows/deploy-prod.yml.disabled
 
       - name: Validate YAML, TOML, and JSON
         run: |
@@ -71,6 +73,9 @@ jobs:
 
       - name: Validate tool version pins
         run: python scripts/ci/validate_tool_versions.py
+
+      - name: Validate backend dependency locks
+        run: bash scripts/compile-api-requirements.sh --check
 
       - name: Validate deployment contract
         run: python scripts/ci/validate_deployment_contract.py
@@ -167,7 +172,7 @@ jobs:
           cache-dependency-path: src/api/requirements/local.txt
 
       - name: Install backend dependencies
-        run: python -m pip install -r src/api/requirements/local.txt
+        run: python -m pip install --require-hashes -r src/api/requirements/local.txt
 
       - name: Check Python formatting
         run: ruff format --check src/api scripts/ci
@@ -196,7 +201,7 @@ jobs:
           cache-dependency-path: src/api/requirements/local.txt
 
       - name: Install backend dependencies
-        run: python -m pip install -r requirements/local.txt "coverage[toml]==${COVERAGE_VERSION}"
+        run: python -m pip install --require-hashes -r requirements/local.txt
 
       - name: Run complete Django suite with strict coverage
         run: |
@@ -285,7 +290,7 @@ jobs:
           cache-dependency-path: src/api/requirements/local.txt
 
       - name: Install backend dependencies
-        run: python -m pip install -r requirements/local.txt
+        run: python -m pip install --require-hashes -r requirements/local.txt
 
       - name: Check migration files are current
         run: python manage.py makemigrations --check --dry-run --settings=config.settings.test_postgres
@@ -333,7 +338,7 @@ jobs:
           cache-dependency-path: src/api/requirements/local.txt
 
       - name: Install backend dependencies
-        run: python -m pip install -r requirements/local.txt
+        run: python -m pip install --require-hashes -r requirements/local.txt
 
       - name: Import production settings
         run: DJANGO_SETTINGS_MODULE=config.settings.production python -c "import django; django.setup()"
@@ -437,7 +442,7 @@ jobs:
           cache-dependency-path: src/api/requirements/local.txt
 
       - name: Install backend dependencies
-        run: python -m pip install -r requirements/local.txt "coverage[toml]==${COVERAGE_VERSION}"
+        run: python -m pip install --require-hashes -r requirements/local.txt
 
       - name: Run app tests against PostgreSQL
         env:
@@ -606,6 +611,7 @@ jobs:
       - name: Build frontend for CI and E2E
         run: npm --workspace=releviz-web run build
         env:
+          NEXT_E2E_SERVER: "1"
           NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:4100
 
       - name: Upload frontend build
@@ -889,6 +895,7 @@ jobs:
           if [ "$RUN_BACKEND" = "true" ]; then targets+=(src/api); fi
           if [ "$RUN_FRONTEND" = "true" ]; then targets+=(src/web); fi
           semgrep scan \
+            --error \
             --config p/default \
             --config p/python \
             --config p/javascript \
@@ -1337,6 +1344,7 @@ jobs:
       FRONTEND_URL: http://127.0.0.1:3100
       EMAIL_FILE_PATH: /tmp/releviz-e2e-mail
       DJANGO_SUPERUSER_EMAIL: admin@releviz.local
+      NEXT_E2E_SERVER: "1"
       PW_PROJECT: ${{ matrix.project }}
     steps:
       - name: Checkout code
@@ -1357,7 +1365,7 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Install backend dependencies
-        run: python -m pip install -r src/api/requirements/local.txt
+        run: python -m pip install --require-hashes -r src/api/requirements/local.txt
 
       - name: Install frontend dependencies
         run: npm ci --workspace=releviz-web

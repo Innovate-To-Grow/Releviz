@@ -14,6 +14,7 @@ CSRF_TRUSTED_ORIGINS = CORS_ALLOWED_ORIGINS
 
 EMAIL_FILE_PATH = os.environ.get("EMAIL_FILE_PATH", str(Path("/tmp") / "releviz-e2e-mail"))
 EMAIL_BACKEND = "django.core.mail.backends.filebased.EmailBackend"
+PRINT_EMAILS_TO_TERMINAL = False
 # No SES credentials exist in E2E, so verification codes must reach the file sink
 # the browser tests read.
 AUTH_EMAIL_DJANGO_BACKEND_FALLBACK = True

@@ -18,6 +18,13 @@ from django.db.models import Q
 from django.utils import timezone
 
 from apps.core.services.aws.crypto import decrypt_secret, encrypt_secret
+from apps.core.services.aws.provider_outcomes import (
+    NO_PROVIDER_RETRIES,
+    PROVIDER_OUTCOME_PERMANENT,
+    PROVIDER_OUTCOME_TRANSIENT,
+    PROVIDER_OUTCOME_UNCERTAIN,
+    classify_aws_send_failure,
+)
 from apps.mail.email_templates import render_branded_email
 from apps.mail.models import EmailDeliveryJob, EmailMessageLog, EmailProviderConfig
 from apps.mail.terminal_output import print_email_to_terminal
@@ -26,7 +33,9 @@ logger = logging.getLogger(__name__)
 
 
 class EmailDeliveryError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, outcome: str = ""):
+        super().__init__(message)
+        self.outcome = outcome
 
 
 @dataclass(frozen=True)
@@ -78,7 +87,7 @@ def _message(
     return message
 
 
-def _send_with_ses(message: EmailMultiAlternatives) -> str:
+def _send_with_ses(message: EmailMultiAlternatives, *, before_provider_call=None) -> str:
     from apps.core.services.aws.credentials import (
         AwsCredentialsError,
         resolve_aws_credentials,
@@ -101,12 +110,20 @@ def _send_with_ses(message: EmailMultiAlternatives) -> str:
         region_name=creds.region,
         aws_access_key_id=creds.access_key_id,
         aws_secret_access_key=creds.secret_access_key,
+        config=NO_PROVIDER_RETRIES,
     )
-    response = client.send_raw_email(
-        Source=message.from_email,
-        Destinations=list(message.to),
-        RawMessage={"Data": message.message().as_bytes()},
-    )
+    raw_message = message.message().as_bytes()
+    if before_provider_call is not None:
+        before_provider_call()
+    try:
+        response = client.send_raw_email(
+            Source=message.from_email,
+            Destinations=list(message.to),
+            RawMessage={"Data": raw_message},
+        )
+    except Exception as exc:  # noqa: BLE001 - classify the provider outcome centrally
+        outcome, error = classify_aws_send_failure(exc, provider="SES")
+        raise EmailDeliveryError(error, outcome=outcome) from exc
     return response.get("MessageId", "")
 
 
@@ -166,6 +183,7 @@ def send_email_message(
     provider_config: EmailProviderConfig | None = None,
     message_id: str = "",
     delivery_job=None,
+    before_provider_call=None,
 ) -> str:
     clean_recipients = [recipient.strip().lower() for recipient in recipients if recipient.strip()]
     if not clean_recipients:
@@ -199,11 +217,7 @@ def send_email_message(
     try:
         if getattr(settings, "PRINT_EMAILS_TO_TERMINAL", False):
             html_alternative = next(
-                (
-                    content
-                    for content, mimetype in message.alternatives
-                    if mimetype == "text/html"
-                ),
+                (content for content, mimetype in message.alternatives if mimetype == "text/html"),
                 "",
             )
             print_email_to_terminal(
@@ -221,8 +235,13 @@ def send_email_message(
         elif getattr(settings, "USE_SES_EMAIL_PROVIDER", False):
             if config is None:
                 raise EmailDeliveryError("No active AWS SES email provider is configured.")
-            provider_message_id = _send_with_ses(message)
+            provider_message_id = _send_with_ses(
+                message,
+                before_provider_call=before_provider_call,
+            )
         else:
+            if before_provider_call is not None:
+                before_provider_call()
             sent_count = message.send(fail_silently=False)
             if sent_count == 0:
                 raise EmailDeliveryError("Django email backend did not send the message.")
@@ -381,8 +400,36 @@ def _claim_email_job(job_id, *, now) -> tuple[EmailDeliveryJob | None, uuid.UUID
         if job is None or job.status in {
             EmailDeliveryJob.Status.SENT,
             EmailDeliveryJob.Status.PERMANENT_FAILURE,
+            EmailDeliveryJob.Status.UNCERTAIN,
             EmailDeliveryJob.Status.CANCELED,
         }:
+            return job, None
+        is_stale_processing = job.status == EmailDeliveryJob.Status.PROCESSING and (
+            job.locked_at is None or job.locked_at <= stale_before
+        )
+        if is_stale_processing and job.provider_call_started_at is not None:
+            job.status = EmailDeliveryJob.Status.UNCERTAIN
+            job.last_error = (
+                "Worker stopped after the provider call began; delivery outcome is "
+                "uncertain. Review before manually retrying."
+            )
+            job.reset_lock()
+            job.save(
+                update_fields=[
+                    "status",
+                    "last_error",
+                    "locked_at",
+                    "lock_token",
+                    "updated_at",
+                ]
+            )
+            logger.error(
+                "email_delivery_outcome_uncertain",
+                extra={
+                    "delivery_job_id": str(job.pk),
+                    "status": EmailDeliveryJob.Status.UNCERTAIN,
+                },
+            )
             return job, None
         if job.event_id is not None and job.message_type in {
             EmailMessageLog.MessageType.INVITATION,
@@ -462,10 +509,7 @@ def _claim_email_job(job_id, *, now) -> tuple[EmailDeliveryJob | None, uuid.UUID
             job.status in {EmailDeliveryJob.Status.PENDING, EmailDeliveryJob.Status.RETRY}
             and job.next_attempt_at <= now
         )
-        is_stale = job.status == EmailDeliveryJob.Status.PROCESSING and (
-            job.locked_at is None or job.locked_at <= stale_before
-        )
-        if not is_due and not is_stale:
+        if not is_due and not is_stale_processing:
             return job, None
         if job.attempt_count >= job.max_attempts:
             job.status = EmailDeliveryJob.Status.PERMANENT_FAILURE
@@ -480,22 +524,51 @@ def _claim_email_job(job_id, *, now) -> tuple[EmailDeliveryJob | None, uuid.UUID
                     "updated_at",
                 ]
             )
+            logger.error(
+                "email_delivery_failed",
+                extra={
+                    "delivery_job_id": str(job.pk),
+                    "event_id": str(job.event_id) if job.event_id else None,
+                    "member_id": str(job.member_id) if job.member_id else None,
+                    "message_type": job.message_type,
+                    "attempt": job.attempt_count,
+                    "status": EmailDeliveryJob.Status.PERMANENT_FAILURE,
+                },
+            )
             return job, None
         token = job.new_lock_token()
         job.status = EmailDeliveryJob.Status.PROCESSING
         job.attempt_count += 1
         job.locked_at = now
         job.lock_token = token
+        job.provider_call_started_at = None
         job.save(
             update_fields=[
                 "status",
                 "attempt_count",
                 "locked_at",
                 "lock_token",
+                "provider_call_started_at",
                 "updated_at",
             ]
         )
         return job, token
+
+
+def _begin_email_provider_call(job_id, *, token, now) -> None:
+    """Persist the no-auto-retry boundary immediately before provider I/O."""
+
+    updated = EmailDeliveryJob.objects.filter(
+        pk=job_id,
+        status=EmailDeliveryJob.Status.PROCESSING,
+        lock_token=token,
+        provider_call_started_at__isnull=True,
+    ).update(provider_call_started_at=now, updated_at=now)
+    if updated != 1:
+        raise EmailDeliveryError(
+            "Email delivery claim was lost before provider invocation.",
+            outcome=PROVIDER_OUTCOME_UNCERTAIN,
+        )
 
 
 def dispatch_email_job(job_id, *, now=None) -> dict:
@@ -519,6 +592,11 @@ def dispatch_email_job(job_id, *, now=None) -> dict:
             invitation=job.invitation,
             message_id=job.message_id,
             delivery_job=job,
+            before_provider_call=lambda: _begin_email_provider_call(
+                job.pk,
+                token=token,
+                now=now or timezone.now(),
+            ),
         )
     except Exception as exc:  # noqa: BLE001 - isolate every durable job attempt
         completion_time = now or timezone.now()
@@ -528,13 +606,20 @@ def dispatch_email_job(job_id, *, now=None) -> dict:
                 return {"attempted": True, "status": claimed.status}
             claimed.last_error = str(exc)
             claimed.reset_lock()
-            if claimed.attempt_count >= claimed.max_attempts:
+            outcome = getattr(exc, "outcome", "")
+            provider_call_started = claimed.provider_call_started_at is not None
+            if outcome == PROVIDER_OUTCOME_PERMANENT:
+                claimed.status = EmailDeliveryJob.Status.PERMANENT_FAILURE
+            elif provider_call_started and outcome not in {PROVIDER_OUTCOME_TRANSIENT}:
+                claimed.status = EmailDeliveryJob.Status.UNCERTAIN
+            elif claimed.attempt_count >= claimed.max_attempts:
                 claimed.status = EmailDeliveryJob.Status.PERMANENT_FAILURE
             else:
                 claimed.status = EmailDeliveryJob.Status.RETRY
                 claimed.next_attempt_at = completion_time + timedelta(
                     minutes=2 ** (claimed.attempt_count - 1)
                 )
+                claimed.provider_call_started_at = None
             claimed.save(
                 update_fields=[
                     "status",
@@ -542,14 +627,22 @@ def dispatch_email_job(job_id, *, now=None) -> dict:
                     "last_error",
                     "locked_at",
                     "lock_token",
+                    "provider_call_started_at",
                     "updated_at",
                 ]
             )
         log_failure = logger.warning if isinstance(exc, EmailDeliveryError) else logger.exception
+        event_name = (
+            "email_delivery_outcome_uncertain"
+            if claimed.status == EmailDeliveryJob.Status.UNCERTAIN
+            else (
+                "email_delivery_failed"
+                if isinstance(exc, EmailDeliveryError)
+                else "email_delivery_unexpected_failure"
+            )
+        )
         log_failure(
-            "email_delivery_failed"
-            if isinstance(exc, EmailDeliveryError)
-            else "email_delivery_unexpected_failure",
+            event_name,
             extra={
                 "delivery_job_id": str(job.pk),
                 "event_id": str(job.event_id) if job.event_id else None,
@@ -639,8 +732,46 @@ def email_delivery_summary(jobs) -> dict:
         "retry": statuses[EmailDeliveryJob.Status.RETRY],
         "sent": statuses[EmailDeliveryJob.Status.SENT],
         "permanentFailure": statuses[EmailDeliveryJob.Status.PERMANENT_FAILURE],
+        "uncertain": statuses[EmailDeliveryJob.Status.UNCERTAIN],
         "canceled": statuses[EmailDeliveryJob.Status.CANCELED],
     }
+
+
+@transaction.atomic
+def retry_uncertain_email_job(job_id, *, now=None) -> bool:
+    """Explicitly grant one new attempt to a quarantined delivery."""
+
+    current_time = now or timezone.now()
+    job = (
+        EmailDeliveryJob.objects.select_for_update()
+        .filter(pk=job_id, status=EmailDeliveryJob.Status.UNCERTAIN)
+        .first()
+    )
+    if job is None:
+        return False
+    job.status = EmailDeliveryJob.Status.RETRY
+    job.max_attempts = max(job.max_attempts, job.attempt_count + 1)
+    job.next_attempt_at = current_time
+    job.provider_call_started_at = None
+    job.last_error = "Manually requeued after an uncertain provider outcome."
+    job.reset_lock()
+    job.save(
+        update_fields=[
+            "status",
+            "max_attempts",
+            "next_attempt_at",
+            "provider_call_started_at",
+            "last_error",
+            "locked_at",
+            "lock_token",
+            "updated_at",
+        ]
+    )
+    logger.warning(
+        "email_delivery_uncertain_manually_requeued",
+        extra={"delivery_job_id": str(job.pk)},
+    )
+    return True
 
 
 class _DispatchRateLimiter:
@@ -730,6 +861,7 @@ def dispatch_due_email_jobs(
         "sent": 0,
         "retry": 0,
         "permanentFailure": 0,
+        "uncertain": 0,
         "canceled": 0,
     }
     limiter = _DispatchRateLimiter(rate_limit_per_second)
@@ -759,6 +891,8 @@ def dispatch_due_email_jobs(
         for result in results:
             if result["status"] == EmailDeliveryJob.Status.CANCELED:
                 summary["canceled"] += 1
+            elif result["status"] == EmailDeliveryJob.Status.UNCERTAIN:
+                summary["uncertain"] += 1
             if not result["attempted"]:
                 continue
             summary["attempted"] += 1
