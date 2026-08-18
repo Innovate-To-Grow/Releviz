@@ -188,6 +188,30 @@ class MessagingTests(TestCase):
                 message_type=EmailMessageLog.MessageType.TEST,
             )
 
+    @override_settings(PRINT_EMAILS_TO_TERMINAL=True, USE_SES_EMAIL_PROVIDER=True)
+    def test_terminal_print_mode_prints_and_skips_delivery(self):
+        with patch("apps.mail.terminal_output.print") as print_mock:
+            provider_message_id = send_email_message(
+                subject="Hello terminal",
+                body="Plain body",
+                html_body="<p>Plain body</p>",
+                recipients=["dev@example.com"],
+                message_type=EmailMessageLog.MessageType.TEST,
+                attachments=[EmailAttachment("cal.ics", "BEGIN:VCALENDAR", "text/calendar")],
+            )
+
+        self.assertEqual(provider_message_id, "terminal")
+        self.assertEqual(len(mail.outbox), 0)
+        rendered = "\n".join(call.args[0] for call in print_mock.call_args_list)
+        self.assertIn("Hello terminal", rendered)
+        self.assertIn("dev@example.com", rendered)
+        self.assertIn("Plain body", rendered)
+        self.assertIn("<p>Plain body</p>", rendered)
+        self.assertIn("cal.ics", rendered)
+        log = EmailMessageLog.objects.get()
+        self.assertEqual(log.status, EmailMessageLog.Status.SENT)
+        self.assertEqual(log.provider_message_id, "terminal")
+
     def test_delivery_failures_are_logged(self):
         with patch("apps.mail.services.EmailMultiAlternatives.send", return_value=0):
             with self.assertRaisesMessage(EmailDeliveryError, "did not send"):

@@ -195,6 +195,8 @@ branch protection always receives the same required check.
 - `DJANGO_SUPERUSER_EMAIL`
 - `DJANGO_SUPERUSER_PASSWORD`
 - `USE_SES_EMAIL_PROVIDER` (`1` in deployed environments; local/test email backends bypass SES)
+- `PRINT_EMAILS_TO_TERMINAL` (`1` prints every outgoing email to the server terminal instead of
+  delivering it; useful for local development and E2E debugging)
 - `REQUIRE_ENCRYPTED_PASSWORDS` (`1` by default in production; password-bearing API requests
   negotiate the active RSA public key and use RSA-OAEP/SHA-256)
 - `AUTH_TRUSTED_PROXY_COUNT` (number of trusted proxies used to resolve the client IP; production

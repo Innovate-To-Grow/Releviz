@@ -20,6 +20,7 @@ from django.utils import timezone
 from apps.core.services.aws.crypto import decrypt_secret, encrypt_secret
 from apps.mail.email_templates import render_branded_email
 from apps.mail.models import EmailDeliveryJob, EmailMessageLog, EmailProviderConfig
+from apps.mail.terminal_output import print_email_to_terminal
 
 logger = logging.getLogger(__name__)
 
@@ -196,7 +197,28 @@ def send_email_message(
     )
 
     try:
-        if getattr(settings, "USE_SES_EMAIL_PROVIDER", False):
+        if getattr(settings, "PRINT_EMAILS_TO_TERMINAL", False):
+            html_alternative = next(
+                (
+                    content
+                    for content, mimetype in message.alternatives
+                    if mimetype == "text/html"
+                ),
+                "",
+            )
+            print_email_to_terminal(
+                subject=message.subject,
+                from_email=message.from_email,
+                recipients=list(message.to),
+                body=message.body,
+                html_body=html_alternative,
+                reply_to=", ".join(message.reply_to or []),
+                message_id=message.extra_headers.get("Message-ID", ""),
+                attachment_names=[attachment[0] for attachment in message.attachments],
+                message_type=message_type,
+            )
+            provider_message_id = "terminal"
+        elif getattr(settings, "USE_SES_EMAIL_PROVIDER", False):
             if config is None:
                 raise EmailDeliveryError("No active AWS SES email provider is configured.")
             provider_message_id = _send_with_ses(message)

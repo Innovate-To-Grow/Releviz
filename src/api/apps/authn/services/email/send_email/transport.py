@@ -11,6 +11,7 @@ from apps.core.services.aws.provider_outcomes import (
     ProviderDeliveryError,
     classify_aws_send_failure,
 )
+from apps.mail.terminal_output import print_email_to_terminal
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,15 @@ def _send_via_django_backend(*, recipient: str, subject: str, html_body: str) ->
     ``AUTH_EMAIL_DJANGO_BACKEND_FALLBACK`` so verification codes are still
     delivered somewhere observable instead of failing the request.
     """
+    if getattr(settings, "PRINT_EMAILS_TO_TERMINAL", False):
+        print_email_to_terminal(
+            subject=subject,
+            from_email=getattr(settings, "DEFAULT_FROM_EMAIL", "") or "",
+            recipients=[recipient],
+            body=strip_tags(html_body),
+            html_body=html_body,
+        )
+        return True
     if not getattr(settings, "AUTH_EMAIL_DJANGO_BACKEND_FALLBACK", False):
         return False
 
@@ -57,6 +67,15 @@ def _send_via_ses(
     before_provider_call=None,
     raise_provider_errors: bool = False,
 ) -> bool:
+    if getattr(settings, "PRINT_EMAILS_TO_TERMINAL", False):
+        print_email_to_terminal(
+            subject=subject,
+            from_email=source_address or getattr(settings, "DEFAULT_FROM_EMAIL", ""),
+            recipients=[recipient],
+            body=strip_tags(html_body),
+            html_body=html_body,
+        )
+        return True
     if source_address is None:
         source_address = _active_source_address()
     if not source_address:
