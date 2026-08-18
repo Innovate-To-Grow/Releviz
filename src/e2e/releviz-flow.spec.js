@@ -1283,6 +1283,24 @@ test.describe("Releviz account and scheduling flow", () => {
       participantPage.getByText(/Welcome, Pat Participant/),
     ).toBeVisible();
 
+    // Reset the grid so the following keyboard action makes a real change.
+    // The previous navigation check deliberately left every slot Available,
+    // which is also the editor's default paint value.
+    const resetToBusyResponse = participantPage.waitForResponse(
+      (response) =>
+        response.request().method() === "PUT" &&
+        updateRoutePattern.test(response.url()) &&
+        response.ok(),
+    );
+    await participantPage
+      .getByRole("button", { name: "Mark all Busy" })
+      .click();
+    await resetToBusyResponse;
+    await expect(cell(keyboardSlotIndex)).toHaveAttribute(
+      "aria-selected",
+      "false",
+    );
+
     let failNextAutosave = true;
     const failAutosaveOnce = async (route) => {
       if (failNextAutosave && route.request().method() === "PUT") {
@@ -1297,13 +1315,27 @@ test.describe("Releviz account and scheduling flow", () => {
       await route.continue();
     };
     await participantPage.route(updateRoutePattern, failAutosaveOnce);
+    const failedAutosaveResponse = participantPage.waitForResponse(
+      (response) =>
+        response.request().method() === "PUT" &&
+        updateRoutePattern.test(response.url()) &&
+        response.status() === 503,
+    );
     await cell(keyboardSlotIndex).focus();
     await participantPage.keyboard.press("Enter");
+    await failedAutosaveResponse;
     await expect(
       participantPage.getByText("Temporary autosave outage"),
     ).toBeVisible();
     expect(await beforeUnloadIsBlocked()).toBe(true);
+    const retriedAutosaveResponse = participantPage.waitForResponse(
+      (response) =>
+        response.request().method() === "PUT" &&
+        updateRoutePattern.test(response.url()) &&
+        response.ok(),
+    );
     await participantPage.getByRole("button", { name: "Retry save" }).click();
+    await retriedAutosaveResponse;
     await expect(savedStatus).toBeVisible();
     expect(await beforeUnloadIsBlocked()).toBe(false);
     await participantPage.unroute(updateRoutePattern, failAutosaveOnce);
