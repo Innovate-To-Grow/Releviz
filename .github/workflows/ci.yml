@@ -791,11 +791,21 @@ jobs:
       - name: Audit Python dependencies
         run: |
           set -o pipefail
-          python -m pip_audit \
-            --requirement src/api/requirements/production.txt \
-            --progress-spinner off \
-            --format columns \
-            | tee "$GITHUB_STEP_SUMMARY"
+          for attempt in 1 2 3; do
+            if python -m pip_audit \
+              --requirement src/api/requirements/production.txt \
+              --progress-spinner off \
+              --format columns \
+              | tee "$GITHUB_STEP_SUMMARY"; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::pip-audit failed after 3 attempts." >&2
+              exit 1
+            fi
+            echo "::warning::pip-audit attempt ${attempt} failed; retrying." >&2
+            sleep $((attempt * 5))
+          done
 
   semgrep-sast:
     name: Semgrep SAST

@@ -49,6 +49,13 @@ class FullCIWorkflowTests(TestCase):
         self.assertIn('playwright install-deps "$PW_PROJECT"', e2e)
         self.assertNotIn("install-deps chromium firefox webkit", e2e)
 
+    def test_python_security_audit_retries_but_still_fails_closed(self):
+        audit = self.job_block("python-security-audit")
+        self.assertIn("for attempt in 1 2 3", audit)
+        self.assertIn("python -m pip_audit", audit)
+        self.assertIn("pip-audit failed after 3 attempts", audit)
+        self.assertNotIn("|| true", audit)
+
     def test_every_step_has_an_action_or_command(self):
         step_blocks = re.split(r"(?m)^      - name: ", self.source)[1:]
         self.assertTrue(step_blocks)
