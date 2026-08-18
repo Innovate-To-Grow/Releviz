@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import AppButton from "@/components/ui/AppButton";
-import { BrandHomeLink } from "@/components/ui/BrandLogo";
+import AppHeader from "@/components/ui/AppHeader";
 import { confirmPasswordReset, requestPasswordResetCode } from "@/lib/api/auth";
 import { navigateTo } from "@/lib/navigation";
 
@@ -64,104 +64,102 @@ export default function RecoverAccountPage() {
   };
 
   return (
-    <main className="auth-page">
-      <form
-        className="auth-panel"
-        onSubmit={step === "request" ? requestCode : resetPassword}
-      >
-        <BrandHomeLink
-          className="auth-brand-link"
-          logoClassName="brand-logo brand-logo--auth"
-          priority
-        />
-        <div>
-          <h1>Recover your account</h1>
-          <p>
-            Request a one-time code, then choose a new password. Resetting your
-            password signs out every device.
-          </p>
-        </div>
-        {error && (
-          <div className="auth-error" role="alert">
-            {error}
-          </div>
-        )}
-        {status && (
-          <div className="auth-status" role="status" aria-live="polite">
-            {status}
-          </div>
-        )}
-        <label>
-          Email
-          <input
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            type="email"
-            autoComplete="email"
-            disabled={step === "reset"}
-            required
-          />
-        </label>
-        {step === "reset" && (
-          <>
-            <button
-              type="button"
-              className="auth-inline-link"
-              onClick={useDifferentEmail}
-            >
-              Use a different email
-            </button>
-            <label>
-              Reset code
-              <input
-                value={code}
-                onChange={(event) => setCode(event.target.value)}
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                required
-              />
-            </label>
-            <label>
-              New password
-              <input
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                type="password"
-                autoComplete="new-password"
-                minLength={8}
-                aria-describedby="recover-password-help"
-                required
-              />
-            </label>
-            <p id="recover-password-help" className="field-help">
-              Use at least 8 characters.
+    <>
+      <AppHeader />
+      <main className="auth-page auth-page-with-header">
+        <form
+          className="auth-panel"
+          onSubmit={step === "request" ? requestCode : resetPassword}
+        >
+          <div>
+            <h1>Recover your account</h1>
+            <p>
+              Request a one-time code, then choose a new password. Resetting
+              your password signs out every device.
             </p>
-            <label>
-              Confirm new password
-              <input
-                value={passwordConfirm}
-                onChange={(event) => setPasswordConfirm(event.target.value)}
-                type="password"
-                autoComplete="new-password"
-                minLength={8}
-                required
-              />
-            </label>
-          </>
-        )}
-        <AppButton type="submit" fullWidth disabled={loading}>
-          {loading
-            ? step === "request"
-              ? "Sending..."
-              : "Resetting..."
-            : step === "request"
-              ? "Send reset code"
-              : "Reset password"}
-        </AppButton>
-        <p className="auth-switch">
-          <Link href="/login">Back to login</Link>
-        </p>
-      </form>
-    </main>
+          </div>
+          {error && (
+            <div className="auth-error" role="alert">
+              {error}
+            </div>
+          )}
+          {status && (
+            <div className="auth-status" role="status" aria-live="polite">
+              {status}
+            </div>
+          )}
+          <label>
+            Email
+            <input
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              type="email"
+              autoComplete="email"
+              disabled={step === "reset"}
+              required
+            />
+          </label>
+          {step === "reset" && (
+            <>
+              <button
+                type="button"
+                className="auth-inline-link"
+                onClick={useDifferentEmail}
+              >
+                Use a different email
+              </button>
+              <label>
+                Reset code
+                <input
+                  value={code}
+                  onChange={(event) => setCode(event.target.value)}
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  required
+                />
+              </label>
+              <label>
+                New password
+                <input
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  type="password"
+                  autoComplete="new-password"
+                  minLength={8}
+                  aria-describedby="recover-password-help"
+                  required
+                />
+              </label>
+              <p id="recover-password-help" className="field-help">
+                Use at least 8 characters.
+              </p>
+              <label>
+                Confirm new password
+                <input
+                  value={passwordConfirm}
+                  onChange={(event) => setPasswordConfirm(event.target.value)}
+                  type="password"
+                  autoComplete="new-password"
+                  minLength={8}
+                  required
+                />
+              </label>
+            </>
+          )}
+          <AppButton type="submit" fullWidth disabled={loading}>
+            {loading
+              ? step === "request"
+                ? "Sending..."
+                : "Resetting..."
+              : step === "request"
+                ? "Send reset code"
+                : "Reset password"}
+          </AppButton>
+          <p className="auth-switch">
+            <Link href="/login">Back to login</Link>
+          </p>
+        </form>
+      </main>
+    </>
   );
 }

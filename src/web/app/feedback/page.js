@@ -1,6 +1,7 @@
 "use client";
 
 import { Suspense, useState } from "react";
+import AppHeader from "@/components/ui/AppHeader";
 import { useSearchParams } from "next/navigation";
 import AppButton from "@/components/ui/AppButton";
 import { submitFeedback } from "@/lib/api/feedback";
@@ -120,16 +121,19 @@ export function FeedbackForm() {
 
 export default function FeedbackPage() {
   return (
-    <Suspense
-      fallback={
-        <main className="page-pad legal-shell">
-          <div className="md-card feedback-panel">
-            <p role="status">Loading feedback form…</p>
-          </div>
-        </main>
-      }
-    >
-      <FeedbackForm />
-    </Suspense>
+    <>
+      <AppHeader />
+      <Suspense
+        fallback={
+          <main className="page-pad legal-shell">
+            <div className="md-card feedback-panel">
+              <p role="status">Loading feedback form…</p>
+            </div>
+          </main>
+        }
+      >
+        <FeedbackForm />
+      </Suspense>
+    </>
   );
 }

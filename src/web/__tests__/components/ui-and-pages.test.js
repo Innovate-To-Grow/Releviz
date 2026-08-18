@@ -658,6 +658,7 @@ describe("app pages", () => {
     jest.clearAllMocks();
     searchParams = new URLSearchParams();
     delete process.env.AMPLIFY_STATIC_EXPORT;
+    useAuth.mockReturnValue({ user: null, loading: false, logout: jest.fn() });
   });
 
   test("wrapper pages render expected clients and redirects", () => {
