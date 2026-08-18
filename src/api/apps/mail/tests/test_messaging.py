@@ -25,6 +25,7 @@ from apps.mail.services import (
     frontend_url,
     send_email_message,
 )
+from apps.mail.terminal_output import print_email_to_terminal
 
 
 class MessagingTests(TestCase):
@@ -188,6 +189,45 @@ class MessagingTests(TestCase):
                 recipients=[" "],
                 message_type=EmailMessageLog.MessageType.TEST,
             )
+
+    @override_settings(PRINT_EMAILS_TO_TERMINAL=True, USE_SES_EMAIL_PROVIDER=True)
+    def test_terminal_print_mode_prints_and_skips_delivery(self):
+        with patch("apps.mail.terminal_output.print") as print_mock:
+            provider_message_id = send_email_message(
+                subject="Hello terminal",
+                body="Plain body",
+                html_body="<p>Plain body</p>",
+                recipients=["dev@example.com"],
+                message_type=EmailMessageLog.MessageType.TEST,
+                attachments=[EmailAttachment("cal.ics", "BEGIN:VCALENDAR", "text/calendar")],
+            )
+
+        self.assertEqual(provider_message_id, "terminal")
+        self.assertEqual(len(mail.outbox), 0)
+        rendered = "\n".join(call.args[0] for call in print_mock.call_args_list)
+        self.assertIn("Hello terminal", rendered)
+        self.assertIn("dev@example.com", rendered)
+        self.assertIn("Plain body", rendered)
+        self.assertIn("<p>Plain body</p>", rendered)
+        self.assertIn("cal.ics", rendered)
+        log = EmailMessageLog.objects.get()
+        self.assertEqual(log.status, EmailMessageLog.Status.SENT)
+        self.assertEqual(log.provider_message_id, "terminal")
+
+    def test_terminal_output_supports_reply_to_without_message_bodies(self):
+        with patch("apps.mail.terminal_output.print") as print_mock:
+            print_email_to_terminal(
+                subject="Metadata only",
+                from_email="sender@example.com",
+                recipients=["recipient@example.com"],
+                reply_to="reply@example.com",
+                message_id="message-123",
+            )
+
+        rendered = "\n".join(call.args[0] for call in print_mock.call_args_list)
+        self.assertIn("Reply-To: reply@example.com", rendered)
+        self.assertIn("Message-ID: message-123", rendered)
+        self.assertNotIn("HTML alternative:", rendered)
 
     def test_delivery_failures_are_logged(self):
         with patch("apps.mail.services.EmailMultiAlternatives.send", return_value=0):

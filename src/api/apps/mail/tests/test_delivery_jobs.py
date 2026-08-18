@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from django.core import mail
 from django.core.management import CommandError, call_command
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from apps.authn.models import EmailAuthChallenge
@@ -234,6 +234,36 @@ class EmailDeliveryJobTests(TestCase):
         invitation.refresh_from_db()
         self.assertIsNone(invitation.last_sent_at)
         self.assertIsNone(invitation.reminder_sent_at)
+
+    @override_settings(PRINT_EMAILS_TO_TERMINAL=True)
+    def test_terminal_dispatch_skips_provider_boundary_and_print_failure_retries(self):
+        sent_job, _created = self.enqueue(recipient="terminal-success@example.com")
+        with patch("apps.mail.terminal_output.print") as print_mock:
+            result = dispatch_email_job(sent_job.pk)
+
+        self.assertEqual(result, {"attempted": True, "status": EmailDeliveryJob.Status.SENT})
+        print_mock.assert_called_once()
+        sent_job.refresh_from_db()
+        self.assertIsNone(sent_job.provider_call_started_at)
+        self.assertEqual(
+            EmailMessageLog.objects.get(delivery_job=sent_job).provider_message_id,
+            "terminal",
+        )
+
+        failed_job, _created = self.enqueue(
+            recipient="terminal-failure@example.com",
+            max_attempts=2,
+        )
+        with patch(
+            "apps.mail.terminal_output.print",
+            side_effect=OSError("terminal unavailable"),
+        ):
+            failed = dispatch_email_job(failed_job.pk)
+
+        self.assertEqual(failed["status"], EmailDeliveryJob.Status.RETRY)
+        failed_job.refresh_from_db()
+        self.assertIsNone(failed_job.provider_call_started_at)
+        self.assertEqual(failed_job.last_error, "terminal unavailable")
 
     def test_not_due_and_fresh_processing_jobs_are_not_claimed(self):
         job, _ = self.enqueue()

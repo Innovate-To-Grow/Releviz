@@ -18,6 +18,7 @@ export DB_USER="${DB_USER:-releviz}"
 export DB_PASSWORD="${DB_PASSWORD:-releviz}"
 export DB_TEST_NAME="${DB_TEST_NAME:-releviz_test}"
 export DJANGO_SETTINGS_MODULE=config.settings.e2e
+export PRINT_EMAILS_TO_TERMINAL=0
 export BACKEND_URL="${BACKEND_URL:-http://127.0.0.1:4100}"
 export FRONTEND_URL="${FRONTEND_URL:-http://127.0.0.1:3100}"
 export NEXT_PUBLIC_API_BASE_URL="${NEXT_PUBLIC_API_BASE_URL:-${BACKEND_URL}}"

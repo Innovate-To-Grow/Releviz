@@ -24,6 +24,7 @@ const backendEnv = {
   DB_TEST_NAME: process.env.DB_TEST_NAME || "releviz_test",
   DJANGO_SETTINGS_MODULE: "config.settings.e2e",
   EMAIL_FILE_PATH: process.env.EMAIL_FILE_PATH || "/tmp/releviz-e2e-mail",
+  PRINT_EMAILS_TO_TERMINAL: "0",
   FRONTEND_URL: frontendUrl,
   BACKEND_URL: backendUrl,
   DJANGO_SUPERUSER_EMAIL:

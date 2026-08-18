@@ -235,6 +235,10 @@ USE_SES_EMAIL_PROVIDER = False
 # Authentication emails send via SES. Environments without SES credentials set
 # this to fall back to EMAIL_BACKEND so verification codes remain observable.
 AUTH_EMAIL_DJANGO_BACKEND_FALLBACK = False
+# When enabled, every outgoing email is printed to the server terminal instead
+# of being delivered through SES or EMAIL_BACKEND. Intended for local
+# development only; production rejects this setting and E2E forces it off.
+PRINT_EMAILS_TO_TERMINAL = os.environ.get("PRINT_EMAILS_TO_TERMINAL", "0") != "0"
 DEFAULT_FROM_EMAIL = "noreply@releviz.local"
 METRICS_BEARER_TOKEN = os.environ.get("METRICS_BEARER_TOKEN", "").strip()
 FEEDBACK_SUBMISSION_RETENTION = timedelta(days=730)

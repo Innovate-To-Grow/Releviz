@@ -172,6 +172,7 @@ test.describe("repository resource audit", () => {
     expect(config).toContain("wait: { stdout: /Event results:/ }");
     expect(config).toContain("wait: { stdout: /Email jobs:/ }");
     expect(config).toContain('PYTHONUNBUFFERED: "1"');
+    expect(config).toContain('PRINT_EMAILS_TO_TERMINAL: "0"');
     expect(config).toContain('NEXT_E2E_SERVER: "1"');
     const runner = fs.readFileSync(
       path.join(ROOT, "scripts/run-e2e.sh"),
@@ -179,6 +180,7 @@ test.describe("repository resource audit", () => {
     );
     expect(runner).toContain('export PYTHON_BIN="$python_bin"');
     expect(runner).toContain("export NEXT_E2E_SERVER=1");
+    expect(runner).toContain("export PRINT_EMAILS_TO_TERMINAL=0");
   });
 
   test("API workspace scripts use the relocatable virtualenv interpreter", async () => {

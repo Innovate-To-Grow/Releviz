@@ -30,6 +30,23 @@ class SendViaSesTests(TestCase):
         )
         self.assertFalse(result)
 
+    @override_settings(PRINT_EMAILS_TO_TERMINAL=True)
+    def test_terminal_print_mode_prints_and_skips_ses(self):
+        with patch("apps.mail.terminal_output.print") as print_mock:
+            result = _send_via_ses(
+                source_address="Test <test@example.com>",
+                recipient="a@b.com",
+                subject="Hi",
+                html_body="<p>Code 123456</p>",
+            )
+
+        self.assertTrue(result)
+        rendered = "\n".join(call.args[0] for call in print_mock.call_args_list)
+        self.assertIn("Hi", rendered)
+        self.assertIn("a@b.com", rendered)
+        self.assertIn("Test <test@example.com>", rendered)
+        self.assertIn("Code 123456", rendered)
+
     @patch("apps.authn.services.email.send_email.transport.resolve_aws_credentials")
     @patch("apps.authn.services.email.send_email.boto3")
     def test_returns_true_on_success(self, mock_boto3, mock_resolve):
@@ -312,6 +329,29 @@ class DjangoBackendFallbackTests(TestCase):
         self.assertFalse(
             _send_via_django_backend(recipient="a@b.com", subject="Hi", html_body="<p>Hi</p>")
         )
+
+    @override_settings(PRINT_EMAILS_TO_TERMINAL=True)
+    def test_terminal_print_mode_bypasses_backend_without_fallback_flag(self):
+        with patch("apps.mail.terminal_output.print") as print_mock:
+            sent = _send_via_django_backend(
+                recipient="a@b.com", subject="Your code", html_body="<p>Code 123456</p>"
+            )
+
+        self.assertTrue(sent)
+        self.assertEqual(len(mail.outbox), 0)
+        rendered = "\n".join(call.args[0] for call in print_mock.call_args_list)
+        self.assertIn("Your code", rendered)
+        self.assertIn("a@b.com", rendered)
+        self.assertIn("Code 123456", rendered)
+
+    @override_settings(PRINT_EMAILS_TO_TERMINAL=True)
+    @patch("apps.mail.terminal_output.print")
+    def test_verification_email_prints_to_terminal(self, print_mock):
+        send_verification_email(recipient="a@b.com", code="123456", purpose="login")
+
+        rendered = "\n".join(call.args[0] for call in print_mock.call_args_list)
+        self.assertIn("123456", rendered)
+        self.assertEqual(len(mail.outbox), 0)
 
     @override_settings(AUTH_EMAIL_DJANGO_BACKEND_FALLBACK=True)
     def test_sends_html_and_plain_text_alternatives(self):
