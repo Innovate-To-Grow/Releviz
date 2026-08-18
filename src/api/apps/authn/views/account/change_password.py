@@ -43,9 +43,11 @@ class ChangePasswordView(APIView):
         # replacement token pair is issued.
         revoked = revoke_all_refresh_sessions(request.user)
         logger.info(
-            "Revoked %s refresh session(s) after a password change for member %s",
-            revoked,
-            request.user.pk,
+            "member_sessions_revoked_after_account_security_change",
+            extra={
+                "member_id": str(request.user.pk),
+                "revoked_session_count": revoked,
+            },
         )
 
         return Response(

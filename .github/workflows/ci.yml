@@ -1290,15 +1290,15 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}-cfw
+          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}-${{ matrix.project }}-cfw
 
       - name: Install Playwright browsers on cache miss
         if: ${{ steps.playwright-cache.outputs.cache-hit != 'true' }}
-        run: npx playwright install --with-deps chromium firefox webkit
+        run: npx playwright install --with-deps "$PW_PROJECT"
 
       - name: Install Playwright system dependencies on cache hit
         if: ${{ steps.playwright-cache.outputs.cache-hit == 'true' }}
-        run: npx playwright install-deps chromium firefox webkit
+        run: npx playwright install-deps "$PW_PROJECT"
 
       - name: Generate ephemeral E2E administrator password
         run: |

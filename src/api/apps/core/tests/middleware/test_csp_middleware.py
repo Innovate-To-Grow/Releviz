@@ -350,6 +350,17 @@ class CSPReportEndpointTests(TestCase):
         response = client.get("/csp-report/")
         self.assertEqual(response.status_code, 405)
 
+    def test_browser_report_does_not_require_a_csrf_cookie(self):
+        client = Client(enforce_csrf_checks=True)
+
+        response = client.post(
+            "/csp-report/",
+            data=json.dumps({"csp-report": {"effective-directive": "script-src"}}),
+            content_type="application/csp-report",
+        )
+
+        self.assertEqual(response.status_code, 204)
+
     @override_settings(CSP_REPORT_RATE_LIMIT=1, CSP_REPORT_RATE_WINDOW_SECONDS=60)
     def test_reports_are_rate_limited_without_logging_attacker_content(self):
         body = json.dumps({"csp-report": {"effective-directive": "img-src"}})

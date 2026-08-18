@@ -70,6 +70,25 @@ test("production fallback and Amplify use the same hardened CSP", async () => {
   );
 });
 
+test("HTTP E2E server does not upgrade its own assets to HTTPS", async () => {
+  jest.resetModules();
+  process.env.NODE_ENV = "production";
+  process.env.NEXT_E2E_SERVER = "1";
+  process.env.NEXT_PUBLIC_API_BASE_URL = "http://127.0.0.1:4100";
+
+  const config = require("../../next.config.js");
+  const routes = await config.headers();
+  const csp = routes[0].headers.find(
+    ({ key }) => key === "Content-Security-Policy",
+  ).value;
+
+  expect(csp).not.toContain("upgrade-insecure-requests");
+  expect(csp).not.toContain("'unsafe-eval'");
+  expect(csp).toContain(
+    "connect-src 'self' http://127.0.0.1:4100 https://challenges.cloudflare.com",
+  );
+});
+
 test("development keeps only the sources needed by the Next dev server", async () => {
   const developmentCsp = await loadCsp("development");
 

@@ -11,7 +11,11 @@ def normalize_contact_email_addresses(apps, schema_editor):
     # case-only duplicate cannot slip in between those two operations.
     if schema_editor.connection.vendor == "postgresql":
         table_name = schema_editor.quote_name(ContactEmail._meta.db_table)
-        schema_editor.execute(f"LOCK TABLE {table_name} IN SHARE ROW EXCLUSIVE MODE")
+        # Bind parameters cannot represent SQL identifiers. The identifier is
+        # trusted model metadata and quote_name applies backend-specific quoting.
+        schema_editor.execute(  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query,python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+            f"LOCK TABLE {table_name} IN SHARE ROW EXCLUSIVE MODE"
+        )
 
     normalized = Lower(Trim("email_address"))
     duplicates = (

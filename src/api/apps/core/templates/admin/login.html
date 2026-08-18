@@ -69,9 +69,12 @@
             {# ── Step 2: Verification code ── #}
             <p class="login-email-hint">
                 {% if hide_email %}
-                    {% blocktranslate trimmed with name=code_recipient_name %}
+                    <!-- The captured translation is force-escaped before rendering. -->
+                    <!-- nosemgrep: python.django.security.audit.xss.template-blocktranslate-no-escape.template-blocktranslate-no-escape -->
+                    {% blocktranslate trimmed with name=code_recipient_name asvar code_sent_message %}
                         We sent a 6-digit code to {{ name }}.
                     {% endblocktranslate %}
+                    {{ code_sent_message|force_escape }}
                 {% else %}
                     {% translate "We sent a 6-digit code to" %} <strong>{{ email }}</strong>
                 {% endif %}

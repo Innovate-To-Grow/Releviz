@@ -42,6 +42,13 @@ class FullCIWorkflowTests(TestCase):
         ci_result = self.job_block("ci-result")
         self.assertIn('data["result"] != "success"', ci_result)
 
+    def test_each_browser_job_installs_only_its_own_runtime(self):
+        e2e = self.job_block("e2e")
+        self.assertIn("${{ matrix.project }}-cfw", e2e)
+        self.assertIn('playwright install --with-deps "$PW_PROJECT"', e2e)
+        self.assertIn('playwright install-deps "$PW_PROJECT"', e2e)
+        self.assertNotIn("install-deps chromium firefox webkit", e2e)
+
     def test_every_step_has_an_action_or_command(self):
         step_blocks = re.split(r"(?m)^      - name: ", self.source)[1:]
         self.assertTrue(step_blocks)

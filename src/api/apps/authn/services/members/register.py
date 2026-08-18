@@ -4,6 +4,8 @@ import logging
 import uuid
 
 from django.contrib.auth import get_user_model
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from rest_framework import serializers
 
@@ -48,6 +50,10 @@ def _apply_registration_details(member, details: dict, *, email: str) -> None:
     member.first_name = details["first_name"]
     member.last_name = details["last_name"]
     member.email = email
+    try:
+        validate_password(details["password"], user=member)
+    except DjangoValidationError as exc:
+        raise serializers.ValidationError({"password": list(exc.messages)}) from exc
     member.set_password(details["password"])
 
 
@@ -97,13 +103,9 @@ def start_registration(data: dict, *, _temporary_upgrade_member_id=None):
         raise serializers.ValidationError({"email": "Unable to register with this email address."})
 
     if member is None:
-        member = Member.objects.create_user(
-            password=details["password"],
-            first_name=details["first_name"],
-            last_name=details["last_name"],
-            is_active=False,
-            email=email,
-        )
+        member = Member(is_active=False)
+        _apply_registration_details(member, details, email=email)
+        member.save()
     else:
         _apply_registration_details(member, details, email=email)
         # A normal pending registration remains inactive until email

@@ -15,13 +15,15 @@
             </span>
         </button>
 
-        <nav class="absolute bg-white border border-base-200 flex flex-col leading-none py-1 -right-2 rounded-default shadow-lg top-7 w-40 z-50 dark:bg-base-800 dark:border-base-700"
+        <!-- Alpine's .escape modifier handles the Escape key; it does not disable JSF escaping. -->
+        <!-- nosemgrep: java.lang.security.audit.xss.jsf.autoescape-disabled.autoescape-disabled -->
+        <nav x-on:keydown.escape.window="openTheme = false"
+             class="absolute bg-white border border-base-200 flex flex-col leading-none py-1 -right-2 rounded-default shadow-lg top-7 w-40 z-50 dark:bg-base-800 dark:border-base-700"
              aria-label="{% trans 'Admin theme options' %}"
              x-cloak
              x-show="openTheme"
              x-transition
-             x-on:click.outside="openTheme = false"
-             x-on:keydown.escape.window="openTheme = false">
+             x-on:click.outside="openTheme = false">
             <button type="button"
                     class="cursor-pointer flex flex-row mx-1 px-3 py-1.5 rounded-default border-0 bg-transparent text-left hover:bg-base-100 hover:text-base-700 dark:hover:bg-base-700 dark:hover:text-base-200"
                     data-admin-theme-choice="light"

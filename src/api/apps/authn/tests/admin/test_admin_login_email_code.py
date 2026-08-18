@@ -8,6 +8,7 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.contrib.auth.hashers import make_password
 from django.http import HttpResponse
+from django.templatetags import i18n
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
@@ -444,6 +445,32 @@ class AdminLoginViewTest(TestCase):
         self.assertNotContains(resp, "admin@example.com")
         self.assertEqual(self.client.session.get("admin_login_step"), "code")
         self.assertTrue(self.client.session.get("admin_login_hide_email"))
+
+    @patch("apps.authn.views.admin.login.issue_email_challenge")
+    def test_hidden_recipient_translation_is_escaped(self, mock_issue):
+        self.staff.first_name = "Ada"
+        self.staff.last_name = "Lovelace"
+        self.staff.save(update_fields=["first_name", "last_name"])
+        self.client.cookies[LAST_ADMIN_LOGIN_COOKIE_NAME] = _last_admin_cookie_value(self.staff)
+        original_gettext = i18n.translation.gettext
+
+        def malicious_gettext(message):
+            if message.startswith("We sent a 6-digit code"):
+                return "<script>alert('translated')</script> %(name)s"
+            return original_gettext(message)
+
+        with patch(
+            "django.templatetags.i18n.translation.gettext",
+            side_effect=malicious_gettext,
+        ):
+            response = self.client.post(LOGIN_URL, {"action": "remembered_code"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "<script>alert('translated')</script>")
+        self.assertContains(
+            response,
+            "&lt;script&gt;alert(&#x27;translated&#x27;)&lt;/script&gt; Ada Lovelace",
+        )
 
     # ── resend ──────────────────────────────────────────────────────
 

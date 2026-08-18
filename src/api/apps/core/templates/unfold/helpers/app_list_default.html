@@ -5,7 +5,10 @@
         <div class="app-{{ app.app_label }} module{% if app.app_url in request.path %} current-app{% endif %}">
             <div class="bg-base-50 mb-6 rounded-default p-3 dark:bg-base-800">
                 <h2 class="font-semibold mb-3 text-base-900 text-left dark:text-base-100">
-                    <a href="{{ app.app_url }}" class="section" title="{% blocktranslate with name=app.name %}Models in the {{ name }} application{% endblocktranslate %}">
+                    <!-- The captured translation is force-escaped before entering the title attribute. -->
+                    <!-- nosemgrep: python.django.security.audit.xss.template-blocktranslate-no-escape.template-blocktranslate-no-escape -->
+                    {% blocktranslate with name=app.name asvar app_models_title %}Models in the {{ name }} application{% endblocktranslate %}
+                    <a href="{{ app.app_url }}" class="section" title="{{ app_models_title|force_escape }}">
                         {{ app.name }}
                     </a>
                 </h2>

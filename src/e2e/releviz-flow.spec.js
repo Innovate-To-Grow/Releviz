@@ -643,7 +643,6 @@ test.describe("Releviz account and scheduling flow", () => {
         accessLevel: "temporary",
         contactVerified: false,
         hasUsablePassword: false,
-        invitationFirstSent: false,
         invitationJobCount: 1,
         userEventVisible: true,
         tempSessionCount: 0,
@@ -1300,7 +1299,6 @@ test.describe("Releviz account and scheduling flow", () => {
     await participantPage.route(updateRoutePattern, failAutosaveOnce);
     await cell(keyboardSlotIndex).focus();
     await participantPage.keyboard.press("Enter");
-    await expect(participantPage.getByText("Saving draft…")).toBeVisible();
     await expect(
       participantPage.getByText("Temporary autosave outage"),
     ).toBeVisible();

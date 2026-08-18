@@ -609,6 +609,21 @@ class RegistrationServiceBranchTests(TestCase):
         self.assertTrue(ContactEmail.objects.filter(member=member, email_type="primary").exists())
         issue.assert_called_once()
 
+    def test_start_registration_rejects_common_password_without_writing_member(self):
+        from apps.authn.services.members import register
+
+        with (
+            patch.object(register, "decrypt_password", side_effect=lambda value, _key: value),
+            self.assertRaises(serializers.ValidationError) as raised,
+        ):
+            register.start_registration(
+                self._data(password="password", password_confirm="password")
+            )
+
+        self.assertIn("password", raised.exception.detail)
+        self.assertFalse(Member.objects.filter(email="new@example.com").exists())
+        self.assertFalse(ContactEmail.objects.filter(email_address="new@example.com").exists())
+
     def test_start_registration_updates_existing_unverified_member(self):
         from apps.authn.services.members import register
 

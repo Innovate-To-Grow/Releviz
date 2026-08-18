@@ -25,7 +25,7 @@ const contentSecurityPolicy = [
   `connect-src 'self' ${apiOrigin} https://challenges.cloudflare.com${isDevelopment ? " ws: wss:" : ""}`,
   "frame-src 'self' https://challenges.cloudflare.com",
   "form-action 'self'",
-  ...(isDevelopment ? [] : ["upgrade-insecure-requests"]),
+  ...(isDevelopment || isE2EServer ? [] : ["upgrade-insecure-requests"]),
 ].join("; ");
 
 const serverConfig = {
