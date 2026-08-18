@@ -332,13 +332,13 @@ select option {
   font-weight: 600;
   letter-spacing: -0.005em;
   min-height: 40px;
+  /* Switching out of a disabled state must restore contrast immediately. */
   transition:
     transform 120ms ease-out,
     background-color 140ms ease-out,
     border-color 140ms ease-out,
     box-shadow 140ms ease-out,
-    color 140ms ease-out,
-    opacity 140ms ease-out;
+    color 140ms ease-out;
 }
 
 .app-btn-filled,
