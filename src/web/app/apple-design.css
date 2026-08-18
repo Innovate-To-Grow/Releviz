@@ -296,6 +296,22 @@ select option {
   color: var(--rv-danger);
 }
 
+.account-menu-error {
+  background: var(--rv-popover);
+  border: 1px solid color-mix(in srgb, var(--rv-danger) 35%, transparent);
+  border-radius: 12px;
+  box-shadow: var(--rv-shadow-medium);
+  color: var(--rv-danger);
+  font-size: 0.82rem;
+  margin: 0;
+  padding: 10px 12px;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  width: min(280px, calc(100vw - 24px));
+  z-index: 100;
+}
+
 @keyframes rv-popover-arrive {
   from {
     opacity: 0;

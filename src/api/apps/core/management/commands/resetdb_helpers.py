@@ -36,7 +36,7 @@ def reset_postgresql(connection):
         cursor.execute("GRANT ALL ON SCHEMA public TO public;")
         db_user = connection.settings_dict.get("USER")
         if db_user:
-            from psycopg2 import sql
+            from psycopg import sql
 
             cursor.execute(
                 sql.SQL("GRANT ALL ON SCHEMA public TO {user};").format(

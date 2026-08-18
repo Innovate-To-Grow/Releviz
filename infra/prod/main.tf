@@ -616,6 +616,18 @@ resource "aws_cloudwatch_log_group" "backend" {
   tags              = local.common_tags
 }
 
+resource "aws_cloudwatch_log_group" "result_worker" {
+  name              = "/ecs/${local.prefix}-result-worker"
+  retention_in_days = 30
+  tags              = local.common_tags
+}
+
+resource "aws_cloudwatch_log_group" "email_worker" {
+  name              = "/ecs/${local.prefix}-email-worker"
+  retention_in_days = 30
+  tags              = local.common_tags
+}
+
 resource "aws_cloudwatch_log_group" "frontend" {
   name              = "/ecs/${local.prefix}-frontend"
   retention_in_days = 30
@@ -1273,6 +1285,24 @@ locals {
       { name = "SENTRY_DSN", valueFrom = var.sentry_dsn_secret_arn },
     ],
   )
+  worker_container_environment = concat(
+    local.backend_container_environment,
+    [
+      { name = "DJANGO_CREATE_DEFAULT_ADMIN", value = "0" },
+      { name = "DJANGO_MIGRATE_ON_START", value = "1" },
+      { name = "DJANGO_SKIP_STARTUP_TASKS", value = "1" },
+    ],
+  )
+  worker_health_check = {
+    command = [
+      "CMD-SHELL",
+      "python manage.py migrate --check --noinput",
+    ]
+    interval    = 30
+    timeout     = 10
+    retries     = 3
+    startPeriod = 60
+  }
   default_admin_container_environment = [
     { name = "DJANGO_SETTINGS_MODULE", value = "config.settings.production" },
     { name = "DJANGO_ALLOWED_HOSTS", value = var.api_domain },
@@ -1365,6 +1395,87 @@ resource "aws_ecs_task_definition" "default_admin" {
         awslogs-group         = aws_cloudwatch_log_group.backend.name
         awslogs-region        = var.aws_region
         awslogs-stream-prefix = "default-admin"
+      }
+    }
+  }])
+
+  tags = local.common_tags
+}
+
+resource "aws_ecs_task_definition" "result_worker" {
+  family                   = "${local.prefix}-result-worker-task"
+  cpu                      = var.backend_task_cpu
+  memory                   = var.backend_task_memory
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  execution_role_arn       = aws_iam_role.ecs_execution.arn
+  task_role_arn            = aws_iam_role.ecs_task.arn
+  enable_fault_injection   = false
+
+  container_definitions = jsonencode([{
+    name           = "${local.prefix}-result-worker"
+    image          = local.backend_image_uri
+    essential      = true
+    command        = ["python", "manage.py", "recompute_event_results", "--watch", "--poll-interval=1"]
+    stopTimeout    = 120
+    healthCheck    = local.worker_health_check
+    portMappings   = []
+    mountPoints    = []
+    systemControls = []
+    volumesFrom    = []
+    environment    = local.worker_container_environment
+    secrets        = local.backend_container_secrets
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-group         = aws_cloudwatch_log_group.result_worker.name
+        awslogs-region        = var.aws_region
+        awslogs-stream-prefix = "ecs"
+      }
+    }
+  }])
+
+  tags = local.common_tags
+}
+
+resource "aws_ecs_task_definition" "email_worker" {
+  family                   = "${local.prefix}-email-worker-task"
+  cpu                      = var.backend_task_cpu
+  memory                   = var.backend_task_memory
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  execution_role_arn       = aws_iam_role.ecs_execution.arn
+  task_role_arn            = aws_iam_role.ecs_task.arn
+  enable_fault_injection   = false
+
+  container_definitions = jsonencode([{
+    name      = "${local.prefix}-email-worker"
+    image     = local.backend_image_uri
+    essential = true
+    command = [
+      "python",
+      "manage.py",
+      "dispatch_email_jobs",
+      "--watch",
+      "--limit=1000",
+      "--concurrency=10",
+      "--rate-limit=10",
+      "--poll-interval=1",
+    ]
+    stopTimeout    = 120
+    healthCheck    = local.worker_health_check
+    portMappings   = []
+    mountPoints    = []
+    systemControls = []
+    volumesFrom    = []
+    environment    = local.worker_container_environment
+    secrets        = local.backend_container_secrets
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-group         = aws_cloudwatch_log_group.email_worker.name
+        awslogs-region        = var.aws_region
+        awslogs-stream-prefix = "ecs"
       }
     }
   }])
@@ -1492,6 +1603,54 @@ resource "aws_ecs_service" "frontend" {
 
   depends_on = [aws_lb_listener.https]
   tags       = local.common_tags
+}
+
+resource "aws_ecs_service" "result_worker" {
+  name            = "${local.prefix}-result-worker-service"
+  cluster         = aws_ecs_cluster.app.id
+  task_definition = aws_ecs_task_definition.result_worker.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+  deployment_minimum_healthy_percent = 100
+  deployment_maximum_percent         = 200
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+
+  network_configuration {
+    assign_public_ip = false
+    subnets          = [aws_subnet.app_a.id, aws_subnet.app_b.id]
+    security_groups  = [aws_security_group.backend.id]
+  }
+
+  tags = local.common_tags
+}
+
+resource "aws_ecs_service" "email_worker" {
+  name            = "${local.prefix}-email-worker-service"
+  cluster         = aws_ecs_cluster.app.id
+  task_definition = aws_ecs_task_definition.email_worker.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+  deployment_minimum_healthy_percent = 100
+  deployment_maximum_percent         = 200
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+
+  network_configuration {
+    assign_public_ip = false
+    subnets          = [aws_subnet.app_a.id, aws_subnet.app_b.id]
+    security_groups  = [aws_security_group.backend.id]
+  }
+
+  tags = local.common_tags
 }
 
 # --- Service autoscaling ---
@@ -1718,6 +1877,50 @@ resource "aws_cloudwatch_metric_alarm" "frontend_running_tasks" {
   tags = local.common_tags
 }
 
+resource "aws_cloudwatch_metric_alarm" "result_worker_running_tasks" {
+  alarm_name          = "${local.prefix}-result-worker-running-tasks"
+  alarm_description   = "Result worker running task count dropped below its production minimum"
+  comparison_operator = "LessThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "RunningTaskCount"
+  namespace           = "ECS/ContainerInsights"
+  period              = 60
+  statistic           = "Average"
+  threshold           = 1
+  treat_missing_data  = "breaching"
+  alarm_actions       = var.alarm_action_arns
+  ok_actions          = var.alarm_action_arns
+
+  dimensions = {
+    ClusterName = aws_ecs_cluster.app.name
+    ServiceName = aws_ecs_service.result_worker.name
+  }
+
+  tags = local.common_tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "email_worker_running_tasks" {
+  alarm_name          = "${local.prefix}-email-worker-running-tasks"
+  alarm_description   = "Email worker running task count dropped below its production minimum"
+  comparison_operator = "LessThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "RunningTaskCount"
+  namespace           = "ECS/ContainerInsights"
+  period              = 60
+  statistic           = "Average"
+  threshold           = 1
+  treat_missing_data  = "breaching"
+  alarm_actions       = var.alarm_action_arns
+  ok_actions          = var.alarm_action_arns
+
+  dimensions = {
+    ClusterName = aws_ecs_cluster.app.name
+    ServiceName = aws_ecs_service.email_worker.name
+  }
+
+  tags = local.common_tags
+}
+
 resource "aws_cloudwatch_log_metric_filter" "request_exceptions" {
   name           = "${local.prefix}-request-exceptions"
   pattern        = "{ $.event = \"request_exception\" }"
@@ -1750,8 +1953,8 @@ resource "aws_cloudwatch_metric_alarm" "request_exceptions" {
 
 resource "aws_cloudwatch_log_metric_filter" "permanent_email_failures" {
   name           = "${local.prefix}-permanent-email-failures"
-  pattern        = "{ $.event = \"email_delivery_failed\" && $.status = \"permanent_failure\" }"
-  log_group_name = aws_cloudwatch_log_group.backend.name
+  pattern        = "{ $.status = \"permanent_failure\" }"
+  log_group_name = aws_cloudwatch_log_group.email_worker.name
 
   metric_transformation {
     name          = "PermanentEmailFailures"
@@ -1769,6 +1972,36 @@ resource "aws_cloudwatch_metric_alarm" "permanent_email_failures" {
   metric_name         = "PermanentEmailFailures"
   namespace           = "Releviz/${var.environment}"
   period              = 300
+  statistic           = "Sum"
+  threshold           = 1
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = var.alarm_action_arns
+  ok_actions          = var.alarm_action_arns
+
+  tags = local.common_tags
+}
+
+resource "aws_cloudwatch_log_metric_filter" "uncertain_email_outcomes" {
+  name           = "${local.prefix}-uncertain-email-outcomes"
+  pattern        = "{ $.event = \"email_delivery_outcome_uncertain\" && $.status = \"uncertain\" }"
+  log_group_name = aws_cloudwatch_log_group.email_worker.name
+
+  metric_transformation {
+    name          = "UncertainEmailOutcomes"
+    namespace     = "Releviz/${var.environment}"
+    value         = "1"
+    default_value = "0"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "uncertain_email_outcomes" {
+  alarm_name          = "${local.prefix}-uncertain-email-outcomes"
+  alarm_description   = "Email provider outcomes require operator reconciliation before retry"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "UncertainEmailOutcomes"
+  namespace           = "Releviz/${var.environment}"
+  period              = 60
   statistic           = "Sum"
   threshold           = 1
   treat_missing_data  = "notBreaching"

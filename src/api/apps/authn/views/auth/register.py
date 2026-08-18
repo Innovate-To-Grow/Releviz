@@ -22,6 +22,7 @@ class RegisterView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
     throttle_classes = [EmailCodeRequestThrottle]
+    auth_rate_scope = "register"
 
     # noinspection PyMethodMayBeStatic
     def post(self, request):

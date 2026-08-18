@@ -3,14 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "python3 manage.py runserver 0.0.0.0:${PORT:-4000} --settings=config.settings.local",
-    "start": "gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-4000}",
-    "test": "python3 manage.py test --settings=config.settings.test",
-    "test:coverage": "coverage run manage.py test --settings=config.settings.test && coverage report --fail-under=100 && coverage xml && coverage html",
-    "test:db": "python3 manage.py test --settings=config.settings.test_postgres",
-    "lint": "ruff check .",
-    "lint:fix": "ruff check . --fix",
-    "format": "ruff format .",
-    "format:check": "ruff format --check ."
+    "dev": ".venv/bin/python manage.py runserver 0.0.0.0:${PORT:-4000} --settings=config.settings.local",
+    "start": ".venv/bin/python -m gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-4000}",
+    "test": ".venv/bin/python manage.py test --settings=config.settings.test",
+    "test:coverage": ".venv/bin/python -m coverage run manage.py test --settings=config.settings.test && .venv/bin/python -m coverage report --fail-under=100 && .venv/bin/python -m coverage xml && .venv/bin/python -m coverage html",
+    "test:db": ".venv/bin/python manage.py test --settings=config.settings.test_postgres",
+    "lint": ".venv/bin/python -m ruff check .",
+    "lint:fix": ".venv/bin/python -m ruff check . --fix",
+    "format": ".venv/bin/python -m ruff format .",
+    "format:check": ".venv/bin/python -m ruff format --check ."
   }
 }

@@ -4,7 +4,6 @@ from django.conf import settings
 from django.utils.cache import patch_vary_headers
 from rest_framework import status
 from rest_framework.response import Response
-from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.authn.constants import VERIFICATION_THROTTLED
 from apps.authn.security import enforce_cookie_request_origin
@@ -13,6 +12,7 @@ from apps.authn.services import (
     AuthChallengeDeliveryError,
     AuthChallengeThrottled,
 )
+from apps.authn.services.security import issue_session_refresh_token
 
 
 def _refresh_cookie_options() -> dict:
@@ -87,7 +87,7 @@ def build_auth_success_payload(
     resolved_next_step = next_step or (
         "complete_profile" if resolved_requires_profile_completion else "account"
     )
-    refresh = RefreshToken.for_user(member)
+    refresh = issue_session_refresh_token(member)
     payload = {
         "message": message,
         "access": str(refresh.access_token),

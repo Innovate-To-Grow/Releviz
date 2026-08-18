@@ -222,14 +222,16 @@ class RecoveryAndAuthEmailBranchTests(TestCase):
 
         self.assertIsNone(resolve_login_identifier(""))
         self.assertIsNone(resolve_login_identifier("member-id"))
-        member = _member(email="DUP@example.com")
-        ContactEmail.objects.create(
-            member=member,
-            email_address="dup@example.com ",
-            email_type="other",
-            verified=True,
-        )
-        self.assertEqual(get_member_auth_emails(member), ["dup@example.com"])
+        member = _member()
+        contacts = [
+            SimpleNamespace(email_address="DUP@example.com"),
+            SimpleNamespace(email_address="dup@example.com "),
+        ]
+        with patch(
+            "apps.authn.services.email.auth_email.ContactEmail.objects.filter"
+        ) as filter_contacts:
+            filter_contacts.return_value.order_by.return_value = contacts
+            self.assertEqual(get_member_auth_emails(member), ["dup@example.com"])
 
 
 class ContactEmailServiceBranchTests(TestCase):
@@ -628,7 +630,12 @@ class RegistrationServiceBranchTests(TestCase):
     def test_temporary_upgrade_rejects_invalid_and_mismatched_ids_then_accepts_match(self):
         from apps.authn.services.members import register
 
-        member = _member(email="temp@example.com", verified=False, is_active=True)
+        member = _member(
+            email="temp@example.com",
+            verified=False,
+            is_active=True,
+            access_level="temporary",
+        )
         with patch.object(register, "decrypt_password", side_effect=lambda value, _key: value):
             with self.assertRaises(serializers.ValidationError):
                 register.start_registration(
@@ -651,9 +658,22 @@ class RegistrationServiceBranchTests(TestCase):
                     _temporary_upgrade_member_id=member.pk,
                 )
         self.assertEqual(result.pk, member.pk)
+        self.assertTrue(result.is_active)
         self.assertEqual(
             issue.call_args.kwargs["scope_key"], register.TEMP_SESSION_REGISTRATION_SCOPE
         )
+
+        full_member = _member(
+            email="not-temporary@example.com",
+            verified=False,
+            is_active=True,
+        )
+        with patch.object(register, "decrypt_password", side_effect=lambda value, _key: value):
+            with self.assertRaises(serializers.ValidationError):
+                register.start_registration(
+                    self._data(email="not-temporary@example.com"),
+                    _temporary_upgrade_member_id=full_member.pk,
+                )
 
     def test_verified_contact_and_delivery_failure_are_propagated(self):
         from apps.authn.services.email.challenges import AuthChallengeDeliveryError

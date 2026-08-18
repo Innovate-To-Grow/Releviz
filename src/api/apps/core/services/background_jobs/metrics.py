@@ -10,6 +10,8 @@ logger = logging.getLogger(__name__)
 
 
 def worker_metrics() -> dict[str, float | int]:
+    from apps.mail.models import EmailDeliveryJob
+
     now = timezone.now()
     aggregates = BackgroundJob.objects.aggregate(
         oldest=Min(
@@ -29,6 +31,9 @@ def worker_metrics() -> dict[str, float | int]:
         "oldest_job_age_seconds": max(0, (now - oldest).total_seconds()) if oldest else 0,
         "failed_jobs": counts.get(BackgroundJob.Status.FAILED, 0),
         "uncertain_jobs": counts.get(BackgroundJob.Status.UNCERTAIN, 0),
+        "uncertain_email_jobs": EmailDeliveryJob.objects.filter(
+            status=EmailDeliveryJob.Status.UNCERTAIN
+        ).count(),
     }
 
 
@@ -43,6 +48,7 @@ def publish_worker_metrics(metrics: dict[str, float | int]) -> None:
         "oldest_job_age_seconds": ("OldestJobAge", "Seconds"),
         "failed_jobs": ("FailedJobs", "Count"),
         "uncertain_jobs": ("UncertainJobs", "Count"),
+        "uncertain_email_jobs": ("UncertainEmailJobs", "Count"),
     }
     try:
         import boto3

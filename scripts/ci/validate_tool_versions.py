@@ -8,11 +8,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/ci.yml"
+BACKEND_DOCKERFILE = ROOT / "src/api/Dockerfile"
 
 REQUIRED_FRAGMENTS = (
     'PYTHON_VERSION: "3.14"',
     'NODE_VERSION: "24"',
     'TERRAFORM_VERSION: "1.15.8"',
+    'UV_VERSION: "0.9.26"',
     'PIP_AUDIT_VERSION: "2.10.1"',
     'SEMGREP_VERSION: "1.170.0"',
     'ACTIONLINT_VERSION: "1.7.7"',
@@ -24,6 +26,9 @@ REQUIRED_FRAGMENTS = (
     "actions/upload-artifact@v7",
     "actions/download-artifact@v8",
     "hashicorp/setup-terraform@v4",
+    "actionlint .github/workflows/deploy-prod.yml.disabled",
+    "semgrep scan \\\n            --error",
+    "bash scripts/compile-api-requirements.sh --check",
 )
 
 
@@ -32,7 +37,19 @@ def missing_fragments(text: str) -> list[str]:
 
 
 def main() -> int:
-    missing = missing_fragments(WORKFLOW.read_text(encoding="utf-8"))
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    missing = missing_fragments(workflow)
+    unhashed_installs = [
+        line.strip()
+        for line in workflow.splitlines()
+        if "python -m pip install" in line
+        and "requirements/local.txt" in line
+        and "--require-hashes" not in line
+    ]
+    dockerfile = BACKEND_DOCKERFILE.read_text(encoding="utf-8")
+    if "--require-hashes -r requirements/production.txt" not in dockerfile:
+        missing.append("Docker production dependency install must use --require-hashes")
+    missing.extend(f"unhashed backend CI install: {line}" for line in unhashed_installs)
     if missing:
         print("CI tool-version validation failed:", file=sys.stderr)
         for fragment in missing:

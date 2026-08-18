@@ -12,7 +12,7 @@ import uuid
 from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-BACKEND_ROOT = REPOSITORY_ROOT / "src" / "backend"
+BACKEND_ROOT = REPOSITORY_ROOT / "src" / "api"
 sys.path.insert(0, str(BACKEND_ROOT))
 
 EXPECTED_RECIPIENTS = 1_000
@@ -85,8 +85,7 @@ def assert_safe_runtime() -> dict:
 
 def run(args: argparse.Namespace) -> dict:
     from apps.authn.models import ContactEmail
-    from apps.messaging.models import EmailDeliveryJob
-    from apps.messaging.services import dispatch_due_email_jobs, email_delivery_summary
+    from apps.mail.services import dispatch_due_email_jobs, email_delivery_summary
     from apps.scheduling.models import Event
     from apps.scheduling.services import upsert_and_send_invitations
 

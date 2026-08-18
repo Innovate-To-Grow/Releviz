@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useId, useMemo, useRef, useState } from "react";
 import AppButton from "@/components/ui/AppButton";
 import {
   cancelRosterImport,
@@ -100,6 +100,7 @@ export default function RosterImportWizard({
     included: true,
   });
   const [rows, setRows] = useState([]);
+  const [rowDrafts, setRowDrafts] = useState({});
   const [pagination, setPagination] = useState(null);
   const [phase, setPhase] = useState("source");
   const [mode, setMode] = useState("merge");
@@ -108,6 +109,8 @@ export default function RosterImportWizard({
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
   const idempotencyKey = useRef("");
+  const sourceTabsId = useId();
+  const sourceTabRefs = useRef({});
 
   const selectedSheet = useMemo(
     () =>
@@ -137,6 +140,7 @@ export default function RosterImportWizard({
     );
     setRecord(importFrom(data) || importRecord);
     setRows(data.rows || []);
+    setRowDrafts({});
     setPagination(
       data.pagination || {
         page,
@@ -274,11 +278,70 @@ export default function RosterImportWizard({
       );
       setRecord(importFrom(data));
       await loadRows(importFrom(data), pagination?.page || 1, token);
+      return true;
     } catch (requestError) {
       setError(requestError.message || "Unable to update this row.");
+      return false;
     } finally {
       setBusy(false);
     }
+  };
+
+  const rowDraftValue = (row, field, serverValue) =>
+    Object.hasOwn(rowDrafts[row.id] || {}, field)
+      ? rowDrafts[row.id][field]
+      : serverValue;
+
+  const updateRowDraft = (rowId, field, value) => {
+    setRowDrafts((current) => ({
+      ...current,
+      [rowId]: { ...current[rowId], [field]: value },
+    }));
+  };
+
+  const clearRowDraft = (rowId, field, expectedValue) => {
+    setRowDrafts((current) => {
+      const currentRow = current[rowId];
+      if (!currentRow || String(currentRow[field]) !== String(expectedValue))
+        return current;
+      const nextRow = { ...currentRow };
+      delete nextRow[field];
+      const next = { ...current };
+      if (Object.keys(nextRow).length) next[rowId] = nextRow;
+      else delete next[rowId];
+      return next;
+    });
+  };
+
+  const saveRowDraft = async (row, field, value, serverValue) => {
+    if (String(value) !== String(serverValue)) {
+      await updateRow(row, { [field]: value });
+    }
+    clearRowDraft(row.id, field, value);
+  };
+
+  const selectSourceType = (nextSource, { focus = false } = {}) => {
+    setSourceType(nextSource);
+    if (focus) sourceTabRefs.current[nextSource]?.focus();
+  };
+
+  const handleSourceTabKeyDown = (event) => {
+    const sources = ["file", "paste"];
+    const currentIndex = sources.indexOf(sourceType);
+    let nextIndex;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+      nextIndex = (currentIndex + 1) % sources.length;
+    } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+      nextIndex = (currentIndex - 1 + sources.length) % sources.length;
+    } else if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = sources.length - 1;
+    } else {
+      return;
+    }
+    event.preventDefault();
+    selectSourceType(sources[nextIndex], { focus: true });
   };
 
   const handleCommit = async () => {
@@ -378,50 +441,74 @@ export default function RosterImportWizard({
             aria-label="Roster source"
           >
             <AppButton
+              role="tab"
+              id={`${sourceTabsId}-file-tab`}
+              aria-controls={`${sourceTabsId}-file-panel`}
+              aria-selected={sourceType === "file"}
+              tabIndex={sourceType === "file" ? 0 : -1}
+              ref={(node) => {
+                sourceTabRefs.current.file = node;
+              }}
               variant={sourceType === "file" ? "filled" : "outlined"}
-              onClick={() => setSourceType("file")}
+              onClick={() => selectSourceType("file")}
+              onKeyDown={handleSourceTabKeyDown}
             >
               File upload
             </AppButton>
             <AppButton
+              role="tab"
+              id={`${sourceTabsId}-paste-tab`}
+              aria-controls={`${sourceTabsId}-paste-panel`}
+              aria-selected={sourceType === "paste"}
+              tabIndex={sourceType === "paste" ? 0 : -1}
+              ref={(node) => {
+                sourceTabRefs.current.paste = node;
+              }}
               variant={sourceType === "paste" ? "filled" : "outlined"}
-              onClick={() => setSourceType("paste")}
+              onClick={() => selectSourceType("paste")}
+              onKeyDown={handleSourceTabKeyDown}
             >
               Paste spreadsheet
             </AppButton>
           </div>
-          {sourceType === "file" ? (
-            <label className="roster-import__field roster-import__source-field">
-              <strong>CSV or XLSX file</strong>
-              <input
-                aria-label="CSV or XLSX file"
-                type="file"
-                accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                onChange={(event) => setFile(event.target.files?.[0] || null)}
-              />
-              <small>
-                Maximum compressed size: 5 MiB. Legacy .xls files and formulas
-                are not supported.
-              </small>
-            </label>
-          ) : (
-            <label className="roster-import__field roster-import__source-field">
-              <strong>Rows copied from Google Sheets or Excel</strong>
-              <textarea
-                aria-label="Pasted roster rows"
-                rows={9}
-                value={pastedText}
-                onChange={(event) => setPastedText(event.target.value)}
-                placeholder={
-                  "name\temail\tgroup\nAda\tada@example.com\tFaculty"
-                }
-              />
-            </label>
-          )}
-          <div className="roster-import__actions">
-            <AppButton onClick={handleSource} disabled={busy}>
-              {busy ? "Reading…" : "Continue to mapping"}
-            </AppButton>
+          <div
+            role="tabpanel"
+            id={`${sourceTabsId}-${sourceType}-panel`}
+            aria-labelledby={`${sourceTabsId}-${sourceType}-tab`}
+          >
+            {sourceType === "file" ? (
+              <label className="roster-import__field roster-import__source-field">
+                <strong>CSV or XLSX file</strong>
+                <input
+                  aria-label="CSV or XLSX file"
+                  type="file"
+                  accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  onChange={(event) => setFile(event.target.files?.[0] || null)}
+                />
+                <small>
+                  Maximum compressed size: 5 MiB. Legacy .xls files and formulas
+                  are not supported.
+                </small>
+              </label>
+            ) : (
+              <label className="roster-import__field roster-import__source-field">
+                <strong>Rows copied from Google Sheets or Excel</strong>
+                <textarea
+                  aria-label="Pasted roster rows"
+                  rows={9}
+                  value={pastedText}
+                  onChange={(event) => setPastedText(event.target.value)}
+                  placeholder={
+                    "name\temail\tgroup\nAda\tada@example.com\tFaculty"
+                  }
+                />
+              </label>
+            )}
+            <div className="roster-import__actions">
+              <AppButton onClick={handleSource} disabled={busy}>
+                {busy ? "Reading…" : "Continue to mapping"}
+              </AppButton>
+            </div>
           </div>
         </>
       )}
@@ -602,30 +689,54 @@ export default function RosterImportWizard({
                     <td>
                       <input
                         aria-label={`Name for row ${row.rowNumber}`}
-                        defaultValue={row.name || ""}
+                        value={rowDraftValue(row, "name", row.name || "")}
+                        disabled={busy}
+                        onChange={(event) =>
+                          updateRowDraft(row.id, "name", event.target.value)
+                        }
                         onBlur={(event) =>
-                          event.target.value !== (row.name || "") &&
-                          updateRow(row, { name: event.target.value })
+                          void saveRowDraft(
+                            row,
+                            "name",
+                            event.target.value,
+                            row.name || "",
+                          )
                         }
                       />
                     </td>
                     <td>
                       <input
                         aria-label={`Email for row ${row.rowNumber}`}
-                        defaultValue={row.email || ""}
+                        value={rowDraftValue(row, "email", row.email || "")}
+                        disabled={busy}
+                        onChange={(event) =>
+                          updateRowDraft(row.id, "email", event.target.value)
+                        }
                         onBlur={(event) =>
-                          event.target.value !== (row.email || "") &&
-                          updateRow(row, { email: event.target.value })
+                          void saveRowDraft(
+                            row,
+                            "email",
+                            event.target.value,
+                            row.email || "",
+                          )
                         }
                       />
                     </td>
                     <td>
                       <input
                         aria-label={`Group for row ${row.rowNumber}`}
-                        defaultValue={row.group || ""}
+                        value={rowDraftValue(row, "group", row.group || "")}
+                        disabled={busy}
+                        onChange={(event) =>
+                          updateRowDraft(row.id, "group", event.target.value)
+                        }
                         onBlur={(event) =>
-                          event.target.value !== (row.group || "") &&
-                          updateRow(row, { group: event.target.value })
+                          void saveRowDraft(
+                            row,
+                            "group",
+                            event.target.value,
+                            row.group || "",
+                          )
                         }
                       />
                     </td>
@@ -636,11 +747,18 @@ export default function RosterImportWizard({
                         min="0"
                         max="1"
                         step="0.05"
-                        defaultValue={row.weight ?? 1}
+                        value={rowDraftValue(row, "weight", row.weight ?? 1)}
+                        disabled={busy}
+                        onChange={(event) =>
+                          updateRowDraft(row.id, "weight", event.target.value)
+                        }
                         onBlur={(event) =>
-                          Number(event.target.value) !==
-                            Number(row.weight ?? 1) &&
-                          updateRow(row, { weight: Number(event.target.value) })
+                          void saveRowDraft(
+                            row,
+                            "weight",
+                            Number(event.target.value),
+                            Number(row.weight ?? 1),
+                          )
                         }
                       />
                     </td>
@@ -649,6 +767,7 @@ export default function RosterImportWizard({
                         aria-label={`Included for row ${row.rowNumber}`}
                         type="checkbox"
                         checked={Boolean(row.included)}
+                        disabled={busy}
                         onChange={(event) =>
                           updateRow(row, { included: event.target.checked })
                         }

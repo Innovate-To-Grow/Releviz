@@ -1,0 +1,10 @@
+*
+!Dockerfile
+!docker-entrypoint.sh
+!manage.py
+!apps/
+!apps/**
+!config/
+!config/**
+!requirements/
+!requirements/*.txt

@@ -400,6 +400,7 @@ class BackgroundJobMetricsTests(SimpleTestCase):
             "oldest_job_age_seconds": 3,
             "failed_jobs": 4,
             "uncertain_jobs": 5,
+            "uncertain_email_jobs": 6,
         }
         with patch.dict(sys.modules, {"boto3": boto3}):
             metrics.publish_worker_metrics(values)
@@ -407,7 +408,7 @@ class BackgroundJobMetricsTests(SimpleTestCase):
         boto3.client.assert_called_once_with("cloudwatch", region_name="us-east-1")
         payload = client.put_metric_data.call_args.kwargs
         self.assertEqual(payload["Namespace"], "Releviz/Worker")
-        self.assertEqual(len(payload["MetricData"]), 5)
+        self.assertEqual(len(payload["MetricData"]), 6)
 
     @override_settings(BACKGROUND_JOB_METRICS_NAMESPACE="Releviz/Worker")
     @patch("apps.core.services.background_jobs.metrics.logger.exception")

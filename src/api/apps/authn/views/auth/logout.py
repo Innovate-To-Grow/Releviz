@@ -32,10 +32,9 @@ class LogoutView(APIView):
         try:
             RefreshToken(refresh).blacklist()
         except TokenError:
-            return clear_refresh_cookie(
-                Response(
-                    {"detail": "Invalid or already-blacklisted token."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            )
+            # Logout is an idempotent local-session teardown. An expired,
+            # malformed, or already-revoked refresh token has no remaining
+            # authority, so clear the browser credential without exposing a
+            # token-validity oracle or trapping the client in a signed-in UI.
+            logger.info("logout_refresh_already_invalid")
         return clear_refresh_cookie(Response(status=status.HTTP_204_NO_CONTENT))

@@ -17,7 +17,11 @@ from apps.mail.models import (
     EmailDeliveryRequest,
     EmailMessageLog,
 )
-from apps.mail.services import dispatch_due_email_jobs, dispatch_email_job
+from apps.mail.services import (
+    dispatch_due_email_jobs,
+    dispatch_email_job,
+    retry_uncertain_email_job,
+)
 from apps.scheduling.models import Event, EventInvitation, Participant
 from apps.scheduling.payloads import api_invitation
 from apps.scheduling.services.ics import response_deadline_ics
@@ -725,11 +729,10 @@ class InvitationApiTests(TestCase):
         ):
             dispatch_email_job(retry_job.pk)
         retry_job.refresh_from_db()
-        self.assertEqual(retry_job.status, EmailDeliveryJob.Status.RETRY)
+        self.assertEqual(retry_job.status, EmailDeliveryJob.Status.UNCERTAIN)
         self.assertIsNone(EventInvitation.objects.get(email="again@example.com").last_sent_at)
 
-        retry_job.next_attempt_at = timezone.now()
-        retry_job.save(update_fields=["next_attempt_at", "updated_at"])
+        self.assertTrue(retry_uncertain_email_job(retry_job.pk))
         self.assertEqual(
             dispatch_email_job(retry_job.pk)["status"],
             EmailDeliveryJob.Status.SENT,
@@ -917,7 +920,7 @@ class InvitationApiTests(TestCase):
         ):
             dispatch_email_job(failed_job.pk)
         failed_job.refresh_from_db()
-        self.assertEqual(failed_job.status, EmailDeliveryJob.Status.RETRY)
+        self.assertEqual(failed_job.status, EmailDeliveryJob.Status.UNCERTAIN)
         failed_invitation.refresh_from_db()
         self.assertIsNone(failed_invitation.reminder_sent_at)
 
@@ -986,7 +989,7 @@ class InvitationApiTests(TestCase):
 
         with patch(
             "apps.scheduling.views.invitations.collection.consume_request_rate_limit",
-            side_effect=[RateLimitDecision(), denied],
+            side_effect=[RateLimitDecision(allowed=True), denied],
         ):
             first = self.client.post(
                 self.invitation_url(),

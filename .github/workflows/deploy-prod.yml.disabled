@@ -656,6 +656,8 @@ jobs:
           {
             echo "cluster_name=$(terraform -chdir=infra/prod output -raw ecs_cluster_name)"
             echo "backend_service=$(terraform -chdir=infra/prod output -raw backend_service_name)"
+            echo "result_worker_service=$(terraform -chdir=infra/prod output -raw result_worker_service_name)"
+            echo "email_worker_service=$(terraform -chdir=infra/prod output -raw email_worker_service_name)"
             echo "frontend_service=$(terraform -chdir=infra/prod output -raw frontend_service_name)"
             echo "default_admin_task_definition=$(terraform -chdir=infra/prod output -raw default_admin_task_definition_arn)"
             echo "default_admin_container=$(terraform -chdir=infra/prod output -raw default_admin_container_name)"
@@ -668,23 +670,26 @@ jobs:
             echo "production_branch=$(terraform -chdir=infra/prod output -raw amplify_production_branch_name)"
           } >>"$GITHUB_OUTPUT"
 
-      - name: Wait for backend and rollback frontend ECS services
+      - name: Wait for backend, workers, and rollback frontend ECS services
         run: |
           aws ecs wait services-stable \
             --cluster "${{ steps.terraform.outputs.cluster_name }}" \
             --services \
               "${{ steps.terraform.outputs.backend_service }}" \
+              "${{ steps.terraform.outputs.result_worker_service }}" \
+              "${{ steps.terraform.outputs.email_worker_service }}" \
               "${{ steps.terraform.outputs.frontend_service }}"
 
       - name: Verify base ECS services use Terraform-selected task definitions
         run: |
           set -euo pipefail
-          for role in backend frontend; do
-            if [ "$role" = "backend" ]; then
-              service="${{ steps.terraform.outputs.backend_service }}"
-            else
-              service="${{ steps.terraform.outputs.frontend_service }}"
-            fi
+          for role in backend result_worker email_worker frontend; do
+            case "$role" in
+              backend) service="${{ steps.terraform.outputs.backend_service }}" ;;
+              result_worker) service="${{ steps.terraform.outputs.result_worker_service }}" ;;
+              email_worker) service="${{ steps.terraform.outputs.email_worker_service }}" ;;
+              frontend) service="${{ steps.terraform.outputs.frontend_service }}" ;;
+            esac
             expected="$(
               terraform -chdir=infra/prod output -raw "${role}_task_definition_arn"
             )"
@@ -2389,6 +2394,8 @@ jobs:
                         ) != {}
                       )
                     elif $address == "aws_ecs_service.backend"
+                      or $address == "aws_ecs_service.result_worker"
+                      or $address == "aws_ecs_service.email_worker"
                       or $address == "aws_ecs_service.frontend" then
                       $actions != ["update"]
                       or (
@@ -2411,7 +2418,9 @@ jobs:
                       or (.change.before.health_check[0].path != "/api/health")
                       or (.change.after.health_check[0].path != "/health")
                       or ((.change.after_unknown | prune_unknown) != {})
-                    elif $address == "aws_ecs_task_definition.backend" then
+                    elif $address == "aws_ecs_task_definition.backend"
+                      or $address == "aws_ecs_task_definition.result_worker"
+                      or $address == "aws_ecs_task_definition.email_worker" then
                       ($actions | sort) != ["create", "delete"]
                       or (
                         (
@@ -2506,6 +2515,8 @@ jobs:
                   .resource_changes[]?
                   | select(
                       .address == "aws_ecs_task_definition.backend"
+                      or .address == "aws_ecs_task_definition.result_worker"
+                      or .address == "aws_ecs_task_definition.email_worker"
                       or .address == "aws_ecs_task_definition.frontend"
                     )
                   | (.change.before.container_definitions | fromjson) as $before
@@ -2566,6 +2577,8 @@ jobs:
             --cluster "${{ steps.terraform.outputs.cluster_name }}" \
             --services \
               "${{ steps.terraform.outputs.backend_service }}" \
+              "${{ steps.terraform.outputs.result_worker_service }}" \
+              "${{ steps.terraform.outputs.email_worker_service }}" \
               "${{ steps.terraform.outputs.frontend_service }}"
           for service in \
             "${{ steps.terraform.outputs.backend_service }}" \
@@ -2612,6 +2625,57 @@ jobs:
             echo "::error::The final ECS backend is not the selected release: ${backend_image}"
             exit 1
           fi
+          for role in result_worker email_worker; do
+            if [ "$role" = "result_worker" ]; then
+              service="${{ steps.terraform.outputs.result_worker_service }}"
+              expected_command='["python","manage.py","recompute_event_results","--watch","--poll-interval=1"]'
+            else
+              service="${{ steps.terraform.outputs.email_worker_service }}"
+              expected_command='["python","manage.py","dispatch_email_jobs","--watch","--limit=1000","--concurrency=10","--rate-limit=10","--poll-interval=1"]'
+            fi
+            worker_task_definition="$(
+              aws ecs describe-services \
+                --cluster "${{ steps.terraform.outputs.cluster_name }}" \
+                --services "$service" \
+                --query "services[0].taskDefinition" \
+                --output text
+            )"
+            expected_worker_task_definition="$(
+              terraform -chdir=infra/prod output -raw "${role}_task_definition_arn"
+            )"
+            if [ "$worker_task_definition" != "$expected_worker_task_definition" ]; then
+              echo "::error::The ${role} service is not running the final Terraform task definition."
+              exit 1
+            fi
+            worker_task_state="$(
+              aws ecs describe-task-definition \
+                --task-definition "$worker_task_definition" \
+                --output json
+            )"
+            if ! jq -e \
+              --arg image "$expected_backend_image" \
+              --argjson command "$expected_command" '
+                .taskDefinition.containerDefinitions[0].image == $image
+                and .taskDefinition.containerDefinitions[0].command == $command
+                and .taskDefinition.containerDefinitions[0].stopTimeout == 120
+                and .taskDefinition.containerDefinitions[0].healthCheck.retries == 3
+                and (
+                  [
+                    .taskDefinition.containerDefinitions[0].environment[]
+                    | select(.name == "DJANGO_SKIP_STARTUP_TASKS" and .value == "1")
+                  ] | length
+                ) == 1
+                and (
+                  [
+                    .taskDefinition.containerDefinitions[0].environment[]
+                    | select(.name == "DJANGO_MIGRATE_ON_START" and .value == "1")
+                  ] | length
+                ) == 1
+              ' <<<"$worker_task_state" >/dev/null; then
+              echo "::error::The ${role} task does not match the reviewed image, migration, command, health, and shutdown contract."
+              exit 1
+            fi
+          done
           frontend_task_definition="$(
             aws ecs describe-services \
               --cluster "${{ steps.terraform.outputs.cluster_name }}" \

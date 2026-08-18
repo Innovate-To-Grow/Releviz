@@ -3,6 +3,7 @@
  */
 
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -188,9 +189,7 @@ function mockRosterImportPreview() {
 
 async function openPastedRosterPreview() {
   await userEvent.click(screen.getByRole("button", { name: "Import roster" }));
-  await userEvent.click(
-    screen.getByRole("button", { name: "Paste spreadsheet" }),
-  );
+  await userEvent.click(screen.getByRole("tab", { name: "Paste spreadsheet" }));
   fireEvent.change(screen.getByLabelText("Pasted roster rows"), {
     target: { value: "name\temail\nAda\tada@example.com" },
   });
@@ -1201,6 +1200,69 @@ describe("scaled organizer workspace", () => {
         "token",
       ),
     );
+  });
+
+  test("rolls an inline roster draft back when the server rejects it", async () => {
+    patchRosterParticipant.mockRejectedValueOnce(
+      Object.assign(new Error("Group is not allowed"), { status: 400 }),
+    );
+    renderView();
+    const group = await screen.findByLabelText("Group for Ada Faculty");
+    fireEvent.change(group, { target: { value: "Invalid group" } });
+    expect(group).toHaveValue("Invalid group");
+    fireEvent.blur(group);
+
+    expect(await screen.findByText("Group is not allowed")).toBeInTheDocument();
+    await waitFor(() => expect(group).toHaveValue("Faculty"));
+  });
+
+  test("serializes rapid updates to one roster row with the latest version", async () => {
+    let resolveGroupUpdate;
+    patchRosterParticipant
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveGroupUpdate = resolve;
+          }),
+      )
+      .mockResolvedValueOnce({
+        participant: {
+          id: "roster-1",
+          group: "Research",
+          included: false,
+          version: 3,
+        },
+        resultsRevision: 5,
+      });
+    renderView();
+    const group = await screen.findByLabelText("Group for Ada Faculty");
+    fireEvent.change(group, { target: { value: "Research" } });
+    fireEvent.blur(group);
+    await waitFor(() =>
+      expect(patchRosterParticipant).toHaveBeenCalledTimes(1),
+    );
+
+    await userEvent.click(screen.getByLabelText("Include Ada Faculty"));
+    expect(patchRosterParticipant).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      resolveGroupUpdate({
+        participant: {
+          id: "roster-1",
+          group: "Research",
+          included: true,
+          version: 2,
+        },
+        resultsRevision: 4,
+      });
+    });
+
+    await waitFor(() =>
+      expect(patchRosterParticipant).toHaveBeenCalledTimes(2),
+    );
+    expect(patchRosterParticipant.mock.calls[1][2]).toEqual({
+      included: false,
+      expectedVersion: 2,
+    });
   });
 
   test("pastes, maps, previews, and merges a roster import", async () => {

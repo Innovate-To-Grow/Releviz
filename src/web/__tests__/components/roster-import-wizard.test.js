@@ -311,9 +311,7 @@ test("surfaces preview-row, commit, and cancel failures", async () => {
   commitRosterImport.mockRejectedValueOnce(new Error("commit failed"));
   cancelRosterImport.mockRejectedValueOnce(new Error("cancel failed"));
   renderWizard();
-  await userEvent.click(
-    screen.getByRole("button", { name: "Paste spreadsheet" }),
-  );
+  await userEvent.click(screen.getByRole("tab", { name: "Paste spreadsheet" }));
   fireEvent.change(screen.getByLabelText("Pasted roster rows"), {
     target: { value: "name\temail\nAda\tada@example.com" },
   });
@@ -325,8 +323,11 @@ test("surfaces preview-row, commit, and cancel failures", async () => {
   );
   await screen.findByDisplayValue("ada@example.com");
 
-  await userEvent.click(screen.getByLabelText("Select row 2"));
+  const rowName = screen.getByLabelText("Name for row 2");
+  fireEvent.change(rowName, { target: { value: "Grace" } });
+  fireEvent.blur(rowName);
   expect(await screen.findByRole("alert")).toHaveTextContent("row failed");
+  await waitFor(() => expect(rowName).toHaveValue("Ada"));
   await userEvent.click(
     screen.getByRole("button", { name: "Merge roster and invite new people" }),
   );

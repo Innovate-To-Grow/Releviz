@@ -4,8 +4,7 @@ View for accepting admin invitations (plain Django, not DRF).
 
 from django.contrib import admin
 from django.contrib.auth.password_validation import validate_password
-from django.core.cache import cache
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.http import HttpResponse
 from django.shortcuts import render
 from django.views import View
@@ -13,8 +12,7 @@ from django.views import View
 from apps.authn.forms.invitation import AcceptInvitationForm
 from apps.authn.models import ContactEmail
 from apps.authn.models.members.admin_invitation import AdminInvitation
-
-_INVITATION_RATE_LIMIT = 10  # max attempts per token per hour
+from apps.authn.security import consume_request_rate_limit
 
 Member = None  # resolved lazily
 
@@ -49,11 +47,15 @@ class AcceptInvitationView(View):
 
         existing = self._get_verified_member(invitation)
         if existing:
-            self._upgrade_member(existing, invitation)
             return render(
                 request,
                 "authn/invitation/already_registered.html",
-                {"email": invitation.email, **_get_unfold_context(request)},
+                {
+                    "email": invitation.email,
+                    "invitation": invitation,
+                    "accepted": False,
+                    **_get_unfold_context(request),
+                },
             )
 
         form = AcceptInvitationForm(initial={"email": invitation.email})
@@ -64,13 +66,17 @@ class AcceptInvitationView(View):
         )
 
     def post(self, request, token):
-        cache_key = f"invitation-rate:{token}"
-        attempts = cache.get(cache_key, 0)
-        if attempts >= _INVITATION_RATE_LIMIT:
-            return HttpResponse(
+        decision = consume_request_rate_limit(
+            "admin_invitation_accept",
+            request,
+            identity=token,
+        )
+        if not decision.allowed:
+            response = HttpResponse(
                 "Too many attempts. Please try again later.", status=429, content_type="text/plain"
             )
-        cache.set(cache_key, attempts + 1, timeout=3600)
+            response["Retry-After"] = str(decision.retry_after)
+            return response
 
         invitation = self._get_invitation(token)
         if invitation is None:
@@ -80,11 +86,32 @@ class AcceptInvitationView(View):
 
         existing = self._get_verified_member(invitation)
         if existing:
-            self._upgrade_member(existing, invitation)
+            with transaction.atomic():
+                locked_invitation = self._get_invitation(token, for_update=True)
+                if locked_invitation is None:
+                    return render(
+                        request,
+                        "authn/invitation/invalid.html",
+                        _get_unfold_context(request),
+                        status=400,
+                    )
+                locked_member = self._get_verified_member(locked_invitation, for_update=True)
+                if locked_member is None:
+                    return render(
+                        request,
+                        "authn/invitation/invalid.html",
+                        _get_unfold_context(request),
+                        status=400,
+                    )
+                self._upgrade_member(locked_member, locked_invitation)
             return render(
                 request,
                 "authn/invitation/already_registered.html",
-                {"email": invitation.email, **_get_unfold_context(request)},
+                {
+                    "email": locked_invitation.email,
+                    "accepted": True,
+                    **_get_unfold_context(request),
+                },
             )
 
         form = AcceptInvitationForm(request.POST, initial={"email": invitation.email})
@@ -96,6 +123,29 @@ class AcceptInvitationView(View):
             )
 
         with transaction.atomic():
+            invitation = self._get_invitation(token, for_update=True)
+            if invitation is None:
+                return render(
+                    request,
+                    "authn/invitation/invalid.html",
+                    _get_unfold_context(request),
+                    status=400,
+                )
+            # A verified account may have claimed this address after the form
+            # was rendered. Serialize that race into an upgrade, not a second
+            # staff account.
+            existing = self._get_verified_member(invitation, for_update=True)
+            if existing is not None:
+                self._upgrade_member(existing, invitation)
+                return render(
+                    request,
+                    "authn/invitation/already_registered.html",
+                    {
+                        "email": invitation.email,
+                        "accepted": True,
+                        **_get_unfold_context(request),
+                    },
+                )
             # noinspection PyPep8Naming
             MemberModel = _get_member_model()
             member = MemberModel(
@@ -109,7 +159,20 @@ class AcceptInvitationView(View):
             member.set_password(password)
             member.save()
 
-            self._attach_invitation_email(member, invitation)
+            resolved_member = self._attach_invitation_email(member, invitation)
+            if resolved_member.pk != member.pk:
+                member.delete()
+                self._upgrade_member(resolved_member, invitation)
+                return render(
+                    request,
+                    "authn/invitation/already_registered.html",
+                    {
+                        "email": invitation.email,
+                        "accepted": True,
+                        **_get_unfold_context(request),
+                    },
+                )
+
             invitation.mark_accepted(member)
 
         return render(
@@ -119,23 +182,33 @@ class AcceptInvitationView(View):
         )
 
     # noinspection PyMethodMayBeStatic
-    def _get_invitation(self, token):
+    def _get_invitation(self, token, *, for_update=False):
+        queryset = AdminInvitation.objects
+        if for_update:
+            queryset = queryset.select_for_update()
         try:
-            invitation = AdminInvitation.objects.get(token=token)
+            invitation = queryset.get(token=token)
         except AdminInvitation.DoesNotExist:
             return None
 
         if not invitation.is_valid:
-            if invitation.status == AdminInvitation.Status.PENDING and invitation.is_expired:
+            if (
+                for_update
+                and invitation.status == AdminInvitation.Status.PENDING
+                and invitation.is_expired
+            ):
                 invitation.mark_expired()
             return None
 
         return invitation
 
     # noinspection PyMethodMayBeStatic
-    def _get_verified_member(self, invitation):
+    def _get_verified_member(self, invitation, *, for_update=False):
+        queryset = ContactEmail.objects
+        if for_update:
+            queryset = queryset.select_for_update()
         contact = (
-            ContactEmail.objects.filter(
+            queryset.filter(
                 email_address__iexact=invitation.email,
                 verified=True,
                 member__isnull=False,
@@ -143,37 +216,67 @@ class AcceptInvitationView(View):
             .select_related("member")
             .first()
         )
-        return contact.member if contact else None
+        if contact is None:
+            return None
+        if for_update:
+            return _get_member_model().objects.select_for_update().get(pk=contact.member_id)
+        return contact.member
 
     # noinspection PyMethodMayBeStatic
-    def _attach_invitation_email(self, member, invitation):
-        contact = (
+    def _get_contact_for_update(self, invitation):
+        return (
             ContactEmail.objects.select_for_update()
             .filter(email_address__iexact=invitation.email)
             .first()
         )
-        if contact is None:
-            ContactEmail.objects.create(
-                member=member,
-                email_address=invitation.email,
-                email_type="primary",
-                verified=True,
-                subscribe=True,
-            )
-            return
 
-        contact.member = member
+    # noinspection PyMethodMayBeStatic
+    def _resolve_invitation_contact(self, contact, candidate):
+        # A verified address is an established identity. If another transaction
+        # verified it while this invitation was being accepted, keep its owner
+        # and upgrade that account instead of moving the address.
+        if contact.verified and contact.member_id is not None:
+            return _get_member_model().objects.select_for_update().get(pk=contact.member_id)
+
+        # An unverified address is not yet an established identity. Possession
+        # of the emailed invitation proves control, so it may be claimed by the
+        # newly-created account while the contact row is locked.
+        contact.member = candidate
         contact.email_type = "primary"
         contact.verified = True
         contact.save(update_fields=["member", "email_type", "verified", "updated_at"])
+        return candidate
+
+    # noinspection PyMethodMayBeStatic
+    def _attach_invitation_email(self, member, invitation):
+        contact = self._get_contact_for_update(invitation)
+        if contact is not None:
+            return self._resolve_invitation_contact(contact, member)
+
+        # select_for_update cannot lock an absent row. Keep the insert inside
+        # its own savepoint so a concurrent case-insensitive insert can be
+        # resolved without poisoning the surrounding invitation transaction.
+        try:
+            with transaction.atomic():
+                ContactEmail.objects.create(
+                    member=member,
+                    email_address=invitation.email,
+                    email_type="primary",
+                    verified=True,
+                    subscribe=True,
+                )
+        except IntegrityError:
+            contact = self._get_contact_for_update(invitation)
+            if contact is None:
+                raise
+            return self._resolve_invitation_contact(contact, member)
+
+        return member
 
     # noinspection PyMethodMayBeStatic
     def _upgrade_member(self, member, invitation):
-        # Upgrade the member and mark the invitation accepted atomically so a
-        # failure between the two writes can't leave a staff-upgraded member with
-        # a still-PENDING invitation.
-        with transaction.atomic():
-            member.is_staff = True
-            member.is_active = True
-            member.save(update_fields=["is_staff", "is_active", "updated_at"])
-            invitation.mark_accepted(member)
+        member.is_staff = True
+        member.is_active = True
+        member.access_level = member.AccessLevel.FULL
+        member.save(update_fields=["is_staff", "is_active", "access_level", "updated_at"])
+        invitation.mark_accepted(member)

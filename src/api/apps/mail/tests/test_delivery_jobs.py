@@ -12,16 +12,23 @@ from django.utils import timezone
 from apps.authn.models import EmailAuthChallenge
 from apps.authn.tests.helpers import create_member
 from apps.core.services.aws.crypto import decrypt_secret
+from apps.core.services.aws.provider_outcomes import (
+    PROVIDER_OUTCOME_PERMANENT,
+    PROVIDER_OUTCOME_TRANSIENT,
+    PROVIDER_OUTCOME_UNCERTAIN,
+)
 from apps.mail.models import EmailDeliveryJob, EmailMessageLog
 from apps.mail.services import (
     EmailAttachment,
     EmailDeliveryError,
+    _begin_email_provider_call,
     _DispatchRateLimiter,
     _safe_log_each,
     dispatch_due_email_jobs,
     dispatch_email_job,
     email_delivery_summary,
     enqueue_email_job,
+    retry_uncertain_email_job,
 )
 from apps.scheduling.models import Event, EventInvitation
 
@@ -325,29 +332,41 @@ class EmailDeliveryJobTests(TestCase):
         )
         self.assertEqual(dispatch_email_job(missing.pk)["status"], "canceled")
 
-        for position, last_error in enumerate(("", "previous failure")):
-            exhausted, _created = self.enqueue(
-                recipient=f"exhausted-{position}@example.com",
-                max_attempts=1,
-            )
-            exhausted.attempt_count = exhausted.max_attempts
-            exhausted.last_error = last_error
-            exhausted.save(update_fields=["attempt_count", "last_error", "updated_at"])
-            result = dispatch_email_job(exhausted.pk)
-            self.assertEqual(result["attempted"], False)
-            self.assertEqual(result["status"], EmailDeliveryJob.Status.PERMANENT_FAILURE)
-            exhausted.refresh_from_db()
+        with patch("apps.mail.services.logger.error") as log_terminal_failure:
+            for position, last_error in enumerate(("", "previous failure")):
+                exhausted, _created = self.enqueue(
+                    recipient=f"exhausted-{position}@example.com",
+                    max_attempts=1,
+                )
+                exhausted.attempt_count = exhausted.max_attempts
+                exhausted.last_error = last_error
+                exhausted.save(update_fields=["attempt_count", "last_error", "updated_at"])
+                result = dispatch_email_job(exhausted.pk)
+                self.assertEqual(result["attempted"], False)
+                self.assertEqual(result["status"], EmailDeliveryJob.Status.PERMANENT_FAILURE)
+                exhausted.refresh_from_db()
+                self.assertEqual(
+                    exhausted.last_error,
+                    last_error or "Maximum delivery attempts reached.",
+                )
+
+        self.assertEqual(log_terminal_failure.call_count, 2)
+        for call in log_terminal_failure.call_args_list:
+            self.assertEqual(call.args[0], "email_delivery_failed")
             self.assertEqual(
-                exhausted.last_error,
-                last_error or "Maximum delivery attempts reached.",
+                call.kwargs["extra"]["status"],
+                EmailDeliveryJob.Status.PERMANENT_FAILURE,
             )
 
-    def test_timeout_retry_success_and_permanent_failure(self):
+    def test_confirmed_transient_retry_success_and_permanent_failure(self):
         retry_job, _ = self.enqueue(recipient="retry@example.com", max_attempts=2)
         now = timezone.now() + timedelta(seconds=1)
         with patch(
-            "apps.mail.services.EmailMultiAlternatives.send",
-            side_effect=TimeoutError("timeout"),
+            "apps.mail.services.send_email_message",
+            side_effect=EmailDeliveryError(
+                "provider unavailable before acceptance",
+                outcome=PROVIDER_OUTCOME_TRANSIENT,
+            ),
         ):
             first = dispatch_email_job(retry_job.pk, now=now)
         self.assertEqual(first["status"], EmailDeliveryJob.Status.RETRY)
@@ -383,6 +402,50 @@ class EmailDeliveryJobTests(TestCase):
                 "attempted": False,
                 "status": EmailDeliveryJob.Status.PERMANENT_FAILURE,
             },
+        )
+
+        provider_rejected, _ = self.enqueue(
+            recipient="provider-rejected@example.com",
+            max_attempts=2,
+        )
+        with patch(
+            "apps.mail.services.send_email_message",
+            side_effect=EmailDeliveryError(
+                "provider rejected request",
+                outcome=PROVIDER_OUTCOME_PERMANENT,
+            ),
+        ):
+            rejected = dispatch_email_job(provider_rejected.pk, now=now)
+        self.assertEqual(rejected["status"], EmailDeliveryJob.Status.PERMANENT_FAILURE)
+
+    def test_provider_call_marker_rejects_a_lost_claim(self):
+        job, _created = self.enqueue(recipient="lost-claim@example.com")
+
+        with self.assertRaises(EmailDeliveryError) as raised:
+            _begin_email_provider_call(
+                job.pk,
+                token=uuid.uuid4(),
+                now=timezone.now(),
+            )
+
+        self.assertEqual(raised.exception.outcome, PROVIDER_OUTCOME_UNCERTAIN)
+
+    def test_provider_timeout_is_quarantined_without_automatic_retry(self):
+        job, _created = self.enqueue(recipient="uncertain-timeout@example.com")
+
+        with patch(
+            "apps.mail.services.EmailMultiAlternatives.send",
+            side_effect=TimeoutError("response lost"),
+        ):
+            result = dispatch_email_job(job.pk)
+
+        self.assertEqual(result["status"], EmailDeliveryJob.Status.UNCERTAIN)
+        job.refresh_from_db()
+        self.assertIsNotNone(job.provider_call_started_at)
+        self.assertIsNone(job.lock_token)
+        self.assertEqual(
+            dispatch_email_job(job.pk),
+            {"attempted": False, "status": EmailDeliveryJob.Status.UNCERTAIN},
         )
 
     def test_unexpected_dispatch_exception_is_persisted_and_does_not_escape(self):
@@ -473,6 +536,7 @@ class EmailDeliveryJobTests(TestCase):
                 "sent": 3,
                 "retry": 1,
                 "permanentFailure": 1,
+                "uncertain": 0,
                 "canceled": 0,
             },
         )
@@ -500,6 +564,34 @@ class EmailDeliveryJobTests(TestCase):
         self.assertTrue(EmailDeliveryJob.objects.filter(pk=pending.pk).exists())
         self.assertTrue(EmailDeliveryJob.objects.filter(pk=processing_race.pk).exists())
 
+    def test_stale_post_provider_claim_is_uncertain_until_manual_requeue(self):
+        job, _created = self.enqueue(recipient="crashed-after-provider@example.com")
+        now = timezone.now()
+        EmailDeliveryJob.objects.filter(pk=job.pk).update(
+            status=EmailDeliveryJob.Status.PROCESSING,
+            attempt_count=1,
+            locked_at=now - timedelta(minutes=16),
+            lock_token=uuid.uuid4(),
+            provider_call_started_at=now - timedelta(minutes=16),
+        )
+
+        with patch("apps.mail.services.send_email_message") as send:
+            summary = dispatch_due_email_jobs(limit=10, now=now)
+
+        send.assert_not_called()
+        self.assertEqual(summary["attempted"], 0)
+        self.assertEqual(summary["uncertain"], 1)
+        job.refresh_from_db()
+        self.assertEqual(job.status, EmailDeliveryJob.Status.UNCERTAIN)
+        self.assertIn("outcome is uncertain", job.last_error)
+
+        self.assertTrue(retry_uncertain_email_job(job.pk, now=now))
+        self.assertFalse(retry_uncertain_email_job(job.pk, now=now))
+        job.refresh_from_db()
+        self.assertEqual(job.status, EmailDeliveryJob.Status.RETRY)
+        self.assertIsNone(job.provider_call_started_at)
+        self.assertGreaterEqual(job.max_attempts, 2)
+
     def test_due_dispatch_isolates_an_unhandled_job_and_continues(self):
         first, _created = self.enqueue(recipient="poisoned@example.com")
         second, _created = self.enqueue(recipient="healthy-after-poison@example.com")
@@ -524,6 +616,7 @@ class EmailDeliveryJobTests(TestCase):
                 "sent": 1,
                 "retry": 0,
                 "permanentFailure": 0,
+                "uncertain": 0,
                 "canceled": 0,
             },
         )
@@ -586,6 +679,7 @@ class EmailDeliveryJobTests(TestCase):
             "sent": 0,
             "retry": 0,
             "permanentFailure": 0,
+            "uncertain": 0,
             "canceled": 0,
         }
 

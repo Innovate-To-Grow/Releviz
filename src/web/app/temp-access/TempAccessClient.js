@@ -7,6 +7,7 @@ import { MdLogout, MdRefresh, MdSend, MdUpgrade } from "react-icons/md";
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
 import ScheduleChannelEditor from "@/components/schedule/ScheduleChannelEditor";
 import ScheduleGrid from "@/components/schedule/ScheduleGrid";
+import useAutosaveNavigationGuard from "@/components/schedule/useAutosaveNavigationGuard";
 import AppButton from "@/components/ui/AppButton";
 import BrandLogo from "@/components/ui/BrandLogo";
 import {
@@ -534,6 +535,21 @@ export default function TempAccessClient() {
     return true;
   }, []);
 
+  const hasPendingDraft = useCallback(
+    () =>
+      draftDirtyRef.current ||
+      Boolean(autosaveInFlightRef.current) ||
+      draftSaveStateRef.current === "saving" ||
+      draftSaveStateRef.current === "failed",
+    [],
+  );
+
+  useAutosaveNavigationGuard({
+    hasPending: hasPendingDraft,
+    flush: flushPendingDraft,
+    pending: draftSaveState === "saving" || draftSaveState === "failed",
+  });
+
   useEffect(() => {
     const warnBeforeUnload = (event) => {
       if (
@@ -549,8 +565,10 @@ export default function TempAccessClient() {
     window.addEventListener("beforeunload", warnBeforeUnload);
     return () => {
       window.removeEventListener("beforeunload", warnBeforeUnload);
-      if (autosaveTimerRef.current)
+      if (autosaveTimerRef.current) {
         window.clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = null;
+      }
     };
   }, []);
 

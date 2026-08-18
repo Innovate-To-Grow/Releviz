@@ -41,6 +41,7 @@ class Command(BaseCommand):
             f"sent={summary['sent']} "
             f"retry={summary['retry']} "
             f"permanent_failure={summary['permanentFailure']} "
+            f"uncertain={summary['uncertain']} "
             f"canceled={summary['canceled']}."
         )
 

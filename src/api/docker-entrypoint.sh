@@ -1,7 +1,9 @@
 #!/bin/sh
 set -eu
 
-if [ "${DJANGO_SKIP_STARTUP_TASKS:-0}" != "1" ]; then
+if [ "${DJANGO_MIGRATE_ON_START:-0}" = "1" ]; then
+  python manage.py migrate_locked --noinput
+elif [ "${DJANGO_SKIP_STARTUP_TASKS:-0}" != "1" ]; then
   python manage.py migrate_locked --noinput
   python manage.py collectstatic --noinput
 

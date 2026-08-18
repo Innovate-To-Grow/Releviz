@@ -138,8 +138,8 @@ class AdminRememberedPasswordTest(TestCase):
                 LOGIN_URL,
                 {"mode": "password", "remembered_admin": "1", "password": "testpass123"},
             )
-        self.assertEqual(resp.status_code, 200)
-        self.assertContains(resp, "Too many login attempts")
+        self.assertEqual(resp.status_code, 429)
+        self.assertContains(resp, "Too many login attempts", status_code=429)
 
 
 @override_settings(ROOT_URLCONF="config.urls")

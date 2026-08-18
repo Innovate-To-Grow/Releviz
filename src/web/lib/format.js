@@ -20,4 +20,23 @@ function formatMode(mode) {
   return "In-Person";
 }
 
-module.exports = { formatHour, formatMode, formatTime };
+function formatDateTimeInTimezone(value, timezone, options = {}) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "Not set";
+  const localeOptions = {
+    ...(timezone ? { timeZone: timezone } : {}),
+    ...options,
+  };
+  try {
+    return date.toLocaleString([], localeOptions);
+  } catch {
+    return date.toLocaleString();
+  }
+}
+
+module.exports = {
+  formatDateTimeInTimezone,
+  formatHour,
+  formatMode,
+  formatTime,
+};
