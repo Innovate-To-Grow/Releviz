@@ -19,21 +19,19 @@ from apps.mail.models import (
 )
 from apps.mail.services import dispatch_due_email_jobs, dispatch_email_job
 from apps.scheduling.models import Event, EventInvitation, Participant
-from apps.scheduling.serializers import api_invitation
-from apps.scheduling.services.calendar import response_deadline_ics
-from apps.scheduling.services.deliveries import (
+from apps.scheduling.payloads import api_invitation
+from apps.scheduling.services.ics import response_deadline_ics
+from apps.scheduling.services.invitations import (
     EventEmailRequestError,
     enqueue_manual_reminders,
-    send_due_event_reminders,
-    send_event_reminders,
-    upsert_and_send_invitations,
-)
-from apps.scheduling.services.emails import invitation_body
-from apps.scheduling.services.invitations import (
+    invitation_body,
     mark_invitation_for_member,
     mark_invitation_opened,
     resolve_invited_member,
+    send_due_event_reminders,
+    send_event_reminders,
     split_invitation_emails,
+    upsert_and_send_invitations,
 )
 
 
@@ -965,7 +963,7 @@ class InvitationApiTests(TestCase):
 
         denied = RateLimitDecision(allowed=False, retry_after=30)
         with patch(
-            "apps.scheduling.views.invitations.consume_request_rate_limit",
+            "apps.scheduling.views.invitations.collection.consume_request_rate_limit",
             return_value=denied,
         ):
             limited = self.client.post(
@@ -976,7 +974,7 @@ class InvitationApiTests(TestCase):
         self.assertEqual(limited.status_code, 429)
 
         with patch(
-            "apps.scheduling.views.invitations.consume_request_rate_limit",
+            "apps.scheduling.views.invitations.reminders.consume_request_rate_limit",
             return_value=denied,
         ):
             limited = self.client.post(
@@ -987,7 +985,7 @@ class InvitationApiTests(TestCase):
         self.assertEqual(limited.status_code, 429)
 
         with patch(
-            "apps.scheduling.views.invitations.consume_request_rate_limit",
+            "apps.scheduling.views.invitations.collection.consume_request_rate_limit",
             side_effect=[RateLimitDecision(), denied],
         ):
             first = self.client.post(

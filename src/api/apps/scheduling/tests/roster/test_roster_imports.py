@@ -291,7 +291,7 @@ class RosterImportApiTests(TestCase):
 
         with (
             patch(
-                "apps.scheduling.services.deliveries._enqueue_invitation_job",
+                "apps.scheduling.services.invitations.delivery._enqueue_invitation_job",
                 side_effect=RuntimeError("queue unavailable"),
             ),
             self.assertRaisesMessage(RuntimeError, "queue unavailable"),

@@ -1,1 +1,1 @@
-"""Temporary event access and account-upgrade tests."""
+"""Temporary event access tests."""

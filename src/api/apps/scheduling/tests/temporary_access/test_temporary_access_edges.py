@@ -25,7 +25,7 @@ from apps.scheduling.models import (
     Weight,
 )
 from apps.scheduling.services.invitations import ManagedParticipantError
-from apps.scheduling.services.temp_access import (
+from apps.scheduling.services.temporary_access import (
     _invitation_and_participant,
     temporary_access_rate_identity,
     temporary_session_from_request,
@@ -155,7 +155,7 @@ class TemporaryAccessServiceEdgeTests(TemporaryAccessEdgeFixture):
 
         other = create_member("mismatch@example.com")
         with patch(
-            "apps.scheduling.services.temp_access.verify_email_challenge",
+            "apps.scheduling.services.temporary_access.verify_email_challenge",
             return_value=SimpleNamespace(member_id=other.pk),
         ):
             self.assertIsNone(
@@ -262,7 +262,7 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
             404,
         )
         with patch(
-            "apps.scheduling.views.participants.create_or_reuse_managed_participant_and_send",
+            "apps.scheduling.views.participants.managed.create_or_reuse_managed_participant_and_send",
             side_effect=ManagedParticipantError("Organizer only", status_code=403),
         ):
             denied = client.post(
@@ -280,11 +280,11 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
         quota_denied = RateLimitDecision(allowed=False, retry_after=9)
         with (
             patch(
-                "apps.scheduling.views.participants.consume_request_rate_limit",
+                "apps.scheduling.views.participants.managed.consume_request_rate_limit",
                 return_value=quota_denied,
             ),
             patch(
-                "apps.scheduling.views.participants.create_or_reuse_managed_participant_and_send"
+                "apps.scheduling.views.participants.managed.create_or_reuse_managed_participant_and_send"
             ) as create,
         ):
             throttled = client.post(
@@ -309,7 +309,7 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
 
         with (
             patch(
-                "apps.scheduling.views.participants.mark_event_results_dirty",
+                "apps.scheduling.views.participants.managed.mark_event_results_dirty",
                 side_effect=RuntimeError("result invalidation failed"),
             ) as mark_dirty,
             self.assertRaisesMessage(RuntimeError, "result invalidation failed"),
@@ -385,7 +385,8 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
         client = APIClient()
         denied = RateLimitDecision(allowed=False, retry_after=7)
         with patch(
-            "apps.scheduling.views.temporary_access.consume_request_rate_limit", return_value=denied
+            "apps.scheduling.views.temporary_access.codes.consume_request_rate_limit",
+            return_value=denied,
         ):
             requested = client.post(
                 "/events/temp-access/request-code",
@@ -405,10 +406,10 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
         self.assertEqual(verified.status_code, 429)
 
         with patch(
-            "apps.scheduling.views.temporary_access.request_temporary_access_code",
+            "apps.scheduling.views.temporary_access.codes.request_temporary_access_code",
             side_effect=RuntimeError("mail provider unavailable"),
         ):
-            with self.assertLogs("apps.scheduling.views.temporary_access", level="ERROR"):
+            with self.assertLogs("apps.scheduling.views.temporary_access.codes", level="ERROR"):
                 generic = client.post(
                     "/events/temp-access/request-code",
                     {"code": self.event.code, "invitationToken": "opaque"},
@@ -432,7 +433,7 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
         self.assertEqual(rejected_origin.status_code, 403)
 
         with patch(
-            "apps.scheduling.views.temporary_access.verify_temporary_access_code",
+            "apps.scheduling.views.temporary_access.codes.verify_temporary_access_code",
             side_effect=DRFValidationError("bad code"),
         ):
             validation_error = client.post("/events/temp-access/verify", payload, format="json")
@@ -441,10 +442,12 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
 
         with (
             patch(
-                "apps.scheduling.views.temporary_access.verify_temporary_access_code",
+                "apps.scheduling.views.temporary_access.codes.verify_temporary_access_code",
                 return_value=None,
             ),
-            patch("apps.scheduling.views.temporary_access.security_logger.warning") as warning,
+            patch(
+                "apps.scheduling.views.temporary_access.codes.security_logger.warning"
+            ) as warning,
         ):
             invalid = client.post("/events/temp-access/verify", payload, format="json")
         self.assertEqual(invalid.status_code, 400)
@@ -491,7 +494,9 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
         )
         self.assertEqual(missing_code.status_code, 400)
 
-        with patch("apps.scheduling.views.temporary_access.consume_request_rate_limit") as consume:
+        with patch(
+            "apps.scheduling.views.temporary_access.registration.consume_request_rate_limit"
+        ) as consume:
             no_session = APIClient().post(
                 endpoint,
                 payload,
@@ -504,10 +509,12 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
         denied = RateLimitDecision(allowed=False, retry_after=7)
         with (
             patch(
-                "apps.scheduling.views.temporary_access.consume_request_rate_limit",
+                "apps.scheduling.views.temporary_access.registration.consume_request_rate_limit",
                 return_value=denied,
             ) as consume,
-            patch("apps.scheduling.views.temporary_access.start_registration") as start,
+            patch(
+                "apps.scheduling.views.temporary_access.registration.start_registration"
+            ) as start,
         ):
             throttled = self.temp_client().post(
                 endpoint,
@@ -527,10 +534,12 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
         verification_code = "123456"
         with (
             patch(
-                "apps.scheduling.views.temporary_access.start_registration",
+                "apps.scheduling.views.temporary_access.registration.start_registration",
                 wraps=start_registration,
             ) as registration_start,
-            patch("apps.scheduling.views.temporary_access.security_logger.info") as log_info,
+            patch(
+                "apps.scheduling.views.temporary_access.registration.security_logger.info"
+            ) as log_info,
             patch(
                 "apps.authn.services.email.challenges._random_code",
                 return_value=verification_code,
@@ -628,7 +637,7 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
             "last_name": "Name",
         }
         with patch(
-            "apps.scheduling.views.temporary_access.start_registration",
+            "apps.scheduling.views.temporary_access.registration.start_registration",
             side_effect=EmailDeliveryError("edge-temp@example.com delivery failed"),
         ):
             delivery_error = self.temp_client().post(
@@ -641,7 +650,7 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
         self.assertNotIn("edge-temp@example.com", delivery_error.content.decode())
 
         with patch(
-            "apps.scheduling.views.temporary_access.start_registration",
+            "apps.scheduling.views.temporary_access.registration.start_registration",
             side_effect=DRFValidationError({"first_name": "First name is required."}),
         ):
             invalid = self.temp_client().post(
@@ -655,7 +664,7 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
 
         mismatched_member = create_member("upgrade-mismatch@example.com")
         with patch(
-            "apps.scheduling.views.temporary_access.start_registration",
+            "apps.scheduling.views.temporary_access.registration.start_registration",
             return_value=mismatched_member,
         ):
             with self.assertRaisesRegex(
@@ -713,7 +722,7 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
         self.session.member = self.temporary
         client = self.temp_client()
         with patch(
-            "apps.scheduling.views.temporary_access.temporary_session_from_request",
+            "apps.scheduling.views.temporary_access.participant.temporary_session_from_request",
             return_value=self.session,
         ):
             response = client.put(

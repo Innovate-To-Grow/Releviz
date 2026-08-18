@@ -7,7 +7,7 @@ from rest_framework.test import APIClient
 
 from apps.authn.tests.helpers import create_member, token_for
 from apps.scheduling.models import Event, EventInvitation, Participant, Weight
-from apps.scheduling.services.lifecycle import (
+from apps.scheduling.services.events.lifecycle import (
     LifecycleError,
     response_write_error,
     transition_event,

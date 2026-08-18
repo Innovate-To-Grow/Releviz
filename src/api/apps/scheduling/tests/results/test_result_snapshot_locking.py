@@ -8,7 +8,7 @@ from django.test import TransactionTestCase
 
 from apps.authn.tests.helpers import create_member
 from apps.scheduling.models import Event, EventResultInvalidation, EventResultSnapshot
-from apps.scheduling.services.result_snapshots import (
+from apps.scheduling.services.results.snapshots import (
     recompute_event_results,
     request_event_results_recompute,
 )
@@ -47,7 +47,7 @@ class EventResultSnapshotLockingTests(TransactionTestCase):
 
         with (
             patch(
-                "apps.scheduling.services.result_snapshots.build_event_results",
+                "apps.scheduling.services.results.snapshots.build_event_results",
                 side_effect=blocked_calculation,
             ),
             ThreadPoolExecutor(max_workers=1) as executor,

@@ -1,3 +1,5 @@
+"""Admin for events and their duplication/deletion records."""
+
 from django.contrib import admin
 from unfold.admin import ModelAdmin
 

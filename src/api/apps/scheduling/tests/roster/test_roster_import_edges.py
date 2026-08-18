@@ -31,10 +31,11 @@ from apps.scheduling.models import (
     UserEvent,
     Weight,
 )
-from apps.scheduling.serializers import roster_import_payload
-from apps.scheduling.services import roster as roster_service
+from apps.scheduling.payloads import roster as roster_payloads
 from apps.scheduling.services import roster_imports
-from apps.scheduling.views import roster as roster_views
+from apps.scheduling.services.invitations import EventEmailRequestError
+from apps.scheduling.views.roster import helpers as roster_helpers
+from apps.scheduling.views.roster import queries as roster_queries
 
 
 class _Cell:
@@ -45,33 +46,37 @@ class _Cell:
 
 class RosterImportParserEdgeTests(SimpleTestCase):
     def test_cell_normalization_and_mapping_helpers_cover_supported_types(self):
-        self.assertEqual(roster_imports._trim_row([1, "", None]), [1])
+        self.assertEqual(roster_imports.parsing._trim_row([1, "", None]), [1])
         self.assertEqual(
-            roster_imports._serialized_cell(_Cell("SUM(A1)", "f")), {"formula": "SUM(A1)"}
+            roster_imports.parsing._serialized_cell(_Cell("SUM(A1)", "f")), {"formula": "SUM(A1)"}
         )
-        self.assertEqual(roster_imports._serialized_cell(_Cell(None)), "")
-        self.assertEqual(roster_imports._serialized_cell(_Cell(date(2026, 8, 5))), "2026-08-05")
-        self.assertEqual(roster_imports._serialized_cell(_Cell(time(9, 30))), "09:30:00")
+        self.assertEqual(roster_imports.parsing._serialized_cell(_Cell(None)), "")
         self.assertEqual(
-            roster_imports._serialized_cell(_Cell(datetime(2026, 8, 5, 9, 30))),
+            roster_imports.parsing._serialized_cell(_Cell(date(2026, 8, 5))), "2026-08-05"
+        )
+        self.assertEqual(roster_imports.parsing._serialized_cell(_Cell(time(9, 30))), "09:30:00")
+        self.assertEqual(
+            roster_imports.parsing._serialized_cell(_Cell(datetime(2026, 8, 5, 9, 30))),
             "2026-08-05T09:30:00",
         )
-        self.assertEqual(roster_imports._serialized_cell(_Cell(Decimal("0.25"))), 0.25)
-        self.assertEqual(roster_imports._serialized_cell(_Cell(True)), True)
+        self.assertEqual(roster_imports.parsing._serialized_cell(_Cell(Decimal("0.25"))), 0.25)
+        self.assertEqual(roster_imports.parsing._serialized_cell(_Cell(True)), True)
         self.assertEqual(
-            roster_imports._serialized_cell(_Cell(object())), str(_Cell(object()).value)
+            roster_imports.parsing._serialized_cell(_Cell(object())), str(_Cell(object()).value)
         )
 
-        self.assertEqual(roster_imports.display_cell({"formula": "A1"}), "=A1")
-        self.assertEqual(roster_imports.display_cell(None), "")
-        self.assertEqual(roster_imports.display_cell(True), "true")
-        self.assertEqual(roster_imports.display_cell(False), "false")
-        self.assertEqual(roster_imports._canonical_header(" Email_Address "), "email address")
+        self.assertEqual(roster_imports.mapping.display_cell({"formula": "A1"}), "=A1")
+        self.assertEqual(roster_imports.mapping.display_cell(None), "")
+        self.assertEqual(roster_imports.mapping.display_cell(True), "true")
+        self.assertEqual(roster_imports.mapping.display_cell(False), "false")
         self.assertEqual(
-            roster_imports._auto_mapping(["Participant Name", "E-mail", "Team", "Priority"]),
+            roster_imports.mapping._canonical_header(" Email_Address "), "email address"
+        )
+        self.assertEqual(
+            roster_imports.mapping.auto_mapping(["Participant Name", "E-mail", "Team", "Priority"]),
             {"name": 0, "email": 1, "group": 2, "weight": 3},
         )
-        metadata = roster_imports._worksheet_metadata(
+        metadata = roster_imports.mapping.worksheet_metadata(
             [
                 {"worksheet": "Sheet", "row_number": 3, "raw_values": ["A", "B"]},
                 {"worksheet": "Sheet", "row_number": 1, "raw_values": ["name"]},
@@ -82,20 +87,20 @@ class RosterImportParserEdgeTests(SimpleTestCase):
 
     def test_mapping_defaults_boolean_and_identity_validation_errors(self):
         headers = ["Name", "Email", "Email"]
-        self.assertEqual(roster_imports._mapping_index("1", headers, "email"), 1)
-        self.assertEqual(roster_imports._mapping_index(0, headers, "name"), 0)
+        self.assertEqual(roster_imports.mapping.mapping_index("1", headers, "email"), 1)
+        self.assertEqual(roster_imports.mapping.mapping_index(0, headers, "name"), 0)
         for value in (True, object(), -1, 99):
             with self.subTest(value=value), self.assertRaises(roster_imports.RosterImportError):
-                roster_imports._mapping_index(value, headers, "name")
+                roster_imports.mapping.mapping_index(value, headers, "name")
         with self.assertRaisesMessage(roster_imports.RosterImportError, "exactly one header"):
-            roster_imports._mapping_index("Email", headers, "email")
+            roster_imports.mapping.mapping_index("Email", headers, "email")
 
         self.assertEqual(
-            roster_imports._parse_defaults(None),
+            roster_imports.mapping.parse_defaults(None),
             {"group": "", "weight": 1.0, "included": True},
         )
         self.assertEqual(
-            roster_imports._parse_defaults(
+            roster_imports.mapping.parse_defaults(
                 {"groupName": " Faculty ", "weight": "0.4", "included": 0}
             ),
             {"group": "Faculty", "weight": 0.4, "included": False},
@@ -111,20 +116,20 @@ class RosterImportParserEdgeTests(SimpleTestCase):
                 self.subTest(defaults=defaults),
                 self.assertRaisesMessage(roster_imports.RosterImportError, message),
             ):
-                roster_imports._parse_defaults(defaults)
+                roster_imports.mapping.parse_defaults(defaults)
 
         for value in (True, 1, "YES", "included"):
-            self.assertTrue(roster_imports._parse_included(value))
+            self.assertTrue(roster_imports.mapping.parse_included(value))
         for value in (False, 0, "NO", "excluded"):
-            self.assertFalse(roster_imports._parse_included(value))
+            self.assertFalse(roster_imports.mapping.parse_included(value))
         with self.assertRaisesMessage(roster_imports.RosterImportError, "true or false"):
-            roster_imports._parse_included("maybe")
+            roster_imports.mapping.parse_included("maybe")
 
         self.assertEqual(
-            roster_imports._validate_identity_fields("", "", ""),
+            roster_imports.normalization.validate_identity_fields("", "", ""),
             ["name is required.", "email is required."],
         )
-        errors = roster_imports._validate_identity_fields(
+        errors = roster_imports.normalization.validate_identity_fields(
             "n" * 101,
             "e" * 255,
             "g" * 101,
@@ -133,78 +138,80 @@ class RosterImportParserEdgeTests(SimpleTestCase):
         self.assertIn("email is too long (max 254).", errors)
         self.assertIn("group is too long (max 100).", errors)
         self.assertEqual(
-            roster_imports._validate_identity_fields("Name", "not-an-email", ""),
+            roster_imports.normalization.validate_identity_fields("Name", "not-an-email", ""),
             ["email is invalid."],
         )
 
     def test_delimited_parser_rejects_malformed_and_bounded_input(self):
         with (
-            patch.object(roster_imports, "MAX_UNCOMPRESSED_BYTES", 2),
+            patch.object(roster_imports.parsing, "MAX_UNCOMPRESSED_BYTES", 2),
             self.assertRaisesMessage(roster_imports.RosterImportError, "25 MiB"),
         ):
-            roster_imports._parse_delimited(b"abc", worksheet="CSV")
+            roster_imports.parsing._parse_delimited(b"abc", worksheet="CSV")
         with self.assertRaisesMessage(roster_imports.RosterImportError, "UTF-8"):
-            roster_imports._parse_delimited(b"\xff", worksheet="CSV")
+            roster_imports.parsing._parse_delimited(b"\xff", worksheet="CSV")
         with self.assertRaisesMessage(roster_imports.RosterImportError, "null bytes"):
-            roster_imports._parse_delimited(b"name\x00,email", worksheet="CSV")
+            roster_imports.parsing._parse_delimited(b"name\x00,email", worksheet="CSV")
         with self.assertRaisesMessage(roster_imports.RosterImportError, "empty"):
-            roster_imports._parse_delimited(b"\n,\n", worksheet="CSV")
+            roster_imports.parsing._parse_delimited(b"\n,\n", worksheet="CSV")
 
         with patch(
-            "apps.scheduling.services.roster_imports.csv.Sniffer.sniff", side_effect=csv.Error
+            "apps.scheduling.services.roster_imports.parsing.csv.Sniffer.sniff",
+            side_effect=csv.Error,
         ):
-            parsed = roster_imports._parse_delimited(
+            parsed = roster_imports.parsing._parse_delimited(
                 b"name\temail\nAda\tada@example.com", worksheet="P"
             )
         self.assertEqual(parsed[1]["raw_values"], ["Ada", "ada@example.com"])
 
         with (
-            patch.object(roster_imports, "MAX_COLUMNS", 1),
+            patch.object(roster_imports.parsing, "MAX_COLUMNS", 1),
             self.assertRaisesMessage(roster_imports.RosterImportError, "more than 1 columns"),
         ):
-            roster_imports._parse_delimited(b"a,b", worksheet="CSV")
+            roster_imports.parsing._parse_delimited(b"a,b", worksheet="CSV")
         with (
-            patch.object(roster_imports, "MAX_PREVIEW_ROWS", 1),
+            patch.object(roster_imports.parsing, "MAX_PREVIEW_ROWS", 1),
             self.assertRaisesMessage(roster_imports.RosterImportError, "at most 1"),
         ):
-            roster_imports._parse_delimited(b"a\nb", worksheet="CSV")
+            roster_imports.parsing._parse_delimited(b"a\nb", worksheet="CSV")
 
         def broken_reader(*_args, **_kwargs):
             yield ["name"]
             raise csv.Error("broken quoting")
 
         with (
-            patch("apps.scheduling.services.roster_imports.csv.reader", broken_reader),
+            patch("apps.scheduling.services.roster_imports.parsing.csv.reader", broken_reader),
             self.assertRaisesMessage(roster_imports.RosterImportError, "could not be parsed"),
         ):
-            roster_imports._parse_delimited(b"name", worksheet="CSV")
+            roster_imports.parsing._parse_delimited(b"name", worksheet="CSV")
 
     def test_xlsx_parser_rejects_invalid_encrypted_unreadable_empty_and_bounds(self):
         with self.assertRaisesMessage(roster_imports.RosterImportError, "valid .xlsx"):
-            roster_imports._parse_xlsx(b"not a zip")
+            roster_imports.parsing._parse_xlsx(b"not a zip")
 
         fake_archive = MagicMock()
         fake_archive.__enter__.return_value = fake_archive
         fake_archive.__exit__.return_value = False
         fake_archive.infolist.return_value = [SimpleNamespace(file_size=1, flag_bits=1)]
         with patch(
-            "apps.scheduling.services.roster_imports.zipfile.ZipFile", return_value=fake_archive
+            "apps.scheduling.services.roster_imports.parsing.zipfile.ZipFile",
+            return_value=fake_archive,
         ):
             with self.assertRaisesMessage(roster_imports.RosterImportError, "Encrypted"):
-                roster_imports._parse_xlsx(b"zip")
+                roster_imports.parsing._parse_xlsx(b"zip")
 
         valid_zip = io.BytesIO()
         with zipfile.ZipFile(valid_zip, "w") as archive:
             archive.writestr("placeholder", "x")
         with patch("openpyxl.load_workbook", side_effect=ValueError("bad workbook")):
             with self.assertRaisesMessage(roster_imports.RosterImportError, "readable"):
-                roster_imports._parse_xlsx(valid_zip.getvalue())
+                roster_imports.parsing._parse_xlsx(valid_zip.getvalue())
 
         blank = Workbook()
         blank_output = io.BytesIO()
         blank.save(blank_output)
         with self.assertRaisesMessage(roster_imports.RosterImportError, "no non-empty"):
-            roster_imports._parse_xlsx(blank_output.getvalue())
+            roster_imports.parsing._parse_xlsx(blank_output.getvalue())
 
         workbook = Workbook()
         workbook.active.append(["name", "email"])
@@ -212,15 +219,15 @@ class RosterImportParserEdgeTests(SimpleTestCase):
         output = io.BytesIO()
         workbook.save(output)
         with (
-            patch.object(roster_imports, "MAX_COLUMNS", 1),
+            patch.object(roster_imports.parsing, "MAX_COLUMNS", 1),
             self.assertRaisesMessage(roster_imports.RosterImportError, "more than 1 columns"),
         ):
-            roster_imports._parse_xlsx(output.getvalue())
+            roster_imports.parsing._parse_xlsx(output.getvalue())
         with (
-            patch.object(roster_imports, "MAX_PREVIEW_ROWS", 1),
+            patch.object(roster_imports.parsing, "MAX_PREVIEW_ROWS", 1),
             self.assertRaisesMessage(roster_imports.RosterImportError, "at most 1"),
         ):
-            roster_imports._parse_xlsx(output.getvalue())
+            roster_imports.parsing._parse_xlsx(output.getvalue())
 
         declared_large = Workbook()
         declared_large.active.append(["name", "email"])
@@ -229,20 +236,20 @@ class RosterImportParserEdgeTests(SimpleTestCase):
         declared_large_output = io.BytesIO()
         declared_large.save(declared_large_output)
         with (
-            patch.object(roster_imports, "MAX_PREVIEW_ROWS", 1),
+            patch.object(roster_imports.parsing, "MAX_PREVIEW_ROWS", 1),
             self.assertRaisesMessage(roster_imports.RosterImportError, "declares more than 2"),
         ):
-            roster_imports._parse_xlsx(declared_large_output.getvalue())
+            roster_imports.parsing._parse_xlsx(declared_large_output.getvalue())
 
         fake_worksheet = MagicMock(max_column=1, max_row=1, title="Mock")
         fake_worksheet.iter_rows.return_value = [[_Cell("name"), _Cell("email")]]
         fake_workbook = MagicMock(worksheets=[fake_worksheet])
         with (
-            patch.object(roster_imports, "MAX_COLUMNS", 1),
+            patch.object(roster_imports.parsing, "MAX_COLUMNS", 1),
             patch("openpyxl.load_workbook", return_value=fake_workbook),
             self.assertRaisesMessage(roster_imports.RosterImportError, "row 1 has more than 1"),
         ):
-            roster_imports._parse_xlsx(valid_zip.getvalue())
+            roster_imports.parsing._parse_xlsx(valid_zip.getvalue())
         fake_workbook.close.assert_called_once()
 
         blank_then_value = Workbook()
@@ -250,21 +257,21 @@ class RosterImportParserEdgeTests(SimpleTestCase):
         blank_then_value_output = io.BytesIO()
         blank_then_value.save(blank_then_value_output)
         self.assertEqual(
-            roster_imports._parse_xlsx(blank_then_value_output.getvalue())[0]["row_number"],
+            roster_imports.parsing._parse_xlsx(blank_then_value_output.getvalue())[0]["row_number"],
             2,
         )
 
     def test_source_selection_and_upload_validation(self):
         oversized = SimpleNamespace(size=3, name="roster.csv", read=lambda _size: b"abc")
         with (
-            patch.object(roster_imports, "MAX_UPLOAD_BYTES", 2),
+            patch.object(roster_imports.parsing, "MAX_UPLOAD_BYTES", 2),
             self.assertRaisesMessage(roster_imports.RosterImportError, "5 MiB"),
         ):
             roster_imports.parse_roster_source(uploaded_file=oversized)
 
         deceptive = SimpleNamespace(size=0, name="roster.csv", read=lambda _size: b"abc")
         with (
-            patch.object(roster_imports, "MAX_UPLOAD_BYTES", 2),
+            patch.object(roster_imports.parsing, "MAX_UPLOAD_BYTES", 2),
             self.assertRaisesMessage(roster_imports.RosterImportError, "5 MiB"),
         ):
             roster_imports.parse_roster_source(uploaded_file=deceptive)
@@ -290,7 +297,7 @@ class RosterImportParserEdgeTests(SimpleTestCase):
         row = RosterImportRow(
             raw_values=[{"formula": "NAME"}, "=EMAIL", {"formula": "GROUP"}, "2", "maybe"]
         )
-        roster_imports._normalize_row(
+        roster_imports.normalization._normalize_row(
             row,
             {"name": 0, "email": 1, "group": 2, "weight": 3, "included": 4},
             {"group": "", "weight": 0.5, "included": False},
@@ -303,7 +310,9 @@ class RosterImportParserEdgeTests(SimpleTestCase):
         self.assertIn("included must be true or false.", row.validation_errors)
 
         missing = RosterImportRow(raw_values=[])
-        roster_imports._normalize_row(missing, {}, {"group": "", "weight": 1, "included": True})
+        roster_imports.normalization._normalize_row(
+            missing, {}, {"group": "", "weight": 1, "included": True}
+        )
         self.assertIn("Map a name column.", missing.validation_errors)
         self.assertIn("Map an email column.", missing.validation_errors)
 
@@ -321,16 +330,18 @@ class RosterImportParserEdgeTests(SimpleTestCase):
             validation_errors=["Conflicting duplicate email."],
             duplicate_status=RosterImportRow.DuplicateStatus.CONFLICT,
         )
-        roster_imports._apply_duplicate_rules([first, second])
+        roster_imports.normalization.apply_duplicate_rules([first, second])
         self.assertEqual(first.duplicate_status, RosterImportRow.DuplicateStatus.UNIQUE)
         self.assertEqual(second.duplicate_status, RosterImportRow.DuplicateStatus.UNIQUE)
         self.assertEqual(second.validation_errors, [])
-        self.assertEqual(roster_imports._active_rows(SimpleNamespace(selected_worksheet="")), [])
+        self.assertEqual(
+            roster_imports.normalization.active_rows(SimpleNamespace(selected_worksheet="")), []
+        )
 
         formula_options = RosterImportRow(
             raw_values=["Name", "name@example.com", {"formula": "WEIGHT"}, "=INCLUDED"]
         )
-        roster_imports._normalize_row(
+        roster_imports.normalization._normalize_row(
             formula_options,
             {"name": 0, "email": 1, "weight": 2, "included": 3},
             {"group": "", "weight": 1, "included": True},
@@ -340,7 +351,7 @@ class RosterImportParserEdgeTests(SimpleTestCase):
 
         tail = RosterImportRow(name="Tail", email="tail@example.com", selected=True)
         second.duplicate_status = RosterImportRow.DuplicateStatus.UNIQUE
-        roster_imports._apply_duplicate_rules([second, tail])
+        roster_imports.normalization.apply_duplicate_rules([second, tail])
         self.assertEqual(second.duplicate_status, RosterImportRow.DuplicateStatus.UNIQUE)
 
 
@@ -448,7 +459,7 @@ class RosterImportDatabaseEdgeTests(TestCase):
 
         payload_batch = self.preview("name,email\nPayload,payload-edge@example.com")
         payload_batch.rows.filter(row_number=1).delete()
-        payload = roster_import_payload(payload_batch)
+        payload = roster_payloads.roster_import_payload(payload_batch)
         self.assertEqual(payload["headers"], ["name", "email"])
 
     def test_row_update_validation_and_every_editable_field(self):
@@ -470,7 +481,7 @@ class RosterImportDatabaseEdgeTests(TestCase):
                 roster_imports.update_roster_import(batch=batch, data=updates)
 
         with (
-            patch.object(roster_imports, "MAX_ROSTER_ROWS", 1),
+            patch.object(roster_imports.batches, "MAX_ROSTER_ROWS", 1),
             self.assertRaisesMessage(roster_imports.RosterImportError, "at most 1"),
         ):
             roster_imports.update_roster_import(
@@ -506,7 +517,7 @@ class RosterImportDatabaseEdgeTests(TestCase):
         )
         one_row = two_rows.rows.get(row_number=2)
         with (
-            patch.object(roster_imports, "MAX_ROSTER_ROWS", 1),
+            patch.object(roster_imports.batches, "MAX_ROSTER_ROWS", 1),
             self.assertRaisesMessage(roster_imports.RosterImportError, "at most 1 valid"),
         ):
             roster_imports.update_roster_import(
@@ -554,7 +565,7 @@ class RosterImportDatabaseEdgeTests(TestCase):
 
     def test_rebuild_without_temporary_challenges_uses_the_empty_cleanup_path(self):
         self.assertFalse(self.event.result_invalidations.exists())
-        roster_imports._rebuild_event_roster(self.event, timezone.now())
+        roster_imports.commit._rebuild_event_roster(self.event, timezone.now())
         self.assertEqual(self.event.status, Event.Status.ACTIVE)
         self.assertEqual(self.event.version, 2)
 
@@ -570,7 +581,7 @@ class RosterImportDatabaseEdgeTests(TestCase):
                 self.subTest(email=email),
                 self.assertRaisesMessage(roster_imports.RosterImportError, expected),
             ):
-                roster_imports._resolve_members([row])
+                roster_imports.commit._resolve_members([row])
 
         orphan = ContactEmail.objects.create(
             member=None,
@@ -578,7 +589,7 @@ class RosterImportDatabaseEdgeTests(TestCase):
             email_type="other",
             verified=True,
         )
-        resolved = roster_imports._resolve_members(
+        resolved = roster_imports.commit._resolve_members(
             [RosterImportRow(name="Orphan", email="orphan-edge@example.com")]
         )
         orphan.refresh_from_db()
@@ -594,7 +605,7 @@ class RosterImportDatabaseEdgeTests(TestCase):
             verified=True,
         )
         with self.assertRaisesMessage(roster_imports.RosterImportError, "same account"):
-            roster_imports._resolve_members(
+            roster_imports.commit._resolve_members(
                 [
                     RosterImportRow(name="One", email="shared-primary-edge@example.com"),
                     RosterImportRow(name="Two", email="shared-other-edge@example.com"),
@@ -611,7 +622,7 @@ class RosterImportDatabaseEdgeTests(TestCase):
             ),
             self.assertRaisesMessage(roster_imports.RosterImportError, "account changed"),
         ):
-            roster_imports._resolve_members(
+            roster_imports.commit._resolve_members(
                 [
                     RosterImportRow(
                         name="Concurrent",
@@ -665,7 +676,7 @@ class RosterImportDatabaseEdgeTests(TestCase):
         self.assertEqual(repeated_merge.data["receipt"]["updatedCount"], 1)
 
         over_capacity = self.preview("name,email\nExtra,extra-capacity-edge@example.com")
-        with patch.object(roster_imports, "MAX_ROSTER_ROWS", 1):
+        with patch.object(roster_imports.commit, "MAX_ROSTER_ROWS", 1):
             response = self.commit(over_capacity)
         self.assertEqual(response.status_code, 409)
 
@@ -677,7 +688,7 @@ class RosterImportDatabaseEdgeTests(TestCase):
         invitation_capacity = self.preview(
             "name,email\nInvitation Cap,new-invitation-capacity@example.com"
         )
-        with patch.object(roster_imports, "MAX_ROSTER_ROWS", 2):
+        with patch.object(roster_imports.commit, "MAX_ROSTER_ROWS", 2):
             invitation_capacity_response = self.commit(invitation_capacity)
         self.assertEqual(invitation_capacity_response.status_code, 409)
         self.assertIn("invitation recipients", invitation_capacity_response.data["error"])
@@ -685,7 +696,7 @@ class RosterImportDatabaseEdgeTests(TestCase):
         oversized_batch = self.preview(
             "name,email\nFirst,first-commit-cap@example.com\nSecond,second-commit-cap@example.com"
         )
-        with patch.object(roster_imports, "MAX_ROSTER_ROWS", 1):
+        with patch.object(roster_imports.commit, "MAX_ROSTER_ROWS", 1):
             oversized_response = self.commit(oversized_batch)
         self.assertEqual(oversized_response.status_code, 400)
         self.assertIn("at most 1", oversized_response.data["error"])
@@ -781,8 +792,8 @@ class RosterImportDatabaseEdgeTests(TestCase):
         row.save(update_fields=["validation_errors", "updated_at"])
 
         with patch(
-            "apps.scheduling.services.roster_imports.upsert_and_send_invitations",
-            side_effect=roster_imports.EventEmailRequestError(
+            "apps.scheduling.services.roster_imports.commit.upsert_and_send_invitations",
+            side_effect=EventEmailRequestError(
                 "Invitation delivery is unavailable.",
                 status_code=503,
             ),
@@ -800,7 +811,8 @@ class RosterImportDatabaseEdgeTests(TestCase):
         self.assertEqual(delivery_error.exception.status_code, 503)
 
         with patch(
-            "apps.scheduling.services.roster_imports._write_roster", side_effect=IntegrityError
+            "apps.scheduling.services.roster_imports.commit._write_roster",
+            side_effect=IntegrityError,
         ):
             with self.assertRaisesMessage(roster_imports.RosterImportError, "changed concurrently"):
                 roster_imports.commit_roster_import(
@@ -916,8 +928,8 @@ class RosterImportDatabaseEdgeTests(TestCase):
         self.assertEqual([response.status_code for response in requests], [403] * len(requests))
 
     def test_roster_filters_schedule_and_participant_patch_edge_contracts(self):
-        self.assertIsNone(roster_views._latest_delivery_request(self.event))
-        self.assertIsNone(roster_service.participant_for_path(self.event, "not-an-identity"))
+        self.assertIsNone(roster_queries.latest_delivery_request(self.event))
+        self.assertIsNone(roster_helpers.participant_for_path(self.event, "not-an-identity"))
 
         batch = self.preview(
             "name,email,group,included\n"
@@ -927,7 +939,7 @@ class RosterImportDatabaseEdgeTests(TestCase):
         self.assertEqual(self.commit(batch).status_code, 201)
         ada = self.event.participants.get(participant_name="Ada")
         grace = self.event.participants.get(participant_name="Grace")
-        member_identity = roster_service.participant_identity_query([str(ada.member_id)])
+        member_identity = roster_helpers.participant_identity_query([str(ada.member_id)])
         self.assertEqual(
             Participant.objects.filter(event=self.event).filter(member_identity).get(),
             ada,
@@ -1135,7 +1147,7 @@ class RosterImportDatabaseEdgeTests(TestCase):
         self.assertIn("invalid", invalid_uuid.data["error"])
 
         with patch(
-            "apps.scheduling.views.roster.bulk_selector",
+            "apps.scheduling.views.roster.bulk._bulk_selector",
             side_effect=ValueError("invalid participant identifier"),
         ):
             invalid_value = self.client.patch(
@@ -1150,7 +1162,7 @@ class RosterImportDatabaseEdgeTests(TestCase):
         self.assertEqual(invalid_value.status_code, 400)
         self.assertEqual(invalid_value.data["error"], "A participant id is invalid.")
 
-        with patch("apps.scheduling.services.roster.MAX_ROSTER_ROWS", 1):
+        with patch("apps.scheduling.views.roster.bulk.MAX_ROSTER_ROWS", 1):
             too_many = self.client.patch(
                 f"/events/roster/bulk?code={self.event.code}",
                 {

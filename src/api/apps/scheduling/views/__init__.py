@@ -1,15 +1,15 @@
-"""
-Scheduling views export.
+"""Scheduling app views export.
 
-One module per endpoint group; ``urls.py`` resolves every name from here.
-Shared response helpers live in ``apps.scheduling.views.helpers``.
+Grouped by resource: ``events``, ``participants``, ``invitations``,
+``finalization``, ``roster``, ``temporary_access``, plus the ``health`` probes
+and the ``operations`` delivery endpoints.
 """
 
-from .deliveries import DeliveryRequestView
 from .events import (
     DashboardEventsView,
     EventDuplicateView,
     EventLifecycleView,
+    EventResultsView,
     EventsView,
 )
 from .finalization import (
@@ -18,11 +18,8 @@ from .finalization import (
     EventFinalizationView,
 )
 from .health import health_live, health_ready
-from .invitations import (
-    EventInvitationOpenView,
-    EventInvitationsView,
-    EventRemindersView,
-)
+from .invitations import EventInvitationOpenView, EventInvitationsView, EventRemindersView
+from .operations import DeliveryRequestView
 from .participants import (
     ManagedParticipantView,
     ParticipantsView,
@@ -30,18 +27,15 @@ from .participants import (
     ParticipantUpdateView,
     WeightsView,
 )
-from .results import EventResultsView
 from .roster import (
     RosterBulkView,
-    RosterParticipantScheduleView,
-    RosterParticipantView,
-    RosterView,
-)
-from .roster_imports import (
     RosterImportCollectionView,
     RosterImportCommitView,
     RosterImportDetailView,
     RosterImportRowsView,
+    RosterParticipantScheduleView,
+    RosterParticipantView,
+    RosterView,
 )
 from .temporary_access import (
     TemporaryAccessLogoutView,
@@ -53,13 +47,14 @@ from .temporary_access import (
 )
 
 __all__ = [
-    # Health probes
+    # Health
     "health_live",
     "health_ready",
     # Events
     "DashboardEventsView",
     "EventDuplicateView",
     "EventLifecycleView",
+    "EventResultsView",
     "EventsView",
     # Participants
     "ManagedParticipantView",
@@ -67,12 +62,23 @@ __all__ = [
     "ParticipantUpdateView",
     "ParticipantsView",
     "WeightsView",
-    # Results
-    "EventResultsView",
     # Invitations
     "EventInvitationOpenView",
     "EventInvitationsView",
     "EventRemindersView",
+    # Finalization
+    "EventFinalCalendarView",
+    "EventFinalizationPreviewView",
+    "EventFinalizationView",
+    # Roster
+    "RosterBulkView",
+    "RosterImportCollectionView",
+    "RosterImportCommitView",
+    "RosterImportDetailView",
+    "RosterImportRowsView",
+    "RosterParticipantScheduleView",
+    "RosterParticipantView",
+    "RosterView",
     # Temporary access
     "TemporaryAccessLogoutView",
     "TemporaryAccessParticipantView",
@@ -80,20 +86,6 @@ __all__ = [
     "TemporaryAccessSessionView",
     "TemporaryAccessUpgradeRegistrationView",
     "TemporaryAccessVerifyView",
-    # Finalization
-    "EventFinalCalendarView",
-    "EventFinalizationPreviewView",
-    "EventFinalizationView",
-    # Roster
-    "RosterBulkView",
-    "RosterParticipantScheduleView",
-    "RosterParticipantView",
-    "RosterView",
-    # Roster imports
-    "RosterImportCollectionView",
-    "RosterImportCommitView",
-    "RosterImportDetailView",
-    "RosterImportRowsView",
-    # Deliveries
+    # Operations
     "DeliveryRequestView",
 ]

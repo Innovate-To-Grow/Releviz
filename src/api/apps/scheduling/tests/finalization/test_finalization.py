@@ -20,8 +20,7 @@ from apps.scheduling.models import (
     Participant,
     Weight,
 )
-from apps.scheduling.serializers import api_event, api_final_meeting
-from apps.scheduling.services.calendar import final_meeting_ics
+from apps.scheduling.payloads import api_event, api_final_meeting
 from apps.scheduling.services.finalization import (
     FinalizationError,
     build_attendance_review,
@@ -31,6 +30,7 @@ from apps.scheduling.services.finalization import (
     final_notification_recipients,
     normalize_final_time,
 )
+from apps.scheduling.services.ics import final_meeting_ics
 from apps.scheduling.services.slots import build_event_slot_groups
 from apps.scheduling.validators import validate_iana_timezone
 

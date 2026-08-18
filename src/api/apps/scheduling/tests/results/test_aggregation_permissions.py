@@ -12,7 +12,7 @@ from apps.scheduling.permissions import (
     visible_participants_for_user,
     weight_for_participant,
 )
-from apps.scheduling.services.aggregation import (
+from apps.scheduling.services.results.aggregation import (
     build_event_results,
     parse_availability,
     participant_availability,
@@ -20,7 +20,7 @@ from apps.scheduling.services.aggregation import (
     participant_is_excluded,
     result_channels,
 )
-from apps.scheduling.services.result_snapshots import recompute_event_results
+from apps.scheduling.services.results.snapshots import recompute_event_results
 
 
 class AggregationDomainTests(TestCase):

@@ -10,12 +10,8 @@ from django.utils import timezone
 from apps.authn.tests.helpers import create_member
 from apps.mail.models import EmailDeliveryJob, EmailMessageLog
 from apps.scheduling.models import Event
-from apps.scheduling.services.event_management import (
-    EventManagementError,
-    create_event,
-    duplicate_event,
-)
-from apps.scheduling.services.lifecycle import (
+from apps.scheduling.services.events import EventManagementError, create_event, duplicate_event
+from apps.scheduling.services.events.lifecycle import (
     LifecycleError,
     response_write_error,
     transition_event,

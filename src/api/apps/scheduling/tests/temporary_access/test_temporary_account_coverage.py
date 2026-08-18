@@ -15,12 +15,12 @@ from apps.scheduling.models import (
     TemporaryEventSession,
     UserEvent,
 )
-from apps.scheduling.serializers import api_participant
+from apps.scheduling.payloads import api_participant
+from apps.scheduling.services.availability import default_availability
 from apps.scheduling.services.invitations import (
     ManagedParticipantError,
     create_or_reuse_managed_participant,
 )
-from apps.scheduling.services.slots import default_availability
 
 
 class TemporaryAccountCoverageTests(TestCase):

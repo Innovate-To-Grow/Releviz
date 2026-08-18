@@ -9,7 +9,7 @@ from django.utils import timezone
 
 from apps.authn.tests.helpers import create_member
 from apps.scheduling.models import Event, EventResultInvalidation, EventResultSnapshot
-from apps.scheduling.services.result_snapshots import (
+from apps.scheduling.services.results.snapshots import (
     ensure_result_snapshot,
     flush_event_result_invalidations,
     mark_event_results_dirty,
@@ -82,7 +82,7 @@ class EventResultSnapshotTests(TestCase):
             return {"stale": True}
 
         with patch(
-            "apps.scheduling.services.result_snapshots.build_event_results",
+            "apps.scheduling.services.results.snapshots.build_event_results",
             side_effect=make_stale,
         ):
             stale = recompute_event_results(self.event.pk)
@@ -92,7 +92,7 @@ class EventResultSnapshotTests(TestCase):
         self.assertEqual(snapshot.requested_revision, 2)
 
         with patch(
-            "apps.scheduling.services.result_snapshots.build_event_results",
+            "apps.scheduling.services.results.snapshots.build_event_results",
             side_effect=RuntimeError("calculation failed"),
         ):
             failed = recompute_event_results(self.event.pk)
@@ -189,7 +189,7 @@ class EventResultSnapshotTests(TestCase):
             return {"winner": "other worker"}
 
         with patch(
-            "apps.scheduling.services.result_snapshots.build_event_results",
+            "apps.scheduling.services.results.snapshots.build_event_results",
             side_effect=replace_lock,
         ):
             lost = recompute_event_results(self.event.pk)
@@ -229,7 +229,7 @@ class EventResultSnapshotTests(TestCase):
             raise RuntimeError("losing worker")
 
         with patch(
-            "apps.scheduling.services.result_snapshots.build_event_results",
+            "apps.scheduling.services.results.snapshots.build_event_results",
             side_effect=replace_lock_and_fail,
         ):
             lost = recompute_event_results(self.event.pk)
@@ -244,7 +244,7 @@ class EventResultSnapshotTests(TestCase):
             raise RuntimeError("stale failure")
 
         with patch(
-            "apps.scheduling.services.result_snapshots.build_event_results",
+            "apps.scheduling.services.results.snapshots.build_event_results",
             side_effect=newer_revision_and_fail,
         ):
             stale_failure = recompute_event_results(self.event.pk)
@@ -256,7 +256,7 @@ class EventResultSnapshotTests(TestCase):
             return {"deleted": True}
 
         with patch(
-            "apps.scheduling.services.result_snapshots.build_event_results",
+            "apps.scheduling.services.results.snapshots.build_event_results",
             side_effect=delete_during_calculation,
         ):
             missing = recompute_event_results(self.event.pk)
@@ -274,7 +274,7 @@ class EventResultSnapshotTests(TestCase):
         snapshot.lock_token = None
         snapshot.save(update_fields=["locked_at", "lock_token", "updated_at"])
         with patch(
-            "apps.scheduling.services.result_snapshots.build_event_results",
+            "apps.scheduling.services.results.snapshots.build_event_results",
             side_effect=RuntimeError("due failure"),
         ):
             failed = recompute_due_event_results(limit=10)
@@ -287,7 +287,7 @@ class EventResultSnapshotTests(TestCase):
             return {"old": True}
 
         with patch(
-            "apps.scheduling.services.result_snapshots.build_event_results",
+            "apps.scheduling.services.results.snapshots.build_event_results",
             side_effect=supersede,
         ):
             stale = recompute_due_event_results(limit=10, now=retry_time)
@@ -299,7 +299,7 @@ class EventResultSnapshotTests(TestCase):
             raise RuntimeError("event removed")
 
         with patch(
-            "apps.scheduling.services.result_snapshots.build_event_results",
+            "apps.scheduling.services.results.snapshots.build_event_results",
             side_effect=delete_and_fail,
         ):
             result = recompute_event_results(self.event.pk)
@@ -311,7 +311,7 @@ class EventResultSnapshotTests(TestCase):
             return {"deleted": True}
 
         with patch(
-            "apps.scheduling.services.result_snapshots.build_event_results",
+            "apps.scheduling.services.results.snapshots.build_event_results",
             side_effect=delete_snapshot,
         ):
             succeeded_without_snapshot = recompute_event_results(self.event.pk)
@@ -325,7 +325,7 @@ class EventResultSnapshotTests(TestCase):
             raise RuntimeError("snapshot removed")
 
         with patch(
-            "apps.scheduling.services.result_snapshots.build_event_results",
+            "apps.scheduling.services.results.snapshots.build_event_results",
             side_effect=delete_snapshot_and_fail,
         ):
             failed_without_snapshot = recompute_event_results(self.event.pk)

@@ -135,7 +135,7 @@ class EventManagementApiTests(TestCase):
         self.assertIn("TOMBSTON", str(record))
 
         with patch(
-            "apps.scheduling.services.event_management.generate_event_code",
+            "apps.scheduling.services.events.mutations.generate_event_code",
             side_effect=["TOMBSTON", "FRESH001"],
         ):
             created = self.client.post("/events", {"name": "Fresh"}, format="json")
@@ -153,7 +153,7 @@ class EventManagementApiTests(TestCase):
 
         with (
             patch(
-                "apps.scheduling.services.event_management._unique_event_code",
+                "apps.scheduling.services.events.mutations._unique_event_code",
                 side_effect=["RACE0001", "RACE0002"],
             ),
             patch.object(Event.objects, "create", side_effect=racing_create),
@@ -172,7 +172,7 @@ class EventManagementApiTests(TestCase):
 
         with (
             patch(
-                "apps.scheduling.services.event_management._unique_event_code",
+                "apps.scheduling.services.events.mutations._unique_event_code",
                 side_effect=["FAIL0001", "FAIL0002", "FAIL0003"],
             ),
             patch.object(
@@ -603,7 +603,7 @@ class EventManagementApiTests(TestCase):
         active_job.save(update_fields=["locked_at", "lock_token", "updated_at"])
 
         with (
-            self.assertLogs("apps.scheduling.services.event_management", level="INFO") as logs,
+            self.assertLogs("apps.scheduling.services.events.mutations", level="INFO") as logs,
             self.captureOnCommitCallbacks(execute=True),
         ):
             deleted = self.delete(event, payload)

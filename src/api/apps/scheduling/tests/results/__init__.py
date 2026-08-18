@@ -1,1 +1,1 @@
-"""Aggregation, recommendation, and result-snapshot tests."""
+"""Aggregation, recommendation, and snapshot tests."""

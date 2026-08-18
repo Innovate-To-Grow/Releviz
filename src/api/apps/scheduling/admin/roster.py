@@ -1,3 +1,5 @@
+"""Admin for roster import batches, rows, and receipts."""
+
 from django.contrib import admin
 from unfold.admin import ModelAdmin
 

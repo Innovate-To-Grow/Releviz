@@ -1,7 +1,9 @@
+"""Who may access, join, and read the results of an event."""
+
 from __future__ import annotations
 
 from apps.authn.models import ContactEmail
-from apps.scheduling.services.aggregation import (
+from apps.scheduling.services.results.aggregation import (
     participant_has_valid_submission,
     participant_is_excluded,
 )

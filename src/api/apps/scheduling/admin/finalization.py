@@ -1,3 +1,5 @@
+"""Admin for final meetings and finalization requests."""
+
 from django.contrib import admin
 from unfold.admin import ModelAdmin
 

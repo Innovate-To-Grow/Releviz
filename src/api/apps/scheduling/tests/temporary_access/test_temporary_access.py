@@ -18,7 +18,7 @@ from apps.scheduling.models import (
     Participant,
     TemporaryEventSession,
 )
-from apps.scheduling.services.result_snapshots import recompute_event_results
+from apps.scheduling.services.results.snapshots import recompute_event_results
 
 
 class TemporaryParticipantAccessTests(TestCase):

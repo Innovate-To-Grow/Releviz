@@ -1,1 +1,1 @@
-"""Migration contract tests."""
+"""Schema migration tests."""

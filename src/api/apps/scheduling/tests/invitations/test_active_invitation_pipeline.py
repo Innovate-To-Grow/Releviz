@@ -7,11 +7,11 @@ from apps.authn.models import ContactEmail
 from apps.authn.tests.helpers import create_member
 from apps.mail.models import EmailDeliveryJob, EmailDeliveryRequest
 from apps.scheduling.models import Event, EventInvitation, Participant, UserEvent
-from apps.scheduling.services.deliveries import (
+from apps.scheduling.services.invitations import (
     EventEmailRequestError,
     create_or_reuse_managed_participant_and_send,
 )
-from apps.scheduling.views.roster import _latest_delivery_request
+from apps.scheduling.views.roster.queries import latest_delivery_request
 
 
 class ActiveInvitationPipelineTests(TestCase):
@@ -108,7 +108,7 @@ class ActiveInvitationPipelineTests(TestCase):
 
         with (
             patch(
-                "apps.scheduling.services.deliveries._enqueue_invitation_job",
+                "apps.scheduling.services.invitations.delivery._enqueue_invitation_job",
                 side_effect=RuntimeError("queue unavailable"),
             ),
             self.assertRaisesMessage(RuntimeError, "queue unavailable"),
@@ -164,6 +164,6 @@ class ActiveInvitationPipelineTests(TestCase):
             replay["deliveryResult"]["request"].pk,
         )
         self.assertEqual(
-            _latest_delivery_request(self.event)["id"],
+            latest_delivery_request(self.event)["id"],
             str(invited["deliveryResult"]["request"].pk),
         )

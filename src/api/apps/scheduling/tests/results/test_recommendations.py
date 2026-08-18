@@ -6,8 +6,8 @@ from django.test import TestCase
 
 from apps.authn.tests.helpers import create_member
 from apps.scheduling.models import Event, Participant
-from apps.scheduling.services.aggregation import build_event_results
-from apps.scheduling.services.recommendations import build_ranked_recommendations
+from apps.scheduling.services.results.aggregation import build_event_results
+from apps.scheduling.services.results.recommendations import build_ranked_recommendations
 
 
 class RecommendationDomainTests(TestCase):
@@ -100,7 +100,7 @@ class RecommendationDomainTests(TestCase):
         weekly = self.event("NOVALID")
         self.submit(weekly, [1, 1])
         with patch(
-            "apps.scheduling.services.recommendations.valid_localizations",
+            "apps.scheduling.services.results.recommendations.valid_localizations",
             return_value=(),
         ):
             weekly_results = build_event_results(

@@ -1,1 +1,1 @@
-"""Event configuration, lifecycle, and dashboard tests."""
+"""Event configuration and lifecycle tests."""

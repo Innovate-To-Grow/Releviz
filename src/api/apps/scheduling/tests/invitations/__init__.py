@@ -1,1 +1,1 @@
-"""Invitation and delivery-request tests."""
+"""Invitation and reminder tests."""

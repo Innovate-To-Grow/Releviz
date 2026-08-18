@@ -1,4 +1,4 @@
-"""Liveness and readiness probes for the load balancer and container platform."""
+"""Liveness and readiness probes."""
 
 import logging
 
