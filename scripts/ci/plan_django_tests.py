@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Select Django app test shards from a pull-request diff."""
+"""Select focused or full Django app test shards."""
 
 from __future__ import annotations
 
@@ -45,8 +45,8 @@ def read_changed_files(path: Path) -> list[str]:
     return [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def select_apps(event_name: str, changed_files: list[str]) -> list[str]:
-    if event_name != "pull_request" or not changed_files:
+def select_apps(event_name: str, changed_files: list[str], *, full: bool = False) -> list[str]:
+    if full or event_name != "pull_request" or not changed_files:
         return list(APPS)
 
     if any(
@@ -71,11 +71,15 @@ def select_apps(event_name: str, changed_files: list[str]) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--event-name", required=True)
-    parser.add_argument("--changed-files", type=Path, required=True)
+    parser.add_argument("--full", action="store_true")
+    parser.add_argument("--event-name", default="")
+    parser.add_argument("--changed-files", type=Path)
     args = parser.parse_args()
 
-    apps = select_apps(args.event_name, read_changed_files(args.changed_files))
+    if not args.full and (not args.event_name or args.changed_files is None):
+        parser.error("--event-name and --changed-files are required unless --full is used")
+    changed_files = read_changed_files(args.changed_files) if args.changed_files else []
+    apps = select_apps(args.event_name, changed_files, full=args.full)
     print(f"apps={json.dumps(apps, separators=(',', ':'))}")
     return 0
 

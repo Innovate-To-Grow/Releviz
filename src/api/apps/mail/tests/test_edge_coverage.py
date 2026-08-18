@@ -64,6 +64,7 @@ class MailAdminEdgeTests(TestCase):
             "admin/mail/emailproviderconfig/send_test_email.html",
         )
         self.assertIsInstance(response.context_data["form"], TestEmailForm)
+        self.assertContains(response, 'name="csrfmiddlewaretoken"')
 
     @patch.object(EmailDeliveryJobAdmin, "message_user")
     @patch.object(EmailDeliveryJobAdmin, "log_change")

@@ -19,16 +19,31 @@ PRINT_EMAILS_TO_TERMINAL = False
 # the browser tests read.
 AUTH_EMAIL_DJANGO_BACKEND_FALLBACK = True
 REQUIRE_ENCRYPTED_PASSWORDS = True
-AUTH_RATE_LIMITS = {}
-AUTH_FAILURE_LIMITS = {}
 
-# A browser run drives many verification codes through one address, which the
-# production throttles would reject. Clearing the DRF rates keeps the flows
-# under test rather than the rate limiter.
-REST_FRAMEWORK = {
-    **REST_FRAMEWORK,  # noqa: F405
-    "DEFAULT_THROTTLE_RATES": dict.fromkeys(
-        REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"],  # noqa: F405
-        None,
-    ),
+# A browser run drives many requests and verification codes through one address.
+# Keep those flows practical while retaining finite, shared limits so an exposed
+# E2E service cannot become an unthrottled endpoint.
+_E2E_THROTTLE_RATE = "1000/minute"
+_E2E_DURABLE_LIMIT = {"limit": 1000, "window": 60, "block": 60}
+
+AUTH_RATE_LIMITS = {  # noqa: F405
+    scope: {dimension: dict(_E2E_DURABLE_LIMIT) for dimension in dimensions}
+    for scope, dimensions in AUTH_RATE_LIMITS.items()  # noqa: F405
+}
+AUTH_FAILURE_LIMITS = {  # noqa: F405
+    scope: {dimension: dict(_E2E_DURABLE_LIMIT) for dimension in dimensions}
+    for scope, dimensions in AUTH_FAILURE_LIMITS.items()  # noqa: F405
+}
+
+REST_FRAMEWORK["DEFAULT_THROTTLE_CLASSES"] = [  # noqa: F405
+    "rest_framework.throttling.AnonRateThrottle",
+    "rest_framework.throttling.UserRateThrottle",
+]
+REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"] = {  # noqa: F405
+    scope: _E2E_THROTTLE_RATE
+    for scope in {
+        *REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"],  # noqa: F405
+        "anon",
+        "user",
+    }
 }

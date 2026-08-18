@@ -20,13 +20,15 @@
               x-text="adminTheme == 'dark' ? $el.dataset.darkLabel : adminTheme == 'light' ? $el.dataset.lightLabel : $el.dataset.systemLabel">{% translate "System" %}</span>
     </button>
 
-    <nav class="i2g-admin-theme-toggle__menu"
+    <!-- Alpine's .escape modifier handles the Escape key; it does not disable JSF escaping. -->
+    <!-- nosemgrep: java.lang.security.audit.xss.jsf.autoescape-disabled.autoescape-disabled -->
+    <nav x-on:keydown.escape.window="openTheme = false"
+         class="i2g-admin-theme-toggle__menu"
          aria-label="{% translate 'Admin theme options' %}"
          x-cloak
          x-show="openTheme"
          x-transition
-         x-on:click.outside="openTheme = false"
-         x-on:keydown.escape.window="openTheme = false">
+         x-on:click.outside="openTheme = false">
         <button type="button"
                 class="i2g-admin-theme-toggle__option"
                 data-admin-theme-choice="light"

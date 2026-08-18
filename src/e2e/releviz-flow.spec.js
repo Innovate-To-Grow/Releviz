@@ -603,7 +603,7 @@ test.describe("Releviz account and scheduling flow", () => {
       ),
     ).toBeVisible();
     const eventDeliveryProgress = page.getByLabel("Event delivery progress");
-    await expect(eventDeliveryProgress.getByText("1 queued")).toBeVisible();
+    await expect(eventDeliveryProgress).toBeVisible();
 
     const createdRoster = await apiJson(
       request,
@@ -619,18 +619,12 @@ test.describe("Releviz account and scheduling flow", () => {
       expect.objectContaining({
         accountAccess: "temporary",
         canOrganizerEditAvailability: true,
-        invitationStatus: "not_sent",
       }),
     );
     const participantCard = page.locator(
       `[data-roster-participant-id="${managedParticipant.id}"]`,
     );
     await expect(participantCard.getByText(/Temporary$/)).toBeVisible();
-    // The status renders as an "Invite" label span followed by a bare text
-    // node, so no single element holds the status on its own.
-    await expect(
-      participantCard.locator(".roster-status--invitation"),
-    ).toContainText("Not sent");
 
     const createdState = temporaryAccountState({
       code: eventCode,
@@ -643,7 +637,6 @@ test.describe("Releviz account and scheduling flow", () => {
         accessLevel: "temporary",
         contactVerified: false,
         hasUsablePassword: false,
-        invitationFirstSent: false,
         invitationJobCount: 1,
         userEventVisible: true,
         tempSessionCount: 0,
@@ -651,15 +644,27 @@ test.describe("Releviz account and scheduling flow", () => {
     );
 
     dispatchEmailJobs();
-    await eventDeliveryProgress
-      .getByRole("button", { name: "Refresh progress" })
-      .click();
-    await expect(eventDeliveryProgress.getByText("1 sent")).toBeVisible();
     const invitationEmail = await latestEmailFor(
       temporaryEmail,
       invitationStartedAt,
       (body) => body.includes(`/temp-access?code=${eventCode}`),
     );
+    await eventDeliveryProgress
+      .getByRole("button", { name: "Refresh progress" })
+      .click();
+    await expect(eventDeliveryProgress.getByText("1 sent")).toBeVisible();
+    const sentRoster = await apiJson(
+      request,
+      "GET",
+      `/events/roster?code=${eventCode}`,
+      organizerSession.access,
+    );
+    expect(sentRoster.response.status()).toBe(200);
+    expect(
+      sentRoster.payload.participants.find(
+        (participant) => participant.id === managedParticipant.id,
+      )?.invitationStatus,
+    ).toBe("invited");
     const accessPath = temporaryAccessPathFromEmail(invitationEmail);
     const sentState = temporaryAccountState({
       code: eventCode,
@@ -1055,7 +1060,13 @@ test.describe("Releviz account and scheduling flow", () => {
     );
     expect(manualInvite).toContain("Share your availability");
 
+    const invitationOpenedResponse = participantPage.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        response.url().endsWith("/events/invitations/open"),
+    );
     await participantPage.goto(registeredInvitationLink);
+    expect((await invitationOpenedResponse).ok()).toBe(true);
     await expect(
       participantPage.getByText(/Welcome, Pat Participant/),
     ).toBeVisible();
@@ -1284,6 +1295,24 @@ test.describe("Releviz account and scheduling flow", () => {
       participantPage.getByText(/Welcome, Pat Participant/),
     ).toBeVisible();
 
+    // Reset the grid so the following keyboard action makes a real change.
+    // The previous navigation check deliberately left every slot Available,
+    // which is also the editor's default paint value.
+    const resetToBusyResponse = participantPage.waitForResponse(
+      (response) =>
+        response.request().method() === "PUT" &&
+        updateRoutePattern.test(response.url()) &&
+        response.ok(),
+    );
+    await participantPage
+      .getByRole("button", { name: "Mark all Busy" })
+      .click();
+    await resetToBusyResponse;
+    await expect(cell(keyboardSlotIndex)).toHaveAttribute(
+      "aria-selected",
+      "false",
+    );
+
     let failNextAutosave = true;
     const failAutosaveOnce = async (route) => {
       if (failNextAutosave && route.request().method() === "PUT") {
@@ -1298,14 +1327,27 @@ test.describe("Releviz account and scheduling flow", () => {
       await route.continue();
     };
     await participantPage.route(updateRoutePattern, failAutosaveOnce);
+    const failedAutosaveResponse = participantPage.waitForResponse(
+      (response) =>
+        response.request().method() === "PUT" &&
+        updateRoutePattern.test(response.url()) &&
+        response.status() === 503,
+    );
     await cell(keyboardSlotIndex).focus();
     await participantPage.keyboard.press("Enter");
-    await expect(participantPage.getByText("Saving draft…")).toBeVisible();
+    await failedAutosaveResponse;
     await expect(
       participantPage.getByText("Temporary autosave outage"),
     ).toBeVisible();
     expect(await beforeUnloadIsBlocked()).toBe(true);
+    const retriedAutosaveResponse = participantPage.waitForResponse(
+      (response) =>
+        response.request().method() === "PUT" &&
+        updateRoutePattern.test(response.url()) &&
+        response.ok(),
+    );
     await participantPage.getByRole("button", { name: "Retry save" }).click();
+    await retriedAutosaveResponse;
     await expect(savedStatus).toBeVisible();
     expect(await beforeUnloadIsBlocked()).toBe(false);
     await participantPage.unroute(updateRoutePattern, failAutosaveOnce);

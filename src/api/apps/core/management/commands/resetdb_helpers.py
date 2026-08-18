@@ -38,7 +38,9 @@ def reset_postgresql(connection):
         if db_user:
             from psycopg import sql
 
-            cursor.execute(
+            # Bind parameters cannot represent role identifiers. Identifier
+            # performs psycopg's context-aware quoting of the configured role.
+            cursor.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 sql.SQL("GRANT ALL ON SCHEMA public TO {user};").format(
                     user=sql.Identifier(db_user)
                 )
@@ -51,7 +53,11 @@ def reset_mysql(connection):
         cursor.execute("SHOW TABLES;")
         for (table,) in cursor.fetchall():
             quoted_table = connection.ops.quote_name(table)
-            cursor.execute(f"DROP TABLE IF EXISTS {quoted_table} CASCADE;")
+            # Bind parameters cannot represent table identifiers. SHOW TABLES
+            # supplies the value and quote_name applies backend-specific quoting.
+            cursor.execute(  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query,python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+                f"DROP TABLE IF EXISTS {quoted_table} CASCADE;"
+            )
         cursor.execute("SET FOREIGN_KEY_CHECKS = 1;")
 
 
@@ -81,7 +87,11 @@ def drop_sqlite_tables(connection):
         for (table,) in cursor.fetchall():
             if table != "sqlite_sequence":
                 quoted_table = connection.ops.quote_name(table)
-                cursor.execute(f"DROP TABLE IF EXISTS {quoted_table};")
+                # Bind parameters cannot represent table identifiers. The
+                # sqlite catalog supplies the value and quote_name escapes it.
+                cursor.execute(  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query,python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+                    f"DROP TABLE IF EXISTS {quoted_table};"
+                )
         cursor.execute("PRAGMA foreign_keys = ON;")
 
 

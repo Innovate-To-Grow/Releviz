@@ -51,6 +51,8 @@
         </div>
     </div>
 
+    <!-- The Django CSRF token is the form's first child; Semgrep only partially parses this template. -->
+    <!-- nosemgrep: python.django.security.django-no-csrf-token.django-no-csrf-token -->
     <form method="post" class="border border-base-200 p-6 rounded-default dark:border-base-700">
         {% csrf_token %}
 

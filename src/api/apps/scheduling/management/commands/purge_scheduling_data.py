@@ -111,7 +111,11 @@ class Command(BaseCommand):
             if connection.vendor == "postgresql":
                 table_name = connection.ops.quote_name(Event._meta.db_table)
                 with connection.cursor() as cursor:
-                    cursor.execute(f"LOCK TABLE {table_name} IN ACCESS EXCLUSIVE MODE")
+                    # Bind parameters cannot represent table identifiers. This
+                    # is trusted model metadata escaped by the active backend.
+                    cursor.execute(  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query,python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+                        f"LOCK TABLE {table_name} IN ACCESS EXCLUSIVE MODE"
+                    )
 
             event_ids = list(
                 Event.objects.using(database)

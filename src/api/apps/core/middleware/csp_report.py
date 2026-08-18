@@ -42,6 +42,9 @@ def _csp_report_rate_limited(request) -> bool:
         return False
 
 
+# Browser CSP reports are unauthenticated diagnostics and cannot mutate user
+# state. Requiring Django's CSRF cookie would make the reporting endpoint unusable.
+# nosemgrep: python.django.security.audit.csrf-exempt.no-csrf-exempt
 @require_POST
 @csrf_exempt
 def csp_report(request):
