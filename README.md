@@ -111,7 +111,7 @@ releviz-monorepo/
   scripts/
     quality-gate.sh # Full lint + test + build for both workspaces
     deploy/         # Bounded manual Amplify artifact deployment helper
-    performance/    # Pure aggregation and guarded PostgreSQL/HTTP scale tools
+    perf/           # Pure aggregation and guarded PostgreSQL/HTTP scale tools
   .github/workflows/
     ci.yml          # Parallel CI for both workspaces
     deploy-prod.yml.disabled # Parked production release; CD is intentionally disabled
