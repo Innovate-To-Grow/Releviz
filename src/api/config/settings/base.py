@@ -150,6 +150,10 @@ AUTH_RATE_LIMITS = {
         "ip": {"limit": 30, "window": 600, "block": 900},
         "identity": {"limit": 10, "window": 600, "block": 900},
     },
+    "contact_email_create": {
+        "ip": {"limit": 20, "window": 3600, "block": 3600},
+        "identity": {"limit": 5, "window": 3600, "block": 3600},
+    },
     "temp_access_code_request": {
         "ip": {"limit": 20, "window": 3600, "block": 3600},
         "identity": {"limit": 5, "window": 3600, "block": 3600},
@@ -168,6 +172,10 @@ AUTH_RATE_LIMITS = {
     "admin_login": {
         "ip": {"limit": 20, "window": 300, "block": 900},
         "identity": {"limit": 10, "window": 900, "block": 900},
+    },
+    "admin_invitation_accept": {
+        "ip": {"limit": 30, "window": 3600, "block": 3600},
+        "identity": {"limit": 10, "window": 3600, "block": 3600},
     },
     "invitation_request": {
         "ip": {"limit": 60, "window": 3600, "block": 3600},

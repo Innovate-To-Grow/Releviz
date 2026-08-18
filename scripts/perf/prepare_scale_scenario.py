@@ -13,12 +13,11 @@ import json
 import os
 import stat
 import sys
-import uuid
 from datetime import timedelta
 from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-BACKEND_ROOT = REPOSITORY_ROOT / "src" / "backend"
+BACKEND_ROOT = REPOSITORY_ROOT / "src" / "api"
 sys.path.insert(0, str(BACKEND_ROOT))
 
 PARTICIPANT_TOTAL = 1_000
@@ -129,11 +128,7 @@ def member_for_email(email: str, *, first_name: str, last_name: str):
     from apps.authn.models import ContactEmail
 
     Member = get_user_model()
-    contact = (
-        ContactEmail.objects.select_related("member")
-        .filter(email_address=email)
-        .first()
-    )
+    contact = ContactEmail.objects.select_related("member").filter(email_address=email).first()
     if contact is not None:
         member = contact.member
         if member is None:
@@ -168,19 +163,16 @@ def member_for_email(email: str, *, first_name: str, last_name: str):
     return member
 
 
-def access_token_for(member, session_id) -> str:
-    from rest_framework_simplejwt.tokens import AccessToken
+def access_token_for(member) -> str:
+    from apps.authn.services.security import issue_session_refresh_token
 
-    token = AccessToken.for_user(member)
-    token["session_id"] = str(session_id)
-    return str(token)
+    return str(issue_session_refresh_token(member).access_token)
 
 
 def create_fixture(args: argparse.Namespace) -> dict:
     from django.db import transaction
     from django.utils import timezone
 
-    from apps.authn.models import AuthSession
     from apps.scheduling.models import (
         Event,
         EventResultSnapshot,
@@ -191,14 +183,10 @@ def create_fixture(args: argparse.Namespace) -> dict:
 
     now = timezone.now()
     first_date = now.date() + timedelta(days=1)
-    specific_dates = [
-        (first_date + timedelta(days=offset)).isoformat() for offset in range(25)
-    ]
+    specific_dates = [(first_date + timedelta(days=offset)).isoformat() for offset in range(25)]
 
     with transaction.atomic():
-        existing = (
-            Event.objects.select_for_update().filter(code=args.event_code).first()
-        )
+        existing = Event.objects.select_for_update().filter(code=args.event_code).first()
         if existing is not None:
             if not args.replace:
                 raise RuntimeError(
@@ -273,37 +261,13 @@ def create_fixture(args: argparse.Namespace) -> dict:
             batch_size=250,
         )
         UserEvent.objects.bulk_create(
-            [
-                UserEvent(member=member, event=event, role="participant")
-                for member in members
-            ],
+            [UserEvent(member=member, event=event, role="participant") for member in members],
             batch_size=250,
         )
         EventResultSnapshot.objects.create(
             event=event,
             requested_revision=event.results_revision,
             status=EventResultSnapshot.Status.REFRESHING,
-        )
-
-        session_expiry = now + timedelta(minutes=30)
-        organizer_session = AuthSession(
-            member=organizer,
-            refresh_jti=f"scale-{uuid.uuid4()}",
-            expires_at=session_expiry,
-            last_seen_at=now,
-        )
-        participant_sessions = [
-            AuthSession(
-                member=member,
-                refresh_jti=f"scale-{uuid.uuid4()}",
-                expires_at=session_expiry,
-                last_seen_at=now,
-            )
-            for member in members
-        ]
-        AuthSession.objects.bulk_create(
-            [organizer_session, *participant_sessions],
-            batch_size=250,
         )
 
         manifest = {
@@ -316,21 +280,16 @@ def create_fixture(args: argparse.Namespace) -> dict:
             ),
             "organizer": {
                 "memberId": str(organizer.pk),
-                "accessToken": access_token_for(organizer, organizer_session.pk),
+                "accessToken": access_token_for(organizer),
             },
             "participants": [
                 {
                     "memberId": str(member.pk),
                     "participantId": str(participant.pk),
                     "expectedVersion": participant.version,
-                    "accessToken": access_token_for(member, session.pk),
+                    "accessToken": access_token_for(member),
                 }
-                for member, participant, session in zip(
-                    members,
-                    participants,
-                    participant_sessions,
-                    strict=True,
-                )
+                for member, participant in zip(members, participants, strict=True)
             ],
         }
     return manifest
@@ -342,9 +301,7 @@ def main() -> int:
     database = assert_safe_database(args)
     manifest = create_fixture(args)
     args.manifest.parent.mkdir(parents=True, exist_ok=True)
-    args.manifest.write_text(
-        json.dumps(manifest, separators=(",", ":")), encoding="utf-8"
-    )
+    args.manifest.write_text(json.dumps(manifest, separators=(",", ":")), encoding="utf-8")
     args.manifest.chmod(stat.S_IRUSR | stat.S_IWUSR)
     print(
         f"Created event {manifest['eventCode']} with {manifest['participantCount']} participants "

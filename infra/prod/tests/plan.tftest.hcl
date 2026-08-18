@@ -167,6 +167,19 @@ run "production_plan" {
   }
 
   assert {
+    condition = alltrue([
+      for service in [aws_ecs_service.result_worker, aws_ecs_service.email_worker] :
+      service.desired_count == 1 &&
+      service.deployment_minimum_healthy_percent == 100 &&
+      service.deployment_maximum_percent == 200 &&
+      service.deployment_circuit_breaker[0].enable &&
+      service.deployment_circuit_breaker[0].rollback &&
+      !service.network_configuration[0].assign_public_ip
+    ])
+    error_message = "Both durable workers must run as private, self-healing single-task ECS services."
+  }
+
+  assert {
     condition = (
       aws_appautoscaling_target.backend.min_capacity >= 2 &&
       aws_appautoscaling_target.frontend.min_capacity >= 2 &&
@@ -255,7 +268,7 @@ run "production_plan" {
         "X-Content-Type-Options|nosniff",
         "X-Frame-Options|DENY",
         "Referrer-Policy|no-referrer",
-        "Content-Security-Policy|default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://challenges.cloudflare.com https://esm.run blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://api.releviz.com ws: wss:; worker-src 'self' blob:; frame-src https://challenges.cloudflare.com;",
+        "Content-Security-Policy|default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://api.releviz.com https://challenges.cloudflare.com; frame-src 'self' https://challenges.cloudflare.com; form-action 'self'; upgrade-insecure-requests;",
       ])
     )
     error_message = "Amplify custom headers must use the reviewed semantic policy and preserve all five production security headers."
@@ -420,6 +433,67 @@ run "production_plan" {
 
   assert {
     condition = (
+      aws_ecs_task_definition.result_worker.family == "releviz-prod-result-worker-task" &&
+      aws_ecs_task_definition.email_worker.family == "releviz-prod-email-worker-task" &&
+      aws_ecs_task_definition.result_worker.execution_role_arn == aws_iam_role.ecs_execution.arn &&
+      aws_ecs_task_definition.email_worker.execution_role_arn == aws_iam_role.ecs_execution.arn &&
+      aws_ecs_task_definition.result_worker.task_role_arn == aws_iam_role.ecs_task.arn &&
+      aws_ecs_task_definition.email_worker.task_role_arn == aws_iam_role.ecs_task.arn &&
+      jsondecode(aws_ecs_task_definition.result_worker.container_definitions)[0].image == local.backend_image_uri &&
+      jsondecode(aws_ecs_task_definition.email_worker.container_definitions)[0].image == local.backend_image_uri &&
+      jsondecode(aws_ecs_task_definition.result_worker.container_definitions)[0].command == [
+        "python",
+        "manage.py",
+        "recompute_event_results",
+        "--watch",
+        "--poll-interval=1",
+      ] &&
+      jsondecode(aws_ecs_task_definition.email_worker.container_definitions)[0].command == [
+        "python",
+        "manage.py",
+        "dispatch_email_jobs",
+        "--watch",
+        "--limit=1000",
+        "--concurrency=10",
+        "--rate-limit=10",
+        "--poll-interval=1",
+      ]
+    )
+    error_message = "Both worker task definitions must use the immutable backend image, reviewed roles, and durable watch commands."
+  }
+
+  assert {
+    condition = alltrue([
+      for task in [aws_ecs_task_definition.result_worker, aws_ecs_task_definition.email_worker] :
+      jsondecode(task.container_definitions)[0].stopTimeout == 120 &&
+      jsondecode(task.container_definitions)[0].healthCheck == local.worker_health_check &&
+      jsondecode(task.container_definitions)[0].portMappings == [] &&
+      one([
+        for environment in jsondecode(task.container_definitions)[0].environment :
+        environment.value if environment.name == "DJANGO_SKIP_STARTUP_TASKS"
+      ]) == "1" &&
+      one([
+        for environment in jsondecode(task.container_definitions)[0].environment :
+        environment.value if environment.name == "DJANGO_MIGRATE_ON_START"
+      ]) == "1" &&
+      one([
+        for environment in jsondecode(task.container_definitions)[0].environment :
+        environment.value if environment.name == "DJANGO_CREATE_DEFAULT_ADMIN"
+      ]) == "0" &&
+      toset([
+        for secret in jsondecode(task.container_definitions)[0].secrets : secret.name
+        ]) == toset([
+        "DJANGO_SECRET_KEY",
+        "DJANGO_FIELD_ENCRYPTION_KEY",
+        "METRICS_BEARER_TOKEN",
+        "DB_PASSWORD",
+      ])
+    ])
+    error_message = "Workers must run locked migrations before skipping web startup mutations, receive only backend secrets, expose no ports, drain gracefully, and report database health."
+  }
+
+  assert {
+    condition = (
       length(jsondecode(aws_ecs_task_definition.default_admin.container_definitions)[0].secrets) == 5 &&
       length(distinct([
         for secret in jsondecode(aws_ecs_task_definition.default_admin.container_definitions)[0].secrets :
@@ -460,6 +534,8 @@ run "production_plan" {
     condition = (
       !aws_ecs_task_definition.backend.enable_fault_injection &&
       !aws_ecs_task_definition.default_admin.enable_fault_injection &&
+      !aws_ecs_task_definition.result_worker.enable_fault_injection &&
+      !aws_ecs_task_definition.email_worker.enable_fault_injection &&
       !aws_ecs_task_definition.frontend.enable_fault_injection &&
       jsondecode(aws_ecs_task_definition.backend.container_definitions)[0].mountPoints == [] &&
       jsondecode(aws_ecs_task_definition.backend.container_definitions)[0].systemControls == [] &&
@@ -467,6 +543,12 @@ run "production_plan" {
       jsondecode(aws_ecs_task_definition.default_admin.container_definitions)[0].mountPoints == [] &&
       jsondecode(aws_ecs_task_definition.default_admin.container_definitions)[0].systemControls == [] &&
       jsondecode(aws_ecs_task_definition.default_admin.container_definitions)[0].volumesFrom == [] &&
+      jsondecode(aws_ecs_task_definition.result_worker.container_definitions)[0].mountPoints == [] &&
+      jsondecode(aws_ecs_task_definition.result_worker.container_definitions)[0].systemControls == [] &&
+      jsondecode(aws_ecs_task_definition.result_worker.container_definitions)[0].volumesFrom == [] &&
+      jsondecode(aws_ecs_task_definition.email_worker.container_definitions)[0].mountPoints == [] &&
+      jsondecode(aws_ecs_task_definition.email_worker.container_definitions)[0].systemControls == [] &&
+      jsondecode(aws_ecs_task_definition.email_worker.container_definitions)[0].volumesFrom == [] &&
       jsondecode(aws_ecs_task_definition.frontend.container_definitions)[0].mountPoints == [] &&
       jsondecode(aws_ecs_task_definition.frontend.container_definitions)[0].systemControls == [] &&
       jsondecode(aws_ecs_task_definition.frontend.container_definitions)[0].volumesFrom == []
@@ -482,13 +564,26 @@ run "production_plan" {
       contains(aws_cloudwatch_metric_alarm.backend_target_5xx.alarm_actions, var.alarm_action_arns[0]) &&
       contains(aws_cloudwatch_metric_alarm.frontend_target_5xx.alarm_actions, var.alarm_action_arns[0]) &&
       contains(aws_cloudwatch_metric_alarm.amplify_5xx.alarm_actions, var.alarm_action_arns[0]) &&
+      contains(aws_cloudwatch_metric_alarm.result_worker_running_tasks.alarm_actions, var.alarm_action_arns[0]) &&
+      contains(aws_cloudwatch_metric_alarm.email_worker_running_tasks.alarm_actions, var.alarm_action_arns[0]) &&
+      aws_cloudwatch_metric_alarm.result_worker_running_tasks.treat_missing_data == "breaching" &&
+      aws_cloudwatch_metric_alarm.email_worker_running_tasks.treat_missing_data == "breaching" &&
+      aws_cloudwatch_metric_alarm.result_worker_running_tasks.dimensions.ServiceName == aws_ecs_service.result_worker.name &&
+      aws_cloudwatch_metric_alarm.email_worker_running_tasks.dimensions.ServiceName == aws_ecs_service.email_worker.name &&
+      contains(aws_cloudwatch_metric_alarm.permanent_email_failures.alarm_actions, var.alarm_action_arns[0]) &&
+      contains(aws_cloudwatch_metric_alarm.uncertain_email_outcomes.alarm_actions, var.alarm_action_arns[0]) &&
+      aws_cloudwatch_metric_alarm.permanent_email_failures.treat_missing_data == "notBreaching" &&
+      aws_cloudwatch_metric_alarm.uncertain_email_outcomes.treat_missing_data == "notBreaching" &&
+      aws_cloudwatch_log_metric_filter.permanent_email_failures.log_group_name == aws_cloudwatch_log_group.email_worker.name &&
+      aws_cloudwatch_log_metric_filter.uncertain_email_outcomes.log_group_name == aws_cloudwatch_log_group.email_worker.name &&
       aws_cloudwatch_metric_alarm.amplify_5xx.namespace == "AWS/AmplifyHosting" &&
       aws_cloudwatch_metric_alarm.amplify_5xx.metric_name == "5xxErrors" &&
       strcontains(aws_cloudwatch_log_metric_filter.request_exceptions.pattern, "request_exception") &&
-      strcontains(aws_cloudwatch_log_metric_filter.permanent_email_failures.pattern, "email_delivery_failed") &&
-      strcontains(aws_cloudwatch_log_metric_filter.permanent_email_failures.pattern, "permanent_failure")
+      strcontains(aws_cloudwatch_log_metric_filter.permanent_email_failures.pattern, "permanent_failure") &&
+      strcontains(aws_cloudwatch_log_metric_filter.uncertain_email_outcomes.pattern, "email_delivery_outcome_uncertain") &&
+      strcontains(aws_cloudwatch_log_metric_filter.uncertain_email_outcomes.pattern, "uncertain")
     )
-    error_message = "Production must page monitored SNS actions for both services, request exceptions, and permanent email failures."
+    error_message = "Production must page monitored SNS actions for web services, durable workers, request exceptions, permanent email failures, and uncertain email outcomes."
   }
 
   assert {

@@ -29,6 +29,9 @@
     "test:db": "bash scripts/run-db-tests.sh",
     "test:e2e": "bash scripts/run-e2e.sh",
     "test:audit": "python3 scripts/ci/audit-test-surface.py",
+    "setup:api": "bash scripts/setup-api.sh",
+    "lock:api": "bash scripts/compile-api-requirements.sh",
+    "lock:api:check": "bash scripts/compile-api-requirements.sh --check",
     "quality-gate": "bash scripts/quality-gate.sh"
   }
 }

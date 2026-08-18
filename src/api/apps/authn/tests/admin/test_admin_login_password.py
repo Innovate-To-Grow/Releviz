@@ -213,5 +213,6 @@ class AdminPasswordLoginTest(TestCase):
         resp = self.client.post(
             LOGIN_URL, {"mode": "password", "email": "admin@example.com", "password": "wrongpass"}
         )
-        self.assertEqual(resp.status_code, 200)
-        self.assertContains(resp, "Too many login attempts")
+        self.assertEqual(resp.status_code, 429)
+        self.assertGreaterEqual(int(resp["Retry-After"]), 1)
+        self.assertContains(resp, "Too many login attempts", status_code=429)

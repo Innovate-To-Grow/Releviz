@@ -2,25 +2,39 @@
 
 {% load i18n unfold %}
 
-{% block title %}Permissions Updated | Innovate to Grow{% endblock %}
+{% block title %}{% if accepted %}Permissions Updated{% else %}Accept Invitation{% endif %} | Innovate to Grow{% endblock %}
 
 {% block content %}
     {% include "unfold/helpers/unauthenticated_title.html" with title="Innovate to Grow" subtitle="Welcome to" %}
 
     <div class="text-center">
         <span class="material-symbols-outlined text-5xl text-blue-500 mb-4">upgrade</span>
-        <h2 class="text-lg font-semibold text-font-default-light dark:text-font-default-dark mb-2">Permissions
-            Updated</h2>
+        <h2 class="text-lg font-semibold text-font-default-light dark:text-font-default-dark mb-2">
+            {% if accepted %}Permissions Updated{% else %}Confirm Admin Access{% endif %}
+        </h2>
         <p class="text-sm text-base-500 mb-6 dark:text-base-400">
             An account for <strong>{{ email }}</strong> already exists.
-            Your admin permissions have been granted. You can now log in.
+            {% if accepted %}
+                Your admin permissions have been granted. You can now log in.
+            {% else %}
+                Confirm below to grant this account admin permissions.
+            {% endif %}
         </p>
 
         <div class="flex flex-col gap-3 mt-6">
-            {% component "unfold/components/button.html" with href="/admin/login/" variant="primary" class="w-full" %}
-                Log in to admin
-                <span class="material-symbols-outlined relative right-0 transition-all group-hover:-right-1 text-sm">arrow_forward</span>
-            {% endcomponent %}
+            {% if accepted %}
+                {% component "unfold/components/button.html" with href="/admin/login/" variant="primary" class="w-full" %}
+                    Log in to admin
+                    <span class="material-symbols-outlined relative right-0 transition-all group-hover:-right-1 text-sm">arrow_forward</span>
+                {% endcomponent %}
+            {% else %}
+                <form method="post">
+                    {% csrf_token %}
+                    {% component "unfold/components/button.html" with submit=1 variant="primary" class="w-full" %}
+                        Grant admin access
+                    {% endcomponent %}
+                </form>
+            {% endif %}
         </div>
     </div>
 {% endblock %}

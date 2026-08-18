@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { lerpColor, lerpVirtualColor } from "@/components/ui/ColorUtils";
 import { formatTime } from "@/lib/format";
 
@@ -30,11 +30,24 @@ function ScheduleGrid({
     pointerType: "",
     visited: new Set(),
   });
+  const cellRefs = useRef(new Map());
+  const [activeCellIndex, setActiveCellIndex] = useState(null);
   const groups = Array.isArray(slotGroups) ? slotGroups : [];
   const maxRows = groups.reduce(
     (largest, group) => Math.max(largest, group?.slots?.length || 0),
     0,
   );
+  const cellPositions = groups.flatMap((group, column) =>
+    (group?.slots || []).flatMap((slot, row) =>
+      slot ? [{ index: slot.index, row, column }] : [],
+    ),
+  );
+  const positionByIndex = new Map(
+    cellPositions.map((position) => [position.index, position]),
+  );
+  const rovingCellIndex = positionByIndex.has(activeCellIndex)
+    ? activeCellIndex
+    : cellPositions[0]?.index;
 
   const finishStroke = useCallback(() => {
     strokeRef.current = {
@@ -99,6 +112,58 @@ function ScheduleGrid({
     }
   };
 
+  const moveKeyboardFocus = (index, event) => {
+    const current = positionByIndex.get(index);
+    if (!current) return;
+
+    let candidates = [];
+    if (event.key === "ArrowRight") {
+      candidates = cellPositions
+        .filter(
+          (cell) => cell.row === current.row && cell.column > current.column,
+        )
+        .sort((a, b) => a.column - b.column);
+    } else if (event.key === "ArrowLeft") {
+      candidates = cellPositions
+        .filter(
+          (cell) => cell.row === current.row && cell.column < current.column,
+        )
+        .sort((a, b) => b.column - a.column);
+    } else if (event.key === "ArrowDown") {
+      candidates = cellPositions
+        .filter(
+          (cell) => cell.column === current.column && cell.row > current.row,
+        )
+        .sort((a, b) => a.row - b.row);
+    } else if (event.key === "ArrowUp") {
+      candidates = cellPositions
+        .filter(
+          (cell) => cell.column === current.column && cell.row < current.row,
+        )
+        .sort((a, b) => b.row - a.row);
+    } else if (event.key === "Home" && event.ctrlKey) {
+      candidates = cellPositions;
+    } else if (event.key === "End" && event.ctrlKey) {
+      candidates = [...cellPositions].reverse();
+    } else if (event.key === "Home") {
+      candidates = cellPositions
+        .filter((cell) => cell.row === current.row)
+        .sort((a, b) => a.column - b.column);
+    } else if (event.key === "End") {
+      candidates = cellPositions
+        .filter((cell) => cell.row === current.row)
+        .sort((a, b) => b.column - a.column);
+    } else {
+      return;
+    }
+
+    const target = candidates[0];
+    if (!target || target.index === index) return;
+    event.preventDefault();
+    setActiveCellIndex(target.index);
+    cellRefs.current.get(target.index)?.focus();
+  };
+
   return (
     <div className="schedule-grid-shell">
       {label && <h4 className="schedule-grid-title">{label}</h4>}
@@ -112,22 +177,30 @@ function ScheduleGrid({
             className="schedule-grid"
             role="grid"
             aria-label={label || "Availability"}
+            aria-colcount={groups.length + 1}
+            aria-rowcount={maxRows + 1}
             style={{ minWidth: `${80 + groups.length * 96}px` }}
           >
             <div
               className="schedule-grid-header"
               role="row"
+              aria-rowindex={1}
               style={{
                 gridTemplateColumns: `80px repeat(${groups.length}, minmax(96px, 1fr))`,
               }}
             >
-              <div className="schedule-grid-time-header" role="columnheader">
+              <div
+                className="schedule-grid-time-header"
+                role="columnheader"
+                aria-colindex={1}
+              >
                 Time
               </div>
-              {groups.map((group) => (
+              {groups.map((group, column) => (
                 <div
                   className="schedule-grid-column-header"
                   role="columnheader"
+                  aria-colindex={column + 2}
                   key={group.key}
                 >
                   {group.label}
@@ -144,6 +217,7 @@ function ScheduleGrid({
                     className="schedule-grid-row"
                     key={row}
                     role="row"
+                    aria-rowindex={row + 2}
                     style={{
                       gridTemplateColumns: `80px repeat(${groups.length}, minmax(96px, 1fr))`,
                     }}
@@ -151,6 +225,7 @@ function ScheduleGrid({
                     <div
                       className="schedule-grid-row-header"
                       role="rowheader"
+                      aria-colindex={1}
                       data-first-row={row === 0 ? "true" : undefined}
                     >
                       {firstSlot ? formatTime(firstSlot.localStart) : ""}
@@ -163,6 +238,7 @@ function ScheduleGrid({
                             className="schedule-grid-cell schedule-grid-cell-empty"
                             key={`${group.key}:empty:${row}`}
                             role="gridcell"
+                            aria-colindex={column + 2}
                             aria-label={`${group.label}, no slot at this time`}
                             aria-disabled="true"
                             style={{
@@ -204,7 +280,18 @@ function ScheduleGrid({
                           className="schedule-grid-cell"
                           key={index}
                           role="gridcell"
-                          tabIndex={readOnly ? undefined : 0}
+                          ref={(node) => {
+                            if (node) cellRefs.current.set(index, node);
+                            else cellRefs.current.delete(index);
+                          }}
+                          tabIndex={
+                            readOnly
+                              ? undefined
+                              : index === rovingCellIndex
+                                ? 0
+                                : -1
+                          }
+                          aria-colindex={column + 2}
                           aria-label={`${group.label}, ${slotLabel(slot)}, availability ${value}`}
                           aria-readonly={readOnly ? "true" : undefined}
                           aria-selected={readOnly ? undefined : value > 0}
@@ -215,11 +302,14 @@ function ScheduleGrid({
                           onPointerUp={finishStroke}
                           onPointerCancel={finishStroke}
                           onLostPointerCapture={finishStroke}
+                          onFocus={() => setActiveCellIndex(index)}
                           onKeyDown={(event) => {
                             if (event.key === "Enter" || event.key === " ") {
                               event.preventDefault();
                               paintCell(index, event, "keyboard");
+                              return;
                             }
+                            moveKeyboardFocus(index, event);
                           }}
                           style={{
                             backgroundColor: virtual

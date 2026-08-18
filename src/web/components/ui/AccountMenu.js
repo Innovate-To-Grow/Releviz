@@ -11,12 +11,15 @@ import {
 } from "react-icons/md";
 import { useAuth } from "@/components/auth/AuthContext";
 import AppButton from "@/components/ui/AppButton";
+import { flushPendingNavigationWork } from "@/components/schedule/useAutosaveNavigationGuard";
 
 export default function AccountMenu({
   signedOutLabel = "Continue with email",
 }) {
   const { user, loading, logout } = useAuth();
   const [open, setOpen] = useState(false);
+  const [logoutError, setLogoutError] = useState("");
+  const [logoutPending, setLogoutPending] = useState(false);
   const menuRef = useRef(null);
   const keyboardOpeningRef = useRef(false);
   const menuId = useId();
@@ -127,14 +130,39 @@ export default function AccountMenu({
             className="account-menu-item account-menu-item-danger"
             type="button"
             role="menuitem"
+            disabled={logoutPending}
             onClick={async () => {
-              setOpen(false);
-              await logout();
+              setLogoutPending(true);
+              setLogoutError("");
+              try {
+                const saved = await flushPendingNavigationWork();
+                if (!saved) {
+                  throw new Error(
+                    "Your latest schedule changes could not be saved. Resolve the save error before logging out.",
+                  );
+                }
+                await logout();
+                setLogoutPending(false);
+                setOpen(false);
+              } catch (error) {
+                setLogoutError(
+                  error?.message ||
+                    "Log out could not be confirmed. Please try again.",
+                );
+                setOpen(false);
+                setLogoutPending(false);
+              }
             }}
           >
-            <MdLogout aria-hidden="true" /> Log out
+            <MdLogout aria-hidden="true" />
+            {logoutPending ? "Logging out…" : "Log out"}
           </button>
         </div>
+      )}
+      {logoutError && (
+        <p className="account-menu-error" role="alert">
+          {logoutError}
+        </p>
       )}
     </div>
   );

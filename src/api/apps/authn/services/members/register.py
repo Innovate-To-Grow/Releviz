@@ -1,9 +1,4 @@
-"""Member registration service — restored from the old services.py.
-
-The ``AccessLevel`` enum was removed from the Member model during
-restructuring. Temporary-upgrade registration paths have been adapted
-accordingly and log a warning when bypassing the old checks.
-"""
+"""Member registration and temporary-account upgrade service."""
 
 import logging
 import uuid
@@ -60,11 +55,8 @@ def _apply_registration_details(member, details: dict, *, email: str) -> None:
 def start_registration(data: dict, *, _temporary_upgrade_member_id=None):
     """Start a member registration, issuing an email verification challenge.
 
-    ``_temporary_upgrade_member_id`` is a private kwarg used by the
-    scheduling app when upgrading a temporary-event member to a full
-    account. It is accepted for backward-compatibility; the old
-    ``AccessLevel`` guard has been removed because the Member model
-    no longer carries that enum.
+    ``_temporary_upgrade_member_id`` is a private capability supplied only
+    after an event-scoped temporary session has been authenticated.
     """
     email = normalize_email(data.get("email", ""))
     if not email:
@@ -83,7 +75,13 @@ def start_registration(data: dict, *, _temporary_upgrade_member_id=None):
             authorized_member_id = uuid.UUID(str(_temporary_upgrade_member_id))
         except (TypeError, ValueError, AttributeError):
             authorized_member_id = None
-        if contact is None or member is None or member.pk != authorized_member_id:
+        if (
+            contact is None
+            or member is None
+            or member.pk != authorized_member_id
+            or member.access_level != Member.AccessLevel.TEMPORARY
+            or not member.is_active
+        ):
             raise serializers.ValidationError(
                 {"email": "Unable to register with this email address."}
             )
@@ -108,7 +106,11 @@ def start_registration(data: dict, *, _temporary_upgrade_member_id=None):
         )
     else:
         _apply_registration_details(member, details, email=email)
-        member.is_active = False
+        # A normal pending registration remains inactive until email
+        # verification. An authenticated temporary member must stay active so
+        # its event-scoped session continues working during that same wait.
+        if not authorized_temporary_upgrade:
+            member.is_active = False
         member.save()
 
     if contact is None:

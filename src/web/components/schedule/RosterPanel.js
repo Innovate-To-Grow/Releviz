@@ -115,6 +115,7 @@ const RosterPanel = forwardRef(function RosterPanel(
   forwardedRef,
 ) {
   const [participants, setParticipants] = useState([]);
+  const [rowDrafts, setRowDrafts] = useState({});
   const [pagination, setPagination] = useState({
     page: 1,
     pageSize: 50,
@@ -169,6 +170,12 @@ const RosterPanel = forwardRef(function RosterPanel(
   const inviteNameInput = useRef(null);
   const inviteEmailInput = useRef(null);
   const selectedRef = useRef(selected);
+  const participantsRef = useRef(participants);
+  const rowMutationQueuesRef = useRef(new Map());
+
+  useEffect(() => {
+    participantsRef.current = participants;
+  }, [participants]);
 
   const updateSelected = useCallback((updater) => {
     const next =
@@ -197,7 +204,9 @@ const RosterPanel = forwardRef(function RosterPanel(
           token,
         );
         if (currentRequest !== requestNumber.current) return;
-        setParticipants(data.participants || []);
+        const nextParticipants = data.participants || [];
+        participantsRef.current = nextParticipants;
+        setParticipants(nextParticipants);
         setPagination(
           data.pagination || { page, pageSize, total: 0, pages: 1 },
         );
@@ -389,31 +398,88 @@ const RosterPanel = forwardRef(function RosterPanel(
   }, [event.status, updateSelected]);
 
   const patchRow = async (participant, updates) => {
-    setError("");
-    setStatus("");
-    try {
-      const token = await getToken();
-      const data = await patchRosterParticipant(
-        event.code,
-        participant.id,
-        { ...updates, expectedVersion: participant.version },
-        token,
-      );
-      const updated = data.participant || { ...participant, ...updates };
-      setParticipants((current) =>
-        current.map((candidate) =>
-          candidate.id === participant.id
-            ? { ...candidate, ...updated }
-            : candidate,
-        ),
-      );
-      setStatus(`${participant.name} was updated.`);
-      if (data.resultsRevision !== undefined)
-        onResultsInvalidated?.(data.resultsRevision);
-    } catch (requestError) {
-      setError(requestError.message || `Unable to update ${participant.name}.`);
-      if (requestError.status === 409) loadRoster();
+    const previous =
+      rowMutationQueuesRef.current.get(participant.id) || Promise.resolve();
+    const request = previous
+      .catch(() => {})
+      .then(async () => {
+        setError("");
+        setStatus("");
+        const latest =
+          participantsRef.current.find(
+            (candidate) => candidate.id === participant.id,
+          ) || participant;
+        try {
+          const token = await getToken();
+          const data = await patchRosterParticipant(
+            event.code,
+            participant.id,
+            { ...updates, expectedVersion: latest.version },
+            token,
+          );
+          const updated = data.participant || { ...latest, ...updates };
+          setParticipants((current) => {
+            const next = current.map((candidate) =>
+              candidate.id === participant.id
+                ? { ...candidate, ...updated }
+                : candidate,
+            );
+            participantsRef.current = next;
+            return next;
+          });
+          setStatus(`${latest.name} was updated.`);
+          if (data.resultsRevision !== undefined)
+            onResultsInvalidated?.(data.resultsRevision);
+          return true;
+        } catch (requestError) {
+          setError(requestError.message || `Unable to update ${latest.name}.`);
+          if (requestError.status === 409) await loadRoster();
+          return false;
+        }
+      });
+    rowMutationQueuesRef.current.set(participant.id, request);
+    const saved = await request;
+    if (rowMutationQueuesRef.current.get(participant.id) === request) {
+      rowMutationQueuesRef.current.delete(participant.id);
     }
+    return saved;
+  };
+
+  const rowDraftValue = (participant, field, serverValue) =>
+    Object.hasOwn(rowDrafts[participant.id] || {}, field)
+      ? rowDrafts[participant.id][field]
+      : serverValue;
+
+  const updateRowDraft = (participantId, field, value) => {
+    setRowDrafts((current) => ({
+      ...current,
+      [participantId]: { ...current[participantId], [field]: value },
+    }));
+  };
+
+  const clearRowDraft = (participantId, field, expectedValue) => {
+    setRowDrafts((current) => {
+      const currentRow = current[participantId];
+      if (!currentRow || String(currentRow[field]) !== String(expectedValue))
+        return current;
+      const nextRow = { ...currentRow };
+      delete nextRow[field];
+      const next = { ...current };
+      if (Object.keys(nextRow).length) next[participantId] = nextRow;
+      else delete next[participantId];
+      return next;
+    });
+  };
+
+  const saveRowDraft = async (participant, field, value, serverValue) => {
+    if (String(value) === String(serverValue)) {
+      clearRowDraft(participant.id, field, value);
+      return;
+    }
+    await patchRow(participant, { [field]: value });
+    // On failure this restores the authoritative prop; on success patchRow has
+    // already replaced that prop with the server-normalized response.
+    clearRowDraft(participant.id, field, value);
   };
 
   const bulkTarget = () => {
@@ -1236,13 +1302,26 @@ const RosterPanel = forwardRef(function RosterPanel(
                             className="roster-table__input roster-table__input--group"
                             aria-label={`Group for ${participant.name}`}
                             placeholder="Ungrouped"
-                            defaultValue={groupValue(participant)}
+                            value={rowDraftValue(
+                              participant,
+                              "group",
+                              groupValue(participant),
+                            )}
                             disabled={!rosterMutable}
+                            onChange={(event) =>
+                              updateRowDraft(
+                                participant.id,
+                                "group",
+                                event.target.value,
+                              )
+                            }
                             onBlur={(event) =>
-                              event.target.value !== groupValue(participant) &&
-                              patchRow(participant, {
-                                group: event.target.value,
-                              })
+                              void saveRowDraft(
+                                participant,
+                                "group",
+                                event.target.value,
+                                groupValue(participant),
+                              )
                             }
                           />
                         </label>
@@ -1256,14 +1335,26 @@ const RosterPanel = forwardRef(function RosterPanel(
                               min="0"
                               max="1"
                               step="0.05"
-                              defaultValue={participant.weight ?? 1}
+                              value={rowDraftValue(
+                                participant,
+                                "weight",
+                                participant.weight ?? 1,
+                              )}
                               disabled={!rosterMutable}
+                              onChange={(event) =>
+                                updateRowDraft(
+                                  participant.id,
+                                  "weight",
+                                  event.target.value,
+                                )
+                              }
                               onBlur={(event) =>
-                                Number(event.target.value) !==
-                                  Number(participant.weight ?? 1) &&
-                                patchRow(participant, {
-                                  weight: Number(event.target.value),
-                                })
+                                void saveRowDraft(
+                                  participant,
+                                  "weight",
+                                  Number(event.target.value),
+                                  Number(participant.weight ?? 1),
+                                )
                               }
                             />
                           </label>
@@ -1275,7 +1366,7 @@ const RosterPanel = forwardRef(function RosterPanel(
                               checked={Boolean(participant.included)}
                               disabled={!rosterMutable}
                               onChange={(event) =>
-                                patchRow(participant, {
+                                void patchRow(participant, {
                                   included: event.target.checked,
                                 })
                               }

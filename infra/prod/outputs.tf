@@ -46,12 +46,28 @@ output "backend_service_name" {
   value = aws_ecs_service.backend.name
 }
 
+output "result_worker_service_name" {
+  value = aws_ecs_service.result_worker.name
+}
+
+output "email_worker_service_name" {
+  value = aws_ecs_service.email_worker.name
+}
+
 output "frontend_service_name" {
   value = aws_ecs_service.frontend.name
 }
 
 output "backend_task_definition_arn" {
   value = aws_ecs_task_definition.backend.arn
+}
+
+output "result_worker_task_definition_arn" {
+  value = aws_ecs_task_definition.result_worker.arn
+}
+
+output "email_worker_task_definition_arn" {
+  value = aws_ecs_task_definition.email_worker.arn
 }
 
 output "default_admin_task_definition_arn" {

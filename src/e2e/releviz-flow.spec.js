@@ -284,7 +284,7 @@ from rest_framework_simplejwt.token_blacklist.models import OutstandingToken
 from apps.authn.models import Member
 from apps.mail.models import EmailDeliveryJob, EmailDeliveryRequest, EmailMessageLog
 from apps.scheduling.models import Event, EventInvitation, FinalMeeting, Participant, UserEvent, Weight
-from apps.scheduling.utils import expected_availability_length
+from apps.scheduling.services.availability import expected_availability_length
 
 data = json.loads(${JSON.stringify(JSON.stringify(payload))})
 event = Event.objects.get(code=data["code"])
@@ -435,7 +435,7 @@ from apps.scheduling.models import (
     EventDuplicationRequest,
     Participant,
 )
-from apps.scheduling.utils import expected_availability_length
+from apps.scheduling.services.availability import expected_availability_length
 
 data = json.loads(${JSON.stringify(JSON.stringify(payload))})
 event = Event.objects.get(code=data["original_code"])
@@ -579,7 +579,7 @@ test.describe("Releviz account and scheduling flow", () => {
     expect(activeEvent.payload.event.status).toBe("active");
 
     await page.getByRole("button", { name: "Import roster" }).click();
-    await page.getByRole("button", { name: "Paste spreadsheet" }).click();
+    await page.getByRole("tab", { name: "Paste spreadsheet" }).click();
     await page
       .getByLabel("Pasted roster rows")
       .fill(
@@ -1106,6 +1106,8 @@ test.describe("Releviz account and scheduling flow", () => {
     });
     const cell = (index) =>
       availabilityGrid.locator(`[data-cell-idx="${index}"]`);
+    const arrowTargetIndex = eventDefinition.slotGroups[1]?.slots[0]?.index;
+    expect(arrowTargetIndex).toBeDefined();
     const beforeUnloadIsBlocked = () =>
       participantPage.evaluate(() => {
         const event = new Event("beforeunload", { cancelable: true });
@@ -1187,6 +1189,101 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(cell(touchSlotIndex)).toHaveAttribute("aria-selected", "true");
 
     const updateRoutePattern = /\/events\/participants\/update\?.*/;
+    await expect(
+      availabilityGrid.locator("[role='gridcell'][tabindex='0']"),
+    ).toHaveCount(1);
+    await cell(eventDefinition.slotGroups[0].slots[0].index).focus();
+    await participantPage.keyboard.press("ArrowRight");
+    await expect(cell(arrowTargetIndex)).toBeFocused();
+
+    let releaseNavigationAutosave;
+    let observeNavigationAutosave;
+    const navigationAutosaveStarted = new Promise((resolve) => {
+      observeNavigationAutosave = resolve;
+    });
+    const navigationAutosaveRelease = new Promise((resolve) => {
+      releaseNavigationAutosave = resolve;
+    });
+    const holdNavigationAutosave = async (route) => {
+      if (route.request().method() === "PUT") {
+        observeNavigationAutosave();
+        await navigationAutosaveRelease;
+      }
+      await route.continue();
+    };
+    await participantPage.route(updateRoutePattern, holdNavigationAutosave);
+    await participantPage
+      .getByRole("button", { name: "Mark all Busy" })
+      .click();
+    const leaveSchedule = participantPage
+      .getByRole("link", { name: "Releviz home" })
+      .click();
+    await navigationAutosaveStarted;
+    expect(new URL(participantPage.url()).pathname).toBe("/event");
+    releaseNavigationAutosave();
+    await leaveSchedule;
+    await expect(participantPage).toHaveURL(/\/$/);
+    await participantPage.unroute(updateRoutePattern, holdNavigationAutosave);
+    draftState = await apiJson(
+      request,
+      "GET",
+      `/events/participants?code=${eventCode}`,
+      participantSession.access,
+    );
+    currentParticipant = draftState.payload.participants.find(
+      (participant) => participant.id === participantSession.user.id,
+    );
+    expect(
+      currentParticipant.availabilityInperson.every((value) => value === 0),
+    ).toBe(true);
+    await participantPage.goto(`/event?code=${eventCode}`);
+    await expect(
+      participantPage.getByText(/Welcome, Pat Participant/),
+    ).toBeVisible();
+
+    let releaseBackAutosave;
+    let observeBackAutosave;
+    const backAutosaveStarted = new Promise((resolve) => {
+      observeBackAutosave = resolve;
+    });
+    const backAutosaveRelease = new Promise((resolve) => {
+      releaseBackAutosave = resolve;
+    });
+    const holdBackAutosave = async (route) => {
+      if (route.request().method() === "PUT") {
+        observeBackAutosave();
+        await backAutosaveRelease;
+      }
+      await route.continue();
+    };
+    await participantPage.route(updateRoutePattern, holdBackAutosave);
+    await participantPage
+      .getByRole("button", { name: "Apply Available to all" })
+      .click();
+    const backNavigation = participantPage.goBack();
+    await backAutosaveStarted;
+    expect(new URL(participantPage.url()).pathname).toBe("/event");
+    releaseBackAutosave();
+    await backNavigation;
+    await expect(participantPage).toHaveURL(/\/$/);
+    await participantPage.unroute(updateRoutePattern, holdBackAutosave);
+    draftState = await apiJson(
+      request,
+      "GET",
+      `/events/participants?code=${eventCode}`,
+      participantSession.access,
+    );
+    currentParticipant = draftState.payload.participants.find(
+      (participant) => participant.id === participantSession.user.id,
+    );
+    expect(
+      currentParticipant.availabilityInperson.every((value) => value === 1),
+    ).toBe(true);
+    await participantPage.goto(`/event?code=${eventCode}`);
+    await expect(
+      participantPage.getByText(/Welcome, Pat Participant/),
+    ).toBeVisible();
+
     let failNextAutosave = true;
     const failAutosaveOnce = async (route) => {
       if (failNextAutosave && route.request().method() === "PUT") {
@@ -1407,9 +1504,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await participantPage
       .getByRole("textbox", { name: "Last name" })
       .fill("Availability");
-    await participantPage
-      .getByRole("button", { name: "Save profile" })
-      .click();
+    await participantPage.getByRole("button", { name: "Save profile" }).click();
     await expect(participantPage.getByText("Saved")).toBeVisible();
 
     await page.goto("/dashboard");
@@ -1987,7 +2082,9 @@ test.describe("Releviz account and scheduling flow", () => {
     await passwordForm.getByRole("button", { name: "Change password" }).click();
     await expect(page).toHaveURL(/\/login\?status=password-changed$/);
     await expect(
-      page.getByText("Password changed. Continue with your email on this device."),
+      page.getByText(
+        "Password changed. Continue with your email on this device.",
+      ),
     ).toBeVisible();
     const changedSessionRejected = await apiJson(
       request,

@@ -12,6 +12,7 @@ const RESOURCE_AUDIT_MANIFEST = [
   ".pre-commit-config.yaml",
   "README.md",
   "Screenshoot.png",
+  "src/api/.dockerignore",
   "src/api/Dockerfile",
   "src/api/docker-entrypoint.sh",
   "src/api/package.json",
@@ -111,6 +112,7 @@ const RESOURCE_AUDIT_MANIFEST = [
   "infra/prod/versions.tf",
   "package-lock.json",
   "package.json",
+  "scripts/compile-api-requirements.sh",
   "scripts/db/backup-restore-drill.sh",
   "scripts/db/postgres-backup.sh",
   "scripts/db/postgres-restore.sh",
@@ -130,6 +132,7 @@ const RESOURCE_AUDIT_MANIFEST = [
   "scripts/deploy/docker-build-frontend.sh",
   "scripts/run-db-tests.sh",
   "scripts/run-e2e.sh",
+  "scripts/setup-api.sh",
   "scripts/ci/terraform-check.sh",
   "scripts/db/wait-for-postgres.sh",
 ];
@@ -156,6 +159,46 @@ test.describe("repository resource audit", () => {
     expect(ci).toContain("Frontend Amplify Static Export");
     expect(ci).toContain("run build:amplify");
     expect(ci).toContain("- frontend-amplify-build");
+    expect(ci).toContain('NEXT_E2E_SERVER: "1"');
+  });
+
+  test("browser flows run with both durable workers", async () => {
+    const config = fs.readFileSync(
+      path.join(ROOT, "src/e2e/playwright.config.js"),
+      "utf8",
+    );
+    expect(config).toContain("recompute_event_results --watch");
+    expect(config).toContain("dispatch_email_jobs --watch");
+    expect(config).toContain("wait: { stdout: /Event results:/ }");
+    expect(config).toContain("wait: { stdout: /Email jobs:/ }");
+    expect(config).toContain('PYTHONUNBUFFERED: "1"');
+    expect(config).toContain('NEXT_E2E_SERVER: "1"');
+    const runner = fs.readFileSync(
+      path.join(ROOT, "scripts/run-e2e.sh"),
+      "utf8",
+    );
+    expect(runner).toContain('export PYTHON_BIN="$python_bin"');
+    expect(runner).toContain("export NEXT_E2E_SERVER=1");
+  });
+
+  test("API workspace scripts use the relocatable virtualenv interpreter", async () => {
+    const packageJson = JSON.parse(
+      fs.readFileSync(path.join(ROOT, "src/api/package.json"), "utf8"),
+    );
+    for (const scriptName of [
+      "start",
+      "test",
+      "test:coverage",
+      "lint",
+      "lint:fix",
+      "format",
+      "format:check",
+    ]) {
+      expect(packageJson.scripts[scriptName]).toContain(".venv/bin/python");
+    }
+    expect(JSON.stringify(packageJson.scripts)).not.toMatch(
+      /\.venv\/bin\/(?:coverage|gunicorn)\b/,
+    );
   });
 
   test("frontend static images and admin logo are loadable", async ({

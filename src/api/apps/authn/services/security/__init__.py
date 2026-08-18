@@ -11,10 +11,17 @@ from .rsa_manager import (
     purge_retired_auth_keypairs,
     rotate_auth_keypair,
 )
+from .session_tokens import (
+    SESSION_REFRESH_JTI_CLAIM,
+    bind_access_to_refresh,
+    issue_session_refresh_token,
+)
 
 __all__ = [
     "AUTH_KEY_NAME",
     "RSADecryptionError",
+    "SESSION_REFRESH_JTI_CLAIM",
+    "bind_access_to_refresh",
     "decrypt_password",
     "decrypt_pem",
     "encrypt_pem",
@@ -22,6 +29,7 @@ __all__ = [
     "get_public_key_pem",
     "is_encrypted",
     "is_encrypted_password",
+    "issue_session_refresh_token",
     "purge_retired_auth_keypairs",
     "rotate_auth_keypair",
 ]

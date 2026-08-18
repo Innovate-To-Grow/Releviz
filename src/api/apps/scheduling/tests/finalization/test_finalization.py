@@ -1013,7 +1013,7 @@ class FinalizationApiTests(TestCase):
         ):
             dispatch_email_job(job.pk)
         job.refresh_from_db()
-        self.assertEqual(job.status, EmailDeliveryJob.Status.RETRY)
+        self.assertEqual(job.status, EmailDeliveryJob.Status.UNCERTAIN)
         self.assertIn("provider timeout", job.last_error)
 
         participant_url = (

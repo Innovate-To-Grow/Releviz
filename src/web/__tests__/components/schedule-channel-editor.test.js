@@ -15,6 +15,30 @@ jest.mock("@/components/schedule/ScheduleGrid", () => ({
 }));
 
 describe("ScheduleChannelEditor", () => {
+  test("uses roving tabs and arrow keys to switch schedule channels", async () => {
+    render(
+      <ScheduleChannelEditor
+        mode="mixed"
+        slotGroups={[]}
+        inperson={[1]}
+        virtual={[0.5]}
+        readOnly={false}
+      />,
+    );
+
+    const inpersonTab = screen.getByRole("tab", { name: "In person" });
+    const virtualTab = screen.getByRole("tab", { name: "Virtual" });
+    expect(inpersonTab).toHaveAttribute("tabindex", "0");
+    expect(virtualTab).toHaveAttribute("tabindex", "-1");
+    inpersonTab.focus();
+    await userEvent.keyboard("{ArrowRight}");
+    expect(virtualTab).toHaveFocus();
+    expect(virtualTab).toHaveAttribute("aria-selected", "true");
+    expect(
+      screen.getByRole("tabpanel", { name: "Virtual" }),
+    ).toBeInTheDocument();
+  });
+
   test("switches channels and copies into an empty target immediately", async () => {
     const onCopy = jest.fn();
     render(

@@ -16,7 +16,7 @@ RUN python -m pip install --no-cache-dir --upgrade \
     "pip==${PIP_VERSION}" \
     "setuptools==${SETUPTOOLS_VERSION}" \
     "wheel==${WHEEL_VERSION}" \
-  && python -m pip install --no-cache-dir -r requirements/production.txt
+  && python -m pip install --no-cache-dir --require-hashes -r requirements/production.txt
 
 COPY apps ./apps
 COPY config ./config

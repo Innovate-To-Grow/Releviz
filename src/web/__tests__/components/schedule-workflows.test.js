@@ -422,6 +422,154 @@ describe("participant workflow", () => {
     );
   });
 
+  test("flushes a debounced draft before replaying a client-navigation link", async () => {
+    updateParticipant.mockResolvedValue({
+      participant: participant("mine", member.id, member.displayName, {
+        availabilityInperson: [1, 0],
+        version: 2,
+      }),
+    });
+
+    renderParticipant();
+    await screen.findByRole("heading", { name: "Join Event" });
+    await userEvent.click(
+      screen.getByRole("button", { name: `Join as ${member.displayName}` }),
+    );
+    await screen.findByText(`Welcome, ${member.displayName}`);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Paint In-Person" }),
+    );
+
+    const navigation = jest.fn((event) => event.preventDefault());
+    const link = document.createElement("a");
+    link.href = "/dashboard";
+    link.textContent = "Leave schedule";
+    link.addEventListener("click", navigation);
+    document.body.appendChild(link);
+    fireEvent.click(link);
+
+    await waitFor(() => expect(updateParticipant).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(navigation).toHaveBeenCalledTimes(1));
+    expect(updateParticipant.mock.invocationCallOrder[0]).toBeLessThan(
+      navigation.mock.invocationCallOrder[0],
+    );
+    link.remove();
+  });
+
+  test("saves an immediate refresh before loading and ignores an older response", async () => {
+    const original = participant("mine", member.id, member.displayName);
+    let resolveUpdate;
+    let resolveRefresh;
+    fetchCurrentParticipant
+      .mockResolvedValueOnce({
+        participant: original,
+        scheduleDataIncluded: true,
+      })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveRefresh = resolve;
+          }),
+      );
+    updateParticipant.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveUpdate = resolve;
+        }),
+    );
+
+    renderParticipant();
+    await screen.findByText(`Welcome, ${member.displayName}`);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Paint In-Person" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    await waitFor(() => expect(updateParticipant).toHaveBeenCalledTimes(1));
+    expect(fetchCurrentParticipant).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("grid-In-Person")).toHaveTextContent("1,0");
+
+    await act(async () => {
+      resolveUpdate({
+        participant: participant("mine", member.id, member.displayName, {
+          availabilityInperson: [1, 0],
+          version: 2,
+        }),
+      });
+    });
+    await waitFor(() =>
+      expect(fetchCurrentParticipant).toHaveBeenCalledTimes(2),
+    );
+
+    await act(async () => {
+      resolveRefresh({
+        participant: original,
+        scheduleDataIncluded: true,
+      });
+    });
+    expect(screen.getByTestId("grid-In-Person")).toHaveTextContent("1,0");
+    expect(
+      screen.getByText("Draft saved. Submit when you are ready."),
+    ).toBeInTheDocument();
+  });
+
+  test("aborts refresh when the pending draft cannot be saved", async () => {
+    fetchCurrentParticipant.mockResolvedValueOnce({
+      participant: participant("mine", member.id, member.displayName),
+      scheduleDataIncluded: true,
+    });
+    updateParticipant.mockRejectedValueOnce(new Error("Network unavailable"));
+
+    renderParticipant();
+    await screen.findByText(`Welcome, ${member.displayName}`);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Paint In-Person" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    expect(await screen.findByText("Network unavailable")).toBeInTheDocument();
+    expect(fetchCurrentParticipant).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("grid-In-Person")).toHaveTextContent("1,0");
+  });
+
+  test("locks an open participant editor when its deadline arrives", async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date("2026-08-18T08:00:00Z"));
+    fetchCurrentParticipant.mockResolvedValue({
+      participant: participant("mine", member.id, member.displayName),
+      scheduleDataIncluded: true,
+    });
+
+    const view = renderParticipant({
+      ...baseEvent,
+      responseDeadline: "2026-08-18T08:00:01Z",
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(0);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(
+      screen.getByText(`Welcome, ${member.displayName}`),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Submit Availability" }),
+    ).toBeEnabled();
+
+    act(() => {
+      jest.advanceTimersByTime(1001);
+    });
+    expect(
+      screen.getByText("The response deadline has passed."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Submit Availability" }),
+    ).toBeDisabled();
+
+    view.unmount();
+    jest.useRealTimers();
+  });
+
   test("shows authorized shared results and locks changes after finalization", async () => {
     fetchCurrentParticipant.mockResolvedValue({
       participant: participant("mine", member.id, member.displayName, {

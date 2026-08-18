@@ -47,11 +47,23 @@ class LogoutViewTests(APITestCase):
         followup = self.client.post("/authn/refresh/", {"refresh": str(refresh)}, format="json")
         self.assertEqual(followup.status_code, 401)
 
-    def test_logout_rejects_invalid_refresh(self):
+    def test_logout_with_invalid_refresh_is_idempotent_and_clears_cookie(self):
+        self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME] = "not-a-real-token"
         response = self.client.post(
             "/authn/logout/", {"refresh": "not-a-real-token"}, format="json"
         )
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.cookies[settings.AUTH_REFRESH_COOKIE_NAME]["max-age"], 0)
+
+    def test_logout_with_already_blacklisted_refresh_is_idempotent(self):
+        refresh = RefreshToken.for_user(self.member)
+        refresh.blacklist()
+        self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME] = str(refresh)
+
+        response = self.client.post("/authn/logout/", {}, format="json")
+
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.cookies[settings.AUTH_REFRESH_COOKIE_NAME]["max-age"], 0)
 
     def test_logout_does_not_require_authentication(self):
         """An already-expired access token should not block logout."""

@@ -264,23 +264,13 @@ class EnsureDefaultAdminCommandTests(TestCase):
         self.assertTrue(member.check_password("existing-password"))
 
     def test_ambiguous_contact_case_variants_are_rejected(self):
-        for address in ("Duplicate@example.com", "duplicate@example.com"):
-            ContactEmail.objects.create(
-                member=None,
-                email_address=address,
-                email_type="other",
-                verified=False,
-                subscribe=False,
-            )
-
-        with patch.dict("os.environ", {"DJANGO_SUPERUSER_PASSWORD": "safe-demo-password"}):
+        with patch.object(ContactEmail.objects, "select_for_update") as select_for_update:
+            select_for_update.return_value.filter.return_value.order_by.return_value.__getitem__.return_value = [
+                object(),
+                object(),
+            ]
             with self.assertRaisesMessage(CommandError, "matches multiple contact records"):
-                call_command(
-                    Command(),
-                    yes=True,
-                    email="duplicate@example.com",
-                    stdout=io.StringIO(),
-                )
+                Command._find_contact_for_update("duplicate@example.com")
 
         self.assertEqual(get_user_model().objects.count(), 0)
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import statistics
 import sys
 import time
@@ -21,12 +22,16 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-BACKEND_ROOT = REPOSITORY_ROOT / "src" / "backend"
+BACKEND_ROOT = REPOSITORY_ROOT / "src" / "api"
 sys.path.insert(0, str(BACKEND_ROOT))
 
-from apps.scheduling.recommendations import build_ranked_recommendations  # noqa: E402
-from apps.scheduling.slots import build_event_slot_groups  # noqa: E402
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.test")
+import django  # noqa: E402
 
+django.setup()
+
+from apps.scheduling.services.results import build_ranked_recommendations  # noqa: E402
+from apps.scheduling.services.slots import build_event_slot_groups  # noqa: E402
 
 PARTICIPANT_TOTAL = 1_000
 DATE_TOTAL = 25
@@ -60,10 +65,7 @@ def percentile(values: list[float], percentile_value: float) -> float:
 
 def benchmark_event() -> BenchmarkEvent:
     first_date = date.today() + timedelta(days=1)
-    dates = [
-        (first_date + timedelta(days=offset)).isoformat()
-        for offset in range(DATE_TOTAL)
-    ]
+    dates = [(first_date + timedelta(days=offset)).isoformat() for offset in range(DATE_TOTAL)]
     return BenchmarkEvent(specific_dates=dates)
 
 
@@ -87,9 +89,7 @@ def fixture() -> tuple[BenchmarkEvent, dict]:
     for participant_index in range(PARTICIPANT_TOTAL):
         # Include zero-weight responses in the unweighted score while excluding
         # their influence from the weighted score, matching production behavior.
-        weight = (
-            0.0 if participant_index % 20 == 0 else ((participant_index % 10) + 1) / 10
-        )
+        weight = 0.0 if participant_index % 20 == 0 else ((participant_index % 10) + 1) / 10
         counted.append(
             {
                 "availability": {
@@ -125,9 +125,7 @@ def calculate(event: BenchmarkEvent, classified: dict) -> dict:
 
     channel_results = {
         channel: {
-            "unweighted": [
-                value / PARTICIPANT_TOTAL for value in unweighted_totals[channel]
-            ],
+            "unweighted": [value / PARTICIPANT_TOTAL for value in unweighted_totals[channel]],
             "weighted": [value / total_weight for value in weighted_totals[channel]],
         }
         for channel in CHANNELS
@@ -145,9 +143,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run the 1,000-person × 1,000-slot × two-channel aggregation benchmark."
     )
-    parser.add_argument(
-        "--runs", type=int, default=3, help="Measured runs (default: 3)."
-    )
+    parser.add_argument("--runs", type=int, default=3, help="Measured runs (default: 3).")
     parser.add_argument(
         "--warmup-runs",
         type=int,
@@ -159,9 +155,7 @@ def parse_args() -> argparse.Namespace:
         type=float,
         help="Exit non-zero when measured p95 exceeds this threshold.",
     )
-    parser.add_argument(
-        "--json", action="store_true", help="Print machine-readable JSON."
-    )
+    parser.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
     args = parser.parse_args()
     if args.runs < 1 or args.runs > 20:
         parser.error("--runs must be between 1 and 20")
@@ -191,9 +185,7 @@ def main() -> int:
     assert last_result is not None
     recommendations = last_result["recommendations"]
     if len(recommendations) != 10:
-        raise RuntimeError(
-            f"expected 10 ranked recommendations, got {len(recommendations)}"
-        )
+        raise RuntimeError(f"expected 10 ranked recommendations, got {len(recommendations)}")
     p95_seconds = percentile(durations, 95)
     summary = {
         "shape": {

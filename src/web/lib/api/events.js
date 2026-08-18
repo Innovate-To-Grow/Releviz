@@ -249,6 +249,11 @@ export async function markInvitationOpened(code, invitationToken) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ code, token: invitationToken }),
+    // This endpoint is intentionally public. Avoid delaying it behind a
+    // refresh request, and let the small telemetry write finish if the link
+    // immediately redirects an unauthenticated visitor to sign in.
+    skipAuthRefresh: true,
+    keepalive: true,
   });
   if (!res.ok) throw new Error(await extractError(res));
   return true;

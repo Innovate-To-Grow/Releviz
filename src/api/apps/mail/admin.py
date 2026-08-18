@@ -17,7 +17,11 @@ from apps.mail.models import (
     EmailMessageLog,
     EmailProviderConfig,
 )
-from apps.mail.services import EmailDeliveryError, send_email_message
+from apps.mail.services import (
+    EmailDeliveryError,
+    retry_uncertain_email_job,
+    send_email_message,
+)
 
 
 class EmailProviderConfigForm(forms.ModelForm):
@@ -214,6 +218,7 @@ class EmailMessageLogAdmin(ModelAdmin):
 
 @admin.register(EmailDeliveryJob)
 class EmailDeliveryJobAdmin(ModelAdmin):
+    actions = ("retry_uncertain_deliveries",)
     list_display = (
         "message_type",
         "recipient",
@@ -256,12 +261,30 @@ class EmailDeliveryJobAdmin(ModelAdmin):
         "next_attempt_at",
         "locked_at",
         "lock_token",
+        "provider_call_started_at",
         "sent_at",
         "provider_message_id",
         "last_error",
         "created_at",
         "updated_at",
     )
+
+    @admin.action(description="Manually retry selected uncertain deliveries")
+    def retry_uncertain_deliveries(self, request, queryset):
+        retried = 0
+        for job in queryset.filter(status=EmailDeliveryJob.Status.UNCERTAIN):
+            if retry_uncertain_email_job(job.pk):
+                self.log_change(
+                    request,
+                    job,
+                    "Manually requeued an uncertain email delivery.",
+                )
+                retried += 1
+        self.message_user(
+            request,
+            f"{retried} uncertain email delivery job(s) requeued.",
+            level=messages.WARNING if retried else messages.INFO,
+        )
 
 
 @admin.register(EmailDeliveryRequest)

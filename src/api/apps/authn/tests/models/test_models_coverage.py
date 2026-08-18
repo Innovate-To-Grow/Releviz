@@ -2,6 +2,7 @@
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from django.db import IntegrityError, transaction
 from django.test import TestCase
 
 from apps.authn.models import (
@@ -20,6 +21,23 @@ def _member(first="A", last="B", **kw):
 
 
 class ContactEmailModelTests(TestCase):
+    def test_save_normalizes_email_address(self):
+        contact = ContactEmail.objects.create(email_address="  Mixed.Case@Example.COM  ")
+
+        self.assertEqual(contact.email_address, "mixed.case@example.com")
+
+    def test_save_preserves_blank_email_address(self):
+        contact = ContactEmail.objects.create(email_address="")
+
+        self.assertEqual(contact.email_address, "")
+
+    def test_database_rejects_case_only_duplicate_when_save_is_bypassed(self):
+        contact = ContactEmail.objects.create(email_address="duplicate@example.com")
+        ContactEmail.objects.filter(pk=contact.pk).update(email_address="Duplicate@Example.com")
+
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            ContactEmail.objects.create(email_address="duplicate@example.com")
+
     def test_clean_rejects_same_member_duplicate(self):
         member = _member()
         ContactEmail.objects.create(

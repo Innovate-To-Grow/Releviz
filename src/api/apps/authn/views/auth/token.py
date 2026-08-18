@@ -11,7 +11,8 @@ from rest_framework_simplejwt.settings import api_settings
 from rest_framework_simplejwt.tokens import AccessToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
-from apps.authn.security import enforce_cookie_request_origin
+from apps.authn.security import AuthRateThrottle, enforce_cookie_request_origin
+from apps.authn.services.security import bind_access_to_refresh
 
 from ..helpers import (
     build_session_payload,
@@ -32,6 +33,8 @@ class PublicTokenRefreshView(TokenRefreshView):
 
     authentication_classes = []
     permission_classes = [AllowAny]
+    throttle_classes = [AuthRateThrottle]
+    auth_rate_scope = "refresh"
 
     def post(self, request, *args, **kwargs):
         enforce_cookie_request_origin(request)
@@ -46,7 +49,11 @@ class PublicTokenRefreshView(TokenRefreshView):
         serializer = self.get_serializer(data={"refresh": refresh_token})
         try:
             serializer.is_valid(raise_exception=True)
-            access = str(serializer.validated_data["access"])
+            rotated_refresh = serializer.validated_data.get("refresh", refresh_token)
+            access = bind_access_to_refresh(
+                serializer.validated_data["access"],
+                rotated_refresh,
+            )
             access_token = AccessToken(access)
             member_id = access_token.get(api_settings.USER_ID_CLAIM)
             member = Member.objects.filter(pk=member_id, is_active=True).first()
@@ -68,5 +75,4 @@ class PublicTokenRefreshView(TokenRefreshView):
             {"access": access, **build_session_payload(member)},
             status=status.HTTP_200_OK,
         )
-        rotated_refresh = serializer.validated_data.get("refresh", refresh_token)
         return set_refresh_cookie(response, str(rotated_refresh))

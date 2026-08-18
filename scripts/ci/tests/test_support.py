@@ -20,6 +20,8 @@ from scripts.ci.validate_deployment_contract import (
     production_default_admin_task_errors,
     production_ecs_task_definition_errors,
     production_proxy_configuration_errors,
+    production_worker_entrypoint_errors,
+    production_worker_errors,
     required_runtime_environment,
     terraform_environment_names,
 )
@@ -372,8 +374,28 @@ resource "terraform_data" "decoy" {
         )
 
     def test_production_amplify_headers_policy_has_top_level_custom_headers(self):
+        valid_policy = {
+            "customHeaders": [
+                {
+                    "pattern": "**",
+                    "headers": [
+                        {
+                            "key": "Content-Security-Policy",
+                            "value": (
+                                "default-src 'self'; base-uri 'self'; object-src 'none'; "
+                                "frame-ancestors 'none'; script-src 'self' 'unsafe-inline' "
+                                "https://challenges.cloudflare.com; connect-src 'self' "
+                                "https://api.releviz.com https://challenges.cloudflare.com; "
+                                "frame-src 'self' https://challenges.cloudflare.com; "
+                                "form-action 'self'; upgrade-insecure-requests;"
+                            ),
+                        }
+                    ],
+                }
+            ]
+        }
         self.assertEqual(
-            production_amplify_custom_headers_policy_errors(json.dumps({"customHeaders": []})),
+            production_amplify_custom_headers_policy_errors(json.dumps(valid_policy)),
             [],
         )
         self.assertEqual(
@@ -387,6 +409,16 @@ resource "terraform_data" "decoy" {
         self.assertEqual(
             production_amplify_custom_headers_policy_errors(json.dumps({"headers": []})),
             ["production Amplify custom-header policy omits the top-level customHeaders list"],
+        )
+        self.assertEqual(
+            production_amplify_custom_headers_policy_errors(json.dumps({"customHeaders": []})),
+            ["production Amplify custom-header policy must contain one global policy"],
+        )
+        unsafe_policy = json.loads(json.dumps(valid_policy))
+        unsafe_policy["customHeaders"][0]["headers"][0]["value"] += " script-src 'unsafe-eval'"
+        self.assertIn(
+            "production Amplify CSP retains forbidden source 'unsafe-eval'",
+            production_amplify_custom_headers_policy_errors(json.dumps(unsafe_policy)),
         )
 
     def test_production_alb_security_group_is_in_place_only(self):
@@ -484,25 +516,25 @@ mountPoints = []
 systemControls = []
 volumesFrom = []
 """
-        source = task_definition * 3
+        source = task_definition * 5
         self.assertEqual(production_ecs_task_definition_errors(source), [])
 
         for field, expected_error in {
             "enable_fault_injection = false": (
                 "production Terraform must set explicitly disabled ECS fault "
-                "injection on all three ECS task definitions"
+                "injection on all five ECS task definitions"
             ),
             "mountPoints = []": (
                 "production Terraform must set canonical empty ECS mount points "
-                "on all three ECS task definitions"
+                "on all five ECS task definitions"
             ),
             "systemControls = []": (
                 "production Terraform must set canonical empty ECS system controls "
-                "on all three ECS task definitions"
+                "on all five ECS task definitions"
             ),
             "volumesFrom = []": (
                 "production Terraform must set canonical empty ECS volume sources "
-                "on all three ECS task definitions"
+                "on all five ECS task definitions"
             ),
         }.items():
             with self.subTest(field=field):
@@ -510,6 +542,74 @@ volumesFrom = []
                     expected_error,
                     production_ecs_task_definition_errors(source.replace(field, "", 1)),
                 )
+
+    def test_production_workers_monitor_terminal_email_outcomes(self):
+        source = (Path(__file__).resolve().parents[3] / "infra/prod/main.tf").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(production_worker_errors(source), [])
+
+        self.assertIn(
+            (
+                "production Terraform permanent_email_failures metric filter omits its "
+                "email-worker log source"
+            ),
+            production_worker_errors(
+                source.replace(
+                    "log_group_name = aws_cloudwatch_log_group.email_worker.name",
+                    "log_group_name = aws_cloudwatch_log_group.backend.name",
+                    1,
+                )
+            ),
+        )
+        self.assertIn(
+            (
+                "production Terraform uncertain_email_outcomes metric filter omits its "
+                "structured event filter"
+            ),
+            production_worker_errors(
+                source.replace("email_delivery_outcome_uncertain", "other_event", 1)
+            ),
+        )
+        self.assertIn(
+            "production worker health check does not reject pending migrations",
+            production_worker_errors(
+                source.replace(
+                    "python manage.py migrate --check --noinput",
+                    "python manage.py check",
+                    1,
+                )
+            ),
+        )
+
+    def test_worker_entrypoint_runs_only_locked_migrations_before_command(self):
+        source = (Path(__file__).resolve().parents[3] / "src/api/docker-entrypoint.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(production_worker_entrypoint_errors(source), [])
+        self.assertIn(
+            "backend entrypoint worker startup omits locked migrations",
+            production_worker_entrypoint_errors(
+                source.replace(
+                    "python manage.py migrate_locked --noinput",
+                    "python manage.py check",
+                    1,
+                )
+            ),
+        )
+        self.assertIn(
+            "backend entrypoint worker startup runs web-only mutation tasks",
+            production_worker_entrypoint_errors(
+                source.replace(
+                    "python manage.py migrate_locked --noinput",
+                    (
+                        "python manage.py migrate_locked --noinput\n"
+                        "  python manage.py collectstatic --noinput"
+                    ),
+                    1,
+                )
+            ),
+        )
 
     def test_default_admin_task_is_dedicated_and_create_only(self):
         source = """
@@ -676,6 +776,9 @@ steps:
       echo 'TF_VAR_frontend_image_tag: ${{ steps.rollback_frontend.outputs.sha }}'
       echo production-base.tfplan
       echo "Verify base ECS services use Terraform-selected task definitions"
+      for role in backend result_worker email_worker frontend; do
+        echo "$role"
+      done
       terraform -chdir=infra/prod output -raw "${role}_task_definition_arn"
       echo '.services[0].taskDefinition == $expected'
 """
@@ -1020,9 +1123,13 @@ steps:
         echo '"aws_amplify_app.frontend"'
         echo '"aws_cloudwatch_event_target.event_reminders"'
         echo '"aws_ecs_service.backend"'
+        echo '"aws_ecs_service.result_worker"'
+        echo '"aws_ecs_service.email_worker"'
         echo '"aws_ecs_service.frontend"'
         echo '"aws_lb_target_group.backend"'
         echo '"aws_ecs_task_definition.backend"'
+        echo '"aws_ecs_task_definition.result_worker"'
+        echo '"aws_ecs_task_definition.email_worker"'
         echo '"aws_ecs_task_definition.frontend"'
         echo '"aws_acm_certificate.origin[0]"'
         echo '"aws_acm_certificate_validation.origin[0]"'
@@ -1063,6 +1170,14 @@ steps:
           --query "taskDefinition.containerDefinitions[0].image"
       )"
       if [ "$backend_image" != "$expected_backend_image" ]; then exit 1; fi
+      for role in result_worker email_worker; do
+        echo "$role"
+      done
+      echo '["python","manage.py","recompute_event_results","--watch","--poll-interval=1"]'
+      echo '["python","manage.py","dispatch_email_jobs","--watch","--limit=1000","--concurrency=10","--rate-limit=10","--poll-interval=1"]'
+      echo '.taskDefinition.containerDefinitions[0].stopTimeout == 120'
+      echo '.taskDefinition.containerDefinitions[0].healthCheck.retries == 3'
+      echo 'DJANGO_MIGRATE_ON_START and .value == "1"'
       frontend_task_definition="$(
         aws ecs describe-services \
           --services "${{ steps.terraform.outputs.frontend_service }}" \

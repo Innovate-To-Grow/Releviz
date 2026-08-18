@@ -10,7 +10,9 @@ const adminPassword = process.env.DJANGO_SUPERUSER_PASSWORD;
 const pythonBin = process.env.PYTHON_BIN || "python3";
 
 if (!adminPassword) {
-  throw new Error("DJANGO_SUPERUSER_PASSWORD must be set before running Playwright.");
+  throw new Error(
+    "DJANGO_SUPERUSER_PASSWORD must be set before running Playwright.",
+  );
 }
 
 const backendEnv = {
@@ -24,15 +26,20 @@ const backendEnv = {
   EMAIL_FILE_PATH: process.env.EMAIL_FILE_PATH || "/tmp/releviz-e2e-mail",
   FRONTEND_URL: frontendUrl,
   BACKEND_URL: backendUrl,
-  DJANGO_SUPERUSER_EMAIL: process.env.DJANGO_SUPERUSER_EMAIL || "admin@releviz.local",
+  DJANGO_SUPERUSER_EMAIL:
+    process.env.DJANGO_SUPERUSER_EMAIL || "admin@releviz.local",
   DJANGO_SUPERUSER_PASSWORD: adminPassword,
+  PYTHONUNBUFFERED: "1",
 };
 
 module.exports = defineConfig({
   testDir: ".",
   timeout: 120_000,
   expect: { timeout: 10_000 },
-  reporter: [["list"], ["html", { outputFolder: "playwright-report", open: "never" }]],
+  reporter: [
+    ["list"],
+    ["html", { outputFolder: "playwright-report", open: "never" }],
+  ],
   use: {
     baseURL: frontendUrl,
     trace: "retain-on-failure",
@@ -41,7 +48,7 @@ module.exports = defineConfig({
   },
   webServer: [
     {
-      command: `${JSON.stringify(pythonBin)} src/api/manage.py runserver 127.0.0.1:${backendPort} --settings=config.settings.e2e`,
+      command: `${JSON.stringify(pythonBin)} src/api/manage.py runserver 127.0.0.1:${backendPort} --noreload --settings=config.settings.e2e`,
       cwd: rootDir,
       url: `${backendUrl}/health`,
       env: backendEnv,
@@ -53,9 +60,29 @@ module.exports = defineConfig({
       cwd: rootDir,
       url: frontendUrl,
       env: {
-        NEXT_PUBLIC_API_BASE_URL: process.env.NEXT_PUBLIC_API_BASE_URL || backendUrl,
+        NEXT_E2E_SERVER: "1",
+        NEXT_PUBLIC_API_BASE_URL:
+          process.env.NEXT_PUBLIC_API_BASE_URL || backendUrl,
       },
       reuseExistingServer: !process.env.CI,
+      timeout: 60_000,
+    },
+    {
+      name: "result-worker",
+      command: `${JSON.stringify(pythonBin)} src/api/manage.py recompute_event_results --watch --poll-interval=0.5 --settings=config.settings.e2e`,
+      cwd: rootDir,
+      env: backendEnv,
+      gracefulShutdown: { signal: "SIGTERM", timeout: 5_000 },
+      wait: { stdout: /Event results:/ },
+      timeout: 60_000,
+    },
+    {
+      name: "email-worker",
+      command: `${JSON.stringify(pythonBin)} src/api/manage.py dispatch_email_jobs --watch --limit=1000 --concurrency=2 --rate-limit=100 --poll-interval=0.5 --settings=config.settings.e2e`,
+      cwd: rootDir,
+      env: backendEnv,
+      gracefulShutdown: { signal: "SIGTERM", timeout: 5_000 },
+      wait: { stdout: /Email jobs:/ },
       timeout: 60_000,
     },
   ],

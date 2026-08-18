@@ -235,16 +235,69 @@ describe("event page routing", () => {
     ).toHaveAttribute("href", "/create");
   });
 
-  test("keeps the loading state while authentication or invitation tracking is pending", () => {
+  test("keeps loading while authentication is pending", () => {
     auth({ loading: true });
-    const authPending = render(<EventPage />);
-    expect(screen.getByText("Loading event...")).toBeInTheDocument();
-    authPending.unmount();
-
-    auth();
-    searchParams = new URLSearchParams("code=EVENT123&invitation=token");
-    markInvitationOpened.mockReturnValue(new Promise(() => {}));
     render(<EventPage />);
     expect(screen.getByText("Loading event...")).toBeInTheDocument();
+  });
+
+  test("does not block event loading on pending invitation telemetry", async () => {
+    auth();
+    searchParams = new URLSearchParams("code=EVENT123&invitation=token");
+    window.history.replaceState(
+      {},
+      "",
+      "/event?code=EVENT123&invitation=token",
+    );
+    markInvitationOpened.mockReturnValue(new Promise(() => {}));
+    fetchEvent.mockResolvedValue({ event });
+
+    render(<EventPage />);
+
+    expect(await screen.findByText("Participant workflow")).toBeInTheDocument();
+    expect(replaceUrl).toHaveBeenCalledWith("/event?code=EVENT123");
+  });
+
+  test("ignores an older event request that settles after a route change", async () => {
+    let resolveFirst;
+    const firstRequest = new Promise((resolve) => {
+      resolveFirst = resolve;
+    });
+    fetchEvent.mockImplementation((code) =>
+      code === "EVENT123"
+        ? firstRequest
+        : Promise.resolve({
+            event: {
+              ...event,
+              code: "SECOND",
+              name: "Second event",
+            },
+          }),
+    );
+
+    const view = render(<EventPage />);
+    await waitFor(() =>
+      expect(fetchEvent).toHaveBeenCalledWith("EVENT123", "token"),
+    );
+
+    searchParams = new URLSearchParams("code=SECOND");
+    window.history.replaceState({}, "", "/event?code=SECOND");
+    view.rerender(<EventPage />);
+
+    expect(await screen.findByText("Second event:SECOND")).toBeInTheDocument();
+    resolveFirst({ event });
+    await waitFor(() =>
+      expect(screen.getByTestId("event-header")).toHaveTextContent(
+        "Second event:SECOND",
+      ),
+    );
+  });
+
+  test("cancels a queued event load when the route unmounts immediately", async () => {
+    fetchEvent.mockResolvedValue({ event });
+    const view = render(<EventPage />);
+    view.unmount();
+    await Promise.resolve();
+    expect(fetchEvent).not.toHaveBeenCalled();
   });
 });

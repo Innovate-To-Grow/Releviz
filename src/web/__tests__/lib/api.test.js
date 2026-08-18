@@ -506,19 +506,20 @@ describe("auth API helpers", () => {
     );
   });
 
-  test("logout always posts the cookie endpoint and clears memory", async () => {
+  test("logout clears memory only after the server confirms revocation", async () => {
     writeAuthSession({ access: "a" });
     global.fetch.mockResolvedValueOnce(textResponse("", { status: 500 }));
-    await logoutApi();
-    expect(readAuthSession()).toBeNull();
+    await expect(logoutApi()).rejects.toThrow("HTTP 500");
+    expect(readAuthSession()).toEqual(expect.objectContaining({ access: "a" }));
 
     writeAuthSession({ access: "a" });
     global.fetch.mockRejectedValueOnce(new Error("network"));
-    await logoutApi();
-    expect(readAuthSession()).toBeNull();
+    await expect(logoutApi()).rejects.toThrow("network");
+    expect(readAuthSession()).toEqual(expect.objectContaining({ access: "a" }));
 
     global.fetch.mockResolvedValueOnce(jsonResponse({ message: "ok" }));
     await logoutApi();
+    expect(readAuthSession()).toBeNull();
     expect(global.fetch).toHaveBeenCalledTimes(3);
     expect(global.fetch).toHaveBeenLastCalledWith(
       "/authn/logout/",
@@ -1062,6 +1063,8 @@ describe("business API helpers", () => {
       "/events/invitations/open",
       expect.objectContaining({
         method: "POST",
+        keepalive: true,
+        skipAuthRefresh: true,
         body: JSON.stringify({
           code: "ABC 123",
           token: "invitation-token",
