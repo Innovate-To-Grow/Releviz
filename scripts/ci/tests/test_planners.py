@@ -7,6 +7,16 @@ from scripts.ci.plan_e2e_tests import ALL_PROJECTS, read_changed_files, select_m
 
 
 class DjangoPlannerTests(TestCase):
+    def test_explicit_full_mode_runs_every_app_for_a_narrow_pr(self):
+        self.assertEqual(
+            select_apps(
+                "pull_request",
+                ["src/api/apps/scheduling/views.py"],
+                full=True,
+            ),
+            list(APPS),
+        )
+
     def test_push_runs_every_app(self):
         self.assertEqual(select_apps("push", ["src/api/apps/core/views.py"]), list(APPS))
 
@@ -33,6 +43,16 @@ class DjangoPlannerTests(TestCase):
 
 
 class E2EPlannerTests(TestCase):
+    def test_explicit_full_mode_runs_every_browser_and_spec(self):
+        matrix = select_matrix(
+            "pull_request",
+            ["src/e2e/accessibility.spec.js"],
+            full=True,
+        )
+
+        self.assertEqual([item["project"] for item in matrix], list(ALL_PROJECTS))
+        self.assertTrue(all(item["spec_args"] == "" for item in matrix))
+
     def test_push_runs_all_browsers(self):
         matrix = select_matrix("push", ["src/web/app/page.js"])
         self.assertEqual([item["project"] for item in matrix], list(ALL_PROJECTS))

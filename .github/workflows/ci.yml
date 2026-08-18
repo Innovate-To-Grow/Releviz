@@ -4,6 +4,7 @@ on:
   push:
     branches: [main, master]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -89,70 +90,26 @@ jobs:
         run: python scripts/ci/validate_dependabot_labels.py
 
   changes:
-    name: Detect changed areas
+    name: Full CI Scope
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      backend: ${{ steps.filter.outputs.backend }}
-      frontend: ${{ steps.filter.outputs.frontend }}
-      e2e: ${{ steps.filter.outputs.e2e }}
-      infra: ${{ steps.filter.outputs.infra }}
+      backend: ${{ steps.scope.outputs.backend }}
+      frontend: ${{ steps.scope.outputs.frontend }}
+      e2e: ${{ steps.scope.outputs.e2e }}
+      infra: ${{ steps.scope.outputs.infra }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      - name: Detect changed areas from the diff
-        id: filter
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      - name: Enable every CI area
+        id: scope
         run: |
           set -euo pipefail
-          if [ "${EVENT_NAME}" != "pull_request" ]; then
-            echo "Push/non-PR event (${EVENT_NAME}); running the full suite."
-            {
-              echo "backend=true"
-              echo "frontend=true"
-              echo "e2e=true"
-              echo "infra=true"
-            } >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if [ -z "${BASE_SHA:-}" ] || [ -z "${HEAD_SHA:-}" ] \
-            || ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            echo "No usable PR base SHA; running the full suite."
-            {
-              echo "backend=true"
-              echo "frontend=true"
-              echo "e2e=true"
-              echo "infra=true"
-            } >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          files="$(git diff --name-only "$BASE_SHA...$HEAD_SHA")"
-          echo "Changed files:"
-          echo "$files"
-          match() { grep -qE "$1" <<< "$files"; }
-
-          backend=false
-          frontend=false
-          e2e=false
-          infra=false
-          if match '^(src/api/|scripts/|\.github/|\.pre-commit-config\.yaml|package(-lock)?\.json|docker-compose\.e2e\.yml)'; then backend=true; fi
-          if match '^(src/api/|src/web/|src/e2e/|scripts/|\.github/|\.pre-commit-config\.yaml|package(-lock)?\.json|docker-compose\.e2e\.yml)'; then frontend=true; fi
-          if match '^(src/api/|src/web/|src/e2e/|scripts/|\.github/|package(-lock)?\.json|docker-compose\.e2e\.yml)'; then e2e=true; fi
-          if match '^(infra/|scripts/ci/terraform-check\.sh|\.github/|\.pre-commit-config\.yaml)'; then infra=true; fi
           {
-            echo "backend=$backend"
-            echo "frontend=$frontend"
-            echo "e2e=$e2e"
-            echo "infra=$infra"
+            echo "backend=true"
+            echo "frontend=true"
+            echo "e2e=true"
+            echo "infra=true"
           } >> "$GITHUB_OUTPUT"
+          echo "Backend, frontend, E2E, and infrastructure checks are all required."
 
   backend-lint:
     name: Backend Lint and Format
@@ -350,7 +307,7 @@ jobs:
         run: python manage.py collectstatic --dry-run --noinput --settings=config.settings.test
 
   django-test-plan:
-    name: Plan Django Test Matrix
+    name: Plan Full Django Test Matrix
     runs-on: ubuntu-latest
     timeout-minutes: 5
     needs: [changes]
@@ -360,36 +317,12 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
 
-      - name: Capture changed files
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          if [ "${EVENT_NAME}" != "pull_request" ]; then
-            : > changed-files.txt
-            exit 0
-          fi
-          if [ -z "${BASE_SHA:-}" ] || [ -z "${HEAD_SHA:-}" ] \
-            || ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            : > changed-files.txt
-            exit 0
-          fi
-          git diff --name-only "$BASE_SHA...$HEAD_SHA" > changed-files.txt
-          cat changed-files.txt
-
-      - name: Select changed Django apps
+      - name: Select every Django app
         id: plan
-        env:
-          EVENT_NAME: ${{ github.event_name }}
         run: |
           python scripts/ci/plan_django_tests.py \
-            --event-name "$EVENT_NAME" \
-            --changed-files changed-files.txt \
+            --full \
             >> "$GITHUB_OUTPUT"
 
   django-app-coverage:
@@ -934,17 +867,16 @@ jobs:
           import sys
 
           needs = json.loads(os.environ["NEEDS_CONTEXT"])
-          ok = {"success", "skipped"}
           failed = {
               name: data["result"]
               for name, data in needs.items()
-              if name != "changes" and data["result"] not in ok
+              if name != "changes" and data["result"] != "success"
           }
           if failed:
               for name, result in failed.items():
                   print(f"{name}: {result}")
               sys.exit(1)
-          print("All applicable security checks passed.")
+          print("All security checks passed.")
           PY
 
   python-supply-chain-report:
@@ -1005,17 +937,16 @@ jobs:
           import sys
 
           needs = json.loads(os.environ["NEEDS_CONTEXT"])
-          ok = {"success", "skipped"}
           failed = {
               name: data["result"]
               for name, data in needs.items()
-              if name != "changes" and data["result"] not in ok
+              if name != "changes" and data["result"] != "success"
           }
           if failed:
               for name, result in failed.items():
                   print(f"{name}: {result}")
               sys.exit(1)
-          print("All applicable supply-chain checks passed.")
+          print("All supply-chain checks passed.")
           PY
 
   infrastructure-plan:
@@ -1213,11 +1144,10 @@ jobs:
           import sys
 
           needs = json.loads(os.environ["NEEDS_CONTEXT"])
-          ok = {"success", "skipped"}
           failed = {
               name: data["result"]
               for name, data in needs.items()
-              if name != "changes" and data["result"] not in ok
+              if name != "changes" and data["result"] != "success"
           }
           if failed:
               for name, result in failed.items():
@@ -1248,21 +1178,20 @@ jobs:
           import sys
 
           needs = json.loads(os.environ["NEEDS_CONTEXT"])
-          ok = {"success", "skipped"}
           failed = {
               name: data["result"]
               for name, data in needs.items()
-              if name != "changes" and data["result"] not in ok
+              if name != "changes" and data["result"] != "success"
           }
           if failed:
               for name, result in failed.items():
                   print(f"{name}: {result}")
               sys.exit(1)
-          print("Docker, Amplify, and infrastructure checks passed or were not required.")
+          print("Docker, Amplify, and infrastructure checks passed.")
           PY
 
   e2e-plan:
-    name: Plan E2E Matrix
+    name: Plan Full E2E Matrix
     runs-on: ubuntu-latest
     timeout-minutes: 5
     needs: changes
@@ -1273,36 +1202,12 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
 
-      - name: Capture changed files
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          if [ "${EVENT_NAME}" != "pull_request" ]; then
-            : > changed-files.txt
-            exit 0
-          fi
-          if [ -z "${BASE_SHA:-}" ] || [ -z "${HEAD_SHA:-}" ] \
-            || ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            : > changed-files.txt
-            exit 0
-          fi
-          git diff --name-only "$BASE_SHA...$HEAD_SHA" > changed-files.txt
-          cat changed-files.txt
-
-      - name: Select browser and spec coverage
+      - name: Select every browser and spec
         id: plan
-        env:
-          EVENT_NAME: ${{ github.event_name }}
         run: |
           python scripts/ci/plan_e2e_tests.py \
-            --event-name "$EVENT_NAME" \
-            --changed-files changed-files.txt \
+            --full \
             >> "$GITHUB_OUTPUT"
 
   e2e:
@@ -1563,18 +1468,16 @@ jobs:
           import sys
 
           needs = json.loads(os.environ["NEEDS_CONTEXT"])
-          required = needs["changes"].get("outputs", {}).get("e2e") == "true"
           results = {
               "e2e-plan": needs["e2e-plan"]["result"],
               "e2e": needs["e2e"]["result"],
           }
-          expected = {"success"} if required else {"success", "skipped"}
-          failed = {name: result for name, result in results.items() if result not in expected}
+          failed = {name: result for name, result in results.items() if result != "success"}
           if failed:
               for name, result in failed.items():
                   print(f"{name}: {result}")
               sys.exit(1)
-          print("E2E passed or was not required for this change.")
+          print("The full E2E matrix passed.")
           PY
 
   ci-result:
@@ -1603,8 +1506,11 @@ jobs:
           import sys
 
           needs = json.loads(os.environ["NEEDS_CONTEXT"])
-          ok = {"success", "skipped"}
-          failed = {name: data["result"] for name, data in needs.items() if data["result"] not in ok}
+          failed = {
+              name: data["result"]
+              for name, data in needs.items()
+              if data["result"] != "success"
+          }
           if failed:
               for name, result in failed.items():
                   print(f"{name}: {result}")

@@ -170,16 +170,17 @@ The guarded scale tools resolve application imports from `src/api`. Run them wit
 backend environment, for example `python scripts/perf/benchmark_aggregation.py`; database and HTTP
 scenarios retain their explicit confirmation and loopback/test-database safeguards.
 
-Pull requests use diff-scoped GitHub Actions jobs for the backend, frontend, E2E, and Terraform
-areas. Every push to `main` runs the full suite and produces one stable `CI Result` check. The
-pipeline includes workflow/configuration preflight checks, strict aggregate
+Every pull request, every push to `main` or `master`, and every manual GitHub Actions dispatch runs
+the complete backend, frontend, E2E, security, supply-chain, container, and Terraform suite and
+produces one stable `CI Result` check. The pipeline includes workflow/configuration preflight
+checks, strict aggregate
 backend coverage, PostgreSQL migration and app tests, frontend coverage and bundle budgets, a
 required Amplify static-export build, dependency/secret/SAST scans, SBOM and license reports,
 Terraform tests, and Docker image scans. The normal Next build and frontend Docker scan remain as
 development/E2E and migration-fallback validation; production frontend releases use the static
 artifact. Chromium, Firefox, and WebKit E2E runs and high/critical container findings block
-`CI Result`. The workflow runs for every pull request, including documentation-only changes, so
-branch protection always receives the same required check.
+`CI Result`. Documentation-only changes run the same full matrix, so a green result never means
+that an application, browser, infrastructure, or security area was skipped.
 
 ## Runtime Environment Variables
 
