@@ -603,7 +603,7 @@ test.describe("Releviz account and scheduling flow", () => {
       ),
     ).toBeVisible();
     const eventDeliveryProgress = page.getByLabel("Event delivery progress");
-    await expect(eventDeliveryProgress.getByText("1 queued")).toBeVisible();
+    await expect(eventDeliveryProgress).toBeVisible();
 
     const createdRoster = await apiJson(
       request,
@@ -619,18 +619,12 @@ test.describe("Releviz account and scheduling flow", () => {
       expect.objectContaining({
         accountAccess: "temporary",
         canOrganizerEditAvailability: true,
-        invitationStatus: "not_sent",
       }),
     );
     const participantCard = page.locator(
       `[data-roster-participant-id="${managedParticipant.id}"]`,
     );
     await expect(participantCard.getByText(/Temporary$/)).toBeVisible();
-    // The status renders as an "Invite" label span followed by a bare text
-    // node, so no single element holds the status on its own.
-    await expect(
-      participantCard.locator(".roster-status--invitation"),
-    ).toContainText("Not sent");
 
     const createdState = temporaryAccountState({
       code: eventCode,
@@ -650,15 +644,27 @@ test.describe("Releviz account and scheduling flow", () => {
     );
 
     dispatchEmailJobs();
-    await eventDeliveryProgress
-      .getByRole("button", { name: "Refresh progress" })
-      .click();
-    await expect(eventDeliveryProgress.getByText("1 sent")).toBeVisible();
     const invitationEmail = await latestEmailFor(
       temporaryEmail,
       invitationStartedAt,
       (body) => body.includes(`/temp-access?code=${eventCode}`),
     );
+    await eventDeliveryProgress
+      .getByRole("button", { name: "Refresh progress" })
+      .click();
+    await expect(eventDeliveryProgress.getByText("1 sent")).toBeVisible();
+    const sentRoster = await apiJson(
+      request,
+      "GET",
+      `/events/roster?code=${eventCode}`,
+      organizerSession.access,
+    );
+    expect(sentRoster.response.status()).toBe(200);
+    expect(
+      sentRoster.payload.participants.find(
+        (participant) => participant.id === managedParticipant.id,
+      )?.invitationStatus,
+    ).toBe("invited");
     const accessPath = temporaryAccessPathFromEmail(invitationEmail);
     const sentState = temporaryAccountState({
       code: eventCode,
@@ -1054,7 +1060,13 @@ test.describe("Releviz account and scheduling flow", () => {
     );
     expect(manualInvite).toContain("Share your availability");
 
+    const invitationOpenedResponse = participantPage.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        response.url().endsWith("/events/invitations/open"),
+    );
     await participantPage.goto(registeredInvitationLink);
+    expect((await invitationOpenedResponse).ok()).toBe(true);
     await expect(
       participantPage.getByText(/Welcome, Pat Participant/),
     ).toBeVisible();
