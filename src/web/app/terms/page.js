@@ -9,10 +9,10 @@ export default function TermsPage() {
   return (
     <>
       <AppHeader />
-      <main className="page-pad legal-shell">
-        <article className="md-card legal-content">
+      <main>
+        <article>
           <header>
-            <p className="legal-eyebrow">Releviz policies</p>
+            <p>Releviz policies</p>
             <h1>Terms of service</h1>
             <p>Last updated July 16, 2026</p>
           </header>

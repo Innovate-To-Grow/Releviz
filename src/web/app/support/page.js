@@ -9,10 +9,10 @@ export default function SupportPage() {
   return (
     <>
       <AppHeader />
-      <main className="page-pad legal-shell">
-        <article className="md-card legal-content">
+      <main>
+        <article>
           <header>
-            <p className="legal-eyebrow">Help and support</p>
+            <p>Help and support</p>
             <h1>How can we help?</h1>
             <p>
               Send a problem report or product question through the secure
@@ -27,12 +27,7 @@ export default function SupportPage() {
               retrying helped. Do not include a password, verification code,
               private invitation link, or another participant&apos;s schedule.
             </p>
-            <Link
-              className="app-btn app-btn-filled support-action"
-              href="/feedback?from=/support"
-            >
-              Open feedback form
-            </Link>
+            <Link href="/feedback?from=/support">Open feedback form</Link>
           </section>
 
           <section>

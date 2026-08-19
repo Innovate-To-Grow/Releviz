@@ -82,14 +82,10 @@ export default function ScheduleChannelEditor({
   };
 
   return (
-    <div className="schedule-channel-editor">
+    <div>
       {mode === "mixed" && (
-        <div className="schedule-channel-editor__toolbar">
-          <div
-            className="schedule-channel-tabs"
-            role="tablist"
-            aria-label="Schedule channel"
-          >
+        <div>
+          <div role="tablist" aria-label="Schedule channel">
             <button
               type="button"
               role="tab"
@@ -122,7 +118,6 @@ export default function ScheduleChannelEditor({
             </button>
           </div>
           <AppButton
-            variant="outlined"
             onClick={requestCopy}
             disabled={readOnly || schedulesMatch(schedule, targetSchedule)}
           >
@@ -133,7 +128,6 @@ export default function ScheduleChannelEditor({
 
       {pendingCopy && (
         <div
-          className="schedule-copy-confirmation"
           role="alertdialog"
           aria-labelledby="schedule-copy-title"
           aria-describedby="schedule-copy-description"
@@ -149,16 +143,13 @@ export default function ScheduleChannelEditor({
           </div>
           <div>
             <AppButton
-              variant="outlined"
               onClick={() =>
                 copySchedule(pendingCopy.source, pendingCopy.target)
               }
             >
               Replace schedule
             </AppButton>
-            <AppButton variant="outlined" onClick={() => setPendingCopy(null)}>
-              Cancel
-            </AppButton>
+            <AppButton onClick={() => setPendingCopy(null)}>Cancel</AppButton>
           </div>
         </div>
       )}
@@ -177,7 +168,6 @@ export default function ScheduleChannelEditor({
           showValues={showValues}
           onCellPaint={channel === "virtual" ? onVirtualPaint : onInpersonPaint}
           label={mode === "mixed" ? channelLabel : undefined}
-          virtual={channel === "virtual"}
         />
       </div>
     </div>

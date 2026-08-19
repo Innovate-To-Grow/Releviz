@@ -71,7 +71,7 @@ jest.mock("@/lib/navigation", () => ({
 }));
 
 import { useAuth } from "@/components/auth/AuthContext";
-import EventPage from "@/components/event/EventPage";
+import EventPage, { isDemoEventPreview } from "@/components/event/EventPage";
 import { fetchEvent, markInvitationOpened } from "@/lib/api/events";
 import { navigateTo, replaceUrl } from "@/lib/navigation";
 
@@ -114,6 +114,37 @@ describe("event page routing", () => {
       "false",
     );
     expect(fetchEvent).toHaveBeenCalledWith("EVENT123", "token");
+  });
+
+  test("enables the exact design-preview URL only in development", () => {
+    const demoParams = new URLSearchParams("code=DEMO2026&demo=1");
+
+    expect(isDemoEventPreview(demoParams, "development")).toBe(true);
+    expect(isDemoEventPreview(demoParams, "production")).toBe(false);
+    expect(isDemoEventPreview(demoParams, "test")).toBe(false);
+    expect(
+      isDemoEventPreview(
+        new URLSearchParams("code=DEMO2026&demo=0"),
+        "development",
+      ),
+    ).toBe(false);
+    expect(
+      isDemoEventPreview(
+        new URLSearchParams("code=OTHER&demo=1"),
+        "development",
+      ),
+    ).toBe(false);
+  });
+
+  test("keeps a demo-shaped URL on the authenticated live path in tests", async () => {
+    searchParams = new URLSearchParams("code=DEMO2026&demo=1");
+    fetchEvent.mockResolvedValue({ event: { ...event, code: "DEMO2026" } });
+
+    render(<EventPage />);
+
+    expect(await screen.findByText("Participant workflow")).toBeInTheDocument();
+    expect(fetchEvent).toHaveBeenCalledWith("DEMO2026", "token");
+    expect(navigateTo).not.toHaveBeenCalled();
   });
 
   test("passes and consumes a one-time response intent", async () => {

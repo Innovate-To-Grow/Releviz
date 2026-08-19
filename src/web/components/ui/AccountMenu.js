@@ -2,13 +2,6 @@
 
 import Link from "next/link";
 import { useEffect, useId, useRef, useState } from "react";
-import {
-  MdDashboard,
-  MdLogin,
-  MdLogout,
-  MdPerson,
-  MdSettings,
-} from "react-icons/md";
 import { useAuth } from "@/components/auth/AuthContext";
 import AppButton from "@/components/ui/AppButton";
 import { flushPendingNavigationWork } from "@/components/schedule/useAutosaveNavigationGuard";
@@ -21,6 +14,7 @@ export default function AccountMenu({
   const [logoutError, setLogoutError] = useState("");
   const [logoutPending, setLogoutPending] = useState(false);
   const menuRef = useRef(null);
+  const triggerRef = useRef(null);
   const keyboardOpeningRef = useRef(false);
   const menuId = useId();
 
@@ -34,7 +28,7 @@ export default function AccountMenu({
     const closeOnEscape = (event) => {
       if (event.key === "Escape") {
         setOpen(false);
-        menuRef.current?.querySelector(".account-menu-trigger")?.focus();
+        triggerRef.current?.focus();
       }
     };
 
@@ -76,20 +70,16 @@ export default function AccountMenu({
 
   if (!user) {
     return (
-      <nav className="app-header-auth" aria-label="Account">
-        <Link className="app-header-signup" href="/login">
-          <MdLogin aria-hidden="true" /> {signedOutLabel}
-        </Link>
+      <nav aria-label="Account">
+        <Link href="/login">{signedOutLabel}</Link>
       </nav>
     );
   }
 
   return (
-    <div className="account-menu" ref={menuRef}>
+    <div ref={menuRef}>
       <AppButton
-        className="account-menu-trigger"
-        variant="outlined"
-        icon={<MdPerson />}
+        ref={triggerRef}
         onClick={() => setOpen((current) => !current)}
         onKeyDown={(event) => {
           if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
@@ -104,30 +94,18 @@ export default function AccountMenu({
         {user.displayName}
       </AppButton>
       {open && (
-        <div
-          className="account-menu-popover"
-          id={menuId}
-          role="menu"
-          onKeyDown={handleMenuKeyDown}
-        >
+        <div id={menuId} role="menu" onKeyDown={handleMenuKeyDown}>
           <Link
-            className="account-menu-item"
             href="/dashboard"
             role="menuitem"
             onClick={() => setOpen(false)}
           >
-            <MdDashboard aria-hidden="true" /> My Dashboard
+            My Dashboard
           </Link>
-          <Link
-            className="account-menu-item"
-            href="/settings"
-            role="menuitem"
-            onClick={() => setOpen(false)}
-          >
-            <MdSettings aria-hidden="true" /> Settings
+          <Link href="/settings" role="menuitem" onClick={() => setOpen(false)}>
+            Settings
           </Link>
           <button
-            className="account-menu-item account-menu-item-danger"
             type="button"
             role="menuitem"
             disabled={logoutPending}
@@ -154,16 +132,11 @@ export default function AccountMenu({
               }
             }}
           >
-            <MdLogout aria-hidden="true" />
             {logoutPending ? "Logging out…" : "Log out"}
           </button>
         </div>
       )}
-      {logoutError && (
-        <p className="account-menu-error" role="alert">
-          {logoutError}
-        </p>
-      )}
+      {logoutError && <p role="alert">{logoutError}</p>}
     </div>
   );
 }

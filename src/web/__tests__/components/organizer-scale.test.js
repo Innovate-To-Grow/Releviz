@@ -13,12 +13,6 @@ import {
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 
-jest.mock("@material/web/checkbox/checkbox.js", () => ({}), { virtual: true });
-jest.mock("@material/web/slider/slider.js", () => ({}), { virtual: true });
-jest.mock("@material/web/textfield/outlined-text-field.js", () => ({}), {
-  virtual: true,
-});
-
 jest.mock("@/components/auth/AuthContext", () => ({ useAuth: jest.fn() }));
 jest.mock("@/components/event/CreateEventClient", () => ({
   __esModule: true,
@@ -397,21 +391,10 @@ describe("scaled organizer workspace", () => {
       screen.queryByRole("navigation", { name: "Organizer sections" }),
     ).not.toBeInTheDocument();
     expect(
-      Array.from(document.querySelectorAll(".organizer-workspace-section")).map(
+      Array.from(document.querySelectorAll("main > section")).map(
         (section) => section.id,
       ),
     ).toEqual(sectionIds);
-    expect(
-      Array.from(
-        document.querySelector(".organizer-workspace-column--primary").children,
-      ).map((section) => section.id),
-    ).toEqual(["organizer-overview", "organizer-roster"]);
-    expect(
-      Array.from(
-        document.querySelector(".organizer-workspace-column--secondary")
-          .children,
-      ).map((section) => section.id),
-    ).toEqual(["organizer-results", "organizer-finalize"]);
     expect(screen.queryAllByRole("tab")).toHaveLength(0);
     expect(screen.queryAllByRole("tabpanel")).toHaveLength(0);
 
@@ -851,6 +834,19 @@ describe("scaled organizer workspace", () => {
     expect(screen.getByLabelText("Group for Ada Faculty")).toBeDisabled();
     expect(screen.getByLabelText("Weight for Ada Faculty")).toBeDisabled();
     expect(screen.getByLabelText("Include Ada Faculty")).toBeDisabled();
+    expect(screen.getByLabelText("Weight for Faculty group")).toBeDisabled();
+    expect(
+      screen.getByRole("button", {
+        name: "Apply Weight to Faculty group",
+      }),
+    ).toBeDisabled();
+    within(
+      screen.getByRole("group", {
+        name: "Quick Weight for Faculty group",
+      }),
+    )
+      .getAllByRole("button")
+      .forEach((button) => expect(button).toBeDisabled());
     expect(
       screen.getByRole("button", { name: "Edit schedule" }),
     ).toBeDisabled();
@@ -884,6 +880,15 @@ describe("scaled organizer workspace", () => {
       screen.queryByLabelText("Bulk roster actions"),
     ).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Rows per page")).not.toBeInTheDocument();
+    const rosterWorkspace = screen.getByRole("region", {
+      name: "Roster management",
+    });
+    expect(
+      within(rosterWorkspace).queryByRole("region", { name: "Roster groups" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(rosterWorkspace).queryByRole("table"),
+    ).not.toBeInTheDocument();
   });
 
   test("does not render pagination for a one-participant roster", async () => {
@@ -992,6 +997,26 @@ describe("scaled organizer workspace", () => {
     expect(
       within(rosterSection).getByRole("group", { name: "Roster actions" }),
     ).toBeInTheDocument();
+    const rosterWorkspace = within(rosterSection).getByRole("region", {
+      name: "Roster management",
+    });
+    const groupsPane = within(rosterWorkspace).getByRole("region", {
+      name: "Roster groups",
+    });
+    const peoplePane = within(rosterWorkspace).getByRole("region", {
+      name: "Roster people",
+    });
+    expect(rosterWorkspace.children[0]).toBe(groupsPane);
+    expect(rosterWorkspace.children[1]).toBe(peoplePane);
+    expect(peoplePane).toContainElement(
+      within(rosterSection).getByRole("search", { name: "Roster filters" }),
+    );
+    expect(peoplePane).toContainElement(
+      within(rosterSection).getByLabelText("Bulk roster actions"),
+    );
+    expect(peoplePane).toContainElement(
+      within(rosterSection).getByRole("region", { name: "Roster entries" }),
+    );
     const table = within(rosterSection).getByRole("table", {
       name: "Roster participants",
     });
@@ -1051,7 +1076,7 @@ describe("scaled organizer workspace", () => {
     expect(await screen.findByText("Ada Faculty")).toBeInTheDocument();
 
     const bulk = screen.getByLabelText("Bulk roster actions");
-    fireEvent.click(within(bulk).getByText("Bulk actions"));
+    fireEvent.click(within(bulk).getByText("Edit multiple people"));
     await userEvent.selectOptions(
       within(bulk).getByLabelText("Bulk update scope"),
       "group",
@@ -1085,11 +1110,308 @@ describe("scaled organizer workspace", () => {
     );
   });
 
+  test("shows roster groups and applies Weight directly to a whole group", async () => {
+    renderView();
+    expect(await screen.findByText("Ada Faculty")).toBeInTheDocument();
+
+    const groupsRegion = screen.getByRole("region", {
+      name: "Roster groups",
+    });
+    expect(
+      within(groupsRegion).getByRole("heading", {
+        name: "Groups",
+      }),
+    ).toBeInTheDocument();
+    expect(within(groupsRegion).getByText("1 group")).toBeInTheDocument();
+
+    const chooser = within(groupsRegion).getByRole("group", {
+      name: "Choose a group",
+    });
+    const facultyChoice = within(chooser).getByRole("button", {
+      name: "Faculty 1 person",
+    });
+    expect(facultyChoice).toHaveAttribute("aria-pressed", "true");
+    expect(
+      within(groupsRegion).getAllByLabelText(/^Weight for .* group$/),
+    ).toHaveLength(1);
+
+    const facultyGroup = within(groupsRegion).getByRole("group", {
+      name: "Faculty group",
+    });
+    expect(within(facultyGroup).getByText("1 person")).toBeInTheDocument();
+    const input = within(facultyGroup).getByLabelText(
+      "Weight for Faculty group",
+    );
+    const apply = within(facultyGroup).getByRole("button", {
+      name: "Apply Weight to Faculty group",
+    });
+    expect(input).toHaveValue(null);
+    expect(apply).toBeDisabled();
+
+    fireEvent.change(input, { target: { value: "0.4" } });
+    expect(apply).toBeEnabled();
+    await userEvent.click(apply);
+
+    await waitFor(() =>
+      expect(patchRosterBulk).toHaveBeenCalledWith(
+        event.code,
+        {
+          group: "Faculty",
+          updates: { weight: 0.4 },
+          idempotencyKey: "request-key",
+        },
+        "token",
+      ),
+    );
+    expect(await within(groupsRegion).findByRole("status")).toHaveTextContent(
+      "Faculty Weight set to 0.4 for 1 person",
+    );
+    expect(input).toHaveValue(null);
+  });
+
+  test("offers human-readable Weight presets for a selected group", async () => {
+    renderView();
+    const groupsRegion = await screen.findByRole("region", {
+      name: "Roster groups",
+    });
+    const facultyGroup = within(groupsRegion).getByRole("group", {
+      name: "Faculty group",
+    });
+    const halfWeight = within(facultyGroup).getByRole("button", {
+      name: "0.5× Half",
+    });
+    const input = within(facultyGroup).getByLabelText(
+      "Weight for Faculty group",
+    );
+    const apply = within(facultyGroup).getByRole("button", {
+      name: "Apply Weight to Faculty group",
+    });
+
+    await userEvent.click(halfWeight);
+    expect(halfWeight).toHaveAttribute("aria-pressed", "true");
+    expect(input).toHaveValue(0.5);
+    expect(apply).toBeEnabled();
+    await userEvent.click(apply);
+
+    await waitFor(() =>
+      expect(patchRosterBulk).toHaveBeenCalledWith(
+        event.code,
+        {
+          group: "Faculty",
+          updates: { weight: 0.5 },
+          idempotencyKey: "request-key",
+        },
+        "token",
+      ),
+    );
+  });
+
+  test("keeps Weight drafts attached to the group they belong to", async () => {
+    fetchRoster.mockResolvedValue({
+      participants: [
+        {
+          id: "roster-1",
+          memberId: "member-1",
+          name: "Ada Faculty",
+          email: "ada@example.com",
+          group: "Faculty",
+          weight: 0.8,
+          included: true,
+          submitted: false,
+          accountAccess: "temporary",
+          canOrganizerEditAvailability: true,
+          invitationStatus: "not_sent",
+          version: 1,
+        },
+      ],
+      pagination: { page: 1, pageSize: 50, total: 3, pages: 1 },
+      stats: {
+        total: 3,
+        submitted: 0,
+        notSubmitted: 3,
+        groups: [
+          { name: "Faculty", count: 1 },
+          { name: "Research", count: 2 },
+        ],
+      },
+    });
+    renderView();
+
+    const groupsRegion = await screen.findByRole("region", {
+      name: "Roster groups",
+    });
+    const chooser = within(groupsRegion).getByRole("group", {
+      name: "Choose a group",
+    });
+    const facultyChoice = within(chooser).getByRole("button", {
+      name: "Faculty 1 person",
+    });
+    const researchChoice = within(chooser).getByRole("button", {
+      name: "Research 2 people",
+    });
+
+    fireEvent.change(
+      within(groupsRegion).getByLabelText("Weight for Faculty group"),
+      { target: { value: "0.4" } },
+    );
+    await userEvent.click(researchChoice);
+    expect(facultyChoice).toHaveAttribute("aria-pressed", "false");
+    expect(researchChoice).toHaveAttribute("aria-pressed", "true");
+    expect(
+      within(groupsRegion).getByRole("group", { name: "Research group" }),
+    ).toBeInTheDocument();
+    expect(
+      within(groupsRegion).getByLabelText("Weight for Research group"),
+    ).toHaveValue(null);
+    expect(within(groupsRegion).getAllByRole("spinbutton")).toHaveLength(1);
+
+    fireEvent.change(
+      within(groupsRegion).getByLabelText("Weight for Research group"),
+      { target: { value: "0.7" } },
+    );
+    await userEvent.click(facultyChoice);
+    expect(
+      within(groupsRegion).getByLabelText("Weight for Faculty group"),
+    ).toHaveValue(0.4);
+  });
+
+  test("coalesces case variants into one group card and count", async () => {
+    fetchRoster.mockResolvedValueOnce({
+      participants: [
+        {
+          id: "roster-1",
+          memberId: "member-1",
+          name: "Ada Faculty",
+          email: "ada@example.com",
+          group: "Faculty",
+          weight: 0.8,
+          included: true,
+          submitted: false,
+          accountAccess: "temporary",
+          canOrganizerEditAvailability: true,
+          invitationStatus: "not_sent",
+          version: 1,
+        },
+      ],
+      pagination: { page: 1, pageSize: 50, total: 3, pages: 1 },
+      stats: {
+        total: 3,
+        submitted: 0,
+        notSubmitted: 3,
+        groups: [
+          { name: "Faculty", count: 1 },
+          { name: "faculty", count: 2 },
+        ],
+      },
+    });
+    renderView();
+
+    const groupsRegion = await screen.findByRole("region", {
+      name: "Roster groups",
+    });
+    const facultyGroups = within(groupsRegion).getAllByRole("group", {
+      name: "Faculty group",
+    });
+    expect(facultyGroups).toHaveLength(1);
+    expect(within(facultyGroups[0]).getByText("3 people")).toBeInTheDocument();
+    expect(screen.getAllByRole("option", { name: "Faculty" })).toHaveLength(1);
+  });
+
+  test("keeps a failed group Weight draft available for retry", async () => {
+    patchRosterBulk.mockRejectedValueOnce(new Error("Temporary update outage"));
+    renderView();
+    const groupsRegion = await screen.findByRole("region", {
+      name: "Roster groups",
+    });
+    const facultyGroup = within(groupsRegion).getByRole("group", {
+      name: "Faculty group",
+    });
+    const input = within(facultyGroup).getByLabelText(
+      "Weight for Faculty group",
+    );
+    fireEvent.change(input, { target: { value: "0.65" } });
+    await userEvent.click(
+      within(facultyGroup).getByRole("button", {
+        name: "Apply Weight to Faculty group",
+      }),
+    );
+
+    expect(await within(facultyGroup).findByRole("alert")).toHaveTextContent(
+      "Temporary update outage",
+    );
+    expect(input).toHaveValue(0.65);
+  });
+
+  test("validates a direct group Weight before sending it", async () => {
+    renderView();
+    const facultyGroup = await screen.findByRole("group", {
+      name: "Faculty group",
+    });
+    fireEvent.change(
+      within(facultyGroup).getByLabelText("Weight for Faculty group"),
+      { target: { value: "1.25" } },
+    );
+    fireEvent.submit(facultyGroup);
+
+    expect(await within(facultyGroup).findByRole("alert")).toHaveTextContent(
+      "Enter a Weight from 0 to 1",
+    );
+    expect(patchRosterBulk).not.toHaveBeenCalled();
+  });
+
+  test("requires clear filters before changing an entire group Weight", async () => {
+    renderView();
+    await screen.findByText("Ada Faculty");
+    const unfilteredRoster = await fetchRoster.mock.results[0].value;
+
+    await userEvent.type(screen.getByLabelText("Search roster"), "Ada");
+    const groupsRegion = screen.getByRole("region", {
+      name: "Roster groups",
+    });
+    expect(within(groupsRegion).getByText(/hidden by filters/)).toBeVisible();
+    expect(
+      within(groupsRegion).queryByLabelText("Weight for Faculty group"),
+    ).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(fetchRoster).toHaveBeenLastCalledWith(
+        event.code,
+        expect.objectContaining({ search: "Ada" }),
+        "token",
+      ),
+    );
+
+    let resolveAllGroups;
+    fetchRoster.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveAllGroups = resolve;
+        }),
+    );
+
+    await userEvent.click(
+      within(groupsRegion).getByRole("button", { name: "Show all groups" }),
+    );
+    expect(within(groupsRegion).getByRole("status")).toHaveTextContent(
+      "Loading all groups",
+    );
+    expect(
+      within(groupsRegion).queryByLabelText("Weight for Faculty group"),
+    ).not.toBeInTheDocument();
+    await waitFor(() => expect(resolveAllGroups).toEqual(expect.any(Function)));
+
+    await act(async () => {
+      resolveAllGroups(unfilteredRoster);
+    });
+    expect(
+      await within(groupsRegion).findByLabelText("Weight for Faculty group"),
+    ).toBeEnabled();
+  });
+
   test("bulk updates require an explicit field and omit fields the organizer did not choose", async () => {
     renderView();
     expect(await screen.findByText("Ada Faculty")).toBeInTheDocument();
     const bulk = screen.getByLabelText("Bulk roster actions");
-    fireEvent.click(within(bulk).getByText("Bulk actions"));
+    fireEvent.click(within(bulk).getByText("Edit multiple people"));
     await userEvent.click(screen.getByLabelText("Select Ada Faculty"));
 
     await userEvent.click(
@@ -1124,7 +1446,7 @@ describe("scaled organizer workspace", () => {
     renderView();
     expect(await screen.findByText("Ada Faculty")).toBeInTheDocument();
     const bulk = screen.getByLabelText("Bulk roster actions");
-    fireEvent.click(within(bulk).getByText("Bulk actions"));
+    fireEvent.click(within(bulk).getByText("Edit multiple people"));
     await userEvent.selectOptions(
       within(bulk).getByLabelText("Bulk update scope"),
       "filter",
@@ -1200,6 +1522,64 @@ describe("scaled organizer workspace", () => {
         "token",
       ),
     );
+  });
+
+  test("refreshes group cards after an individual moves groups", async () => {
+    const facultyParticipant = {
+      id: "roster-1",
+      memberId: "member-1",
+      name: "Ada Faculty",
+      email: "ada@example.com",
+      group: "Faculty",
+      weight: 0.8,
+      included: true,
+      submitted: false,
+      accountAccess: "temporary",
+      canOrganizerEditAvailability: true,
+      invitationStatus: "not_sent",
+      version: 1,
+    };
+    const researchParticipant = {
+      ...facultyParticipant,
+      group: "Research",
+      version: 2,
+    };
+    fetchRoster
+      .mockResolvedValueOnce({
+        participants: [facultyParticipant],
+        pagination: { page: 1, pageSize: 50, total: 1, pages: 1 },
+        stats: {
+          total: 1,
+          submitted: 0,
+          notSubmitted: 1,
+          groups: [{ name: "Faculty", count: 1 }],
+        },
+      })
+      .mockResolvedValueOnce({
+        participants: [researchParticipant],
+        pagination: { page: 1, pageSize: 50, total: 1, pages: 1 },
+        stats: {
+          total: 1,
+          submitted: 0,
+          notSubmitted: 1,
+          groups: [{ name: "Research", count: 1 }],
+        },
+      });
+    patchRosterParticipant.mockResolvedValueOnce({
+      participant: researchParticipant,
+      resultsRevision: 4,
+    });
+    renderView();
+    const groupInput = await screen.findByLabelText("Group for Ada Faculty");
+    fireEvent.change(groupInput, { target: { value: "Research" } });
+    fireEvent.blur(groupInput);
+
+    expect(
+      await screen.findByRole("group", { name: "Research group" }),
+    ).toHaveTextContent("1 person");
+    expect(
+      screen.queryByRole("group", { name: "Faculty group" }),
+    ).not.toBeInTheDocument();
   });
 
   test("rolls an inline roster draft back when the server rejects it", async () => {

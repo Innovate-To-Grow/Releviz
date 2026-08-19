@@ -20,10 +20,6 @@ jest.mock("@/components/auth/AuthContext", () => ({
   useAuth: () => ({ signup, verifySignup, loading: false }),
 }));
 
-jest.mock("@/components/ui/BrandLogo", () => ({
-  BrandHomeLink: () => <div>Releviz</div>,
-}));
-
 jest.mock("@/lib/api/auth", () => ({
   startTemporaryUpgradeRegistration: (...args) =>
     startTemporaryUpgradeRegistration(...args),

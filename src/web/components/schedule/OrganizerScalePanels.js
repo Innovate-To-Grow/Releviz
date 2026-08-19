@@ -1,6 +1,5 @@
 "use client";
 
-import { MdEdit } from "react-icons/md";
 import {
   forwardRef,
   useCallback,
@@ -90,8 +89,8 @@ export function DeliveryRequestProgress({
   };
 
   return (
-    <div aria-label={ariaLabel} className="delivery-progress">
-      <div className="delivery-progress__header">
+    <div aria-label={ariaLabel}>
+      <div>
         <strong>
           {request.operation
             ? `${request.operation} delivery`
@@ -105,7 +104,7 @@ export function DeliveryRequestProgress({
               : "Complete"}
         </span>
       </div>
-      <div className="delivery-progress__metrics">
+      <div>
         <span>
           {delivery.total ??
             delivery.recipientTotal ??
@@ -120,8 +119,8 @@ export function DeliveryRequestProgress({
           <span>{delivery.canceled} canceled</span>
         )}
       </div>
-      <div className="delivery-progress__actions">
-        <AppButton variant="outlined" onClick={load} disabled={retrying}>
+      <div>
+        <AppButton onClick={load} disabled={retrying}>
           Refresh progress
         </AppButton>
         {failed > 0 && (
@@ -130,11 +129,7 @@ export function DeliveryRequestProgress({
           </AppButton>
         )}
       </div>
-      {error && (
-        <p role="alert" className="organizer-message organizer-message--error">
-          {error}
-        </p>
-      )}
+      {error && <p role="alert">{error}</p>}
     </div>
   );
 }
@@ -233,25 +228,19 @@ export function EventControls({
   };
 
   return (
-    <section
-      className="organizer-event-controls"
-      aria-labelledby="organizer-lifecycle-title"
-    >
-      <div className="organizer-event-controls__label">
-        <span className="organizer-lifecycle-panel__status">
-          {event.status || "unknown"}
-        </span>
+    <section aria-labelledby="organizer-lifecycle-title">
+      <div>
+        <span>{event.status || "unknown"}</span>
         <h3 id="organizer-lifecycle-title">Event controls</h3>
       </div>
 
-      <div className="organizer-event-controls__actions">
+      <div>
         {event.status === "active" && (
           <>
-            <AppButton variant="outlined" onClick={remind} disabled={changing}>
+            <AppButton onClick={remind} disabled={changing}>
               Queue reminders
             </AppButton>
             <AppButton
-              variant="outlined"
               onClick={() => changeLifecycle("closed")}
               disabled={changing}
             >
@@ -261,7 +250,6 @@ export function EventControls({
         )}
         {["closed", "finalized", "archived"].includes(event.status) && (
           <AppButton
-            variant="outlined"
             onClick={() => changeLifecycle("active")}
             disabled={changing}
           >
@@ -270,7 +258,6 @@ export function EventControls({
         )}
         {["active", "closed", "finalized"].includes(event.status) && (
           <AppButton
-            variant="outlined"
             onClick={() => changeLifecycle("archived")}
             disabled={changing}
           >
@@ -280,23 +267,9 @@ export function EventControls({
       </div>
 
       {(status || error) && (
-        <div className="organizer-event-controls__feedback">
-          {status && (
-            <p
-              role="status"
-              className="organizer-message organizer-message--success"
-            >
-              {status}
-            </p>
-          )}
-          {error && (
-            <p
-              role="alert"
-              className="organizer-message organizer-message--error"
-            >
-              {error}
-            </p>
-          )}
+        <div>
+          {status && <p role="status">{status}</p>}
+          {error && <p role="alert">{error}</p>}
         </div>
       )}
     </section>
@@ -320,7 +293,7 @@ export function OverviewPanel({ event, onEventSaved }) {
     window.setTimeout(
       () =>
         panelRef.current
-          ?.querySelector(".organizer-overview-edit-link")
+          ?.querySelector('[aria-controls="organizer-inline-event-editor"]')
           ?.focus(),
       0,
     );
@@ -346,37 +319,18 @@ export function OverviewPanel({ event, onEventSaved }) {
   };
 
   return (
-    <section
-      ref={panelRef}
-      className="md-card organizer-panel organizer-overview-panel"
-    >
-      <header className="organizer-panel__header">
+    <section ref={panelRef}>
+      <header>
         <div>
-          <h3
-            id="organizer-overview-heading"
-            className="organizer-panel__title"
-          >
-            Overview
-          </h3>
-          <p className="organizer-panel__description">
-            Review the event schedule and response settings.
-          </p>
+          <h3 id="organizer-overview-heading">Overview</h3>
+          <p>Review the event schedule and response settings.</p>
         </div>
         {editLocked ? (
-          <AppButton
-            variant="outlined"
-            className="organizer-overview-edit-link"
-            icon={<MdEdit />}
-            disabled
-            title={editLockReason}
-          >
+          <AppButton disabled title={editLockReason}>
             Edit event
           </AppButton>
         ) : (
           <AppButton
-            variant="outlined"
-            className="organizer-overview-edit-link"
-            icon={<MdEdit />}
             onClick={openEditor}
             disabled={editing}
             aria-expanded={editing}
@@ -386,7 +340,7 @@ export function OverviewPanel({ event, onEventSaved }) {
           </AppButton>
         )}
       </header>
-      <div className="organizer-overview-panel__snapshot">
+      <div>
         <EventDetailsGrid
           event={event}
           variant="organizer"
@@ -406,22 +360,14 @@ export function OverviewPanel({ event, onEventSaved }) {
           ]}
         />
       </div>
-      {saveStatus && (
-        <p
-          className="organizer-message organizer-message--success organizer-overview-edit-status"
-          role="status"
-        >
-          {saveStatus}
-        </p>
-      )}
+      {saveStatus && <p role="status">{saveStatus}</p>}
       {editing && editingEvent && (
         <div
           id="organizer-inline-event-editor"
-          className="organizer-overview-editor"
           role="region"
           aria-labelledby="organizer-inline-event-editor-heading"
         >
-          <header className="organizer-overview-editor__header">
+          <header>
             <div>
               <h4
                 id="organizer-inline-event-editor-heading"
@@ -570,32 +516,24 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
   const recommendations = (results.recommendations || []).slice(0, 10);
 
   return (
-    <section
-      ref={sectionRef}
-      className="md-card organizer-panel organizer-results-panel"
-    >
-      <div className="organizer-panel__header">
+    <section ref={sectionRef}>
+      <div>
         <div>
-          <h3
-            ref={headingRef}
-            id="organizer-results-heading"
-            className="organizer-panel__title"
-            tabIndex={-1}
-          >
+          <h3 ref={headingRef} id="organizer-results-heading" tabIndex={-1}>
             Results
           </h3>
-          <p className="organizer-panel__description">
+          <p>
             Top continuous windows for a{" "}
             {event.meetingDurationMinutes || event.slotMinutes}-minute meeting.
           </p>
         </div>
-        <AppButton variant="outlined" onClick={() => load()} disabled={loading}>
+        <AppButton onClick={() => load()} disabled={loading}>
           Refresh results
         </AppButton>
       </div>
 
       {snapshot.status === "refreshing" && (
-        <p role="status" className="organizer-message">
+        <p role="status">
           Results are updating for revision{" "}
           {snapshot.requestedRevision ?? event.resultsRevision ?? "latest"}.
           {snapshot.results
@@ -604,13 +542,13 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
         </p>
       )}
       {snapshot.status === "failed" && (
-        <p role="alert" className="organizer-message organizer-message--error">
+        <p role="alert">
           Result calculation failed. The worker will retry; the last successful
           snapshot remains visible.
         </p>
       )}
       {snapshot.status === "fresh" && (
-        <p role="status" className="organizer-message">
+        <p role="status">
           Results are current at revision{" "}
           {snapshot.computedRevision ?? "latest"}
           {snapshot.generatedAt
@@ -621,7 +559,7 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
       )}
 
       {recommendations.length > 0 ? (
-        <ol className="results-list">
+        <ol>
           {recommendations.map((recommendation, index) => {
             const key = recommendationKey(recommendation, index);
             const selected =
@@ -640,16 +578,11 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
             const endsAt =
               recommendation.suggestedEndsAt || recommendation.endsAt;
             return (
-              <li
-                key={key}
-                className={`result-option${selected ? " result-option--selected" : ""}`}
-              >
-                <div className="result-option__content">
-                  <div className="result-option__heading">
-                    <span className="result-option__rank">
-                      #{recommendation.rank || index + 1}
-                    </span>
-                    <strong className="result-option__title">
+              <li key={key}>
+                <div>
+                  <div>
+                    <span>#{recommendation.rank || index + 1}</span>
+                    <strong>
                       {recommendation.label ||
                         (startsAt
                           ? new Date(startsAt).toLocaleString([], {
@@ -658,28 +591,21 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
                           : "Candidate window")}
                     </strong>
                   </div>
-                  <p className="result-option__summary">
-                    <span className="result-option__metric">
+                  <p>
+                    <span>
                       {recommendation.channel === "virtual"
                         ? "Virtual"
                         : "In person"}
                     </span>{" "}
-                    ·{" "}
-                    <span className="result-option__metric">
-                      {(weighted * 100).toFixed(0)}% weighted
-                    </span>{" "}
-                    ·{" "}
-                    <span className="result-option__metric">
-                      {(unweighted * 100).toFixed(0)}% unweighted
-                    </span>{" "}
-                    ·{" "}
-                    <span className="result-option__metric">
+                    · <span>{(weighted * 100).toFixed(0)}% weighted</span> ·{" "}
+                    <span>{(unweighted * 100).toFixed(0)}% unweighted</span> ·{" "}
+                    <span>
                       {recommendation.fullyAvailableParticipantTotal || 0} fully
                       available
                     </span>
                   </p>
                   {startsAt && endsAt && (
-                    <small className="result-option__time">
+                    <small>
                       {new Date(startsAt).toLocaleString([], {
                         timeZone: event.timezone,
                       })}{" "}
@@ -691,7 +617,6 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
                   )}
                 </div>
                 <AppButton
-                  variant="outlined"
                   aria-pressed={selected}
                   onClick={() => onChoose(recommendation)}
                 >
@@ -702,21 +627,17 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
           })}
         </ol>
       ) : loading || snapshot.status === "refreshing" ? (
-        <div className="organizer-empty-state organizer-empty-state--loading">
+        <div>
           <h4>Calculating the best options</h4>
           <p>Recommendations will appear here as responses arrive.</p>
         </div>
       ) : (
-        <div className="organizer-empty-state">
+        <div>
           <h4>No recommendation yet</h4>
           <p>No valid meeting window is available yet.</p>
         </div>
       )}
-      {error && (
-        <p role="alert" className="organizer-message organizer-message--error">
-          {error}
-        </p>
-      )}
+      {error && <p role="alert">{error}</p>}
     </section>
   );
 });
@@ -840,19 +761,14 @@ function FinalizeScalePanelContent({
   const meeting = event.finalMeeting;
   const canFinalize = ["active", "closed"].includes(event.status);
   return (
-    <div className="organizer-panel-stack">
-      <section className="md-card organizer-panel organizer-finalize-panel">
-        <header className="organizer-panel__header">
+    <div>
+      <section>
+        <header>
           <div>
-            <h3
-              ref={headingRef}
-              id="organizer-finalize-heading"
-              className="organizer-panel__title"
-              tabIndex={-1}
-            >
+            <h3 ref={headingRef} id="organizer-finalize-heading" tabIndex={-1}>
               Finalize
             </h3>
-            <p className="organizer-panel__description">
+            <p>
               Confirm one ranked, continuous window and send an iCalendar update
               to invited people.
             </p>
@@ -861,9 +777,9 @@ function FinalizeScalePanelContent({
         {["finalized", "archived"].includes(event.status) &&
         meeting &&
         meeting.active !== false ? (
-          <div className="finalized-meeting">
-            <div className="finalized-meeting__summary">
-              <strong className="finalized-meeting__time">
+          <div>
+            <div>
+              <strong>
                 {new Date(meeting.startsAt).toLocaleString([], {
                   timeZone: event.timezone,
                 })}{" "}
@@ -872,35 +788,29 @@ function FinalizeScalePanelContent({
                   timeZone: event.timezone,
                 })}
               </strong>
-              <span className="finalized-meeting__meta">
+              <span>
                 {meeting.channel === "virtual" ? "Virtual" : "In person"} ·{" "}
                 {meeting.location || "Location TBD"}
               </span>
             </div>
-            <div className="finalized-meeting__actions">
-              <AppButton
-                variant="outlined"
-                onClick={download}
-                disabled={downloading}
-              >
+            <div>
+              <AppButton onClick={download} disabled={downloading}>
                 {downloading ? "Preparing…" : "Download calendar (.ics)"}
               </AppButton>
             </div>
           </div>
         ) : recommendation ? (
-          <div className="organizer-finalize-workspace">
-            <div className="final-candidate">
-              <div className="final-candidate__heading">
-                <strong className="final-candidate__title">
-                  {recommendation.label || "Selected candidate"}
-                </strong>
-                <span className="final-candidate__channel">
+          <div>
+            <div>
+              <div>
+                <strong>{recommendation.label || "Selected candidate"}</strong>
+                <span>
                   {recommendation.channel === "virtual"
                     ? "Virtual"
                     : "In person"}
                 </span>
               </div>
-              <p className="final-candidate__time">
+              <p>
                 {new Date(payload.startsAt).toLocaleString([], {
                   timeZone: event.timezone,
                 })}{" "}
@@ -910,8 +820,8 @@ function FinalizeScalePanelContent({
                 })}
               </p>
             </div>
-            <div className="organizer-finalize-workspace__form">
-              <label className="organizer-field">
+            <div>
+              <label>
                 <strong>Location or meeting link</strong>
                 <input
                   value={location}
@@ -922,12 +832,11 @@ function FinalizeScalePanelContent({
                   }}
                 />
               </label>
-              <div className="organizer-panel__actions organizer-finalize-workspace__actions">
-                <AppButton variant="outlined" onClick={onBrowseResults}>
+              <div>
+                <AppButton onClick={onBrowseResults}>
                   Choose a different result
                 </AppButton>
                 <AppButton
-                  variant="outlined"
                   onClick={preview}
                   disabled={!canFinalize || reviewing || confirming}
                 >
@@ -941,7 +850,7 @@ function FinalizeScalePanelContent({
                 </AppButton>
               </div>
               {!canFinalize && (
-                <p role="note" className="organizer-message">
+                <p role="note">
                   Reactivate this event before reviewing and finalizing a
                   meeting time.
                 </p>
@@ -949,17 +858,17 @@ function FinalizeScalePanelContent({
             </div>
           </div>
         ) : (
-          <div className="organizer-empty-state organizer-empty-state--finalize">
+          <div>
             <h4>No time selected yet</h4>
             <p>Choose a recommended window before finalizing.</p>
-            <div className="organizer-empty-state__actions">
+            <div>
               <AppButton onClick={onBrowseResults}>Browse results</AppButton>
             </div>
           </div>
         )}
 
         {review && (
-          <div className="attendance-review" aria-label="Attendance review">
+          <div aria-label="Attendance review">
             {[
               ["Available", review.availableParticipantTotal],
               ["Partial", review.partialParticipantTotal],
@@ -967,31 +876,15 @@ function FinalizeScalePanelContent({
               ["Unanswered", review.unansweredParticipantTotal],
               ["Excluded", review.excludedParticipantTotal],
             ].map(([label, value]) => (
-              <div key={label} className="attendance-review__item">
+              <div key={label}>
                 <span>{label}</span>
-                <strong className="attendance-review__value">
-                  {value || 0}
-                </strong>
+                <strong>{value || 0}</strong>
               </div>
             ))}
           </div>
         )}
-        {status && (
-          <p
-            role="status"
-            className="organizer-message organizer-message--success"
-          >
-            {status}
-          </p>
-        )}
-        {error && (
-          <p
-            role="alert"
-            className="organizer-message organizer-message--error"
-          >
-            {error}
-          </p>
-        )}
+        {status && <p role="status">{status}</p>}
+        {error && <p role="alert">{error}</p>}
       </section>
       <DeliveryRequestProgress
         key={deliveryRequest?.id || "no-delivery"}

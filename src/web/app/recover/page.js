@@ -66,11 +66,8 @@ export default function RecoverAccountPage() {
   return (
     <>
       <AppHeader />
-      <main className="auth-page auth-page-with-header">
-        <form
-          className="auth-panel"
-          onSubmit={step === "request" ? requestCode : resetPassword}
-        >
+      <main>
+        <form onSubmit={step === "request" ? requestCode : resetPassword}>
           <div>
             <h1>Recover your account</h1>
             <p>
@@ -78,13 +75,9 @@ export default function RecoverAccountPage() {
               your password signs out every device.
             </p>
           </div>
-          {error && (
-            <div className="auth-error" role="alert">
-              {error}
-            </div>
-          )}
+          {error && <div role="alert">{error}</div>}
           {status && (
-            <div className="auth-status" role="status" aria-live="polite">
+            <div role="status" aria-live="polite">
               {status}
             </div>
           )}
@@ -101,11 +94,7 @@ export default function RecoverAccountPage() {
           </label>
           {step === "reset" && (
             <>
-              <button
-                type="button"
-                className="auth-inline-link"
-                onClick={useDifferentEmail}
-              >
+              <button type="button" onClick={useDifferentEmail}>
                 Use a different email
               </button>
               <label>
@@ -130,9 +119,7 @@ export default function RecoverAccountPage() {
                   required
                 />
               </label>
-              <p id="recover-password-help" className="field-help">
-                Use at least 8 characters.
-              </p>
+              <p id="recover-password-help">Use at least 8 characters.</p>
               <label>
                 Confirm new password
                 <input
@@ -146,7 +133,7 @@ export default function RecoverAccountPage() {
               </label>
             </>
           )}
-          <AppButton type="submit" fullWidth disabled={loading}>
+          <AppButton type="submit" disabled={loading}>
             {loading
               ? step === "request"
                 ? "Sending..."
@@ -155,7 +142,7 @@ export default function RecoverAccountPage() {
                 ? "Send reset code"
                 : "Reset password"}
           </AppButton>
-          <p className="auth-switch">
+          <p>
             <Link href="/login">Back to login</Link>
           </p>
         </form>

@@ -12,13 +12,6 @@ import {
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 
-jest.mock("@material/web/checkbox/checkbox.js", () => ({}), { virtual: true });
-jest.mock("@material/web/dialog/dialog.js", () => ({}), { virtual: true });
-jest.mock("@material/web/slider/slider.js", () => ({}), { virtual: true });
-jest.mock("@material/web/textfield/outlined-text-field.js", () => ({}), {
-  virtual: true,
-});
-
 jest.mock("@/components/auth/AuthContext", () => ({
   useAuth: jest.fn(),
 }));

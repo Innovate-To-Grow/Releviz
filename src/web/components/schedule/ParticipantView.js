@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useContext, useEffect, useRef, useCallback } from "react";
-import { MdLogin, MdRefresh, MdSend } from "react-icons/md";
 import AppButton from "@/components/ui/AppButton";
 import EventContext from "@/components/event/EventContext";
 import ScheduleChannelEditor from "@/components/schedule/ScheduleChannelEditor";
@@ -522,7 +521,7 @@ function ParticipantView() {
 
   if (authLoading || !user) {
     return (
-      <div className="page-pad participant-loading">
+      <div>
         <p>Loading...</p>
       </div>
     );
@@ -530,10 +529,10 @@ function ParticipantView() {
 
   if (!joined) {
     return (
-      <div className="page-pad participant-join-shell">
-        <div className="participant-join-card">
-          <div className="participant-join-heading">
-            <p className="participant-eyebrow">Your invitation</p>
+      <div>
+        <div>
+          <div>
+            <p>Your invitation</p>
             <h2>Join Event</h2>
             <p>
               Join, mark the times that work for you, then submit your response.
@@ -542,69 +541,40 @@ function ParticipantView() {
 
           <EventDetailsGrid event={event} />
 
-          {joinError && (
-            <p className="participant-error" role="alert">
-              {joinError}
-            </p>
-          )}
+          {joinError && <p role="alert">{joinError}</p>}
 
-          <AppButton onClick={handleJoin} fullWidth icon={<MdLogin />}>
-            Join as {user.displayName}
-          </AppButton>
+          <AppButton onClick={handleJoin}>Join as {user.displayName}</AppButton>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="page-pad participant-workspace">
-      <div className="participant-heading">
+    <div>
+      <div>
         <div>
-          <p className="participant-eyebrow">Your availability</p>
-          <h2 className="participant-title">
+          <p>Your availability</p>
+          <h2>
             Welcome, {participantName}
-            {submitted && (
-              <span className="participant-submitted">
-                <span aria-hidden="true">✓</span> Submitted
-              </span>
-            )}
+            {submitted && "✓ Submitted"}
           </h2>
-          <p className="participant-heading-copy">
-            Choose a status, then click or drag across the times below.
-          </p>
+          <p>Choose a status, then click or drag across the times below.</p>
         </div>
-        <AppButton
-          onClick={handleRefresh}
-          variant="outlined"
-          icon={<MdRefresh />}
-          disabled={isRefreshing}
-        >
+        <AppButton onClick={handleRefresh} disabled={isRefreshing}>
           {isRefreshing ? "Refreshing…" : "Refresh"}
         </AppButton>
       </div>
 
-      <div className="participant-columns">
-        <div
-          className={`participant-editor-pane${viewPermission === "own_only" ? " participant-editor-pane-wide" : ""}`}
-        >
-          <section
-            className="participant-editor"
-            aria-labelledby="participant-editor-title"
-          >
-            <div className="participant-choice-block">
+      <div>
+        <div>
+          <section aria-labelledby="participant-editor-title">
+            <div>
               <h3 id="participant-editor-title">Mark times as</h3>
-              <div
-                role="group"
-                aria-label="Availability status"
-                className="participant-choice-group"
-              >
+              <div role="group" aria-label="Availability status">
                 {AVAILABILITY_CHOICES.map((choice) => (
                   <AppButton
                     key={choice.value}
                     onClick={() => setAvailabilityValue(choice.value)}
-                    variant={
-                      availabilityValue === choice.value ? "filled" : "outlined"
-                    }
                     aria-pressed={availabilityValue === choice.value}
                     disabled={responseChangesDisabled}
                   >
@@ -612,13 +582,10 @@ function ParticipantView() {
                   </AppButton>
                 ))}
               </div>
-              <p className="participant-hint">
-                Your changes save automatically.
-              </p>
-              <div className="participant-actions">
+              <p>Your changes save automatically.</p>
+              <div>
                 <AppButton
                   onClick={() => fillAllAvailability(availabilityValue)}
-                  variant="outlined"
                   disabled={responseChangesDisabled}
                 >
                   Apply{" "}
@@ -631,7 +598,6 @@ function ParticipantView() {
                 </AppButton>
                 <AppButton
                   onClick={() => fillAllAvailability(0)}
-                  variant="outlined"
                   disabled={responseChangesDisabled}
                 >
                   Mark all Busy
@@ -654,7 +620,6 @@ function ParticipantView() {
               <div
                 role={draftSaveState === "failed" ? "alert" : "status"}
                 aria-live={draftSaveState === "failed" ? "assertive" : "polite"}
-                className={`participant-save-status${draftSaveState === "failed" ? " participant-save-status-failed" : ""}`}
               >
                 <span>
                   {draftSaveState === "saving" && "Saving draft…"}
@@ -667,39 +632,30 @@ function ParticipantView() {
                 {draftSaveState === "failed" &&
                   (saveConflict ? (
                     <AppButton
-                      variant="outlined"
                       onClick={() => applyParticipantResponse(saveConflict)}
                     >
                       Reload latest response
                     </AppButton>
                   ) : (
-                    <AppButton
-                      variant="outlined"
-                      onClick={() => void runAutosave()}
-                    >
+                    <AppButton onClick={() => void runAutosave()}>
                       Retry save
                     </AppButton>
                   ))}
               </div>
             )}
 
-            {submitError && (
-              <p role="alert" className="participant-error">
-                {submitError}
-              </p>
-            )}
+            {submitError && <p role="alert">{submitError}</p>}
             {responseChangesDisabled && (
-              <p className="participant-error">
+              <p>
                 {event.status !== "active"
                   ? `Responses are locked while this event is ${event.status}.`
                   : "The response deadline has passed."}
               </p>
             )}
-            <div className="participant-submit-row">
+            <div>
               <AppButton
                 onClick={handleSubmit}
                 disabled={isSubmitting || responseChangesDisabled}
-                icon={<MdSend />}
               >
                 {isSubmitting
                   ? "Submitting..."
@@ -712,12 +668,9 @@ function ParticipantView() {
         </div>
 
         {viewPermission !== "own_only" && (
-          <aside
-            className="participant-results-pane"
-            aria-label="Group availability"
-          >
+          <aside aria-label="Group availability">
             {resultSnapshot.status === "refreshing" && (
-              <div className="participant-result-notice" role="status">
+              <div role="status">
                 Group availability is updating for revision{" "}
                 {resultSnapshot.requestedRevision ??
                   event.resultsRevision ??
@@ -729,25 +682,22 @@ function ParticipantView() {
               </div>
             )}
             {resultSnapshot.status === "failed" && (
-              <div
-                className="participant-result-notice participant-result-notice-error"
-                role="alert"
-              >
+              <div role="alert">
                 Group availability could not be refreshed yet.
                 {results ? " Showing the last completed snapshot." : ""}
               </div>
             )}
             {results ? (
-              <section className="participant-results-card">
+              <section>
                 <h3>Group Availability</h3>
-                <p className="participant-results-summary">
+                <p>
                   Based on {results.countedResponseTotal} submitted response(s).{" "}
                   {results.unansweredParticipantTotal} participant(s) are still
                   unanswered.
                 </p>
-                <div className="participant-results-grids">
+                <div>
                   {mode !== "virtual" && (
-                    <div className="participant-result-grid">
+                    <div>
                       <ScheduleGrid
                         schedule={avgInperson}
                         slotGroups={event.slotGroups}
@@ -762,7 +712,7 @@ function ParticipantView() {
                     </div>
                   )}
                   {mode !== "inperson" && (
-                    <div className="participant-result-grid">
+                    <div>
                       <ScheduleGrid
                         schedule={avgVirtual}
                         slotGroups={event.slotGroups}
@@ -780,7 +730,7 @@ function ParticipantView() {
                 </div>
               </section>
             ) : (
-              <section className="participant-results-card participant-results-empty">
+              <section>
                 <h3>Group Availability</h3>
                 <p>
                   Submit a valid schedule before shared results become

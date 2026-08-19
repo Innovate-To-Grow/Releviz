@@ -1,11 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import React, { useState } from "react";
-import { MdCheck, MdLink } from "react-icons/md";
+import { useState } from "react";
 import AppButton from "@/components/ui/AppButton";
 import AccountMenu from "@/components/ui/AccountMenu";
-import BrandLogo from "@/components/ui/BrandLogo";
 
 function EventHeader({ eventName, eventCode, isOrganizer }) {
   const [copied, setCopied] = useState(false);
@@ -30,33 +28,17 @@ function EventHeader({ eventName, eventCode, isOrganizer }) {
   };
 
   return (
-    <header className="event-header">
-      <Link href="/" className="event-header-identity">
-        <BrandLogo
-          alt="Releviz"
-          className="brand-logo brand-logo--event-header"
-          priority
-        />
-        <h1>{eventName}</h1>
-        {eventCode && <span className="event-header-code">#{eventCode}</span>}
-        {isOrganizer !== undefined && (
-          <span
-            className={`event-role-badge${isOrganizer ? " event-role-badge-organizer" : ""}`}
-          >
-            {isOrganizer ? "Organizer" : "Participant"}
-          </span>
-        )}
-      </Link>
-      <div className="event-header-actions">
-        <AppButton
-          onClick={handleCopy}
-          variant="outlined"
-          icon={copied ? <MdCheck /> : <MdLink />}
-        >
-          {copied ? "Copied!" : "Copy Share Link"}
-        </AppButton>
-        <AccountMenu signedOutLabel="Log in" />
-      </div>
+    <header>
+      <Link href="/">Releviz</Link>
+      <h1>{eventName}</h1>
+      {eventCode && <span>#{eventCode}</span>}
+      {isOrganizer !== undefined && (
+        <span>{isOrganizer ? "Organizer" : "Participant"}</span>
+      )}
+      <AppButton onClick={handleCopy}>
+        {copied ? "Copied!" : "Copy Share Link"}
+      </AppButton>
+      <AccountMenu signedOutLabel="Log in" />
     </header>
   );
 }

@@ -1,5 +1,3 @@
-import "./globals.css";
-import "./apple-design.css";
 import { AuthProvider } from "@/components/auth/AuthContext";
 import SiteFooter from "@/components/ui/SiteFooter";
 
@@ -42,24 +40,13 @@ export const metadata = {
   },
 };
 
-export const viewport = {
-  width: "device-width",
-  initialScale: 1,
-  themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#f5f5f7" },
-    { media: "(prefers-color-scheme: dark)", color: "#000000" },
-  ],
-};
-
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
       <body>
         <AuthProvider>
-          <div className="site-shell">
-            <div className="site-content">{children}</div>
-            <SiteFooter />
-          </div>
+          {children}
+          <SiteFooter />
         </AuthProvider>
       </body>
     </html>

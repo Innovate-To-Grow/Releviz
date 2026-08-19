@@ -184,15 +184,11 @@ export default function OrganizerScaleView() {
   );
 
   if (loading || !user) {
-    return (
-      <div className="page-pad organizer-loading">
-        <p>Loading…</p>
-      </div>
-    );
+    return <p>Loading…</p>;
   }
 
   return (
-    <main className="page-pad organizer-workspace">
+    <main>
       <OrganizerHeader
         event={event}
         onRefresh={refreshWorkspace}
@@ -208,93 +204,73 @@ export default function OrganizerScaleView() {
       />
 
       {(refreshStatus || refreshError) && (
-        <p
-          className="organizer-workspace__refresh-feedback"
-          role={refreshError ? "alert" : "status"}
-        >
+        <p role={refreshError ? "alert" : "status"}>
           {refreshError || refreshStatus}
         </p>
       )}
 
       {deliveryRequest && (
-        <div className="organizer-workspace__delivery">
-          <DeliveryRequestProgress
-            key={deliveryRequest.id || "event-delivery"}
-            initialRequest={deliveryRequest}
-            getToken={getToken}
-            onChange={setDeliveryRequest}
-            ariaLabel="Event delivery progress"
-          />
-        </div>
+        <DeliveryRequestProgress
+          key={deliveryRequest.id || "event-delivery"}
+          initialRequest={deliveryRequest}
+          getToken={getToken}
+          onChange={setDeliveryRequest}
+          ariaLabel="Event delivery progress"
+        />
       )}
 
-      <div className="organizer-workspace-layout">
-        <div className="organizer-workspace-sections">
-          <div className="organizer-workspace-column organizer-workspace-column--primary">
-            <section
-              id="organizer-overview"
-              className="organizer-workspace-section"
-              aria-labelledby="organizer-overview-heading"
-            >
-              <OverviewPanel event={event} onEventSaved={handleEventSaved} />
-            </section>
+      <section
+        id="organizer-overview"
+        aria-labelledby="organizer-overview-heading"
+      >
+        <OverviewPanel event={event} onEventSaved={handleEventSaved} />
+      </section>
 
-            <section
-              id="organizer-roster"
-              className="organizer-workspace-section"
-              aria-labelledby="organizer-roster-heading"
-            >
-              <RosterPanel
-                ref={rosterRef}
-                event={event}
-                setEvent={setEvent}
-                getToken={getToken}
-                onResultsInvalidated={invalidateResults}
-                onDeliveryRequestChange={setDeliveryRequest}
-              />
-            </section>
-          </div>
+      <section id="organizer-roster" aria-labelledby="organizer-roster-heading">
+        <RosterPanel
+          ref={rosterRef}
+          event={event}
+          setEvent={setEvent}
+          getToken={getToken}
+          onResultsInvalidated={invalidateResults}
+          onDeliveryRequestChange={setDeliveryRequest}
+        />
+      </section>
 
-          <div className="organizer-workspace-column organizer-workspace-column--secondary">
-            <section
-              id="organizer-results"
-              className="organizer-workspace-section"
-              aria-labelledby="organizer-results-heading"
-            >
-              <ResultsSnapshotPanel
-                ref={resultsRef}
-                event={event}
-                getToken={getToken}
-                invalidationKey={resultsInvalidationKey}
-                selectedRecommendationKey={selectedRecommendationKey(
-                  selectedRecommendation,
-                )}
-                headingRef={resultsHeadingRef}
-                onChoose={(recommendation) => {
-                  setSelectedRecommendation(recommendation);
-                }}
-              />
-            </section>
+      <section
+        id="organizer-results"
+        aria-labelledby="organizer-results-heading"
+      >
+        <ResultsSnapshotPanel
+          ref={resultsRef}
+          event={event}
+          getToken={getToken}
+          invalidationKey={resultsInvalidationKey}
+          selectedRecommendationKey={selectedRecommendationKey(
+            selectedRecommendation,
+          )}
+          headingRef={resultsHeadingRef}
+          onChoose={(recommendation) => {
+            setSelectedRecommendation(recommendation);
+          }}
+        />
+      </section>
 
-            <section
-              id="organizer-finalize"
-              className="organizer-workspace-section"
-              aria-labelledby="organizer-finalize-heading"
-            >
-              <FinalizeScalePanel
-                event={event}
-                setEvent={setEvent}
-                getToken={getToken}
-                recommendation={selectedRecommendation}
-                headingRef={finalizeHeadingRef}
-                onBrowseResults={() =>
-                  focusSection("organizer-results", resultsHeadingRef)
-                }
-              />
-            </section>
-          </div>
-        </div>
-      </div>
+      <section
+        id="organizer-finalize"
+        aria-labelledby="organizer-finalize-heading"
+      >
+        <FinalizeScalePanel
+          event={event}
+          setEvent={setEvent}
+          getToken={getToken}
+          recommendation={selectedRecommendation}
+          headingRef={finalizeHeadingRef}
+          onBrowseResults={() =>
+            focusSection("organizer-results", resultsHeadingRef)
+          }
+        />
+      </section>
     </main>
   );
 }

@@ -130,10 +130,10 @@ export default function ContinueWithEmailPage({
     return (
       <>
         <AppHeader />
-        <main className="auth-page auth-page-with-header">
-          <div className="auth-panel" role="status" aria-live="polite">
+        <main>
+          <p role="status" aria-live="polite">
             {authLoading ? "Checking your session…" : "Opening your account…"}
-          </div>
+          </p>
         </main>
       </>
     );
@@ -142,8 +142,8 @@ export default function ContinueWithEmailPage({
   return (
     <>
       <AppHeader />
-      <main className="auth-page auth-page-with-header">
-        <form className="auth-panel" onSubmit={handleSubmit}>
+      <main>
+        <form onSubmit={handleSubmit}>
           <div>
             <h1>{codeSent ? "Check your email" : "Continue with email"}</h1>
             <p>
@@ -153,15 +153,11 @@ export default function ContinueWithEmailPage({
             </p>
           </div>
 
-          {error && (
-            <div className="auth-error" role="alert">
-              {error}
-            </div>
-          )}
+          {error && <p role="alert">{error}</p>}
           {status && (
-            <div className="auth-status" role="status" aria-live="polite">
+            <p role="status" aria-live="polite">
               {status}
-            </div>
+            </p>
           )}
 
           {!codeSent ? (
@@ -191,17 +187,13 @@ export default function ContinueWithEmailPage({
                   required
                 />
               </label>
-              <button
-                type="button"
-                className="auth-inline-link"
-                onClick={useDifferentEmail}
-              >
+              <button type="button" onClick={useDifferentEmail}>
                 Use a different email
               </button>
             </>
           )}
 
-          <AppButton type="submit" fullWidth disabled={loading || authLoading}>
+          <AppButton type="submit" disabled={loading || authLoading}>
             {loading
               ? codeSent
                 ? "Verifying..."
@@ -211,7 +203,7 @@ export default function ContinueWithEmailPage({
                 : "Continue with email"}
           </AppButton>
 
-          <p className="auth-privacy-note">
+          <p>
             No password required. By continuing, you agree to receive a one-time
             verification email.
           </p>

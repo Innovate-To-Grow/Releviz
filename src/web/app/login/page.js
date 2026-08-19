@@ -32,8 +32,8 @@ export default function Login() {
       fallback={
         <>
           <AppHeader />
-          <main className="auth-page auth-page-with-header">
-            <div className="auth-panel">Loading...</div>
+          <main>
+            <p>Loading...</p>
           </main>
         </>
       }

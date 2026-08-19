@@ -249,7 +249,7 @@ export default function SettingsPage() {
 
   if (!completionResolved || loading || !user) {
     return (
-      <div className="center-page">
+      <div>
         <p>Loading...</p>
       </div>
     );
@@ -270,13 +270,10 @@ export default function SettingsPage() {
     return (
       <>
         <AppHeader pageTitle="Complete your profile" />
-        <main className="auth-page auth-page-with-header profile-onboarding-page">
-          <section
-            className="auth-panel profile-onboarding-panel"
-            aria-labelledby="profile-onboarding-heading"
-          >
-            <header className="profile-onboarding-heading">
-              <span className="settings-eyebrow">One last step</span>
+        <main>
+          <section aria-labelledby="profile-onboarding-heading">
+            <header>
+              <span>One last step</span>
               <h1 id="profile-onboarding-heading">Complete your profile</h1>
               <p>
                 Add your name so people can recognize your response in the
@@ -284,20 +281,16 @@ export default function SettingsPage() {
               </p>
             </header>
 
-            <form className="profile-onboarding-form" onSubmit={handleSave}>
-              {error && (
-                <div className="auth-error" role="alert">
-                  {error}
-                </div>
-              )}
+            <form onSubmit={handleSave}>
+              {error && <div role="alert">{error}</div>}
 
-              <label className="field-label profile-onboarding-email">
+              <label>
                 Email address
                 <input value={user.email} type="email" readOnly />
               </label>
 
-              <div className="auth-grid">
-                <label className="field-label">
+              <div>
+                <label>
                   First name
                   <input
                     value={current.firstName}
@@ -309,7 +302,7 @@ export default function SettingsPage() {
                     required
                   />
                 </label>
-                <label className="field-label">
+                <label>
                   Last name
                   <input
                     value={current.lastName}
@@ -322,7 +315,7 @@ export default function SettingsPage() {
                 </label>
               </div>
 
-              <AppButton type="submit" fullWidth>
+              <AppButton type="submit">
                 {continueToEvent ? "Continue to event" : "Continue"}
               </AppButton>
             </form>
@@ -335,35 +328,33 @@ export default function SettingsPage() {
   return (
     <>
       <AppHeader pageTitle="Account settings" />
-      <main className="page-pad settings-shell">
-        <div className="settings-panel">
-          <aside className="settings-sidebar">
-            <div className="settings-account-summary">
-              <span className="settings-avatar" aria-hidden="true">
-                {initials}
-              </span>
+      <main>
+        <div>
+          <aside>
+            <div>
+              <span aria-hidden="true">{initials}</span>
               <div>
-                <span className="settings-eyebrow">Signed in as</span>
+                <span>Signed in as</span>
                 <strong>{displayName}</strong>
-                <span className="settings-sidebar-email">{user.email}</span>
+                <span>{user.email}</span>
               </div>
             </div>
-            <nav className="settings-nav" aria-label="Settings sections">
+            <nav aria-label="Settings sections">
               <a href="#profile">Profile</a>
               <a href="#sessions">Active sessions</a>
               <a href="#password">Password</a>
               <a href="#danger-zone">Danger zone</a>
             </nav>
-            <div className="settings-account-id">
+            <div>
               <span>Account ID</span>
               <code>{user.id}</code>
             </div>
           </aside>
 
-          <div className="settings-content">
-            <header className="settings-heading">
+          <div>
+            <header>
               <div>
-                <span className="settings-eyebrow">Your account</span>
+                <span>Your account</span>
                 <h1>Account settings</h1>
               </div>
               <p>
@@ -371,26 +362,16 @@ export default function SettingsPage() {
               </p>
             </header>
 
-            <form
-              id="profile"
-              className="settings-section"
-              onSubmit={handleSave}
-            >
-              <div className="settings-section-copy">
-                <span className="settings-section-index">01</span>
+            <form id="profile" onSubmit={handleSave}>
+              <div>
+                <span>01</span>
                 <h2>Profile</h2>
-                <p className="settings-muted">
-                  Update the name shown across your scheduling workspace.
-                </p>
+                <p>Update the name shown across your scheduling workspace.</p>
               </div>
-              <div className="settings-section-body">
-                {error && (
-                  <div className="auth-error" role="alert">
-                    {error}
-                  </div>
-                )}
-                <div className="auth-grid">
-                  <label className="field-label">
+              <div>
+                {error && <div role="alert">{error}</div>}
+                <div>
+                  <label>
                     First name
                     <input
                       value={current.firstName}
@@ -401,7 +382,7 @@ export default function SettingsPage() {
                       required
                     />
                   </label>
-                  <label className="field-label">
+                  <label>
                     Last name
                     <input
                       value={current.lastName}
@@ -413,13 +394,9 @@ export default function SettingsPage() {
                     />
                   </label>
                 </div>
-                <div className="settings-actions">
+                <div>
                   {saved && (
-                    <span
-                      className="settings-saved"
-                      role="status"
-                      aria-live="polite"
-                    >
+                    <span role="status" aria-live="polite">
                       Saved
                     </span>
                   )}
@@ -428,44 +405,29 @@ export default function SettingsPage() {
               </div>
             </form>
 
-            <section
-              id="sessions"
-              className="settings-section"
-              aria-labelledby="active-sessions-heading"
-            >
-              <div className="settings-section-copy">
-                <span className="settings-section-index">02</span>
+            <section id="sessions" aria-labelledby="active-sessions-heading">
+              <div>
+                <span>02</span>
                 <h2 id="active-sessions-heading">Active sessions</h2>
-                <p className="settings-muted">
+                <p>
                   Revoke devices you no longer recognize. Access is invalidated
                   immediately.
                 </p>
               </div>
-              <div className="settings-section-body">
-                {sessionError && (
-                  <div className="auth-error" role="alert">
-                    {sessionError}
-                  </div>
-                )}
+              <div>
+                {sessionError && <div role="alert">{sessionError}</div>}
                 {sessionsLoading ? (
                   <p>Loading active sessions...</p>
                 ) : sessions.length ? (
-                  <ul className="session-list">
+                  <ul>
                     {sessions.map((session) => (
-                      <li
-                        key={session.id}
-                        className={`session-card${session.current ? " session-card-current" : ""}`}
-                      >
-                        <div className="session-description">
-                          <div className="session-title">
+                      <li key={session.id}>
+                        <div>
+                          <div>
                             <strong>
                               {session.current ? "This device" : "Other device"}
                             </strong>
-                            {session.current && (
-                              <span className="session-current-badge">
-                                Current
-                              </span>
-                            )}
+                            {session.current && <span>Current</span>}
                           </div>
                           <div>{describeSessionDevice(session.userAgent)}</div>
                           <small>
@@ -475,7 +437,6 @@ export default function SettingsPage() {
                           </small>
                         </div>
                         <AppButton
-                          variant="outlined"
                           disabled={Boolean(sessionAction)}
                           onClick={() => handleRevokeSession(session)}
                         >
@@ -491,9 +452,8 @@ export default function SettingsPage() {
                 ) : (
                   <p>No active sessions were found.</p>
                 )}
-                <div className="settings-actions">
+                <div>
                   <AppButton
-                    variant="outlined"
                     disabled={Boolean(sessionAction)}
                     onClick={handleLogoutAll}
                   >
@@ -505,41 +465,24 @@ export default function SettingsPage() {
               </div>
             </section>
 
-            <form
-              id="password"
-              className="settings-disclosure"
-              onSubmit={handleChangePassword}
-            >
+            <form id="password" onSubmit={handleChangePassword}>
               <details>
-                <summary className="settings-disclosure-summary">
-                  <div className="settings-section-copy">
-                    <span className="settings-section-index">03</span>
+                <summary>
+                  <div>
+                    <span>03</span>
                     <h2>Change password</h2>
-                    <p className="settings-muted">
+                    <p>
                       Changing your password signs out every device, including
                       this one.
                     </p>
                   </div>
-                  <span className="settings-disclosure-toggle">
-                    <span className="settings-disclosure-label-closed">
-                      Show
-                    </span>
-                    <span className="settings-disclosure-label-open">Hide</span>
-                    <span
-                      className="settings-disclosure-chevron"
-                      aria-hidden="true"
-                    />
-                  </span>
+                  Show
                 </summary>
-                <div className="settings-disclosure-content">
-                  <div className="settings-section-body">
-                    {passwordError && (
-                      <div className="auth-error" role="alert">
-                        {passwordError}
-                      </div>
-                    )}
-                    <div className="settings-fields-grid settings-password-fields">
-                      <label className="field-label">
+                <div>
+                  <div>
+                    {passwordError && <div role="alert">{passwordError}</div>}
+                    <div>
+                      <label>
                         Current password
                         <input
                           value={currentPassword}
@@ -551,7 +494,7 @@ export default function SettingsPage() {
                           required
                         />
                       </label>
-                      <label className="field-label">
+                      <label>
                         New password
                         <input
                           value={newPassword}
@@ -565,7 +508,7 @@ export default function SettingsPage() {
                           required
                         />
                       </label>
-                      <label className="field-label">
+                      <label>
                         Confirm new password
                         <input
                           value={newPasswordConfirm}
@@ -579,10 +522,10 @@ export default function SettingsPage() {
                         />
                       </label>
                     </div>
-                    <p id="settings-password-help" className="field-help">
+                    <p id="settings-password-help">
                       Use at least 8 characters.
                     </p>
-                    <div className="settings-actions">
+                    <div>
                       <AppButton type="submit" disabled={passwordAction}>
                         {passwordAction ? "Changing..." : "Change password"}
                       </AppButton>
@@ -592,55 +535,34 @@ export default function SettingsPage() {
               </details>
             </form>
 
-            <form
-              id="danger-zone"
-              className="settings-disclosure settings-danger-zone"
-              onSubmit={handleDeleteAccount}
-            >
+            <form id="danger-zone" onSubmit={handleDeleteAccount}>
               <details>
-                <summary className="settings-disclosure-summary">
-                  <div className="settings-section-copy">
-                    <span className="settings-section-index">04</span>
+                <summary>
+                  <div>
+                    <span>04</span>
                     <h2>Delete account</h2>
                     <p>
                       Permanently remove your sign-in details and profile. This
                       cannot be undone.
                     </p>
                   </div>
-                  <span className="settings-disclosure-toggle">
-                    <span className="settings-disclosure-label-closed">
-                      Show
-                    </span>
-                    <span className="settings-disclosure-label-open">Hide</span>
-                    <span
-                      className="settings-disclosure-chevron"
-                      aria-hidden="true"
-                    />
-                  </span>
+                  Show
                 </summary>
-                <div className="settings-disclosure-content">
-                  <div className="settings-section-body">
-                    <p className="settings-danger-note">
+                <div>
+                  <div>
+                    <p>
                       Every session will be revoked and your identity will be
                       anonymized in retained scheduling records.
                     </p>
-                    {deleteError && (
-                      <div className="auth-error" role="alert">
-                        {deleteError}
-                      </div>
-                    )}
+                    {deleteError && <div role="alert">{deleteError}</div>}
                     {deleteStatus && (
-                      <div
-                        className="auth-status"
-                        role="status"
-                        aria-live="polite"
-                      >
+                      <div role="status" aria-live="polite">
                         {deleteStatus}
                       </div>
                     )}
-                    <div className="settings-fields-grid">
+                    <div>
                       {deleteCodeSent && (
-                        <label className="field-label">
+                        <label>
                           Confirmation code
                           <input
                             value={deleteCode}
@@ -655,7 +577,7 @@ export default function SettingsPage() {
                           />
                         </label>
                       )}
-                      <label className="field-label">
+                      <label>
                         Type DELETE to confirm
                         <input
                           value={deleteConfirmation}
@@ -668,11 +590,9 @@ export default function SettingsPage() {
                         />
                       </label>
                     </div>
-                    <div className="settings-actions">
+                    <div>
                       <AppButton
                         type="submit"
-                        variant="outlined"
-                        className="app-btn-danger"
                         disabled={
                           deleteAction ||
                           deleteConfirmation !== "DELETE" ||

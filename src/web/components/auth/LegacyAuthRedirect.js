@@ -12,13 +12,11 @@ export default function LegacyAuthRedirect({ destination, label }) {
   }, [destination, router]);
 
   return (
-    <main className="auth-page">
-      <div className="auth-panel">
-        <p>Redirecting...</p>
-        <p className="auth-switch">
-          <Link href={destination}>Continue to {label}</Link>
-        </p>
-      </div>
+    <main>
+      <p>Redirecting...</p>
+      <p>
+        <Link href={destination}>Continue to {label}</Link>
+      </p>
     </main>
   );
 }

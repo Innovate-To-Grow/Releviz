@@ -58,9 +58,8 @@ function importFrom(data) {
 function Pagination({ pagination, onPage }) {
   if (!pagination || pagination.pages <= 1) return null;
   return (
-    <div className="roster-import__pagination">
+    <>
       <AppButton
-        variant="outlined"
         disabled={pagination.page <= 1}
         onClick={() => onPage(pagination.page - 1)}
       >
@@ -70,13 +69,12 @@ function Pagination({ pagination, onPage }) {
         Page {pagination.page} of {pagination.pages}
       </span>
       <AppButton
-        variant="outlined"
         disabled={pagination.page >= pagination.pages}
         onClick={() => onPage(pagination.page + 1)}
       >
         Next
       </AppButton>
-    </div>
+    </>
   );
 }
 
@@ -407,39 +405,26 @@ export default function RosterImportWizard({
   };
 
   return (
-    <section
-      className="md-card roster-import"
-      aria-labelledby="roster-import-heading"
-    >
-      <div className="roster-import__header">
-        <div className="roster-import__heading-copy">
-          <h3 id="roster-import-heading" className="roster-import__title">
-            Import roster
-          </h3>
-          <p className="roster-import__subtitle">
-            {phase === "source" &&
-              "Upload a CSV/XLSX file or paste cells from a spreadsheet."}
-            {phase === "mapping" && "Choose a worksheet and map its columns."}
-            {phase === "preview" &&
-              "Review validation issues before changing the event roster."}
-            {phase === "complete" &&
-              "The roster import was committed successfully."}
-          </p>
-        </div>
-        {onClose && (
-          <AppButton variant="text" onClick={handleCancel} disabled={busy}>
-            Close
-          </AppButton>
-        )}
-      </div>
+    <section aria-labelledby="roster-import-heading">
+      <h3 id="roster-import-heading">Import roster</h3>
+      <p>
+        {phase === "source" &&
+          "Upload a CSV/XLSX file or paste cells from a spreadsheet."}
+        {phase === "mapping" && "Choose a worksheet and map its columns."}
+        {phase === "preview" &&
+          "Review validation issues before changing the event roster."}
+        {phase === "complete" &&
+          "The roster import was committed successfully."}
+      </p>
+      {onClose && (
+        <AppButton onClick={handleCancel} disabled={busy}>
+          Close
+        </AppButton>
+      )}
 
       {phase === "source" && (
         <>
-          <div
-            className="roster-import__source-switcher"
-            role="tablist"
-            aria-label="Roster source"
-          >
+          <div role="tablist" aria-label="Roster source">
             <AppButton
               role="tab"
               id={`${sourceTabsId}-file-tab`}
@@ -449,7 +434,6 @@ export default function RosterImportWizard({
               ref={(node) => {
                 sourceTabRefs.current.file = node;
               }}
-              variant={sourceType === "file" ? "filled" : "outlined"}
               onClick={() => selectSourceType("file")}
               onKeyDown={handleSourceTabKeyDown}
             >
@@ -464,7 +448,6 @@ export default function RosterImportWizard({
               ref={(node) => {
                 sourceTabRefs.current.paste = node;
               }}
-              variant={sourceType === "paste" ? "filled" : "outlined"}
               onClick={() => selectSourceType("paste")}
               onKeyDown={handleSourceTabKeyDown}
             >
@@ -477,7 +460,7 @@ export default function RosterImportWizard({
             aria-labelledby={`${sourceTabsId}-${sourceType}-tab`}
           >
             {sourceType === "file" ? (
-              <label className="roster-import__field roster-import__source-field">
+              <label>
                 <strong>CSV or XLSX file</strong>
                 <input
                   aria-label="CSV or XLSX file"
@@ -491,7 +474,7 @@ export default function RosterImportWizard({
                 </small>
               </label>
             ) : (
-              <label className="roster-import__field roster-import__source-field">
+              <label>
                 <strong>Rows copied from Google Sheets or Excel</strong>
                 <textarea
                   aria-label="Pasted roster rows"
@@ -504,11 +487,9 @@ export default function RosterImportWizard({
                 />
               </label>
             )}
-            <div className="roster-import__actions">
-              <AppButton onClick={handleSource} disabled={busy}>
-                {busy ? "Reading…" : "Continue to mapping"}
-              </AppButton>
-            </div>
+            <AppButton onClick={handleSource} disabled={busy}>
+              {busy ? "Reading…" : "Continue to mapping"}
+            </AppButton>
           </div>
         </>
       )}
@@ -516,7 +497,7 @@ export default function RosterImportWizard({
       {phase === "mapping" && (
         <>
           {record?.worksheets?.length > 1 && (
-            <label className="roster-import__field">
+            <label>
               <strong>Worksheet</strong>
               <select
                 value={worksheet}
@@ -540,7 +521,7 @@ export default function RosterImportWizard({
               </select>
             </label>
           )}
-          <label className="roster-import__field roster-import__header-row-field">
+          <label>
             <strong>Header row</strong>
             <input
               type="number"
@@ -557,236 +538,222 @@ export default function RosterImportWizard({
               }}
             />
           </label>
-          <div className="roster-import__field-grid roster-import__mapping-grid">
-            {FIELD_OPTIONS.map(([field, label, mandatory]) => (
-              <label key={field} className="roster-import__field">
-                <strong>
-                  {label}
-                  {mandatory ? " *" : ""}
-                </strong>
-                <select
-                  value={mapping[field] || ""}
-                  onChange={(event) =>
-                    setMapping((current) => ({
-                      ...current,
-                      [field]: event.target.value || undefined,
-                    }))
-                  }
-                >
-                  <option value="">
-                    {mandatory ? "Select a column" : "Use default"}
+          {FIELD_OPTIONS.map(([field, label, mandatory]) => (
+            <label key={field}>
+              <strong>
+                {label}
+                {mandatory ? " *" : ""}
+              </strong>
+              <select
+                value={mapping[field] || ""}
+                onChange={(event) =>
+                  setMapping((current) => ({
+                    ...current,
+                    [field]: event.target.value || undefined,
+                  }))
+                }
+              >
+                <option value="">
+                  {mandatory ? "Select a column" : "Use default"}
+                </option>
+                {headers.map((header, index) => (
+                  <option key={`${index}:${header}`} value={String(index)}>
+                    {header || `Column ${index + 1}`}
                   </option>
-                  {headers.map((header, index) => (
-                    <option key={`${index}:${header}`} value={String(index)}>
-                      {header || `Column ${index + 1}`}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ))}
-          </div>
-          <div className="roster-import__field-grid roster-import__defaults-grid">
-            <label className="roster-import__field">
-              <strong>Default group</strong>
-              <input
-                value={defaults.group}
-                onChange={(event) =>
-                  setDefaults((current) => ({
-                    ...current,
-                    group: event.target.value,
-                  }))
-                }
-              />
+                ))}
+              </select>
             </label>
-            <label className="roster-import__field">
-              <strong>Default weight</strong>
-              <input
-                type="number"
-                min="0"
-                max="1"
-                step="0.05"
-                value={defaults.weight}
-                onChange={(event) =>
-                  setDefaults((current) => ({
-                    ...current,
-                    weight: Number(event.target.value),
-                  }))
-                }
-              />
-            </label>
-            <label className="roster-import__checkbox-field">
-              <input
-                type="checkbox"
-                checked={Boolean(defaults.included)}
-                onChange={(event) =>
-                  setDefaults((current) => ({
-                    ...current,
-                    included: event.target.checked,
-                  }))
-                }
-              />{" "}
-              Include by default
-            </label>
-          </div>
-          <div className="roster-import__actions">
-            <AppButton
-              variant="outlined"
-              onClick={() => setPhase("source")}
-              disabled={busy}
-            >
-              Back
-            </AppButton>
-            <AppButton onClick={handleConfigure} disabled={busy}>
-              {busy ? "Validating…" : "Preview rows"}
-            </AppButton>
-          </div>
+          ))}
+          <label>
+            <strong>Default group</strong>
+            <input
+              value={defaults.group}
+              onChange={(event) =>
+                setDefaults((current) => ({
+                  ...current,
+                  group: event.target.value,
+                }))
+              }
+            />
+          </label>
+          <label>
+            <strong>Default weight</strong>
+            <input
+              type="number"
+              min="0"
+              max="1"
+              step="0.05"
+              value={defaults.weight}
+              onChange={(event) =>
+                setDefaults((current) => ({
+                  ...current,
+                  weight: Number(event.target.value),
+                }))
+              }
+            />
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={Boolean(defaults.included)}
+              onChange={(event) =>
+                setDefaults((current) => ({
+                  ...current,
+                  included: event.target.checked,
+                }))
+              }
+            />{" "}
+            Include by default
+          </label>
+          <AppButton onClick={() => setPhase("source")} disabled={busy}>
+            Back
+          </AppButton>
+          <AppButton onClick={handleConfigure} disabled={busy}>
+            {busy ? "Validating…" : "Preview rows"}
+          </AppButton>
         </>
       )}
 
       {phase === "preview" && (
         <>
-          <div className="roster-import__summary">
-            {[
-              ["Selected", record?.summary?.selected],
-              ["Valid", record?.summary?.valid],
-              ["Invalid", record?.summary?.invalid],
-              ["Conflicts", record?.summary?.conflicts],
-            ].map(([label, value]) => (
-              <span key={label}>
-                <strong>{value || 0}</strong> {label.toLowerCase()}
-              </span>
-            ))}
-          </div>
-          <div className="roster-import__table-scroll">
-            <table className="roster-import__table">
-              <thead>
-                <tr>
-                  <th scope="col">Use</th>
-                  <th scope="col">Row</th>
-                  <th scope="col">Name</th>
-                  <th scope="col">Email</th>
-                  <th scope="col">Group</th>
-                  <th scope="col">Weight</th>
-                  <th scope="col">Included</th>
-                  <th scope="col">Validation</th>
+          {[
+            ["Selected", record?.summary?.selected],
+            ["Valid", record?.summary?.valid],
+            ["Invalid", record?.summary?.invalid],
+            ["Conflicts", record?.summary?.conflicts],
+          ].map(([label, value]) => (
+            <span key={label}>
+              <strong>{value || 0}</strong> {label.toLowerCase()}
+            </span>
+          ))}
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Use</th>
+                <th scope="col">Row</th>
+                <th scope="col">Name</th>
+                <th scope="col">Email</th>
+                <th scope="col">Group</th>
+                <th scope="col">Weight</th>
+                <th scope="col">Included</th>
+                <th scope="col">Validation</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.id}>
+                  <td>
+                    <input
+                      aria-label={`Select row ${row.rowNumber}`}
+                      type="checkbox"
+                      checked={Boolean(row.selected)}
+                      disabled={busy}
+                      onChange={(event) =>
+                        updateRow(row, { selected: event.target.checked })
+                      }
+                    />
+                  </td>
+                  <td>{row.rowNumber}</td>
+                  <td>
+                    <input
+                      aria-label={`Name for row ${row.rowNumber}`}
+                      value={rowDraftValue(row, "name", row.name || "")}
+                      disabled={busy}
+                      onChange={(event) =>
+                        updateRowDraft(row.id, "name", event.target.value)
+                      }
+                      onBlur={(event) =>
+                        void saveRowDraft(
+                          row,
+                          "name",
+                          event.target.value,
+                          row.name || "",
+                        )
+                      }
+                    />
+                  </td>
+                  <td>
+                    <input
+                      aria-label={`Email for row ${row.rowNumber}`}
+                      value={rowDraftValue(row, "email", row.email || "")}
+                      disabled={busy}
+                      onChange={(event) =>
+                        updateRowDraft(row.id, "email", event.target.value)
+                      }
+                      onBlur={(event) =>
+                        void saveRowDraft(
+                          row,
+                          "email",
+                          event.target.value,
+                          row.email || "",
+                        )
+                      }
+                    />
+                  </td>
+                  <td>
+                    <input
+                      aria-label={`Group for row ${row.rowNumber}`}
+                      value={rowDraftValue(row, "group", row.group || "")}
+                      disabled={busy}
+                      onChange={(event) =>
+                        updateRowDraft(row.id, "group", event.target.value)
+                      }
+                      onBlur={(event) =>
+                        void saveRowDraft(
+                          row,
+                          "group",
+                          event.target.value,
+                          row.group || "",
+                        )
+                      }
+                    />
+                  </td>
+                  <td>
+                    <input
+                      aria-label={`Weight for row ${row.rowNumber}`}
+                      type="number"
+                      min="0"
+                      max="1"
+                      step="0.05"
+                      value={rowDraftValue(row, "weight", row.weight ?? 1)}
+                      disabled={busy}
+                      onChange={(event) =>
+                        updateRowDraft(row.id, "weight", event.target.value)
+                      }
+                      onBlur={(event) =>
+                        void saveRowDraft(
+                          row,
+                          "weight",
+                          Number(event.target.value),
+                          Number(row.weight ?? 1),
+                        )
+                      }
+                    />
+                  </td>
+                  <td>
+                    <input
+                      aria-label={`Included for row ${row.rowNumber}`}
+                      type="checkbox"
+                      checked={Boolean(row.included)}
+                      disabled={busy}
+                      onChange={(event) =>
+                        updateRow(row, { included: event.target.checked })
+                      }
+                    />
+                  </td>
+                  <td>
+                    {!row.valid
+                      ? (row.errors || []).join(" · ") || "Invalid"
+                      : row.duplicate === "identical"
+                        ? "Identical duplicate merged"
+                        : row.duplicate === "conflict"
+                          ? "Conflicting duplicate"
+                          : "Ready"}
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => (
-                  <tr key={row.id} style={{ opacity: row.selected ? 1 : 0.6 }}>
-                    <td>
-                      <input
-                        aria-label={`Select row ${row.rowNumber}`}
-                        type="checkbox"
-                        checked={Boolean(row.selected)}
-                        disabled={busy}
-                        onChange={(event) =>
-                          updateRow(row, { selected: event.target.checked })
-                        }
-                      />
-                    </td>
-                    <td>{row.rowNumber}</td>
-                    <td>
-                      <input
-                        aria-label={`Name for row ${row.rowNumber}`}
-                        value={rowDraftValue(row, "name", row.name || "")}
-                        disabled={busy}
-                        onChange={(event) =>
-                          updateRowDraft(row.id, "name", event.target.value)
-                        }
-                        onBlur={(event) =>
-                          void saveRowDraft(
-                            row,
-                            "name",
-                            event.target.value,
-                            row.name || "",
-                          )
-                        }
-                      />
-                    </td>
-                    <td>
-                      <input
-                        aria-label={`Email for row ${row.rowNumber}`}
-                        value={rowDraftValue(row, "email", row.email || "")}
-                        disabled={busy}
-                        onChange={(event) =>
-                          updateRowDraft(row.id, "email", event.target.value)
-                        }
-                        onBlur={(event) =>
-                          void saveRowDraft(
-                            row,
-                            "email",
-                            event.target.value,
-                            row.email || "",
-                          )
-                        }
-                      />
-                    </td>
-                    <td>
-                      <input
-                        aria-label={`Group for row ${row.rowNumber}`}
-                        value={rowDraftValue(row, "group", row.group || "")}
-                        disabled={busy}
-                        onChange={(event) =>
-                          updateRowDraft(row.id, "group", event.target.value)
-                        }
-                        onBlur={(event) =>
-                          void saveRowDraft(
-                            row,
-                            "group",
-                            event.target.value,
-                            row.group || "",
-                          )
-                        }
-                      />
-                    </td>
-                    <td>
-                      <input
-                        aria-label={`Weight for row ${row.rowNumber}`}
-                        type="number"
-                        min="0"
-                        max="1"
-                        step="0.05"
-                        value={rowDraftValue(row, "weight", row.weight ?? 1)}
-                        disabled={busy}
-                        onChange={(event) =>
-                          updateRowDraft(row.id, "weight", event.target.value)
-                        }
-                        onBlur={(event) =>
-                          void saveRowDraft(
-                            row,
-                            "weight",
-                            Number(event.target.value),
-                            Number(row.weight ?? 1),
-                          )
-                        }
-                      />
-                    </td>
-                    <td>
-                      <input
-                        aria-label={`Included for row ${row.rowNumber}`}
-                        type="checkbox"
-                        checked={Boolean(row.included)}
-                        disabled={busy}
-                        onChange={(event) =>
-                          updateRow(row, { included: event.target.checked })
-                        }
-                      />
-                    </td>
-                    <td>
-                      {!row.valid
-                        ? (row.errors || []).join(" · ") || "Invalid"
-                        : row.duplicate === "identical"
-                          ? "Identical duplicate merged"
-                          : row.duplicate === "conflict"
-                            ? "Conflicting duplicate"
-                            : "Ready"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+              ))}
+            </tbody>
+          </table>
           <Pagination
             pagination={pagination}
             onPage={(page) =>
@@ -795,9 +762,9 @@ export default function RosterImportWizard({
               )
             }
           />
-          <fieldset className="roster-import__mode-options">
+          <fieldset>
             <legend>Import behavior</legend>
-            <p className="roster-import__hint">
+            <p>
               New participants receive an invitation automatically. Existing
               participants are updated without another email.
             </p>
@@ -824,12 +791,12 @@ export default function RosterImportWizard({
             </label>
             {mode === "rebuild" && (
               <>
-                <p className="roster-import__warning" role="note">
+                <p role="note">
                   Rebuilding clears schedules, invitations, and pending
                   delivery, then sends a new invitation to every imported
                   participant.
                 </p>
-                <label className="roster-import__field roster-import__confirmation-field">
+                <label>
                   <strong>Type {event.code} to confirm</strong>
                   <input
                     aria-label="Rebuild confirmation code"
@@ -843,50 +810,34 @@ export default function RosterImportWizard({
               </>
             )}
           </fieldset>
-          <div className="roster-import__actions">
-            <AppButton
-              variant="outlined"
-              onClick={() => setPhase("mapping")}
-              disabled={busy}
-            >
-              Back
-            </AppButton>
-            <AppButton
-              onClick={handleCommit}
-              disabled={
-                busy ||
-                !record?.summary?.valid ||
-                (mode === "rebuild" && confirmationCode !== event.code)
-              }
-            >
-              {busy
-                ? "Importing…"
-                : mode === "rebuild"
-                  ? "Rebuild roster and send invitations"
-                  : "Merge roster and invite new people"}
-            </AppButton>
-          </div>
+          <AppButton onClick={() => setPhase("mapping")} disabled={busy}>
+            Back
+          </AppButton>
+          <AppButton
+            onClick={handleCommit}
+            disabled={
+              busy ||
+              !record?.summary?.valid ||
+              (mode === "rebuild" && confirmationCode !== event.code)
+            }
+          >
+            {busy
+              ? "Importing…"
+              : mode === "rebuild"
+                ? "Rebuild roster and send invitations"
+                : "Merge roster and invite new people"}
+          </AppButton>
         </>
       )}
 
       {phase === "complete" && (
-        <div className="roster-import__complete">
-          <p role="status" className="roster-import__status">
-            {status}
-          </p>
+        <>
+          <p role="status">{status}</p>
           <AppButton onClick={onClose}>Return to roster</AppButton>
-        </div>
+        </>
       )}
-      {phase !== "complete" && status && (
-        <p role="status" className="roster-import__status">
-          {status}
-        </p>
-      )}
-      {error && (
-        <p role="alert" className="roster-import__error">
-          {error}
-        </p>
-      )}
+      {phase !== "complete" && status && <p role="status">{status}</p>}
+      {error && <p role="alert">{error}</p>}
     </section>
   );
 }

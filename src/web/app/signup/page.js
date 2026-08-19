@@ -173,11 +173,8 @@ function TemporaryUpgradeSignupContent({ searchParams, next }) {
   };
 
   return (
-    <main className="auth-page auth-page-with-header">
-      <form
-        className="auth-panel"
-        onSubmit={step === "details" ? submitDetails : submitCode}
-      >
+    <main>
+      <form onSubmit={step === "details" ? submitDetails : submitCode}>
         <div>
           <h1>Upgrade your account</h1>
           <p>
@@ -189,15 +186,11 @@ function TemporaryUpgradeSignupContent({ searchParams, next }) {
         {upgradeMode && upgradeSessionState === "loading" && (
           <div role="status">Checking your temporary event access…</div>
         )}
-        {upgradeSessionError && (
-          <div className="auth-error" role="alert">
-            {upgradeSessionError}
-          </div>
-        )}
-        {error && <div className="auth-error">{error}</div>}
+        {upgradeSessionError && <div role="alert">{upgradeSessionError}</div>}
+        {error && <div>{error}</div>}
         {step === "details" ? (
           <>
-            <div className="auth-grid">
+            <>
               <label>
                 First name
                 <input
@@ -216,8 +209,8 @@ function TemporaryUpgradeSignupContent({ searchParams, next }) {
                   required
                 />
               </label>
-            </div>
-            <div className="field-label">
+            </>
+            <>
               <label htmlFor={emailInputId}>Email</label>
               <input
                 id={emailInputId}
@@ -229,13 +222,13 @@ function TemporaryUpgradeSignupContent({ searchParams, next }) {
                 required
               />
               {upgradeMode && (
-                <span id={emailDescriptionId} className="auth-optional">
+                <span id={emailDescriptionId}>
                   {upgradeSessionState === "ready"
                     ? "This email is fixed so your existing event responses stay connected."
                     : "Your email is loaded from this event's verified temporary session."}
                 </span>
               )}
-            </div>
+            </>
             <label>
               Password
               <input
@@ -272,7 +265,6 @@ function TemporaryUpgradeSignupContent({ searchParams, next }) {
         )}
         <AppButton
           type="submit"
-          fullWidth
           disabled={loading || authLoading || !upgradeReady}
         >
           {upgradeSessionState === "loading"
@@ -283,7 +275,7 @@ function TemporaryUpgradeSignupContent({ searchParams, next }) {
                 ? "Send verification code"
                 : "Verify and continue"}
         </AppButton>
-        <p className="auth-switch">
+        <p>
           Prefer email verification?{" "}
           <Link href={`/login?next=${encodeURIComponent(next)}`}>
             Continue with email
@@ -316,9 +308,7 @@ export default function Signup() {
       fallback={
         <>
           <AppHeader />
-          <main className="auth-page auth-page-with-header">
-            <div className="auth-panel">Loading...</div>
-          </main>
+          <main>Loading...</main>
         </>
       }
     >

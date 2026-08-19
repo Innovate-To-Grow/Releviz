@@ -9,12 +9,6 @@ import {
   useRef,
   useState,
 } from "react";
-import {
-  MdCheckCircle,
-  MdExpandMore,
-  MdGroups,
-  MdSearch,
-} from "react-icons/md";
 import AppButton from "@/components/ui/AppButton";
 import { ManagedScheduleDrawer } from "@/components/schedule/OrganizerPanels";
 import RosterImportWizard from "@/components/schedule/RosterImportWizard";
@@ -29,10 +23,53 @@ import {
   patchRosterParticipant,
 } from "@/lib/api/roster";
 
+const GROUP_WEIGHT_PRESETS = [
+  { value: "1", label: "Standard", display: "1×" },
+  { value: "0.5", label: "Half", display: "0.5×" },
+  { value: "0", label: "No influence", display: "0×" },
+];
+
 function groupValue(participant) {
   return (
     participant.group ?? participant.groupName ?? participant.group_name ?? ""
   );
+}
+
+function rosterGroupEntries(groupStats) {
+  const entries = Array.isArray(groupStats)
+    ? groupStats.map((item) =>
+        typeof item === "string"
+          ? { name: item, count: 0 }
+          : { name: item?.name ?? "", count: Number(item?.count) || 0 },
+      )
+    : Object.entries(groupStats || {}).map(([name, count]) => ({
+        name,
+        count: Number(count) || 0,
+      }));
+
+  const mergedEntries = new Map();
+  entries.forEach((entry) => {
+    const name = String(entry.name || "").trim();
+    const key = name ? name.toLocaleLowerCase() : "__ungrouped__";
+    const existing = mergedEntries.get(key);
+    if (existing) {
+      existing.count += entry.count;
+      return;
+    }
+    mergedEntries.set(key, {
+      name,
+      count: entry.count,
+      key,
+      label: name || "Ungrouped",
+    });
+  });
+
+  return [...mergedEntries.values()].sort((left, right) => {
+    if (left.key === right.key) return 0;
+    if (left.key === "__ungrouped__") return 1;
+    if (right.key === "__ungrouped__") return -1;
+    return left.label.localeCompare(right.label);
+  });
 }
 
 function accountLabel(participant) {
@@ -46,19 +83,6 @@ function deliveryLabel(participant) {
   return String(value)
     .replaceAll("_", " ")
     .replace(/^./, (character) => character.toUpperCase());
-}
-
-function deliveryStatusVariant(participant) {
-  switch (participant.invitationStatus || "not_sent") {
-    case "invited":
-      return "invited";
-    case "opened":
-      return "opened";
-    case "submitted":
-      return "submitted";
-    default:
-      return "not-sent";
-  }
 }
 
 function invitationDeliveryRequest(data) {
@@ -128,6 +152,7 @@ const RosterPanel = forwardRef(function RosterPanel(
     notSubmitted: 0,
     groups: [],
   });
+  const [loadedRosterFilterKey, setLoadedRosterFilterKey] = useState(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [searchInput, setSearchInput] = useState("");
@@ -154,6 +179,11 @@ const RosterPanel = forwardRef(function RosterPanel(
   const [bulkIncluded, setBulkIncluded] = useState(true);
   const [bulkGroup, setBulkGroup] = useState("");
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [selectedGroupKey, setSelectedGroupKey] = useState("");
+  const [groupWeightDrafts, setGroupWeightDrafts] = useState({});
+  const [groupWeightErrors, setGroupWeightErrors] = useState({});
+  const [groupWeightBusy, setGroupWeightBusy] = useState("");
+  const [groupWeightStatus, setGroupWeightStatus] = useState("");
   const [editor, setEditor] = useState(null);
   const [editorName, setEditorName] = useState("");
   const [editorInperson, setEditorInperson] = useState([]);
@@ -165,6 +195,8 @@ const RosterPanel = forwardRef(function RosterPanel(
   const [editorConflict, setEditorConflict] = useState(null);
   const requestNumber = useRef(0);
   const bulkIdempotencyKey = useRef("");
+  const groupWeightIdempotencyKeys = useRef(new Map());
+  const groupWeightRequestInFlight = useRef(false);
   const inviteIdempotencyKey = useRef("");
   const inviteRequestInFlight = useRef(false);
   const inviteNameInput = useRef(null);
@@ -172,6 +204,7 @@ const RosterPanel = forwardRef(function RosterPanel(
   const selectedRef = useRef(selected);
   const participantsRef = useRef(participants);
   const rowMutationQueuesRef = useRef(new Map());
+  const rowGroupReloadsRef = useRef(new Set());
 
   useEffect(() => {
     participantsRef.current = participants;
@@ -188,11 +221,13 @@ const RosterPanel = forwardRef(function RosterPanel(
     () => ({ search, group, submitted, invitationStatus }),
     [group, invitationStatus, search, submitted],
   );
+  const rosterFilterKey = useMemo(() => JSON.stringify(filters), [filters]);
   const inviteAllowed = event.status === "active";
 
   const loadRoster = useCallback(
     async (providedToken, { throwOnError = false } = {}) => {
       const currentRequest = ++requestNumber.current;
+      const requestedFilterKey = rosterFilterKey;
       setLoading(true);
       setError("");
       try {
@@ -213,6 +248,7 @@ const RosterPanel = forwardRef(function RosterPanel(
         setStats(
           data.stats || { total: 0, submitted: 0, notSubmitted: 0, groups: [] },
         );
+        setLoadedRosterFilterKey(requestedFilterKey);
         const recoveredDelivery =
           data.latestDeliveryRequest ||
           data.deliveryRequest ||
@@ -229,7 +265,15 @@ const RosterPanel = forwardRef(function RosterPanel(
         if (currentRequest === requestNumber.current) setLoading(false);
       }
     },
-    [event.code, filters, getToken, onDeliveryRequestChange, page, pageSize],
+    [
+      event.code,
+      filters,
+      getToken,
+      onDeliveryRequestChange,
+      page,
+      pageSize,
+      rosterFilterKey,
+    ],
   );
 
   useImperativeHandle(
@@ -386,6 +430,12 @@ const RosterPanel = forwardRef(function RosterPanel(
     setBulkIncluded(true);
     setBulkGroup("");
     bulkIdempotencyKey.current = "";
+    setSelectedGroupKey("");
+    setGroupWeightDrafts({});
+    setGroupWeightErrors({});
+    setGroupWeightBusy("");
+    setGroupWeightStatus("");
+    groupWeightIdempotencyKeys.current.clear();
 
     setEditor(null);
     setEditorName("");
@@ -430,6 +480,9 @@ const RosterPanel = forwardRef(function RosterPanel(
           setStatus(`${latest.name} was updated.`);
           if (data.resultsRevision !== undefined)
             onResultsInvalidated?.(data.resultsRevision);
+          if (Object.hasOwn(updates, "group")) {
+            rowGroupReloadsRef.current.add(participant.id);
+          }
           return true;
         } catch (requestError) {
           setError(requestError.message || `Unable to update ${latest.name}.`);
@@ -441,6 +494,9 @@ const RosterPanel = forwardRef(function RosterPanel(
     const saved = await request;
     if (rowMutationQueuesRef.current.get(participant.id) === request) {
       rowMutationQueuesRef.current.delete(participant.id);
+      if (rowGroupReloadsRef.current.delete(participant.id)) {
+        await loadRoster();
+      }
     }
     return saved;
   };
@@ -542,6 +598,77 @@ const RosterPanel = forwardRef(function RosterPanel(
       setError(requestError.message || "Unable to apply the bulk update.");
     } finally {
       setBulkBusy(false);
+    }
+  };
+
+  const applyGroupWeight = async (groupEntry) => {
+    if (groupWeightRequestInFlight.current || !rosterMutable) return;
+    const rawWeight = String(groupWeightDrafts[groupEntry.key] ?? "").trim();
+    const weight = Number(rawWeight);
+    if (
+      rawWeight === "" ||
+      !Number.isFinite(weight) ||
+      weight < 0 ||
+      weight > 1
+    ) {
+      setGroupWeightErrors((current) => ({
+        ...current,
+        [groupEntry.key]: "Enter a Weight from 0 to 1.",
+      }));
+      return;
+    }
+
+    setError("");
+    setStatus("");
+    setGroupWeightStatus("");
+    setGroupWeightErrors((current) => ({
+      ...current,
+      [groupEntry.key]: "",
+    }));
+    groupWeightRequestInFlight.current = true;
+    setGroupWeightBusy(groupEntry.key);
+
+    let idempotencyKey = groupWeightIdempotencyKeys.current.get(groupEntry.key);
+    if (!idempotencyKey) {
+      idempotencyKey = crypto.randomUUID();
+      groupWeightIdempotencyKeys.current.set(groupEntry.key, idempotencyKey);
+    }
+
+    try {
+      const token = await getToken();
+      const data = await patchRosterBulk(
+        event.code,
+        {
+          group: groupEntry.name,
+          updates: { weight },
+          idempotencyKey,
+        },
+        token,
+      );
+      const matchedCount =
+        data.matchedCount ?? data.updatedCount ?? groupEntry.count;
+      setGroupWeightStatus(
+        `${groupEntry.label} Weight set to ${weight} for ${matchedCount} ${matchedCount === 1 ? "person" : "people"}.`,
+      );
+      setGroupWeightDrafts((current) => ({
+        ...current,
+        [groupEntry.key]: "",
+      }));
+      groupWeightIdempotencyKeys.current.delete(groupEntry.key);
+      if (data.resultsRevision !== undefined) {
+        onResultsInvalidated?.(data.resultsRevision);
+      }
+      await loadRoster(token);
+    } catch (requestError) {
+      setGroupWeightErrors((current) => ({
+        ...current,
+        [groupEntry.key]:
+          requestError.message ||
+          `Unable to update the ${groupEntry.label} group.`,
+      }));
+    } finally {
+      groupWeightRequestInFlight.current = false;
+      setGroupWeightBusy("");
     }
   };
 
@@ -669,20 +796,26 @@ const RosterPanel = forwardRef(function RosterPanel(
     setEditorStatus("Latest response loaded.");
   };
 
-  const groupNames = Array.isArray(stats.groups)
-    ? stats.groups
-        .map((item) => (typeof item === "string" ? item : item.name))
-        .filter(Boolean)
-    : Object.keys(stats.groups || {});
-  const groups = groupNames.map((name) => ({ value: name, label: name }));
-  if (
-    Array.isArray(stats.groups) &&
-    stats.groups.some(
-      (item) => (typeof item === "string" ? item : item.name) === "",
-    )
-  ) {
-    groups.unshift({ value: "__ungrouped__", label: "Ungrouped" });
-  }
+  const groupEntries = rosterGroupEntries(stats.groups);
+  const selectedGroupEntry =
+    groupEntries.find((entry) => entry.key === selectedGroupKey) ||
+    groupEntries[0] ||
+    null;
+  const selectedGroupIndex = selectedGroupEntry
+    ? groupEntries.indexOf(selectedGroupEntry)
+    : -1;
+  const selectedGroupDraft = selectedGroupEntry
+    ? (groupWeightDrafts[selectedGroupEntry.key] ?? "")
+    : "";
+  const selectedGroupError = selectedGroupEntry
+    ? groupWeightErrors[selectedGroupEntry.key] || ""
+    : "";
+  const selectedGroupErrorId = `roster-group-weight-error-${selectedGroupIndex}`;
+  const selectedGroupHelpId = `roster-group-weight-help-${selectedGroupIndex}`;
+  const groups = groupEntries.map(({ key, label, name }) => ({
+    value: key === "__ungrouped__" ? key : name,
+    label,
+  }));
   const allOnPageSelected =
     participants.length > 0 &&
     participants.every((participant) => selected.has(participant.id));
@@ -692,8 +825,7 @@ const RosterPanel = forwardRef(function RosterPanel(
     searchInput.trim() || search || group || submitted || invitationStatus,
   );
   const hasRosterEntries = (stats.total || 0) > 0;
-  const isTrulyEmpty =
-    !loading && !hasActiveFilters && !hasRosterEntries && !error;
+  const groupStatsReady = !loading && loadedRosterFilterKey === rosterFilterKey;
   const showRosterTools = hasActiveFilters || hasRosterEntries;
   const showPagination = !loading && (pagination.total || 0) > 25;
 
@@ -706,66 +838,65 @@ const RosterPanel = forwardRef(function RosterPanel(
     setPage(1);
   };
 
+  const updateGroupWeightDraft = (groupEntry, value) => {
+    setGroupWeightDrafts((current) => ({
+      ...current,
+      [groupEntry.key]: value,
+    }));
+    setGroupWeightErrors((current) => ({
+      ...current,
+      [groupEntry.key]: "",
+    }));
+    setGroupWeightStatus("");
+    groupWeightIdempotencyKeys.current.delete(groupEntry.key);
+  };
+
   return (
-    <div
-      className={`roster-panel${isTrulyEmpty ? " roster-panel--empty" : ""}`}
-    >
-      <section className="md-card roster-panel__controls">
-        <div className="roster-panel__header">
-          <div>
-            <h3 id="organizer-roster-heading" className="roster-panel__title">
-              Roster
-            </h3>
-            <div className="roster-panel__stats" aria-label="Roster summary">
-              <span className="roster-panel__stat">
-                <strong>{stats.total || 0}</strong>{" "}
-                {(stats.total || 0) === 1 ? "person" : "people"}
-              </span>
-              <span className="roster-panel__stat">
-                <strong>{stats.submitted || 0}</strong> submitted
-              </span>
-              <span className="roster-panel__stat">
-                <strong>{stats.notSubmitted || 0}</strong> awaiting response
-              </span>
-            </div>
-          </div>
-          {rosterMutable && (
-            <div
-              className="roster-panel__header-actions"
-              role="group"
-              aria-label="Roster actions"
-            >
-              <AppButton
-                id="roster-invite-trigger"
-                variant={showInvite ? "outlined" : "filled"}
-                onClick={showInvite ? closeInviteForm : showInviteForm}
-                disabled={inviteBusy}
-                aria-expanded={showInvite}
-                aria-controls="roster-invite-form"
-              >
-                {showInvite ? "Close invite" : "Invite person"}
-              </AppButton>
-              <AppButton
-                variant="outlined"
-                onClick={() => {
-                  const nextShowImport = !showImport;
-                  setShowImport(nextShowImport);
-                  if (nextShowImport) {
-                    closeInviteForm();
-                    setInviteNotice("");
-                  }
-                }}
-                disabled={inviteBusy}
-                aria-expanded={showImport}
-              >
-                {showImport ? "Hide import" : "Import roster"}
-              </AppButton>
-            </div>
-          )}
+    <div>
+      <section>
+        <h3 id="organizer-roster-heading">Roster</h3>
+        <div aria-label="Roster summary">
+          <span>
+            <strong>{stats.total || 0}</strong>{" "}
+            {(stats.total || 0) === 1 ? "person" : "people"}
+          </span>
+          <span>
+            <strong>{stats.submitted || 0}</strong> submitted
+          </span>
+          <span>
+            <strong>{stats.notSubmitted || 0}</strong> awaiting response
+          </span>
         </div>
+        {rosterMutable && (
+          <div role="group" aria-label="Roster actions">
+            <AppButton
+              id="roster-invite-trigger"
+              onClick={showInvite ? closeInviteForm : showInviteForm}
+              disabled={inviteBusy}
+              aria-expanded={showInvite}
+              aria-controls="roster-invite-form"
+            >
+              {showInvite ? "Close invite" : "Invite person"}
+            </AppButton>
+            <AppButton
+              onClick={() => {
+                const nextShowImport = !showImport;
+                setShowImport(nextShowImport);
+                if (nextShowImport) {
+                  closeInviteForm();
+                  setInviteNotice("");
+                }
+              }}
+              disabled={inviteBusy}
+              aria-expanded={showImport}
+            >
+              {showImport ? "Hide import" : "Import roster"}
+            </AppButton>
+          </div>
+        )}
 
         {!rosterMutable && (
-          <p role="note" className="roster-panel__note">
+          <p role="note">
             {event.status === "closed"
               ? "This roster is read-only while responses are closed. Reactivate the event to make changes."
               : "Reactivate this event before changing its roster."}
@@ -773,362 +904,107 @@ const RosterPanel = forwardRef(function RosterPanel(
         )}
 
         {inviteNotice && (
-          <p
-            className="roster-panel__invite-notice"
-            role="status"
-            aria-live="polite"
-          >
-            <MdCheckCircle aria-hidden="true" />
-            <span>{inviteNotice}</span>
+          <p role="status" aria-live="polite">
+            {inviteNotice}
           </p>
         )}
 
         {showInvite && rosterMutable && (
           <form
             id="roster-invite-form"
-            className="roster-invite-form"
             aria-labelledby="roster-invite-title"
             noValidate
             onSubmit={submitInvitation}
           >
-            <div className="roster-invite-form__header">
-              <div>
-                <h4
-                  id="roster-invite-title"
-                  className="roster-invite-form__title"
-                >
-                  Invite someone to respond
-                </h4>
-                <p className="roster-invite-form__description">
-                  Add one person and email them a secure link to fill in their
-                  availability.
-                </p>
-              </div>
-            </div>
+            <h4 id="roster-invite-title">Invite someone to respond</h4>
+            <p>
+              Add one person and email them a secure link to fill in their
+              availability.
+            </p>
 
-            <div className="roster-invite-form__fields">
-              <div className="roster-panel__field roster-invite-form__field">
-                <label htmlFor="roster-invite-name">Full name</label>
-                <input
-                  ref={inviteNameInput}
-                  id="roster-invite-name"
-                  name="name"
-                  type="text"
-                  autoComplete="name"
-                  maxLength={100}
-                  value={inviteName}
-                  disabled={inviteBusy}
-                  aria-invalid={Boolean(inviteErrors.name)}
-                  aria-describedby={
-                    inviteErrors.name ? "roster-invite-name-error" : undefined
-                  }
-                  onChange={(changeEvent) => {
-                    setInviteName(changeEvent.target.value);
-                    setInviteErrors((current) => ({ ...current, name: "" }));
-                    setInviteFormError("");
-                    inviteIdempotencyKey.current = "";
-                  }}
-                  onBlur={() =>
-                    setInviteErrors((current) => ({
-                      ...current,
-                      name: fullNameError(inviteName),
-                    }))
-                  }
-                />
-                {inviteErrors.name && (
-                  <span
-                    id="roster-invite-name-error"
-                    className="roster-invite-form__field-error"
-                    role="alert"
-                  >
-                    {inviteErrors.name}
-                  </span>
-                )}
-              </div>
+            <label htmlFor="roster-invite-name">Full name</label>
+            <input
+              ref={inviteNameInput}
+              id="roster-invite-name"
+              name="name"
+              type="text"
+              autoComplete="name"
+              maxLength={100}
+              value={inviteName}
+              disabled={inviteBusy}
+              aria-invalid={Boolean(inviteErrors.name)}
+              aria-describedby={
+                inviteErrors.name ? "roster-invite-name-error" : undefined
+              }
+              onChange={(changeEvent) => {
+                setInviteName(changeEvent.target.value);
+                setInviteErrors((current) => ({ ...current, name: "" }));
+                setInviteFormError("");
+                inviteIdempotencyKey.current = "";
+              }}
+              onBlur={() =>
+                setInviteErrors((current) => ({
+                  ...current,
+                  name: fullNameError(inviteName),
+                }))
+              }
+            />
+            {inviteErrors.name && (
+              <span id="roster-invite-name-error" role="alert">
+                {inviteErrors.name}
+              </span>
+            )}
 
-              <div className="roster-panel__field roster-invite-form__field">
-                <label htmlFor="roster-invite-email">Email address</label>
-                <input
-                  ref={inviteEmailInput}
-                  id="roster-invite-email"
-                  name="email"
-                  type="email"
-                  inputMode="email"
-                  autoComplete="email"
-                  maxLength={254}
-                  value={inviteEmail}
-                  disabled={inviteBusy}
-                  aria-invalid={Boolean(inviteErrors.email)}
-                  aria-describedby={
-                    inviteErrors.email ? "roster-invite-email-error" : undefined
-                  }
-                  onChange={(changeEvent) => {
-                    setInviteEmail(changeEvent.target.value);
-                    setInviteErrors((current) => ({
-                      ...current,
-                      email: "",
-                    }));
-                    setInviteFormError("");
-                    inviteIdempotencyKey.current = "";
-                  }}
-                  onBlur={() =>
-                    setInviteErrors((current) => ({
-                      ...current,
-                      email: emailAddressError(inviteEmail),
-                    }))
-                  }
-                />
-                {inviteErrors.email && (
-                  <span
-                    id="roster-invite-email-error"
-                    className="roster-invite-form__field-error"
-                    role="alert"
-                  >
-                    {inviteErrors.email}
-                  </span>
-                )}
-              </div>
-            </div>
+            <label htmlFor="roster-invite-email">Email address</label>
+            <input
+              ref={inviteEmailInput}
+              id="roster-invite-email"
+              name="email"
+              type="email"
+              inputMode="email"
+              autoComplete="email"
+              maxLength={254}
+              value={inviteEmail}
+              disabled={inviteBusy}
+              aria-invalid={Boolean(inviteErrors.email)}
+              aria-describedby={
+                inviteErrors.email ? "roster-invite-email-error" : undefined
+              }
+              onChange={(changeEvent) => {
+                setInviteEmail(changeEvent.target.value);
+                setInviteErrors((current) => ({
+                  ...current,
+                  email: "",
+                }));
+                setInviteFormError("");
+                inviteIdempotencyKey.current = "";
+              }}
+              onBlur={() =>
+                setInviteErrors((current) => ({
+                  ...current,
+                  email: emailAddressError(inviteEmail),
+                }))
+              }
+            />
+            {inviteErrors.email && (
+              <span id="roster-invite-email-error" role="alert">
+                {inviteErrors.email}
+              </span>
+            )}
 
             {inviteFormError && (
-              <p
-                className="roster-invite-form__error"
-                role="alert"
-                aria-live="assertive"
-              >
+              <p role="alert" aria-live="assertive">
                 {inviteFormError}
               </p>
             )}
 
-            <div className="roster-invite-form__actions">
-              <AppButton
-                variant="text"
-                onClick={closeInviteForm}
-                disabled={inviteBusy}
-              >
-                Cancel
-              </AppButton>
-              <AppButton type="submit" disabled={inviteBusy || !inviteAllowed}>
-                {inviteBusy ? "Adding and sending…" : "Add and send invitation"}
-              </AppButton>
-            </div>
+            <AppButton onClick={closeInviteForm} disabled={inviteBusy}>
+              Cancel
+            </AppButton>
+            <AppButton type="submit" disabled={inviteBusy || !inviteAllowed}>
+              {inviteBusy ? "Adding and sending…" : "Add and send invitation"}
+            </AppButton>
           </form>
-        )}
-
-        {showRosterTools && (
-          <div
-            className="roster-panel__filters"
-            role="search"
-            aria-label="Roster filters"
-          >
-            <div className="roster-panel__filter roster-panel__filter--search">
-              <MdSearch
-                className="roster-panel__search-icon"
-                aria-hidden="true"
-              />
-              <input
-                className="roster-panel__filter-control roster-panel__filter-control--search"
-                aria-label="Search roster"
-                type="search"
-                value={searchInput}
-                onChange={(event) => setSearchInput(event.target.value)}
-                placeholder="Search name or email"
-              />
-            </div>
-            <div className="roster-panel__filter">
-              <select
-                className="roster-panel__filter-control"
-                aria-label="Filter by group"
-                value={group}
-                onChange={(event) => {
-                  setGroup(event.target.value);
-                  setPage(1);
-                }}
-              >
-                <option value="">All groups</option>
-                {groups.map(({ value, label }) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="roster-panel__filter">
-              <select
-                className="roster-panel__filter-control"
-                aria-label="Filter by response"
-                value={submitted}
-                onChange={(event) => {
-                  setSubmitted(event.target.value);
-                  setPage(1);
-                }}
-              >
-                <option value="">Any response</option>
-                <option value="true">Submitted</option>
-                <option value="false">Not submitted</option>
-              </select>
-            </div>
-            <div className="roster-panel__filter">
-              <select
-                className="roster-panel__filter-control"
-                aria-label="Filter by invitation"
-                value={invitationStatus}
-                onChange={(event) => {
-                  setInvitationStatus(event.target.value);
-                  setPage(1);
-                }}
-              >
-                <option value="">Any invitation</option>
-                <option value="not_sent">Not sent</option>
-                <option value="invited">Invited</option>
-                <option value="opened">Opened</option>
-                <option value="submitted">Submitted</option>
-              </select>
-            </div>
-          </div>
-        )}
-
-        {rosterMutable && hasRosterEntries && (
-          <details
-            className="roster-panel__bulk"
-            aria-label="Bulk roster actions"
-          >
-            <summary className="roster-panel__bulk-summary">
-              <span className="roster-panel__bulk-copy">
-                <span className="roster-panel__bulk-title">Bulk actions</span>
-                <small>
-                  {selected.size} selected · Change weight or inclusion
-                </small>
-              </span>
-              <MdExpandMore
-                className="roster-panel__bulk-icon"
-                aria-hidden="true"
-              />
-            </summary>
-            <div className="roster-panel__bulk-controls">
-              <div className="roster-panel__bulk-targets">
-                <label className="roster-panel__field">
-                  Apply to
-                  <select
-                    className="roster-panel__bulk-control"
-                    aria-label="Bulk update scope"
-                    value={bulkScope}
-                    onChange={(event) => setBulkScope(event.target.value)}
-                  >
-                    <option value="selected">Selected people</option>
-                    <option value="filter">Current search and filters</option>
-                    <option value="group">One group</option>
-                  </select>
-                </label>
-                {bulkScope === "group" && (
-                  <label className="roster-panel__field">
-                    Group
-                    <select
-                      className="roster-panel__bulk-control"
-                      aria-label="Bulk update group"
-                      value={bulkGroup}
-                      onChange={(event) => setBulkGroup(event.target.value)}
-                    >
-                      <option value="">Choose group</option>
-                      {groups.map(({ value, label }) => (
-                        <option key={value} value={value}>
-                          {label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                )}
-              </div>
-
-              <div className="roster-panel__bulk-changes">
-                <fieldset className="roster-panel__bulk-setting">
-                  <legend>Weight</legend>
-                  <div className="roster-panel__bulk-setting-row">
-                    <label className="roster-panel__check">
-                      <input
-                        className="roster-panel__bulk-checkbox"
-                        aria-label="Apply bulk weight"
-                        type="checkbox"
-                        checked={bulkApplyWeight}
-                        onChange={(event) =>
-                          setBulkApplyWeight(event.target.checked)
-                        }
-                      />
-                      Change weight
-                    </label>
-                    <label className="roster-panel__field roster-panel__field--compact">
-                      Set to
-                      <input
-                        className="roster-panel__bulk-control roster-panel__bulk-control--number"
-                        aria-label="Bulk weight"
-                        type="number"
-                        min="0"
-                        max="1"
-                        step="0.05"
-                        value={bulkWeight}
-                        disabled={!bulkApplyWeight}
-                        onChange={(event) =>
-                          setBulkWeight(Number(event.target.value))
-                        }
-                      />
-                    </label>
-                  </div>
-                </fieldset>
-
-                <fieldset className="roster-panel__bulk-setting">
-                  <legend>Inclusion</legend>
-                  <div className="roster-panel__bulk-setting-row">
-                    <label className="roster-panel__check">
-                      <input
-                        className="roster-panel__bulk-checkbox"
-                        aria-label="Apply bulk included status"
-                        type="checkbox"
-                        checked={bulkApplyIncluded}
-                        onChange={(event) =>
-                          setBulkApplyIncluded(event.target.checked)
-                        }
-                      />
-                      Change inclusion
-                    </label>
-                    <div className="roster-panel__field roster-panel__field--compact">
-                      <span>Set to</span>
-                      <label className="roster-panel__check">
-                        <input
-                          className="roster-panel__bulk-checkbox"
-                          aria-label="Bulk included"
-                          type="checkbox"
-                          checked={bulkIncluded}
-                          disabled={!bulkApplyIncluded}
-                          onChange={(event) =>
-                            setBulkIncluded(event.target.checked)
-                          }
-                        />
-                        Included
-                      </label>
-                    </div>
-                  </div>
-                </fieldset>
-              </div>
-
-              <div className="roster-panel__bulk-footer">
-                <p className="roster-panel__bulk-hint">
-                  {bulkScope === "selected"
-                    ? selected.size > 0
-                      ? `${selected.size} participant${selected.size === 1 ? "" : "s"} will be updated.`
-                      : "Select participants in the list before applying changes."
-                    : bulkScope === "group"
-                      ? "Changes apply to everyone in the chosen group."
-                      : "Changes apply to everyone matching the current filters."}
-                </p>
-                <AppButton
-                  onClick={applyBulk}
-                  disabled={bulkBusy || !rosterMutable}
-                >
-                  {bulkBusy ? "Applying…" : "Apply update"}
-                </AppButton>
-              </div>
-            </div>
-          </details>
         )}
       </section>
 
@@ -1168,138 +1044,429 @@ const RosterPanel = forwardRef(function RosterPanel(
         />
       )}
 
-      <section
-        className="md-card roster-panel__list"
-        aria-label="Roster entries"
-      >
-        {loading ? (
-          <p className="roster-panel__empty roster-panel__empty--loading">
-            Loading roster…
-          </p>
-        ) : participants.length === 0 ? (
-          !showInvite &&
-          !showImport &&
-          !error && (
-            <div className="roster-panel__empty-state">
-              <span className="roster-panel__empty-icon" aria-hidden="true">
-                {hasActiveFilters ? <MdSearch /> : <MdGroups />}
+      <div role="region" aria-label="Roster management">
+        {showRosterTools && (
+          <section aria-label="Roster groups">
+            <h4>Groups</h4>
+            <p>Choose one to adjust everyone together.</p>
+            {!hasActiveFilters && groupEntries.length > 0 && (
+              <span>
+                {groupEntries.length}{" "}
+                {groupEntries.length === 1 ? "group" : "groups"}
               </span>
-              <div className="roster-panel__empty-copy">
-                <h4>
-                  {hasActiveFilters
-                    ? "No matching participants"
-                    : "No participants yet"}
-                </h4>
+            )}
+
+            {hasActiveFilters ? (
+              <>
                 <p>
-                  {hasActiveFilters
-                    ? "Try a different search or clear the current filters."
-                    : rosterMutable
-                      ? "Invite someone or import a roster to start collecting availability."
-                      : "This event does not have any participants."}
+                  Group Weight changes affect everyone in a group, including
+                  people hidden by filters. Clear filters to manage full groups.
                 </p>
-              </div>
-              {hasActiveFilters && (
-                <AppButton variant="text" onClick={clearFilters}>
-                  Clear filters
-                </AppButton>
-              )}
-            </div>
-          )
-        ) : (
-          <div className="roster-panel__table-scroll">
-            <table className="roster-table">
-              <caption className="roster-table__caption">
-                Roster participants
-              </caption>
-              <thead>
-                <tr>
-                  <th scope="col">
-                    <input
-                      className="roster-table__checkbox roster-table__checkbox--select-all"
-                      aria-label="Select all on page"
-                      type="checkbox"
-                      checked={allOnPageSelected}
-                      disabled={!rosterMutable}
-                      onChange={(event) =>
-                        updateSelected(
-                          event.target.checked
-                            ? new Set([
-                                ...selected,
-                                ...participants.map(
-                                  (participant) => participant.id,
-                                ),
-                              ])
-                            : new Set(
-                                [...selected].filter(
-                                  (id) =>
-                                    !participants.some(
-                                      (participant) => participant.id === id,
-                                    ),
-                                ),
-                              ),
-                        )
-                      }
-                    />
-                  </th>
-                  <th scope="col">Person</th>
-                  <th scope="col">Settings</th>
-                  <th scope="col">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {participants.map((participant) => (
-                  <tr
-                    className="roster-table__row"
-                    key={participant.id}
-                    data-roster-participant-id={participant.id}
+                <AppButton onClick={clearFilters}>Show all groups</AppButton>
+              </>
+            ) : !groupStatsReady ? (
+              <p role="status">Loading all groups…</p>
+            ) : (
+              <>
+                <div role="group" aria-label="Choose a group">
+                  {groupEntries.map((groupEntry) => {
+                    const active = selectedGroupEntry?.key === groupEntry.key;
+                    return (
+                      <button
+                        key={groupEntry.key}
+                        type="button"
+                        aria-pressed={active}
+                        disabled={Boolean(groupWeightBusy)}
+                        onClick={() => {
+                          setSelectedGroupKey(groupEntry.key);
+                          setGroupWeightStatus("");
+                        }}
+                      >
+                        <span>{groupEntry.label}</span>{" "}
+                        <small>
+                          {groupEntry.count}{" "}
+                          {groupEntry.count === 1 ? "person" : "people"}
+                        </small>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {selectedGroupEntry && (
+                  <form
+                    role="group"
+                    aria-label={`${selectedGroupEntry.label} group`}
+                    noValidate
+                    onSubmit={(submitEvent) => {
+                      submitEvent.preventDefault();
+                      void applyGroupWeight(selectedGroupEntry);
+                    }}
                   >
-                    <td>
+                    <span>Adjust group</span>{" "}
+                    <strong>{selectedGroupEntry.label}</strong>{" "}
+                    <small>
+                      {selectedGroupEntry.count}{" "}
+                      {selectedGroupEntry.count === 1 ? "person" : "people"}
+                    </small>
+                    <p id={selectedGroupHelpId}>
+                      Weight controls how strongly this group shapes the
+                      recommended times. 1× is standard.
+                    </p>
+                    <div
+                      role="group"
+                      aria-label={`Quick Weight for ${selectedGroupEntry.label} group`}
+                    >
+                      {GROUP_WEIGHT_PRESETS.map((preset) => (
+                        <button
+                          key={preset.value}
+                          type="button"
+                          aria-pressed={selectedGroupDraft === preset.value}
+                          disabled={!rosterMutable || Boolean(groupWeightBusy)}
+                          onClick={() =>
+                            updateGroupWeightDraft(
+                              selectedGroupEntry,
+                              preset.value,
+                            )
+                          }
+                        >
+                          <strong>{preset.display}</strong>{" "}
+                          <span>{preset.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <label>
+                      <span>Custom Weight</span>
                       <input
-                        className="roster-table__checkbox roster-table__checkbox--select-row"
-                        aria-label={`Select ${participant.name}`}
-                        type="checkbox"
-                        checked={selected.has(participant.id)}
-                        disabled={!rosterMutable}
-                        onChange={(event) =>
-                          updateSelected((current) => {
-                            const next = new Set(current);
-                            if (event.target.checked) next.add(participant.id);
-                            else next.delete(participant.id);
-                            return next;
-                          })
+                        aria-label={`Weight for ${selectedGroupEntry.label} group`}
+                        aria-invalid={Boolean(selectedGroupError)}
+                        aria-describedby={
+                          selectedGroupError
+                            ? `${selectedGroupHelpId} ${selectedGroupErrorId}`
+                            : selectedGroupHelpId
+                        }
+                        type="number"
+                        min="0"
+                        max="1"
+                        step="0.05"
+                        placeholder="0–1"
+                        value={selectedGroupDraft}
+                        disabled={
+                          !rosterMutable ||
+                          !groupStatsReady ||
+                          Boolean(groupWeightBusy)
+                        }
+                        onChange={(changeEvent) =>
+                          updateGroupWeightDraft(
+                            selectedGroupEntry,
+                            changeEvent.target.value,
+                          )
                         }
                       />
-                    </td>
-                    <th scope="row" className="roster-table__person">
-                      <strong>{participant.name}</strong>
-                      <small className="roster-table__meta">
-                        {participant.email || "No email"} ·{" "}
-                        {accountLabel(participant)}
-                      </small>
-                      <div className="roster-table__person-action">
+                    </label>
+                    <AppButton
+                      type="submit"
+                      aria-label={`Apply Weight to ${selectedGroupEntry.label} group`}
+                      disabled={
+                        !rosterMutable ||
+                        !groupStatsReady ||
+                        Boolean(groupWeightBusy) ||
+                        String(selectedGroupDraft).trim() === ""
+                      }
+                    >
+                      {groupWeightBusy === selectedGroupEntry.key
+                        ? "Applying…"
+                        : `Apply to ${selectedGroupEntry.count}`}
+                    </AppButton>
+                    {selectedGroupError && (
+                      <p id={selectedGroupErrorId} role="alert">
+                        {selectedGroupError}
+                      </p>
+                    )}
+                  </form>
+                )}
+              </>
+            )}
+
+            {groupWeightStatus && (
+              <p role="status" aria-live="polite">
+                {groupWeightStatus}
+              </p>
+            )}
+          </section>
+        )}
+
+        <div role="region" aria-label="Roster people">
+          {showRosterTools && (
+            <div role="search" aria-label="Roster filters">
+              <input
+                aria-label="Search roster"
+                type="search"
+                value={searchInput}
+                onChange={(event) => setSearchInput(event.target.value)}
+                placeholder="Search name or email"
+              />
+              <select
+                aria-label="Filter by group"
+                value={group}
+                onChange={(event) => {
+                  setGroup(event.target.value);
+                  setPage(1);
+                }}
+              >
+                <option value="">All groups</option>
+                {groups.map(({ value, label }) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+              <select
+                aria-label="Filter by response"
+                value={submitted}
+                onChange={(event) => {
+                  setSubmitted(event.target.value);
+                  setPage(1);
+                }}
+              >
+                <option value="">Any response</option>
+                <option value="true">Submitted</option>
+                <option value="false">Not submitted</option>
+              </select>
+              <select
+                aria-label="Filter by invitation"
+                value={invitationStatus}
+                onChange={(event) => {
+                  setInvitationStatus(event.target.value);
+                  setPage(1);
+                }}
+              >
+                <option value="">Any invitation</option>
+                <option value="not_sent">Not sent</option>
+                <option value="invited">Invited</option>
+                <option value="opened">Opened</option>
+                <option value="submitted">Submitted</option>
+              </select>
+            </div>
+          )}
+
+          {rosterMutable && hasRosterEntries && (
+            <details aria-label="Bulk roster actions">
+              <summary>
+                Edit multiple people{" "}
+                <small>
+                  {selected.size} selected · Change Weight or inclusion
+                </small>
+              </summary>
+              <label>
+                Apply to
+                <select
+                  aria-label="Bulk update scope"
+                  value={bulkScope}
+                  onChange={(event) => setBulkScope(event.target.value)}
+                >
+                  <option value="selected">Selected people</option>
+                  <option value="filter">Current search and filters</option>
+                  <option value="group">One group</option>
+                </select>
+              </label>
+              {bulkScope === "group" && (
+                <label>
+                  Group
+                  <select
+                    aria-label="Bulk update group"
+                    value={bulkGroup}
+                    onChange={(event) => setBulkGroup(event.target.value)}
+                  >
+                    <option value="">Choose group</option>
+                    {groups.map(({ value, label }) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+
+              <fieldset>
+                <legend>Weight</legend>
+                <label>
+                  <input
+                    aria-label="Apply bulk weight"
+                    type="checkbox"
+                    checked={bulkApplyWeight}
+                    onChange={(event) =>
+                      setBulkApplyWeight(event.target.checked)
+                    }
+                  />
+                  Change weight
+                </label>
+                <label>
+                  Set to
+                  <input
+                    aria-label="Bulk weight"
+                    type="number"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    value={bulkWeight}
+                    disabled={!bulkApplyWeight}
+                    onChange={(event) =>
+                      setBulkWeight(Number(event.target.value))
+                    }
+                  />
+                </label>
+              </fieldset>
+
+              <fieldset>
+                <legend>Inclusion</legend>
+                <label>
+                  <input
+                    aria-label="Apply bulk included status"
+                    type="checkbox"
+                    checked={bulkApplyIncluded}
+                    onChange={(event) =>
+                      setBulkApplyIncluded(event.target.checked)
+                    }
+                  />
+                  Change inclusion
+                </label>
+                <span>Set to</span>
+                <label>
+                  <input
+                    aria-label="Bulk included"
+                    type="checkbox"
+                    checked={bulkIncluded}
+                    disabled={!bulkApplyIncluded}
+                    onChange={(event) => setBulkIncluded(event.target.checked)}
+                  />
+                  Included
+                </label>
+              </fieldset>
+
+              <p>
+                {bulkScope === "selected"
+                  ? selected.size > 0
+                    ? `${selected.size} participant${selected.size === 1 ? "" : "s"} will be updated.`
+                    : "Select participants in the list before applying changes."
+                  : bulkScope === "group"
+                    ? "Changes apply to everyone in the chosen group."
+                    : "Changes apply to everyone matching the current filters."}
+              </p>
+              <AppButton
+                onClick={applyBulk}
+                disabled={bulkBusy || !rosterMutable}
+              >
+                {bulkBusy ? "Applying…" : "Apply update"}
+              </AppButton>
+            </details>
+          )}
+
+          <section aria-label="Roster entries">
+            {loading ? (
+              <p>Loading roster…</p>
+            ) : participants.length === 0 ? (
+              !showInvite &&
+              !showImport &&
+              !error && (
+                <>
+                  <h4>
+                    {hasActiveFilters
+                      ? "No matching participants"
+                      : "No participants yet"}
+                  </h4>
+                  <p>
+                    {hasActiveFilters
+                      ? "Try a different search or clear the current filters."
+                      : rosterMutable
+                        ? "Invite someone or import a roster to start collecting availability."
+                        : "This event does not have any participants."}
+                  </p>
+                  {hasActiveFilters && (
+                    <AppButton onClick={clearFilters}>Clear filters</AppButton>
+                  )}
+                </>
+              )
+            ) : (
+              <table>
+                <caption>Roster participants</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">
+                      <input
+                        aria-label="Select all on page"
+                        type="checkbox"
+                        checked={allOnPageSelected}
+                        disabled={!rosterMutable}
+                        onChange={(event) =>
+                          updateSelected(
+                            event.target.checked
+                              ? new Set([
+                                  ...selected,
+                                  ...participants.map(
+                                    (participant) => participant.id,
+                                  ),
+                                ])
+                              : new Set(
+                                  [...selected].filter(
+                                    (id) =>
+                                      !participants.some(
+                                        (participant) => participant.id === id,
+                                      ),
+                                  ),
+                                ),
+                          )
+                        }
+                      />
+                    </th>
+                    <th scope="col">Person</th>
+                    <th scope="col">Settings</th>
+                    <th scope="col">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {participants.map((participant) => (
+                    <tr
+                      key={participant.id}
+                      data-roster-participant-id={participant.id}
+                    >
+                      <td>
+                        <input
+                          aria-label={`Select ${participant.name}`}
+                          type="checkbox"
+                          checked={selected.has(participant.id)}
+                          disabled={!rosterMutable}
+                          onChange={(event) =>
+                            updateSelected((current) => {
+                              const next = new Set(current);
+                              if (event.target.checked)
+                                next.add(participant.id);
+                              else next.delete(participant.id);
+                              return next;
+                            })
+                          }
+                        />
+                      </td>
+                      <th scope="row">
+                        <strong>{participant.name}</strong>{" "}
+                        <small>
+                          {participant.email || "No email"} ·{" "}
+                          {accountLabel(participant)}
+                        </small>{" "}
                         {participant.canOrganizerEditAvailability ? (
                           <AppButton
-                            variant="outlined"
                             onClick={() => openEditor(participant)}
                             disabled={!editorAllowed}
                           >
                             Edit schedule
                           </AppButton>
                         ) : (
-                          <span className="roster-table__self-managed">
-                            Self-managed
-                          </span>
+                          <span>Manages own schedule</span>
                         )}
-                      </div>
-                    </th>
-                    <td className="roster-table__settings-cell">
-                      <div className="roster-table__settings">
-                        <label className="roster-table__setting-group">
-                          <span className="roster-table__setting-label">
-                            Group
-                          </span>
+                      </th>
+                      <td>
+                        <label>
+                          <span>Group</span>
                           <input
-                            className="roster-table__input roster-table__input--group"
                             aria-label={`Group for ${participant.name}`}
                             placeholder="Ungrouped"
                             value={rowDraftValue(
@@ -1324,145 +1491,109 @@ const RosterPanel = forwardRef(function RosterPanel(
                               )
                             }
                           />
-                        </label>
-                        <div className="roster-table__priority">
-                          <label className="roster-table__priority-field">
-                            <span>Weight</span>
-                            <input
-                              className="roster-table__input roster-table__input--weight"
-                              aria-label={`Weight for ${participant.name}`}
-                              type="number"
-                              min="0"
-                              max="1"
-                              step="0.05"
-                              value={rowDraftValue(
+                        </label>{" "}
+                        <label>
+                          <span>Weight</span>
+                          <input
+                            aria-label={`Weight for ${participant.name}`}
+                            type="number"
+                            min="0"
+                            max="1"
+                            step="0.05"
+                            value={rowDraftValue(
+                              participant,
+                              "weight",
+                              participant.weight ?? 1,
+                            )}
+                            disabled={!rosterMutable}
+                            onChange={(event) =>
+                              updateRowDraft(
+                                participant.id,
+                                "weight",
+                                event.target.value,
+                              )
+                            }
+                            onBlur={(event) =>
+                              void saveRowDraft(
                                 participant,
                                 "weight",
-                                participant.weight ?? 1,
-                              )}
-                              disabled={!rosterMutable}
-                              onChange={(event) =>
-                                updateRowDraft(
-                                  participant.id,
-                                  "weight",
-                                  event.target.value,
-                                )
-                              }
-                              onBlur={(event) =>
-                                void saveRowDraft(
-                                  participant,
-                                  "weight",
-                                  Number(event.target.value),
-                                  Number(participant.weight ?? 1),
-                                )
-                              }
-                            />
-                          </label>
-                          <label className="roster-table__included-control">
-                            <input
-                              className="roster-table__checkbox roster-table__checkbox--included"
-                              aria-label={`Include ${participant.name}`}
-                              type="checkbox"
-                              checked={Boolean(participant.included)}
-                              disabled={!rosterMutable}
-                              onChange={(event) =>
-                                void patchRow(participant, {
-                                  included: event.target.checked,
-                                })
-                              }
-                            />
-                            <span>Included</span>
-                          </label>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="roster-table__progress-cell">
-                      <div className="roster-table__progress">
-                        <span
-                          className={`roster-status roster-status--response roster-status--${
-                            participant.submitted
-                              ? "submitted"
-                              : "not-submitted"
-                          }`}
-                        >
-                          <span className="roster-status__label">Response</span>
+                                Number(event.target.value),
+                                Number(participant.weight ?? 1),
+                              )
+                            }
+                          />
+                        </label>{" "}
+                        <label>
+                          <input
+                            aria-label={`Include ${participant.name}`}
+                            type="checkbox"
+                            checked={Boolean(participant.included)}
+                            disabled={!rosterMutable}
+                            onChange={(event) =>
+                              void patchRow(participant, {
+                                included: event.target.checked,
+                              })
+                            }
+                          />
+                          <span>Count in results</span>
+                        </label>
+                      </td>
+                      <td>
+                        <span>
+                          <span>Response</span>{" "}
                           {participant.submitted
                             ? "Submitted"
                             : "Not submitted"}
+                        </span>{" "}
+                        <span>
+                          <span>Invite</span> {deliveryLabel(participant)}
                         </span>
-                        <span
-                          className={`roster-status roster-status--invitation roster-status--${deliveryStatusVariant(
-                            participant,
-                          )}`}
-                        >
-                          <span className="roster-status__label">Invite</span>
-                          {deliveryLabel(participant)}
-                        </span>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        {showPagination && (
-          <div className="roster-panel__pagination">
-            <label className="roster-panel__page-size">
-              Rows per page{" "}
-              <select
-                className="roster-panel__page-size-select"
-                aria-label="Rows per page"
-                value={pageSize}
-                onChange={(event) => {
-                  setPageSize(Number(event.target.value));
-                  setPage(1);
-                }}
-              >
-                <option value="25">25</option>
-                <option value="50">50</option>
-                <option value="100">100</option>
-              </select>
-            </label>
-            <div className="roster-panel__pagination-actions">
-              <AppButton
-                variant="outlined"
-                disabled={page <= 1 || loading}
-                onClick={() => setPage((current) => current - 1)}
-              >
-                Previous
-              </AppButton>
-              <span className="roster-panel__page-count">
-                Page {pagination.page || page} of {pagination.pages || 1}
-              </span>
-              <AppButton
-                variant="outlined"
-                disabled={page >= (pagination.pages || 1) || loading}
-                onClick={() => setPage((current) => current + 1)}
-              >
-                Next
-              </AppButton>
-            </div>
-          </div>
-        )}
-      </section>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            {showPagination && (
+              <>
+                <label>
+                  Rows per page{" "}
+                  <select
+                    aria-label="Rows per page"
+                    value={pageSize}
+                    onChange={(event) => {
+                      setPageSize(Number(event.target.value));
+                      setPage(1);
+                    }}
+                  >
+                    <option value="25">25</option>
+                    <option value="50">50</option>
+                    <option value="100">100</option>
+                  </select>
+                </label>
+                <AppButton
+                  disabled={page <= 1 || loading}
+                  onClick={() => setPage((current) => current - 1)}
+                >
+                  Previous
+                </AppButton>
+                <span>
+                  Page {pagination.page || page} of {pagination.pages || 1}
+                </span>
+                <AppButton
+                  disabled={page >= (pagination.pages || 1) || loading}
+                  onClick={() => setPage((current) => current + 1)}
+                >
+                  Next
+                </AppButton>
+              </>
+            )}
+          </section>
+        </div>
+      </div>
 
-      {status && (
-        <p
-          role="status"
-          className="roster-panel__message roster-panel__message--status"
-        >
-          {status}
-        </p>
-      )}
-      {error && (
-        <p
-          role="alert"
-          className="roster-panel__message roster-panel__message--error"
-        >
-          {error}
-        </p>
-      )}
+      {status && <p role="status">{status}</p>}
+      {error && <p role="alert">{error}</p>}
 
       <ManagedScheduleDrawer
         event={event}

@@ -2,15 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import {
-  MdAdd,
-  MdArchive,
-  MdContentCopy,
-  MdDeleteOutline,
-  MdEdit,
-  MdOpenInNew,
-  MdSearch,
-} from "react-icons/md";
 import AppButton from "@/components/ui/AppButton";
 import AppHeader from "@/components/ui/AppHeader";
 import { useAuth } from "@/components/auth/AuthContext";
@@ -22,7 +13,6 @@ import {
 } from "@/lib/api/events";
 import { formatDateTimeInTimezone, formatMode } from "@/lib/format";
 import { navigateTo } from "@/lib/navigation";
-import "@material/web/textfield/outlined-text-field.js";
 
 function newRequestKey() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
@@ -39,12 +29,10 @@ function EventCard({
 }) {
   const eventUrl = `/event?code=${encodeURIComponent(event.code)}`;
   return (
-    <article className="dashboard-event-card">
-      <div className="dashboard-event-summary">
-        <Link href={eventUrl} className="dashboard-event-title">
-          {event.name}
-        </Link>
-        <div className="dashboard-event-meta">
+    <article>
+      <div>
+        <Link href={eventUrl}>{event.name}</Link>
+        <div>
           <span>{formatMode(event.mode)}</span>
           <span>Status: {event.status || "unknown"}</span>
           <span>Code: {event.code}</span>
@@ -65,16 +53,10 @@ function EventCard({
       </div>
 
       {organizerActions && (
-        <div
-          className="dashboard-event-actions"
-          aria-label={`Actions for ${event.name}`}
-        >
-          <Link href={eventUrl} className="dashboard-action-link">
-            <MdOpenInNew aria-hidden="true" /> View
-          </Link>
+        <div aria-label={`Actions for ${event.name}`}>
+          <Link href={eventUrl}>View</Link>
           <Link
             href={`/edit?code=${encodeURIComponent(event.code)}`}
-            className="dashboard-action-link"
             aria-disabled={
               event.status === "finalized" || event.status === "archived"
             }
@@ -84,33 +66,17 @@ function EventCard({
               }
             }}
           >
-            <MdEdit aria-hidden="true" /> Edit
+            Edit
           </Link>
-          <AppButton
-            variant="outlined"
-            icon={<MdContentCopy />}
-            disabled={busy}
-            onClick={() => onDuplicate(event)}
-          >
+          <AppButton disabled={busy} onClick={() => onDuplicate(event)}>
             Duplicate
           </AppButton>
           {event.status !== "archived" && (
-            <AppButton
-              variant="outlined"
-              icon={<MdArchive />}
-              disabled={busy}
-              onClick={() => onArchive(event)}
-            >
+            <AppButton disabled={busy} onClick={() => onArchive(event)}>
               Archive
             </AppButton>
           )}
-          <AppButton
-            variant="outlined"
-            className="app-btn-danger"
-            icon={<MdDeleteOutline />}
-            disabled={busy}
-            onClick={() => onDeleteRequested(event)}
-          >
+          <AppButton disabled={busy} onClick={() => onDeleteRequested(event)}>
             Delete
           </AppButton>
         </div>
@@ -263,13 +229,7 @@ function DashboardPage() {
   };
 
   if (authLoading || loading) {
-    return (
-      <div className="center-page">
-        <p style={{ color: "var(--md-sys-color-on-surface-variant)" }}>
-          Loading...
-        </p>
-      </div>
-    );
+    return <p>Loading...</p>;
   }
 
   const handleGoToEvent = () => {
@@ -280,55 +240,34 @@ function DashboardPage() {
   return (
     <>
       <AppHeader pageTitle="My Dashboard" />
-      <main className="page-pad dashboard-shell">
-        {error && (
-          <div className="dashboard-message dashboard-error" role="alert">
-            {error}
-          </div>
-        )}
-        {status && (
-          <div className="dashboard-message dashboard-status" role="status">
-            {status}
-          </div>
-        )}
+      <main>
+        {error && <div role="alert">{error}</div>}
+        {status && <div role="status">{status}</div>}
 
-        <div className="dashboard-heading">
-          <h1>My Dashboard</h1>
-          <Link href="/create" className="dashboard-create-link">
-            <MdAdd aria-hidden="true" /> Create New Event
-          </Link>
-        </div>
+        <h1>My Dashboard</h1>
+        <Link href="/create">Create New Event</Link>
 
-        <div className="md-card dashboard-code-search">
-          <md-outlined-text-field
-            label="Enter Event Code"
-            value={eventCode}
-            onInput={(event) => setEventCode(event.target.value)}
-            onKeyDown={(event) => event.key === "Enter" && handleGoToEvent()}
-            style={{ flex: 1 }}
-          ></md-outlined-text-field>
-          <AppButton
-            onClick={handleGoToEvent}
-            variant="outlined"
-            icon={<MdSearch />}
-          >
-            Go
-          </AppButton>
-        </div>
+        <section>
+          <label>
+            Enter Event Code
+            <input
+              value={eventCode}
+              onChange={(event) => setEventCode(event.target.value)}
+              onKeyDown={(event) => event.key === "Enter" && handleGoToEvent()}
+            />
+          </label>
+          <AppButton onClick={handleGoToEvent}>Go</AppButton>
+        </section>
 
         {deleteTarget && (
-          <form
-            className="dashboard-delete-panel"
-            onSubmit={handleDelete}
-            aria-labelledby="delete-event-heading"
-          >
+          <form onSubmit={handleDelete} aria-labelledby="delete-event-heading">
             <h2 id="delete-event-heading">Delete {deleteTarget.name}?</h2>
             <p>
               This permanently removes the event, participant responses,
               invitations, final meeting, and queued event emails. This action
               cannot be undone.
             </p>
-            <label className="field-label">
+            <label>
               Type <strong>{deleteTarget.code}</strong> to confirm
               <input
                 aria-label="Event code confirmation"
@@ -337,15 +276,10 @@ function DashboardPage() {
                 autoComplete="off"
               />
             </label>
-            <div className="dashboard-delete-actions">
-              <AppButton variant="text" onClick={closeDeletePanel}>
-                Cancel
-              </AppButton>
+            <div>
+              <AppButton onClick={closeDeletePanel}>Cancel</AppButton>
               <AppButton
                 type="submit"
-                variant="outlined"
-                className="app-btn-danger"
-                icon={<MdDeleteOutline />}
                 disabled={
                   actionCode === deleteTarget.code ||
                   deleteConfirmation !== deleteTarget.code
@@ -359,10 +293,10 @@ function DashboardPage() {
           </form>
         )}
 
-        <section className="md-card dashboard-section">
+        <section>
           <h2>My Events ({organized.length})</h2>
           {organized.length > 0 ? (
-            <div className="dashboard-event-list">
+            <div>
               {organized.map((event) => (
                 <EventCard
                   key={event.code}
@@ -376,22 +310,20 @@ function DashboardPage() {
               ))}
             </div>
           ) : (
-            <p className="dashboard-empty">No events organized yet.</p>
+            <p>No events organized yet.</p>
           )}
         </section>
 
-        <section className="md-card dashboard-section">
+        <section>
           <h2>Events I Participate In ({participating.length})</h2>
           {participating.length > 0 ? (
-            <div className="dashboard-event-list">
+            <div>
               {participating.map((event) => (
                 <EventCard key={event.code} event={event} />
               ))}
             </div>
           ) : (
-            <p className="dashboard-empty">
-              Not participating in any events yet.
-            </p>
+            <p>Not participating in any events yet.</p>
           )}
         </section>
       </main>

@@ -111,8 +111,8 @@ export default function EmailAuthLinkPage() {
   return (
     <>
       <AppHeader />
-      <main className="auth-page auth-page-with-header">
-        <section className="auth-panel" aria-live="polite">
+      <main>
+        <section aria-live="polite">
           <div>
             <h1>{error ? "Link verification failed" : "Signing you in"}</h1>
             <p>
@@ -121,11 +121,7 @@ export default function EmailAuthLinkPage() {
                 : "Please wait while we securely verify your email."}
             </p>
           </div>
-          {error && (
-            <Link className="app-btn app-btn-filled app-btn-full" href="/login">
-              Request a new code
-            </Link>
-          )}
+          {error && <Link href="/login">Request a new code</Link>}
         </section>
       </main>
     </>

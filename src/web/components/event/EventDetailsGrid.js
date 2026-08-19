@@ -1,48 +1,36 @@
 "use client";
 
 import { useId, useState } from "react";
-import {
-  MdEventAvailable,
-  MdExpandMore,
-  MdGroups,
-  MdLockOutline,
-  MdSchedule,
-} from "react-icons/md";
 import { DAY_LABELS } from "@/lib/constants";
 import { formatDateTimeInTimezone, formatMode, formatTime } from "@/lib/format";
 
 function InfoCard({ label, value }) {
   return (
-    <div className="event-info-item">
-      <dt className="event-info-label">{label}</dt>
-      <dd className="event-info-value">{value ?? "Not set"}</dd>
-    </div>
+    <>
+      <dt>{label}</dt>
+      <dd>{value ?? "Not set"}</dd>
+    </>
   );
 }
 
-function SummaryItem({ icon: Icon, label, primary, secondary, confirmed }) {
+function SummaryItem({ label, primary, secondary }) {
   return (
-    <div
-      className={`event-overview-summary__item${confirmed ? " event-overview-summary__item--confirmed" : ""}`}
-    >
-      <dt className="event-overview-summary__label">
-        <Icon aria-hidden="true" />
-        <span>{label}</span>
-      </dt>
-      <dd className="event-overview-summary__value">
+    <>
+      <dt>{label}</dt>
+      <dd>
         <strong>{primary || "Not set"}</strong>
-        {secondary && <span>{secondary}</span>}
+        {secondary && <span> {secondary}</span>}
       </dd>
-    </div>
+    </>
   );
 }
 
 function DetailItem({ label, value }) {
   return (
-    <div className="event-overview-details__item">
+    <>
       <dt>{label}</dt>
       <dd>{value ?? "Not set"}</dd>
-    </div>
+    </>
   );
 }
 
@@ -94,57 +82,43 @@ function OrganizerEventDetails({ event, extraCards }) {
     : null;
 
   return (
-    <div className="event-overview" aria-label="Event overview">
-      <dl className="event-overview-summary" aria-label="Key event information">
+    <section aria-label="Event overview">
+      <dl aria-label="Key event information">
         <SummaryItem
-          icon={MdSchedule}
           label="Schedule"
           primary={dayText || "Days not set"}
           secondary={`${timeWindow} · ${event?.timezone || "UTC"}`}
         />
         <SummaryItem
-          icon={MdGroups}
           label="Meeting"
           primary={`${formatMode(mode)} · ${meetingDuration}`}
           secondary={event?.location || "Location not set"}
         />
         <SummaryItem
-          icon={MdLockOutline}
           label="Responses"
           primary={access}
           secondary={responseDeadline}
         />
         {finalMeeting && (
           <SummaryItem
-            icon={MdEventAvailable}
             label="Confirmed meeting"
             primary={finalWindow}
             secondary={`${formatMode(finalMeeting.channel)} · ${finalMeeting.location || "Location not set"}`}
-            confirmed
           />
         )}
       </dl>
 
-      <div className="event-overview-disclosure">
+      <div>
         <button
           type="button"
-          className="event-overview-disclosure__toggle"
           aria-expanded={detailsOpen}
           aria-controls={detailsId}
           onClick={() => setDetailsOpen((open) => !open)}
         >
-          <span>{detailsOpen ? "Hide details" : "Show all details"}</span>
-          <MdExpandMore
-            className="event-overview-disclosure__icon"
-            aria-hidden="true"
-          />
+          {detailsOpen ? "Hide details" : "Show all details"}
         </button>
         {detailsOpen && (
-          <dl
-            id={detailsId}
-            className="event-overview-details"
-            aria-label="Additional event details"
-          >
+          <dl id={detailsId} aria-label="Additional event details">
             <DetailItem
               label="Availability interval"
               value={`${event?.slotMinutes || 30} minutes`}
@@ -155,7 +129,7 @@ function OrganizerEventDetails({ event, extraCards }) {
           </dl>
         )}
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -177,10 +151,7 @@ function EventDetailsGrid({ event, extraCards = [], variant = "default" }) {
   }
 
   return (
-    <dl
-      className={`event-details-grid event-details-grid--${variant}`}
-      aria-label="Event details"
-    >
+    <dl aria-label="Event details">
       {variant !== "organizer" && (
         <InfoCard label="Event" value={event?.name} />
       )}
@@ -214,7 +185,9 @@ function EventDetailsGrid({ event, extraCards = [], variant = "default" }) {
             ? formatDateTimeInTimezone(
                 event.responseDeadline,
                 event?.timezone,
-                { timeZoneName: "short" },
+                {
+                  timeZoneName: "short",
+                },
               )
             : "No deadline"
         }

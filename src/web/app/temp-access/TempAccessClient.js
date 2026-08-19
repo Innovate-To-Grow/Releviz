@@ -3,13 +3,11 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { MdLogout, MdRefresh, MdSend, MdUpgrade } from "react-icons/md";
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
 import ScheduleChannelEditor from "@/components/schedule/ScheduleChannelEditor";
 import ScheduleGrid from "@/components/schedule/ScheduleGrid";
 import useAutosaveNavigationGuard from "@/components/schedule/useAutosaveNavigationGuard";
 import AppButton from "@/components/ui/AppButton";
-import BrandLogo from "@/components/ui/BrandLogo";
 import {
   fetchTempAccessSession,
   logoutTempAccess,
@@ -18,7 +16,6 @@ import {
   verifyTempAccess,
 } from "@/lib/api/tempAccess";
 import { navigateTo, replaceUrl } from "@/lib/navigation";
-import styles from "./temp-access.module.css";
 
 const AVAILABILITY_CHOICES = [
   { label: "Busy", value: 0 },
@@ -802,33 +799,21 @@ export default function TempAccessClient() {
 
   if (phase === "code") {
     return (
-      <main className={styles.authPage}>
-        <section
-          className={styles.authCard}
-          aria-labelledby="temp-access-heading"
-        >
-          <BrandLogo alt="Releviz" className={styles.authLogo} priority />
-          <div>
-            <p className={styles.eyebrow}>Temporary event access</p>
-            <h1 id="temp-access-heading">Check your email</h1>
-            <p className={styles.muted}>
-              Enter the six-digit code sent to the email address connected to
-              this invitation. The code expires after 10 minutes.
-            </p>
-          </div>
+      <main>
+        <section aria-labelledby="temp-access-heading">
+          Releviz
+          <p>Temporary event access</p>
+          <h1 id="temp-access-heading">Check your email</h1>
+          <p>
+            Enter the six-digit code sent to the email address connected to this
+            invitation. The code expires after 10 minutes.
+          </p>
           {requestMessage && (
-            <p
-              className={
-                requestState === "error"
-                  ? styles.errorNotice
-                  : styles.infoNotice
-              }
-              role={requestState === "error" ? "alert" : "status"}
-            >
+            <p role={requestState === "error" ? "alert" : "status"}>
               {requestMessage}
             </p>
           )}
-          <form className={styles.codeForm} onSubmit={verifyCode}>
+          <form onSubmit={verifyCode}>
             <label htmlFor="temporary-verification-code">
               Verification code
             </label>
@@ -847,14 +832,9 @@ export default function TempAccessClient() {
               autoFocus
               required
             />
-            {verificationError && (
-              <p className={styles.fieldError} role="alert">
-                {verificationError}
-              </p>
-            )}
+            {verificationError && <p role="alert">{verificationError}</p>}
             <AppButton
               type="submit"
-              fullWidth
               disabled={
                 requestState === "sending" || requestState === "verifying"
               }
@@ -865,8 +845,6 @@ export default function TempAccessClient() {
             </AppButton>
           </form>
           <AppButton
-            variant="outlined"
-            fullWidth
             disabled={
               requestState === "sending" || requestState === "verifying"
             }
@@ -874,7 +852,7 @@ export default function TempAccessClient() {
           >
             {requestState === "sending" ? "Sending…" : "Send a new code"}
           </AppButton>
-          <p className={styles.securityNote}>
+          <p>
             This verification only grants access to this event. It does not sign
             you in to a full Releviz account.
           </p>
@@ -913,246 +891,175 @@ export default function TempAccessClient() {
   };
 
   return (
-    <main className={styles.page}>
-      <header className={styles.header}>
-        <div className={styles.brandBlock}>
-          <BrandLogo alt="Releviz" className={styles.headerLogo} priority />
-          <span className={styles.accessBadge}>Temporary event access</span>
-        </div>
-        <AppButton
-          variant="outlined"
-          icon={<MdLogout />}
-          disabled={leavingPage}
-          onClick={() => void logout()}
-        >
+    <main>
+      <header>
+        Releviz
+        <span>Temporary event access</span>
+        <AppButton disabled={leavingPage} onClick={() => void logout()}>
           {logoutPending ? "Signing out…" : "Sign out"}
         </AppButton>
       </header>
 
-      <div className={styles.content}>
-        <section className={styles.hero}>
-          <div>
-            <p className={styles.eyebrow}>
-              You are responding as {participant.name}
-            </p>
-            <h1>{event.name}</h1>
-            <p className={styles.muted}>
-              Choose a status, then click or drag across the times that work for
-              you.
-            </p>
-          </div>
-          {upgradeHref && (
-            <Link
-              className={styles.upgradeLink}
-              href={upgradeHref}
-              aria-disabled={leavingPage}
-              onClick={(clickEvent) => void upgradeToFullAccess(clickEvent)}
+      <section>
+        <p>You are responding as {participant.name}</p>
+        <h1>{event.name}</h1>
+        <p>
+          Choose a status, then click or drag across the times that work for
+          you.
+        </p>
+        {upgradeHref && (
+          <Link
+            href={upgradeHref}
+            aria-disabled={leavingPage}
+            onClick={(clickEvent) => void upgradeToFullAccess(clickEvent)}
+          >
+            {upgradePending
+              ? "Saving before upgrade…"
+              : "Upgrade to full access"}
+          </Link>
+        )}
+      </section>
+
+      <EventDetailsGrid event={event} />
+
+      <section aria-labelledby="your-schedule-heading">
+        <h2 id="your-schedule-heading">Your schedule</h2>
+        <p>Changes save automatically to the shared response.</p>
+        {submitted && <span>Submitted</span>}
+
+        <p>Mark times as</p>
+        <div role="group" aria-label="Availability status">
+          {AVAILABILITY_CHOICES.map((choice) => (
+            <AppButton
+              key={choice.value}
+              aria-pressed={availabilityValue === choice.value}
+              disabled={responseChangesDisabled || leavingPage}
+              onClick={() => setAvailabilityValue(choice.value)}
             >
-              <MdUpgrade aria-hidden="true" />
-              {upgradePending
-                ? "Saving before upgrade…"
-                : "Upgrade to full access"}
-            </Link>
+              {choice.label}
+            </AppButton>
+          ))}
+        </div>
+        <AppButton
+          disabled={responseChangesDisabled || leavingPage}
+          onClick={() => fillAll(availabilityValue)}
+        >
+          Apply to all
+        </AppButton>
+        <AppButton
+          disabled={responseChangesDisabled || leavingPage}
+          onClick={() => fillAll(0)}
+        >
+          Mark all Busy
+        </AppButton>
+
+        <ScheduleChannelEditor
+          mode={mode}
+          slotGroups={event.slotGroups || []}
+          inperson={scheduleInperson}
+          virtual={scheduleVirtual}
+          readOnly={
+            responseChangesDisabled || leavingPage || Boolean(saveConflict)
+          }
+          onInpersonPaint={handleInpersonPaint}
+          onVirtualPaint={handleVirtualPaint}
+          onCopy={copySchedule}
+        />
+
+        {draftSaveState !== "idle" && (
+          <div
+            role={draftSaveState === "failed" ? "alert" : "status"}
+            aria-live={draftSaveState === "failed" ? "assertive" : "polite"}
+          >
+            <span>
+              {draftSaveState === "saving" && "Saving draft…"}
+              {draftSaveState === "saved" &&
+                "Draft saved. Submit when you are ready."}
+              {draftSaveState === "submitted" && "Schedule submitted."}
+              {draftSaveState === "failed" &&
+                (draftSaveError || "Draft autosave failed.")}
+            </span>
+            {draftSaveState === "failed" &&
+              (saveConflict ? (
+                <AppButton
+                  disabled={conflictReloadPending}
+                  onClick={() => void reloadLatestResponse()}
+                >
+                  {conflictReloadPending
+                    ? "Reloading…"
+                    : "Reload latest response"}
+                </AppButton>
+              ) : !responseChangesDisabled ? (
+                <AppButton onClick={() => void runAutosave()}>
+                  Retry save
+                </AppButton>
+              ) : null)}
+          </div>
+        )}
+
+        {responseChangesDisabled && (
+          <p role="status">
+            {serverWriteLock
+              ? serverWriteLock
+              : event.status !== "active"
+                ? `Responses are locked while this event is ${event.status}.`
+                : "The response deadline has passed."}
+          </p>
+        )}
+        {submitError && <p role="alert">{submitError}</p>}
+        <AppButton
+          disabled={
+            isSubmitting ||
+            responseChangesDisabled ||
+            leavingPage ||
+            Boolean(saveConflict)
+          }
+          onClick={() => void submitSchedule()}
+        >
+          {isSubmitting
+            ? "Submitting…"
+            : submitted
+              ? "Update availability"
+              : "Submit availability"}
+        </AppButton>
+      </section>
+
+      {access.canViewResults && results && (
+        <section aria-labelledby="group-availability-heading">
+          <h2 id="group-availability-heading">Group availability</h2>
+          <p>
+            Based on {results.countedResponseTotal || 0} submitted response(s).{" "}
+            {results.unansweredParticipantTotal || 0} participant(s) are still
+            unanswered.
+          </p>
+          {mode !== "virtual" && (
+            <ScheduleGrid
+              schedule={avgInperson}
+              slotGroups={event.slotGroups || []}
+              readOnly
+              showValues
+              label={
+                mode === "mixed" ? "In-Person Availability" : "Availability"
+              }
+            />
+          )}
+          {mode !== "inperson" && (
+            <ScheduleGrid
+              schedule={avgVirtual}
+              slotGroups={event.slotGroups || []}
+              readOnly
+              showValues
+              label={mode === "mixed" ? "Virtual Availability" : "Availability"}
+              virtual
+            />
           )}
         </section>
+      )}
 
-        <EventDetailsGrid event={event} />
-
-        <div
-          className={
-            access.canViewResults && results ? styles.twoPane : undefined
-          }
-        >
-          <section
-            className={styles.scheduleCard}
-            aria-labelledby="your-schedule-heading"
-          >
-            <div className={styles.sectionHeading}>
-              <div>
-                <h2 id="your-schedule-heading">Your schedule</h2>
-                <p className={styles.muted}>
-                  Changes save automatically to the shared response.
-                </p>
-              </div>
-              {submitted && (
-                <span className={styles.submittedBadge}>Submitted</span>
-              )}
-            </div>
-
-            <div className={styles.controls}>
-              <p>Mark times as</p>
-              <div
-                className={styles.choiceRow}
-                role="group"
-                aria-label="Availability status"
-              >
-                {AVAILABILITY_CHOICES.map((choice) => (
-                  <AppButton
-                    key={choice.value}
-                    variant={
-                      availabilityValue === choice.value ? "filled" : "outlined"
-                    }
-                    aria-pressed={availabilityValue === choice.value}
-                    disabled={responseChangesDisabled || leavingPage}
-                    onClick={() => setAvailabilityValue(choice.value)}
-                  >
-                    {choice.label}
-                  </AppButton>
-                ))}
-              </div>
-              <div className={styles.choiceRow}>
-                <AppButton
-                  variant="outlined"
-                  disabled={responseChangesDisabled || leavingPage}
-                  onClick={() => fillAll(availabilityValue)}
-                >
-                  Apply to all
-                </AppButton>
-                <AppButton
-                  variant="outlined"
-                  disabled={responseChangesDisabled || leavingPage}
-                  onClick={() => fillAll(0)}
-                >
-                  Mark all Busy
-                </AppButton>
-              </div>
-            </div>
-
-            <ScheduleChannelEditor
-              mode={mode}
-              slotGroups={event.slotGroups || []}
-              inperson={scheduleInperson}
-              virtual={scheduleVirtual}
-              readOnly={
-                responseChangesDisabled || leavingPage || Boolean(saveConflict)
-              }
-              onInpersonPaint={handleInpersonPaint}
-              onVirtualPaint={handleVirtualPaint}
-              onCopy={copySchedule}
-            />
-
-            {draftSaveState !== "idle" && (
-              <div
-                className={
-                  draftSaveState === "failed"
-                    ? styles.errorNotice
-                    : styles.saveNotice
-                }
-                role={draftSaveState === "failed" ? "alert" : "status"}
-                aria-live={draftSaveState === "failed" ? "assertive" : "polite"}
-              >
-                <span>
-                  {draftSaveState === "saving" && "Saving draft…"}
-                  {draftSaveState === "saved" &&
-                    "Draft saved. Submit when you are ready."}
-                  {draftSaveState === "submitted" && "Schedule submitted."}
-                  {draftSaveState === "failed" &&
-                    (draftSaveError || "Draft autosave failed.")}
-                </span>
-                {draftSaveState === "failed" &&
-                  (saveConflict ? (
-                    <AppButton
-                      variant="outlined"
-                      icon={<MdRefresh />}
-                      disabled={conflictReloadPending}
-                      onClick={() => void reloadLatestResponse()}
-                    >
-                      {conflictReloadPending
-                        ? "Reloading…"
-                        : "Reload latest response"}
-                    </AppButton>
-                  ) : !responseChangesDisabled ? (
-                    <AppButton
-                      variant="outlined"
-                      onClick={() => void runAutosave()}
-                    >
-                      Retry save
-                    </AppButton>
-                  ) : null)}
-              </div>
-            )}
-
-            {responseChangesDisabled && (
-              <p className={styles.fieldError} role="status">
-                {serverWriteLock
-                  ? serverWriteLock
-                  : event.status !== "active"
-                    ? `Responses are locked while this event is ${event.status}.`
-                    : "The response deadline has passed."}
-              </p>
-            )}
-            {submitError && (
-              <p className={styles.fieldError} role="alert">
-                {submitError}
-              </p>
-            )}
-            <div className={styles.submitRow}>
-              <AppButton
-                icon={<MdSend />}
-                disabled={
-                  isSubmitting ||
-                  responseChangesDisabled ||
-                  leavingPage ||
-                  Boolean(saveConflict)
-                }
-                onClick={() => void submitSchedule()}
-              >
-                {isSubmitting
-                  ? "Submitting…"
-                  : submitted
-                    ? "Update availability"
-                    : "Submit availability"}
-              </AppButton>
-            </div>
-          </section>
-
-          {access.canViewResults && results && (
-            <section
-              className={styles.resultsCard}
-              aria-labelledby="group-availability-heading"
-            >
-              <h2 id="group-availability-heading">Group availability</h2>
-              <p className={styles.muted}>
-                Based on {results.countedResponseTotal || 0} submitted
-                response(s). {results.unansweredParticipantTotal || 0}{" "}
-                participant(s) are still unanswered.
-              </p>
-              <div className={styles.resultGrids}>
-                {mode !== "virtual" && (
-                  <ScheduleGrid
-                    schedule={avgInperson}
-                    slotGroups={event.slotGroups || []}
-                    readOnly
-                    showValues
-                    label={
-                      mode === "mixed"
-                        ? "In-Person Availability"
-                        : "Availability"
-                    }
-                  />
-                )}
-                {mode !== "inperson" && (
-                  <ScheduleGrid
-                    schedule={avgVirtual}
-                    slotGroups={event.slotGroups || []}
-                    readOnly
-                    showValues
-                    label={
-                      mode === "mixed" ? "Virtual Availability" : "Availability"
-                    }
-                    virtual
-                  />
-                )}
-              </div>
-            </section>
-          )}
-        </div>
-
-        <aside className={styles.restrictedNote}>
-          This session can only access this event. Create a full account to
-          manage all of your events in one place.
-        </aside>
-      </div>
+      <aside>
+        This session can only access this event. Create a full account to manage
+        all of your events in one place.
+      </aside>
     </main>
   );
 }
@@ -1162,11 +1069,11 @@ function CenteredStatus({
   message = "Please wait while we check this event link.",
 }) {
   return (
-    <main className={styles.authPage}>
-      <section className={styles.authCard}>
-        <BrandLogo alt="Releviz" className={styles.authLogo} priority />
+    <main>
+      <section>
+        Releviz
         <h1>{title}</h1>
-        <p className={styles.muted}>{message}</p>
+        <p>{message}</p>
       </section>
     </main>
   );

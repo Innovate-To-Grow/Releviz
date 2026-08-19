@@ -16,15 +16,42 @@ const OrganizerView = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div className="page-pad participant-loading" aria-busy="true">
+      <main aria-busy="true">
         <p role="status">Loading organizer tools…</p>
-      </div>
+      </main>
     ),
   },
 );
 
-function EventPage() {
-  const searchParams = useSearchParams();
+const DemoEventPage =
+  process.env.NODE_ENV === "development"
+    ? dynamic(
+        /* istanbul ignore next -- this development-only chunk loads in the browser. */
+        () => import("@/components/event/DemoEventPage"),
+        {
+          ssr: false,
+          /* istanbul ignore next -- Next renders this only while the development chunk loads. */
+          loading: () => (
+            <main aria-busy="true">
+              <p role="status">Loading design preview...</p>
+            </main>
+          ),
+        },
+      )
+    : null;
+
+export function isDemoEventPreview(
+  searchParams,
+  nodeEnv = process.env.NODE_ENV,
+) {
+  return (
+    nodeEnv === "development" &&
+    searchParams.get("demo") === "1" &&
+    searchParams.get("code") === "DEMO2026"
+  );
+}
+
+function LiveEventPage({ searchParams }) {
   const eventCode = searchParams.get("code");
   const invitationToken = searchParams.get("invitation");
   const {
@@ -134,7 +161,7 @@ function EventPage() {
     (Boolean(eventCode) && settledEventCode !== eventCode)
   ) {
     return (
-      <main className="status-page" aria-busy="true">
+      <main aria-busy="true">
         <p role="status">Loading event...</p>
       </main>
     );
@@ -142,13 +169,10 @@ function EventPage() {
 
   if (!event) {
     return (
-      <main className="status-page">
-        <span className="status-page-code">Event unavailable</span>
+      <main>
         <h1>Event Not Found</h1>
         <p>{error || "This event does not exist."}</p>
-        <Link className="app-btn app-btn-filled" href="/create">
-          Create New Event
-        </Link>
+        <Link href="/create">Create New Event</Link>
       </main>
     );
   }
@@ -174,6 +198,16 @@ function EventPage() {
       {isOrganizer ? <OrganizerView /> : <ParticipantView />}
     </EventContext.Provider>
   );
+}
+
+function EventPage() {
+  const searchParams = useSearchParams();
+  const demoPreview = isDemoEventPreview(searchParams);
+
+  /* istanbul ignore next -- NODE_ENV=test cannot mount the dev-only chunk; browser smoke covers it. */
+  if (demoPreview && DemoEventPage) return <DemoEventPage />;
+
+  return <LiveEventPage searchParams={searchParams} />;
 }
 
 export default EventPage;

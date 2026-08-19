@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { lerpColor, lerpVirtualColor } from "@/components/ui/ColorUtils";
 import { formatTime } from "@/lib/format";
 
 function slotLabel(slot) {
@@ -21,7 +20,6 @@ function ScheduleGrid({
   showValues,
   onCellPaint,
   label,
-  virtual = false,
   participantDetails,
 }) {
   const strokeRef = useRef({
@@ -165,40 +163,24 @@ function ScheduleGrid({
   };
 
   return (
-    <div className="schedule-grid-shell">
-      {label && <h4 className="schedule-grid-title">{label}</h4>}
-      <div className="schedule-grid-scroll">
+    <div>
+      {label && <h4>{label}</h4>}
+      <div>
         {groups.length === 0 ? (
-          <p className="schedule-grid-empty">
-            No schedule slots are configured.
-          </p>
+          <p>No schedule slots are configured.</p>
         ) : (
           <div
-            className="schedule-grid"
             role="grid"
             aria-label={label || "Availability"}
             aria-colcount={groups.length + 1}
             aria-rowcount={maxRows + 1}
-            style={{ minWidth: `${80 + groups.length * 96}px` }}
           >
-            <div
-              className="schedule-grid-header"
-              role="row"
-              aria-rowindex={1}
-              style={{
-                gridTemplateColumns: `80px repeat(${groups.length}, minmax(96px, 1fr))`,
-              }}
-            >
-              <div
-                className="schedule-grid-time-header"
-                role="columnheader"
-                aria-colindex={1}
-              >
+            <div role="row" aria-rowindex={1}>
+              <div role="columnheader" aria-colindex={1}>
                 Time
               </div>
               {groups.map((group, column) => (
                 <div
-                  className="schedule-grid-column-header"
                   role="columnheader"
                   aria-colindex={column + 2}
                   key={group.key}
@@ -208,22 +190,13 @@ function ScheduleGrid({
               ))}
             </div>
 
-            <div className="schedule-grid-body" role="rowgroup">
+            <div role="rowgroup">
               {Array.from({ length: maxRows }, (_, row) => {
                 const firstSlot = groups.find((group) => group.slots?.[row])
                   ?.slots?.[row];
                 return (
-                  <div
-                    className="schedule-grid-row"
-                    key={row}
-                    role="row"
-                    aria-rowindex={row + 2}
-                    style={{
-                      gridTemplateColumns: `80px repeat(${groups.length}, minmax(96px, 1fr))`,
-                    }}
-                  >
+                  <div key={row} role="row" aria-rowindex={row + 2}>
                     <div
-                      className="schedule-grid-row-header"
                       role="rowheader"
                       aria-colindex={1}
                       data-first-row={row === 0 ? "true" : undefined}
@@ -235,22 +208,11 @@ function ScheduleGrid({
                       if (!slot) {
                         return (
                           <div
-                            className="schedule-grid-cell schedule-grid-cell-empty"
                             key={`${group.key}:empty:${row}`}
                             role="gridcell"
                             aria-colindex={column + 2}
                             aria-label={`${group.label}, no slot at this time`}
                             aria-disabled="true"
-                            style={{
-                              borderTop:
-                                row === 0
-                                  ? "none"
-                                  : "1px solid var(--md-sys-color-surface-variant)",
-                              borderLeft:
-                                column === 0
-                                  ? "none"
-                                  : "1px solid var(--md-sys-color-surface-variant)",
-                            }}
                           />
                         );
                       }
@@ -277,7 +239,6 @@ function ScheduleGrid({
 
                       return (
                         <div
-                          className="schedule-grid-cell"
                           key={index}
                           role="gridcell"
                           ref={(node) => {
@@ -310,20 +271,6 @@ function ScheduleGrid({
                               return;
                             }
                             moveKeyboardFocus(index, event);
-                          }}
-                          style={{
-                            backgroundColor: virtual
-                              ? lerpVirtualColor(value)
-                              : lerpColor(value),
-                            borderTop:
-                              row === 0
-                                ? "none"
-                                : "1px solid var(--md-sys-color-surface-variant)",
-                            borderLeft:
-                              column === 0
-                                ? "none"
-                                : "1px solid var(--md-sys-color-surface-variant)",
-                            cursor: readOnly ? "default" : "pointer",
                           }}
                         >
                           {showValues

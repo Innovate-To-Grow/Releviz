@@ -1,8 +1,6 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { GoVerified } from "react-icons/go";
-import { MdClose, MdRefresh, MdSave } from "react-icons/md";
 import AppButton from "@/components/ui/AppButton";
 import ScheduleChannelEditor from "@/components/schedule/ScheduleChannelEditor";
 
@@ -13,23 +11,13 @@ export function OrganizerHeader({
   controls = null,
 }) {
   return (
-    <header className="organizer-heading">
-      <div className="organizer-heading__content">
-        <span className="organizer-eyebrow">Event workspace</span>
-        <h2 className="organizer-title">
-          {event?.name?.trim() || "Untitled event"}
-        </h2>
-      </div>
-      <div
-        className="organizer-heading__actions"
-        role="group"
-        aria-label="Workspace actions"
-      >
+    <header>
+      Event workspace
+      <h2>{event?.name?.trim() || "Untitled event"}</h2>
+      <div role="group" aria-label="Workspace actions">
         {controls}
         <AppButton
           onClick={onRefresh}
-          variant="outlined"
-          icon={<MdRefresh />}
           disabled={refreshing}
           aria-busy={refreshing}
         >
@@ -117,126 +105,104 @@ export function ManagedScheduleDrawer({
   if (!participant) return null;
 
   return (
-    <div className="managed-drawer-layer">
+    <>
       <button
         type="button"
-        className="managed-drawer-backdrop"
         aria-label="Close schedule editor"
         onClick={onClose}
         disabled={saving}
       />
       <aside
         ref={drawerRef}
-        className="managed-drawer"
         role="dialog"
         aria-modal="true"
         aria-labelledby="managed-drawer-title"
       >
-        <header className="managed-drawer__header">
-          <div>
-            <p>Temporary participant</p>
-            <h2 id="managed-drawer-title">
-              Edit {participant.name}&apos;s schedule
-            </h2>
-          </div>
+        <header>
+          <p>Temporary participant</p>
+          <h2 id="managed-drawer-title">
+            Edit {participant.name}&apos;s schedule
+          </h2>
           <button
             ref={closeButtonRef}
             type="button"
-            className="managed-drawer__close"
             aria-label="Close schedule editor"
             onClick={onClose}
             disabled={saving}
           >
-            <MdClose aria-hidden="true" />
+            Close
           </button>
         </header>
 
-        <div className="managed-drawer__body">
-          <label className="managed-drawer__name">
-            <span>Event display name</span>
-            <input
-              value={participantName}
-              onChange={(changeEvent) =>
-                setParticipantName(changeEvent.target.value)
-              }
-              maxLength={100}
-              disabled={!responsesOpen || saving}
-            />
-          </label>
-          <p className="managed-drawer__hint">
-            You and this participant edit the same response. A version conflict
-            will never be silently overwritten.
-          </p>
-
-          <div>
-            <p className="managed-drawer__hint">Mark times as</p>
-            <div
-              className="managed-drawer__choices"
-              role="group"
-              aria-label="Availability status"
-            >
-              {[
-                { label: "Busy", value: 0 },
-                { label: "If needed", value: 0.5 },
-                { label: "Available", value: 1 },
-              ].map((choice) => (
-                <AppButton
-                  key={choice.value}
-                  variant={
-                    availabilityValue === choice.value ? "filled" : "outlined"
-                  }
-                  aria-pressed={availabilityValue === choice.value}
-                  disabled={
-                    !responsesOpen || saving || Boolean(conflictParticipant)
-                  }
-                  onClick={() => onAvailabilityValueChange(choice.value)}
-                >
-                  {choice.label}
-                </AppButton>
-              ))}
-            </div>
-          </div>
-
-          <ScheduleChannelEditor
-            mode={mode}
-            slotGroups={event.slotGroups}
-            inperson={inperson}
-            virtual={virtual}
-            readOnly={!responsesOpen || saving || Boolean(conflictParticipant)}
-            onInpersonPaint={onInpersonPaint}
-            onVirtualPaint={onVirtualPaint}
-            onCopy={onCopy}
+        <label>
+          <span>Event display name</span>
+          <input
+            value={participantName}
+            onChange={(changeEvent) =>
+              setParticipantName(changeEvent.target.value)
+            }
+            maxLength={100}
+            disabled={!responsesOpen || saving}
           />
+        </label>
+        <p>
+          You and this participant edit the same response. A version conflict
+          will never be silently overwritten.
+        </p>
 
-          {!responsesOpen && (
-            <p className="managed-participants__error" role="note">
-              Availability can only be edited while this event is active.
-            </p>
-          )}
-          {error && (
-            <div className="managed-drawer__error" role="alert">
-              <p>{error}</p>
-              {conflictParticipant && (
-                <AppButton variant="outlined" onClick={onReloadLatest}>
-                  Reload latest response
-                </AppButton>
-              )}
-            </div>
-          )}
-          {status && (
-            <p className="managed-drawer__status" role="status">
-              {status}
-            </p>
-          )}
+        <p>Mark times as</p>
+        <div role="group" aria-label="Availability status">
+          {[
+            { label: "Busy", value: 0 },
+            { label: "If needed", value: 0.5 },
+            { label: "Available", value: 1 },
+          ].map((choice) => (
+            <AppButton
+              key={choice.value}
+              aria-pressed={availabilityValue === choice.value}
+              disabled={
+                !responsesOpen || saving || Boolean(conflictParticipant)
+              }
+              onClick={() => onAvailabilityValueChange(choice.value)}
+            >
+              {choice.label}
+            </AppButton>
+          ))}
         </div>
 
-        <footer className="managed-drawer__footer">
-          <AppButton variant="outlined" onClick={onClose} disabled={saving}>
+        <ScheduleChannelEditor
+          mode={mode}
+          slotGroups={event.slotGroups}
+          inperson={inperson}
+          virtual={virtual}
+          readOnly={!responsesOpen || saving || Boolean(conflictParticipant)}
+          onInpersonPaint={onInpersonPaint}
+          onVirtualPaint={onVirtualPaint}
+          onCopy={onCopy}
+        />
+
+        {!responsesOpen && (
+          <p role="note">
+            Availability can only be edited while this event is active.
+          </p>
+        )}
+        {error && (
+          <div role="alert">
+            <p>{error}</p>
+            {conflictParticipant && (
+              <AppButton onClick={onReloadLatest}>
+                Reload latest response
+              </AppButton>
+            )}
+          </div>
+        )}
+        {status && <p role="status">{status}</p>}
+
+        <footer>
+          <AppButton onClick={onClose} disabled={saving}>
             Cancel
           </AppButton>
           <AppButton
-            variant="outlined"
-            icon={<MdSave />}
             onClick={onSaveDraft}
             disabled={
               saving ||
@@ -248,7 +214,6 @@ export function ManagedScheduleDrawer({
             {saving ? "Saving..." : "Save draft"}
           </AppButton>
           <AppButton
-            icon={<GoVerified />}
             onClick={onSubmit}
             disabled={
               saving ||
@@ -261,6 +226,6 @@ export function ManagedScheduleDrawer({
           </AppButton>
         </footer>
       </aside>
-    </div>
+    </>
   );
 }
