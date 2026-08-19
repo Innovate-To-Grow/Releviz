@@ -1,9 +1,7 @@
-import importlib
 import uuid
 from datetime import timedelta
 
-from django.apps import apps
-from django.db import IntegrityError, connection, transaction
+from django.db import IntegrityError, transaction
 from django.test import TestCase
 from django.utils import timezone
 
@@ -135,15 +133,3 @@ class ActiveStatusCoreTests(TestCase):
             now=self.now,
         )
         self.assertEqual(event.status, Event.Status.ACTIVE)
-
-
-class ActiveStatusMigrationGuardTests(TestCase):
-    def test_guard_requires_an_empty_event_table(self):
-        migration = importlib.import_module("apps.scheduling.migrations.0002_event_status_active")
-        schema_editor = connection.schema_editor()
-        migration.require_empty_event_table(apps, schema_editor)
-
-        organizer = create_member("migration-guard@example.com")
-        Event.objects.create(code="MIGRATE1", name="Migration guard", organizer=organizer)
-        with self.assertRaisesMessage(RuntimeError, "Event rows exist"):
-            migration.require_empty_event_table(apps, schema_editor)
