@@ -1,8 +1,18 @@
 "use client";
 
-import { useEffect, useRef } from "react";
-import AppButton from "@/components/ui/AppButton";
+import Button from "@/components/ui/Button";
+import Dialog from "@/components/ui/Dialog";
+import { Badge, Callout } from "@/components/ui/Feedback";
+import { Field, TextInput } from "@/components/ui/Form";
+import SegmentedControl from "@/components/ui/Segmented";
+import { Eyebrow } from "@/components/ui/Surface";
 import ScheduleChannelEditor from "@/components/schedule/ScheduleChannelEditor";
+
+const AVAILABILITY_CHOICES = [
+  { label: "Busy", value: 0 },
+  { label: "If needed", value: 0.5 },
+  { label: "Available", value: 1 },
+];
 
 export function OrganizerHeader({
   event,
@@ -11,23 +21,50 @@ export function OrganizerHeader({
   controls = null,
 }) {
   return (
-    <header>
-      Event workspace
-      <h2>{event?.name?.trim() || "Untitled event"}</h2>
-      <div role="group" aria-label="Workspace actions">
-        {controls}
-        <AppButton
-          onClick={onRefresh}
-          disabled={refreshing}
-          aria-busy={refreshing}
+    <header className="rv-page-header rv-page-header--plain rv-event-identity">
+      <div className="rv-split">
+        <div className="rv-stack rv-stack--sm rv-fill">
+          <Eyebrow icon="sliders">Event workspace</Eyebrow>
+          <h2 className="rv-event-identity__title">
+            {event?.name?.trim() || "Untitled event"}
+          </h2>
+          {/* Status lives with its lifecycle controls so the workspace never
+              shows the same state twice. */}
+          {event?.code && (
+            <div className="rv-cluster rv-cluster--sm">
+              <Badge tone="outline" mono>
+                #{event.code}
+              </Badge>
+            </div>
+          )}
+        </div>
+        <div
+          role="group"
+          aria-label="Workspace actions"
+          className="rv-stack rv-stack--sm"
         >
-          {refreshing ? "Refreshing…" : "Refresh"}
-        </AppButton>
+          {controls}
+          <div className="rv-btn-row rv-btn-row--end">
+            <Button
+              icon="refresh"
+              onClick={onRefresh}
+              disabled={refreshing}
+              busy={refreshing}
+            >
+              {refreshing ? "Refreshing…" : "Refresh"}
+            </Button>
+          </div>
+        </div>
       </div>
     </header>
   );
 }
 
+/**
+ * Organizer-side editor for a temporary participant's availability. It shares
+ * the same response record as the participant, so the conflict and read-only
+ * states are surfaced explicitly rather than silently overwriting.
+ */
 export function ManagedScheduleDrawer({
   event,
   mode,
@@ -51,181 +88,98 @@ export function ManagedScheduleDrawer({
   onReloadLatest,
   onClose,
 }) {
-  const closeButtonRef = useRef(null);
-  const drawerRef = useRef(null);
-  const restoreFocusRef = useRef(null);
-  const savingRef = useRef(saving);
-  const onCloseRef = useRef(onClose);
-  const participantId = participant?.id;
-
-  useEffect(() => {
-    savingRef.current = saving;
-  }, [saving]);
-
-  useEffect(() => {
-    onCloseRef.current = onClose;
-  }, [onClose]);
-
-  useEffect(() => {
-    if (!participantId) return undefined;
-    restoreFocusRef.current = document.activeElement;
-    const previousBodyOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    closeButtonRef.current?.focus();
-    const handleKeyDown = (keyboardEvent) => {
-      if (keyboardEvent.key === "Escape" && !savingRef.current) {
-        onCloseRef.current();
-        return;
-      }
-      if (keyboardEvent.key !== "Tab") return;
-      const focusable = Array.from(
-        drawerRef.current?.querySelectorAll(
-          'button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
-        ) || [],
-      );
-      if (!focusable.length) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (keyboardEvent.shiftKey && document.activeElement === first) {
-        keyboardEvent.preventDefault();
-        last.focus();
-      } else if (!keyboardEvent.shiftKey && document.activeElement === last) {
-        keyboardEvent.preventDefault();
-        first.focus();
-      }
-    };
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("keydown", handleKeyDown);
-      document.body.style.overflow = previousBodyOverflow;
-      restoreFocusRef.current?.focus?.();
-    };
-  }, [participantId]);
-
   if (!participant) return null;
 
+  const locked = !responsesOpen || saving || Boolean(conflictParticipant);
+  const canSave =
+    !saving &&
+    responsesOpen &&
+    !conflictParticipant &&
+    Boolean(participantName.trim());
+
   return (
-    <>
-      <button
-        type="button"
-        aria-label="Close schedule editor"
-        onClick={onClose}
-        disabled={saving}
-      />
-      <aside
-        ref={drawerRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="managed-drawer-title"
-      >
-        <header>
-          <p>Temporary participant</p>
-          <h2 id="managed-drawer-title">
-            Edit {participant.name}&apos;s schedule
-          </h2>
-          <button
-            ref={closeButtonRef}
-            type="button"
-            aria-label="Close schedule editor"
-            onClick={onClose}
-            disabled={saving}
-          >
-            Close
-          </button>
-        </header>
-
-        <label>
-          <span>Event display name</span>
-          <input
-            value={participantName}
-            onChange={(changeEvent) =>
-              setParticipantName(changeEvent.target.value)
-            }
-            maxLength={100}
-            disabled={!responsesOpen || saving}
-          />
-        </label>
-        <p>
-          You and this participant edit the same response. A version conflict
-          will never be silently overwritten.
-        </p>
-
-        <p>Mark times as</p>
-        <div role="group" aria-label="Availability status">
-          {[
-            { label: "Busy", value: 0 },
-            { label: "If needed", value: 0.5 },
-            { label: "Available", value: 1 },
-          ].map((choice) => (
-            <AppButton
-              key={choice.value}
-              aria-pressed={availabilityValue === choice.value}
-              disabled={
-                !responsesOpen || saving || Boolean(conflictParticipant)
-              }
-              onClick={() => onAvailabilityValueChange(choice.value)}
-            >
-              {choice.label}
-            </AppButton>
-          ))}
-        </div>
-
-        <ScheduleChannelEditor
-          mode={mode}
-          slotGroups={event.slotGroups}
-          inperson={inperson}
-          virtual={virtual}
-          readOnly={!responsesOpen || saving || Boolean(conflictParticipant)}
-          onInpersonPaint={onInpersonPaint}
-          onVirtualPaint={onVirtualPaint}
-          onCopy={onCopy}
-        />
-
-        {!responsesOpen && (
-          <p role="note">
-            Availability can only be edited while this event is active.
-          </p>
-        )}
-        {error && (
-          <div role="alert">
-            <p>{error}</p>
-            {conflictParticipant && (
-              <AppButton onClick={onReloadLatest}>
-                Reload latest response
-              </AppButton>
-            )}
-          </div>
-        )}
-        {status && <p role="status">{status}</p>}
-
-        <footer>
-          <AppButton onClick={onClose} disabled={saving}>
+    <Dialog
+      open
+      variant="drawer"
+      titleId="managed-drawer-title"
+      eyebrow="Temporary participant"
+      title={`Edit ${participant.name}'s schedule`}
+      description="You and this participant edit the same response. A version conflict will never be silently overwritten."
+      closeLabel="Close schedule editor"
+      closeDisabled={saving}
+      onClose={onClose}
+      footer={
+        <>
+          <Button onClick={onClose} disabled={saving}>
             Cancel
-          </AppButton>
-          <AppButton
-            onClick={onSaveDraft}
-            disabled={
-              saving ||
-              !responsesOpen ||
-              Boolean(conflictParticipant) ||
-              !participantName.trim()
-            }
-          >
+          </Button>
+          <Button onClick={onSaveDraft} disabled={!canSave} busy={saving}>
             {saving ? "Saving..." : "Save draft"}
-          </AppButton>
-          <AppButton
+          </Button>
+          <Button
+            variant="primary"
             onClick={onSubmit}
-            disabled={
-              saving ||
-              !responsesOpen ||
-              Boolean(conflictParticipant) ||
-              !participantName.trim()
-            }
+            disabled={!canSave}
+            busy={saving}
           >
             {saving ? "Saving..." : "Submit on behalf"}
-          </AppButton>
-        </footer>
-      </aside>
-    </>
+          </Button>
+        </>
+      }
+    >
+      <Field label="Event display name">
+        <TextInput
+          value={participantName}
+          onChange={(changeEvent) =>
+            setParticipantName(changeEvent.target.value)
+          }
+          maxLength={100}
+          disabled={!responsesOpen || saving}
+        />
+      </Field>
+
+      <div className="rv-stack rv-stack--sm">
+        <p className="rv-field__label">Mark times as</p>
+        <SegmentedControl
+          label="Availability status"
+          options={AVAILABILITY_CHOICES}
+          value={availabilityValue}
+          disabled={locked}
+          onChange={onAvailabilityValueChange}
+        />
+      </div>
+
+      <ScheduleChannelEditor
+        mode={mode}
+        slotGroups={event.slotGroups}
+        inperson={inperson}
+        virtual={virtual}
+        readOnly={locked}
+        onInpersonPaint={onInpersonPaint}
+        onVirtualPaint={onVirtualPaint}
+        onCopy={onCopy}
+      />
+
+      {!responsesOpen && (
+        <Callout tone="warning" role="note">
+          Availability can only be edited while this event is active.
+        </Callout>
+      )}
+      {error && (
+        <Callout tone="danger" role="alert">
+          <p>{error}</p>
+          {conflictParticipant && (
+            <Button icon="refresh" onClick={onReloadLatest}>
+              Reload latest response
+            </Button>
+          )}
+        </Callout>
+      )}
+      {status && (
+        <Callout tone="success" role="status">
+          {status}
+        </Callout>
+      )}
+    </Dialog>
   );
 }

@@ -1,0 +1,225 @@
+/*
+ * Releviz design tokens.
+ *
+ * One source of truth for colour, type, space, radius, elevation, motion and
+ * sizing. Every rule in the rest of the stylesheet reads from these variables,
+ * so a theme change never needs a component edit.
+ *
+ * Light is the default palette. Dark is a token-only override applied through
+ * `prefers-color-scheme`; no component defines a colour of its own.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  /* ---- Palette: warm paper canvas, cool "deep sea" accent ---------------- */
+  --rv-canvas: #f7f6f3;
+  --rv-canvas-raised: #fffefc;
+  --rv-surface: #ffffff;
+  --rv-surface-muted: #f3f1ec;
+  --rv-surface-sunken: #ebe8e1;
+  --rv-surface-inverse: #23221f;
+
+  --rv-text: #1c1b19;
+  --rv-text-secondary: #57534b;
+  --rv-text-muted: #6b675e;
+  --rv-text-inverse: #f8f7f4;
+  --rv-text-on-accent: #ffffff;
+
+  --rv-border: #e4e0d8;
+  --rv-border-strong: #d3cec3;
+  --rv-border-control: #8c877e;
+
+  --rv-accent: #15606f;
+  --rv-accent-hover: #0f4c58;
+  --rv-accent-active: #0b3b45;
+  --rv-accent-soft: #e2eef1;
+  --rv-accent-soft-hover: #d2e5ea;
+  --rv-accent-border: #9ac4ce;
+  --rv-accent-text: #10505e;
+
+  --rv-success: #1b6e43;
+  --rv-success-soft: #e3f1e8;
+  --rv-success-border: #a3ceb6;
+  --rv-warning: #8a5a0b;
+  --rv-warning-soft: #fbf0da;
+  --rv-warning-border: #e0c284;
+  --rv-danger: #a32b2b;
+  --rv-danger-hover: #8a2020;
+  --rv-danger-soft: #fbe9e7;
+  --rv-danger-border: #e6b0ab;
+  --rv-info: var(--rv-accent);
+  --rv-info-soft: var(--rv-accent-soft);
+  --rv-info-border: var(--rv-accent-border);
+
+  /* Availability ramp — always paired with a glyph and a text label. */
+  --rv-avail-none: #ffffff;
+  --rv-avail-none-line: #d8d3c9;
+  --rv-avail-maybe: #f7e2b6;
+  --rv-avail-maybe-line: #c99b34;
+  --rv-avail-yes: #a8d9bd;
+  --rv-avail-yes-line: #2f8757;
+  --rv-avail-ink: #1c1b19;
+
+  --rv-focus: #0d4b58;
+  --rv-focus-inverse: #8ed7e6;
+  --rv-selection: #cfe6ec;
+
+  /* ---- Type ------------------------------------------------------------- */
+  --rv-font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", "Noto Sans", Arial, sans-serif, "Apple Color Emoji",
+    "Segoe UI Emoji";
+  --rv-font-mono:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono",
+    monospace;
+
+  --rv-text-2xs: 0.6875rem;
+  --rv-text-xs: 0.75rem;
+  --rv-text-sm: 0.8125rem;
+  --rv-text-base: 0.9375rem;
+  --rv-text-md: 1rem;
+  --rv-text-lg: 1.125rem;
+  --rv-text-xl: 1.375rem;
+  --rv-text-2xl: 1.75rem;
+  --rv-text-3xl: 2.125rem;
+  --rv-text-hero: clamp(2rem, 1.35rem + 2.6vw, 3rem);
+
+  --rv-leading-tight: 1.2;
+  --rv-leading-snug: 1.35;
+  --rv-leading-normal: 1.55;
+  --rv-leading-relaxed: 1.7;
+
+  --rv-weight-regular: 400;
+  --rv-weight-medium: 500;
+  --rv-weight-semibold: 600;
+  --rv-weight-bold: 700;
+
+  --rv-tracking-tight: -0.015em;
+  --rv-tracking-wide: 0.02em;
+  --rv-tracking-caps: 0.07em;
+
+  /* ---- Space ------------------------------------------------------------ */
+  --rv-space-1: 0.25rem;
+  --rv-space-2: 0.5rem;
+  --rv-space-3: 0.75rem;
+  --rv-space-4: 1rem;
+  --rv-space-5: 1.25rem;
+  --rv-space-6: 1.5rem;
+  --rv-space-7: 1.75rem;
+  --rv-space-8: 2rem;
+  --rv-space-10: 2.5rem;
+  --rv-space-12: 3rem;
+  --rv-space-16: 4rem;
+  --rv-space-20: 5rem;
+
+  /* ---- Radius ----------------------------------------------------------- */
+  --rv-radius-xs: 4px;
+  --rv-radius-sm: 6px;
+  --rv-radius-md: 10px;
+  --rv-radius-lg: 14px;
+  --rv-radius-xl: 20px;
+  --rv-radius-pill: 999px;
+
+  /* ---- Elevation -------------------------------------------------------- */
+  --rv-shadow-xs: 0 1px 2px rgba(28, 27, 25, 0.06);
+  --rv-shadow-sm:
+    0 1px 2px rgba(28, 27, 25, 0.05), 0 2px 6px rgba(28, 27, 25, 0.05);
+  --rv-shadow-md:
+    0 2px 4px rgba(28, 27, 25, 0.04), 0 10px 24px rgba(28, 27, 25, 0.08);
+  --rv-shadow-lg:
+    0 6px 14px rgba(28, 27, 25, 0.07), 0 26px 52px rgba(28, 27, 25, 0.14);
+
+  /* ---- Motion ----------------------------------------------------------- */
+  --rv-ease: cubic-bezier(0.2, 0.8, 0.3, 1);
+  --rv-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --rv-duration-fast: 120ms;
+  --rv-duration: 180ms;
+  --rv-duration-slow: 280ms;
+
+  /* ---- Sizing ----------------------------------------------------------- */
+  --rv-control-sm: 2rem;
+  --rv-control-md: 2.5rem;
+  --rv-control-lg: 3rem;
+  --rv-touch-target: 2.75rem;
+
+  --rv-width-prose: 68ch;
+  --rv-width-form: 40rem;
+  --rv-width-app: 78rem;
+  --rv-width-wide: 94rem;
+  --rv-gutter: var(--rv-space-4);
+
+  --rv-header-height: 3.5rem;
+}
+
+@media (min-width: 48rem) {
+  :root {
+    --rv-gutter: var(--rv-space-6);
+    --rv-header-height: 4rem;
+  }
+}
+
+@media (min-width: 64rem) {
+  :root {
+    --rv-gutter: var(--rv-space-8);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --rv-canvas: #17181b;
+    --rv-canvas-raised: #1b1d21;
+    --rv-surface: #1e2024;
+    --rv-surface-muted: #24272c;
+    --rv-surface-sunken: #131417;
+    --rv-surface-inverse: #edebe7;
+
+    --rv-text: #edebe7;
+    --rv-text-secondary: #b5b0a7;
+    --rv-text-muted: #9d9890;
+    --rv-text-inverse: #17181b;
+    --rv-text-on-accent: #0c1013;
+
+    --rv-border: #2e323a;
+    --rv-border-strong: #3a3f48;
+    --rv-border-control: #7a8390;
+
+    --rv-accent: #5cc2d6;
+    --rv-accent-hover: #7ad2e3;
+    --rv-accent-active: #96dfec;
+    --rv-accent-soft: #16323a;
+    --rv-accent-soft-hover: #1c414b;
+    --rv-accent-border: #2f6270;
+    --rv-accent-text: #7fd2e2;
+
+    --rv-success: #6fd39a;
+    --rv-success-soft: #14301f;
+    --rv-success-border: #2c5d40;
+    --rv-warning: #e5b25c;
+    --rv-warning-soft: #302512;
+    --rv-warning-border: #6a5124;
+    --rv-danger: #f08a82;
+    --rv-danger-hover: #f5a49d;
+    --rv-danger-soft: #341917;
+    --rv-danger-border: #6d3430;
+
+    --rv-avail-none: #1e2024;
+    --rv-avail-none-line: #3b404a;
+    --rv-avail-maybe: #4a3a17;
+    --rv-avail-maybe-line: #c79b3d;
+    --rv-avail-yes: #1d4a32;
+    --rv-avail-yes-line: #5fbd8a;
+    --rv-avail-ink: #edebe7;
+
+    --rv-focus: #8ed7e6;
+    --rv-focus-inverse: #0d4b58;
+    --rv-selection: #1f4a55;
+
+    --rv-shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.5);
+    --rv-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.4);
+    --rv-shadow-md:
+      0 2px 6px rgba(0, 0, 0, 0.45), 0 12px 28px rgba(0, 0, 0, 0.5);
+    --rv-shadow-lg:
+      0 8px 18px rgba(0, 0, 0, 0.5), 0 28px 56px rgba(0, 0, 0, 0.6);
+  }
+}

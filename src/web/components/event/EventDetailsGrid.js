@@ -1,53 +1,66 @@
 "use client";
 
 import { useId, useState } from "react";
+import Button from "@/components/ui/Button";
+import Icon from "@/components/ui/Icon";
 import { DAY_LABELS } from "@/lib/constants";
 import { formatDateTimeInTimezone, formatMode, formatTime } from "@/lib/format";
 
 function InfoCard({ label, value }) {
   return (
-    <>
-      <dt>{label}</dt>
-      <dd>{value ?? "Not set"}</dd>
-    </>
+    <div className="rv-deflist__item">
+      <dt className="rv-deflist__label">{label}</dt>
+      <dd className="rv-deflist__value">{value ?? "Not set"}</dd>
+    </div>
   );
 }
 
-function SummaryItem({ label, primary, secondary }) {
+function SummaryItem({ label, icon, primary, secondary }) {
   return (
-    <>
-      <dt>{label}</dt>
-      <dd>
+    <div className="rv-summary-item">
+      <dt className="rv-summary-item__label">
+        <Icon name={icon} className="rv-summary-item__icon" />
+        {label}
+      </dt>
+      <dd className="rv-summary-item__value">
         <strong>{primary || "Not set"}</strong>
-        {secondary && <span> {secondary}</span>}
+        {secondary && (
+          <span className="rv-summary-item__secondary"> {secondary}</span>
+        )}
       </dd>
-    </>
+    </div>
   );
 }
 
 function DetailItem({ label, value }) {
   return (
-    <>
-      <dt>{label}</dt>
-      <dd>{value ?? "Not set"}</dd>
-    </>
+    <div className="rv-deflist__item">
+      <dt className="rv-deflist__label">{label}</dt>
+      <dd className="rv-deflist__value">{value ?? "Not set"}</dd>
+    </div>
   );
+}
+
+function dayTextFor(event) {
+  if (
+    event?.daySelectionType === "specific_dates" &&
+    Array.isArray(event?.specificDates)
+  ) {
+    return event.specificDates.join(", ");
+  }
+  return Array.isArray(event?.days)
+    ? event.days
+        .map((day) => DAY_LABELS[day])
+        .filter(Boolean)
+        .join(", ")
+    : "";
 }
 
 function OrganizerEventDetails({ event, extraCards }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const detailsId = useId();
   const mode = event?.mode || "inperson";
-  const dayText =
-    event?.daySelectionType === "specific_dates" &&
-    Array.isArray(event?.specificDates)
-      ? event.specificDates.join(", ")
-      : Array.isArray(event?.days)
-        ? event.days
-            .map((day) => DAY_LABELS[day])
-            .filter(Boolean)
-            .join(", ")
-        : "";
+  const dayText = dayTextFor(event);
   const timeWindow = `${formatTime(event?.startTime)} - ${formatTime(
     event?.endTime,
   )}${event?.crossesMidnight ? " (next day)" : ""}`;
@@ -82,43 +95,53 @@ function OrganizerEventDetails({ event, extraCards }) {
     : null;
 
   return (
-    <section aria-label="Event overview">
-      <dl aria-label="Key event information">
+    <section aria-label="Event overview" className="rv-stack rv-stack--md">
+      <dl aria-label="Key event information" className="rv-summary-grid">
         <SummaryItem
           label="Schedule"
+          icon="calendar"
           primary={dayText || "Days not set"}
           secondary={`${timeWindow} · ${event?.timezone || "UTC"}`}
         />
         <SummaryItem
           label="Meeting"
+          icon={mode === "virtual" ? "video" : "mapPin"}
           primary={`${formatMode(mode)} · ${meetingDuration}`}
           secondary={event?.location || "Location not set"}
         />
         <SummaryItem
           label="Responses"
+          icon="users"
           primary={access}
           secondary={responseDeadline}
         />
         {finalMeeting && (
           <SummaryItem
             label="Confirmed meeting"
+            icon="checkCircle"
             primary={finalWindow}
             secondary={`${formatMode(finalMeeting.channel)} · ${finalMeeting.location || "Location not set"}`}
           />
         )}
       </dl>
 
-      <div>
-        <button
-          type="button"
-          aria-expanded={detailsOpen}
-          aria-controls={detailsId}
-          onClick={() => setDetailsOpen((open) => !open)}
-        >
-          {detailsOpen ? "Hide details" : "Show all details"}
-        </button>
+      <div className="rv-stack rv-stack--md">
+        <div>
+          <Button
+            variant="link"
+            aria-expanded={detailsOpen}
+            aria-controls={detailsId}
+            onClick={() => setDetailsOpen((open) => !open)}
+          >
+            {detailsOpen ? "Hide details" : "Show all details"}
+          </Button>
+        </div>
         {detailsOpen && (
-          <dl id={detailsId} aria-label="Additional event details">
+          <dl
+            id={detailsId}
+            aria-label="Additional event details"
+            className="rv-deflist"
+          >
             <DetailItem
               label="Availability interval"
               value={`${event?.slotMinutes || 30} minutes`}
@@ -135,26 +158,15 @@ function OrganizerEventDetails({ event, extraCards }) {
 
 function EventDetailsGrid({ event, extraCards = [], variant = "default" }) {
   const mode = event?.mode || "inperson";
-  const dayText =
-    event?.daySelectionType === "specific_dates" &&
-    Array.isArray(event?.specificDates)
-      ? event.specificDates.join(", ")
-      : Array.isArray(event?.days)
-        ? event.days
-            .map((d) => DAY_LABELS[d])
-            .filter(Boolean)
-            .join(", ")
-        : "";
+  const dayText = dayTextFor(event);
   const finalMeeting = event?.finalMeeting;
   if (variant === "organizer") {
     return <OrganizerEventDetails event={event} extraCards={extraCards} />;
   }
 
   return (
-    <dl aria-label="Event details">
-      {variant !== "organizer" && (
-        <InfoCard label="Event" value={event?.name} />
-      )}
+    <dl aria-label="Event details" className="rv-deflist">
+      <InfoCard label="Event" value={event?.name} />
       <InfoCard label="Meeting type" value={formatMode(mode)} />
       <InfoCard
         label="Availability window"

@@ -1,5 +1,10 @@
 import { AuthProvider } from "@/components/auth/AuthContext";
 import SiteFooter from "@/components/ui/SiteFooter";
+import "@/styles/tokens.css";
+import "@/styles/base.css";
+import "@/styles/layout.css";
+import "@/styles/components.css";
+import "@/styles/patterns.css";
 
 export const metadata = {
   metadataBase: new URL("https://releviz.com"),
@@ -40,13 +45,28 @@ export const metadata = {
   },
 };
 
+export const viewport = {
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#f7f6f3" },
+    { media: "(prefers-color-scheme: dark)", color: "#17181b" },
+  ],
+  colorScheme: "light dark",
+  width: "device-width",
+  initialScale: 1,
+};
+
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
       <body>
         <AuthProvider>
-          {children}
-          <SiteFooter />
+          <a className="rv-skip-link" href="#main">
+            Skip to main content
+          </a>
+          <div className="rv-app">
+            {children}
+            <SiteFooter />
+          </div>
         </AuthProvider>
       </body>
     </html>

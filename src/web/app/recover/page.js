@@ -2,8 +2,11 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import AppButton from "@/components/ui/AppButton";
 import AppHeader from "@/components/ui/AppHeader";
+import Button from "@/components/ui/Button";
+import { Callout } from "@/components/ui/Feedback";
+import { Field, TextInput } from "@/components/ui/Form";
+import { Eyebrow } from "@/components/ui/Surface";
 import { confirmPasswordReset, requestPasswordResetCode } from "@/lib/api/auth";
 import { navigateTo } from "@/lib/navigation";
 
@@ -65,25 +68,34 @@ export default function RecoverAccountPage() {
 
   return (
     <>
-      <AppHeader />
-      <main>
-        <form onSubmit={step === "request" ? requestCode : resetPassword}>
-          <div>
-            <h1>Recover your account</h1>
-            <p>
+      <AppHeader pageTitle="Account recovery" />
+      <main id="main" className="rv-page rv-page--form rv-page--centered">
+        <form
+          onSubmit={step === "request" ? requestCode : resetPassword}
+          className="rv-auth"
+        >
+          <div className="rv-stack rv-stack--sm">
+            <Eyebrow icon="shield">Account recovery</Eyebrow>
+            <h1 className="rv-auth__title">Recover your account</h1>
+            <p className="rv-auth__lede">
               Request a one-time code, then choose a new password. Resetting
               your password signs out every device.
             </p>
           </div>
-          {error && <div role="alert">{error}</div>}
-          {status && (
-            <div role="status" aria-live="polite">
-              {status}
-            </div>
+
+          {error && (
+            <Callout tone="danger" role="alert">
+              {error}
+            </Callout>
           )}
-          <label>
-            Email
-            <input
+          {status && (
+            <Callout tone="info" role="status" aria-live="polite">
+              {status}
+            </Callout>
+          )}
+
+          <Field label="Email">
+            <TextInput
               value={email}
               onChange={(event) => setEmail(event.target.value)}
               type="email"
@@ -91,38 +103,37 @@ export default function RecoverAccountPage() {
               disabled={step === "reset"}
               required
             />
-          </label>
+          </Field>
+
           {step === "reset" && (
             <>
-              <button type="button" onClick={useDifferentEmail}>
-                Use a different email
-              </button>
-              <label>
-                Reset code
-                <input
+              <div>
+                <Button variant="link" onClick={useDifferentEmail}>
+                  Use a different email
+                </Button>
+              </div>
+              <Field label="Reset code">
+                <TextInput
+                  className="rv-input--code"
                   value={code}
                   onChange={(event) => setCode(event.target.value)}
                   inputMode="numeric"
                   autoComplete="one-time-code"
                   required
                 />
-              </label>
-              <label>
-                New password
-                <input
+              </Field>
+              <Field label="New password" hint="Use at least 8 characters.">
+                <TextInput
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
                   type="password"
                   autoComplete="new-password"
                   minLength={8}
-                  aria-describedby="recover-password-help"
                   required
                 />
-              </label>
-              <p id="recover-password-help">Use at least 8 characters.</p>
-              <label>
-                Confirm new password
-                <input
+              </Field>
+              <Field label="Confirm new password">
+                <TextInput
                   value={passwordConfirm}
                   onChange={(event) => setPasswordConfirm(event.target.value)}
                   type="password"
@@ -130,10 +141,18 @@ export default function RecoverAccountPage() {
                   minLength={8}
                   required
                 />
-              </label>
+              </Field>
             </>
           )}
-          <AppButton type="submit" disabled={loading}>
+
+          <Button
+            type="submit"
+            variant="primary"
+            size="lg"
+            block
+            busy={loading}
+            disabled={loading}
+          >
             {loading
               ? step === "request"
                 ? "Sending..."
@@ -141,8 +160,9 @@ export default function RecoverAccountPage() {
               : step === "request"
                 ? "Send reset code"
                 : "Reset password"}
-          </AppButton>
-          <p>
+          </Button>
+
+          <p className="rv-auth__footnote">
             <Link href="/login">Back to login</Link>
           </p>
         </form>

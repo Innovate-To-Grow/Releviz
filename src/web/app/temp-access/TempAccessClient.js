@@ -1,13 +1,22 @@
 "use client";
 
-import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
 import ScheduleChannelEditor from "@/components/schedule/ScheduleChannelEditor";
 import ScheduleGrid from "@/components/schedule/ScheduleGrid";
 import useAutosaveNavigationGuard from "@/components/schedule/useAutosaveNavigationGuard";
-import AppButton from "@/components/ui/AppButton";
+import Button, { ButtonLink } from "@/components/ui/Button";
+import { Badge, Callout } from "@/components/ui/Feedback";
+import { Field, TextInput } from "@/components/ui/Form";
+import { BrandMark } from "@/components/ui/Icon";
+import SegmentedControl from "@/components/ui/Segmented";
+import {
+  Card,
+  Eyebrow,
+  PageHeader,
+  SectionHeader,
+} from "@/components/ui/Surface";
 import {
   fetchTempAccessSession,
   logoutTempAccess,
@@ -799,42 +808,60 @@ export default function TempAccessClient() {
 
   if (phase === "code") {
     return (
-      <main>
-        <section aria-labelledby="temp-access-heading">
-          Releviz
-          <p>Temporary event access</p>
-          <h1 id="temp-access-heading">Check your email</h1>
-          <p>
-            Enter the six-digit code sent to the email address connected to this
-            invitation. The code expires after 10 minutes.
-          </p>
-          {requestMessage && (
-            <p role={requestState === "error" ? "alert" : "status"}>
-              {requestMessage}
+      <main id="main" className="rv-page rv-page--form rv-page--centered">
+        <section aria-labelledby="temp-access-heading" className="rv-auth">
+          <div className="rv-stack rv-stack--sm">
+            <span className="rv-brand rv-brand--sm">
+              <BrandMark className="rv-brand__mark" />
+              <span className="rv-brand__word">Releviz</span>
+            </span>
+            <Eyebrow icon="shield">Temporary event access</Eyebrow>
+            <h1 className="rv-auth__title" id="temp-access-heading">
+              Check your email
+            </h1>
+            <p className="rv-auth__lede">
+              Enter the six-digit code sent to the email address connected to
+              this invitation. The code expires after 10 minutes.
             </p>
+          </div>
+
+          {requestMessage && (
+            <Callout
+              tone={requestState === "error" ? "danger" : "info"}
+              role={requestState === "error" ? "alert" : "status"}
+            >
+              {requestMessage}
+            </Callout>
           )}
-          <form onSubmit={verifyCode}>
-            <label htmlFor="temporary-verification-code">
-              Verification code
-            </label>
-            <input
+
+          <form onSubmit={verifyCode} className="rv-stack rv-stack--md">
+            <Field
+              label="Verification code"
               id="temporary-verification-code"
-              value={verificationCode}
-              onChange={(event) =>
-                setVerificationCode(
-                  event.target.value.replace(/\D/g, "").slice(0, 6),
-                )
-              }
-              autoComplete="one-time-code"
-              inputMode="numeric"
-              pattern="[0-9]{6}"
-              maxLength={6}
-              autoFocus
-              required
-            />
-            {verificationError && <p role="alert">{verificationError}</p>}
-            <AppButton
+              error={verificationError}
+            >
+              <TextInput
+                className="rv-input--code"
+                value={verificationCode}
+                onChange={(event) =>
+                  setVerificationCode(
+                    event.target.value.replace(/\D/g, "").slice(0, 6),
+                  )
+                }
+                autoComplete="one-time-code"
+                inputMode="numeric"
+                pattern="[0-9]{6}"
+                maxLength={6}
+                autoFocus
+                required
+              />
+            </Field>
+            <Button
               type="submit"
+              variant="primary"
+              size="lg"
+              block
+              busy={requestState === "verifying"}
               disabled={
                 requestState === "sending" || requestState === "verifying"
               }
@@ -842,17 +869,20 @@ export default function TempAccessClient() {
               {requestState === "verifying"
                 ? "Verifying…"
                 : "Verify and open schedule"}
-            </AppButton>
+            </Button>
           </form>
-          <AppButton
+
+          <Button
+            variant="link"
             disabled={
               requestState === "sending" || requestState === "verifying"
             }
             onClick={() => void sendCode(invitationToken)}
           >
             {requestState === "sending" ? "Sending…" : "Send a new code"}
-          </AppButton>
-          <p>
+          </Button>
+
+          <p className="rv-auth__footnote">
             This verification only grants access to this event. It does not sign
             you in to a full Releviz account.
           </p>
@@ -891,175 +921,238 @@ export default function TempAccessClient() {
   };
 
   return (
-    <main>
-      <header>
-        Releviz
-        <span>Temporary event access</span>
-        <AppButton disabled={leavingPage} onClick={() => void logout()}>
-          {logoutPending ? "Signing out…" : "Sign out"}
-        </AppButton>
+    <main id="main" className="rv-page rv-page--wide">
+      <header className="rv-split rv-temp-bar">
+        <span className="rv-brand rv-brand--sm">
+          <BrandMark className="rv-brand__mark" />
+          <span className="rv-brand__word">Releviz</span>
+        </span>
+        <div className="rv-cluster rv-cluster--sm">
+          <Badge tone="outline" icon="shield">
+            Temporary event access
+          </Badge>
+          <Button
+            size="sm"
+            icon="logOut"
+            disabled={leavingPage}
+            busy={logoutPending}
+            onClick={() => void logout()}
+          >
+            {logoutPending ? "Signing out…" : "Sign out"}
+          </Button>
+        </div>
       </header>
 
-      <section>
-        <p>You are responding as {participant.name}</p>
-        <h1>{event.name}</h1>
-        <p>
-          Choose a status, then click or drag across the times that work for
-          you.
-        </p>
-        {upgradeHref && (
-          <Link
-            href={upgradeHref}
-            aria-disabled={leavingPage}
-            onClick={(clickEvent) => void upgradeToFullAccess(clickEvent)}
-          >
-            {upgradePending
-              ? "Saving before upgrade…"
-              : "Upgrade to full access"}
-          </Link>
-        )}
-      </section>
-
-      <EventDetailsGrid event={event} />
-
-      <section aria-labelledby="your-schedule-heading">
-        <h2 id="your-schedule-heading">Your schedule</h2>
-        <p>Changes save automatically to the shared response.</p>
-        {submitted && <span>Submitted</span>}
-
-        <p>Mark times as</p>
-        <div role="group" aria-label="Availability status">
-          {AVAILABILITY_CHOICES.map((choice) => (
-            <AppButton
-              key={choice.value}
-              aria-pressed={availabilityValue === choice.value}
-              disabled={responseChangesDisabled || leavingPage}
-              onClick={() => setAvailabilityValue(choice.value)}
-            >
-              {choice.label}
-            </AppButton>
-          ))}
-        </div>
-        <AppButton
-          disabled={responseChangesDisabled || leavingPage}
-          onClick={() => fillAll(availabilityValue)}
-        >
-          Apply to all
-        </AppButton>
-        <AppButton
-          disabled={responseChangesDisabled || leavingPage}
-          onClick={() => fillAll(0)}
-        >
-          Mark all Busy
-        </AppButton>
-
-        <ScheduleChannelEditor
-          mode={mode}
-          slotGroups={event.slotGroups || []}
-          inperson={scheduleInperson}
-          virtual={scheduleVirtual}
-          readOnly={
-            responseChangesDisabled || leavingPage || Boolean(saveConflict)
+      <div className="rv-stack rv-stack--lg">
+        <PageHeader
+          eyebrow={`You are responding as ${participant.name}`}
+          eyebrowIcon="users"
+          title={event.name}
+          description="Choose a status, then click or drag across the times that work for you."
+          actions={
+            upgradeHref ? (
+              <ButtonLink
+                href={upgradeHref}
+                variant="subtle"
+                iconEnd="arrowRight"
+                aria-disabled={leavingPage}
+                onClick={(clickEvent) => void upgradeToFullAccess(clickEvent)}
+              >
+                {upgradePending
+                  ? "Saving before upgrade…"
+                  : "Upgrade to full access"}
+              </ButtonLink>
+            ) : null
           }
-          onInpersonPaint={handleInpersonPaint}
-          onVirtualPaint={handleVirtualPaint}
-          onCopy={copySchedule}
         />
 
-        {draftSaveState !== "idle" && (
-          <div
-            role={draftSaveState === "failed" ? "alert" : "status"}
-            aria-live={draftSaveState === "failed" ? "assertive" : "polite"}
-          >
-            <span>
-              {draftSaveState === "saving" && "Saving draft…"}
-              {draftSaveState === "saved" &&
-                "Draft saved. Submit when you are ready."}
-              {draftSaveState === "submitted" && "Schedule submitted."}
-              {draftSaveState === "failed" &&
-                (draftSaveError || "Draft autosave failed.")}
-            </span>
-            {draftSaveState === "failed" &&
-              (saveConflict ? (
-                <AppButton
-                  disabled={conflictReloadPending}
-                  onClick={() => void reloadLatestResponse()}
+        <Card>
+          <EventDetailsGrid event={event} />
+        </Card>
+
+        <Card as="section" aria-labelledby="your-schedule-heading">
+          <SectionHeader
+            as="h2"
+            titleId="your-schedule-heading"
+            title="Your schedule"
+            description="Changes save automatically to the shared response."
+            badge={
+              submitted ? (
+                <Badge tone="success" icon="checkCircle">
+                  Submitted
+                </Badge>
+              ) : null
+            }
+            actions={
+              <div className="rv-btn-row">
+                <Button
+                  size="sm"
+                  disabled={responseChangesDisabled || leavingPage}
+                  onClick={() => fillAll(availabilityValue)}
                 >
-                  {conflictReloadPending
-                    ? "Reloading…"
-                    : "Reload latest response"}
-                </AppButton>
-              ) : !responseChangesDisabled ? (
-                <AppButton onClick={() => void runAutosave()}>
-                  Retry save
-                </AppButton>
-              ) : null)}
-          </div>
-        )}
+                  Apply to all
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={responseChangesDisabled || leavingPage}
+                  onClick={() => fillAll(0)}
+                >
+                  Mark all Busy
+                </Button>
+              </div>
+            }
+          />
 
-        {responseChangesDisabled && (
-          <p role="status">
-            {serverWriteLock
-              ? serverWriteLock
-              : event.status !== "active"
-                ? `Responses are locked while this event is ${event.status}.`
-                : "The response deadline has passed."}
-          </p>
-        )}
-        {submitError && <p role="alert">{submitError}</p>}
-        <AppButton
-          disabled={
-            isSubmitting ||
-            responseChangesDisabled ||
-            leavingPage ||
-            Boolean(saveConflict)
-          }
-          onClick={() => void submitSchedule()}
-        >
-          {isSubmitting
-            ? "Submitting…"
-            : submitted
-              ? "Update availability"
-              : "Submit availability"}
-        </AppButton>
-      </section>
+          <SegmentedControl
+            label="Availability status"
+            options={AVAILABILITY_CHOICES}
+            value={availabilityValue}
+            disabled={responseChangesDisabled || leavingPage}
+            onChange={setAvailabilityValue}
+          />
 
-      {access.canViewResults && results && (
-        <section aria-labelledby="group-availability-heading">
-          <h2 id="group-availability-heading">Group availability</h2>
-          <p>
-            Based on {results.countedResponseTotal || 0} submitted response(s).{" "}
-            {results.unansweredParticipantTotal || 0} participant(s) are still
-            unanswered.
-          </p>
-          {mode !== "virtual" && (
-            <ScheduleGrid
-              schedule={avgInperson}
-              slotGroups={event.slotGroups || []}
-              readOnly
-              showValues
-              label={
-                mode === "mixed" ? "In-Person Availability" : "Availability"
+          <ScheduleChannelEditor
+            mode={mode}
+            slotGroups={event.slotGroups || []}
+            inperson={scheduleInperson}
+            virtual={scheduleVirtual}
+            readOnly={
+              responseChangesDisabled || leavingPage || Boolean(saveConflict)
+            }
+            onInpersonPaint={handleInpersonPaint}
+            onVirtualPaint={handleVirtualPaint}
+            onCopy={copySchedule}
+          />
+
+          {draftSaveState !== "idle" && (
+            <Callout
+              tone={
+                draftSaveState === "failed"
+                  ? "danger"
+                  : draftSaveState === "saving"
+                    ? "neutral"
+                    : "success"
               }
-            />
+              icon={draftSaveState === "saving" ? "clock" : undefined}
+              role={draftSaveState === "failed" ? "alert" : "status"}
+              aria-live={draftSaveState === "failed" ? "assertive" : "polite"}
+            >
+              <span>
+                {draftSaveState === "saving" && "Saving draft…"}
+                {draftSaveState === "saved" &&
+                  "Draft saved. Submit when you are ready."}
+                {draftSaveState === "submitted" && "Schedule submitted."}
+                {draftSaveState === "failed" &&
+                  (draftSaveError || "Draft autosave failed.")}
+              </span>
+              {draftSaveState === "failed" &&
+                (saveConflict ? (
+                  <div className="rv-btn-row">
+                    <Button
+                      size="sm"
+                      icon="refresh"
+                      disabled={conflictReloadPending}
+                      onClick={() => void reloadLatestResponse()}
+                    >
+                      {conflictReloadPending
+                        ? "Reloading…"
+                        : "Reload latest response"}
+                    </Button>
+                  </div>
+                ) : !responseChangesDisabled ? (
+                  <div className="rv-btn-row">
+                    <Button
+                      size="sm"
+                      icon="refresh"
+                      onClick={() => void runAutosave()}
+                    >
+                      Retry save
+                    </Button>
+                  </div>
+                ) : null)}
+            </Callout>
           )}
-          {mode !== "inperson" && (
-            <ScheduleGrid
-              schedule={avgVirtual}
-              slotGroups={event.slotGroups || []}
-              readOnly
-              showValues
-              label={mode === "mixed" ? "Virtual Availability" : "Availability"}
-              virtual
-            />
-          )}
-        </section>
-      )}
 
-      <aside>
-        This session can only access this event. Create a full account to manage
-        all of your events in one place.
-      </aside>
+          {responseChangesDisabled && (
+            <Callout tone="warning" role="status">
+              {serverWriteLock
+                ? serverWriteLock
+                : event.status !== "active"
+                  ? `Responses are locked while this event is ${event.status}.`
+                  : "The response deadline has passed."}
+            </Callout>
+          )}
+          {submitError && (
+            <Callout tone="danger" role="alert">
+              {submitError}
+            </Callout>
+          )}
+
+          <div className="rv-btn-row rv-btn-row--stack rv-btn-row--end">
+            <Button
+              variant="primary"
+              size="lg"
+              icon="check"
+              busy={isSubmitting}
+              disabled={
+                isSubmitting ||
+                responseChangesDisabled ||
+                leavingPage ||
+                Boolean(saveConflict)
+              }
+              onClick={() => void submitSchedule()}
+            >
+              {isSubmitting
+                ? "Submitting…"
+                : submitted
+                  ? "Update availability"
+                  : "Submit availability"}
+            </Button>
+          </div>
+        </Card>
+
+        {access.canViewResults && results && (
+          <Card as="section" aria-labelledby="group-availability-heading">
+            <SectionHeader
+              as="h2"
+              titleId="group-availability-heading"
+              title="Group availability"
+              description={`Based on ${results.countedResponseTotal || 0} submitted response(s). ${results.unansweredParticipantTotal || 0} participant(s) are still unanswered.`}
+            />
+            <div className="rv-stack rv-stack--lg">
+              {mode !== "virtual" && (
+                <ScheduleGrid
+                  schedule={avgInperson}
+                  slotGroups={event.slotGroups || []}
+                  readOnly
+                  showValues
+                  label={
+                    mode === "mixed" ? "In-Person Availability" : "Availability"
+                  }
+                />
+              )}
+              {mode !== "inperson" && (
+                <ScheduleGrid
+                  schedule={avgVirtual}
+                  slotGroups={event.slotGroups || []}
+                  readOnly
+                  showValues
+                  label={
+                    mode === "mixed" ? "Virtual Availability" : "Availability"
+                  }
+                  virtual
+                />
+              )}
+            </div>
+          </Card>
+        )}
+
+        <Callout tone="info">
+          This session can only access this event. Create a full account to
+          manage all of your events in one place.
+        </Callout>
+      </div>
     </main>
   );
 }
@@ -1069,11 +1162,14 @@ function CenteredStatus({
   message = "Please wait while we check this event link.",
 }) {
   return (
-    <main>
-      <section>
-        Releviz
-        <h1>{title}</h1>
-        <p>{message}</p>
+    <main id="main" className="rv-page rv-page--form rv-page--centered">
+      <section className="rv-auth">
+        <span className="rv-brand rv-brand--sm">
+          <BrandMark className="rv-brand__mark" />
+          <span className="rv-brand__word">Releviz</span>
+        </span>
+        <h1 className="rv-auth__title">{title}</h1>
+        <p className="rv-auth__lede">{message}</p>
       </section>
     </main>
   );

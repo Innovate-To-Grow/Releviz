@@ -2,11 +2,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import Link from "next/link";
 import dynamic from "next/dynamic";
 import EventContext from "@/components/event/EventContext";
 import EventHeader from "@/components/event/EventHeader";
 import ParticipantView from "@/components/schedule/ParticipantView";
+import { ButtonLink } from "@/components/ui/Button";
+import { EmptyState, LoadingState } from "@/components/ui/Feedback";
 import { useAuth } from "@/components/auth/AuthContext";
 import { fetchEvent, markInvitationOpened } from "@/lib/api/events";
 import { navigateTo, replaceUrl } from "@/lib/navigation";
@@ -16,8 +17,8 @@ const OrganizerView = dynamic(
   {
     ssr: false,
     loading: () => (
-      <main aria-busy="true">
-        <p role="status">Loading organizer tools…</p>
+      <main id="main" className="rv-page" aria-busy="true">
+        <LoadingState message="Loading organizer tools…" />
       </main>
     ),
   },
@@ -32,8 +33,8 @@ const DemoEventPage =
           ssr: false,
           /* istanbul ignore next -- Next renders this only while the development chunk loads. */
           loading: () => (
-            <main aria-busy="true">
-              <p role="status">Loading design preview...</p>
+            <main id="main" className="rv-page" aria-busy="true">
+              <LoadingState message="Loading design preview..." />
             </main>
           ),
         },
@@ -161,18 +162,26 @@ function LiveEventPage({ searchParams }) {
     (Boolean(eventCode) && settledEventCode !== eventCode)
   ) {
     return (
-      <main aria-busy="true">
-        <p role="status">Loading event...</p>
+      <main id="main" className="rv-page rv-page--centered" aria-busy="true">
+        <LoadingState message="Loading event..." />
       </main>
     );
   }
 
   if (!event) {
     return (
-      <main>
-        <h1>Event Not Found</h1>
-        <p>{error || "This event does not exist."}</p>
-        <Link href="/create">Create New Event</Link>
+      <main id="main" className="rv-page rv-page--form rv-page--centered">
+        <EmptyState
+          icon="search"
+          headingLevel={1}
+          title="Event Not Found"
+          description={error || "This event does not exist."}
+          action={
+            <ButtonLink href="/create" variant="primary" icon="plus">
+              Create New Event
+            </ButtonLink>
+          }
+        />
       </main>
     );
   }

@@ -12,9 +12,17 @@ import {
   ResultsSnapshotPanel,
 } from "@/components/schedule/OrganizerScalePanels";
 import RosterPanel from "@/components/schedule/RosterPanel";
+import { Callout, LoadingState } from "@/components/ui/Feedback";
 import { fetchEvent } from "@/lib/api/events";
 
 const SECTION_IDS = ["overview", "roster", "results", "finalize"];
+
+const WORKSPACE_SECTIONS = [
+  { id: "overview", label: "Overview", hint: "Event details" },
+  { id: "roster", label: "Roster", hint: "People and groups" },
+  { id: "results", label: "Results", hint: "Best times" },
+  { id: "finalize", label: "Finalize", hint: "Confirm and invite" },
+];
 
 function deliveryStorageKey(eventCode) {
   return `releviz.delivery-request.${eventCode}`;
@@ -184,11 +192,15 @@ export default function OrganizerScaleView() {
   );
 
   if (loading || !user) {
-    return <p>Loading…</p>;
+    return (
+      <main id="main" className="rv-page rv-page--centered">
+        <LoadingState message="Loading…" />
+      </main>
+    );
   }
 
   return (
-    <main>
+    <main id="main" className="rv-page rv-page--wide">
       <OrganizerHeader
         event={event}
         onRefresh={refreshWorkspace}
@@ -203,10 +215,29 @@ export default function OrganizerScaleView() {
         }
       />
 
+      <nav aria-label="Organizer sections" className="rv-worknav">
+        <ul className="rv-worknav__list">
+          {WORKSPACE_SECTIONS.map((section, index) => (
+            <li key={section.id}>
+              <a className="rv-worknav__link" href={`#organizer-${section.id}`}>
+                <span className="rv-worknav__step" aria-hidden="true">
+                  {index + 1}
+                </span>
+                {section.label}
+              </a>
+            </li>
+          ))}
+        </ul>
+      </nav>
+
       {(refreshStatus || refreshError) && (
-        <p role={refreshError ? "alert" : "status"}>
+        <Callout
+          tone={refreshError ? "danger" : "success"}
+          role={refreshError ? "alert" : "status"}
+          className="rv-section-gap"
+        >
           {refreshError || refreshStatus}
-        </p>
+        </Callout>
       )}
 
       {deliveryRequest && (
@@ -222,11 +253,16 @@ export default function OrganizerScaleView() {
       <section
         id="organizer-overview"
         aria-labelledby="organizer-overview-heading"
+        className="rv-worksection"
       >
         <OverviewPanel event={event} onEventSaved={handleEventSaved} />
       </section>
 
-      <section id="organizer-roster" aria-labelledby="organizer-roster-heading">
+      <section
+        id="organizer-roster"
+        aria-labelledby="organizer-roster-heading"
+        className="rv-worksection"
+      >
         <RosterPanel
           ref={rosterRef}
           event={event}
@@ -240,6 +276,7 @@ export default function OrganizerScaleView() {
       <section
         id="organizer-results"
         aria-labelledby="organizer-results-heading"
+        className="rv-worksection"
       >
         <ResultsSnapshotPanel
           ref={resultsRef}
@@ -259,6 +296,7 @@ export default function OrganizerScaleView() {
       <section
         id="organizer-finalize"
         aria-labelledby="organizer-finalize-heading"
+        className="rv-worksection"
       >
         <FinalizeScalePanel
           event={event}

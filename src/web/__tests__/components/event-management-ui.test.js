@@ -279,6 +279,77 @@ describe("organizer event management UI", () => {
     expect(navigateTo).toHaveBeenCalledWith("/event?code=A%20B%20C");
   });
 
+  test("dashboard blocks locked edits and surfaces lifecycle failures", async () => {
+    const archived = {
+      ...baseEvent,
+      code: "LOCKED01",
+      name: "Archived plan",
+      status: "archived",
+    };
+    fetchDashboardEvents.mockResolvedValueOnce({
+      organized: [archived],
+      participating: [],
+    });
+
+    const lockedView = render(<DashboardPage />);
+    await screen.findByRole("heading", { name: "My Dashboard" });
+
+    // A locked event keeps its Edit affordance visible, but the link refuses to
+    // navigate instead of leading to a form that cannot save.
+    const lockedCard = screen
+      .getByRole("link", { name: archived.name })
+      .closest("article");
+    const editLink = within(lockedCard).getByRole("link", { name: "Edit" });
+    expect(editLink).toHaveAttribute("aria-disabled", "true");
+    const editClick = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+    });
+    fireEvent(editLink, editClick);
+    expect(editClick.defaultPrevented).toBe(true);
+    expect(
+      within(lockedCard).queryByRole("button", { name: "Archive" }),
+    ).not.toBeInTheDocument();
+    lockedView.unmount();
+
+    fetchDashboardEvents.mockResolvedValueOnce({
+      organized: [baseEvent],
+      participating: [],
+    });
+    updateEventLifecycle.mockRejectedValueOnce(new Error("archive offline"));
+    deleteEvent.mockRejectedValueOnce(
+      Object.assign(new Error("delete conflict"), {
+        event: { ...baseEvent, version: 9 },
+      }),
+    );
+
+    render(<DashboardPage />);
+    await screen.findByRole("heading", { name: "My Dashboard" });
+    const activeCard = screen
+      .getByRole("link", { name: baseEvent.name })
+      .closest("article");
+
+    await userEvent.click(
+      within(activeCard).getByRole("button", { name: "Archive" }),
+    );
+    expect(await screen.findByText("archive offline")).toBeInTheDocument();
+
+    await userEvent.click(
+      within(activeCard).getByRole("button", { name: "Delete" }),
+    );
+    await userEvent.type(
+      screen.getByLabelText("Event code confirmation"),
+      baseEvent.code,
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Delete event permanently" }),
+    );
+    expect(await screen.findByText("delete conflict")).toBeInTheDocument();
+    // The confirmation stays open with the refreshed event so the organizer can
+    // retry against the version the server actually holds.
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
   test("dashboard reports load failures and redirects unauthenticated users", async () => {
     fetchDashboardEvents.mockRejectedValueOnce(new Error("offline"));
     const first = render(<DashboardPage />);

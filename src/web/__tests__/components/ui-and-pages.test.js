@@ -13,7 +13,6 @@ import {
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 
-import AppButton from "@/components/ui/AppButton";
 import AppHeader from "@/components/ui/AppHeader";
 import SiteFooter from "@/components/ui/SiteFooter";
 import ScheduleGrid from "@/components/schedule/ScheduleGrid";
@@ -161,26 +160,6 @@ describe("small UI modules", () => {
     expect(formatMode("virtual")).toBe("Virtual");
     expect(formatMode("mixed")).toBe("Mixed");
     expect(formatMode("inperson")).toBe("In-Person");
-  });
-
-  test("AppButton renders a native button and passes through props", () => {
-    const onClick = jest.fn();
-    render(
-      <>
-        <AppButton onClick={onClick} aria-pressed="true">
-          Save
-        </AppButton>
-        <AppButton type="submit" disabled>
-          Cancel
-        </AppButton>
-      </>,
-    );
-    const save = screen.getByRole("button", { name: "Save" });
-    expect(save).toHaveAttribute("type", "button");
-    expect(save).toHaveAttribute("aria-pressed", "true");
-    fireEvent.click(save);
-    expect(onClick).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
   });
 
   test("header and footer link home and layout keeps icon metadata", () => {
@@ -610,7 +589,7 @@ describe("role-aware headers", () => {
 
     render(<AppHeader pageTitle="Create event" contextLabel="Organizer" />);
 
-    expect(screen.getByText("/ Create event")).toBeInTheDocument();
+    expect(screen.getByText("Create event")).toBeInTheDocument();
     expect(screen.getByText("Organizer")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Prachi" }));
     expect(screen.getByRole("menuitem", { name: "Settings" })).toHaveAttribute(

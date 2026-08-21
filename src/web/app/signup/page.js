@@ -2,10 +2,13 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useId, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import ContinueWithEmailPage from "@/components/auth/ContinueWithEmailPage";
-import AppButton from "@/components/ui/AppButton";
 import AppHeader from "@/components/ui/AppHeader";
+import Button from "@/components/ui/Button";
+import { Callout, LoadingState } from "@/components/ui/Feedback";
+import { Field, TextInput } from "@/components/ui/Form";
+import { Eyebrow } from "@/components/ui/Surface";
 import { useAuth } from "@/components/auth/AuthContext";
 import { startTemporaryUpgradeRegistration } from "@/lib/api/auth";
 import { fetchTempAccessSession } from "@/lib/api/tempAccess";
@@ -14,30 +17,31 @@ import { navigateTo, safeNextPath } from "@/lib/navigation";
 const MISSING_UPGRADE_CODE_MESSAGE =
   "This upgrade link is incomplete. Reopen the event from your temporary access link.";
 
+const LOCKED_EMAIL_READY =
+  "This email is fixed so your existing event responses stay connected.";
+const LOCKED_EMAIL_PENDING =
+  "Your email is loaded from this event's verified temporary session.";
+
+function initialUpgradeSession(sessionKey, eventCode) {
+  return {
+    key: sessionKey,
+    state: eventCode ? "loading" : "error",
+    email: "",
+    error: eventCode ? "" : MISSING_UPGRADE_CODE_MESSAGE,
+  };
+}
+
 function TemporaryUpgradeSignupContent({ searchParams, next }) {
-  const emailInputId = useId();
-  const emailDescriptionId = `${emailInputId}-description`;
-  const upgradeMode = true;
   const upgradeEventCode = (searchParams.get("code") || "").trim();
-  const upgradeSessionKey = upgradeMode
-    ? `temporary:${upgradeEventCode}`
-    : "regular";
+  const upgradeSessionKey = `temporary:${upgradeEventCode}`;
   const { verifySignup, loading: authLoading } = useAuth();
   const [step, setStep] = useState("details");
-  const [upgradeSession, setUpgradeSession] = useState({
-    key: upgradeSessionKey,
-    state: upgradeMode
-      ? upgradeEventCode
-        ? "loading"
-        : "error"
-      : "not-required",
-    email: "",
-    error: upgradeMode && !upgradeEventCode ? MISSING_UPGRADE_CODE_MESSAGE : "",
-  });
+  const [upgradeSession, setUpgradeSession] = useState(() =>
+    initialUpgradeSession(upgradeSessionKey, upgradeEventCode),
+  );
   const [form, setForm] = useState({
     firstName: "",
     lastName: "",
-    email: "",
     password: "",
     passwordConfirm: "",
     code: "",
@@ -48,30 +52,14 @@ function TemporaryUpgradeSignupContent({ searchParams, next }) {
   const currentUpgradeSession =
     upgradeSession.key === upgradeSessionKey
       ? upgradeSession
-      : {
-          key: upgradeSessionKey,
-          state: upgradeMode
-            ? upgradeEventCode
-              ? "loading"
-              : "error"
-            : "not-required",
-          email: "",
-          error:
-            upgradeMode && !upgradeEventCode
-              ? MISSING_UPGRADE_CODE_MESSAGE
-              : "",
-        };
-  const upgradeSessionState = upgradeMode
-    ? currentUpgradeSession.state
-    : "not-required";
-  const upgradeSessionError = upgradeMode ? currentUpgradeSession.error : "";
-  const registrationEmail = upgradeMode
-    ? currentUpgradeSession.email
-    : form.email;
-  const upgradeReady = !upgradeMode || upgradeSessionState === "ready";
+      : initialUpgradeSession(upgradeSessionKey, upgradeEventCode);
+  const upgradeSessionState = currentUpgradeSession.state;
+  const upgradeSessionError = currentUpgradeSession.error;
+  const registrationEmail = currentUpgradeSession.email;
+  const upgradeReady = upgradeSessionState === "ready";
 
   useEffect(() => {
-    if (!upgradeMode || !upgradeEventCode) return;
+    if (!upgradeEventCode) return undefined;
 
     let active = true;
 
@@ -107,7 +95,7 @@ function TemporaryUpgradeSignupContent({ searchParams, next }) {
     return () => {
       active = false;
     };
-  }, [upgradeEventCode, upgradeMode, upgradeSessionKey]);
+  }, [upgradeEventCode, upgradeSessionKey]);
 
   const setField = (field, value) =>
     setForm((current) => ({ ...current, [field]: value }));
@@ -128,13 +116,12 @@ function TemporaryUpgradeSignupContent({ searchParams, next }) {
     }
     setLoading(true);
     try {
-      const registration = {
+      await startTemporaryUpgradeRegistration(upgradeEventCode, {
         password: form.password,
         password_confirm: form.passwordConfirm,
         first_name: form.firstName,
         last_name: form.lastName,
-      };
-      await startTemporaryUpgradeRegistration(upgradeEventCode, registration);
+      });
       setStep("code");
     } catch (err) {
       setError(err.message || "Unable to start registration.");
@@ -149,12 +136,11 @@ function TemporaryUpgradeSignupContent({ searchParams, next }) {
     setError("");
     setLoading(true);
     try {
-      const verification = {
+      const data = await verifySignup({
         email: registrationEmail,
         code: form.code,
-        temporaryUpgrade: upgradeMode,
-      };
-      const data = await verifySignup(verification);
+        temporaryUpgrade: true,
+      });
       if (
         data?.requires_profile_completion ||
         data?.next_step === "complete_profile"
@@ -173,98 +159,112 @@ function TemporaryUpgradeSignupContent({ searchParams, next }) {
   };
 
   return (
-    <main>
-      <form onSubmit={step === "details" ? submitDetails : submitCode}>
-        <div>
-          <h1>Upgrade your account</h1>
-          <p>
+    <main id="main" className="rv-page rv-page--form rv-page--centered">
+      <form
+        onSubmit={step === "details" ? submitDetails : submitCode}
+        className="rv-auth"
+      >
+        <div className="rv-stack rv-stack--sm">
+          <Eyebrow icon="shield">Temporary access</Eyebrow>
+          <h1 className="rv-auth__title">Upgrade your account</h1>
+          <p className="rv-auth__lede">
             {step === "details"
-              ? "Set up your Releviz account."
+              ? "Set up your Releviz account. Your existing event responses stay connected."
               : "Enter the email verification code."}
           </p>
         </div>
-        {upgradeMode && upgradeSessionState === "loading" && (
-          <div role="status">Checking your temporary event access…</div>
+
+        {upgradeSessionState === "loading" && (
+          <Callout tone="info" role="status">
+            Checking your temporary event access…
+          </Callout>
         )}
-        {upgradeSessionError && <div role="alert">{upgradeSessionError}</div>}
-        {error && <div>{error}</div>}
+        {upgradeSessionError && (
+          <Callout tone="danger" role="alert">
+            {upgradeSessionError}
+          </Callout>
+        )}
+        {error && (
+          <Callout tone="danger" role="alert">
+            {error}
+          </Callout>
+        )}
+
         {step === "details" ? (
           <>
-            <>
-              <label>
-                First name
-                <input
+            <div className="rv-grid rv-grid--pair">
+              <Field label="First name">
+                <TextInput
                   value={form.firstName}
                   onChange={(event) =>
                     setField("firstName", event.target.value)
                   }
+                  autoComplete="given-name"
                   required
                 />
-              </label>
-              <label>
-                Last name
-                <input
+              </Field>
+              <Field label="Last name">
+                <TextInput
                   value={form.lastName}
                   onChange={(event) => setField("lastName", event.target.value)}
+                  autoComplete="family-name"
                   required
                 />
-              </label>
-            </>
-            <>
-              <label htmlFor={emailInputId}>Email</label>
-              <input
-                id={emailInputId}
-                value={registrationEmail}
-                onChange={(event) => setField("email", event.target.value)}
-                type="email"
-                readOnly={upgradeMode}
-                aria-describedby={upgradeMode ? emailDescriptionId : undefined}
-                required
-              />
-              {upgradeMode && (
-                <span id={emailDescriptionId}>
-                  {upgradeSessionState === "ready"
-                    ? "This email is fixed so your existing event responses stay connected."
-                    : "Your email is loaded from this event's verified temporary session."}
-                </span>
-              )}
-            </>
-            <label>
-              Password
-              <input
+              </Field>
+            </div>
+            <Field
+              label="Email"
+              hint={
+                upgradeSessionState === "ready"
+                  ? LOCKED_EMAIL_READY
+                  : LOCKED_EMAIL_PENDING
+              }
+            >
+              <TextInput value={registrationEmail} type="email" readOnly />
+            </Field>
+            <Field label="Password" hint="Use at least 8 characters.">
+              <TextInput
                 value={form.password}
                 onChange={(event) => setField("password", event.target.value)}
                 type="password"
+                autoComplete="new-password"
                 minLength={8}
                 required
               />
-            </label>
-            <label>
-              Confirm password
-              <input
+            </Field>
+            <Field label="Confirm password">
+              <TextInput
                 value={form.passwordConfirm}
                 onChange={(event) =>
                   setField("passwordConfirm", event.target.value)
                 }
                 type="password"
+                autoComplete="new-password"
                 minLength={8}
                 required
               />
-            </label>
+            </Field>
           </>
         ) : (
-          <label>
-            Verification code
-            <input
+          <Field label="Verification code">
+            <TextInput
+              className="rv-input--code"
               value={form.code}
               onChange={(event) => setField("code", event.target.value)}
               inputMode="numeric"
+              autoComplete="one-time-code"
+              maxLength={6}
               required
             />
-          </label>
+          </Field>
         )}
-        <AppButton
+
+        <Button
           type="submit"
+          variant="primary"
+          size="lg"
+          block
+          busy={loading}
           disabled={loading || authLoading || !upgradeReady}
         >
           {upgradeSessionState === "loading"
@@ -274,8 +274,9 @@ function TemporaryUpgradeSignupContent({ searchParams, next }) {
               : step === "details"
                 ? "Send verification code"
                 : "Verify and continue"}
-        </AppButton>
-        <p>
+        </Button>
+
+        <p className="rv-auth__footnote">
           Prefer email verification?{" "}
           <Link href={`/login?next=${encodeURIComponent(next)}`}>
             Continue with email
@@ -296,7 +297,7 @@ function SignupContent() {
 
   return (
     <>
-      <AppHeader />
+      <AppHeader pageTitle="Upgrade account" />
       <TemporaryUpgradeSignupContent searchParams={searchParams} next={next} />
     </>
   );
@@ -308,7 +309,9 @@ export default function Signup() {
       fallback={
         <>
           <AppHeader />
-          <main>Loading...</main>
+          <main id="main" className="rv-page rv-page--form rv-page--centered">
+            <LoadingState message="Loading…" />
+          </main>
         </>
       }
     >

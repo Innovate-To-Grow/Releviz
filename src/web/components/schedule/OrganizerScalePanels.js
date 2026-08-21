@@ -9,7 +9,11 @@ import {
   useRef,
   useState,
 } from "react";
-import AppButton from "@/components/ui/AppButton";
+import Button from "@/components/ui/Button";
+import Icon from "@/components/ui/Icon";
+import { Badge, Callout, EmptyState, Stat } from "@/components/ui/Feedback";
+import { Field, TextInput } from "@/components/ui/Form";
+import { Card, SectionHeader } from "@/components/ui/Surface";
 import CreateEventClient from "@/components/event/CreateEventClient";
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
 import {
@@ -23,6 +27,19 @@ import {
   updateEventLifecycle,
 } from "@/lib/api/events";
 
+const LIFECYCLE_TONE = {
+  active: "success",
+  closed: "warning",
+  finalized: "accent",
+  archived: "neutral",
+};
+
+function operationLabel(operation) {
+  if (!operation) return "Email delivery";
+  const words = String(operation).replaceAll("_", " ");
+  return `${words.charAt(0).toUpperCase()}${words.slice(1)} delivery`;
+}
+
 function deliveryFrom(request) {
   return request?.delivery || request?.summary || {};
 }
@@ -35,6 +52,30 @@ function deliveryWaiting(delivery) {
   );
 }
 
+function peopleCount(total) {
+  const value = Number(total || 0);
+  return `${value} ${value === 1 ? "person" : "people"}`;
+}
+
+function percent(value) {
+  return `${(Number(value || 0) * 100).toFixed(0)}%`;
+}
+
+function channelLabel(channel) {
+  return channel === "virtual" ? "Virtual" : "In person";
+}
+
+function formatWindow(startsAt, endsAt, timezone) {
+  if (!startsAt || !endsAt) return "";
+  return `${new Date(startsAt).toLocaleString([], {
+    timeZone: timezone,
+  })} – ${new Date(endsAt).toLocaleString([], { timeZone: timezone })}`;
+}
+
+/**
+ * Live progress for a queued email batch. Email delivery is asynchronous, so
+ * the organizer sees the queue drain instead of a fire-and-forget toast.
+ */
 export function DeliveryRequestProgress({
   initialRequest,
   getToken,
@@ -71,6 +112,8 @@ export function DeliveryRequestProgress({
   const delivery = deliveryFrom(request);
   const waiting = deliveryWaiting(delivery);
   const failed = Number(delivery.permanentFailure || 0);
+  const total =
+    delivery.total ?? delivery.recipientTotal ?? request.recipientCount ?? 0;
 
   const retry = async () => {
     setRetrying(true);
@@ -89,51 +132,68 @@ export function DeliveryRequestProgress({
   };
 
   return (
-    <div aria-label={ariaLabel}>
-      <div>
-        <strong>
-          {request.operation
-            ? `${request.operation} delivery`
-            : "Email delivery"}
-        </strong>
-        <span>
+    <div aria-label={ariaLabel} className="rv-delivery">
+      <div className="rv-split">
+        <p className="rv-cluster rv-cluster--sm">
+          <Icon name="mail" className="rv-meta__icon" />
+          <strong>{operationLabel(request.operation)}</strong>
+        </p>
+        <Badge
+          dot
+          tone={waiting > 0 ? "accent" : failed > 0 ? "danger" : "success"}
+        >
           {waiting > 0
             ? "In progress"
             : failed > 0
               ? "Needs attention"
               : "Complete"}
-        </span>
+        </Badge>
       </div>
-      <div>
-        <span>
-          {delivery.total ??
-            delivery.recipientTotal ??
-            request.recipientCount ??
-            0}{" "}
-          total
+      <div className="rv-delivery__counts">
+        <span className="rv-delivery__count">
+          <strong>{total}</strong> total
         </span>
-        <span>{delivery.sent || 0} sent</span>
-        <span>{waiting} queued</span>
-        <span>{failed} failed</span>
+        <span className="rv-delivery__count">
+          <strong>{delivery.sent || 0}</strong> sent
+        </span>
+        <span className="rv-delivery__count">
+          <strong>{waiting}</strong> queued
+        </span>
+        <span className="rv-delivery__count">
+          <strong>{failed}</strong> failed
+        </span>
         {Number(delivery.canceled || 0) > 0 && (
-          <span>{delivery.canceled} canceled</span>
+          <span className="rv-delivery__count">
+            <strong>{delivery.canceled}</strong> canceled
+          </span>
         )}
       </div>
-      <div>
-        <AppButton onClick={load} disabled={retrying}>
+      <div className="rv-btn-row">
+        <Button size="sm" icon="refresh" onClick={load} disabled={retrying}>
           Refresh progress
-        </AppButton>
+        </Button>
         {failed > 0 && (
-          <AppButton onClick={retry} disabled={retrying}>
+          <Button
+            size="sm"
+            variant="subtle"
+            onClick={retry}
+            disabled={retrying}
+            busy={retrying}
+          >
             {retrying ? "Retrying…" : "Retry failed recipients"}
-          </AppButton>
+          </Button>
         )}
       </div>
-      {error && <p role="alert">{error}</p>}
+      {error && (
+        <Callout tone="danger" role="alert" bare>
+          {error}
+        </Callout>
+      )}
     </div>
   );
 }
 
+/** Lifecycle actions for the event: reminders, close, reactivate, archive. */
 export function EventControls({
   event,
   setEvent,
@@ -228,54 +288,73 @@ export function EventControls({
   };
 
   return (
-    <section aria-labelledby="organizer-lifecycle-title">
-      <div>
-        <span>{event.status || "unknown"}</span>
-        <h3 id="organizer-lifecycle-title">Event controls</h3>
+    <section
+      aria-labelledby="organizer-lifecycle-title"
+      className="rv-stack rv-stack--sm"
+    >
+      <h3 id="organizer-lifecycle-title" className="rv-visually-hidden">
+        Event controls
+      </h3>
+
+      <div className="rv-cluster rv-cluster--sm rv-cluster--end">
+        <Badge tone={LIFECYCLE_TONE[event.status] || "neutral"} dot>
+          {String(event.status || "unknown").replace(/^./, (character) =>
+            character.toUpperCase(),
+          )}
+        </Badge>
       </div>
 
-      <div>
+      <div className="rv-btn-row rv-btn-row--end">
         {event.status === "active" && (
           <>
-            <AppButton onClick={remind} disabled={changing}>
+            <Button size="sm" icon="mail" onClick={remind} disabled={changing}>
               Queue reminders
-            </AppButton>
-            <AppButton
+            </Button>
+            <Button
+              size="sm"
               onClick={() => changeLifecycle("closed")}
               disabled={changing}
             >
               Close responses
-            </AppButton>
+            </Button>
           </>
         )}
         {["closed", "finalized", "archived"].includes(event.status) && (
-          <AppButton
+          <Button
+            size="sm"
+            variant="subtle"
             onClick={() => changeLifecycle("active")}
             disabled={changing}
           >
             Reactivate event
-          </AppButton>
+          </Button>
         )}
         {["active", "closed", "finalized"].includes(event.status) && (
-          <AppButton
+          <Button
+            size="sm"
             onClick={() => changeLifecycle("archived")}
             disabled={changing}
           >
             Archive event
-          </AppButton>
+          </Button>
         )}
       </div>
 
-      {(status || error) && (
-        <div>
-          {status && <p role="status">{status}</p>}
-          {error && <p role="alert">{error}</p>}
-        </div>
+      {status && (
+        <Callout tone="success" role="status" bare>
+          {status}
+        </Callout>
+      )}
+      {error && (
+        <Callout tone="danger" role="alert" bare>
+          {error}
+        </Callout>
       )}
     </section>
   );
 }
 
+/** Event summary plus in-place editing without leaving the workspace. */
 export function OverviewPanel({ event, onEventSaved }) {
   const [editing, setEditing] = useState(false);
   const [editingEvent, setEditingEvent] = useState(null);
@@ -319,65 +398,75 @@ export function OverviewPanel({ event, onEventSaved }) {
   };
 
   return (
-    <section ref={panelRef}>
-      <header>
-        <div>
-          <h3 id="organizer-overview-heading">Overview</h3>
-          <p>Review the event schedule and response settings.</p>
-        </div>
-        {editLocked ? (
-          <AppButton disabled title={editLockReason}>
-            Edit event
-          </AppButton>
-        ) : (
-          <AppButton
-            onClick={openEditor}
-            disabled={editing}
-            aria-expanded={editing}
-            aria-controls="organizer-inline-event-editor"
-          >
-            Edit event
-          </AppButton>
-        )}
-      </header>
-      <div>
-        <EventDetailsGrid
-          event={event}
-          variant="organizer"
-          extraCards={[
-            {
-              label: "Access",
-              value:
-                event.accessMode === "open_link"
-                  ? "Anyone with code"
-                  : "Invite only",
-            },
-            {
-              label: "Meeting duration",
-              value: `${event.meetingDurationMinutes || event.slotMinutes || 30} minutes`,
-            },
-            { label: "Result revision", value: event.resultsRevision ?? 1 },
-          ]}
-        />
-      </div>
-      {saveStatus && <p role="status">{saveStatus}</p>}
+    <Card as="section" ref={panelRef}>
+      <SectionHeader
+        as="h3"
+        titleId="organizer-overview-heading"
+        title="Overview"
+        description="Review the event schedule and response settings."
+        actions={
+          editLocked ? (
+            <Button size="sm" icon="sliders" disabled title={editLockReason}>
+              Edit event
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              icon="sliders"
+              onClick={openEditor}
+              disabled={editing}
+              aria-expanded={editing}
+              aria-controls="organizer-inline-event-editor"
+            >
+              Edit event
+            </Button>
+          )
+        }
+      />
+
+      <EventDetailsGrid
+        event={event}
+        variant="organizer"
+        extraCards={[
+          {
+            label: "Access",
+            value:
+              event.accessMode === "open_link"
+                ? "Anyone with code"
+                : "Invite only",
+          },
+          {
+            label: "Meeting duration",
+            value: `${event.meetingDurationMinutes || event.slotMinutes || 30} minutes`,
+          },
+          { label: "Result revision", value: event.resultsRevision ?? 1 },
+        ]}
+      />
+
+      {saveStatus && (
+        <Callout tone="success" role="status" bare>
+          {saveStatus}
+        </Callout>
+      )}
+
       {editing && editingEvent && (
         <div
           id="organizer-inline-event-editor"
           role="region"
           aria-labelledby="organizer-inline-event-editor-heading"
+          className="rv-inline-editor"
         >
-          <header>
-            <div>
-              <h4
-                id="organizer-inline-event-editor-heading"
-                ref={editorHeadingRef}
-                tabIndex={-1}
-              >
-                Edit event
-              </h4>
-              <p>Update this event without leaving the workspace.</p>
-            </div>
+          <header className="rv-stack rv-stack--xs">
+            <h4
+              id="organizer-inline-event-editor-heading"
+              ref={editorHeadingRef}
+              tabIndex={-1}
+            >
+              Edit event
+            </h4>
+            <p className="rv-field__hint">
+              Update this event without leaving the workspace.
+            </p>
           </header>
           <CreateEventClient
             operation="edit"
@@ -388,7 +477,7 @@ export function OverviewPanel({ event, onEventSaved }) {
           />
         </div>
       )}
-    </section>
+    </Card>
   );
 }
 
@@ -423,6 +512,38 @@ function recommendationSelectionKey(recommendation) {
   );
 }
 
+function normalizeRecommendation(recommendation, index, timezone) {
+  const startsAt =
+    recommendation.suggestedStartsAt || recommendation.startsAt || null;
+  const endsAt =
+    recommendation.suggestedEndsAt || recommendation.endsAt || null;
+  return {
+    raw: recommendation,
+    key: recommendationKey(recommendation, index),
+    rank: recommendation.rank || index + 1,
+    startsAt,
+    endsAt,
+    window: formatWindow(startsAt, endsAt, timezone),
+    label:
+      recommendation.label ||
+      (startsAt
+        ? new Date(startsAt).toLocaleString([], { timeZone: timezone })
+        : "Candidate window"),
+    channel: recommendation.channel,
+    weighted:
+      recommendation.weightedAvailability ?? recommendation.weightedScore ?? 0,
+    unweighted:
+      recommendation.unweightedAvailability ??
+      recommendation.unweightedScore ??
+      0,
+    fullyAvailable: recommendation.fullyAvailableParticipantTotal || 0,
+  };
+}
+
+/**
+ * Versioned result snapshot. Recommendations are ranked; the strongest one is
+ * presented as a decision, and the rest as a compact comparison list.
+ */
 export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
   {
     event,
@@ -513,132 +634,198 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
   }, [documentVisible, load, sectionVisible, snapshot.status]);
 
   const results = snapshot.results || {};
-  const recommendations = (results.recommendations || []).slice(0, 10);
+  const recommendations = (results.recommendations || [])
+    .slice(0, 10)
+    .map((recommendation, index) =>
+      normalizeRecommendation(recommendation, index, event.timezone),
+    );
+  const [topPick, ...runnersUp] = recommendations;
+  const isSelected = (recommendation) =>
+    selectedRecommendationKey ===
+    recommendationSelectionKey(recommendation.raw);
 
   return (
-    <section ref={sectionRef}>
-      <div>
-        <div>
-          <h3 ref={headingRef} id="organizer-results-heading" tabIndex={-1}>
-            Results
-          </h3>
-          <p>
-            Top continuous windows for a{" "}
-            {event.meetingDurationMinutes || event.slotMinutes}-minute meeting.
-          </p>
-        </div>
-        <AppButton onClick={() => load()} disabled={loading}>
-          Refresh results
-        </AppButton>
-      </div>
+    <Card as="section" ref={sectionRef}>
+      <SectionHeader
+        as="h3"
+        titleId="organizer-results-heading"
+        titleRef={headingRef}
+        title="Results"
+        description={`Top continuous windows for a ${
+          event.meetingDurationMinutes || event.slotMinutes
+        }-minute meeting.`}
+        actions={
+          <Button
+            size="sm"
+            icon="refresh"
+            onClick={() => load()}
+            disabled={loading}
+          >
+            Refresh results
+          </Button>
+        }
+      />
 
       {snapshot.status === "refreshing" && (
-        <p role="status">
+        <Callout tone="info" role="status" icon="refresh">
           Results are updating for revision{" "}
           {snapshot.requestedRevision ?? event.resultsRevision ?? "latest"}.
           {snapshot.results
             ? " Showing the last successful snapshot meanwhile."
             : ""}
-        </p>
+        </Callout>
       )}
       {snapshot.status === "failed" && (
-        <p role="alert">
+        <Callout tone="danger" role="alert">
           Result calculation failed. The worker will retry; the last successful
           snapshot remains visible.
-        </p>
+        </Callout>
       )}
       {snapshot.status === "fresh" && (
-        <p role="status">
+        <Callout tone="success" role="status" bare>
           Results are current at revision{" "}
           {snapshot.computedRevision ?? "latest"}
           {snapshot.generatedAt
             ? ` · generated ${new Date(snapshot.generatedAt).toLocaleString()}`
             : ""}
           .
-        </p>
+        </Callout>
       )}
 
-      {recommendations.length > 0 ? (
-        <ol>
-          {recommendations.map((recommendation, index) => {
-            const key = recommendationKey(recommendation, index);
-            const selected =
-              selectedRecommendationKey ===
-              recommendationSelectionKey(recommendation);
-            const weighted =
-              recommendation.weightedAvailability ??
-              recommendation.weightedScore ??
-              0;
-            const unweighted =
-              recommendation.unweightedAvailability ??
-              recommendation.unweightedScore ??
-              0;
-            const startsAt =
-              recommendation.suggestedStartsAt || recommendation.startsAt;
-            const endsAt =
-              recommendation.suggestedEndsAt || recommendation.endsAt;
-            return (
-              <li key={key}>
-                <div>
-                  <div>
-                    <span>#{recommendation.rank || index + 1}</span>
-                    <strong>
-                      {recommendation.label ||
-                        (startsAt
-                          ? new Date(startsAt).toLocaleString([], {
-                              timeZone: event.timezone,
-                            })
-                          : "Candidate window")}
-                    </strong>
-                  </div>
-                  <p>
-                    <span>
-                      {recommendation.channel === "virtual"
-                        ? "Virtual"
-                        : "In person"}
-                    </span>{" "}
-                    · <span>{(weighted * 100).toFixed(0)}% weighted</span> ·{" "}
-                    <span>{(unweighted * 100).toFixed(0)}% unweighted</span> ·{" "}
-                    <span>
-                      {recommendation.fullyAvailableParticipantTotal || 0} fully
-                      available
+      {topPick ? (
+        <>
+          <div className="rv-top-pick">
+            <div className="rv-cluster rv-cluster--sm">
+              <Badge tone="accent" icon="sparkle">
+                Best overlap
+              </Badge>
+              <Badge
+                tone="outline"
+                icon={topPick.channel === "virtual" ? "video" : "mapPin"}
+              >
+                {channelLabel(topPick.channel)}
+              </Badge>
+            </div>
+            <div className="rv-stack rv-stack--xs">
+              <p className="rv-top-pick__when">{topPick.label}</p>
+              {topPick.window && (
+                <p className="rv-field__hint">{topPick.window}</p>
+              )}
+            </div>
+            <div className="rv-top-pick__stats">
+              <Stat
+                tone="accent"
+                label="Weighted"
+                value={percent(topPick.weighted)}
+                hint="Counts group Weight"
+              />
+              <Stat
+                label="Unweighted"
+                value={percent(topPick.unweighted)}
+                hint="Everyone counted equally"
+              />
+              <Stat
+                label="Fully available"
+                value={peopleCount(topPick.fullyAvailable)}
+                hint="Free for the whole window"
+              />
+              <Stat
+                label="Missing responses"
+                value={peopleCount(results.unansweredParticipantTotal)}
+                hint={`${results.excludedParticipantTotal ?? 0} excluded`}
+              />
+            </div>
+            <div className="rv-btn-row">
+              <Button
+                variant="primary"
+                icon={isSelected(topPick) ? "check" : "arrowRight"}
+                aria-pressed={isSelected(topPick)}
+                onClick={() => onChoose(topPick.raw)}
+              >
+                {isSelected(topPick) ? "Selected time" : "Choose this time"}
+              </Button>
+            </div>
+          </div>
+
+          {runnersUp.length > 0 && (
+            <div className="rv-stack rv-stack--sm">
+              <h4 className="rv-field__label">Other strong options</h4>
+              <ol className="rv-rank-list">
+                {runnersUp.map((recommendation) => (
+                  <li
+                    key={recommendation.key}
+                    className={`rv-rank${isSelected(recommendation) ? " rv-rank--selected" : ""}`}
+                  >
+                    <span className="rv-rank__index" aria-hidden="true">
+                      {recommendation.rank}
                     </span>
-                  </p>
-                  {startsAt && endsAt && (
-                    <small>
-                      {new Date(startsAt).toLocaleString([], {
-                        timeZone: event.timezone,
-                      })}{" "}
-                      –{" "}
-                      {new Date(endsAt).toLocaleString([], {
-                        timeZone: event.timezone,
-                      })}
-                    </small>
-                  )}
-                </div>
-                <AppButton
-                  aria-pressed={selected}
-                  onClick={() => onChoose(recommendation)}
-                >
-                  {selected ? "Selected time" : "Choose this time"}
-                </AppButton>
-              </li>
-            );
-          })}
-        </ol>
+                    <div className="rv-rank__body">
+                      <span className="rv-rank__when">
+                        <span className="rv-visually-hidden">
+                          Rank {recommendation.rank}:{" "}
+                        </span>
+                        {recommendation.label}
+                      </span>
+                      <span className="rv-meta">
+                        <span className="rv-meta__item">
+                          {channelLabel(recommendation.channel)}
+                        </span>
+                        <span className="rv-meta__item">
+                          {percent(recommendation.weighted)} weighted
+                        </span>
+                        <span className="rv-meta__item">
+                          {percent(recommendation.unweighted)} unweighted
+                        </span>
+                        <span className="rv-meta__item">
+                          {recommendation.fullyAvailable} fully available
+                        </span>
+                      </span>
+                      {recommendation.window && (
+                        <span className="rv-field__hint">
+                          {recommendation.window}
+                        </span>
+                      )}
+                    </div>
+                    <Button
+                      className="rv-rank__action"
+                      size="sm"
+                      variant={
+                        isSelected(recommendation) ? "primary" : "secondary"
+                      }
+                      aria-pressed={isSelected(recommendation)}
+                      onClick={() => onChoose(recommendation.raw)}
+                    >
+                      {isSelected(recommendation)
+                        ? "Selected time"
+                        : "Choose this time"}
+                    </Button>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
+        </>
       ) : loading || snapshot.status === "refreshing" ? (
-        <div>
-          <h4>Calculating the best options</h4>
-          <p>Recommendations will appear here as responses arrive.</p>
-        </div>
+        <EmptyState
+          icon="clock"
+          headingLevel={4}
+          title="Calculating the best options"
+          description="Recommendations will appear here as responses arrive."
+        />
       ) : (
-        <div>
-          <h4>No recommendation yet</h4>
-          <p>No valid meeting window is available yet.</p>
-        </div>
+        <EmptyState
+          icon="search"
+          headingLevel={4}
+          title="No recommendation yet"
+          description="No valid meeting window is available yet."
+        />
       )}
-      {error && <p role="alert">{error}</p>}
-    </section>
+      {error && (
+        <Callout tone="danger" role="alert">
+          {error}
+        </Callout>
+      )}
+    </Card>
   );
 });
 
@@ -761,114 +948,116 @@ function FinalizeScalePanelContent({
   const meeting = event.finalMeeting;
   const canFinalize = ["active", "closed"].includes(event.status);
   return (
-    <div>
-      <section>
-        <header>
-          <div>
-            <h3 ref={headingRef} id="organizer-finalize-heading" tabIndex={-1}>
-              Finalize
-            </h3>
-            <p>
-              Confirm one ranked, continuous window and send an iCalendar update
-              to invited people.
-            </p>
-          </div>
-        </header>
+    <div className="rv-stack rv-stack--md">
+      <Card as="section">
+        <SectionHeader
+          as="h3"
+          titleId="organizer-finalize-heading"
+          titleRef={headingRef}
+          title="Finalize"
+          description="Confirm one ranked, continuous window and send an iCalendar update to invited people."
+        />
+
         {["finalized", "archived"].includes(event.status) &&
         meeting &&
         meeting.active !== false ? (
-          <div>
-            <div>
-              <strong>
-                {new Date(meeting.startsAt).toLocaleString([], {
-                  timeZone: event.timezone,
-                })}{" "}
-                –{" "}
-                {new Date(meeting.endsAt).toLocaleString([], {
-                  timeZone: event.timezone,
-                })}
-              </strong>
-              <span>
-                {meeting.channel === "virtual" ? "Virtual" : "In person"} ·{" "}
-                {meeting.location || "Location TBD"}
-              </span>
-            </div>
-            <div>
-              <AppButton onClick={download} disabled={downloading}>
+          <div className="rv-top-pick">
+            <Badge tone="success" icon="checkCircle">
+              Meeting confirmed
+            </Badge>
+            <p className="rv-top-pick__when">
+              {formatWindow(meeting.startsAt, meeting.endsAt, event.timezone)}
+            </p>
+            <p className="rv-field__hint">
+              {channelLabel(meeting.channel)} ·{" "}
+              {meeting.location || "Location TBD"}
+            </p>
+            <div className="rv-btn-row">
+              <Button
+                icon="download"
+                onClick={download}
+                disabled={downloading}
+                busy={downloading}
+              >
                 {downloading ? "Preparing…" : "Download calendar (.ics)"}
-              </AppButton>
+              </Button>
             </div>
           </div>
         ) : recommendation ? (
-          <div>
-            <div>
-              <div>
-                <strong>{recommendation.label || "Selected candidate"}</strong>
-                <span>
-                  {recommendation.channel === "virtual"
-                    ? "Virtual"
-                    : "In person"}
-                </span>
+          <div className="rv-stack rv-stack--md">
+            <div className="rv-top-pick">
+              <div className="rv-cluster rv-cluster--sm">
+                <Badge tone="accent">Selected candidate</Badge>
+                <Badge tone="outline">
+                  {channelLabel(recommendation.channel)}
+                </Badge>
               </div>
-              <p>
-                {new Date(payload.startsAt).toLocaleString([], {
-                  timeZone: event.timezone,
-                })}{" "}
-                –{" "}
-                {new Date(payload.endsAt).toLocaleString([], {
-                  timeZone: event.timezone,
-                })}
+              <p className="rv-top-pick__when">
+                {recommendation.label || "Selected candidate"}
+              </p>
+              <p className="rv-field__hint">
+                {formatWindow(payload.startsAt, payload.endsAt, event.timezone)}
               </p>
             </div>
-            <div>
-              <label>
-                <strong>Location or meeting link</strong>
-                <input
-                  value={location}
-                  maxLength={500}
-                  onChange={(changeEvent) => {
-                    setLocation(changeEvent.target.value);
-                    setReview(null);
-                  }}
-                />
-              </label>
-              <div>
-                <AppButton onClick={onBrowseResults}>
-                  Choose a different result
-                </AppButton>
-                <AppButton
-                  onClick={preview}
-                  disabled={!canFinalize || reviewing || confirming}
-                >
-                  {reviewing ? "Reviewing…" : "Review attendance"}
-                </AppButton>
-                <AppButton
-                  onClick={confirm}
-                  disabled={!canFinalize || !review || reviewing || confirming}
-                >
-                  {confirming ? "Finalizing…" : "Finalize meeting"}
-                </AppButton>
-              </div>
-              {!canFinalize && (
-                <p role="note">
-                  Reactivate this event before reviewing and finalizing a
-                  meeting time.
-                </p>
-              )}
+
+            <Field
+              label="Location or meeting link"
+              hint="Included in the calendar invitation sent to every attendee."
+            >
+              <TextInput
+                value={location}
+                maxLength={500}
+                onChange={(changeEvent) => {
+                  setLocation(changeEvent.target.value);
+                  setReview(null);
+                }}
+              />
+            </Field>
+
+            <div className="rv-btn-row">
+              <Button variant="ghost" onClick={onBrowseResults}>
+                Choose a different result
+              </Button>
+              <Button
+                onClick={preview}
+                disabled={!canFinalize || reviewing || confirming}
+                busy={reviewing}
+              >
+                {reviewing ? "Reviewing…" : "Review attendance"}
+              </Button>
+              <Button
+                variant="primary"
+                icon="checkCircle"
+                onClick={confirm}
+                disabled={!canFinalize || !review || reviewing || confirming}
+                busy={confirming}
+              >
+                {confirming ? "Finalizing…" : "Finalize meeting"}
+              </Button>
             </div>
+            {!canFinalize && (
+              <Callout tone="warning" role="note">
+                Reactivate this event before reviewing and finalizing a meeting
+                time.
+              </Callout>
+            )}
           </div>
         ) : (
-          <div>
-            <h4>No time selected yet</h4>
-            <p>Choose a recommended window before finalizing.</p>
-            <div>
-              <AppButton onClick={onBrowseResults}>Browse results</AppButton>
-            </div>
-          </div>
+          <EmptyState
+            icon="calendar"
+            headingLevel={4}
+            title="No time selected yet"
+            description="Choose a recommended window before finalizing."
+            action={
+              <Button variant="subtle" onClick={onBrowseResults}>
+                Browse results
+              </Button>
+            }
+          />
         )}
 
         {review && (
-          <div aria-label="Attendance review">
+          <div aria-label="Attendance review" className="rv-top-pick__stats">
             {[
               ["Available", review.availableParticipantTotal],
               ["Partial", review.partialParticipantTotal],
@@ -876,16 +1065,21 @@ function FinalizeScalePanelContent({
               ["Unanswered", review.unansweredParticipantTotal],
               ["Excluded", review.excludedParticipantTotal],
             ].map(([label, value]) => (
-              <div key={label}>
-                <span>{label}</span>
-                <strong>{value || 0}</strong>
-              </div>
+              <Stat key={label} label={label} value={value || 0} />
             ))}
           </div>
         )}
-        {status && <p role="status">{status}</p>}
-        {error && <p role="alert">{error}</p>}
-      </section>
+        {status && (
+          <Callout tone="success" role="status" bare>
+            {status}
+          </Callout>
+        )}
+        {error && (
+          <Callout tone="danger" role="alert" bare>
+            {error}
+          </Callout>
+        )}
+      </Card>
       <DeliveryRequestProgress
         key={deliveryRequest?.id || "no-delivery"}
         initialRequest={deliveryRequest}

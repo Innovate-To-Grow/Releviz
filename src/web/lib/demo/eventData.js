@@ -8,19 +8,40 @@ export const DEMO_ORGANIZER = Object.freeze({
   email: "jordan.lee@example.test",
 });
 
+const DEMO_DAY_LABELS = {
+  "2026-08-24": "Mon, Aug 24",
+  "2026-08-25": "Tue, Aug 25",
+  "2026-08-26": "Wed, Aug 26",
+};
+
+// Mirrors the backend slot-group payload: a local wall-clock window per slot
+// plus the absolute instants, so the preview exercises the real grid code.
 function slotsForDay(date, startIndex) {
   return Array.from({ length: 6 }, (_, offset) => {
-    const hour = 16 + Math.floor(offset / 2);
-    const minute = offset % 2 === 0 ? "00" : "30";
-    const endOffset = offset + 1;
-    const endHour = 16 + Math.floor(endOffset / 2);
-    const endMinute = endOffset % 2 === 0 ? "00" : "30";
+    const localHour = 9 + Math.floor(offset / 2);
+    const localMinute = offset % 2 === 0 ? "00" : "30";
+    const endLocalHour = 9 + Math.floor((offset + 1) / 2);
+    const endLocalMinute = (offset + 1) % 2 === 0 ? "00" : "30";
+    const utcHour = 16 + Math.floor(offset / 2);
+    const utcEndHour = 16 + Math.floor((offset + 1) / 2);
     return {
       index: startIndex + offset,
-      startsAt: `${date}T${String(hour).padStart(2, "0")}:${minute}:00Z`,
-      endsAt: `${date}T${String(endHour).padStart(2, "0")}:${endMinute}:00Z`,
+      localStart: `${String(localHour).padStart(2, "0")}:${localMinute}`,
+      localEnd: `${String(endLocalHour).padStart(2, "0")}:${endLocalMinute}`,
+      startDayOffset: 0,
+      endDayOffset: 0,
+      startsAt: `${date}T${String(utcHour).padStart(2, "0")}:${localMinute}:00Z`,
+      endsAt: `${date}T${String(utcEndHour).padStart(2, "0")}:${endLocalMinute}:00Z`,
     };
   });
+}
+
+function slotGroup(date, startIndex) {
+  return {
+    key: date,
+    label: DEMO_DAY_LABELS[date],
+    slots: slotsForDay(date, startIndex),
+  };
 }
 
 export const DEMO_EVENT = Object.freeze({
@@ -48,9 +69,9 @@ export const DEMO_EVENT = Object.freeze({
   remindersEnabled: true,
   reminderHoursBefore: 24,
   slotGroups: [
-    { key: "2026-08-24", slots: slotsForDay("2026-08-24", 0) },
-    { key: "2026-08-25", slots: slotsForDay("2026-08-25", 6) },
-    { key: "2026-08-26", slots: slotsForDay("2026-08-26", 12) },
+    slotGroup("2026-08-24", 0),
+    slotGroup("2026-08-25", 6),
+    slotGroup("2026-08-26", 12),
   ],
 });
 

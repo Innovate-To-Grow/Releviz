@@ -1,8 +1,14 @@
 "use client";
 
-import { useId, useRef, useState } from "react";
-import AppButton from "@/components/ui/AppButton";
+import { useId, useState } from "react";
+import Button from "@/components/ui/Button";
+import Tabs, { TabPanel } from "@/components/ui/Tabs";
 import ScheduleGrid from "@/components/schedule/ScheduleGrid";
+
+const CHANNEL_TABS = [
+  { id: "inperson", label: "In person" },
+  { id: "virtual", label: "Virtual" },
+];
 
 function schedulesMatch(first = [], second = []) {
   return (
@@ -15,6 +21,11 @@ function hasAvailability(schedule = []) {
   return schedule.some((value) => Number(value) > 0);
 }
 
+/**
+ * Availability editor for one or both meeting channels. In mixed mode the two
+ * channels are separate tab panels, and copying between them asks first when
+ * the target already has answers.
+ */
 export default function ScheduleChannelEditor({
   mode,
   slotGroups,
@@ -31,7 +42,6 @@ export default function ScheduleChannelEditor({
   );
   const [pendingCopy, setPendingCopy] = useState(null);
   const tabsId = useId();
-  const tabRefs = useRef({});
 
   const schedules = { inperson, virtual };
   const channel = mode === "mixed" ? activeChannel : mode;
@@ -56,73 +66,39 @@ export default function ScheduleChannelEditor({
     copySchedule(channel, otherChannel);
   };
 
-  const selectChannel = (nextChannel, { focus = false } = {}) => {
-    setActiveChannel(nextChannel);
-    setPendingCopy(null);
-    if (focus) tabRefs.current[nextChannel]?.focus();
-  };
-
-  const handleTabKeyDown = (event) => {
-    const channels = ["inperson", "virtual"];
-    const currentIndex = channels.indexOf(activeChannel);
-    let nextIndex;
-    if (event.key === "ArrowRight" || event.key === "ArrowDown") {
-      nextIndex = (currentIndex + 1) % channels.length;
-    } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
-      nextIndex = (currentIndex - 1 + channels.length) % channels.length;
-    } else if (event.key === "Home") {
-      nextIndex = 0;
-    } else if (event.key === "End") {
-      nextIndex = channels.length - 1;
-    } else {
-      return;
-    }
-    event.preventDefault();
-    selectChannel(channels[nextIndex], { focus: true });
-  };
+  const grid = (
+    <ScheduleGrid
+      schedule={schedule}
+      slotGroups={slotGroups}
+      readOnly={readOnly}
+      showValues={showValues}
+      onCellPaint={channel === "virtual" ? onVirtualPaint : onInpersonPaint}
+      label={mode === "mixed" ? channelLabel : undefined}
+    />
+  );
 
   return (
-    <div>
+    <div className="rv-stack rv-stack--md">
       {mode === "mixed" && (
-        <div>
-          <div role="tablist" aria-label="Schedule channel">
-            <button
-              type="button"
-              role="tab"
-              id={`${tabsId}-inperson-tab`}
-              aria-controls={`${tabsId}-inperson-panel`}
-              aria-selected={activeChannel === "inperson"}
-              tabIndex={activeChannel === "inperson" ? 0 : -1}
-              ref={(node) => {
-                tabRefs.current.inperson = node;
-              }}
-              onClick={() => selectChannel("inperson")}
-              onKeyDown={handleTabKeyDown}
-            >
-              In person
-            </button>
-            <button
-              type="button"
-              role="tab"
-              id={`${tabsId}-virtual-tab`}
-              aria-controls={`${tabsId}-virtual-panel`}
-              aria-selected={activeChannel === "virtual"}
-              tabIndex={activeChannel === "virtual" ? 0 : -1}
-              ref={(node) => {
-                tabRefs.current.virtual = node;
-              }}
-              onClick={() => selectChannel("virtual")}
-              onKeyDown={handleTabKeyDown}
-            >
-              Virtual
-            </button>
-          </div>
-          <AppButton
+        <div className="rv-split">
+          <Tabs
+            label="Schedule channel"
+            tabs={CHANNEL_TABS}
+            activeId={activeChannel}
+            idPrefix={tabsId}
+            onChange={(nextChannel) => {
+              setActiveChannel(nextChannel);
+              setPendingCopy(null);
+            }}
+          />
+          <Button
+            size="sm"
+            icon="copy"
             onClick={requestCopy}
             disabled={readOnly || schedulesMatch(schedule, targetSchedule)}
           >
             Copy {channelLabel} to {targetLabel}
-          </AppButton>
+          </Button>
         </div>
       )}
 
@@ -131,45 +107,38 @@ export default function ScheduleChannelEditor({
           role="alertdialog"
           aria-labelledby="schedule-copy-title"
           aria-describedby="schedule-copy-description"
+          className="rv-callout rv-callout--warning"
         >
-          <div>
-            <strong id="schedule-copy-title">
+          <div className="rv-callout__body">
+            <p className="rv-callout__title" id="schedule-copy-title">
               Replace {targetLabel} availability?
-            </strong>
+            </p>
             <p id="schedule-copy-description">
               This copies every {channelLabel} value and replaces the current{" "}
               {targetLabel} schedule.
             </p>
-          </div>
-          <div>
-            <AppButton
-              onClick={() =>
-                copySchedule(pendingCopy.source, pendingCopy.target)
-              }
-            >
-              Replace schedule
-            </AppButton>
-            <AppButton onClick={() => setPendingCopy(null)}>Cancel</AppButton>
+            <div className="rv-btn-row">
+              <Button
+                variant="primary"
+                onClick={() =>
+                  copySchedule(pendingCopy.source, pendingCopy.target)
+                }
+              >
+                Replace schedule
+              </Button>
+              <Button onClick={() => setPendingCopy(null)}>Cancel</Button>
+            </div>
           </div>
         </div>
       )}
 
-      <div
-        role={mode === "mixed" ? "tabpanel" : undefined}
-        id={mode === "mixed" ? `${tabsId}-${channel}-panel` : undefined}
-        aria-labelledby={
-          mode === "mixed" ? `${tabsId}-${channel}-tab` : undefined
-        }
-      >
-        <ScheduleGrid
-          schedule={schedule}
-          slotGroups={slotGroups}
-          readOnly={readOnly}
-          showValues={showValues}
-          onCellPaint={channel === "virtual" ? onVirtualPaint : onInpersonPaint}
-          label={mode === "mixed" ? channelLabel : undefined}
-        />
-      </div>
+      {mode === "mixed" ? (
+        <TabPanel idPrefix={tabsId} id={channel}>
+          {grid}
+        </TabPanel>
+      ) : (
+        grid
+      )}
     </div>
   );
 }

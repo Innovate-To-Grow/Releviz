@@ -9,7 +9,11 @@ import {
   useRef,
   useState,
 } from "react";
-import AppButton from "@/components/ui/AppButton";
+import Button from "@/components/ui/Button";
+import Icon from "@/components/ui/Icon";
+import { Badge, Callout, LoadingState, Stat } from "@/components/ui/Feedback";
+import { Checkbox, Field, Select, TextInput } from "@/components/ui/Form";
+import { Card, SectionHeader } from "@/components/ui/Surface";
 import { ManagedScheduleDrawer } from "@/components/schedule/OrganizerPanels";
 import RosterImportWizard from "@/components/schedule/RosterImportWizard";
 import {
@@ -24,10 +28,23 @@ import {
 } from "@/lib/api/roster";
 
 const GROUP_WEIGHT_PRESETS = [
-  { value: "1", label: "Standard", display: "1×" },
-  { value: "0.5", label: "Half", display: "0.5×" },
+  { value: "1", label: "Full influence", display: "1×" },
+  { value: "0.5", label: "Half influence", display: "0.5×" },
   { value: "0", label: "No influence", display: "0×" },
 ];
+
+// Response state is a solid chip; invitation state is an outline chip prefixed
+// with "Invite", so the two never read as the same signal.
+const INVITATION_TONE = {
+  not_sent: "warning",
+  invited: "outline",
+  opened: "outline",
+  submitted: "outline",
+};
+
+function peopleLabel(count) {
+  return `${count} ${count === 1 ? "person" : "people"}`;
+}
 
 function groupValue(participant) {
   return (
@@ -179,6 +196,7 @@ const RosterPanel = forwardRef(function RosterPanel(
   const [bulkIncluded, setBulkIncluded] = useState(true);
   const [bulkGroup, setBulkGroup] = useState("");
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
   const [selectedGroupKey, setSelectedGroupKey] = useState("");
   const [groupWeightDrafts, setGroupWeightDrafts] = useState({});
   const [groupWeightErrors, setGroupWeightErrors] = useState({});
@@ -852,161 +870,188 @@ const RosterPanel = forwardRef(function RosterPanel(
   };
 
   return (
-    <div>
-      <section>
-        <h3 id="organizer-roster-heading">Roster</h3>
-        <div aria-label="Roster summary">
-          <span>
-            <strong>{stats.total || 0}</strong>{" "}
-            {(stats.total || 0) === 1 ? "person" : "people"}
-          </span>
-          <span>
-            <strong>{stats.submitted || 0}</strong> submitted
-          </span>
-          <span>
-            <strong>{stats.notSubmitted || 0}</strong> awaiting response
-          </span>
+    <div className="rv-stack rv-stack--lg">
+      <Card as="section">
+        <SectionHeader
+          as="h3"
+          titleId="organizer-roster-heading"
+          title="Roster"
+          description="Groups decide how much each set of people counts. People are the individuals you invite."
+          actions={
+            rosterMutable ? (
+              <div
+                className="rv-btn-row"
+                role="group"
+                aria-label="Roster actions"
+              >
+                <Button
+                  id="roster-invite-trigger"
+                  size="sm"
+                  variant="primary"
+                  icon="plus"
+                  onClick={showInvite ? closeInviteForm : showInviteForm}
+                  disabled={inviteBusy}
+                  aria-expanded={showInvite}
+                  aria-controls="roster-invite-form"
+                >
+                  {showInvite ? "Close invite" : "Invite person"}
+                </Button>
+                <Button
+                  size="sm"
+                  icon="upload"
+                  onClick={() => {
+                    const nextShowImport = !showImport;
+                    setShowImport(nextShowImport);
+                    if (nextShowImport) {
+                      closeInviteForm();
+                      setInviteNotice("");
+                    }
+                  }}
+                  disabled={inviteBusy}
+                  aria-expanded={showImport}
+                >
+                  {showImport ? "Hide import" : "Import roster"}
+                </Button>
+              </div>
+            ) : null
+          }
+        />
+
+        <div
+          className="rv-grid rv-grid--3"
+          aria-label="Roster summary"
+          role="group"
+        >
+          <Stat
+            label="On the roster"
+            value={stats.total || 0}
+            hint={(stats.total || 0) === 1 ? "person" : "people"}
+          />
+          <Stat
+            tone="accent"
+            label="Submitted"
+            value={stats.submitted || 0}
+            hint="responses received"
+          />
+          <Stat
+            label="Awaiting response"
+            value={stats.notSubmitted || 0}
+            hint="not submitted yet"
+          />
         </div>
-        {rosterMutable && (
-          <div role="group" aria-label="Roster actions">
-            <AppButton
-              id="roster-invite-trigger"
-              onClick={showInvite ? closeInviteForm : showInviteForm}
-              disabled={inviteBusy}
-              aria-expanded={showInvite}
-              aria-controls="roster-invite-form"
-            >
-              {showInvite ? "Close invite" : "Invite person"}
-            </AppButton>
-            <AppButton
-              onClick={() => {
-                const nextShowImport = !showImport;
-                setShowImport(nextShowImport);
-                if (nextShowImport) {
-                  closeInviteForm();
-                  setInviteNotice("");
-                }
-              }}
-              disabled={inviteBusy}
-              aria-expanded={showImport}
-            >
-              {showImport ? "Hide import" : "Import roster"}
-            </AppButton>
-          </div>
-        )}
 
         {!rosterMutable && (
-          <p role="note">
+          <Callout tone="warning" role="note">
             {event.status === "closed"
               ? "This roster is read-only while responses are closed. Reactivate the event to make changes."
               : "Reactivate this event before changing its roster."}
-          </p>
+          </Callout>
         )}
 
         {inviteNotice && (
-          <p role="status" aria-live="polite">
+          <Callout tone="success" role="status" aria-live="polite">
             {inviteNotice}
-          </p>
+          </Callout>
         )}
 
         {showInvite && rosterMutable && (
           <form
             id="roster-invite-form"
             aria-labelledby="roster-invite-title"
+            className="rv-card rv-card--muted rv-card--compact"
             noValidate
             onSubmit={submitInvitation}
           >
-            <h4 id="roster-invite-title">Invite someone to respond</h4>
-            <p>
-              Add one person and email them a secure link to fill in their
-              availability.
-            </p>
+            <div className="rv-stack rv-stack--xs">
+              <h4 id="roster-invite-title">Invite someone to respond</h4>
+              <p className="rv-field__hint">
+                Add one person and email them a secure link to fill in their
+                availability.
+              </p>
+            </div>
 
-            <label htmlFor="roster-invite-name">Full name</label>
-            <input
-              ref={inviteNameInput}
-              id="roster-invite-name"
-              name="name"
-              type="text"
-              autoComplete="name"
-              maxLength={100}
-              value={inviteName}
-              disabled={inviteBusy}
-              aria-invalid={Boolean(inviteErrors.name)}
-              aria-describedby={
-                inviteErrors.name ? "roster-invite-name-error" : undefined
-              }
-              onChange={(changeEvent) => {
-                setInviteName(changeEvent.target.value);
-                setInviteErrors((current) => ({ ...current, name: "" }));
-                setInviteFormError("");
-                inviteIdempotencyKey.current = "";
-              }}
-              onBlur={() =>
-                setInviteErrors((current) => ({
-                  ...current,
-                  name: fullNameError(inviteName),
-                }))
-              }
-            />
-            {inviteErrors.name && (
-              <span id="roster-invite-name-error" role="alert">
-                {inviteErrors.name}
-              </span>
-            )}
+            <div className="rv-grid rv-grid--pair">
+              <Field
+                label="Full name"
+                id="roster-invite-name"
+                error={inviteErrors.name}
+              >
+                <TextInput
+                  ref={inviteNameInput}
+                  name="name"
+                  type="text"
+                  autoComplete="name"
+                  maxLength={100}
+                  value={inviteName}
+                  disabled={inviteBusy}
+                  onChange={(changeEvent) => {
+                    setInviteName(changeEvent.target.value);
+                    setInviteErrors((current) => ({ ...current, name: "" }));
+                    setInviteFormError("");
+                    inviteIdempotencyKey.current = "";
+                  }}
+                  onBlur={() =>
+                    setInviteErrors((current) => ({
+                      ...current,
+                      name: fullNameError(inviteName),
+                    }))
+                  }
+                />
+              </Field>
 
-            <label htmlFor="roster-invite-email">Email address</label>
-            <input
-              ref={inviteEmailInput}
-              id="roster-invite-email"
-              name="email"
-              type="email"
-              inputMode="email"
-              autoComplete="email"
-              maxLength={254}
-              value={inviteEmail}
-              disabled={inviteBusy}
-              aria-invalid={Boolean(inviteErrors.email)}
-              aria-describedby={
-                inviteErrors.email ? "roster-invite-email-error" : undefined
-              }
-              onChange={(changeEvent) => {
-                setInviteEmail(changeEvent.target.value);
-                setInviteErrors((current) => ({
-                  ...current,
-                  email: "",
-                }));
-                setInviteFormError("");
-                inviteIdempotencyKey.current = "";
-              }}
-              onBlur={() =>
-                setInviteErrors((current) => ({
-                  ...current,
-                  email: emailAddressError(inviteEmail),
-                }))
-              }
-            />
-            {inviteErrors.email && (
-              <span id="roster-invite-email-error" role="alert">
-                {inviteErrors.email}
-              </span>
-            )}
+              <Field
+                label="Email address"
+                id="roster-invite-email"
+                error={inviteErrors.email}
+              >
+                <TextInput
+                  ref={inviteEmailInput}
+                  name="email"
+                  type="email"
+                  inputMode="email"
+                  autoComplete="email"
+                  maxLength={254}
+                  value={inviteEmail}
+                  disabled={inviteBusy}
+                  onChange={(changeEvent) => {
+                    setInviteEmail(changeEvent.target.value);
+                    setInviteErrors((current) => ({ ...current, email: "" }));
+                    setInviteFormError("");
+                    inviteIdempotencyKey.current = "";
+                  }}
+                  onBlur={() =>
+                    setInviteErrors((current) => ({
+                      ...current,
+                      email: emailAddressError(inviteEmail),
+                    }))
+                  }
+                />
+              </Field>
+            </div>
 
             {inviteFormError && (
-              <p role="alert" aria-live="assertive">
+              <Callout tone="danger" role="alert" aria-live="assertive">
                 {inviteFormError}
-              </p>
+              </Callout>
             )}
 
-            <AppButton onClick={closeInviteForm} disabled={inviteBusy}>
-              Cancel
-            </AppButton>
-            <AppButton type="submit" disabled={inviteBusy || !inviteAllowed}>
-              {inviteBusy ? "Adding and sending…" : "Add and send invitation"}
-            </AppButton>
+            <div className="rv-btn-row rv-btn-row--stack rv-btn-row--end">
+              <Button onClick={closeInviteForm} disabled={inviteBusy}>
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                variant="primary"
+                icon="mail"
+                busy={inviteBusy}
+                disabled={inviteBusy || !inviteAllowed}
+              >
+                {inviteBusy ? "Adding and sending…" : "Add and send invitation"}
+              </Button>
+            </div>
           </form>
         )}
-      </section>
+      </Card>
 
       {showImport && rosterMutable && (
         <RosterImportWizard
@@ -1044,37 +1089,56 @@ const RosterPanel = forwardRef(function RosterPanel(
         />
       )}
 
-      <div role="region" aria-label="Roster management">
+      <div role="region" aria-label="Roster management" className="rv-roster">
         {showRosterTools && (
-          <section aria-label="Roster groups">
-            <h4>Groups</h4>
-            <p>Choose one to adjust everyone together.</p>
-            {!hasActiveFilters && groupEntries.length > 0 && (
-              <span>
-                {groupEntries.length}{" "}
-                {groupEntries.length === 1 ? "group" : "groups"}
-              </span>
-            )}
+          <Card
+            as="section"
+            aria-label="Roster groups"
+            className="rv-card--compact"
+          >
+            <div className="rv-split">
+              <div className="rv-stack rv-stack--xs rv-fill">
+                <h4>Groups</h4>
+                <p className="rv-field__hint">
+                  Choose one to adjust everyone together.
+                </p>
+              </div>
+              {!hasActiveFilters && groupEntries.length > 0 && (
+                <Badge tone="outline">
+                  {groupEntries.length}{" "}
+                  {groupEntries.length === 1 ? "group" : "groups"}
+                </Badge>
+              )}
+            </div>
 
             {hasActiveFilters ? (
-              <>
+              <Callout tone="info">
                 <p>
                   Group Weight changes affect everyone in a group, including
                   people hidden by filters. Clear filters to manage full groups.
                 </p>
-                <AppButton onClick={clearFilters}>Show all groups</AppButton>
-              </>
+                <div className="rv-btn-row">
+                  <Button size="sm" onClick={clearFilters}>
+                    Show all groups
+                  </Button>
+                </div>
+              </Callout>
             ) : !groupStatsReady ? (
-              <p role="status">Loading all groups…</p>
+              <LoadingState inline message="Loading all groups…" />
             ) : (
               <>
-                <div role="group" aria-label="Choose a group">
+                <div
+                  role="group"
+                  aria-label="Choose a group"
+                  className="rv-group-picker"
+                >
                   {groupEntries.map((groupEntry) => {
                     const active = selectedGroupEntry?.key === groupEntry.key;
                     return (
                       <button
                         key={groupEntry.key}
                         type="button"
+                        className="rv-group-option"
                         aria-pressed={active}
                         disabled={Boolean(groupWeightBusy)}
                         onClick={() => {
@@ -1082,10 +1146,11 @@ const RosterPanel = forwardRef(function RosterPanel(
                           setGroupWeightStatus("");
                         }}
                       >
-                        <span>{groupEntry.label}</span>{" "}
-                        <small>
-                          {groupEntry.count}{" "}
-                          {groupEntry.count === 1 ? "person" : "people"}
+                        <span className="rv-group-option__name">
+                          {groupEntry.label}
+                        </span>{" "}
+                        <small className="rv-group-option__count">
+                          {peopleLabel(groupEntry.count)}
                         </small>
                       </button>
                     );
@@ -1096,30 +1161,39 @@ const RosterPanel = forwardRef(function RosterPanel(
                   <form
                     role="group"
                     aria-label={`${selectedGroupEntry.label} group`}
+                    className="rv-weight-editor"
                     noValidate
                     onSubmit={(submitEvent) => {
                       submitEvent.preventDefault();
                       void applyGroupWeight(selectedGroupEntry);
                     }}
                   >
-                    <span>Adjust group</span>{" "}
-                    <strong>{selectedGroupEntry.label}</strong>{" "}
-                    <small>
-                      {selectedGroupEntry.count}{" "}
-                      {selectedGroupEntry.count === 1 ? "person" : "people"}
-                    </small>
-                    <p id={selectedGroupHelpId}>
-                      Weight controls how strongly this group shapes the
-                      recommended times. 1× is standard.
-                    </p>
+                    <div className="rv-stack rv-stack--xs">
+                      <p className="rv-eyebrow">Adjust group</p>
+                      <p className="rv-cluster rv-cluster--sm">
+                        <strong>{selectedGroupEntry.label}</strong>{" "}
+                        <small className="rv-group-option__count">
+                          {peopleLabel(selectedGroupEntry.count)}
+                        </small>
+                      </p>
+                      <p id={selectedGroupHelpId} className="rv-field__hint">
+                        Weight decides how much this group counts when Releviz
+                        ranks meeting times. Full influence counts everyone
+                        normally; no influence keeps them on the roster but
+                        leaves them out of the ranking.
+                      </p>
+                    </div>
+
                     <div
                       role="group"
                       aria-label={`Quick Weight for ${selectedGroupEntry.label} group`}
+                      className="rv-weight-presets"
                     >
                       {GROUP_WEIGHT_PRESETS.map((preset) => (
                         <button
                           key={preset.value}
                           type="button"
+                          className="rv-weight-preset"
                           aria-pressed={selectedGroupDraft === preset.value}
                           disabled={!rosterMutable || Boolean(groupWeightBusy)}
                           onClick={() =>
@@ -1129,58 +1203,76 @@ const RosterPanel = forwardRef(function RosterPanel(
                             )
                           }
                         >
-                          <strong>{preset.display}</strong>{" "}
-                          <span>{preset.label}</span>
+                          <strong className="rv-weight-preset__value">
+                            {preset.display}
+                          </strong>{" "}
+                          <span className="rv-weight-preset__label">
+                            {preset.label}
+                          </span>
                         </button>
                       ))}
                     </div>
-                    <label>
-                      <span>Custom Weight</span>
-                      <input
-                        aria-label={`Weight for ${selectedGroupEntry.label} group`}
-                        aria-invalid={Boolean(selectedGroupError)}
-                        aria-describedby={
-                          selectedGroupError
-                            ? `${selectedGroupHelpId} ${selectedGroupErrorId}`
-                            : selectedGroupHelpId
-                        }
-                        type="number"
-                        min="0"
-                        max="1"
-                        step="0.05"
-                        placeholder="0–1"
-                        value={selectedGroupDraft}
+
+                    <div className="rv-input-group">
+                      <Field label="Custom Weight" className="rv-fill">
+                        <TextInput
+                          className="rv-input--numeric"
+                          aria-label={`Weight for ${selectedGroupEntry.label} group`}
+                          aria-invalid={selectedGroupError ? "true" : undefined}
+                          aria-describedby={
+                            selectedGroupError
+                              ? `${selectedGroupHelpId} ${selectedGroupErrorId}`
+                              : selectedGroupHelpId
+                          }
+                          type="number"
+                          min="0"
+                          max="1"
+                          step="0.05"
+                          placeholder="0–1"
+                          value={selectedGroupDraft}
+                          disabled={
+                            !rosterMutable ||
+                            !groupStatsReady ||
+                            Boolean(groupWeightBusy)
+                          }
+                          onChange={(changeEvent) =>
+                            updateGroupWeightDraft(
+                              selectedGroupEntry,
+                              changeEvent.target.value,
+                            )
+                          }
+                        />
+                      </Field>
+                      <Button
+                        type="submit"
+                        variant="primary"
+                        aria-label={`Apply Weight to ${selectedGroupEntry.label} group`}
+                        busy={groupWeightBusy === selectedGroupEntry.key}
                         disabled={
                           !rosterMutable ||
                           !groupStatsReady ||
-                          Boolean(groupWeightBusy)
+                          Boolean(groupWeightBusy) ||
+                          String(selectedGroupDraft).trim() === ""
                         }
-                        onChange={(changeEvent) =>
-                          updateGroupWeightDraft(
-                            selectedGroupEntry,
-                            changeEvent.target.value,
-                          )
-                        }
-                      />
-                    </label>
-                    <AppButton
-                      type="submit"
-                      aria-label={`Apply Weight to ${selectedGroupEntry.label} group`}
-                      disabled={
-                        !rosterMutable ||
-                        !groupStatsReady ||
-                        Boolean(groupWeightBusy) ||
-                        String(selectedGroupDraft).trim() === ""
-                      }
-                    >
-                      {groupWeightBusy === selectedGroupEntry.key
-                        ? "Applying…"
-                        : `Apply to ${selectedGroupEntry.count}`}
-                    </AppButton>
+                      >
+                        {groupWeightBusy === selectedGroupEntry.key
+                          ? "Applying…"
+                          : `Apply to ${selectedGroupEntry.count}`}
+                      </Button>
+                    </div>
+                    <p className="rv-field__hint">
+                      This updates every person in {selectedGroupEntry.label} (
+                      {peopleLabel(selectedGroupEntry.count)}).
+                    </p>
                     {selectedGroupError && (
-                      <p id={selectedGroupErrorId} role="alert">
+                      <Callout
+                        id={selectedGroupErrorId}
+                        tone="danger"
+                        role="alert"
+                        bare
+                      >
                         {selectedGroupError}
-                      </p>
+                      </Callout>
                     )}
                   </form>
                 )}
@@ -1188,24 +1280,32 @@ const RosterPanel = forwardRef(function RosterPanel(
             )}
 
             {groupWeightStatus && (
-              <p role="status" aria-live="polite">
+              <Callout tone="success" role="status" aria-live="polite" bare>
                 {groupWeightStatus}
-              </p>
+              </Callout>
             )}
-          </section>
+          </Card>
         )}
 
-        <div role="region" aria-label="Roster people">
+        <div
+          role="region"
+          aria-label="Roster people"
+          className="rv-stack rv-stack--md"
+        >
           {showRosterTools && (
-            <div role="search" aria-label="Roster filters">
-              <input
+            <div
+              role="search"
+              aria-label="Roster filters"
+              className="rv-roster-filters"
+            >
+              <TextInput
                 aria-label="Search roster"
                 type="search"
                 value={searchInput}
                 onChange={(event) => setSearchInput(event.target.value)}
                 placeholder="Search name or email"
               />
-              <select
+              <Select
                 aria-label="Filter by group"
                 value={group}
                 onChange={(event) => {
@@ -1219,8 +1319,8 @@ const RosterPanel = forwardRef(function RosterPanel(
                     {label}
                   </option>
                 ))}
-              </select>
-              <select
+              </Select>
+              <Select
                 aria-label="Filter by response"
                 value={submitted}
                 onChange={(event) => {
@@ -1231,8 +1331,8 @@ const RosterPanel = forwardRef(function RosterPanel(
                 <option value="">Any response</option>
                 <option value="true">Submitted</option>
                 <option value="false">Not submitted</option>
-              </select>
-              <select
+              </Select>
+              <Select
                 aria-label="Filter by invitation"
                 value={invitationStatus}
                 onChange={(event) => {
@@ -1245,136 +1345,152 @@ const RosterPanel = forwardRef(function RosterPanel(
                 <option value="invited">Invited</option>
                 <option value="opened">Opened</option>
                 <option value="submitted">Submitted</option>
-              </select>
+              </Select>
             </div>
           )}
 
           {rosterMutable && hasRosterEntries && (
-            <details aria-label="Bulk roster actions">
-              <summary>
-                Edit multiple people{" "}
-                <small>
-                  {selected.size} selected · Change Weight or inclusion
-                </small>
+            <details
+              aria-label="Bulk roster actions"
+              className="rv-disclosure"
+              open={bulkOpen}
+              onToggle={(toggleEvent) =>
+                setBulkOpen(toggleEvent.currentTarget.open)
+              }
+            >
+              <summary className="rv-disclosure__summary">
+                <span className="rv-disclosure__summary-text">
+                  <span className="rv-disclosure__title">
+                    Edit multiple people
+                  </span>
+                  <small className="rv-disclosure__hint">
+                    {selected.size} selected · Change Weight or inclusion
+                  </small>
+                </span>
+                <Icon name="chevronDown" className="rv-disclosure__chevron" />
               </summary>
-              <label>
-                Apply to
-                <select
-                  aria-label="Bulk update scope"
-                  value={bulkScope}
-                  onChange={(event) => setBulkScope(event.target.value)}
-                >
-                  <option value="selected">Selected people</option>
-                  <option value="filter">Current search and filters</option>
-                  <option value="group">One group</option>
-                </select>
-              </label>
-              {bulkScope === "group" && (
-                <label>
-                  Group
-                  <select
-                    aria-label="Bulk update group"
-                    value={bulkGroup}
-                    onChange={(event) => setBulkGroup(event.target.value)}
+              <div className="rv-disclosure__content rv-stack rv-stack--md">
+                <div className="rv-grid rv-grid--pair">
+                  <Field label="Apply to">
+                    <Select
+                      aria-label="Bulk update scope"
+                      value={bulkScope}
+                      onChange={(event) => setBulkScope(event.target.value)}
+                    >
+                      <option value="selected">Selected people</option>
+                      <option value="filter">Current search and filters</option>
+                      <option value="group">One group</option>
+                    </Select>
+                  </Field>
+                  {bulkScope === "group" && (
+                    <Field label="Group">
+                      <Select
+                        aria-label="Bulk update group"
+                        value={bulkGroup}
+                        onChange={(event) => setBulkGroup(event.target.value)}
+                      >
+                        <option value="">Choose group</option>
+                        {groups.map(({ value, label }) => (
+                          <option key={value} value={value}>
+                            {label}
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
+                  )}
+                </div>
+
+                <div className="rv-grid rv-grid--pair">
+                  <fieldset className="rv-fieldset">
+                    <legend className="rv-fieldset__legend">Weight</legend>
+                    <Checkbox
+                      label="Change weight"
+                      aria-label="Apply bulk weight"
+                      checked={bulkApplyWeight}
+                      onChange={(event) =>
+                        setBulkApplyWeight(event.target.checked)
+                      }
+                    />
+                    <Field label="Set to">
+                      <TextInput
+                        className="rv-input--numeric"
+                        aria-label="Bulk weight"
+                        type="number"
+                        min="0"
+                        max="1"
+                        step="0.05"
+                        value={bulkWeight}
+                        disabled={!bulkApplyWeight}
+                        onChange={(event) =>
+                          setBulkWeight(Number(event.target.value))
+                        }
+                      />
+                    </Field>
+                  </fieldset>
+
+                  <fieldset className="rv-fieldset">
+                    <legend className="rv-fieldset__legend">Inclusion</legend>
+                    <Checkbox
+                      label="Change inclusion"
+                      aria-label="Apply bulk included status"
+                      checked={bulkApplyIncluded}
+                      onChange={(event) =>
+                        setBulkApplyIncluded(event.target.checked)
+                      }
+                    />
+                    <Checkbox
+                      label="Included"
+                      aria-label="Bulk included"
+                      checked={bulkIncluded}
+                      disabled={!bulkApplyIncluded}
+                      onChange={(event) =>
+                        setBulkIncluded(event.target.checked)
+                      }
+                    />
+                  </fieldset>
+                </div>
+
+                <Callout tone="info">
+                  {bulkScope === "selected"
+                    ? selected.size > 0
+                      ? `${selected.size} participant${selected.size === 1 ? "" : "s"} will be updated.`
+                      : "Select participants in the list before applying changes."
+                    : bulkScope === "group"
+                      ? "Changes apply to everyone in the chosen group."
+                      : "Changes apply to everyone matching the current filters."}
+                </Callout>
+                <div className="rv-btn-row rv-btn-row--end">
+                  <Button
+                    variant="primary"
+                    onClick={applyBulk}
+                    busy={bulkBusy}
+                    disabled={bulkBusy || !rosterMutable}
                   >
-                    <option value="">Choose group</option>
-                    {groups.map(({ value, label }) => (
-                      <option key={value} value={value}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
-
-              <fieldset>
-                <legend>Weight</legend>
-                <label>
-                  <input
-                    aria-label="Apply bulk weight"
-                    type="checkbox"
-                    checked={bulkApplyWeight}
-                    onChange={(event) =>
-                      setBulkApplyWeight(event.target.checked)
-                    }
-                  />
-                  Change weight
-                </label>
-                <label>
-                  Set to
-                  <input
-                    aria-label="Bulk weight"
-                    type="number"
-                    min="0"
-                    max="1"
-                    step="0.05"
-                    value={bulkWeight}
-                    disabled={!bulkApplyWeight}
-                    onChange={(event) =>
-                      setBulkWeight(Number(event.target.value))
-                    }
-                  />
-                </label>
-              </fieldset>
-
-              <fieldset>
-                <legend>Inclusion</legend>
-                <label>
-                  <input
-                    aria-label="Apply bulk included status"
-                    type="checkbox"
-                    checked={bulkApplyIncluded}
-                    onChange={(event) =>
-                      setBulkApplyIncluded(event.target.checked)
-                    }
-                  />
-                  Change inclusion
-                </label>
-                <span>Set to</span>
-                <label>
-                  <input
-                    aria-label="Bulk included"
-                    type="checkbox"
-                    checked={bulkIncluded}
-                    disabled={!bulkApplyIncluded}
-                    onChange={(event) => setBulkIncluded(event.target.checked)}
-                  />
-                  Included
-                </label>
-              </fieldset>
-
-              <p>
-                {bulkScope === "selected"
-                  ? selected.size > 0
-                    ? `${selected.size} participant${selected.size === 1 ? "" : "s"} will be updated.`
-                    : "Select participants in the list before applying changes."
-                  : bulkScope === "group"
-                    ? "Changes apply to everyone in the chosen group."
-                    : "Changes apply to everyone matching the current filters."}
-              </p>
-              <AppButton
-                onClick={applyBulk}
-                disabled={bulkBusy || !rosterMutable}
-              >
-                {bulkBusy ? "Applying…" : "Apply update"}
-              </AppButton>
+                    {bulkBusy ? "Applying…" : "Apply update"}
+                  </Button>
+                </div>
+              </div>
             </details>
           )}
 
-          <section aria-label="Roster entries">
+          <section
+            aria-label="Roster entries"
+            className="rv-stack rv-stack--sm"
+          >
             {loading ? (
-              <p>Loading roster…</p>
+              <LoadingState message="Loading roster…" />
             ) : participants.length === 0 ? (
               !showInvite &&
               !showImport &&
               !error && (
-                <>
-                  <h4>
+                <div className="rv-state">
+                  <Icon name="users" className="rv-state__icon" />
+                  <h4 className="rv-state__title">
                     {hasActiveFilters
                       ? "No matching participants"
                       : "No participants yet"}
                   </h4>
-                  <p>
+                  <p className="rv-state__description">
                     {hasActiveFilters
                       ? "Try a different search or clear the current filters."
                       : rosterMutable
@@ -1382,218 +1498,289 @@ const RosterPanel = forwardRef(function RosterPanel(
                         : "This event does not have any participants."}
                   </p>
                   {hasActiveFilters && (
-                    <AppButton onClick={clearFilters}>Clear filters</AppButton>
+                    <Button onClick={clearFilters}>Clear filters</Button>
                   )}
-                </>
+                </div>
               )
             ) : (
-              <table>
-                <caption>Roster participants</caption>
-                <thead>
-                  <tr>
-                    <th scope="col">
-                      <input
-                        aria-label="Select all on page"
-                        type="checkbox"
-                        checked={allOnPageSelected}
-                        disabled={!rosterMutable}
-                        onChange={(event) =>
-                          updateSelected(
-                            event.target.checked
-                              ? new Set([
-                                  ...selected,
-                                  ...participants.map(
-                                    (participant) => participant.id,
-                                  ),
-                                ])
-                              : new Set(
-                                  [...selected].filter(
-                                    (id) =>
-                                      !participants.some(
-                                        (participant) => participant.id === id,
-                                      ),
-                                  ),
-                                ),
-                          )
-                        }
-                      />
-                    </th>
-                    <th scope="col">Person</th>
-                    <th scope="col">Settings</th>
-                    <th scope="col">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {participants.map((participant) => (
-                    <tr
-                      key={participant.id}
-                      data-roster-participant-id={participant.id}
-                    >
-                      <td>
-                        <input
-                          aria-label={`Select ${participant.name}`}
-                          type="checkbox"
-                          checked={selected.has(participant.id)}
+              <div className="rv-table-wrap">
+                <table className="rv-people" role="table">
+                  <caption className="rv-visually-hidden">
+                    Roster participants
+                  </caption>
+                  <thead role="rowgroup">
+                    <tr role="row">
+                      <th
+                        scope="col"
+                        role="columnheader"
+                        className="rv-people__select"
+                      >
+                        <Checkbox
+                          tight
+                          aria-label="Select all on page"
+                          label={
+                            <span className="rv-visually-hidden">
+                              Select all on page
+                            </span>
+                          }
+                          checked={allOnPageSelected}
                           disabled={!rosterMutable}
                           onChange={(event) =>
-                            updateSelected((current) => {
-                              const next = new Set(current);
-                              if (event.target.checked)
-                                next.add(participant.id);
-                              else next.delete(participant.id);
-                              return next;
-                            })
+                            updateSelected(
+                              event.target.checked
+                                ? new Set([
+                                    ...selected,
+                                    ...participants.map(
+                                      (participant) => participant.id,
+                                    ),
+                                  ])
+                                : new Set(
+                                    [...selected].filter(
+                                      (id) =>
+                                        !participants.some(
+                                          (participant) =>
+                                            participant.id === id,
+                                        ),
+                                    ),
+                                  ),
+                            )
                           }
                         />
-                      </td>
-                      <th scope="row">
-                        <strong>{participant.name}</strong>{" "}
-                        <small>
-                          {participant.email || "No email"} ·{" "}
-                          {accountLabel(participant)}
-                        </small>{" "}
-                        {participant.canOrganizerEditAvailability ? (
-                          <AppButton
-                            onClick={() => openEditor(participant)}
-                            disabled={!editorAllowed}
-                          >
-                            Edit schedule
-                          </AppButton>
-                        ) : (
-                          <span>Manages own schedule</span>
-                        )}
                       </th>
-                      <td>
-                        <label>
-                          <span>Group</span>
-                          <input
-                            aria-label={`Group for ${participant.name}`}
-                            placeholder="Ungrouped"
-                            value={rowDraftValue(
-                              participant,
-                              "group",
-                              groupValue(participant),
-                            )}
+                      <th scope="col" role="columnheader">
+                        Person
+                      </th>
+                      <th scope="col" role="columnheader">
+                        Settings
+                      </th>
+                      <th scope="col" role="columnheader">
+                        Status
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody role="rowgroup">
+                    {participants.map((participant) => (
+                      <tr
+                        key={participant.id}
+                        role="row"
+                        data-roster-participant-id={participant.id}
+                      >
+                        <td role="cell" className="rv-people__select">
+                          <Checkbox
+                            tight
+                            aria-label={`Select ${participant.name}`}
+                            label={
+                              <span className="rv-visually-hidden">
+                                Select {participant.name}
+                              </span>
+                            }
+                            checked={selected.has(participant.id)}
                             disabled={!rosterMutable}
                             onChange={(event) =>
-                              updateRowDraft(
-                                participant.id,
-                                "group",
-                                event.target.value,
-                              )
-                            }
-                            onBlur={(event) =>
-                              void saveRowDraft(
-                                participant,
-                                "group",
-                                event.target.value,
-                                groupValue(participant),
-                              )
-                            }
-                          />
-                        </label>{" "}
-                        <label>
-                          <span>Weight</span>
-                          <input
-                            aria-label={`Weight for ${participant.name}`}
-                            type="number"
-                            min="0"
-                            max="1"
-                            step="0.05"
-                            value={rowDraftValue(
-                              participant,
-                              "weight",
-                              participant.weight ?? 1,
-                            )}
-                            disabled={!rosterMutable}
-                            onChange={(event) =>
-                              updateRowDraft(
-                                participant.id,
-                                "weight",
-                                event.target.value,
-                              )
-                            }
-                            onBlur={(event) =>
-                              void saveRowDraft(
-                                participant,
-                                "weight",
-                                Number(event.target.value),
-                                Number(participant.weight ?? 1),
-                              )
-                            }
-                          />
-                        </label>{" "}
-                        <label>
-                          <input
-                            aria-label={`Include ${participant.name}`}
-                            type="checkbox"
-                            checked={Boolean(participant.included)}
-                            disabled={!rosterMutable}
-                            onChange={(event) =>
-                              void patchRow(participant, {
-                                included: event.target.checked,
+                              updateSelected((current) => {
+                                const next = new Set(current);
+                                if (event.target.checked)
+                                  next.add(participant.id);
+                                else next.delete(participant.id);
+                                return next;
                               })
                             }
                           />
-                          <span>Count in results</span>
-                        </label>
-                      </td>
-                      <td>
-                        <span>
-                          <span>Response</span>{" "}
-                          {participant.submitted
-                            ? "Submitted"
-                            : "Not submitted"}
-                        </span>{" "}
-                        <span>
-                          <span>Invite</span> {deliveryLabel(participant)}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-            {showPagination && (
-              <>
-                <label>
-                  Rows per page{" "}
-                  <select
-                    aria-label="Rows per page"
-                    value={pageSize}
-                    onChange={(event) => {
-                      setPageSize(Number(event.target.value));
-                      setPage(1);
-                    }}
-                  >
-                    <option value="25">25</option>
-                    <option value="50">50</option>
-                    <option value="100">100</option>
-                  </select>
-                </label>
-                <AppButton
-                  disabled={page <= 1 || loading}
-                  onClick={() => setPage((current) => current - 1)}
-                >
-                  Previous
-                </AppButton>
-                <span>
-                  Page {pagination.page || page} of {pagination.pages || 1}
-                </span>
-                <AppButton
-                  disabled={page >= (pagination.pages || 1) || loading}
-                  onClick={() => setPage((current) => current + 1)}
-                >
-                  Next
-                </AppButton>
-              </>
+                        </td>
+                        <th scope="row" role="rowheader">
+                          <span className="rv-person__name">
+                            {participant.name}
+                          </span>
+                          <span className="rv-person__email">
+                            {participant.email || "No email"}
+                          </span>
+                          <span className="rv-cluster rv-cluster--sm rv-person__tags">
+                            <Badge tone="outline">
+                              {accountLabel(participant)}
+                            </Badge>
+                            {participant.canOrganizerEditAvailability ? (
+                              <Button
+                                size="sm"
+                                icon="calendar"
+                                onClick={() => openEditor(participant)}
+                                disabled={!editorAllowed}
+                              >
+                                Edit schedule
+                              </Button>
+                            ) : (
+                              <span className="rv-field__hint">
+                                Manages own schedule
+                              </span>
+                            )}
+                          </span>
+                        </th>
+                        <td role="cell">
+                          <div className="rv-person__settings">
+                            <Field label="Group" className="rv-field--inline">
+                              <TextInput
+                                size="sm"
+                                aria-label={`Group for ${participant.name}`}
+                                placeholder="Ungrouped"
+                                value={rowDraftValue(
+                                  participant,
+                                  "group",
+                                  groupValue(participant),
+                                )}
+                                disabled={!rosterMutable}
+                                onChange={(event) =>
+                                  updateRowDraft(
+                                    participant.id,
+                                    "group",
+                                    event.target.value,
+                                  )
+                                }
+                                onBlur={(event) =>
+                                  void saveRowDraft(
+                                    participant,
+                                    "group",
+                                    event.target.value,
+                                    groupValue(participant),
+                                  )
+                                }
+                              />
+                            </Field>
+                            <Field label="Weight" className="rv-field--inline">
+                              <TextInput
+                                size="sm"
+                                className="rv-input--numeric"
+                                aria-label={`Weight for ${participant.name}`}
+                                type="number"
+                                min="0"
+                                max="1"
+                                step="0.05"
+                                value={rowDraftValue(
+                                  participant,
+                                  "weight",
+                                  participant.weight ?? 1,
+                                )}
+                                disabled={!rosterMutable}
+                                onChange={(event) =>
+                                  updateRowDraft(
+                                    participant.id,
+                                    "weight",
+                                    event.target.value,
+                                  )
+                                }
+                                onBlur={(event) =>
+                                  void saveRowDraft(
+                                    participant,
+                                    "weight",
+                                    Number(event.target.value),
+                                    Number(participant.weight ?? 1),
+                                  )
+                                }
+                              />
+                            </Field>
+                            <Checkbox
+                              tight
+                              label="Count in results"
+                              aria-label={`Include ${participant.name}`}
+                              checked={Boolean(participant.included)}
+                              disabled={!rosterMutable}
+                              onChange={(event) =>
+                                void patchRow(participant, {
+                                  included: event.target.checked,
+                                })
+                              }
+                            />
+                          </div>
+                        </td>
+                        <td role="cell">
+                          <div className="rv-person__status">
+                            <Badge
+                              tone={
+                                participant.submitted ? "success" : "neutral"
+                              }
+                              icon={
+                                participant.submitted ? "checkCircle" : "clock"
+                              }
+                            >
+                              <span className="rv-visually-hidden">
+                                Response:
+                              </span>{" "}
+                              {participant.submitted
+                                ? "Submitted"
+                                : "Not submitted"}
+                            </Badge>
+                            <Badge
+                              tone={
+                                INVITATION_TONE[
+                                  participant.invitationStatus || "not_sent"
+                                ] || "outline"
+                              }
+                              icon="mail"
+                            >
+                              Invite · {deliveryLabel(participant)}
+                            </Badge>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {showPagination && (
+                  <div className="rv-pagination">
+                    <label className="rv-cluster rv-cluster--sm">
+                      Rows per page{" "}
+                      <Select
+                        size="sm"
+                        aria-label="Rows per page"
+                        value={pageSize}
+                        onChange={(event) => {
+                          setPageSize(Number(event.target.value));
+                          setPage(1);
+                        }}
+                      >
+                        <option value="25">25</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                      </Select>
+                    </label>
+                    <div className="rv-pagination__controls">
+                      <Button
+                        size="sm"
+                        icon="chevronLeft"
+                        disabled={page <= 1 || loading}
+                        onClick={() => setPage((current) => current - 1)}
+                      >
+                        Previous
+                      </Button>
+                      <span>
+                        Page {pagination.page || page} of{" "}
+                        {pagination.pages || 1}
+                      </span>
+                      <Button
+                        size="sm"
+                        iconEnd="chevronRight"
+                        disabled={page >= (pagination.pages || 1) || loading}
+                        onClick={() => setPage((current) => current + 1)}
+                      >
+                        Next
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
           </section>
         </div>
       </div>
 
-      {status && <p role="status">{status}</p>}
-      {error && <p role="alert">{error}</p>}
+      {status && (
+        <Callout tone="success" role="status">
+          {status}
+        </Callout>
+      )}
+      {error && (
+        <Callout tone="danger" role="alert">
+          {error}
+        </Callout>
+      )}
 
       <ManagedScheduleDrawer
         event={event}

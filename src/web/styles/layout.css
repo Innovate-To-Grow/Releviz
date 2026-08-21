@@ -1,0 +1,315 @@
+/*
+ * Layout primitives: the app shell, page containers, and the small set of
+ * composition helpers (stack / cluster / split / grid) that every screen is
+ * assembled from. No page defines its own spacing rhythm.
+ */
+
+/* ---- App shell ---------------------------------------------------------- */
+
+.rv-app {
+  display: flex;
+  min-height: 100dvh;
+  flex-direction: column;
+  background: var(--rv-canvas);
+}
+
+.rv-app__main,
+.rv-app > main {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+}
+
+.rv-shell-header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: color-mix(in srgb, var(--rv-canvas) 88%, transparent);
+  border-bottom: 1px solid var(--rv-border);
+  backdrop-filter: saturate(180%) blur(12px);
+}
+
+@supports not (backdrop-filter: blur(1px)) {
+  .rv-shell-header {
+    background: var(--rv-canvas);
+  }
+}
+
+.rv-shell-header__inner {
+  display: flex;
+  align-items: center;
+  gap: var(--rv-space-3);
+  min-height: var(--rv-header-height);
+  padding-inline: var(--rv-gutter);
+  margin-inline: auto;
+  width: 100%;
+  max-width: var(--rv-width-wide);
+}
+
+.rv-shell-header__identity {
+  display: flex;
+  align-items: center;
+  gap: var(--rv-space-2);
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.rv-shell-header__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--rv-space-2);
+  flex: none;
+}
+
+.rv-shell-header__crumb {
+  display: none;
+  align-items: center;
+  gap: var(--rv-space-2);
+  min-width: 0;
+  color: var(--rv-text-secondary);
+  font-size: var(--rv-text-sm);
+}
+
+@media (min-width: 40rem) {
+  .rv-shell-header__crumb {
+    display: flex;
+  }
+}
+
+.rv-shell-header__crumb-sep {
+  color: var(--rv-text-muted);
+}
+
+.rv-shell-header__title {
+  font-size: var(--rv-text-sm);
+  font-weight: var(--rv-weight-semibold);
+  letter-spacing: 0;
+  color: var(--rv-text);
+  max-width: 22ch;
+}
+
+/* ---- Brand -------------------------------------------------------------- */
+
+.rv-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--rv-space-2);
+  padding: var(--rv-space-1) var(--rv-space-1);
+  margin-inline-start: calc(var(--rv-space-1) * -1);
+  border-radius: var(--rv-radius-sm);
+  color: var(--rv-text);
+  font-weight: var(--rv-weight-semibold);
+  letter-spacing: var(--rv-tracking-tight);
+  text-decoration: none;
+  flex: none;
+}
+
+.rv-brand:hover {
+  color: var(--rv-accent-text);
+}
+
+.rv-brand__mark {
+  width: 1.5rem;
+  height: 1.5rem;
+  flex: none;
+  color: var(--rv-accent);
+}
+
+.rv-brand__word {
+  font-size: var(--rv-text-md);
+}
+
+.rv-brand--sm .rv-brand__mark {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.rv-brand--sm .rv-brand__word {
+  font-size: var(--rv-text-base);
+}
+
+/* ---- Page containers ---------------------------------------------------- */
+
+.rv-page {
+  width: 100%;
+  max-width: var(--rv-width-app);
+  margin-inline: auto;
+  padding-inline: var(--rv-gutter);
+  padding-block: var(--rv-space-6) var(--rv-space-16);
+}
+
+@media (min-width: 48rem) {
+  .rv-page {
+    padding-block: var(--rv-space-8) var(--rv-space-20);
+  }
+}
+
+.rv-page--wide {
+  max-width: var(--rv-width-wide);
+}
+
+.rv-page--form {
+  max-width: var(--rv-width-form);
+}
+
+.rv-page--prose {
+  max-width: 46rem;
+}
+
+.rv-page--centered {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: calc(100dvh - var(--rv-header-height) - 9rem);
+}
+
+/* ---- Composition helpers ------------------------------------------------ */
+
+.rv-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--rv-space-4);
+  min-width: 0;
+}
+
+.rv-stack--xs {
+  gap: var(--rv-space-1);
+}
+.rv-stack--sm {
+  gap: var(--rv-space-2);
+}
+.rv-stack--md {
+  gap: var(--rv-space-3);
+}
+.rv-stack--lg {
+  gap: var(--rv-space-6);
+}
+.rv-stack--xl {
+  gap: var(--rv-space-8);
+}
+.rv-stack--2xl {
+  gap: var(--rv-space-10);
+}
+
+.rv-cluster {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--rv-space-3);
+  min-width: 0;
+}
+
+.rv-cluster--sm {
+  gap: var(--rv-space-2);
+}
+.rv-cluster--xs {
+  gap: var(--rv-space-1);
+}
+.rv-cluster--lg {
+  gap: var(--rv-space-4);
+}
+.rv-cluster--end {
+  justify-content: flex-end;
+}
+.rv-cluster--between {
+  justify-content: space-between;
+}
+.rv-cluster--baseline {
+  align-items: baseline;
+}
+.rv-cluster--top {
+  align-items: flex-start;
+}
+
+.rv-split {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--rv-space-4);
+  min-width: 0;
+}
+
+.rv-grid {
+  display: grid;
+  gap: var(--rv-space-4);
+  min-width: 0;
+}
+
+.rv-grid--2 {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+}
+
+.rv-grid--3 {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+}
+
+.rv-grid--4 {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
+}
+
+.rv-grid--pair {
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 40rem) {
+  .rv-grid--pair {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.rv-fill {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.rv-spacer {
+  flex: 1 1 auto;
+}
+
+/* Two-column work surface: content plus a supporting rail. */
+.rv-columns {
+  display: grid;
+  gap: var(--rv-space-6);
+  grid-template-columns: 1fr;
+  align-items: start;
+}
+
+@media (min-width: 64rem) {
+  .rv-columns {
+    grid-template-columns: minmax(0, 1fr) minmax(16rem, 20rem);
+  }
+
+  .rv-columns--rail-first {
+    grid-template-columns: minmax(14rem, 17rem) minmax(0, 1fr);
+  }
+}
+
+.rv-sticky-rail {
+  position: static;
+}
+
+@media (min-width: 64rem) {
+  .rv-sticky-rail {
+    position: sticky;
+    top: calc(var(--rv-header-height) + var(--rv-space-4));
+  }
+}
+
+/* Extra breathing room between top-level page sections. */
+.rv-section-gap {
+  margin-block-start: var(--rv-space-10);
+}
+
+@media (min-width: 48rem) {
+  .rv-section-gap {
+    margin-block-start: var(--rv-space-12);
+  }
+}
+
+/* Auto-filling card grid used by list surfaces (events, summaries). */
+.rv-card-grid {
+  display: grid;
+  gap: var(--rv-space-4);
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));
+}

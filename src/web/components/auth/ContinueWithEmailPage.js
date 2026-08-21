@@ -2,8 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@/components/auth/AuthContext";
-import AppButton from "@/components/ui/AppButton";
 import AppHeader from "@/components/ui/AppHeader";
+import Button from "@/components/ui/Button";
+import { Callout, LoadingState } from "@/components/ui/Feedback";
+import { Field, TextInput } from "@/components/ui/Form";
+import { Eyebrow } from "@/components/ui/Surface";
 import { navigateTo, safeNextPath } from "@/lib/navigation";
 
 const AUTH_ENTRY_PATHS = new Set([
@@ -130,10 +133,12 @@ export default function ContinueWithEmailPage({
     return (
       <>
         <AppHeader />
-        <main>
-          <p role="status" aria-live="polite">
-            {authLoading ? "Checking your session…" : "Opening your account…"}
-          </p>
+        <main id="main" className="rv-page rv-page--form rv-page--centered">
+          <LoadingState
+            message={
+              authLoading ? "Checking your session…" : "Opening your account…"
+            }
+          />
         </main>
       </>
     );
@@ -142,28 +147,36 @@ export default function ContinueWithEmailPage({
   return (
     <>
       <AppHeader />
-      <main>
-        <form onSubmit={handleSubmit}>
-          <div>
-            <h1>{codeSent ? "Check your email" : "Continue with email"}</h1>
-            <p>
+      <main id="main" className="rv-page rv-page--form rv-page--centered">
+        <form onSubmit={handleSubmit} className="rv-auth">
+          <div className="rv-stack rv-stack--sm">
+            <Eyebrow icon={codeSent ? "mail" : "shield"}>
+              {codeSent ? "Verification" : "Sign in or sign up"}
+            </Eyebrow>
+            <h1 className="rv-auth__title">
+              {codeSent ? "Check your email" : "Continue with email"}
+            </h1>
+            <p className="rv-auth__lede">
               {codeSent
                 ? `Enter the 6-digit code sent to ${email}.`
                 : "We’ll send you a verification code. Existing accounts sign in and new accounts are created automatically."}
             </p>
           </div>
 
-          {error && <p role="alert">{error}</p>}
+          {error && (
+            <Callout tone="danger" role="alert">
+              {error}
+            </Callout>
+          )}
           {status && (
-            <p role="status" aria-live="polite">
+            <Callout tone="info" role="status" aria-live="polite">
               {status}
-            </p>
+            </Callout>
           )}
 
           {!codeSent ? (
-            <label>
-              Email
-              <input
+            <Field label="Email">
+              <TextInput
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
                 type="email"
@@ -171,12 +184,12 @@ export default function ContinueWithEmailPage({
                 autoFocus
                 required
               />
-            </label>
+            </Field>
           ) : (
-            <>
-              <label>
-                Verification code
-                <input
+            <div className="rv-stack rv-stack--sm">
+              <Field label="Verification code">
+                <TextInput
+                  className="rv-input--code"
                   value={code}
                   onChange={(event) => setCode(event.target.value)}
                   inputMode="numeric"
@@ -186,14 +199,23 @@ export default function ContinueWithEmailPage({
                   autoFocus
                   required
                 />
-              </label>
-              <button type="button" onClick={useDifferentEmail}>
-                Use a different email
-              </button>
-            </>
+              </Field>
+              <div>
+                <Button variant="link" onClick={useDifferentEmail}>
+                  Use a different email
+                </Button>
+              </div>
+            </div>
           )}
 
-          <AppButton type="submit" disabled={loading || authLoading}>
+          <Button
+            type="submit"
+            variant="primary"
+            size="lg"
+            block
+            busy={loading}
+            disabled={loading || authLoading}
+          >
             {loading
               ? codeSent
                 ? "Verifying..."
@@ -201,9 +223,9 @@ export default function ContinueWithEmailPage({
               : codeSent
                 ? "Verify and continue"
                 : "Continue with email"}
-          </AppButton>
+          </Button>
 
-          <p>
+          <p className="rv-auth__footnote">
             No password required. By continuing, you agree to receive a one-time
             verification email.
           </p>

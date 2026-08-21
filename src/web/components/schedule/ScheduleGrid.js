@@ -3,6 +3,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { formatTime } from "@/lib/format";
 
+const VALUE_MARKS = { 0: "", 0.5: "~", 1: "✓" };
+
+// Availability is announced in words, and drawn with a glyph plus a fill
+// pattern, so the value never depends on colour alone.
+function describeValue(value) {
+  if (value === 0) return "Busy";
+  if (value === 0.5) return "If needed";
+  if (value === 1) return "Available";
+  return `${Math.round(value * 100)}% available`;
+}
+
 function slotLabel(slot) {
   const startDay = slot.startDayOffset ? ` +${slot.startDayOffset}d` : "";
   const endDay = slot.endDayOffset ? ` +${slot.endDayOffset}d` : "";
@@ -163,129 +174,196 @@ function ScheduleGrid({
   };
 
   return (
-    <div>
-      {label && <h4>{label}</h4>}
-      <div>
+    <div className="rv-schedule">
+      {label && <h4 className="rv-field__label">{label}</h4>}
+      <div className="rv-schedule__body">
         {groups.length === 0 ? (
-          <p>No schedule slots are configured.</p>
+          <p className="rv-field__hint">No schedule slots are configured.</p>
         ) : (
-          <div
-            role="grid"
-            aria-label={label || "Availability"}
-            aria-colcount={groups.length + 1}
-            aria-rowcount={maxRows + 1}
-          >
-            <div role="row" aria-rowindex={1}>
-              <div role="columnheader" aria-colindex={1}>
-                Time
-              </div>
-              {groups.map((group, column) => (
+          <div className="rv-grid-scroll">
+            <div
+              role="grid"
+              className="rv-grid"
+              style={{ "--rv-grid-columns": groups.length }}
+              aria-label={label || "Availability"}
+              aria-colcount={groups.length + 1}
+              aria-rowcount={maxRows + 1}
+            >
+              <div
+                role="row"
+                aria-rowindex={1}
+                className="rv-grid__row rv-grid__head"
+              >
                 <div
                   role="columnheader"
-                  aria-colindex={column + 2}
-                  key={group.key}
+                  aria-colindex={1}
+                  className="rv-grid__colhead rv-grid__colhead--time"
                 >
-                  {group.label}
+                  Time
                 </div>
-              ))}
-            </div>
+                {groups.map((group, column) => (
+                  <div
+                    role="columnheader"
+                    aria-colindex={column + 2}
+                    className="rv-grid__colhead"
+                    key={group.key}
+                  >
+                    {group.label}
+                  </div>
+                ))}
+              </div>
 
-            <div role="rowgroup">
-              {Array.from({ length: maxRows }, (_, row) => {
-                const firstSlot = groups.find((group) => group.slots?.[row])
-                  ?.slots?.[row];
-                return (
-                  <div key={row} role="row" aria-rowindex={row + 2}>
+              <div role="rowgroup">
+                {Array.from({ length: maxRows }, (_, row) => {
+                  const firstSlot = groups.find((group) => group.slots?.[row])
+                    ?.slots?.[row];
+                  return (
                     <div
-                      role="rowheader"
-                      aria-colindex={1}
-                      data-first-row={row === 0 ? "true" : undefined}
+                      key={row}
+                      role="row"
+                      aria-rowindex={row + 2}
+                      className="rv-grid__row"
                     >
-                      {firstSlot ? formatTime(firstSlot.localStart) : ""}
-                    </div>
-                    {groups.map((group, column) => {
-                      const slot = group.slots?.[row];
-                      if (!slot) {
+                      <div
+                        role="rowheader"
+                        aria-colindex={1}
+                        className="rv-grid__rowhead"
+                        data-first-row={row === 0 ? "true" : undefined}
+                      >
+                        {firstSlot ? formatTime(firstSlot.localStart) : ""}
+                      </div>
+                      {groups.map((group, column) => {
+                        const slot = group.slots?.[row];
+                        if (!slot) {
+                          return (
+                            <div
+                              key={`${group.key}:empty:${row}`}
+                              role="gridcell"
+                              className="rv-grid__cell"
+                              data-empty="true"
+                              aria-colindex={column + 2}
+                              aria-label={`${group.label}, no slot at this time`}
+                              aria-disabled="true"
+                            />
+                          );
+                        }
+
+                        const index = slot.index;
+                        const value = Number(schedule[index] || 0);
+                        const details = participantDetails
+                          ? participantDetails
+                              .filter(
+                                (participant) =>
+                                  Number(participant.schedule[index] || 0) > 0,
+                              )
+                              .map(
+                                (participant) =>
+                                  `${participant.name}: ${Number(
+                                    participant.schedule[index],
+                                  ).toFixed(2)}`,
+                              )
+                              .join("\n")
+                          : "";
+                        const title = details
+                          ? `${slotLabel(slot)}\n${details}`
+                          : slotLabel(slot);
+
                         return (
                           <div
-                            key={`${group.key}:empty:${row}`}
+                            key={index}
                             role="gridcell"
-                            aria-colindex={column + 2}
-                            aria-label={`${group.label}, no slot at this time`}
-                            aria-disabled="true"
-                          />
-                        );
-                      }
-
-                      const index = slot.index;
-                      const value = Number(schedule[index] || 0);
-                      const details = participantDetails
-                        ? participantDetails
-                            .filter(
-                              (participant) =>
-                                Number(participant.schedule[index] || 0) > 0,
-                            )
-                            .map(
-                              (participant) =>
-                                `${participant.name}: ${Number(
-                                  participant.schedule[index],
-                                ).toFixed(2)}`,
-                            )
-                            .join("\n")
-                        : "";
-                      const title = details
-                        ? `${slotLabel(slot)}\n${details}`
-                        : slotLabel(slot);
-
-                      return (
-                        <div
-                          key={index}
-                          role="gridcell"
-                          ref={(node) => {
-                            if (node) cellRefs.current.set(index, node);
-                            else cellRefs.current.delete(index);
-                          }}
-                          tabIndex={
-                            readOnly
-                              ? undefined
-                              : index === rovingCellIndex
-                                ? 0
-                                : -1
-                          }
-                          aria-colindex={column + 2}
-                          aria-label={`${group.label}, ${slotLabel(slot)}, availability ${value}`}
-                          aria-readonly={readOnly ? "true" : undefined}
-                          aria-selected={readOnly ? undefined : value > 0}
-                          data-cell-idx={index}
-                          title={title}
-                          onPointerDown={(event) => startStroke(index, event)}
-                          onPointerMove={continueStroke}
-                          onPointerUp={finishStroke}
-                          onPointerCancel={finishStroke}
-                          onLostPointerCapture={finishStroke}
-                          onFocus={() => setActiveCellIndex(index)}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter" || event.key === " ") {
-                              event.preventDefault();
-                              paintCell(index, event, "keyboard");
-                              return;
+                            className={`rv-grid__cell${showValues ? " rv-grid__cell--heat" : ""}`}
+                            style={
+                              showValues
+                                ? { "--rv-cell-value": value }
+                                : undefined
                             }
-                            moveKeyboardFocus(index, event);
-                          }}
-                        >
-                          {showValues
-                            ? value.toFixed(2).replace(/\.00$/, "")
-                            : ""}
-                        </div>
-                      );
-                    })}
-                  </div>
-                );
-              })}
+                            data-value={showValues ? undefined : value}
+                            ref={(node) => {
+                              if (node) cellRefs.current.set(index, node);
+                              else cellRefs.current.delete(index);
+                            }}
+                            tabIndex={
+                              readOnly
+                                ? undefined
+                                : index === rovingCellIndex
+                                  ? 0
+                                  : -1
+                            }
+                            aria-colindex={column + 2}
+                            aria-label={`${group.label}, ${slotLabel(slot)}, ${describeValue(value)}`}
+                            aria-readonly={readOnly ? "true" : undefined}
+                            aria-selected={readOnly ? undefined : value > 0}
+                            data-cell-idx={index}
+                            title={title}
+                            onPointerDown={(event) => startStroke(index, event)}
+                            onPointerMove={continueStroke}
+                            onPointerUp={finishStroke}
+                            onPointerCancel={finishStroke}
+                            onLostPointerCapture={finishStroke}
+                            onFocus={() => setActiveCellIndex(index)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                paintCell(index, event, "keyboard");
+                                return;
+                              }
+                              moveKeyboardFocus(index, event);
+                            }}
+                          >
+                            {showValues ? (
+                              value.toFixed(2).replace(/\.00$/, "")
+                            ) : (
+                              <span
+                                className="rv-grid__mark"
+                                aria-hidden="true"
+                              >
+                                {VALUE_MARKS[value] || ""}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </div>
         )}
       </div>
+      {!readOnly && groups.length > 0 && (
+        <p className="rv-schedule__legend">
+          <span className="rv-schedule__legend-item">
+            <span
+              className="rv-schedule__swatch"
+              data-value="0"
+              aria-hidden="true"
+            />
+            Busy
+          </span>
+          <span className="rv-schedule__legend-item">
+            <span
+              className="rv-schedule__swatch"
+              data-value="0.5"
+              aria-hidden="true"
+            >
+              ~
+            </span>
+            If needed
+          </span>
+          <span className="rv-schedule__legend-item">
+            <span
+              className="rv-schedule__swatch"
+              data-value="1"
+              aria-hidden="true"
+            >
+              ✓
+            </span>
+            Available
+          </span>
+        </p>
+      )}
     </div>
   );
 }

@@ -387,14 +387,21 @@ describe("scaled organizer workspace", () => {
         label,
       );
     });
+    const sectionNav = screen.getByRole("navigation", {
+      name: "Organizer sections",
+    });
     expect(
-      screen.queryByRole("navigation", { name: "Organizer sections" }),
-    ).not.toBeInTheDocument();
+      within(sectionNav)
+        .getAllByRole("link")
+        .map((link) => link.getAttribute("href")),
+    ).toEqual(sectionIds.map((id) => `#${id}`));
     expect(
       Array.from(document.querySelectorAll("main > section")).map(
         (section) => section.id,
       ),
     ).toEqual(sectionIds);
+    // Deep links stay real anchors: the workspace is one scrollable document,
+    // not a tab set that hides sections from find-in-page or the back button.
     expect(screen.queryAllByRole("tab")).toHaveLength(0);
     expect(screen.queryAllByRole("tabpanel")).toHaveLength(0);
 
@@ -1178,7 +1185,7 @@ describe("scaled organizer workspace", () => {
       name: "Faculty group",
     });
     const halfWeight = within(facultyGroup).getByRole("button", {
-      name: "0.5× Half",
+      name: "0.5× Half influence",
     });
     const input = within(facultyGroup).getByLabelText(
       "Weight for Faculty group",
