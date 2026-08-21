@@ -1,9 +1,11 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@/components/auth/AuthContext";
 import AppHeader from "@/components/ui/AppHeader";
+import { ButtonLink } from "@/components/ui/Button";
+import { Spinner } from "@/components/ui/Feedback";
+import { Eyebrow } from "@/components/ui/Surface";
 import { navigateTo, safeNextPath } from "@/lib/navigation";
 
 const ALLOWED_FLOWS = new Set(["auth", "login", "register"]);
@@ -111,20 +113,30 @@ export default function EmailAuthLinkPage() {
   return (
     <>
       <AppHeader />
-      <main className="auth-page auth-page-with-header">
-        <section className="auth-panel" aria-live="polite">
-          <div>
-            <h1>{error ? "Link verification failed" : "Signing you in"}</h1>
-            <p>
+      <main id="main" className="rv-page rv-page--form rv-page--centered">
+        <section aria-live="polite" className="rv-auth">
+          <div className="rv-stack rv-stack--sm">
+            <Eyebrow icon={error ? "alertTriangle" : "shield"}>
+              Email verification
+            </Eyebrow>
+            <h1 className="rv-auth__title">
+              {error ? "Link verification failed" : "Signing you in"}
+            </h1>
+            <p className="rv-auth__lede">
               {error
                 ? error
                 : "Please wait while we securely verify your email."}
             </p>
           </div>
-          {error && (
-            <Link className="app-btn app-btn-filled app-btn-full" href="/login">
+          {error ? (
+            <ButtonLink href="/login" variant="primary" block>
               Request a new code
-            </Link>
+            </ButtonLink>
+          ) : (
+            <p className="rv-loading-row">
+              <Spinner />
+              Verifying…
+            </p>
           )}
         </section>
       </main>

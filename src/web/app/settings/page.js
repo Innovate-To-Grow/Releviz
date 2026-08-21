@@ -1,8 +1,12 @@
 "use client";
 
 import { useEffect, useState, useSyncExternalStore } from "react";
-import AppButton from "@/components/ui/AppButton";
 import AppHeader from "@/components/ui/AppHeader";
+import Button from "@/components/ui/Button";
+import { Badge, Callout, LoadingState } from "@/components/ui/Feedback";
+import { Field, TextInput } from "@/components/ui/Form";
+import Icon from "@/components/ui/Icon";
+import { Card, PageHeader } from "@/components/ui/Surface";
 import { useAuth } from "@/components/auth/AuthContext";
 import { requestAccountDeletionCode } from "@/lib/api/auth";
 import { navigateTo, safeNextPath } from "@/lib/navigation";
@@ -95,6 +99,10 @@ export default function SettingsPage() {
   const [deleteStatus, setDeleteStatus] = useState("");
   const [deleteError, setDeleteError] = useState("");
   const [deleteAction, setDeleteAction] = useState(false);
+  // Disclosure state is owned by React so a background re-render (session list,
+  // profile save) can never drop an open panel the user is typing into.
+  const [passwordOpen, setPasswordOpen] = useState(false);
+  const [dangerOpen, setDangerOpen] = useState(false);
   const search = useSyncExternalStore(
     subscribeToLocation,
     locationSearch,
@@ -249,9 +257,12 @@ export default function SettingsPage() {
 
   if (!completionResolved || loading || !user) {
     return (
-      <div className="center-page">
-        <p>Loading...</p>
-      </div>
+      <>
+        <AppHeader pageTitle="Account settings" />
+        <main id="main" className="rv-page rv-page--form rv-page--centered">
+          <LoadingState message="Loading..." />
+        </main>
+      </>
     );
   }
 
@@ -270,36 +281,36 @@ export default function SettingsPage() {
     return (
       <>
         <AppHeader pageTitle="Complete your profile" />
-        <main className="auth-page auth-page-with-header profile-onboarding-page">
+        <main id="main" className="rv-page rv-page--form rv-page--centered">
           <section
-            className="auth-panel profile-onboarding-panel"
             aria-labelledby="profile-onboarding-heading"
+            className="rv-auth"
           >
-            <header className="profile-onboarding-heading">
-              <span className="settings-eyebrow">One last step</span>
-              <h1 id="profile-onboarding-heading">Complete your profile</h1>
-              <p>
+            <div className="rv-stack rv-stack--sm">
+              <p className="rv-eyebrow">One last step</p>
+              <h1 className="rv-auth__title" id="profile-onboarding-heading">
+                Complete your profile
+              </h1>
+              <p className="rv-auth__lede">
                 Add your name so people can recognize your response in the
                 schedule.
               </p>
-            </header>
+            </div>
 
-            <form className="profile-onboarding-form" onSubmit={handleSave}>
+            <form onSubmit={handleSave} className="rv-stack rv-stack--md">
               {error && (
-                <div className="auth-error" role="alert">
+                <Callout tone="danger" role="alert">
                   {error}
-                </div>
+                </Callout>
               )}
 
-              <label className="field-label profile-onboarding-email">
-                Email address
-                <input value={user.email} type="email" readOnly />
-              </label>
+              <Field label="Email address">
+                <TextInput value={user.email} type="email" readOnly />
+              </Field>
 
-              <div className="auth-grid">
-                <label className="field-label">
-                  First name
-                  <input
+              <div className="rv-grid rv-grid--pair">
+                <Field label="First name">
+                  <TextInput
                     value={current.firstName}
                     onChange={(event) =>
                       setField("firstName", event.target.value)
@@ -308,10 +319,9 @@ export default function SettingsPage() {
                     autoFocus
                     required
                   />
-                </label>
-                <label className="field-label">
-                  Last name
-                  <input
+                </Field>
+                <Field label="Last name">
+                  <TextInput
                     value={current.lastName}
                     onChange={(event) =>
                       setField("lastName", event.target.value)
@@ -319,12 +329,12 @@ export default function SettingsPage() {
                     autoComplete="family-name"
                     required
                   />
-                </label>
+                </Field>
               </div>
 
-              <AppButton type="submit" fullWidth>
+              <Button type="submit" variant="primary" size="lg" block>
                 {continueToEvent ? "Continue to event" : "Continue"}
-              </AppButton>
+              </Button>
             </form>
           </section>
         </main>
@@ -335,64 +345,77 @@ export default function SettingsPage() {
   return (
     <>
       <AppHeader pageTitle="Account settings" />
-      <main className="page-pad settings-shell">
-        <div className="settings-panel">
-          <aside className="settings-sidebar">
-            <div className="settings-account-summary">
-              <span className="settings-avatar" aria-hidden="true">
-                {initials}
-              </span>
-              <div>
-                <span className="settings-eyebrow">Signed in as</span>
-                <strong>{displayName}</strong>
-                <span className="settings-sidebar-email">{user.email}</span>
-              </div>
-            </div>
-            <nav className="settings-nav" aria-label="Settings sections">
-              <a href="#profile">Profile</a>
-              <a href="#sessions">Active sessions</a>
-              <a href="#password">Password</a>
-              <a href="#danger-zone">Danger zone</a>
-            </nav>
-            <div className="settings-account-id">
-              <span>Account ID</span>
-              <code>{user.id}</code>
-            </div>
-          </aside>
+      <main id="main" className="rv-page">
+        <div className="rv-stack rv-stack--lg">
+          <PageHeader
+            eyebrow="Your account"
+            eyebrowIcon="settings"
+            title="Account settings"
+            description="Manage your profile, signed-in devices, and account security."
+          />
 
-          <div className="settings-content">
-            <header className="settings-heading">
-              <div>
-                <span className="settings-eyebrow">Your account</span>
-                <h1>Account settings</h1>
-              </div>
-              <p>
-                Manage your profile, signed-in devices, and account security.
-              </p>
-            </header>
-
-            <form
-              id="profile"
-              className="settings-section"
-              onSubmit={handleSave}
-            >
-              <div className="settings-section-copy">
-                <span className="settings-section-index">01</span>
-                <h2>Profile</h2>
-                <p className="settings-muted">
-                  Update the name shown across your scheduling workspace.
-                </p>
-              </div>
-              <div className="settings-section-body">
-                {error && (
-                  <div className="auth-error" role="alert">
-                    {error}
+          <div className="rv-columns rv-columns--rail-first">
+            <aside className="rv-stack rv-stack--md rv-sticky-rail">
+              <Card compact className="rv-card--muted">
+                <div className="rv-cluster">
+                  <span className="rv-avatar rv-avatar--lg" aria-hidden="true">
+                    {initials}
+                  </span>
+                  <div className="rv-stack rv-stack--xs rv-fill">
+                    <span className="rv-eyebrow">Signed in as</span>
+                    <strong className="rv-break-anywhere">{displayName}</strong>
+                    <span className="rv-field__hint rv-break-anywhere">
+                      {user.email}
+                    </span>
                   </div>
+                </div>
+                <div className="rv-stack rv-stack--xs">
+                  <span className="rv-deflist__label">Account ID</span>
+                  <code className="rv-break-anywhere">{user.id}</code>
+                </div>
+              </Card>
+
+              <nav aria-label="Settings sections">
+                <ul className="rv-sidenav">
+                  {[
+                    ["#profile", "Profile", "users"],
+                    ["#sessions", "Active sessions", "shield"],
+                    ["#password", "Password", "lock"],
+                    ["#danger-zone", "Danger zone", "alertTriangle"],
+                  ].map(([href, label, icon]) => (
+                    <li key={href}>
+                      <a className="rv-sidenav__link" href={href}>
+                        <Icon name={icon} className="rv-menu__icon" />
+                        {label}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </nav>
+            </aside>
+
+            <div className="rv-stack rv-stack--lg">
+              <Card as="form" id="profile" onSubmit={handleSave}>
+                <div className="rv-cluster rv-cluster--top">
+                  <span className="rv-step-chip" aria-hidden="true">
+                    01
+                  </span>
+                  <div className="rv-stack rv-stack--xs rv-fill">
+                    <h2 className="rv-section-header__title">Profile</h2>
+                    <p className="rv-section-header__description">
+                      Update the name shown across your scheduling workspace.
+                    </p>
+                  </div>
+                </div>
+
+                {error && (
+                  <Callout tone="danger" role="alert">
+                    {error}
+                  </Callout>
                 )}
-                <div className="auth-grid">
-                  <label className="field-label">
-                    First name
-                    <input
+                <div className="rv-grid rv-grid--pair">
+                  <Field label="First name">
+                    <TextInput
                       value={current.firstName}
                       onChange={(event) =>
                         setField("firstName", event.target.value)
@@ -400,10 +423,9 @@ export default function SettingsPage() {
                       autoComplete="given-name"
                       required
                     />
-                  </label>
-                  <label className="field-label">
-                    Last name
-                    <input
+                  </Field>
+                  <Field label="Last name">
+                    <TextInput
                       value={current.lastName}
                       onChange={(event) =>
                         setField("lastName", event.target.value)
@@ -411,72 +433,77 @@ export default function SettingsPage() {
                       autoComplete="family-name"
                       required
                     />
-                  </label>
+                  </Field>
                 </div>
-                <div className="settings-actions">
+                <div className="rv-btn-row rv-btn-row--end">
                   {saved && (
-                    <span
-                      className="settings-saved"
-                      role="status"
-                      aria-live="polite"
-                    >
+                    <Badge tone="success" icon="checkCircle" role="status">
                       Saved
-                    </span>
+                    </Badge>
                   )}
-                  <AppButton type="submit">Save profile</AppButton>
+                  <Button type="submit" variant="primary">
+                    Save profile
+                  </Button>
                 </div>
-              </div>
-            </form>
+              </Card>
 
-            <section
-              id="sessions"
-              className="settings-section"
-              aria-labelledby="active-sessions-heading"
-            >
-              <div className="settings-section-copy">
-                <span className="settings-section-index">02</span>
-                <h2 id="active-sessions-heading">Active sessions</h2>
-                <p className="settings-muted">
-                  Revoke devices you no longer recognize. Access is invalidated
-                  immediately.
-                </p>
-              </div>
-              <div className="settings-section-body">
-                {sessionError && (
-                  <div className="auth-error" role="alert">
-                    {sessionError}
+              <Card
+                as="section"
+                id="sessions"
+                aria-labelledby="active-sessions-heading"
+              >
+                <div className="rv-cluster rv-cluster--top">
+                  <span className="rv-step-chip" aria-hidden="true">
+                    02
+                  </span>
+                  <div className="rv-stack rv-stack--xs rv-fill">
+                    <h2
+                      className="rv-section-header__title"
+                      id="active-sessions-heading"
+                    >
+                      Active sessions
+                    </h2>
+                    <p className="rv-section-header__description">
+                      Revoke devices you no longer recognize. Access is
+                      invalidated immediately.
+                    </p>
                   </div>
+                </div>
+
+                {sessionError && (
+                  <Callout tone="danger" role="alert">
+                    {sessionError}
+                  </Callout>
                 )}
                 {sessionsLoading ? (
-                  <p>Loading active sessions...</p>
+                  <LoadingState inline message="Loading active sessions..." />
                 ) : sessions.length ? (
-                  <ul className="session-list">
+                  <ul className="rv-session-list">
                     {sessions.map((session) => (
-                      <li
-                        key={session.id}
-                        className={`session-card${session.current ? " session-card-current" : ""}`}
-                      >
-                        <div className="session-description">
-                          <div className="session-title">
+                      <li key={session.id} className="rv-session">
+                        <div className="rv-stack rv-stack--xs rv-fill">
+                          <div className="rv-cluster rv-cluster--sm">
                             <strong>
                               {session.current ? "This device" : "Other device"}
                             </strong>
                             {session.current && (
-                              <span className="session-current-badge">
-                                Current
-                              </span>
+                              <Badge tone="accent">Current</Badge>
                             )}
                           </div>
-                          <div>{describeSessionDevice(session.userAgent)}</div>
-                          <small>
+                          <span>
+                            {describeSessionDevice(session.userAgent)}
+                          </span>
+                          <small className="rv-field__hint">
                             Last active{" "}
                             {new Date(session.lastSeenAt).toLocaleString()}
                             {session.ipAddress ? ` · ${session.ipAddress}` : ""}
                           </small>
                         </div>
-                        <AppButton
-                          variant="outlined"
+                        <Button
+                          size="sm"
+                          variant="dangerOutline"
                           disabled={Boolean(sessionAction)}
+                          busy={sessionAction === session.id}
                           onClick={() => handleRevokeSession(session)}
                         >
                           {sessionAction === session.id
@@ -484,64 +511,63 @@ export default function SettingsPage() {
                             : session.current
                               ? "Sign out this device"
                               : "Revoke"}
-                        </AppButton>
+                        </Button>
                       </li>
                     ))}
                   </ul>
                 ) : (
-                  <p>No active sessions were found.</p>
+                  <p className="rv-field__hint">
+                    No active sessions were found.
+                  </p>
                 )}
-                <div className="settings-actions">
-                  <AppButton
-                    variant="outlined"
+                <div className="rv-btn-row rv-btn-row--end">
+                  <Button
+                    variant="secondary"
+                    icon="logOut"
                     disabled={Boolean(sessionAction)}
+                    busy={sessionAction === "all"}
                     onClick={handleLogoutAll}
                   >
                     {sessionAction === "all"
                       ? "Signing out..."
                       : "Sign out all devices"}
-                  </AppButton>
+                  </Button>
                 </div>
-              </div>
-            </section>
+              </Card>
 
-            <form
-              id="password"
-              className="settings-disclosure"
-              onSubmit={handleChangePassword}
-            >
-              <details>
-                <summary className="settings-disclosure-summary">
-                  <div className="settings-section-copy">
-                    <span className="settings-section-index">03</span>
-                    <h2>Change password</h2>
-                    <p className="settings-muted">
-                      Changing your password signs out every device, including
-                      this one.
-                    </p>
-                  </div>
-                  <span className="settings-disclosure-toggle">
-                    <span className="settings-disclosure-label-closed">
-                      Show
+              <form id="password" onSubmit={handleChangePassword}>
+                <details
+                  className="rv-disclosure"
+                  open={passwordOpen}
+                  onToggle={(event) =>
+                    setPasswordOpen(event.currentTarget.open)
+                  }
+                >
+                  <summary className="rv-disclosure__summary">
+                    <span className="rv-step-chip" aria-hidden="true">
+                      03
                     </span>
-                    <span className="settings-disclosure-label-open">Hide</span>
-                    <span
-                      className="settings-disclosure-chevron"
-                      aria-hidden="true"
+                    <span className="rv-disclosure__summary-text">
+                      <h2 className="rv-disclosure__title">Change password</h2>
+                      <span className="rv-disclosure__hint">
+                        Changing your password signs out every device, including
+                        this one.
+                      </span>
+                    </span>
+                    <Icon
+                      name="chevronDown"
+                      className="rv-disclosure__chevron"
                     />
-                  </span>
-                </summary>
-                <div className="settings-disclosure-content">
-                  <div className="settings-section-body">
+                  </summary>
+                  <div className="rv-disclosure__content rv-stack rv-stack--md">
                     {passwordError && (
-                      <div className="auth-error" role="alert">
+                      <Callout tone="danger" role="alert">
                         {passwordError}
-                      </div>
+                      </Callout>
                     )}
-                    <div className="settings-fields-grid settings-password-fields">
-                      <label className="field-label">
-                        Current password
-                        <input
+                    <div className="rv-grid rv-grid--pair">
+                      <Field label="Current password">
+                        <TextInput
                           value={currentPassword}
                           onChange={(event) =>
                             setCurrentPassword(event.target.value)
@@ -550,10 +576,12 @@ export default function SettingsPage() {
                           autoComplete="current-password"
                           required
                         />
-                      </label>
-                      <label className="field-label">
-                        New password
-                        <input
+                      </Field>
+                      <Field
+                        label="New password"
+                        hint="Use at least 8 characters."
+                      >
+                        <TextInput
                           value={newPassword}
                           onChange={(event) =>
                             setNewPassword(event.target.value)
@@ -561,13 +589,11 @@ export default function SettingsPage() {
                           type="password"
                           autoComplete="new-password"
                           minLength={8}
-                          aria-describedby="settings-password-help"
                           required
                         />
-                      </label>
-                      <label className="field-label">
-                        Confirm new password
-                        <input
+                      </Field>
+                      <Field label="Confirm new password">
+                        <TextInput
                           value={newPasswordConfirm}
                           onChange={(event) =>
                             setNewPasswordConfirm(event.target.value)
@@ -577,72 +603,64 @@ export default function SettingsPage() {
                           minLength={8}
                           required
                         />
-                      </label>
+                      </Field>
                     </div>
-                    <p id="settings-password-help" className="field-help">
-                      Use at least 8 characters.
-                    </p>
-                    <div className="settings-actions">
-                      <AppButton type="submit" disabled={passwordAction}>
+                    <div className="rv-btn-row rv-btn-row--end">
+                      <Button
+                        type="submit"
+                        variant="primary"
+                        busy={passwordAction}
+                        disabled={passwordAction}
+                      >
                         {passwordAction ? "Changing..." : "Change password"}
-                      </AppButton>
+                      </Button>
                     </div>
                   </div>
-                </div>
-              </details>
-            </form>
+                </details>
+              </form>
 
-            <form
-              id="danger-zone"
-              className="settings-disclosure settings-danger-zone"
-              onSubmit={handleDeleteAccount}
-            >
-              <details>
-                <summary className="settings-disclosure-summary">
-                  <div className="settings-section-copy">
-                    <span className="settings-section-index">04</span>
-                    <h2>Delete account</h2>
-                    <p>
-                      Permanently remove your sign-in details and profile. This
-                      cannot be undone.
-                    </p>
-                  </div>
-                  <span className="settings-disclosure-toggle">
-                    <span className="settings-disclosure-label-closed">
-                      Show
+              <form id="danger-zone" onSubmit={handleDeleteAccount}>
+                <details
+                  className="rv-disclosure rv-disclosure--danger"
+                  open={dangerOpen}
+                  onToggle={(event) => setDangerOpen(event.currentTarget.open)}
+                >
+                  <summary className="rv-disclosure__summary">
+                    <span className="rv-step-chip" aria-hidden="true">
+                      04
                     </span>
-                    <span className="settings-disclosure-label-open">Hide</span>
-                    <span
-                      className="settings-disclosure-chevron"
-                      aria-hidden="true"
+                    <span className="rv-disclosure__summary-text">
+                      <h2 className="rv-disclosure__title">Delete account</h2>
+                      <span className="rv-disclosure__hint">
+                        Permanently remove your sign-in details and profile.
+                        This cannot be undone.
+                      </span>
+                    </span>
+                    <Icon
+                      name="chevronDown"
+                      className="rv-disclosure__chevron"
                     />
-                  </span>
-                </summary>
-                <div className="settings-disclosure-content">
-                  <div className="settings-section-body">
-                    <p className="settings-danger-note">
+                  </summary>
+                  <div className="rv-disclosure__content rv-stack rv-stack--md">
+                    <Callout tone="danger">
                       Every session will be revoked and your identity will be
                       anonymized in retained scheduling records.
-                    </p>
+                    </Callout>
                     {deleteError && (
-                      <div className="auth-error" role="alert">
+                      <Callout tone="danger" role="alert">
                         {deleteError}
-                      </div>
+                      </Callout>
                     )}
                     {deleteStatus && (
-                      <div
-                        className="auth-status"
-                        role="status"
-                        aria-live="polite"
-                      >
+                      <Callout tone="info" role="status" aria-live="polite">
                         {deleteStatus}
-                      </div>
+                      </Callout>
                     )}
-                    <div className="settings-fields-grid">
+                    <div className="rv-grid rv-grid--pair">
                       {deleteCodeSent && (
-                        <label className="field-label">
-                          Confirmation code
-                          <input
+                        <Field label="Confirmation code">
+                          <TextInput
+                            className="rv-input--code"
                             value={deleteCode}
                             onChange={(event) =>
                               setDeleteCode(event.target.value)
@@ -653,11 +671,10 @@ export default function SettingsPage() {
                             maxLength={6}
                             required
                           />
-                        </label>
+                        </Field>
                       )}
-                      <label className="field-label">
-                        Type DELETE to confirm
-                        <input
+                      <Field label="Type DELETE to confirm">
+                        <TextInput
                           value={deleteConfirmation}
                           onChange={(event) =>
                             setDeleteConfirmation(event.target.value)
@@ -666,13 +683,13 @@ export default function SettingsPage() {
                           spellCheck="false"
                           required
                         />
-                      </label>
+                      </Field>
                     </div>
-                    <div className="settings-actions">
-                      <AppButton
+                    <div className="rv-btn-row rv-btn-row--end">
+                      <Button
                         type="submit"
-                        variant="outlined"
-                        className="app-btn-danger"
+                        variant="danger"
+                        busy={deleteAction}
                         disabled={
                           deleteAction ||
                           deleteConfirmation !== "DELETE" ||
@@ -686,12 +703,12 @@ export default function SettingsPage() {
                           : deleteCodeSent
                             ? "Delete account permanently"
                             : "Email a confirmation code"}
-                      </AppButton>
+                      </Button>
                     </div>
                   </div>
-                </div>
-              </details>
-            </form>
+                </details>
+              </form>
+            </div>
           </div>
         </div>
       </main>

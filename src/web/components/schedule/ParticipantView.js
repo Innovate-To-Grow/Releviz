@@ -1,8 +1,10 @@
 "use client";
 
 import { useState, useContext, useEffect, useRef, useCallback } from "react";
-import { MdLogin, MdRefresh, MdSend } from "react-icons/md";
-import AppButton from "@/components/ui/AppButton";
+import Button from "@/components/ui/Button";
+import { Badge, Callout, LoadingState } from "@/components/ui/Feedback";
+import SegmentedControl from "@/components/ui/Segmented";
+import { Card, PageHeader, SectionHeader } from "@/components/ui/Surface";
 import EventContext from "@/components/event/EventContext";
 import ScheduleChannelEditor from "@/components/schedule/ScheduleChannelEditor";
 import ScheduleGrid from "@/components/schedule/ScheduleGrid";
@@ -522,202 +524,207 @@ function ParticipantView() {
 
   if (authLoading || !user) {
     return (
-      <div className="page-pad participant-loading">
-        <p>Loading...</p>
-      </div>
+      <main id="main" className="rv-page rv-page--centered">
+        <LoadingState message="Loading..." />
+      </main>
     );
   }
 
   if (!joined) {
     return (
-      <div className="page-pad participant-join-shell">
-        <div className="participant-join-card">
-          <div className="participant-join-heading">
-            <p className="participant-eyebrow">Your invitation</p>
-            <h2>Join Event</h2>
-            <p>
-              Join, mark the times that work for you, then submit your response.
-            </p>
-          </div>
+      <main id="main" className="rv-page rv-page--form">
+        <Card className="rv-stack--lg">
+          <PageHeader
+            plain
+            as="h2"
+            eyebrow="Your invitation"
+            eyebrowIcon="mail"
+            title="Join Event"
+            description="Join, mark the times that work for you, then submit your response."
+          />
 
           <EventDetailsGrid event={event} />
 
           {joinError && (
-            <p className="participant-error" role="alert">
+            <Callout tone="danger" role="alert">
               {joinError}
-            </p>
+            </Callout>
           )}
 
-          <AppButton onClick={handleJoin} fullWidth icon={<MdLogin />}>
-            Join as {user.displayName}
-          </AppButton>
-        </div>
-      </div>
+          <div className="rv-btn-row">
+            <Button
+              variant="primary"
+              size="lg"
+              icon="check"
+              onClick={handleJoin}
+            >
+              Join as {user.displayName}
+            </Button>
+          </div>
+        </Card>
+      </main>
     );
   }
 
-  return (
-    <div className="page-pad participant-workspace">
-      <div className="participant-heading">
-        <div>
-          <p className="participant-eyebrow">Your availability</p>
-          <h2 className="participant-title">
-            Welcome, {participantName}
-            {submitted && (
-              <span className="participant-submitted">
-                <span aria-hidden="true">✓</span> Submitted
-              </span>
-            )}
-          </h2>
-          <p className="participant-heading-copy">
-            Choose a status, then click or drag across the times below.
-          </p>
-        </div>
-        <AppButton
-          onClick={handleRefresh}
-          variant="outlined"
-          icon={<MdRefresh />}
-          disabled={isRefreshing}
-        >
-          {isRefreshing ? "Refreshing…" : "Refresh"}
-        </AppButton>
-      </div>
+  const activeChoice = AVAILABILITY_CHOICES.find(
+    (choice) => choice.value === availabilityValue,
+  );
 
-      <div className="participant-columns">
-        <div
-          className={`participant-editor-pane${viewPermission === "own_only" ? " participant-editor-pane-wide" : ""}`}
-        >
-          <section
-            className="participant-editor"
-            aria-labelledby="participant-editor-title"
-          >
-            <div className="participant-choice-block">
-              <h3 id="participant-editor-title">Mark times as</h3>
-              <div
-                role="group"
-                aria-label="Availability status"
-                className="participant-choice-group"
+  return (
+    <main id="main" className="rv-page rv-page--wide">
+      <div className="rv-stack rv-stack--lg">
+        <PageHeader
+          as="h2"
+          eyebrow="Your availability"
+          eyebrowIcon="calendar"
+          title={`Welcome, ${participantName}`}
+          description="Choose a status, then click or drag across the times below."
+          actions={
+            <>
+              {submitted && (
+                <Badge tone="success" icon="checkCircle">
+                  Submitted
+                </Badge>
+              )}
+              <Button
+                icon="refresh"
+                onClick={handleRefresh}
+                disabled={isRefreshing}
+                busy={isRefreshing}
               >
-                {AVAILABILITY_CHOICES.map((choice) => (
-                  <AppButton
-                    key={choice.value}
-                    onClick={() => setAvailabilityValue(choice.value)}
-                    variant={
-                      availabilityValue === choice.value ? "filled" : "outlined"
-                    }
-                    aria-pressed={availabilityValue === choice.value}
-                    disabled={responseChangesDisabled}
-                  >
-                    {choice.label}
-                  </AppButton>
-                ))}
-              </div>
-              <p className="participant-hint">
-                Your changes save automatically.
-              </p>
-              <div className="participant-actions">
-                <AppButton
+                {isRefreshing ? "Refreshing…" : "Refresh"}
+              </Button>
+            </>
+          }
+        />
+
+        <Card as="section" aria-labelledby="participant-editor-title">
+          <SectionHeader
+            as="h3"
+            titleId="participant-editor-title"
+            title="Mark times as"
+            description="Your changes save automatically."
+            actions={
+              <div className="rv-btn-row">
+                <Button
+                  size="sm"
                   onClick={() => fillAllAvailability(availabilityValue)}
-                  variant="outlined"
                   disabled={responseChangesDisabled}
                 >
-                  Apply{" "}
-                  {
-                    AVAILABILITY_CHOICES.find(
-                      (choice) => choice.value === availabilityValue,
-                    )?.label
-                  }{" "}
-                  to all
-                </AppButton>
-                <AppButton
+                  Apply {activeChoice?.label} to all
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
                   onClick={() => fillAllAvailability(0)}
-                  variant="outlined"
                   disabled={responseChangesDisabled}
                 >
                   Mark all Busy
-                </AppButton>
+                </Button>
               </div>
-            </div>
+            }
+          />
 
-            <ScheduleChannelEditor
-              mode={mode}
-              slotGroups={event.slotGroups}
-              inperson={scheduleInperson}
-              virtual={scheduleVirtual}
-              readOnly={responseChangesDisabled}
-              onInpersonPaint={handleInpersonPaint}
-              onVirtualPaint={handleVirtualPaint}
-              onCopy={handleCopySchedule}
-            />
+          <SegmentedControl
+            label="Availability status"
+            options={AVAILABILITY_CHOICES}
+            value={availabilityValue}
+            disabled={responseChangesDisabled}
+            onChange={setAvailabilityValue}
+          />
 
-            {draftSaveState !== "idle" && (
-              <div
-                role={draftSaveState === "failed" ? "alert" : "status"}
-                aria-live={draftSaveState === "failed" ? "assertive" : "polite"}
-                className={`participant-save-status${draftSaveState === "failed" ? " participant-save-status-failed" : ""}`}
-              >
-                <span>
-                  {draftSaveState === "saving" && "Saving draft…"}
-                  {draftSaveState === "saved" &&
-                    "Draft saved. Submit when you are ready."}
-                  {draftSaveState === "submitted" && "Schedule submitted."}
-                  {draftSaveState === "failed" &&
-                    (draftSaveError || "Draft autosave failed.")}
-                </span>
+          <ScheduleChannelEditor
+            mode={mode}
+            slotGroups={event.slotGroups}
+            inperson={scheduleInperson}
+            virtual={scheduleVirtual}
+            readOnly={responseChangesDisabled}
+            onInpersonPaint={handleInpersonPaint}
+            onVirtualPaint={handleVirtualPaint}
+            onCopy={handleCopySchedule}
+          />
+
+          {draftSaveState !== "idle" && (
+            <Callout
+              tone={
+                draftSaveState === "failed"
+                  ? "danger"
+                  : draftSaveState === "saving"
+                    ? "neutral"
+                    : "success"
+              }
+              icon={draftSaveState === "saving" ? "clock" : undefined}
+              role={draftSaveState === "failed" ? "alert" : "status"}
+              aria-live={draftSaveState === "failed" ? "assertive" : "polite"}
+            >
+              <span>
+                {draftSaveState === "saving" && "Saving draft…"}
+                {draftSaveState === "saved" &&
+                  "Draft saved. Submit when you are ready."}
+                {draftSaveState === "submitted" && "Schedule submitted."}
                 {draftSaveState === "failed" &&
-                  (saveConflict ? (
-                    <AppButton
-                      variant="outlined"
+                  (draftSaveError || "Draft autosave failed.")}
+              </span>
+              {draftSaveState === "failed" &&
+                (saveConflict ? (
+                  <div className="rv-btn-row">
+                    <Button
+                      size="sm"
+                      icon="refresh"
                       onClick={() => applyParticipantResponse(saveConflict)}
                     >
                       Reload latest response
-                    </AppButton>
-                  ) : (
-                    <AppButton
-                      variant="outlined"
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="rv-btn-row">
+                    <Button
+                      size="sm"
+                      icon="refresh"
                       onClick={() => void runAutosave()}
                     >
                       Retry save
-                    </AppButton>
-                  ))}
-              </div>
-            )}
+                    </Button>
+                  </div>
+                ))}
+            </Callout>
+          )}
 
-            {submitError && (
-              <p role="alert" className="participant-error">
-                {submitError}
-              </p>
-            )}
-            {responseChangesDisabled && (
-              <p className="participant-error">
-                {event.status !== "active"
-                  ? `Responses are locked while this event is ${event.status}.`
-                  : "The response deadline has passed."}
-              </p>
-            )}
-            <div className="participant-submit-row">
-              <AppButton
-                onClick={handleSubmit}
-                disabled={isSubmitting || responseChangesDisabled}
-                icon={<MdSend />}
-              >
-                {isSubmitting
-                  ? "Submitting..."
-                  : submitted
-                    ? "Update Availability"
-                    : "Submit Availability"}
-              </AppButton>
-            </div>
-          </section>
-        </div>
+          {submitError && (
+            <Callout tone="danger" role="alert">
+              {submitError}
+            </Callout>
+          )}
+          {responseChangesDisabled && (
+            <Callout tone="warning">
+              {event.status !== "active"
+                ? `Responses are locked while this event is ${event.status}.`
+                : "The response deadline has passed."}
+            </Callout>
+          )}
+
+          <div className="rv-btn-row rv-btn-row--stack rv-btn-row--end">
+            <Button
+              variant="primary"
+              size="lg"
+              icon="check"
+              onClick={handleSubmit}
+              busy={isSubmitting}
+              disabled={isSubmitting || responseChangesDisabled}
+            >
+              {isSubmitting
+                ? "Submitting..."
+                : submitted
+                  ? "Update Availability"
+                  : "Submit Availability"}
+            </Button>
+          </div>
+        </Card>
 
         {viewPermission !== "own_only" && (
-          <aside
-            className="participant-results-pane"
-            aria-label="Group availability"
-          >
+          <Card as="aside" aria-label="Group availability">
             {resultSnapshot.status === "refreshing" && (
-              <div className="participant-result-notice" role="status">
+              <Callout tone="info" role="status" icon="refresh">
                 Group availability is updating for revision{" "}
                 {resultSnapshot.requestedRevision ??
                   event.resultsRevision ??
@@ -726,72 +733,64 @@ function ParticipantView() {
                 {results
                   ? " Showing the last completed snapshot meanwhile."
                   : ""}
-              </div>
+              </Callout>
             )}
             {resultSnapshot.status === "failed" && (
-              <div
-                className="participant-result-notice participant-result-notice-error"
-                role="alert"
-              >
+              <Callout tone="danger" role="alert">
                 Group availability could not be refreshed yet.
                 {results ? " Showing the last completed snapshot." : ""}
-              </div>
+              </Callout>
             )}
             {results ? (
-              <section className="participant-results-card">
-                <h3>Group Availability</h3>
-                <p className="participant-results-summary">
-                  Based on {results.countedResponseTotal} submitted response(s).{" "}
-                  {results.unansweredParticipantTotal} participant(s) are still
-                  unanswered.
-                </p>
-                <div className="participant-results-grids">
+              <section className="rv-stack rv-stack--md">
+                <SectionHeader
+                  as="h3"
+                  title="Group Availability"
+                  description={`Based on ${results.countedResponseTotal} submitted response(s). ${results.unansweredParticipantTotal} participant(s) are still unanswered.`}
+                />
+                <div className="rv-stack rv-stack--lg">
                   {mode !== "virtual" && (
-                    <div className="participant-result-grid">
-                      <ScheduleGrid
-                        schedule={avgInperson}
-                        slotGroups={event.slotGroups}
-                        readOnly={true}
-                        showValues={true}
-                        label={
-                          mode === "mixed"
-                            ? "In-Person Availability"
-                            : "Availability"
-                        }
-                      />
-                    </div>
+                    <ScheduleGrid
+                      schedule={avgInperson}
+                      slotGroups={event.slotGroups}
+                      readOnly={true}
+                      showValues={true}
+                      label={
+                        mode === "mixed"
+                          ? "In-Person Availability"
+                          : "Availability"
+                      }
+                    />
                   )}
                   {mode !== "inperson" && (
-                    <div className="participant-result-grid">
-                      <ScheduleGrid
-                        schedule={avgVirtual}
-                        slotGroups={event.slotGroups}
-                        readOnly={true}
-                        showValues={true}
-                        label={
-                          mode === "mixed"
-                            ? "Virtual Availability"
-                            : "Availability"
-                        }
-                        virtual
-                      />
-                    </div>
+                    <ScheduleGrid
+                      schedule={avgVirtual}
+                      slotGroups={event.slotGroups}
+                      readOnly={true}
+                      showValues={true}
+                      label={
+                        mode === "mixed"
+                          ? "Virtual Availability"
+                          : "Availability"
+                      }
+                      virtual
+                    />
                   )}
                 </div>
               </section>
             ) : (
-              <section className="participant-results-card participant-results-empty">
-                <h3>Group Availability</h3>
-                <p>
-                  Submit a valid schedule before shared results become
-                  available.
-                </p>
+              <section className="rv-stack rv-stack--sm">
+                <SectionHeader
+                  as="h3"
+                  title="Group Availability"
+                  description="Submit a valid schedule before shared results become available."
+                />
               </section>
             )}
-          </aside>
+          </Card>
         )}
       </div>
-    </div>
+    </main>
   );
 }
 

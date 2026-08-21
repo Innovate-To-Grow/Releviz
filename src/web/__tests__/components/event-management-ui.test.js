@@ -12,16 +12,6 @@ import {
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 
-jest.mock("@material/web/textfield/outlined-text-field.js", () => ({}), {
-  virtual: true,
-});
-jest.mock("@material/web/select/outlined-select.js", () => ({}), {
-  virtual: true,
-});
-jest.mock("@material/web/select/select-option.js", () => ({}), {
-  virtual: true,
-});
-
 const replace = jest.fn();
 let searchParams = new URLSearchParams();
 
@@ -108,9 +98,8 @@ function authenticated() {
   });
 }
 
-function setCustomElementValue(element, value) {
-  element.value = value;
-  fireEvent(element, new Event("input", { bubbles: true }));
+function setFieldValue(element, value) {
+  fireEvent.change(element, { target: { value } });
 }
 
 describe("organizer event management UI", () => {
@@ -284,12 +273,81 @@ describe("organizer event management UI", () => {
       "stable-duplicate-key",
     );
 
-    const codeField = document.querySelector(
-      'md-outlined-text-field[label="Enter Event Code"]',
-    );
-    setCustomElementValue(codeField, " A B C ");
+    const codeField = screen.getByLabelText("Enter Event Code");
+    setFieldValue(codeField, " A B C ");
     fireEvent.keyDown(codeField, { key: "Enter" });
     expect(navigateTo).toHaveBeenCalledWith("/event?code=A%20B%20C");
+  });
+
+  test("dashboard blocks locked edits and surfaces lifecycle failures", async () => {
+    const archived = {
+      ...baseEvent,
+      code: "LOCKED01",
+      name: "Archived plan",
+      status: "archived",
+    };
+    fetchDashboardEvents.mockResolvedValueOnce({
+      organized: [archived],
+      participating: [],
+    });
+
+    const lockedView = render(<DashboardPage />);
+    await screen.findByRole("heading", { name: "My Dashboard" });
+
+    // A locked event keeps its Edit affordance visible, but the link refuses to
+    // navigate instead of leading to a form that cannot save.
+    const lockedCard = screen
+      .getByRole("link", { name: archived.name })
+      .closest("article");
+    const editLink = within(lockedCard).getByRole("link", { name: "Edit" });
+    expect(editLink).toHaveAttribute("aria-disabled", "true");
+    const editClick = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+    });
+    fireEvent(editLink, editClick);
+    expect(editClick.defaultPrevented).toBe(true);
+    expect(
+      within(lockedCard).queryByRole("button", { name: "Archive" }),
+    ).not.toBeInTheDocument();
+    lockedView.unmount();
+
+    fetchDashboardEvents.mockResolvedValueOnce({
+      organized: [baseEvent],
+      participating: [],
+    });
+    updateEventLifecycle.mockRejectedValueOnce(new Error("archive offline"));
+    deleteEvent.mockRejectedValueOnce(
+      Object.assign(new Error("delete conflict"), {
+        event: { ...baseEvent, version: 9 },
+      }),
+    );
+
+    render(<DashboardPage />);
+    await screen.findByRole("heading", { name: "My Dashboard" });
+    const activeCard = screen
+      .getByRole("link", { name: baseEvent.name })
+      .closest("article");
+
+    await userEvent.click(
+      within(activeCard).getByRole("button", { name: "Archive" }),
+    );
+    expect(await screen.findByText("archive offline")).toBeInTheDocument();
+
+    await userEvent.click(
+      within(activeCard).getByRole("button", { name: "Delete" }),
+    );
+    await userEvent.type(
+      screen.getByLabelText("Event code confirmation"),
+      baseEvent.code,
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Delete event permanently" }),
+    );
+    expect(await screen.findByText("delete conflict")).toBeInTheDocument();
+    // The confirmation stays open with the refreshed event so the organizer can
+    // retry against the version the server actually holds.
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
   test("dashboard reports load failures and redirects unauthenticated users", async () => {
@@ -334,11 +392,9 @@ describe("organizer event management UI", () => {
     expect(
       screen.getByText("Advanced options").closest("details"),
     ).toHaveAttribute("open");
-    const nameField = document.querySelector(
-      'md-outlined-text-field[label="Event Name"]',
-    );
-    expect(nameField).toHaveAttribute("value", baseEvent.name);
-    setCustomElementValue(nameField, "Updated planning");
+    const nameField = screen.getByLabelText("Event Name");
+    expect(nameField).toHaveValue(baseEvent.name);
+    setFieldValue(nameField, "Updated planning");
     fireEvent.change(screen.getByLabelText("End Time"), {
       target: { value: "10:30" },
     });
@@ -396,11 +452,9 @@ describe("organizer event management UI", () => {
     const inlineForm = screen
       .getByRole("button", { name: "Save changes" })
       .closest("form");
-    expect(inlineForm).toHaveClass("create-event-form--inline");
+    expect(inlineForm.closest("main")).toBeNull();
     expect(fetchEvent).not.toHaveBeenCalled();
-    expect(
-      document.querySelector('md-outlined-text-field[label="Event Name"]'),
-    ).toHaveAttribute("value", baseEvent.name);
+    expect(screen.getByLabelText("Event Name")).toHaveValue(baseEvent.name);
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onCancel).toHaveBeenCalledTimes(1);
     expect(replace).not.toHaveBeenCalled();
@@ -441,7 +495,7 @@ describe("organizer event management UI", () => {
     const reloadButton = await screen.findByRole("button", {
       name: "Reload latest event",
     });
-    expect(reloadButton.closest(".event-form-warning")).toHaveTextContent(
+    expect(reloadButton.closest("div")).toHaveTextContent(
       "The latest saved version is 5.",
     );
     await userEvent.click(reloadButton);
@@ -491,9 +545,7 @@ describe("organizer event management UI", () => {
     ).toBeInTheDocument();
     const createButton = screen.getByRole("button", { name: "Create Event" });
     const createForm = createButton.closest("form");
-    expect(createForm).toHaveClass("create-event-form");
-    expect(createForm).not.toHaveClass("md-card");
-    expect(createForm.closest("main")).toHaveClass("create-event-shell");
+    expect(createForm.closest("main")).not.toBeNull();
     expect(
       screen.getByRole("heading", { name: "Meeting & access" }),
     ).toBeInTheDocument();
@@ -502,9 +554,7 @@ describe("organizer event management UI", () => {
       .closest("details");
     expect(advancedOptions).not.toHaveAttribute("open");
 
-    const locationField = document.querySelector(
-      'md-outlined-text-field[label="Location / Address"]',
-    );
+    const locationField = screen.getByLabelText("Location / Address");
     const timezoneField = screen.getByLabelText("Event timezone");
     const meetingDurationField = screen.getByLabelText("Meeting Duration");
     const accessField = screen.getByLabelText("Event Access");
@@ -537,15 +587,15 @@ describe("organizer event management UI", () => {
     ).toBeInTheDocument();
     await userEvent.click(createButton);
     const nameError = await screen.findByText("Event name is required");
-    expect(nameError).toHaveClass("create-event-field-error");
+    expect(nameError).toHaveAttribute("role", "alert");
     expect(nameError.closest('[data-error-field="eventName"]')).not.toBeNull();
 
-    const nameField = document.querySelector(
-      'md-outlined-text-field[label="Event Name"]',
-    );
+    const nameField = screen.getByLabelText("Event Name");
     expect(nameField).toHaveAttribute("aria-invalid", "true");
-    expect(nameField.parentElement).toContainElement(nameError);
-    setCustomElementValue(nameField, "Created event");
+    expect(
+      nameField.closest('[data-error-field="eventName"]'),
+    ).toContainElement(nameError);
+    setFieldValue(nameField, "Created event");
     expect(
       screen.queryByText("Event name is required"),
     ).not.toBeInTheDocument();
@@ -557,13 +607,13 @@ describe("organizer event management UI", () => {
     });
     await userEvent.click(screen.getByRole("button", { name: "Add date" }));
     expect(screen.getByText("2026-08-21")).toBeInTheDocument();
-    setCustomElementValue(screen.getByLabelText("Event Access"), "open_link");
+    setFieldValue(screen.getByLabelText("Event Access"), "open_link");
     const timezoneSelect = screen.getByLabelText("Event timezone");
-    expect(timezoneSelect.tagName).toBe("MD-OUTLINED-SELECT");
+    expect(timezoneSelect.tagName).toBe("SELECT");
     expect(
       within(timezoneSelect).getByText("America/Los_Angeles"),
     ).toBeInTheDocument();
-    setCustomElementValue(timezoneSelect, "America/Los_Angeles");
+    setFieldValue(timezoneSelect, "America/Los_Angeles");
     fireEvent.change(screen.getByLabelText("Meeting Duration"), {
       target: { value: "60" },
     });
@@ -591,13 +641,11 @@ describe("organizer event management UI", () => {
     const advancedOptions = screen
       .getByText("Advanced options")
       .closest("details");
-    const nameField = document.querySelector(
-      'md-outlined-text-field[label="Event Name"]',
-    );
+    const nameField = screen.getByLabelText("Event Name");
     const meetingDuration = screen.getByLabelText("Meeting Duration");
 
     expect(advancedOptions).not.toHaveAttribute("open");
-    setCustomElementValue(nameField, "Duration validation");
+    setFieldValue(nameField, "Duration validation");
     fireEvent.change(meetingDuration, { target: { value: "20" } });
     fireEvent.submit(
       screen.getByRole("button", { name: "Create Event" }).closest("form"),
@@ -611,9 +659,7 @@ describe("organizer event management UI", () => {
       durationError.closest('[data-error-field="meetingDuration"]'),
     ).toContainElement(meetingDuration);
     expect(meetingDuration).toHaveAttribute("aria-invalid", "true");
-    expect(
-      document.querySelector(".create-event-feedback .create-event-error"),
-    ).not.toBeInTheDocument();
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
   });
 
   test("opens advanced options and places advanced validation beside its field", async () => {
@@ -621,15 +667,13 @@ describe("organizer event management UI", () => {
     const advancedOptions = screen
       .getByText("Advanced options")
       .closest("details");
-    const nameField = document.querySelector(
-      'md-outlined-text-field[label="Event Name"]',
-    );
+    const nameField = screen.getByLabelText("Event Name");
     const reminderHours = screen.getByLabelText(
       "Reminder Hours Before Deadline",
     );
 
     expect(advancedOptions).not.toHaveAttribute("open");
-    setCustomElementValue(nameField, "Reminder validation");
+    setFieldValue(nameField, "Reminder validation");
     fireEvent.change(reminderHours, { target: { value: "721" } });
     fireEvent.submit(
       screen.getByRole("button", { name: "Create Event" }).closest("form"),
@@ -643,8 +687,6 @@ describe("organizer event management UI", () => {
       reminderError.closest('[data-error-field="reminderHours"]'),
     ).toContainElement(reminderHours);
     expect(reminderHours).toHaveAttribute("aria-invalid", "true");
-    expect(
-      document.querySelector(".create-event-feedback .create-event-error"),
-    ).not.toBeInTheDocument();
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
   });
 });

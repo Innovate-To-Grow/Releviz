@@ -2,11 +2,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import Link from "next/link";
 import dynamic from "next/dynamic";
 import EventContext from "@/components/event/EventContext";
 import EventHeader from "@/components/event/EventHeader";
 import ParticipantView from "@/components/schedule/ParticipantView";
+import { ButtonLink } from "@/components/ui/Button";
+import { EmptyState, LoadingState } from "@/components/ui/Feedback";
 import { useAuth } from "@/components/auth/AuthContext";
 import { fetchEvent, markInvitationOpened } from "@/lib/api/events";
 import { navigateTo, replaceUrl } from "@/lib/navigation";
@@ -16,15 +17,42 @@ const OrganizerView = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div className="page-pad participant-loading" aria-busy="true">
-        <p role="status">Loading organizer tools…</p>
-      </div>
+      <main id="main" className="rv-page" aria-busy="true">
+        <LoadingState message="Loading organizer tools…" />
+      </main>
     ),
   },
 );
 
-function EventPage() {
-  const searchParams = useSearchParams();
+const DemoEventPage =
+  process.env.NODE_ENV === "development"
+    ? dynamic(
+        /* istanbul ignore next -- this development-only chunk loads in the browser. */
+        () => import("@/components/event/DemoEventPage"),
+        {
+          ssr: false,
+          /* istanbul ignore next -- Next renders this only while the development chunk loads. */
+          loading: () => (
+            <main id="main" className="rv-page" aria-busy="true">
+              <LoadingState message="Loading design preview..." />
+            </main>
+          ),
+        },
+      )
+    : null;
+
+export function isDemoEventPreview(
+  searchParams,
+  nodeEnv = process.env.NODE_ENV,
+) {
+  return (
+    nodeEnv === "development" &&
+    searchParams.get("demo") === "1" &&
+    searchParams.get("code") === "DEMO2026"
+  );
+}
+
+function LiveEventPage({ searchParams }) {
   const eventCode = searchParams.get("code");
   const invitationToken = searchParams.get("invitation");
   const {
@@ -134,21 +162,26 @@ function EventPage() {
     (Boolean(eventCode) && settledEventCode !== eventCode)
   ) {
     return (
-      <main className="status-page" aria-busy="true">
-        <p role="status">Loading event...</p>
+      <main id="main" className="rv-page rv-page--centered" aria-busy="true">
+        <LoadingState message="Loading event..." />
       </main>
     );
   }
 
   if (!event) {
     return (
-      <main className="status-page">
-        <span className="status-page-code">Event unavailable</span>
-        <h1>Event Not Found</h1>
-        <p>{error || "This event does not exist."}</p>
-        <Link className="app-btn app-btn-filled" href="/create">
-          Create New Event
-        </Link>
+      <main id="main" className="rv-page rv-page--form rv-page--centered">
+        <EmptyState
+          icon="search"
+          headingLevel={1}
+          title="Event Not Found"
+          description={error || "This event does not exist."}
+          action={
+            <ButtonLink href="/create" variant="primary" icon="plus">
+              Create New Event
+            </ButtonLink>
+          }
+        />
       </main>
     );
   }
@@ -174,6 +207,16 @@ function EventPage() {
       {isOrganizer ? <OrganizerView /> : <ParticipantView />}
     </EventContext.Provider>
   );
+}
+
+function EventPage() {
+  const searchParams = useSearchParams();
+  const demoPreview = isDemoEventPreview(searchParams);
+
+  /* istanbul ignore next -- NODE_ENV=test cannot mount the dev-only chunk; browser smoke covers it. */
+  if (demoPreview && DemoEventPage) return <DemoEventPage />;
+
+  return <LiveEventPage searchParams={searchParams} />;
 }
 
 export default EventPage;

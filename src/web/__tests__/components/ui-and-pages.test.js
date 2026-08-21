@@ -13,9 +13,8 @@ import {
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 
-import AppButton from "@/components/ui/AppButton";
 import AppHeader from "@/components/ui/AppHeader";
-import BrandLogo, { BrandHomeLink } from "@/components/ui/BrandLogo";
+import SiteFooter from "@/components/ui/SiteFooter";
 import ScheduleGrid from "@/components/schedule/ScheduleGrid";
 import useAutosaveNavigationGuard from "@/components/schedule/useAutosaveNavigationGuard";
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
@@ -27,18 +26,6 @@ function PendingDraftGuard({ flush, hasPending = () => true, pending = true }) {
   useAutosaveNavigationGuard({ hasPending, flush, pending });
   return null;
 }
-
-jest.mock("@material/web/textfield/outlined-text-field.js", () => ({}), {
-  virtual: true,
-});
-jest.mock("@material/web/select/outlined-select.js", () => ({}), {
-  virtual: true,
-});
-jest.mock("@material/web/select/select-option.js", () => ({}), {
-  virtual: true,
-});
-jest.mock("@material/web/slider/slider.js", () => ({}), { virtual: true });
-jest.mock("@material/web/checkbox/checkbox.js", () => ({}), { virtual: true });
 
 const push = jest.fn();
 const replace = jest.fn();
@@ -57,13 +44,6 @@ jest.mock("next/link", () => ({
     <a href={href} {...props}>
       {children}
     </a>
-  ),
-}));
-
-jest.mock("next/image", () => ({
-  __esModule: true,
-  default: ({ alt, priority: _priority, ...props }) => (
-    <img alt={alt || ""} {...props} />
   ),
 }));
 
@@ -182,46 +162,21 @@ describe("small UI modules", () => {
     expect(formatMode("inperson")).toBe("In-Person");
   });
 
-  test("AppButton renders variants and optional icon", () => {
+  test("header and footer link home and layout keeps icon metadata", () => {
+    useAuth.mockReturnValue({ user: null, loading: false, logout: jest.fn() });
     render(
       <>
-        <AppButton
-          icon={<span data-testid="icon" />}
-          fullWidth
-          className="extra"
-        >
-          Save
-        </AppButton>
-        <AppButton variant="outlined">Cancel</AppButton>
+        <AppHeader />
+        <SiteFooter />
       </>,
     );
-    expect(screen.getByText("Save").closest("button")).toHaveClass(
-      "app-btn-full",
-      "extra",
-    );
-    expect(screen.getByTestId("icon")).toBeInTheDocument();
-    expect(screen.getByText("Cancel").closest("button")).toHaveClass(
-      "app-btn-outlined",
-    );
-  });
-
-  test("brand logo exposes wordmark and square assets", () => {
-    const { rerender } = render(<BrandLogo />);
-    expect(screen.getByRole("img", { name: "Releviz" })).toHaveAttribute(
-      "src",
-      "/brand/releviz-logo.png",
-    );
-
-    rerender(<BrandLogo variant="mark" />);
-    expect(screen.getByRole("img", { name: "Releviz" })).toHaveAttribute(
-      "src",
-      "/brand/releviz-mark.png",
-    );
-
-    rerender(<BrandHomeLink logoClassName="brand-logo--footer" />);
-    expect(screen.getByRole("link", { name: "Releviz home" })).toHaveAttribute(
+    expect(screen.getAllByRole("link", { name: "Releviz" })[0]).toHaveAttribute(
       "href",
       "/",
+    );
+    expect(screen.getByRole("link", { name: "Privacy" })).toHaveAttribute(
+      "href",
+      "/privacy",
     );
     expect(rootMetadata.manifest).toBe("/manifest.json");
     expect(rootMetadata.icons.icon[1].url).toBe("/brand/releviz-mark.png");
@@ -634,7 +589,7 @@ describe("role-aware headers", () => {
 
     render(<AppHeader pageTitle="Create event" contextLabel="Organizer" />);
 
-    expect(screen.getByText("/ Create event")).toBeInTheDocument();
+    expect(screen.getByText("Create event")).toBeInTheDocument();
     expect(screen.getByText("Organizer")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Prachi" }));
     expect(screen.getByRole("menuitem", { name: "Settings" })).toHaveAttribute(

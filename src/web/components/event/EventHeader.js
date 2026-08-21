@@ -1,12 +1,17 @@
 "use client";
 
 import Link from "next/link";
-import React, { useState } from "react";
-import { MdCheck, MdLink } from "react-icons/md";
-import AppButton from "@/components/ui/AppButton";
+import { useState } from "react";
 import AccountMenu from "@/components/ui/AccountMenu";
-import BrandLogo from "@/components/ui/BrandLogo";
+import Button from "@/components/ui/Button";
+import { Badge } from "@/components/ui/Feedback";
+import { BrandMark } from "@/components/ui/Icon";
 
+/**
+ * Event application bar. It answers "which event am I in, what is my role, and
+ * how do I share it" before any workflow content is reached, and wraps instead
+ * of truncating so nothing is lost at 320px.
+ */
 function EventHeader({ eventName, eventCode, isOrganizer }) {
   const [copied, setCopied] = useState(false);
 
@@ -30,32 +35,35 @@ function EventHeader({ eventName, eventCode, isOrganizer }) {
   };
 
   return (
-    <header className="event-header">
-      <Link href="/" className="event-header-identity">
-        <BrandLogo
-          alt="Releviz"
-          className="brand-logo brand-logo--event-header"
-          priority
-        />
-        <h1>{eventName}</h1>
-        {eventCode && <span className="event-header-code">#{eventCode}</span>}
-        {isOrganizer !== undefined && (
-          <span
-            className={`event-role-badge${isOrganizer ? " event-role-badge-organizer" : ""}`}
+    <header className="rv-shell-header">
+      <div className="rv-shell-header__inner rv-event-bar">
+        <Link href="/" className="rv-brand rv-brand--sm">
+          <BrandMark className="rv-brand__mark" />
+          <span className="rv-brand__word">Releviz</span>
+        </Link>
+        <h1 className="rv-event-bar__title rv-truncate">{eventName}</h1>
+        <div className="rv-event-bar__tags">
+          {eventCode && (
+            <Badge mono tone="outline">
+              #{eventCode}
+            </Badge>
+          )}
+          {isOrganizer !== undefined && (
+            <Badge tone={isOrganizer ? "accent" : "neutral"}>
+              {isOrganizer ? "Organizer" : "Participant"}
+            </Badge>
+          )}
+        </div>
+        <div className="rv-event-bar__actions">
+          <Button
+            size="sm"
+            icon={copied ? "check" : "link"}
+            onClick={handleCopy}
           >
-            {isOrganizer ? "Organizer" : "Participant"}
-          </span>
-        )}
-      </Link>
-      <div className="event-header-actions">
-        <AppButton
-          onClick={handleCopy}
-          variant="outlined"
-          icon={copied ? <MdCheck /> : <MdLink />}
-        >
-          {copied ? "Copied!" : "Copy Share Link"}
-        </AppButton>
-        <AccountMenu signedOutLabel="Log in" />
+            {copied ? "Copied!" : "Copy Share Link"}
+          </Button>
+          <AccountMenu signedOutLabel="Log in" />
+        </div>
       </div>
     </header>
   );

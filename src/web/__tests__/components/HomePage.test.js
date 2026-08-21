@@ -47,7 +47,7 @@ describe("HomePage", () => {
   test("explains the product and shows signed-out account actions", () => {
     useAuth.mockReturnValue({ user: null, loading: false });
     render(<HomePage />);
-    expect(screen.getByRole("link", { name: "Releviz home" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Releviz" })).toHaveAttribute(
       "href",
       "/",
     );

@@ -3,14 +3,30 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { MdAdd, MdHourglassEmpty, MdRefresh, MdSave } from "react-icons/md";
-import AppButton from "@/components/ui/AppButton";
 import AppHeader from "@/components/ui/AppHeader";
+import Button from "@/components/ui/Button";
+import Icon from "@/components/ui/Icon";
+import SegmentedControl, {
+  ChipGroup,
+  ToggleChip,
+} from "@/components/ui/Segmented";
+import {
+  Checkbox,
+  Field,
+  FieldError,
+  Select,
+  Switch,
+  TextInput,
+} from "@/components/ui/Form";
+import { Callout, LoadingState } from "@/components/ui/Feedback";
+import {
+  Card,
+  Disclosure,
+  PageHeader,
+  SectionHeader,
+} from "@/components/ui/Surface";
 import { useAuth } from "@/components/auth/AuthContext";
 import { createEvent, fetchEvent, updateEvent } from "@/lib/api/events";
-import "@material/web/textfield/outlined-text-field.js";
-import "@material/web/select/outlined-select.js";
-import "@material/web/select/select-option.js";
 import { DAY_LABELS } from "@/lib/constants";
 import { reloadPage } from "@/lib/navigation";
 import { formatIsoForDateTimeLocal, zonedLocalDateTimeToIso } from "@/lib/time";
@@ -84,31 +100,8 @@ function getBrowserTimezone() {
   }
 }
 
-function ToggleChip({ label, active, onClick }) {
-  return (
-    <button
-      type="button"
-      aria-pressed={active}
-      onClick={onClick}
-      className={`event-toggle-chip${active ? " event-toggle-chip-active" : ""}`}
-    >
-      {label}
-    </button>
-  );
-}
-
-function LabelRow({ children }) {
-  return <span className="event-field-label">{children}</span>;
-}
-
-function FieldError({ id, message }) {
-  if (!message) return null;
-
-  return (
-    <p id={id} className="create-event-field-error" role="alert">
-      {message}
-    </p>
-  );
+function GroupLabel({ children }) {
+  return <span className="rv-field__label">{children}</span>;
 }
 
 function focusInvalidField(fieldName) {
@@ -120,11 +113,7 @@ function focusInvalidField(fieldName) {
       field.scrollIntoView({ behavior: "smooth", block: "center" });
     }
 
-    field
-      .querySelector(
-        "md-outlined-text-field, md-outlined-select, input, button",
-      )
-      ?.focus();
+    field.querySelector("input, select, button")?.focus();
   }, 0);
 }
 
@@ -258,38 +247,6 @@ function CreateEvent({
       router.replace(`/login?next=${encodeURIComponent(next)}`);
     }
   }, [authLoading, editing, eventCode, user, router]);
-
-  useEffect(() => {
-    const field = nameFieldRef.current;
-    if (!field) return;
-    let input = null;
-    let cancelled = false;
-
-    const syncName = (event) => {
-      setName(event.currentTarget.value || "");
-      setFieldErrors((current) => {
-        if (!current.eventName) return current;
-        const next = { ...current };
-        delete next.eventName;
-        return next;
-      });
-    };
-
-    const bindInput = async () => {
-      await field.updateComplete;
-      if (cancelled) return;
-      input = field.shadowRoot?.querySelector("input") || null;
-      input?.addEventListener("input", syncName);
-      input?.addEventListener("change", syncName);
-    };
-
-    bindInput();
-    return () => {
-      cancelled = true;
-      input?.removeEventListener("input", syncName);
-      input?.removeEventListener("change", syncName);
-    };
-  }, []);
 
   useEffect(() => {
     if (!editing || authLoading || !user) return;
@@ -519,25 +476,15 @@ function CreateEvent({
 
   if (authLoading || !user || loadingEvent) {
     if (inline) {
-      return (
-        <div className="create-event-inline-status" aria-busy="true">
-          <p role="status">Loading event...</p>
-        </div>
-      );
+      return <LoadingState inline message="Loading event..." />;
     }
     return (
-      <div
-        style={{
-          minHeight: "100vh",
-          display: "flex",
-          justifyContent: "center",
-          alignItems: "center",
-        }}
-      >
-        <p style={{ color: "var(--md-sys-color-on-surface-variant)" }}>
-          {editing ? "Loading event..." : "Loading..."}
-        </p>
-      </div>
+      <>
+        <AppHeader pageTitle={editing ? "Edit event" : "Create event"} />
+        <main id="main" className="rv-page rv-page--form rv-page--centered">
+          <LoadingState message={editing ? "Loading event..." : "Loading..."} />
+        </main>
+      </>
     );
   }
 
@@ -547,163 +494,128 @@ function CreateEvent({
     initialEvent.organizerUserId !== user.id
   ) {
     return (
-      <div className="create-event-inline-status">
-        <p role="alert">Only the organizer can edit this event.</p>
-      </div>
+      <Callout tone="danger" role="alert">
+        Only the organizer can edit this event.
+      </Callout>
     );
   }
 
   if (editing && eventVersion === null) {
     if (inline) {
       return (
-        <div className="create-event-inline-status">
-          <p role="alert">{error || "This event could not be loaded."}</p>
-        </div>
+        <Callout tone="danger" role="alert">
+          {error || "This event could not be loaded."}
+        </Callout>
       );
     }
     return (
-      <div className="center-page page-pad">
-        <div className="md-card" style={{ maxWidth: "480px", width: "100%" }}>
-          <h1
-            style={{ color: "var(--md-sys-color-error)", marginBottom: "12px" }}
-          >
-            Unable to edit event
-          </h1>
-          <p
-            role="alert"
-            style={{ color: "var(--md-sys-color-on-surface-variant)" }}
-          >
-            {error || "This event could not be loaded."}
-          </p>
-          <Link
-            href="/dashboard"
-            className="dashboard-action-link"
-            style={{ marginTop: "20px" }}
-          >
-            Return to dashboard
-          </Link>
-        </div>
-      </div>
+      <>
+        <AppHeader pageTitle="Edit event" />
+        <main id="main" className="rv-page rv-page--form rv-page--centered">
+          <div className="rv-auth">
+            <h1 className="rv-auth__title">Unable to edit event</h1>
+            <Callout tone="danger" role="alert">
+              {error || "This event could not be loaded."}
+            </Callout>
+            <Link href="/dashboard">Return to dashboard</Link>
+          </div>
+        </main>
+      </>
     );
   }
 
   const form = (
-    <form
-      onSubmit={handleSubmit}
-      className={`create-event-form${inline ? " create-event-form--inline" : ""}`}
-      noValidate
-    >
+    <form onSubmit={handleSubmit} noValidate className="rv-stack rv-stack--lg">
       {!inline && (
-        <header className="create-event-heading">
-          <span className="create-event-eyebrow">Event setup</span>
-          <h1>{editing ? "Edit event" : "Create event"}</h1>
-          <p>
-            {editing
+        <PageHeader
+          eyebrow="Event setup"
+          eyebrowIcon="calendar"
+          title={editing ? "Edit event" : "Create event"}
+          description={
+            editing
               ? "Review the schedule and response rules before saving your changes."
-              : "Set the schedule and response rules, then share one link with everyone."}
-          </p>
-        </header>
+              : "Set the schedule and response rules, then share one link with everyone."
+          }
+        />
       )}
 
-      <section
-        className="create-event-section"
-        aria-labelledby="schedule-fields-heading"
-      >
-        <div className="create-event-section-copy">
-          <span className="create-event-section-index">01</span>
-          <div>
-            <SectionHeading id="schedule-fields-heading">
-              Schedule
-            </SectionHeading>
-            <p>
-              Name the event, then choose the days and time range people can
-              respond to.
-            </p>
-          </div>
+      <Card as="section" aria-labelledby="schedule-fields-heading">
+        <div className="rv-cluster rv-cluster--top">
+          <span className="rv-step-chip" aria-hidden="true">
+            01
+          </span>
+          <SectionHeader
+            className="rv-fill"
+            as={SectionHeading}
+            titleId="schedule-fields-heading"
+            title="Schedule"
+            description="Name the event, then choose the days and time range people can respond to."
+          />
         </div>
 
-        <div className="create-event-section-fields">
-          <div
-            className="create-event-field-group"
-            data-error-field="eventName"
-          >
-            <md-outlined-text-field
-              ref={nameFieldRef}
-              className="create-event-wide-field"
-              label="Event Name"
-              value={name}
-              onInput={(event) => {
-                setName(event.target.value);
-                clearFieldError("eventName");
-              }}
-              onChange={(event) => {
-                setName(event.currentTarget.value);
-                clearFieldError("eventName");
-              }}
-              maxLength="200"
-              error={Boolean(fieldErrors.eventName)}
-              aria-invalid={fieldErrors.eventName ? "true" : undefined}
-              aria-describedby={
-                fieldErrors.eventName ? "event-name-error" : undefined
-              }
-            ></md-outlined-text-field>
-            <FieldError id="event-name-error" message={fieldErrors.eventName} />
+        <div className="rv-stack rv-stack--lg">
+          <div data-error-field="eventName">
+            <Field label="Event Name" error={fieldErrors.eventName}>
+              <TextInput
+                ref={nameFieldRef}
+                value={name}
+                onChange={(event) => {
+                  setName(event.target.value);
+                  clearFieldError("eventName");
+                }}
+                maxLength={200}
+                placeholder="Weekly design review"
+              />
+            </Field>
           </div>
 
           <div
-            className="create-event-field-group"
             data-error-field="daySelection"
+            className="rv-stack rv-stack--sm"
           >
-            <LabelRow>Day Selection</LabelRow>
-            <div
-              className="create-event-chip-row create-event-day-modes"
-              role="group"
-              aria-label="Day selection type"
+            <GroupLabel>Day Selection</GroupLabel>
+            <SegmentedControl
+              label="Day selection type"
+              value={daySelectionType}
               aria-describedby={
                 fieldErrors.daySelection ? "day-selection-error" : undefined
               }
-            >
-              <ToggleChip
-                label="Days of Week"
-                active={daySelectionType === "days_of_week"}
-                onClick={() => {
-                  setDaySelectionType("days_of_week");
-                  clearFieldError("daySelection");
-                }}
-              />
-              <ToggleChip
-                label="Specific Dates"
-                active={daySelectionType === "specific_dates"}
-                onClick={() => {
-                  setDaySelectionType("specific_dates");
-                  clearFieldError("daySelection");
-                }}
-              />
-            </div>
+              options={[
+                { value: "days_of_week", label: "Days of Week" },
+                { value: "specific_dates", label: "Specific Dates" },
+              ]}
+              onChange={(value) => {
+                setDaySelectionType(value);
+                clearFieldError("daySelection");
+              }}
+            />
             {daySelectionType === "days_of_week" ? (
-              <div className="create-event-chip-row">
+              <ChipGroup label="Days of the week">
                 {DAY_LABELS.map((label, idx) => (
                   <ToggleChip
                     key={idx}
                     label={label}
-                    active={selectedDays.includes(idx)}
+                    pressed={selectedDays.includes(idx)}
                     onClick={() => toggleDay(idx)}
                   />
                 ))}
-              </div>
+              </ChipGroup>
             ) : (
-              <div className="create-event-date-picker">
-                <div className="create-event-date-entry">
-                  <input
-                    className="create-event-control"
-                    aria-label="Specific event date"
-                    type="date"
-                    value={dateInput}
-                    onChange={(e) => setDateInput(e.target.value)}
-                  />
-                  <button
-                    className="create-event-add-date"
-                    type="button"
+              <div className="rv-stack rv-stack--sm">
+                <div className="rv-input-group">
+                  <Field
+                    label="Specific event date"
+                    labelHidden
+                    className="rv-fill"
+                  >
+                    <TextInput
+                      type="date"
+                      value={dateInput}
+                      onChange={(e) => setDateInput(e.target.value)}
+                    />
+                  </Field>
+                  <Button
+                    icon="plus"
                     onClick={() => {
                       if (dateInput && !specificDates.includes(dateInput)) {
                         setSpecificDates((prev) => [...prev, dateInput].sort());
@@ -713,15 +625,16 @@ function CreateEvent({
                     }}
                   >
                     Add date
-                  </button>
+                  </Button>
                 </div>
                 {specificDates.length > 0 && (
-                  <div className="create-event-date-tags">
+                  <ul className="rv-chip-list">
                     {specificDates.map((d) => (
-                      <span className="create-event-date-tag" key={d}>
-                        {d}
+                      <li key={d} className="rv-chip">
+                        <span>{d}</span>
                         <button
                           type="button"
+                          className="rv-chip__remove"
                           aria-label={`Remove ${d}`}
                           onClick={() =>
                             setSpecificDates((prev) =>
@@ -729,30 +642,23 @@ function CreateEvent({
                             )
                           }
                         >
-                          ×
+                          <Icon name="close" />
                         </button>
-                      </span>
+                      </li>
                     ))}
-                  </div>
+                  </ul>
                 )}
               </div>
             )}
-            <FieldError
-              id="day-selection-error"
-              message={fieldErrors.daySelection}
-            />
+            <FieldError id="day-selection-error">
+              {fieldErrors.daySelection}
+            </FieldError>
           </div>
 
-          <div
-            className="create-event-field-group"
-            data-error-field="timeRange"
-          >
-            <div className="create-event-two-column">
-              <label>
-                <LabelRow>Start Time</LabelRow>
-                <input
-                  className="create-event-control"
-                  aria-label="Start Time"
+          <div data-error-field="timeRange" className="rv-stack rv-stack--sm">
+            <div className="rv-grid rv-grid--pair">
+              <Field label="Start Time">
+                <TextInput
                   type="time"
                   step={slotMinutes * 60}
                   value={startTime}
@@ -765,12 +671,9 @@ function CreateEvent({
                     clearFieldError("timeRange");
                   }}
                 />
-              </label>
-              <label>
-                <LabelRow>End Time</LabelRow>
-                <input
-                  className="create-event-control"
-                  aria-label="End Time"
+              </Field>
+              <Field label="End Time">
+                <TextInput
                   type="time"
                   step={slotMinutes * 60}
                   value={endTime}
@@ -783,377 +686,272 @@ function CreateEvent({
                     clearFieldError("timeRange");
                   }}
                 />
-              </label>
+              </Field>
             </div>
-            <FieldError id="time-range-error" message={fieldErrors.timeRange} />
-            <p className="create-event-help">
+            <FieldError id="time-range-error">
+              {fieldErrors.timeRange}
+            </FieldError>
+            <p className="rv-field__hint">
               An end time earlier than the start time creates an overnight
               window.
             </p>
           </div>
         </div>
-      </section>
+      </Card>
 
-      <section
-        className="create-event-section"
-        aria-labelledby="meeting-access-heading"
-      >
-        <div className="create-event-section-copy">
-          <span className="create-event-section-index">02</span>
-          <div>
-            <SectionHeading id="meeting-access-heading">
-              Meeting &amp; access
-            </SectionHeading>
-            <p>
-              Choose how the group meets, the event timezone and length, and who
-              can join.
-            </p>
-          </div>
+      <Card as="section" aria-labelledby="meeting-access-heading">
+        <div className="rv-cluster rv-cluster--top">
+          <span className="rv-step-chip" aria-hidden="true">
+            02
+          </span>
+          <SectionHeader
+            className="rv-fill"
+            as={SectionHeading}
+            titleId="meeting-access-heading"
+            title="Meeting &amp; access"
+            description="Choose how the group meets, the event timezone and length, and who can join."
+          />
         </div>
 
-        <div className="create-event-section-fields">
-          <div className="create-event-field-group">
-            <LabelRow>Meeting Type</LabelRow>
-            <div className="create-event-chip-row">
-              {MODES.map((meetingMode) => (
-                <ToggleChip
-                  key={meetingMode.value}
-                  label={meetingMode.label}
-                  active={mode === meetingMode.value}
-                  onClick={() => setMode(meetingMode.value)}
-                />
-              ))}
-            </div>
+        <div className="rv-stack rv-stack--lg">
+          <div className="rv-stack rv-stack--sm">
+            <GroupLabel>Meeting Type</GroupLabel>
+            <SegmentedControl
+              label="Meeting type"
+              value={mode}
+              options={MODES.map((meetingMode) => ({
+                value: meetingMode.value,
+                label: meetingMode.label,
+              }))}
+              onChange={setMode}
+            />
           </div>
 
           {mode !== "virtual" && (
-            <md-outlined-text-field
-              className="create-event-wide-field"
+            <Field
               label="Location / Address"
-              value={location}
-              onInput={(event) => setLocation(event.target.value)}
-              onChange={(event) => setLocation(event.currentTarget.value)}
-              placeholder="TBD"
-            ></md-outlined-text-field>
+              hint="Leave empty to show “TBD” until the meeting is confirmed."
+            >
+              <TextInput
+                value={location}
+                onChange={(event) => setLocation(event.target.value)}
+                placeholder="TBD"
+              />
+            </Field>
           )}
 
-          <div className="create-event-two-column">
-            <div
-              className="create-event-field-group"
-              data-error-field="eventTimezone"
-            >
-              <LabelRow>Event Timezone</LabelRow>
-              <md-outlined-select
-                className="create-event-wide-field create-event-select create-event-timezone-select"
-                aria-label="Event timezone"
-                value={eventTimezone}
-                clamp-menu-width
-                typeahead-delay="600"
-                error={Boolean(fieldErrors.eventTimezone)}
-                aria-invalid={fieldErrors.eventTimezone ? "true" : undefined}
-                aria-describedby={
-                  fieldErrors.eventTimezone ? "event-timezone-error" : undefined
-                }
-                onInput={(event) => {
-                  setEventTimezone(event.target.value);
-                  clearFieldError("eventTimezone");
-                }}
-                onChange={(event) => {
-                  setEventTimezone(event.target.value);
-                  clearFieldError("eventTimezone");
-                }}
+          <div className="rv-grid rv-grid--pair">
+            <div data-error-field="eventTimezone">
+              <Field
+                label="Event Timezone"
+                error={fieldErrors.eventTimezone}
+                id="event-timezone"
               >
-                {timezoneOptions.map((timezone) => (
-                  <md-select-option key={timezone} value={timezone}>
-                    <div slot="headline">{timezone}</div>
-                  </md-select-option>
-                ))}
-              </md-outlined-select>
-              <FieldError
-                id="event-timezone-error"
-                message={fieldErrors.eventTimezone}
-              />
+                <Select
+                  aria-label="Event timezone"
+                  value={eventTimezone}
+                  onChange={(event) => {
+                    setEventTimezone(event.target.value);
+                    clearFieldError("eventTimezone");
+                  }}
+                >
+                  {timezoneOptions.map((timezone) => (
+                    <option key={timezone} value={timezone}>
+                      {timezone}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
             </div>
 
-            <div
-              className="create-event-field-group"
-              data-error-field="meetingDuration"
-            >
-              <LabelRow>Meeting Duration</LabelRow>
-              <input
-                className="create-event-control"
-                aria-label="Meeting Duration"
-                type="number"
-                min="15"
-                max="480"
-                step="15"
-                value={meetingDurationMinutes}
-                aria-invalid={fieldErrors.meetingDuration ? "true" : undefined}
-                aria-describedby={
-                  fieldErrors.meetingDuration
-                    ? "meeting-duration-error"
-                    : undefined
-                }
-                onChange={(event) => {
-                  setMeetingDurationMinutes(Number(event.target.value));
-                  clearFieldError("meetingDuration");
-                }}
-              />
-              <FieldError
-                id="meeting-duration-error"
-                message={fieldErrors.meetingDuration}
-              />
+            <div data-error-field="meetingDuration">
+              <Field
+                label="Meeting Duration"
+                error={fieldErrors.meetingDuration}
+                id="meeting-duration"
+              >
+                <TextInput
+                  className="rv-input--numeric"
+                  type="number"
+                  min="15"
+                  max="480"
+                  step="15"
+                  value={meetingDurationMinutes}
+                  onChange={(event) => {
+                    setMeetingDurationMinutes(Number(event.target.value));
+                    clearFieldError("meetingDuration");
+                  }}
+                />
+              </Field>
             </div>
           </div>
-          <p className="create-event-help">
+          <p className="rv-field__hint">
             Times are shown in this timezone. Meeting duration determines how
             much continuous availability a recommendation needs.
           </p>
 
-          <div className="create-event-field-group">
-            <LabelRow>Event Access</LabelRow>
-            <md-outlined-select
-              className="create-event-wide-field create-event-select"
-              aria-label="Event Access"
+          <Field
+            label="Event Access"
+            hint="Invite-only events restrict access to roster members and the organizer."
+          >
+            <Select
               value={accessMode}
-              onInput={(event) => setAccessMode(event.target.value)}
               onChange={(event) => setAccessMode(event.target.value)}
             >
-              <md-select-option value="invite_only">
-                <div slot="headline">Invite only</div>
-              </md-select-option>
-              <md-select-option value="open_link">
-                <div slot="headline">Anyone with the event code</div>
-              </md-select-option>
-            </md-outlined-select>
-          </div>
-          <p className="create-event-help">
-            Invite-only events restrict access to roster members and the
-            organizer.
-          </p>
+              <option value="invite_only">Invite only</option>
+              <option value="open_link">Anyone with the event code</option>
+            </Select>
+          </Field>
         </div>
-      </section>
+      </Card>
 
-      <details
-        className="create-event-disclosure"
+      <Disclosure
         open={advancedOpen}
         onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}
+        summary={<span className="rv-disclosure__title">Advanced options</span>}
+        hint="Fine-tune slot granularity, participant visibility, deadlines, and reminders."
       >
-        <summary className="create-event-disclosure-summary">
-          <div className="create-event-section-copy">
-            <span className="create-event-section-index">03</span>
-            <div>
-              <SectionHeading>Advanced options</SectionHeading>
-              <p>
-                Fine-tune slot granularity, participant visibility, deadlines,
-                and reminders.
-              </p>
-            </div>
+        <section
+          aria-labelledby="advanced-settings-heading"
+          className="rv-stack rv-stack--lg"
+        >
+          <SectionHeader
+            as={AdvancedHeading}
+            titleId="advanced-settings-heading"
+            title="Fine tuning"
+            description="Adjust availability granularity, schedule visibility, and reminder timing when the defaults are not enough."
+          />
+
+          <div className="rv-grid rv-grid--pair">
+            <Field label="Slot Duration">
+              <Select
+                value={String(slotMinutes)}
+                onChange={(event) => setSlotMinutes(Number(event.target.value))}
+              >
+                <option value="15">15 minutes</option>
+                <option value="30">30 minutes</option>
+              </Select>
+            </Field>
+            <Field label="Participant View">
+              <Select
+                value={participantViewPermission}
+                onChange={(event) =>
+                  setParticipantViewPermission(event.target.value)
+                }
+              >
+                <option value="own_only">Own schedule only</option>
+                <option value="all_after_submit">
+                  Submitted schedules after I submit
+                </option>
+                <option value="realtime">
+                  Submitted schedules in real time
+                </option>
+              </Select>
+            </Field>
           </div>
-          <span className="create-event-disclosure-toggle" aria-hidden="true">
-            <span className="create-event-disclosure-label-closed">Show</span>
-            <span className="create-event-disclosure-label-open">Hide</span>
-            <span className="create-event-disclosure-chevron" />
-          </span>
-        </summary>
-
-        <div className="create-event-disclosure-content">
-          <section
-            className="create-event-advanced-section"
-            aria-labelledby="advanced-settings-heading"
-          >
-            <div className="create-event-advanced-copy">
-              <AdvancedHeading id="advanced-settings-heading">
-                Fine tuning
-              </AdvancedHeading>
-              <p>
-                Adjust availability granularity, schedule visibility, and
-                reminder timing when the defaults are not enough.
-              </p>
-            </div>
-            <div className="create-event-advanced-fields">
-              <div className="create-event-two-column">
-                <div className="create-event-field-group">
-                  <LabelRow>Slot Duration</LabelRow>
-                  <md-outlined-select
-                    className="create-event-wide-field create-event-select"
-                    aria-label="Slot Duration"
-                    value={String(slotMinutes)}
-                    onInput={(event) =>
-                      setSlotMinutes(Number(event.target.value))
-                    }
-                    onChange={(event) =>
-                      setSlotMinutes(Number(event.target.value))
-                    }
-                  >
-                    <md-select-option value="15">
-                      <div slot="headline">15 minutes</div>
-                    </md-select-option>
-                    <md-select-option value="30">
-                      <div slot="headline">30 minutes</div>
-                    </md-select-option>
-                  </md-outlined-select>
-                </div>
-                <div className="create-event-field-group">
-                  <LabelRow>Participant View</LabelRow>
-                  <md-outlined-select
-                    className="create-event-wide-field create-event-select"
-                    aria-label="Participant View"
-                    value={participantViewPermission}
-                    onInput={(event) =>
-                      setParticipantViewPermission(event.target.value)
-                    }
-                  >
-                    <md-select-option value="own_only">
-                      <div slot="headline">Own schedule only</div>
-                    </md-select-option>
-                    <md-select-option value="all_after_submit">
-                      <div slot="headline">
-                        Submitted schedules after I submit
-                      </div>
-                    </md-select-option>
-                    <md-select-option value="realtime">
-                      <div slot="headline">
-                        Submitted schedules in real time
-                      </div>
-                    </md-select-option>
-                  </md-outlined-select>
-                </div>
-              </div>
-              <p className="create-event-help">
-                Slot duration controls the availability grid. Participant View
-                controls when people can see submitted schedules.
-              </p>
-
-              <div className="create-event-two-column">
-                <label>
-                  <LabelRow>Response Deadline</LabelRow>
-                  <input
-                    className="create-event-control"
-                    aria-label="Response Deadline"
-                    type="datetime-local"
-                    value={responseDeadline}
-                    onChange={(event) =>
-                      setResponseDeadline(event.target.value)
-                    }
-                  />
-                </label>
-                <div
-                  className="create-event-field-group"
-                  data-error-field="reminderHours"
-                >
-                  <LabelRow>Reminder Hours Before Deadline</LabelRow>
-                  <input
-                    className="create-event-control"
-                    aria-label="Reminder Hours Before Deadline"
-                    type="number"
-                    min="0"
-                    max="720"
-                    value={reminderHoursBefore}
-                    aria-invalid={
-                      fieldErrors.reminderHours ? "true" : undefined
-                    }
-                    aria-describedby={
-                      fieldErrors.reminderHours
-                        ? "reminder-hours-error"
-                        : undefined
-                    }
-                    onChange={(event) => {
-                      setReminderHoursBefore(Number(event.target.value));
-                      clearFieldError("reminderHours");
-                    }}
-                  />
-                  <FieldError
-                    id="reminder-hours-error"
-                    message={fieldErrors.reminderHours}
-                  />
-                </div>
-              </div>
-              <label className="create-event-checkbox-row">
-                <input
-                  type="checkbox"
-                  checked={remindersEnabled}
-                  onChange={(event) =>
-                    setRemindersEnabled(event.target.checked)
-                  }
-                />
-                Send reminder emails before the deadline
-              </label>
-            </div>
-          </section>
-        </div>
-      </details>
-
-      <div className="create-event-feedback">
-        {error && (
-          <p className="create-event-error" role="alert">
-            {error}
+          <p className="rv-field__hint">
+            Slot duration controls the availability grid. Participant View
+            controls when people can see submitted schedules.
           </p>
-        )}
 
-        {conflictEvent && (
-          <div className="event-form-warning">
-            <p>
-              The latest saved version is{" "}
-              <strong>{conflictEvent.version}</strong>. Reload before deciding
-              which edits to keep.
-            </p>
-            <AppButton
-              variant="outlined"
-              icon={<MdRefresh />}
-              onClick={reloadLatestEvent}
-            >
-              Reload latest event
-            </AppButton>
-          </div>
-        )}
-
-        {resetRequired && (
-          <div className="event-form-warning" role="alert">
-            <strong>Schedule changes require a response reset</strong>
-            <p>
-              Saving will clear draft and submitted availability for{" "}
-              {resetParticipantCount}{" "}
-              {resetParticipantCount === 1 ? "participant" : "participants"}.
-              Invitations and participant membership will remain.
-            </p>
-            <label>
-              <input
-                type="checkbox"
-                checked={resetConfirmed}
-                onChange={(event) => setResetConfirmed(event.target.checked)}
+          <div className="rv-grid rv-grid--pair">
+            <Field label="Response Deadline">
+              <TextInput
+                type="datetime-local"
+                value={responseDeadline}
+                onChange={(event) => setResponseDeadline(event.target.value)}
               />
-              I understand that participant availability will be reset.
-            </label>
+            </Field>
+            <div data-error-field="reminderHours">
+              <Field
+                label="Reminder Hours Before Deadline"
+                error={fieldErrors.reminderHours}
+                id="reminder-hours"
+              >
+                <TextInput
+                  className="rv-input--numeric"
+                  type="number"
+                  min="0"
+                  max="720"
+                  value={reminderHoursBefore}
+                  onChange={(event) => {
+                    setReminderHoursBefore(Number(event.target.value));
+                    clearFieldError("reminderHours");
+                  }}
+                />
+              </Field>
+            </div>
           </div>
-        )}
-      </div>
 
-      <footer className="create-event-actions">
-        {editing && inline ? (
-          <AppButton
-            variant="text"
-            className="event-form-cancel"
-            onClick={() => onCancel?.()}
-            disabled={loading}
+          <Switch
+            label="Send reminder emails before the deadline"
+            hint="Reminders only go to people who have not submitted yet."
+            checked={remindersEnabled}
+            onChange={(event) => setRemindersEnabled(event.target.checked)}
+          />
+        </section>
+      </Disclosure>
+
+      {error && (
+        <Callout tone="danger" role="alert">
+          {error}
+        </Callout>
+      )}
+
+      {conflictEvent && (
+        <Callout tone="warning" title="This event changed somewhere else">
+          <p>
+            The latest saved version is <strong>{conflictEvent.version}</strong>
+            . Reload before deciding which edits to keep.
+          </p>
+          <Button
+            variant="secondary"
+            icon="refresh"
+            onClick={reloadLatestEvent}
           >
+            Reload latest event
+          </Button>
+        </Callout>
+      )}
+
+      {resetRequired && (
+        <Callout
+          tone="danger"
+          role="alert"
+          title="Schedule changes require a response reset"
+        >
+          <p>
+            Saving will clear draft and submitted availability for{" "}
+            {resetParticipantCount}{" "}
+            {resetParticipantCount === 1 ? "participant" : "participants"}.
+            Invitations and participant membership will remain.
+          </p>
+          <Checkbox
+            label="I understand that participant availability will be reset."
+            checked={resetConfirmed}
+            onChange={(event) => setResetConfirmed(event.target.checked)}
+          />
+        </Callout>
+      )}
+
+      <footer className="rv-btn-row rv-btn-row--stack rv-btn-row--end">
+        {editing && inline ? (
+          <Button onClick={() => onCancel?.()} disabled={loading}>
             Cancel
-          </AppButton>
+          </Button>
         ) : editing ? (
           <Link
+            className="rv-btn rv-btn--ghost"
             href={`/event?code=${encodeURIComponent(eventCode)}`}
-            className="event-form-cancel"
           >
             Cancel and return to event
           </Link>
         ) : null}
-        <AppButton
-          className="create-event-submit"
+        <Button
           type="submit"
+          variant="primary"
+          busy={loading}
           disabled={loading || (resetRequired && !resetConfirmed)}
-          icon={
-            loading ? <MdHourglassEmpty /> : editing ? <MdSave /> : <MdAdd />
-          }
         >
           {loading
             ? editing
@@ -1162,7 +960,7 @@ function CreateEvent({
             : editing
               ? "Save changes"
               : "Create Event"}
-        </AppButton>
+        </Button>
       </footer>
     </form>
   );
@@ -1175,7 +973,9 @@ function CreateEvent({
         pageTitle={editing ? "Edit event" : "Create event"}
         contextLabel={editing ? "Organizer" : undefined}
       />
-      <main className="create-event-shell">{form}</main>
+      <main id="main" className="rv-page rv-page--form">
+        {form}
+      </main>
     </>
   );
 }

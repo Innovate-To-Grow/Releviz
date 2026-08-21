@@ -18,11 +18,6 @@ jest.mock("next/navigation", () => ({
   useSearchParams: () => searchParams,
 }));
 
-jest.mock("@/components/ui/BrandLogo", () => ({
-  __esModule: true,
-  default: (props) => <div role="img" aria-label={props.alt || "Releviz"} />,
-}));
-
 jest.mock("@/components/event/EventDetailsGrid", () => ({
   __esModule: true,
   default: ({ event }) => <div data-testid="event-details">{event.name}</div>,

@@ -1,0 +1,285 @@
+export const DEMO_EVENT_CODE = "DEMO2026";
+
+export const DEMO_ORGANIZER = Object.freeze({
+  id: "demo-organizer",
+  displayName: "Jordan Lee",
+  firstName: "Jordan",
+  lastName: "Lee",
+  email: "jordan.lee@example.test",
+});
+
+const DEMO_DAY_LABELS = {
+  "2026-08-24": "Mon, Aug 24",
+  "2026-08-25": "Tue, Aug 25",
+  "2026-08-26": "Wed, Aug 26",
+};
+
+// Mirrors the backend slot-group payload: a local wall-clock window per slot
+// plus the absolute instants, so the preview exercises the real grid code.
+function slotsForDay(date, startIndex) {
+  return Array.from({ length: 6 }, (_, offset) => {
+    const localHour = 9 + Math.floor(offset / 2);
+    const localMinute = offset % 2 === 0 ? "00" : "30";
+    const endLocalHour = 9 + Math.floor((offset + 1) / 2);
+    const endLocalMinute = (offset + 1) % 2 === 0 ? "00" : "30";
+    const utcHour = 16 + Math.floor(offset / 2);
+    const utcEndHour = 16 + Math.floor((offset + 1) / 2);
+    return {
+      index: startIndex + offset,
+      localStart: `${String(localHour).padStart(2, "0")}:${localMinute}`,
+      localEnd: `${String(endLocalHour).padStart(2, "0")}:${endLocalMinute}`,
+      startDayOffset: 0,
+      endDayOffset: 0,
+      startsAt: `${date}T${String(utcHour).padStart(2, "0")}:${localMinute}:00Z`,
+      endsAt: `${date}T${String(utcEndHour).padStart(2, "0")}:${endLocalMinute}:00Z`,
+    };
+  });
+}
+
+function slotGroup(date, startIndex) {
+  return {
+    key: date,
+    label: DEMO_DAY_LABELS[date],
+    slots: slotsForDay(date, startIndex),
+  };
+}
+
+export const DEMO_EVENT = Object.freeze({
+  code: DEMO_EVENT_CODE,
+  name: "Product Design Sprint Planning",
+  organizerUserId: DEMO_ORGANIZER.id,
+  status: "active",
+  version: 4,
+  accessMode: "invite_only",
+  meetingDurationMinutes: 60,
+  resultsRevision: 12,
+  slotMinutes: 30,
+  slotCount: 18,
+  startTime: "09:00",
+  endTime: "12:00",
+  crossesMidnight: false,
+  days: [],
+  daySelectionType: "specific_dates",
+  specificDates: ["2026-08-24", "2026-08-25", "2026-08-26"],
+  mode: "mixed",
+  timezone: "America/Los_Angeles",
+  location: "Innovation Studio · Room 4B",
+  participantViewPermission: "all_after_submit",
+  responseDeadline: "2026-08-22T23:59:00-07:00",
+  remindersEnabled: true,
+  reminderHoursBefore: 24,
+  slotGroups: [
+    slotGroup("2026-08-24", 0),
+    slotGroup("2026-08-25", 6),
+    slotGroup("2026-08-26", 12),
+  ],
+});
+
+export const DEMO_PARTICIPANTS = Object.freeze([
+  {
+    id: "demo-roster-01",
+    memberId: "demo-member-01",
+    name: "Maya Chen",
+    email: "maya.chen@example.test",
+    group: "Design",
+    weight: 1,
+    included: true,
+    submitted: true,
+    accountAccess: "full",
+    canOrganizerEditAvailability: false,
+    invitationStatus: "submitted",
+    version: 3,
+  },
+  {
+    id: "demo-roster-02",
+    memberId: "demo-member-02",
+    name: "Liam Patel",
+    email: "liam.patel@example.test",
+    group: "Product",
+    weight: 1,
+    included: true,
+    submitted: true,
+    accountAccess: "full",
+    canOrganizerEditAvailability: false,
+    invitationStatus: "submitted",
+    version: 2,
+  },
+  {
+    id: "demo-roster-03",
+    memberId: "demo-member-03",
+    name: "Sophia Martinez",
+    email: "sophia.martinez@example.test",
+    group: "Engineering",
+    weight: 0.9,
+    included: true,
+    submitted: true,
+    accountAccess: "full",
+    canOrganizerEditAvailability: false,
+    invitationStatus: "submitted",
+    version: 4,
+  },
+  {
+    id: "demo-roster-04",
+    memberId: "demo-member-04",
+    name: "Noah Williams",
+    email: "noah.williams@example.test",
+    group: "Research",
+    weight: 0.8,
+    included: true,
+    submitted: false,
+    accountAccess: "temporary",
+    canOrganizerEditAvailability: true,
+    invitationStatus: "invited",
+    version: 1,
+  },
+  {
+    id: "demo-roster-05",
+    memberId: "demo-member-05",
+    name: "Olivia Kim",
+    email: "olivia.kim@example.test",
+    group: "Design",
+    weight: 1,
+    included: true,
+    submitted: false,
+    accountAccess: "temporary",
+    canOrganizerEditAvailability: true,
+    invitationStatus: "not_sent",
+    version: 1,
+  },
+  {
+    id: "demo-roster-06",
+    memberId: "demo-member-06",
+    name: "Ethan Brown",
+    email: "ethan.brown@example.test",
+    group: "Operations",
+    weight: 0.75,
+    included: true,
+    submitted: true,
+    accountAccess: "full",
+    canOrganizerEditAvailability: false,
+    invitationStatus: "submitted",
+    version: 2,
+  },
+  {
+    id: "demo-roster-07",
+    memberId: "demo-member-07",
+    name: "Ava Thompson",
+    email: "ava.thompson@example.test",
+    group: "Leadership",
+    weight: 0.6,
+    included: true,
+    submitted: false,
+    accountAccess: "full",
+    canOrganizerEditAvailability: false,
+    invitationStatus: "opened",
+    version: 2,
+  },
+  {
+    id: "demo-roster-08",
+    memberId: "demo-member-08",
+    name: "Lucas Garcia",
+    email: "lucas.garcia@example.test",
+    group: "Engineering",
+    weight: 0.4,
+    included: true,
+    submitted: false,
+    accountAccess: "temporary",
+    canOrganizerEditAvailability: true,
+    invitationStatus: "invited",
+    version: 1,
+  },
+  {
+    id: "demo-roster-09",
+    memberId: "demo-member-09",
+    name: "Mia Davis",
+    email: "mia.davis@example.test",
+    group: "Design",
+    weight: 0.5,
+    included: false,
+    submitted: true,
+    accountAccess: "full",
+    canOrganizerEditAvailability: false,
+    invitationStatus: "submitted",
+    version: 3,
+  },
+  {
+    id: "demo-roster-10",
+    memberId: "demo-member-10",
+    name: "Benjamin Lee",
+    email: "benjamin.lee@example.test",
+    group: "Research",
+    weight: 0,
+    included: true,
+    submitted: false,
+    accountAccess: "temporary",
+    canOrganizerEditAvailability: true,
+    invitationStatus: "not_sent",
+    version: 1,
+  },
+]);
+
+export const DEMO_DELIVERY_REQUEST = Object.freeze({
+  id: "demo-delivery",
+  operation: "invitation",
+  recipientCount: 8,
+  enqueued: 8,
+  createdAt: "2026-08-19T08:30:00Z",
+  updatedAt: "2026-08-19T08:32:00Z",
+  delivery: {
+    total: 8,
+    pending: 0,
+    processing: 0,
+    retry: 0,
+    sent: 8,
+    permanentFailure: 0,
+    uncertain: 0,
+    canceled: 0,
+  },
+});
+
+export const DEMO_RESULTS = Object.freeze({
+  status: "fresh",
+  requestedRevision: 12,
+  computedRevision: 12,
+  generatedAt: "2026-08-19T09:12:00Z",
+  results: {
+    countedResponseTotal: 4,
+    unansweredParticipantTotal: 5,
+    excludedParticipantTotal: 1,
+    recommendations: [
+      {
+        id: "demo-result-1",
+        rank: 1,
+        label: "Tuesday · 10:00–11:00 AM",
+        channel: "inperson",
+        suggestedStartsAt: "2026-08-25T17:00:00Z",
+        suggestedEndsAt: "2026-08-25T18:00:00Z",
+        weightedAvailability: 0.91,
+        unweightedAvailability: 0.88,
+        fullyAvailableParticipantTotal: 4,
+      },
+      {
+        id: "demo-result-2",
+        rank: 2,
+        label: "Monday · 9:30–10:30 AM",
+        channel: "virtual",
+        suggestedStartsAt: "2026-08-24T16:30:00Z",
+        suggestedEndsAt: "2026-08-24T17:30:00Z",
+        weightedAvailability: 0.86,
+        unweightedAvailability: 0.81,
+        fullyAvailableParticipantTotal: 3,
+      },
+      {
+        id: "demo-result-3",
+        rank: 3,
+        label: "Wednesday · 11:00 AM–12:00 PM",
+        channel: "inperson",
+        suggestedStartsAt: "2026-08-26T18:00:00Z",
+        suggestedEndsAt: "2026-08-26T19:00:00Z",
+        weightedAvailability: 0.79,
+        unweightedAvailability: 0.76,
+        fullyAvailableParticipantTotal: 3,
+      },
+    ],
+  },
+});

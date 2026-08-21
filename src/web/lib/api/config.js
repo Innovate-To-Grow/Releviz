@@ -114,6 +114,12 @@ export async function getAccessToken() {
 }
 
 export async function apiFetch(url, options = {}, token = null) {
+  if (process.env.NODE_ENV === "development") {
+    const { maybeHandleDemoRequest } = await import("@/lib/demo/api");
+    const demoResponse = maybeHandleDemoRequest(url, options);
+    if (demoResponse) return demoResponse;
+  }
+
   const access =
     token ||
     (options.skipAuthRefresh

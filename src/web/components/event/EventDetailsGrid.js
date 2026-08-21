@@ -1,37 +1,32 @@
 "use client";
 
 import { useId, useState } from "react";
-import {
-  MdEventAvailable,
-  MdExpandMore,
-  MdGroups,
-  MdLockOutline,
-  MdSchedule,
-} from "react-icons/md";
+import Button from "@/components/ui/Button";
+import Icon from "@/components/ui/Icon";
 import { DAY_LABELS } from "@/lib/constants";
 import { formatDateTimeInTimezone, formatMode, formatTime } from "@/lib/format";
 
 function InfoCard({ label, value }) {
   return (
-    <div className="event-info-item">
-      <dt className="event-info-label">{label}</dt>
-      <dd className="event-info-value">{value ?? "Not set"}</dd>
+    <div className="rv-deflist__item">
+      <dt className="rv-deflist__label">{label}</dt>
+      <dd className="rv-deflist__value">{value ?? "Not set"}</dd>
     </div>
   );
 }
 
-function SummaryItem({ icon: Icon, label, primary, secondary, confirmed }) {
+function SummaryItem({ label, icon, primary, secondary }) {
   return (
-    <div
-      className={`event-overview-summary__item${confirmed ? " event-overview-summary__item--confirmed" : ""}`}
-    >
-      <dt className="event-overview-summary__label">
-        <Icon aria-hidden="true" />
-        <span>{label}</span>
+    <div className="rv-summary-item">
+      <dt className="rv-summary-item__label">
+        <Icon name={icon} className="rv-summary-item__icon" />
+        {label}
       </dt>
-      <dd className="event-overview-summary__value">
+      <dd className="rv-summary-item__value">
         <strong>{primary || "Not set"}</strong>
-        {secondary && <span>{secondary}</span>}
+        {secondary && (
+          <span className="rv-summary-item__secondary"> {secondary}</span>
+        )}
       </dd>
     </div>
   );
@@ -39,27 +34,33 @@ function SummaryItem({ icon: Icon, label, primary, secondary, confirmed }) {
 
 function DetailItem({ label, value }) {
   return (
-    <div className="event-overview-details__item">
-      <dt>{label}</dt>
-      <dd>{value ?? "Not set"}</dd>
+    <div className="rv-deflist__item">
+      <dt className="rv-deflist__label">{label}</dt>
+      <dd className="rv-deflist__value">{value ?? "Not set"}</dd>
     </div>
   );
+}
+
+function dayTextFor(event) {
+  if (
+    event?.daySelectionType === "specific_dates" &&
+    Array.isArray(event?.specificDates)
+  ) {
+    return event.specificDates.join(", ");
+  }
+  return Array.isArray(event?.days)
+    ? event.days
+        .map((day) => DAY_LABELS[day])
+        .filter(Boolean)
+        .join(", ")
+    : "";
 }
 
 function OrganizerEventDetails({ event, extraCards }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const detailsId = useId();
   const mode = event?.mode || "inperson";
-  const dayText =
-    event?.daySelectionType === "specific_dates" &&
-    Array.isArray(event?.specificDates)
-      ? event.specificDates.join(", ")
-      : Array.isArray(event?.days)
-        ? event.days
-            .map((day) => DAY_LABELS[day])
-            .filter(Boolean)
-            .join(", ")
-        : "";
+  const dayText = dayTextFor(event);
   const timeWindow = `${formatTime(event?.startTime)} - ${formatTime(
     event?.endTime,
   )}${event?.crossesMidnight ? " (next day)" : ""}`;
@@ -94,56 +95,52 @@ function OrganizerEventDetails({ event, extraCards }) {
     : null;
 
   return (
-    <div className="event-overview" aria-label="Event overview">
-      <dl className="event-overview-summary" aria-label="Key event information">
+    <section aria-label="Event overview" className="rv-stack rv-stack--md">
+      <dl aria-label="Key event information" className="rv-summary-grid">
         <SummaryItem
-          icon={MdSchedule}
           label="Schedule"
+          icon="calendar"
           primary={dayText || "Days not set"}
           secondary={`${timeWindow} · ${event?.timezone || "UTC"}`}
         />
         <SummaryItem
-          icon={MdGroups}
           label="Meeting"
+          icon={mode === "virtual" ? "video" : "mapPin"}
           primary={`${formatMode(mode)} · ${meetingDuration}`}
           secondary={event?.location || "Location not set"}
         />
         <SummaryItem
-          icon={MdLockOutline}
           label="Responses"
+          icon="users"
           primary={access}
           secondary={responseDeadline}
         />
         {finalMeeting && (
           <SummaryItem
-            icon={MdEventAvailable}
             label="Confirmed meeting"
+            icon="checkCircle"
             primary={finalWindow}
             secondary={`${formatMode(finalMeeting.channel)} · ${finalMeeting.location || "Location not set"}`}
-            confirmed
           />
         )}
       </dl>
 
-      <div className="event-overview-disclosure">
-        <button
-          type="button"
-          className="event-overview-disclosure__toggle"
-          aria-expanded={detailsOpen}
-          aria-controls={detailsId}
-          onClick={() => setDetailsOpen((open) => !open)}
-        >
-          <span>{detailsOpen ? "Hide details" : "Show all details"}</span>
-          <MdExpandMore
-            className="event-overview-disclosure__icon"
-            aria-hidden="true"
-          />
-        </button>
+      <div className="rv-stack rv-stack--md">
+        <div>
+          <Button
+            variant="link"
+            aria-expanded={detailsOpen}
+            aria-controls={detailsId}
+            onClick={() => setDetailsOpen((open) => !open)}
+          >
+            {detailsOpen ? "Hide details" : "Show all details"}
+          </Button>
+        </div>
         {detailsOpen && (
           <dl
             id={detailsId}
-            className="event-overview-details"
             aria-label="Additional event details"
+            className="rv-deflist"
           >
             <DetailItem
               label="Availability interval"
@@ -155,35 +152,21 @@ function OrganizerEventDetails({ event, extraCards }) {
           </dl>
         )}
       </div>
-    </div>
+    </section>
   );
 }
 
 function EventDetailsGrid({ event, extraCards = [], variant = "default" }) {
   const mode = event?.mode || "inperson";
-  const dayText =
-    event?.daySelectionType === "specific_dates" &&
-    Array.isArray(event?.specificDates)
-      ? event.specificDates.join(", ")
-      : Array.isArray(event?.days)
-        ? event.days
-            .map((d) => DAY_LABELS[d])
-            .filter(Boolean)
-            .join(", ")
-        : "";
+  const dayText = dayTextFor(event);
   const finalMeeting = event?.finalMeeting;
   if (variant === "organizer") {
     return <OrganizerEventDetails event={event} extraCards={extraCards} />;
   }
 
   return (
-    <dl
-      className={`event-details-grid event-details-grid--${variant}`}
-      aria-label="Event details"
-    >
-      {variant !== "organizer" && (
-        <InfoCard label="Event" value={event?.name} />
-      )}
+    <dl aria-label="Event details" className="rv-deflist">
+      <InfoCard label="Event" value={event?.name} />
       <InfoCard label="Meeting type" value={formatMode(mode)} />
       <InfoCard
         label="Availability window"
@@ -214,7 +197,9 @@ function EventDetailsGrid({ event, extraCards = [], variant = "default" }) {
             ? formatDateTimeInTimezone(
                 event.responseDeadline,
                 event?.timezone,
-                { timeZoneName: "short" },
+                {
+                  timeZoneName: "short",
+                },
               )
             : "No deadline"
         }

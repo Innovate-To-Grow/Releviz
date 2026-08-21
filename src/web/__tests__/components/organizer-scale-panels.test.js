@@ -391,7 +391,7 @@ test("event controls queue reminders and close an active event", async () => {
       name: "Event controls",
     }),
   ).toHaveAttribute("id", "organizer-lifecycle-title");
-  expect(within(controls).getByText("active")).toBeInTheDocument();
+  expect(within(controls).getByText("Active")).toBeInTheDocument();
   expect(
     within(controls).getByRole("button", { name: "Archive event" }),
   ).toBeInTheDocument();
