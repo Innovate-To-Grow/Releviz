@@ -1,15 +1,14 @@
 name: OIDC subject probe
 on:
-  workflow_dispatch:
+  pull_request:
+    paths: [".github/workflows/oidc-probe.yml"]
 permissions:
   id-token: write
   contents: read
 jobs:
   probe:
-    name: Print the OIDC subject claim for the Production environment
+    name: Print the OIDC subject claim (repository casing)
     runs-on: ubuntu-latest
-    environment:
-      name: Production
     steps:
       - uses: actions/github-script@v8
         with:
