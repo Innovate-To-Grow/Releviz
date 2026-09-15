@@ -26,7 +26,7 @@ REQUIRED_FRAGMENTS = (
     "actions/upload-artifact@v7",
     "actions/download-artifact@v8",
     "hashicorp/setup-terraform@v4",
-    "actionlint .github/workflows/deploy-prod.yml.disabled",
+    "run: actionlint",
     "semgrep scan \\\n            --error",
     "bash scripts/compile-api-requirements.sh --check",
 )
