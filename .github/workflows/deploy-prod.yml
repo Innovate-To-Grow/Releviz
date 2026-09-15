@@ -1,4 +1,10 @@
-name: Deploy Production
+name: Releviz Production Release
+# The run title names the release: the CI run's commit for automatic releases,
+# the dispatched commit for manual ones.
+run-name: >-
+  ${{ github.event_name == 'workflow_run'
+      && format('Production release: {0}', github.event.workflow_run.display_title)
+      || format('Production release (manual): {0}', github.sha) }}
 
 on:
   # Every green CI run on main requests a production release; the run waits in
@@ -28,7 +34,7 @@ concurrency:
 
 jobs:
   deploy:
-    name: Deploy to Production
+    name: Release to production
     runs-on: ubuntu-latest
     timeout-minutes: 160
     if: >-
