@@ -33,6 +33,14 @@ REQUIRED_CSV_ENVIRONMENT = {
     "CORS_ALLOWED_ORIGINS",
     "CSRF_TRUSTED_ORIGINS",
 }
+# The release commit: the CI run's head commit for automatic (workflow_run)
+# releases, the selected main commit for manual dispatch. github.sha alone is
+# the default-branch tip at trigger time, which can already be a newer commit.
+RELEASE_SHA_EXPRESSION_RE = (
+    r"\$\{\{\s*github\.event_name\s*==\s*'workflow_run'\s*&&\s*"
+    r"github\.event\.workflow_run\.head_sha\s*\|\|\s*github\.sha\s*\}\}"
+)
+
 ENVIRONMENT_NAME_RE = re.compile(r"\{\s*name\s*=\s*\"([A-Z][A-Z0-9_]*)\"", re.MULTILINE)
 
 
@@ -80,6 +88,24 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
     source = active_path.read_text(encoding="utf-8")
     required_patterns = {
         r"workflow_dispatch:": "manual dispatch",
+        (
+            r"workflow_run:\s*\n\s*workflows:\s*\[CI\]\s*\n\s*types:\s*\[completed\]"
+            r"\s*\n\s*branches:\s*\[main\]"
+        ): "automatic release requests from CI runs on main",
+        (
+            r"github\.event\.workflow_run\.conclusion\s*==\s*'success'\s*&&\s*"
+            r"github\.event\.workflow_run\.event\s*==\s*'push'\s*&&\s*"
+            r"github\.event\.workflow_run\.head_branch\s*==\s*'main'\s*&&\s*"
+            r"github\.event\.workflow_run\.head_repository\.full_name\s*==\s*github\.repository"
+        ): "an automatic-release guard for successful push CI runs on main from this repository",
+        r"DEPLOY_SHA:\s*" + RELEASE_SHA_EXPRESSION_RE: "the release commit as the deploy SHA",
+        r"TF_VAR_backend_image_tag:\s*" + RELEASE_SHA_EXPRESSION_RE: (
+            "the release commit as the backend image tag"
+        ),
+        (
+            r"\[\s*\"\$TRIGGER_EVENT\"\s*=\s*\"workflow_dispatch\"\s*\]\s*&&\s*"
+            r"\[\s*\"\$CONFIRMATION\"\s*!=\s*\"DEPLOY\"\s*\]"
+        ): "the DEPLOY confirmation for manual releases",
         r"timeout-minutes:\s*160": "the reviewed 160-minute production job limit",
         r'PRODUCTION_JOB_TIMEOUT_SECONDS:\s*"9600"': ("the production job timeout in seconds"),
         r'AMPLIFY_TIMEOUT_SECONDS:\s*"1200"': ("the bounded Amplify deployment-helper timeout"),
@@ -107,7 +133,9 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
             r"secretsmanager describe-secret"
         ): "default-admin password secret metadata verification",
         r"describe-task-definition": "deployed ECS frontend rollback discovery",
-        r"frontend_image_tag.*github\.sha": "immutable ECS fallback frontend release tag",
+        r"TF_VAR_frontend_image_tag:\s*" + RELEASE_SHA_EXPRESSION_RE: (
+            "immutable ECS fallback frontend release tag"
+        ),
         (
             r"Plan production infrastructure with current DNS state"
             r"[\s\S]{0,500}TF_VAR_frontend_image_tag:\s*\$\{\{\s*"
@@ -169,15 +197,13 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
             r"\.workflow_run\.head_sha\s*==\s*\$(?:sha|previous_sha)|"
             r"\$(?:sha|previous_sha)\s*==\s*\.workflow_run\.head_sha"
         ): "rollback artifact head-SHA binding",
-        (
-            r"(?:\.workflow_run\.)?\.?head_branch\s*==\s*\"main\"|"
-            r"head_branch[\s\S]{0,100}\bmain\b"
-        ): "rollback artifact main-branch binding",
+        r"(?:\.workflow_run)?\.head_branch\s*==\s*\"main\"": (
+            "rollback artifact main-branch binding"
+        ),
         r"\.github/workflows/deploy-prod\.yml": ("rollback artifact production-workflow binding"),
         (
-            r"\.event\s*==\s*\"workflow_dispatch\"|"
-            r"workflow_dispatch[\s\S]{0,100}\.event"
-        ): "rollback artifact workflow-dispatch binding",
+            r"\(\.event\s*==\s*\"workflow_dispatch\"\s*or\s*\.event\s*==\s*\"workflow_run\"\)"
+        ): "rollback artifact release-event binding",
         r"\.status\s*==\s*\"completed\"": ("a completed trusted rollback workflow run"),
         (
             r"\.head_repository\.full_name[\s\S]{0,120}GITHUB_REPOSITORY|"
@@ -395,7 +421,7 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         r"Run canonical production smoke tests": "post-cutover smoke tests",
         (
             r"Plan final production topology"
-            r"[\s\S]{0,700}TF_VAR_frontend_image_tag:\s*\$\{\{\s*github\.sha\s*\}\}"
+            r"[\s\S]{0,700}TF_VAR_frontend_image_tag:\s*" + RELEASE_SHA_EXPRESSION_RE
         ): "the current frontend SHA in the final Terraform plan",
         (
             r"Plan final production topology"

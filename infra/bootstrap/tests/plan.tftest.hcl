@@ -47,7 +47,7 @@ run "bootstrap_plan" {
 
   assert {
     condition = (
-      strcontains(aws_iam_role.production_deploy.assume_role_policy, "repo:Innovate-To-Grow/releviz:environment:Production") &&
+      strcontains(aws_iam_role.production_deploy.assume_role_policy, "repo:Innovate-To-Grow/Releviz:environment:Production") &&
       strcontains(aws_iam_role.production_deploy.assume_role_policy, "sts.amazonaws.com") &&
       strcontains(aws_iam_role.production_deploy.assume_role_policy, var.existing_github_oidc_provider_arn)
     )

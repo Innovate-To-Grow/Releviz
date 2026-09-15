@@ -89,7 +89,7 @@ required/mandatory participants.
 | Database       | PostgreSQL/RDS in deployed environments; SQLite for local development                    |
 | Infrastructure | AWS Amplify frontend; public TLS ALB; private ECS Fargate API and durable workers       |
 | IaC            | Terraform (versioned encrypted S3 state with native lock files)                          |
-| CI/CD          | GitHub Actions (required CI and protected manual Amplify/ECS production CD)              |
+| CI/CD          | GitHub Actions (required CI; Amplify/ECS production CD on green `main`, reviewer-approved) |
 
 The Active-status release intentionally purges existing scheduling events, rosters, responses,
 invitations, temporary event identities, and event-owned delivery work during its coordinated
@@ -115,7 +115,7 @@ releviz-monorepo/
     perf/           # Pure aggregation and guarded PostgreSQL/HTTP scale tools
   .github/workflows/
     ci.yml          # Parallel CI for both workspaces
-    deploy-prod.yml.disabled # Parked production release; CD is intentionally disabled
+    deploy-prod.yml # Production release: automatic on green main, approved in the Production environment
 ```
 
 ## Local Development
@@ -291,13 +291,19 @@ docker run --rm -p 3000:3000 releviz-web:local
 
 ### Production
 
-Production CD is a protected manual workflow on `main`. It requires the exact confirmation
-`DEPLOY`, verifies that the selected immutable commit passed `CI Result`, assumes the production
-AWS role through GitHub OIDC, builds and pushes SHA-tagged backend and ECS-fallback frontend
-images, and creates one SHA-identified static ZIP from `src/web/out`. The workflow manually
+Production CD is a protected workflow on `main`. Every successful `CI` run for a push to `main`
+requests a release of that exact commit; the run waits in the GitHub `Production` environment
+until a configured reviewer approves it, and only then receives short-lived AWS credentials. The
+same workflow can also be dispatched manually for a redeploy or rollback, which additionally
+requires the exact confirmation `DEPLOY`. Either way it verifies that the immutable commit passed
+`CI Result`, assumes the production AWS role through GitHub OIDC, builds and pushes SHA-tagged
+backend and ECS-fallback frontend images, and creates one SHA-identified static ZIP from
+`src/web/out`. The workflow manually
 deploys that exact ZIP to an Amplify `candidate` branch, verifies the frontend plus the direct
 `https://api.releviz.com` CORS/auth/admin boundary, promotes the same ZIP to Amplify `main`, and
-only then associates `releviz.com`. The reviewed infrastructure plan preserves the public TLS ALB
+only then associates `releviz.com`. When no ECS frontend service is live (a first release, or
+after the cluster was removed), the base plan rolls out the release SHA directly instead of
+preserving a hot rollback. The reviewed infrastructure plan preserves the public TLS ALB
 and private ECS boundary and keeps the backend on a fixed one-hop ALB trust model. Separate private
 result and email ECS services use the same immutable backend release, database-aware health checks,
 graceful 120-second shutdown, circuit-breaker rollback, retained logs, and fail-closed running-task

@@ -36,7 +36,7 @@ variable "lock_table_name" {
 
 variable "github_repository" {
   type        = string
-  default     = "Innovate-To-Grow/releviz"
+  default     = "Innovate-To-Grow/Releviz"
   description = "GitHub owner/repository allowed to request production deployment credentials"
 }
 
