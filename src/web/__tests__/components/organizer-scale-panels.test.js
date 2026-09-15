@@ -56,7 +56,10 @@ import {
   OverviewPanel,
   ResultsSnapshotPanel,
 } from "@/components/schedule/OrganizerScalePanels";
-import { OrganizerHeader } from "@/components/schedule/OrganizerPanels";
+import {
+  ManagedScheduleDrawer,
+  OrganizerHeader,
+} from "@/components/schedule/OrganizerPanels";
 import {
   confirmFinalMeeting,
   downloadFinalCalendar,
@@ -67,6 +70,12 @@ import {
   sendReminders,
   updateEventLifecycle,
 } from "@/lib/api/events";
+import {
+  formatWeekLabel,
+  localDateOf,
+  selectionFromRecommendation,
+  weekStartOf,
+} from "@/lib/meetingWindows";
 
 const getToken = jest.fn().mockResolvedValue("token");
 const baseEvent = {
@@ -91,6 +100,58 @@ const recommendation = {
   startsAt: "2026-09-01T09:00:00Z",
   endsAt: "2026-09-01T10:00:00Z",
 };
+const drawerEvent = {
+  ...baseEvent,
+  slotGroups: [
+    {
+      key: "2026-09-01",
+      slots: [
+        {
+          index: 0,
+          startsAt: "2026-09-01T09:00:00Z",
+          endsAt: "2026-09-01T09:30:00Z",
+        },
+        {
+          index: 1,
+          startsAt: "2026-09-01T09:30:00Z",
+          endsAt: "2026-09-01T10:00:00Z",
+        },
+      ],
+    },
+  ],
+};
+
+function renderDrawerProps(overrides = {}) {
+  return {
+    event: drawerEvent,
+    mode: "inperson",
+    participant: { id: "roster-1", name: "Temporary Taylor" },
+    participantName: "Temporary Taylor",
+    setParticipantName: jest.fn(),
+    inperson: [0, 1],
+    virtual: [0, 0],
+    availabilityValue: 1,
+    onAvailabilityValueChange: jest.fn(),
+    responsesOpen: true,
+    saving: false,
+    error: "",
+    status: "",
+    conflictParticipant: null,
+    onInpersonPaint: jest.fn(),
+    onVirtualPaint: jest.fn(),
+    onCopy: jest.fn(),
+    onSaveDraft: jest.fn(),
+    onSubmit: jest.fn(),
+    onReloadLatest: jest.fn(),
+    onClose: jest.fn(),
+    ...overrides,
+  };
+}
+
+function renderDrawer(overrides = {}) {
+  const props = renderDrawerProps(overrides);
+  return { props, ...render(<ManagedScheduleDrawer {...props} />) };
+}
 
 beforeEach(() => {
   jest.resetAllMocks();
@@ -221,6 +282,123 @@ test("organizer header keeps lifecycle controls beside the workspace refresh act
   expect(
     within(actions).getByRole("button", { name: "Refreshing…" }),
   ).toHaveAttribute("aria-busy", "true");
+});
+
+test("managed schedule drawer is a labelled modal dialog that traps focus and closes on Escape", async () => {
+  const { props } = renderDrawer();
+
+  const dialog = screen.getByRole("dialog", {
+    name: "Edit Temporary Taylor's schedule",
+  });
+  expect(dialog).toHaveAttribute("aria-modal", "true");
+  expect(screen.getByText("Temporary participant")).toBeInTheDocument();
+  expect(document.body.style.overflow).toBe("hidden");
+
+  const closeButton = within(dialog).getByRole("button", {
+    name: "Close schedule editor",
+  });
+  expect(closeButton).toHaveFocus();
+
+  expect(
+    screen.getByRole("textbox", { name: "Event display name" }),
+  ).toHaveAccessibleDescription(
+    "You and this participant edit the same response. A version conflict will never be silently overwritten.",
+  );
+  expect(screen.getByText("Mark times as")).toBeInTheDocument();
+  const choices = screen.getByRole("group", { name: "Availability status" });
+  expect(
+    within(choices).getByRole("button", { name: "Available" }),
+  ).toHaveAttribute("aria-pressed", "true");
+  expect(within(choices).getByRole("button", { name: "Busy" })).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+  await userEvent.click(within(choices).getByRole("button", { name: "Busy" }));
+  expect(props.onAvailabilityValueChange).toHaveBeenCalledWith(0);
+
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Submit on behalf" }),
+  );
+  expect(props.onSubmit).toHaveBeenCalledTimes(1);
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Save draft" }),
+  );
+  expect(props.onSaveDraft).toHaveBeenCalledTimes(1);
+
+  // Shift+Tab from the first focusable control wraps to the last one.
+  closeButton.focus();
+  await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
+  expect(
+    within(dialog).getByRole("button", { name: "Submit on behalf" }),
+  ).toHaveFocus();
+
+  await userEvent.keyboard("{Escape}");
+  expect(props.onClose).toHaveBeenCalledTimes(1);
+});
+
+test("managed schedule drawer locks editing while saving, closed, or conflicted", () => {
+  const { rerender } = renderDrawer({ participantName: "   " });
+  expect(screen.getByRole("button", { name: "Save draft" })).toBeDisabled();
+  expect(
+    screen.getByRole("button", { name: "Submit on behalf" }),
+  ).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
+
+  rerender(
+    <ManagedScheduleDrawer {...renderDrawerProps({ responsesOpen: false })} />,
+  );
+  expect(screen.getByRole("note")).toHaveTextContent(
+    "Availability can only be edited while this event is active.",
+  );
+  expect(
+    screen.getByRole("textbox", { name: "Event display name" }),
+  ).toBeDisabled();
+  expect(
+    within(
+      screen.getByRole("group", { name: "Availability status" }),
+    ).getByRole("button", { name: "Busy" }),
+  ).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Save draft" })).toBeDisabled();
+
+  rerender(
+    <ManagedScheduleDrawer
+      {...renderDrawerProps({
+        saving: true,
+        status: "Draft saved.",
+      })}
+    />,
+  );
+  const savingButtons = screen.getAllByRole("button", { name: "Saving..." });
+  expect(savingButtons).toHaveLength(2);
+  savingButtons.forEach((button) => expect(button).toBeDisabled());
+  expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+  expect(
+    within(screen.getByRole("dialog")).getByRole("button", {
+      name: "Close schedule editor",
+    }),
+  ).toBeDisabled();
+  expect(screen.getByRole("status")).toHaveTextContent("Draft saved.");
+
+  const onReloadLatest = jest.fn();
+  rerender(
+    <ManagedScheduleDrawer
+      {...renderDrawerProps({
+        error: "This response changed after you opened it.",
+        conflictParticipant: { id: "roster-1", version: 2 },
+        onReloadLatest,
+      })}
+    />,
+  );
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    "This response changed after you opened it.",
+  );
+  expect(
+    screen.getByRole("button", { name: "Submit on behalf" }),
+  ).toBeDisabled();
+  fireEvent.click(
+    screen.getByRole("button", { name: "Reload latest response" }),
+  );
+  expect(onReloadLatest).toHaveBeenCalledTimes(1);
 });
 
 test("overview keeps key summaries and its edit button visible while details are collapsed", () => {
@@ -513,6 +691,17 @@ test("results support the legacy envelope and failed or empty snapshots", async 
   expect(
     await screen.findByText(/Results are current at revision 5/),
   ).toBeInTheDocument();
+  // baseEvent has no slotGroups: the calendar falls back to its empty state
+  // while the ranked rail still lists the legacy recommendation.
+  expect(
+    screen.getByText("No schedule slots are configured."),
+  ).toBeInTheDocument();
+  expect(
+    screen.queryByRole("grid", { name: /Meeting time calendar/ }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.getByRole("heading", { name: "Ranked windows" }),
+  ).toBeInTheDocument();
   await userEvent.click(
     screen.getByRole("button", { name: "Choose this time" }),
   );
@@ -566,7 +755,7 @@ test("finalize handles nested attendance, delivery progress, and confirmation er
       event={baseEvent}
       setEvent={setEvent}
       getToken={getToken}
-      recommendation={recommendation}
+      selection={recommendation}
       onBrowseResults={jest.fn()}
     />,
   );
@@ -627,7 +816,7 @@ test("finalized organizers can download ICS and see download errors", async () =
       event={finalized}
       setEvent={jest.fn()}
       getToken={getToken}
-      recommendation={null}
+      selection={null}
       onBrowseResults={jest.fn()}
     />,
   );
@@ -643,7 +832,7 @@ test("finalized organizers can download ICS and see download errors", async () =
       event={{ ...finalized, status: "archived" }}
       setEvent={jest.fn()}
       getToken={getToken}
-      recommendation={null}
+      selection={null}
       onBrowseResults={jest.fn()}
     />,
   );
@@ -661,7 +850,7 @@ test("finalize empty and inactive states return to results and block review", as
       event={baseEvent}
       setEvent={jest.fn()}
       getToken={getToken}
-      recommendation={null}
+      selection={null}
       onBrowseResults={onBrowseResults}
     />,
   );
@@ -673,7 +862,7 @@ test("finalize empty and inactive states return to results and block review", as
       event={{ ...baseEvent, status: "archived" }}
       setEvent={jest.fn()}
       getToken={getToken}
-      recommendation={recommendation}
+      selection={recommendation}
       onBrowseResults={onBrowseResults}
     />,
   );
@@ -681,4 +870,217 @@ test("finalize empty and inactive states return to results and block review", as
   expect(
     screen.getByRole("button", { name: "Review attendance" }),
   ).toBeDisabled();
+});
+
+const calendarSelection = {
+  channel: "inperson",
+  startsAt: "2026-09-01T09:00:00Z",
+  endsAt: "2026-09-01T10:00:00Z",
+  slotIndices: [0, 1],
+  groupKey: "date:2026-09-01",
+  label: "2026-09-01 09:00–10:00",
+  dateLabel: "",
+  source: "calendar",
+  recommendation: null,
+  rescheduled: false,
+  metrics: { exact: false, weighted: 0.75, unweighted: 0.7 },
+};
+
+function renderFinalize(selection) {
+  return render(
+    <FinalizeScalePanel
+      event={baseEvent}
+      setEvent={jest.fn()}
+      getToken={getToken}
+      selection={selection}
+      onBrowseResults={jest.fn()}
+    />,
+  );
+}
+
+test("finalize describes a custom calendar window with its estimated availability", async () => {
+  previewFinalMeeting.mockResolvedValueOnce({
+    attendance: { availableParticipantTotal: 3 },
+  });
+  renderFinalize(calendarSelection);
+
+  expect(screen.getByText("2026-09-01 09:00–10:00")).toBeInTheDocument();
+  expect(screen.getByText("Custom window")).toBeInTheDocument();
+  expect(screen.queryByText(/Ranked #/)).not.toBeInTheDocument();
+  expect(screen.getByText("In person")).toBeInTheDocument();
+  expect(
+    screen.getByText(
+      "At least 75% weighted · 70% unweighted across this window (lowest slot). Exact attendance counts appear after Review attendance.",
+    ),
+  ).toBeInTheDocument();
+  expect(
+    screen.queryByText(
+      "The suggested date has passed; this uses the next occurrence.",
+    ),
+  ).not.toBeInTheDocument();
+  expect(screen.getByText(/9:00 AM/)).toBeInTheDocument();
+  expect(screen.getByText(/\(UTC\)/)).toBeInTheDocument();
+
+  // The calendar window's instants are sent verbatim.
+  await userEvent.click(
+    screen.getByRole("button", { name: "Review attendance" }),
+  );
+  await waitFor(() =>
+    expect(previewFinalMeeting).toHaveBeenCalledWith(
+      baseEvent.code,
+      {
+        startsAt: "2026-09-01T09:00:00Z",
+        endsAt: "2026-09-01T10:00:00Z",
+        channel: "inperson",
+        location: "Room 4",
+      },
+      "token",
+    ),
+  );
+  expect(await screen.findByText("3")).toBeInTheDocument();
+});
+
+test("finalize shows exact ranked metrics and the rescheduled note", () => {
+  renderFinalize({
+    ...calendarSelection,
+    rescheduled: true,
+    metrics: {
+      exact: true,
+      weighted: 0.75,
+      unweighted: 0.7,
+      rank: 2,
+      fullyAvailableParticipantTotal: 5,
+    },
+  });
+
+  expect(screen.getByText("Ranked #2")).toBeInTheDocument();
+  expect(screen.queryByText("Custom window")).not.toBeInTheDocument();
+  expect(
+    screen.getByText("75% weighted · 70% unweighted · 5 fully available"),
+  ).toBeInTheDocument();
+  expect(screen.queryByText(/At least/)).not.toBeInTheDocument();
+  expect(
+    screen.getByText(
+      "The suggested date has passed; this uses the next occurrence.",
+    ),
+  ).toBeInTheDocument();
+});
+
+test("finalize explains when a window has no counted responses", () => {
+  renderFinalize({
+    ...calendarSelection,
+    metrics: { exact: false, weighted: null, unweighted: null },
+  });
+
+  expect(
+    screen.getByText("No responses have been counted yet."),
+  ).toBeInTheDocument();
+  expect(screen.queryByText(/At least/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/weighted/)).not.toBeInTheDocument();
+  expect(screen.getByText("Custom window")).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "Review attendance" }),
+  ).toBeEnabled();
+});
+
+// Weekly Mon/Wed 09:00–11:00 in half-hour slots (the API shape).
+const weeklyEvent = {
+  ...baseEvent,
+  mode: "inperson",
+  slotGroups: [1, 3].map((weekday, groupIndex) => ({
+    key: `weekday:${weekday}`,
+    label: weekday === 1 ? "Mon" : "Wed",
+    weekday,
+    slots: ["09:00", "09:30", "10:00", "10:30"].map((localStart, offset) => ({
+      index: groupIndex * 4 + offset,
+      localStart,
+      localEnd: ["09:30", "10:00", "10:30", "11:00"][offset],
+      startDayOffset: 0,
+      endDayOffset: 0,
+    })),
+  })),
+};
+
+test("choosing a stale ranked window reveals its next occurrence and keeps it marked as selected", async () => {
+  // Suggested long ago: the snapshot outlived its suggested Monday.
+  const stale = {
+    rank: 1,
+    channel: "inperson",
+    slotIndices: [0, 1],
+    groupKey: "weekday:1",
+    weekday: 1,
+    localStart: "09:00",
+    localEnd: "10:00",
+    startDayOffset: 0,
+    endDayOffset: 0,
+    suggestedStartsAt: "2020-01-06T09:00:00Z",
+    suggestedEndsAt: "2020-01-06T10:00:00Z",
+    label: "Mon 09:00–10:00",
+    weightedAvailability: 0.8,
+    unweightedAvailability: 0.7,
+    fullyAvailableParticipantTotal: 5,
+  };
+  fetchEventResults.mockResolvedValue({
+    results: {
+      revision: 7,
+      generatedAt: "2020-01-05T00:00:00Z",
+      countedResponseTotal: 5,
+      channels: {
+        inperson: {
+          weighted: [0.8, 0.8, 0.5, 0.4, 0.3, 0.2, 0.1, 0.1],
+          unweighted: [0.7, 0.7, 0.4, 0.3, 0.2, 0.1, 0.1, 0.1],
+        },
+      },
+      recommendations: [stale],
+    },
+  });
+  const onChoose = jest.fn();
+  const panelProps = {
+    event: weeklyEvent,
+    getToken,
+    invalidationKey: 0,
+    onChoose,
+    onSelect: jest.fn(),
+  };
+  const { rerender } = render(
+    <ResultsSnapshotPanel {...panelProps} selection={null} />,
+  );
+  const choose = await screen.findByRole("button", {
+    name: "Choose this time",
+  });
+  expect(choose).toHaveAttribute("aria-pressed", "false");
+
+  await userEvent.click(choose);
+  expect(onChoose).toHaveBeenCalledWith(stale);
+
+  // The workspace turns the raw recommendation into a selection; the same
+  // call here yields the next Monday 09:00, never the 2020 instant.
+  const selection = selectionFromRecommendation(stale, weeklyEvent, {
+    now: Date.now(),
+  });
+  expect(selection.rescheduled).toBe(true);
+  expect(Date.parse(selection.startsAt)).toBeGreaterThanOrEqual(
+    Date.now() - 60_000,
+  );
+  expect(Date.parse(selection.startsAt) - Date.now()).toBeLessThanOrEqual(
+    8 * 24 * 60 * 60 * 1000,
+  );
+  // The calendar moved to that occurrence's week, not to January 2020.
+  const week = weekStartOf(localDateOf(selection.startsAt, "UTC"));
+  expect(screen.getByRole("grid")).toHaveAccessibleName(
+    `Meeting time calendar, ${formatWeekLabel(week)}`,
+  );
+
+  rerender(<ResultsSnapshotPanel {...panelProps} selection={selection} />);
+  expect(screen.getByRole("button", { name: "Selected time" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  expect(
+    document.querySelector(".meeting-calendar__block--selected"),
+  ).not.toBeNull();
+  expect(document.querySelector('[data-cell-idx="0"]')).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
 });

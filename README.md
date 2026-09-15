@@ -48,12 +48,13 @@ Open-link events retain code-based joining, subject to the 1,000-person cap.
 Each participant:
 
 1. Signs in and clicks **Join**
-2. Uses the **Availability Slider** to pick a level (0 = Busy, 0.5 = Maybe, 1 = Free)
+2. Chooses a level with the **Busy / If needed / Available** control (0, 0.5, 1)
 3. Clicks, drags, touches, or uses the keyboard on the **schedule grid** to paint 15- or 30-minute
    slots with that availability level
 4. Clicks **Submit Schedule** when done
 
-The grid uses color coding: red (busy) -> yellow (partial) -> green (free).
+The grid uses color coding plus text cues: hatched red (busy) -> yellow ◐ (if needed) -> green ✓
+(available). Virtual channels use a red -> purple -> blue scale.
 
 Depending on the event's visibility setting, participants can see the latest published group
 snapshot. While a newer response is being calculated, the UI labels the result as refreshing and
@@ -83,7 +84,7 @@ required/mandatory participants.
 
 | Layer          | Technology                                                                               |
 | -------------- | ---------------------------------------------------------------------------------------- |
-| Frontend       | [Next.js 16](https://nextjs.org/) static export + React 19 + Material Web components     |
+| Frontend       | [Next.js 16](https://nextjs.org/) static export + React 19 + Bootstrap 5.3 (Sass theme)  |
 | Backend        | [Django 6](https://www.djangoproject.com/) + DRF + SimpleJWT                             |
 | Database       | PostgreSQL/RDS in deployed environments; SQLite for local development                    |
 | Infrastructure | AWS Amplify frontend; public TLS ALB; private ECS Fargate API and durable workers       |

@@ -1,16 +1,22 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { MdAdd, MdHourglassEmpty, MdRefresh, MdSave } from "react-icons/md";
+import Alert from "@/components/ui/Alert";
 import AppButton from "@/components/ui/AppButton";
 import AppHeader from "@/components/ui/AppHeader";
+import FormField from "@/components/ui/FormField";
+import LoadingState from "@/components/ui/LoadingState";
+import PageHeader from "@/components/ui/PageHeader";
+import {
+  AddIcon,
+  ChevronDownIcon,
+  RefreshIcon,
+  SaveIcon,
+} from "@/components/ui/icons";
 import { useAuth } from "@/components/auth/AuthContext";
 import { createEvent, fetchEvent, updateEvent } from "@/lib/api/events";
-import "@material/web/textfield/outlined-text-field.js";
-import "@material/web/select/outlined-select.js";
-import "@material/web/select/select-option.js";
 import { DAY_LABELS } from "@/lib/constants";
 import { reloadPage } from "@/lib/navigation";
 import { formatIsoForDateTimeLocal, zonedLocalDateTimeToIso } from "@/lib/time";
@@ -90,7 +96,7 @@ function ToggleChip({ label, active, onClick }) {
       type="button"
       aria-pressed={active}
       onClick={onClick}
-      className={`event-toggle-chip${active ? " event-toggle-chip-active" : ""}`}
+      className={`btn btn-sm chip-toggle ${active ? "btn-primary" : "btn-outline-secondary"}`}
     >
       {label}
     </button>
@@ -98,17 +104,25 @@ function ToggleChip({ label, active, onClick }) {
 }
 
 function LabelRow({ children }) {
-  return <span className="event-field-label">{children}</span>;
+  return <span className="form-label d-block">{children}</span>;
 }
 
 function FieldError({ id, message }) {
   if (!message) return null;
 
   return (
-    <p id={id} className="create-event-field-error" role="alert">
+    <div
+      id={id}
+      className="invalid-feedback d-block create-event-field-error"
+      role="alert"
+    >
       {message}
-    </p>
+    </div>
   );
+}
+
+function controlClass(base, invalid) {
+  return invalid ? `${base} is-invalid` : base;
 }
 
 function focusInvalidField(fieldName) {
@@ -120,11 +134,7 @@ function focusInvalidField(fieldName) {
       field.scrollIntoView({ behavior: "smooth", block: "center" });
     }
 
-    field
-      .querySelector(
-        "md-outlined-text-field, md-outlined-select, input, button",
-      )
-      ?.focus();
+    field.querySelector("input, select, button")?.focus();
   }, 0);
 }
 
@@ -215,7 +225,6 @@ function CreateEvent({
   const [resetConfirmed, setResetConfirmed] = useState(false);
   const [conflictEvent, setConflictEvent] = useState(null);
   const [advancedOpen, setAdvancedOpen] = useState(editing && !inline);
-  const nameFieldRef = useRef(null);
   const timezoneOptions = useMemo(
     () => getTimezoneOptions(eventTimezone),
     [eventTimezone],
@@ -258,38 +267,6 @@ function CreateEvent({
       router.replace(`/login?next=${encodeURIComponent(next)}`);
     }
   }, [authLoading, editing, eventCode, user, router]);
-
-  useEffect(() => {
-    const field = nameFieldRef.current;
-    if (!field) return;
-    let input = null;
-    let cancelled = false;
-
-    const syncName = (event) => {
-      setName(event.currentTarget.value || "");
-      setFieldErrors((current) => {
-        if (!current.eventName) return current;
-        const next = { ...current };
-        delete next.eventName;
-        return next;
-      });
-    };
-
-    const bindInput = async () => {
-      await field.updateComplete;
-      if (cancelled) return;
-      input = field.shadowRoot?.querySelector("input") || null;
-      input?.addEventListener("input", syncName);
-      input?.addEventListener("change", syncName);
-    };
-
-    bindInput();
-    return () => {
-      cancelled = true;
-      input?.removeEventListener("input", syncName);
-      input?.removeEventListener("change", syncName);
-    };
-  }, []);
 
   useEffect(() => {
     if (!editing || authLoading || !user) return;
@@ -520,24 +497,14 @@ function CreateEvent({
   if (authLoading || !user || loadingEvent) {
     if (inline) {
       return (
-        <div className="create-event-inline-status" aria-busy="true">
-          <p role="status">Loading event...</p>
-        </div>
+        <LoadingState
+          label="Loading event..."
+          className="create-event-inline-status"
+        />
       );
     }
     return (
-      <div
-        style={{
-          minHeight: "100vh",
-          display: "flex",
-          justifyContent: "center",
-          alignItems: "center",
-        }}
-      >
-        <p style={{ color: "var(--md-sys-color-on-surface-variant)" }}>
-          {editing ? "Loading event..." : "Loading..."}
-        </p>
-      </div>
+      <LoadingState page label={editing ? "Loading event..." : "Loading..."} />
     );
   }
 
@@ -548,7 +515,7 @@ function CreateEvent({
   ) {
     return (
       <div className="create-event-inline-status">
-        <p role="alert">Only the organizer can edit this event.</p>
+        <Alert variant="danger">Only the organizer can edit this event.</Alert>
       </div>
     );
   }
@@ -557,62 +524,60 @@ function CreateEvent({
     if (inline) {
       return (
         <div className="create-event-inline-status">
-          <p role="alert">{error || "This event could not be loaded."}</p>
+          <Alert variant="danger">
+            {error || "This event could not be loaded."}
+          </Alert>
         </div>
       );
     }
     return (
-      <div className="center-page page-pad">
-        <div className="md-card" style={{ maxWidth: "480px", width: "100%" }}>
-          <h1
-            style={{ color: "var(--md-sys-color-error)", marginBottom: "12px" }}
-          >
-            Unable to edit event
-          </h1>
-          <p
-            role="alert"
-            style={{ color: "var(--md-sys-color-on-surface-variant)" }}
-          >
-            {error || "This event could not be loaded."}
-          </p>
-          <Link
-            href="/dashboard"
-            className="dashboard-action-link"
-            style={{ marginTop: "20px" }}
-          >
-            Return to dashboard
-          </Link>
-        </div>
-      </div>
+      <>
+        <AppHeader pageTitle="Edit event" contextLabel="Organizer" />
+        <main className="page-shell page-shell--narrow create-event-shell">
+          <div className="card">
+            <div className="card-body d-flex flex-column gap-3">
+              <h1 className="h4 mb-0">Unable to edit event</h1>
+              <Alert variant="danger">
+                {error || "This event could not be loaded."}
+              </Alert>
+              <div>
+                <Link
+                  href="/dashboard"
+                  className="btn btn-outline-secondary app-btn"
+                >
+                  <span className="app-btn-label">Return to dashboard</span>
+                </Link>
+              </div>
+            </div>
+          </div>
+        </main>
+      </>
     );
   }
 
-  const form = (
-    <form
-      onSubmit={handleSubmit}
-      className={`create-event-form${inline ? " create-event-form--inline" : ""}`}
-      noValidate
-    >
-      {!inline && (
-        <header className="create-event-heading">
-          <span className="create-event-eyebrow">Event setup</span>
-          <h1>{editing ? "Edit event" : "Create event"}</h1>
-          <p>
-            {editing
-              ? "Review the schedule and response rules before saving your changes."
-              : "Set the schedule and response rules, then share one link with everyone."}
-          </p>
-        </header>
-      )}
+  const hasFeedback = Boolean(error || conflictEvent || resetRequired);
+  // The inline editor sits inside the organizer workspace column, which is
+  // far narrower than a page; there the copy stacks above the fields instead
+  // of using the two-column `.form-section` grid.
+  const sectionClassName = inline
+    ? "create-event-section d-flex flex-column gap-3 mb-4"
+    : "form-section create-event-section";
+  const advancedSectionClassName = inline
+    ? "create-event-advanced-section d-flex flex-column gap-3"
+    : "form-section create-event-advanced-section pb-0";
 
+  const sections = (
+    <>
       <section
-        className="create-event-section"
+        className={sectionClassName}
         aria-labelledby="schedule-fields-heading"
       >
-        <div className="create-event-section-copy">
-          <span className="create-event-section-index">01</span>
-          <div>
-            <SectionHeading id="schedule-fields-heading">
+        <div className="form-section__copy">
+          <span className="section-index" aria-hidden="true">
+            01
+          </span>
+          <div className="min-w-0">
+            <SectionHeading id="schedule-fields-heading" className="h5">
               Schedule
             </SectionHeading>
             <p>
@@ -622,41 +587,47 @@ function CreateEvent({
           </div>
         </div>
 
-        <div className="create-event-section-fields">
-          <div
-            className="create-event-field-group"
+        <div className="form-section__fields">
+          <FormField
+            id="event-name"
+            label="Event Name"
+            required
             data-error-field="eventName"
           >
-            <md-outlined-text-field
-              ref={nameFieldRef}
-              className="create-event-wide-field"
-              label="Event Name"
-              value={name}
-              onInput={(event) => {
-                setName(event.target.value);
-                clearFieldError("eventName");
-              }}
-              onChange={(event) => {
-                setName(event.currentTarget.value);
-                clearFieldError("eventName");
-              }}
-              maxLength="200"
-              error={Boolean(fieldErrors.eventName)}
-              aria-invalid={fieldErrors.eventName ? "true" : undefined}
-              aria-describedby={
-                fieldErrors.eventName ? "event-name-error" : undefined
-              }
-            ></md-outlined-text-field>
-            <FieldError id="event-name-error" message={fieldErrors.eventName} />
-          </div>
+            {(fieldProps) => (
+              <>
+                <input
+                  {...fieldProps}
+                  type="text"
+                  className={controlClass(
+                    "form-control",
+                    fieldErrors.eventName,
+                  )}
+                  value={name}
+                  maxLength={200}
+                  required
+                  autoComplete="off"
+                  onChange={(event) => {
+                    setName(event.target.value);
+                    clearFieldError("eventName");
+                  }}
+                  aria-invalid={fieldErrors.eventName ? "true" : undefined}
+                  aria-describedby={
+                    fieldErrors.eventName ? "event-name-error" : undefined
+                  }
+                />
+                <FieldError
+                  id="event-name-error"
+                  message={fieldErrors.eventName}
+                />
+              </>
+            )}
+          </FormField>
 
-          <div
-            className="create-event-field-group"
-            data-error-field="daySelection"
-          >
+          <div data-error-field="daySelection">
             <LabelRow>Day Selection</LabelRow>
             <div
-              className="create-event-chip-row create-event-day-modes"
+              className="chip-group mb-2"
               role="group"
               aria-label="Day selection type"
               aria-describedby={
@@ -681,7 +652,11 @@ function CreateEvent({
               />
             </div>
             {daySelectionType === "days_of_week" ? (
-              <div className="create-event-chip-row">
+              <div
+                className="chip-group"
+                role="group"
+                aria-label="Days of the week"
+              >
                 {DAY_LABELS.map((label, idx) => (
                   <ToggleChip
                     key={idx}
@@ -692,18 +667,18 @@ function CreateEvent({
                 ))}
               </div>
             ) : (
-              <div className="create-event-date-picker">
-                <div className="create-event-date-entry">
+              <div className="d-flex flex-column gap-2">
+                <div className="d-flex flex-wrap align-items-center gap-2">
                   <input
-                    className="create-event-control"
+                    className="form-control w-auto"
                     aria-label="Specific event date"
                     type="date"
                     value={dateInput}
                     onChange={(e) => setDateInput(e.target.value)}
                   />
-                  <button
-                    className="create-event-add-date"
-                    type="button"
+                  <AppButton
+                    variant="outlined"
+                    icon={<AddIcon />}
                     onClick={() => {
                       if (dateInput && !specificDates.includes(dateInput)) {
                         setSpecificDates((prev) => [...prev, dateInput].sort());
@@ -713,27 +688,31 @@ function CreateEvent({
                     }}
                   >
                     Add date
-                  </button>
+                  </AppButton>
                 </div>
                 {specificDates.length > 0 && (
-                  <div className="create-event-date-tags">
+                  <ul
+                    className="list-unstyled d-flex flex-wrap gap-2 mb-0"
+                    aria-label="Selected dates"
+                  >
                     {specificDates.map((d) => (
-                      <span className="create-event-date-tag" key={d}>
-                        {d}
-                        <button
-                          type="button"
-                          aria-label={`Remove ${d}`}
-                          onClick={() =>
-                            setSpecificDates((prev) =>
-                              prev.filter((x) => x !== d),
-                            )
-                          }
-                        >
-                          ×
-                        </button>
-                      </span>
+                      <li key={d}>
+                        <span className="badge rounded-pill bg-body-secondary text-body border fw-normal fs-6 d-inline-flex align-items-center gap-2 py-1 ps-3 pe-2">
+                          {d}
+                          <button
+                            type="button"
+                            className="btn-close"
+                            aria-label={`Remove ${d}`}
+                            onClick={() =>
+                              setSpecificDates((prev) =>
+                                prev.filter((x) => x !== d),
+                              )
+                            }
+                          />
+                        </span>
+                      </li>
                     ))}
-                  </div>
+                  </ul>
                 )}
               </div>
             )}
@@ -743,65 +722,77 @@ function CreateEvent({
             />
           </div>
 
-          <div
-            className="create-event-field-group"
-            data-error-field="timeRange"
-          >
-            <div className="create-event-two-column">
-              <label>
-                <LabelRow>Start Time</LabelRow>
-                <input
-                  className="create-event-control"
-                  aria-label="Start Time"
-                  type="time"
-                  step={slotMinutes * 60}
-                  value={startTime}
-                  aria-invalid={fieldErrors.timeRange ? "true" : undefined}
-                  aria-describedby={
-                    fieldErrors.timeRange ? "time-range-error" : undefined
-                  }
-                  onChange={(event) => {
-                    setStartTime(event.target.value);
-                    clearFieldError("timeRange");
-                  }}
-                />
-              </label>
-              <label>
-                <LabelRow>End Time</LabelRow>
-                <input
-                  className="create-event-control"
-                  aria-label="End Time"
-                  type="time"
-                  step={slotMinutes * 60}
-                  value={endTime}
-                  aria-invalid={fieldErrors.timeRange ? "true" : undefined}
-                  aria-describedby={
-                    fieldErrors.timeRange ? "time-range-error" : undefined
-                  }
-                  onChange={(event) => {
-                    setEndTime(event.target.value);
-                    clearFieldError("timeRange");
-                  }}
-                />
-              </label>
+          <div data-error-field="timeRange">
+            <div className="form-row-2">
+              {/* Render-function children keep the explicit aria-invalid /
+                  aria-describedby below; FormField's element-child merge
+                  would overwrite them with its own (empty) values. */}
+              <FormField id="event-start-time" label="Start Time">
+                {(fieldProps) => (
+                  <input
+                    {...fieldProps}
+                    className={controlClass(
+                      "form-control",
+                      fieldErrors.timeRange,
+                    )}
+                    aria-label="Start Time"
+                    type="time"
+                    step={slotMinutes * 60}
+                    value={startTime}
+                    aria-invalid={fieldErrors.timeRange ? "true" : undefined}
+                    aria-describedby={
+                      fieldErrors.timeRange ? "time-range-error" : undefined
+                    }
+                    onChange={(event) => {
+                      setStartTime(event.target.value);
+                      clearFieldError("timeRange");
+                    }}
+                  />
+                )}
+              </FormField>
+              <FormField id="event-end-time" label="End Time">
+                {(fieldProps) => (
+                  <input
+                    {...fieldProps}
+                    className={controlClass(
+                      "form-control",
+                      fieldErrors.timeRange,
+                    )}
+                    aria-label="End Time"
+                    type="time"
+                    step={slotMinutes * 60}
+                    value={endTime}
+                    aria-invalid={fieldErrors.timeRange ? "true" : undefined}
+                    aria-describedby={
+                      fieldErrors.timeRange ? "time-range-error" : undefined
+                    }
+                    onChange={(event) => {
+                      setEndTime(event.target.value);
+                      clearFieldError("timeRange");
+                    }}
+                  />
+                )}
+              </FormField>
             </div>
             <FieldError id="time-range-error" message={fieldErrors.timeRange} />
-            <p className="create-event-help">
+            <div className="form-text">
               An end time earlier than the start time creates an overnight
               window.
-            </p>
+            </div>
           </div>
         </div>
       </section>
 
       <section
-        className="create-event-section"
+        className={sectionClassName}
         aria-labelledby="meeting-access-heading"
       >
-        <div className="create-event-section-copy">
-          <span className="create-event-section-index">02</span>
-          <div>
-            <SectionHeading id="meeting-access-heading">
+        <div className="form-section__copy">
+          <span className="section-index" aria-hidden="true">
+            02
+          </span>
+          <div className="min-w-0">
+            <SectionHeading id="meeting-access-heading" className="h5">
               Meeting &amp; access
             </SectionHeading>
             <p>
@@ -811,10 +802,10 @@ function CreateEvent({
           </div>
         </div>
 
-        <div className="create-event-section-fields">
-          <div className="create-event-field-group">
+        <div className="form-section__fields">
+          <div>
             <LabelRow>Meeting Type</LabelRow>
-            <div className="create-event-chip-row">
+            <div className="chip-group" role="group" aria-label="Meeting type">
               {MODES.map((meetingMode) => (
                 <ToggleChip
                   key={meetingMode.value}
@@ -827,209 +818,208 @@ function CreateEvent({
           </div>
 
           {mode !== "virtual" && (
-            <md-outlined-text-field
-              className="create-event-wide-field"
-              label="Location / Address"
-              value={location}
-              onInput={(event) => setLocation(event.target.value)}
-              onChange={(event) => setLocation(event.currentTarget.value)}
-              placeholder="TBD"
-            ></md-outlined-text-field>
+            <FormField id="event-location" label="Location / Address">
+              <input
+                type="text"
+                className="form-control"
+                value={location}
+                placeholder="TBD"
+                autoComplete="off"
+                onChange={(event) => setLocation(event.target.value)}
+              />
+            </FormField>
           )}
 
-          <div className="create-event-two-column">
-            <div
-              className="create-event-field-group"
+          <div className="form-row-2">
+            <FormField
+              id="event-timezone"
+              label="Event Timezone"
               data-error-field="eventTimezone"
             >
-              <LabelRow>Event Timezone</LabelRow>
-              <md-outlined-select
-                className="create-event-wide-field create-event-select create-event-timezone-select"
-                aria-label="Event timezone"
-                value={eventTimezone}
-                clamp-menu-width
-                typeahead-delay="600"
-                error={Boolean(fieldErrors.eventTimezone)}
-                aria-invalid={fieldErrors.eventTimezone ? "true" : undefined}
-                aria-describedby={
-                  fieldErrors.eventTimezone ? "event-timezone-error" : undefined
-                }
-                onInput={(event) => {
-                  setEventTimezone(event.target.value);
-                  clearFieldError("eventTimezone");
-                }}
-                onChange={(event) => {
-                  setEventTimezone(event.target.value);
-                  clearFieldError("eventTimezone");
-                }}
-              >
-                {timezoneOptions.map((timezone) => (
-                  <md-select-option key={timezone} value={timezone}>
-                    <div slot="headline">{timezone}</div>
-                  </md-select-option>
-                ))}
-              </md-outlined-select>
-              <FieldError
-                id="event-timezone-error"
-                message={fieldErrors.eventTimezone}
-              />
-            </div>
+              {(fieldProps) => (
+                <>
+                  <select
+                    {...fieldProps}
+                    className={controlClass(
+                      "form-select",
+                      fieldErrors.eventTimezone,
+                    )}
+                    aria-label="Event timezone"
+                    value={eventTimezone}
+                    aria-invalid={
+                      fieldErrors.eventTimezone ? "true" : undefined
+                    }
+                    aria-describedby={
+                      fieldErrors.eventTimezone
+                        ? "event-timezone-error"
+                        : undefined
+                    }
+                    onChange={(event) => {
+                      setEventTimezone(event.target.value);
+                      clearFieldError("eventTimezone");
+                    }}
+                  >
+                    {timezoneOptions.map((timezone) => (
+                      <option key={timezone} value={timezone}>
+                        {timezone}
+                      </option>
+                    ))}
+                  </select>
+                  <FieldError
+                    id="event-timezone-error"
+                    message={fieldErrors.eventTimezone}
+                  />
+                </>
+              )}
+            </FormField>
 
-            <div
-              className="create-event-field-group"
+            <FormField
+              id="meeting-duration"
+              label="Meeting Duration"
               data-error-field="meetingDuration"
             >
-              <LabelRow>Meeting Duration</LabelRow>
-              <input
-                className="create-event-control"
-                aria-label="Meeting Duration"
-                type="number"
-                min="15"
-                max="480"
-                step="15"
-                value={meetingDurationMinutes}
-                aria-invalid={fieldErrors.meetingDuration ? "true" : undefined}
-                aria-describedby={
-                  fieldErrors.meetingDuration
-                    ? "meeting-duration-error"
-                    : undefined
-                }
-                onChange={(event) => {
-                  setMeetingDurationMinutes(Number(event.target.value));
-                  clearFieldError("meetingDuration");
-                }}
-              />
-              <FieldError
-                id="meeting-duration-error"
-                message={fieldErrors.meetingDuration}
-              />
-            </div>
+              {(fieldProps) => (
+                <>
+                  <input
+                    {...fieldProps}
+                    className={controlClass(
+                      "form-control",
+                      fieldErrors.meetingDuration,
+                    )}
+                    aria-label="Meeting Duration"
+                    type="number"
+                    min="15"
+                    max="480"
+                    step="15"
+                    value={meetingDurationMinutes}
+                    aria-invalid={
+                      fieldErrors.meetingDuration ? "true" : undefined
+                    }
+                    aria-describedby={
+                      fieldErrors.meetingDuration
+                        ? "meeting-duration-error"
+                        : undefined
+                    }
+                    onChange={(event) => {
+                      setMeetingDurationMinutes(Number(event.target.value));
+                      clearFieldError("meetingDuration");
+                    }}
+                  />
+                  <FieldError
+                    id="meeting-duration-error"
+                    message={fieldErrors.meetingDuration}
+                  />
+                </>
+              )}
+            </FormField>
           </div>
-          <p className="create-event-help">
+          <p className="form-text mb-0">
             Times are shown in this timezone. Meeting duration determines how
             much continuous availability a recommendation needs.
           </p>
 
-          <div className="create-event-field-group">
-            <LabelRow>Event Access</LabelRow>
-            <md-outlined-select
-              className="create-event-wide-field create-event-select"
+          <FormField
+            id="event-access"
+            label="Event Access"
+            help="Invite-only events restrict access to roster members and the organizer."
+          >
+            <select
+              className="form-select"
               aria-label="Event Access"
               value={accessMode}
-              onInput={(event) => setAccessMode(event.target.value)}
               onChange={(event) => setAccessMode(event.target.value)}
             >
-              <md-select-option value="invite_only">
-                <div slot="headline">Invite only</div>
-              </md-select-option>
-              <md-select-option value="open_link">
-                <div slot="headline">Anyone with the event code</div>
-              </md-select-option>
-            </md-outlined-select>
-          </div>
-          <p className="create-event-help">
-            Invite-only events restrict access to roster members and the
-            organizer.
-          </p>
+              <option value="invite_only">Invite only</option>
+              <option value="open_link">Anyone with the event code</option>
+            </select>
+          </FormField>
         </div>
       </section>
 
       <details
-        className="create-event-disclosure"
+        className="disclosure create-event-disclosure"
         open={advancedOpen}
         onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}
       >
-        <summary className="create-event-disclosure-summary">
-          <div className="create-event-section-copy">
-            <span className="create-event-section-index">03</span>
-            <div>
-              <SectionHeading>Advanced options</SectionHeading>
-              <p>
+        <summary>
+          <div className="disclosure__summary-copy d-flex align-items-start gap-3">
+            <span className="section-index" aria-hidden="true">
+              03
+            </span>
+            <div className="min-w-0">
+              <SectionHeading className="h5 mb-1">
+                Advanced options
+              </SectionHeading>
+              <p className="mb-0">
                 Fine-tune slot granularity, participant visibility, deadlines,
                 and reminders.
               </p>
             </div>
           </div>
-          <span className="create-event-disclosure-toggle" aria-hidden="true">
-            <span className="create-event-disclosure-label-closed">Show</span>
-            <span className="create-event-disclosure-label-open">Hide</span>
-            <span className="create-event-disclosure-chevron" />
+          <span className="disclosure__chevron" aria-hidden="true">
+            <ChevronDownIcon />
           </span>
         </summary>
 
-        <div className="create-event-disclosure-content">
+        <div className="disclosure__content">
           <section
-            className="create-event-advanced-section"
+            className={advancedSectionClassName}
             aria-labelledby="advanced-settings-heading"
           >
-            <div className="create-event-advanced-copy">
-              <AdvancedHeading id="advanced-settings-heading">
-                Fine tuning
-              </AdvancedHeading>
-              <p>
-                Adjust availability granularity, schedule visibility, and
-                reminder timing when the defaults are not enough.
-              </p>
+            <div className="form-section__copy">
+              <div className="min-w-0">
+                <AdvancedHeading id="advanced-settings-heading" className="h6">
+                  Fine tuning
+                </AdvancedHeading>
+                <p>
+                  Adjust availability granularity, schedule visibility, and
+                  reminder timing when the defaults are not enough.
+                </p>
+              </div>
             </div>
-            <div className="create-event-advanced-fields">
-              <div className="create-event-two-column">
-                <div className="create-event-field-group">
-                  <LabelRow>Slot Duration</LabelRow>
-                  <md-outlined-select
-                    className="create-event-wide-field create-event-select"
+            <div className="form-section__fields">
+              <div className="form-row-2">
+                <FormField id="slot-minutes" label="Slot Duration">
+                  <select
+                    className="form-select"
                     aria-label="Slot Duration"
                     value={String(slotMinutes)}
-                    onInput={(event) =>
-                      setSlotMinutes(Number(event.target.value))
-                    }
                     onChange={(event) =>
                       setSlotMinutes(Number(event.target.value))
                     }
                   >
-                    <md-select-option value="15">
-                      <div slot="headline">15 minutes</div>
-                    </md-select-option>
-                    <md-select-option value="30">
-                      <div slot="headline">30 minutes</div>
-                    </md-select-option>
-                  </md-outlined-select>
-                </div>
-                <div className="create-event-field-group">
-                  <LabelRow>Participant View</LabelRow>
-                  <md-outlined-select
-                    className="create-event-wide-field create-event-select"
+                    <option value="15">15 minutes</option>
+                    <option value="30">30 minutes</option>
+                  </select>
+                </FormField>
+                <FormField id="participant-view" label="Participant View">
+                  <select
+                    className="form-select"
                     aria-label="Participant View"
                     value={participantViewPermission}
-                    onInput={(event) =>
+                    onChange={(event) =>
                       setParticipantViewPermission(event.target.value)
                     }
                   >
-                    <md-select-option value="own_only">
-                      <div slot="headline">Own schedule only</div>
-                    </md-select-option>
-                    <md-select-option value="all_after_submit">
-                      <div slot="headline">
-                        Submitted schedules after I submit
-                      </div>
-                    </md-select-option>
-                    <md-select-option value="realtime">
-                      <div slot="headline">
-                        Submitted schedules in real time
-                      </div>
-                    </md-select-option>
-                  </md-outlined-select>
-                </div>
+                    <option value="own_only">Own schedule only</option>
+                    <option value="all_after_submit">
+                      Submitted schedules after I submit
+                    </option>
+                    <option value="realtime">
+                      Submitted schedules in real time
+                    </option>
+                  </select>
+                </FormField>
               </div>
-              <p className="create-event-help">
+              <p className="form-text mb-0">
                 Slot duration controls the availability grid. Participant View
                 controls when people can see submitted schedules.
               </p>
 
-              <div className="create-event-two-column">
-                <label>
-                  <LabelRow>Response Deadline</LabelRow>
+              <div className="form-row-2">
+                <FormField id="response-deadline" label="Response Deadline">
                   <input
-                    className="create-event-control"
+                    className="form-control"
                     aria-label="Response Deadline"
                     type="datetime-local"
                     value={responseDeadline}
@@ -1037,99 +1027,126 @@ function CreateEvent({
                       setResponseDeadline(event.target.value)
                     }
                   />
-                </label>
-                <div
-                  className="create-event-field-group"
+                </FormField>
+                <FormField
+                  id="reminder-hours"
+                  label="Reminder Hours Before Deadline"
                   data-error-field="reminderHours"
                 >
-                  <LabelRow>Reminder Hours Before Deadline</LabelRow>
-                  <input
-                    className="create-event-control"
-                    aria-label="Reminder Hours Before Deadline"
-                    type="number"
-                    min="0"
-                    max="720"
-                    value={reminderHoursBefore}
-                    aria-invalid={
-                      fieldErrors.reminderHours ? "true" : undefined
-                    }
-                    aria-describedby={
-                      fieldErrors.reminderHours
-                        ? "reminder-hours-error"
-                        : undefined
-                    }
-                    onChange={(event) => {
-                      setReminderHoursBefore(Number(event.target.value));
-                      clearFieldError("reminderHours");
-                    }}
-                  />
-                  <FieldError
-                    id="reminder-hours-error"
-                    message={fieldErrors.reminderHours}
-                  />
-                </div>
+                  {(fieldProps) => (
+                    <>
+                      <input
+                        {...fieldProps}
+                        className={controlClass(
+                          "form-control",
+                          fieldErrors.reminderHours,
+                        )}
+                        aria-label="Reminder Hours Before Deadline"
+                        type="number"
+                        min="0"
+                        max="720"
+                        value={reminderHoursBefore}
+                        aria-invalid={
+                          fieldErrors.reminderHours ? "true" : undefined
+                        }
+                        aria-describedby={
+                          fieldErrors.reminderHours
+                            ? "reminder-hours-error"
+                            : undefined
+                        }
+                        onChange={(event) => {
+                          setReminderHoursBefore(Number(event.target.value));
+                          clearFieldError("reminderHours");
+                        }}
+                      />
+                      <FieldError
+                        id="reminder-hours-error"
+                        message={fieldErrors.reminderHours}
+                      />
+                    </>
+                  )}
+                </FormField>
               </div>
-              <label className="create-event-checkbox-row">
+              <div className="form-check">
                 <input
+                  className="form-check-input"
                   type="checkbox"
+                  id="reminders-enabled"
                   checked={remindersEnabled}
                   onChange={(event) =>
                     setRemindersEnabled(event.target.checked)
                   }
                 />
-                Send reminder emails before the deadline
-              </label>
+                <label className="form-check-label" htmlFor="reminders-enabled">
+                  Send reminder emails before the deadline
+                </label>
+              </div>
             </div>
           </section>
         </div>
       </details>
 
-      <div className="create-event-feedback">
+      <div
+        className={`create-event-feedback d-flex flex-column gap-3${hasFeedback ? " mt-4" : ""}`}
+      >
         {error && (
-          <p className="create-event-error" role="alert">
+          <Alert variant="danger" className="create-event-error">
             {error}
-          </p>
+          </Alert>
         )}
 
         {conflictEvent && (
-          <div className="event-form-warning">
-            <p>
+          <Alert
+            variant="warning"
+            className="event-form-warning"
+            actions={
+              <AppButton
+                variant="outlined"
+                icon={<RefreshIcon />}
+                onClick={reloadLatestEvent}
+              >
+                Reload latest event
+              </AppButton>
+            }
+          >
+            <p className="mb-0">
               The latest saved version is{" "}
               <strong>{conflictEvent.version}</strong>. Reload before deciding
               which edits to keep.
             </p>
-            <AppButton
-              variant="outlined"
-              icon={<MdRefresh />}
-              onClick={reloadLatestEvent}
-            >
-              Reload latest event
-            </AppButton>
-          </div>
+          </Alert>
         )}
 
         {resetRequired && (
-          <div className="event-form-warning" role="alert">
-            <strong>Schedule changes require a response reset</strong>
+          <Alert
+            variant="warning"
+            role="alert"
+            className="event-form-warning"
+            title="Schedule changes require a response reset"
+          >
             <p>
               Saving will clear draft and submitted availability for{" "}
               {resetParticipantCount}{" "}
               {resetParticipantCount === 1 ? "participant" : "participants"}.
               Invitations and participant membership will remain.
             </p>
-            <label>
+            <div className="form-check">
               <input
+                className="form-check-input"
                 type="checkbox"
+                id="reset-confirmed"
                 checked={resetConfirmed}
                 onChange={(event) => setResetConfirmed(event.target.checked)}
               />
-              I understand that participant availability will be reset.
-            </label>
-          </div>
+              <label className="form-check-label" htmlFor="reset-confirmed">
+                I understand that participant availability will be reset.
+              </label>
+            </div>
+          </Alert>
         )}
       </div>
 
-      <footer className="create-event-actions">
+      <footer className="create-event-actions d-flex flex-wrap justify-content-end align-items-center gap-2 mt-4 pt-3 border-top">
         {editing && inline ? (
           <AppButton
             variant="text"
@@ -1142,18 +1159,17 @@ function CreateEvent({
         ) : editing ? (
           <Link
             href={`/event?code=${encodeURIComponent(eventCode)}`}
-            className="event-form-cancel"
+            className="btn btn-outline-secondary app-btn event-form-cancel"
           >
-            Cancel and return to event
+            <span className="app-btn-label">Cancel and return to event</span>
           </Link>
         ) : null}
         <AppButton
           className="create-event-submit"
           type="submit"
+          busy={loading}
           disabled={loading || (resetRequired && !resetConfirmed)}
-          icon={
-            loading ? <MdHourglassEmpty /> : editing ? <MdSave /> : <MdAdd />
-          }
+          icon={editing ? <SaveIcon /> : <AddIcon />}
         >
           {loading
             ? editing
@@ -1164,6 +1180,33 @@ function CreateEvent({
               : "Create Event"}
         </AppButton>
       </footer>
+    </>
+  );
+
+  const form = (
+    <form
+      onSubmit={handleSubmit}
+      className={`create-event-form${inline ? " create-event-form--inline" : ""}`}
+      noValidate
+    >
+      {!inline && (
+        <PageHeader
+          eyebrow="Event setup"
+          title={editing ? "Edit event" : "Create event"}
+          lede={
+            editing
+              ? "Review the schedule and response rules before saving your changes."
+              : "Set the schedule and response rules, then share one link with everyone."
+          }
+        />
+      )}
+      {inline ? (
+        sections
+      ) : (
+        <div className="card">
+          <div className="card-body">{sections}</div>
+        </div>
+      )}
     </form>
   );
 
@@ -1175,7 +1218,7 @@ function CreateEvent({
         pageTitle={editing ? "Edit event" : "Create event"}
         contextLabel={editing ? "Organizer" : undefined}
       />
-      <main className="create-event-shell">{form}</main>
+      <main className="page-shell create-event-shell">{form}</main>
     </>
   );
 }

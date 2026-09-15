@@ -12,16 +12,6 @@ import {
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 
-jest.mock("@material/web/textfield/outlined-text-field.js", () => ({}), {
-  virtual: true,
-});
-jest.mock("@material/web/select/outlined-select.js", () => ({}), {
-  virtual: true,
-});
-jest.mock("@material/web/select/select-option.js", () => ({}), {
-  virtual: true,
-});
-
 const replace = jest.fn();
 let searchParams = new URLSearchParams();
 
@@ -106,11 +96,6 @@ function authenticated() {
     loading: false,
     getToken: jest.fn().mockResolvedValue("token"),
   });
-}
-
-function setCustomElementValue(element, value) {
-  element.value = value;
-  fireEvent(element, new Event("input", { bubbles: true }));
 }
 
 describe("organizer event management UI", () => {
@@ -284,10 +269,8 @@ describe("organizer event management UI", () => {
       "stable-duplicate-key",
     );
 
-    const codeField = document.querySelector(
-      'md-outlined-text-field[label="Enter Event Code"]',
-    );
-    setCustomElementValue(codeField, " A B C ");
+    const codeField = screen.getByLabelText("Enter Event Code");
+    fireEvent.change(codeField, { target: { value: " A B C " } });
     fireEvent.keyDown(codeField, { key: "Enter" });
     expect(navigateTo).toHaveBeenCalledWith("/event?code=A%20B%20C");
   });
@@ -334,11 +317,9 @@ describe("organizer event management UI", () => {
     expect(
       screen.getByText("Advanced options").closest("details"),
     ).toHaveAttribute("open");
-    const nameField = document.querySelector(
-      'md-outlined-text-field[label="Event Name"]',
-    );
-    expect(nameField).toHaveAttribute("value", baseEvent.name);
-    setCustomElementValue(nameField, "Updated planning");
+    const nameField = screen.getByRole("textbox", { name: "Event Name" });
+    expect(nameField).toHaveValue(baseEvent.name);
+    fireEvent.change(nameField, { target: { value: "Updated planning" } });
     fireEvent.change(screen.getByLabelText("End Time"), {
       target: { value: "10:30" },
     });
@@ -398,9 +379,9 @@ describe("organizer event management UI", () => {
       .closest("form");
     expect(inlineForm).toHaveClass("create-event-form--inline");
     expect(fetchEvent).not.toHaveBeenCalled();
-    expect(
-      document.querySelector('md-outlined-text-field[label="Event Name"]'),
-    ).toHaveAttribute("value", baseEvent.name);
+    expect(screen.getByRole("textbox", { name: "Event Name" })).toHaveValue(
+      baseEvent.name,
+    );
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onCancel).toHaveBeenCalledTimes(1);
     expect(replace).not.toHaveBeenCalled();
@@ -502,9 +483,7 @@ describe("organizer event management UI", () => {
       .closest("details");
     expect(advancedOptions).not.toHaveAttribute("open");
 
-    const locationField = document.querySelector(
-      'md-outlined-text-field[label="Location / Address"]',
-    );
+    const locationField = screen.getByLabelText("Location / Address");
     const timezoneField = screen.getByLabelText("Event timezone");
     const meetingDurationField = screen.getByLabelText("Meeting Duration");
     const accessField = screen.getByLabelText("Event Access");
@@ -540,12 +519,10 @@ describe("organizer event management UI", () => {
     expect(nameError).toHaveClass("create-event-field-error");
     expect(nameError.closest('[data-error-field="eventName"]')).not.toBeNull();
 
-    const nameField = document.querySelector(
-      'md-outlined-text-field[label="Event Name"]',
-    );
+    const nameField = screen.getByRole("textbox", { name: "Event Name" });
     expect(nameField).toHaveAttribute("aria-invalid", "true");
     expect(nameField.parentElement).toContainElement(nameError);
-    setCustomElementValue(nameField, "Created event");
+    fireEvent.change(nameField, { target: { value: "Created event" } });
     expect(
       screen.queryByText("Event name is required"),
     ).not.toBeInTheDocument();
@@ -557,13 +534,17 @@ describe("organizer event management UI", () => {
     });
     await userEvent.click(screen.getByRole("button", { name: "Add date" }));
     expect(screen.getByText("2026-08-21")).toBeInTheDocument();
-    setCustomElementValue(screen.getByLabelText("Event Access"), "open_link");
+    fireEvent.change(screen.getByLabelText("Event Access"), {
+      target: { value: "open_link" },
+    });
     const timezoneSelect = screen.getByLabelText("Event timezone");
-    expect(timezoneSelect.tagName).toBe("MD-OUTLINED-SELECT");
+    expect(timezoneSelect.tagName).toBe("SELECT");
     expect(
       within(timezoneSelect).getByText("America/Los_Angeles"),
     ).toBeInTheDocument();
-    setCustomElementValue(timezoneSelect, "America/Los_Angeles");
+    fireEvent.change(timezoneSelect, {
+      target: { value: "America/Los_Angeles" },
+    });
     fireEvent.change(screen.getByLabelText("Meeting Duration"), {
       target: { value: "60" },
     });
@@ -591,13 +572,11 @@ describe("organizer event management UI", () => {
     const advancedOptions = screen
       .getByText("Advanced options")
       .closest("details");
-    const nameField = document.querySelector(
-      'md-outlined-text-field[label="Event Name"]',
-    );
+    const nameField = screen.getByRole("textbox", { name: "Event Name" });
     const meetingDuration = screen.getByLabelText("Meeting Duration");
 
     expect(advancedOptions).not.toHaveAttribute("open");
-    setCustomElementValue(nameField, "Duration validation");
+    fireEvent.change(nameField, { target: { value: "Duration validation" } });
     fireEvent.change(meetingDuration, { target: { value: "20" } });
     fireEvent.submit(
       screen.getByRole("button", { name: "Create Event" }).closest("form"),
@@ -621,15 +600,13 @@ describe("organizer event management UI", () => {
     const advancedOptions = screen
       .getByText("Advanced options")
       .closest("details");
-    const nameField = document.querySelector(
-      'md-outlined-text-field[label="Event Name"]',
-    );
+    const nameField = screen.getByRole("textbox", { name: "Event Name" });
     const reminderHours = screen.getByLabelText(
       "Reminder Hours Before Deadline",
     );
 
     expect(advancedOptions).not.toHaveAttribute("open");
-    setCustomElementValue(nameField, "Reminder validation");
+    fireEvent.change(nameField, { target: { value: "Reminder validation" } });
     fireEvent.change(reminderHours, { target: { value: "721" } });
     fireEvent.submit(
       screen.getByRole("button", { name: "Create Event" }).closest("form"),

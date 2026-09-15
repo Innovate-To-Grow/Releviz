@@ -1,5 +1,6 @@
+import "./theme.scss";
 import "./globals.css";
-import "./apple-design.css";
+import "./scheduling.css";
 import { AuthProvider } from "@/components/auth/AuthContext";
 import SiteFooter from "@/components/ui/SiteFooter";
 
@@ -46,8 +47,8 @@ export const viewport = {
   width: "device-width",
   initialScale: 1,
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#f5f5f7" },
-    { media: "(prefers-color-scheme: dark)", color: "#000000" },
+    { media: "(prefers-color-scheme: light)", color: "#f8f9fa" },
+    { media: "(prefers-color-scheme: dark)", color: "#212529" },
   ],
 };
 

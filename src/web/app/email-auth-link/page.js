@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@/components/auth/AuthContext";
 import AppHeader from "@/components/ui/AppHeader";
+import { RefreshIcon } from "@/components/ui/icons";
 import { navigateTo, safeNextPath } from "@/lib/navigation";
 
 const ALLOWED_FLOWS = new Set(["auth", "login", "register"]);
@@ -115,16 +116,24 @@ export default function EmailAuthLinkPage() {
         <section className="auth-panel" aria-live="polite">
           <div>
             <h1>{error ? "Link verification failed" : "Signing you in"}</h1>
-            <p>
+            <p className={error ? "text-danger-emphasis" : undefined}>
               {error
                 ? error
                 : "Please wait while we securely verify your email."}
             </p>
           </div>
-          {error && (
-            <Link className="app-btn app-btn-filled app-btn-full" href="/login">
-              Request a new code
+          {error ? (
+            <Link className="btn btn-primary app-btn w-100" href="/login">
+              <span className="app-btn-icon" aria-hidden="true">
+                <RefreshIcon />
+              </span>
+              <span className="app-btn-label">Request a new code</span>
             </Link>
+          ) : (
+            <span
+              className="spinner-border text-primary align-self-center"
+              aria-hidden="true"
+            />
           )}
         </section>
       </main>

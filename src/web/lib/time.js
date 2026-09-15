@@ -98,3 +98,72 @@ export function formatIsoForDateTimeLocal(value, timeZone) {
     parts.minute,
   )}`;
 }
+
+// Offset (minutes east of UTC) of `timeZone` at a given instant.
+function zoneOffsetMinutes(instant, formatter) {
+  const parts = zonedParts(instant, formatter);
+  const asUtc = Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    parts.second,
+  );
+  return Math.round((asUtc - instant.getTime()) / 60_000);
+}
+
+/**
+ * Returns `resolve("YYYY-MM-DDTHH:MM") → ISO` for one timezone.
+ *
+ * `zonedLocalDateTimeToIso` brute-forces ±14h of candidates for every call,
+ * which is far too slow for a calendar that resolves hundreds of slot
+ * boundaries per week. The resolver caches the zone offset per calendar day:
+ * when the offset is identical one day before and two days after, the day
+ * contains no DST transition and the instant is a single subtraction
+ * (verified once). Days with a transition fall back to the exhaustive search
+ * so its exact "does not exist" / "ambiguous" errors still surface.
+ */
+export function createLocalDateTimeResolver(timeZone) {
+  const formatter = zonedFormatter(timeZone);
+  const offsetsByDate = new Map();
+
+  const stableOffsetFor = (year, month, day) => {
+    const key = `${year}-${month}-${day}`;
+    if (offsetsByDate.has(key)) return offsetsByDate.get(key);
+    const before = new Date(Date.UTC(year, month - 1, day - 1));
+    const after = new Date(Date.UTC(year, month - 1, day + 2));
+    const offsetBefore = zoneOffsetMinutes(before, formatter);
+    const offsetAfter = zoneOffsetMinutes(after, formatter);
+    const stable = offsetBefore === offsetAfter ? offsetBefore : null;
+    offsetsByDate.set(key, stable);
+    return stable;
+  };
+
+  return function resolve(value) {
+    const match = LOCAL_DATE_TIME.exec(String(value || ""));
+    if (!match) return zonedLocalDateTimeToIso(value, timeZone);
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const hour = Number(match[4]);
+    const minute = Number(match[5]);
+    const offset = stableOffsetFor(year, month, day);
+    if (offset === null) return zonedLocalDateTimeToIso(value, timeZone);
+    const instant = new Date(
+      Date.UTC(year, month - 1, day, hour, minute) - offset * 60_000,
+    );
+    if (
+      !sameLocalTime(zonedParts(instant, formatter), {
+        year,
+        month,
+        day,
+        hour,
+        minute,
+      })
+    ) {
+      return zonedLocalDateTimeToIso(value, timeZone);
+    }
+    return instant.toISOString();
+  };
+}

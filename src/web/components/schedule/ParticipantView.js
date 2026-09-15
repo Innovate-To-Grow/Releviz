@@ -1,8 +1,26 @@
 "use client";
 
 import { useState, useContext, useEffect, useRef, useCallback } from "react";
-import { MdLogin, MdRefresh, MdSend } from "react-icons/md";
+import Alert from "@/components/ui/Alert";
 import AppButton from "@/components/ui/AppButton";
+import {
+  AVAILABILITY_CHOICES,
+  AvailabilityChoice,
+  AvailabilityLegend,
+} from "@/components/ui/Availability";
+import EmptyState from "@/components/ui/EmptyState";
+import LoadingState from "@/components/ui/LoadingState";
+import PageHeader from "@/components/ui/PageHeader";
+import Panel from "@/components/ui/Panel";
+import StatusBadge from "@/components/ui/StatusBadge";
+import {
+  RefreshIcon,
+  ResultsIcon,
+  SendIcon,
+  SignInIcon,
+  SuccessIcon,
+  TimezoneIcon,
+} from "@/components/ui/icons";
 import EventContext from "@/components/event/EventContext";
 import ScheduleChannelEditor from "@/components/schedule/ScheduleChannelEditor";
 import ScheduleGrid from "@/components/schedule/ScheduleGrid";
@@ -15,12 +33,6 @@ import {
 import { fetchEventResults } from "@/lib/api/events";
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
 import useAutosaveNavigationGuard from "@/components/schedule/useAutosaveNavigationGuard";
-
-const AVAILABILITY_CHOICES = [
-  { label: "Busy", value: 0 },
-  { label: "If needed", value: 0.5 },
-  { label: "Available", value: 1 },
-];
 
 const NOOP = () => {};
 
@@ -522,121 +534,146 @@ function ParticipantView() {
 
   if (authLoading || !user) {
     return (
-      <div className="page-pad participant-loading">
-        <p>Loading...</p>
-      </div>
+      <main className="page-shell" aria-busy="true">
+        <LoadingState label="Loading..." />
+      </main>
     );
   }
 
   if (!joined) {
     return (
-      <div className="page-pad participant-join-shell">
-        <div className="participant-join-card">
-          <div className="participant-join-heading">
-            <p className="participant-eyebrow">Your invitation</p>
-            <h2>Join Event</h2>
-            <p>
-              Join, mark the times that work for you, then submit your response.
-            </p>
-          </div>
+      <main className="page-shell page-shell--narrow">
+        <Panel bodyClassName="d-flex flex-column gap-3">
+          <PageHeader
+            headingLevel={2}
+            eyebrow="Your invitation"
+            title="Join Event"
+            lede="Join, mark the times that work for you, then submit your response."
+            className="mb-0"
+          />
 
           <EventDetailsGrid event={event} />
 
           {joinError && (
-            <p className="participant-error" role="alert">
+            <Alert variant="danger" role="alert" className="participant-error">
               {joinError}
-            </p>
+            </Alert>
           )}
 
-          <AppButton onClick={handleJoin} fullWidth icon={<MdLogin />}>
+          <AppButton
+            onClick={handleJoin}
+            fullWidth
+            className="text-wrap"
+            icon={<SignInIcon />}
+          >
             Join as {user.displayName}
           </AppButton>
-        </div>
-      </div>
+        </Panel>
+      </main>
     );
   }
 
-  return (
-    <div className="page-pad participant-workspace">
-      <div className="participant-heading">
-        <div>
-          <p className="participant-eyebrow">Your availability</p>
-          <h2 className="participant-title">
-            Welcome, {participantName}
-            {submitted && (
-              <span className="participant-submitted">
-                <span aria-hidden="true">✓</span> Submitted
-              </span>
-            )}
-          </h2>
-          <p className="participant-heading-copy">
-            Choose a status, then click or drag across the times below.
-          </p>
-        </div>
-        <AppButton
-          onClick={handleRefresh}
-          variant="outlined"
-          icon={<MdRefresh />}
-          disabled={isRefreshing}
-        >
-          {isRefreshing ? "Refreshing…" : "Refresh"}
-        </AppButton>
-      </div>
+  const activeChoiceLabel = AVAILABILITY_CHOICES.find(
+    (choice) => choice.value === availabilityValue,
+  )?.label;
+  const saveStatusVariant =
+    draftSaveState === "failed"
+      ? "danger"
+      : draftSaveState === "submitted"
+        ? "success"
+        : "info";
 
-      <div className="participant-columns">
-        <div
-          className={`participant-editor-pane${viewPermission === "own_only" ? " participant-editor-pane-wide" : ""}`}
-        >
-          <section
-            className="participant-editor"
-            aria-labelledby="participant-editor-title"
-          >
-            <div className="participant-choice-block">
-              <h3 id="participant-editor-title">Mark times as</h3>
-              <div
-                role="group"
-                aria-label="Availability status"
-                className="participant-choice-group"
+  return (
+    <main className="page-shell page-shell--wide participant-workspace">
+      <PageHeader
+        headingLevel={2}
+        eyebrow="Your availability"
+        title={
+          <>
+            Welcome, {participantName}{" "}
+            {submitted ? (
+              <StatusBadge
+                status="submitted"
+                dot={false}
+                className="ms-1 align-middle"
               >
-                {AVAILABILITY_CHOICES.map((choice) => (
-                  <AppButton
-                    key={choice.value}
-                    onClick={() => setAvailabilityValue(choice.value)}
-                    variant={
-                      availabilityValue === choice.value ? "filled" : "outlined"
-                    }
-                    aria-pressed={availabilityValue === choice.value}
-                    disabled={responseChangesDisabled}
-                  >
-                    {choice.label}
-                  </AppButton>
-                ))}
+                <span className="icon-inline" aria-hidden="true">
+                  <SuccessIcon />
+                </span>
+                Submitted
+              </StatusBadge>
+            ) : (
+              <StatusBadge status="draft" className="ms-1 align-middle">
+                Draft
+              </StatusBadge>
+            )}
+          </>
+        }
+        lede="Choose a status, then click or drag across the times below."
+        actions={
+          <AppButton
+            onClick={handleRefresh}
+            variant="outlined"
+            icon={<RefreshIcon />}
+            disabled={isRefreshing}
+            busy={isRefreshing}
+          >
+            {isRefreshing ? "Refreshing…" : "Refresh"}
+          </AppButton>
+        }
+      />
+
+      <div
+        className={`participant-columns${viewPermission !== "own_only" ? " participant-columns--split" : ""}`}
+      >
+        <Panel
+          as="section"
+          className="participant-editor"
+          aria-labelledby="participant-editor-title"
+          title="Mark times as"
+          titleId="participant-editor-title"
+          headingLevel={3}
+        >
+          <div className="d-flex flex-column gap-3">
+            <div className="schedule-toolbar mb-0">
+              <div className="schedule-toolbar__group">
+                <AvailabilityChoice
+                  value={availabilityValue}
+                  onChange={setAvailabilityValue}
+                  disabled={responseChangesDisabled}
+                  label="Availability status"
+                  virtual={mode === "virtual"}
+                  className="flex-wrap"
+                />
               </div>
-              <p className="participant-hint">
-                Your changes save automatically.
-              </p>
-              <div className="participant-actions">
+              <div className="schedule-toolbar__actions">
                 <AppButton
                   onClick={() => fillAllAvailability(availabilityValue)}
                   variant="outlined"
+                  size="sm"
                   disabled={responseChangesDisabled}
                 >
-                  Apply{" "}
-                  {
-                    AVAILABILITY_CHOICES.find(
-                      (choice) => choice.value === availabilityValue,
-                    )?.label
-                  }{" "}
-                  to all
+                  Apply {activeChoiceLabel} to all
                 </AppButton>
                 <AppButton
                   onClick={() => fillAllAvailability(0)}
                   variant="outlined"
+                  size="sm"
                   disabled={responseChangesDisabled}
                 >
                   Mark all Busy
                 </AppButton>
               </div>
+              <p className="w-100 mb-0 small text-secondary d-flex flex-wrap align-items-center gap-2">
+                <span className="d-inline-flex align-items-center gap-1">
+                  <span className="icon-inline" aria-hidden="true">
+                    <TimezoneIcon />
+                  </span>
+                  Times shown in {event.timezone || "UTC"}
+                </span>
+                <span aria-hidden="true">·</span>
+                <span>Your changes save automatically.</span>
+              </p>
             </div>
 
             <ScheduleChannelEditor
@@ -648,58 +685,82 @@ function ParticipantView() {
               onInpersonPaint={handleInpersonPaint}
               onVirtualPaint={handleVirtualPaint}
               onCopy={handleCopySchedule}
+              legend={false}
             />
 
             {draftSaveState !== "idle" && (
-              <div
+              <Alert
+                variant={saveStatusVariant}
                 role={draftSaveState === "failed" ? "alert" : "status"}
-                aria-live={draftSaveState === "failed" ? "assertive" : "polite"}
+                icon={draftSaveState !== "saving"}
                 className={`participant-save-status${draftSaveState === "failed" ? " participant-save-status-failed" : ""}`}
+                actions={
+                  draftSaveState === "failed" ? (
+                    saveConflict ? (
+                      <AppButton
+                        variant="outlined"
+                        size="sm"
+                        onClick={() => applyParticipantResponse(saveConflict)}
+                      >
+                        Reload latest response
+                      </AppButton>
+                    ) : (
+                      <AppButton
+                        variant="outlined"
+                        size="sm"
+                        onClick={() => void runAutosave()}
+                      >
+                        Retry save
+                      </AppButton>
+                    )
+                  ) : null
+                }
               >
-                <span>
-                  {draftSaveState === "saving" && "Saving draft…"}
-                  {draftSaveState === "saved" &&
-                    "Draft saved. Submit when you are ready."}
-                  {draftSaveState === "submitted" && "Schedule submitted."}
-                  {draftSaveState === "failed" &&
-                    (draftSaveError || "Draft autosave failed.")}
+                <span className="save-status__text">
+                  {draftSaveState === "saving" && (
+                    <span
+                      className="spinner-border spinner-border-sm"
+                      aria-hidden="true"
+                    />
+                  )}
+                  <span>
+                    {draftSaveState === "saving" && "Saving draft…"}
+                    {draftSaveState === "saved" &&
+                      "Draft saved. Submit when you are ready."}
+                    {draftSaveState === "submitted" && "Schedule submitted."}
+                    {draftSaveState === "failed" &&
+                      (draftSaveError || "Draft autosave failed.")}
+                  </span>
                 </span>
-                {draftSaveState === "failed" &&
-                  (saveConflict ? (
-                    <AppButton
-                      variant="outlined"
-                      onClick={() => applyParticipantResponse(saveConflict)}
-                    >
-                      Reload latest response
-                    </AppButton>
-                  ) : (
-                    <AppButton
-                      variant="outlined"
-                      onClick={() => void runAutosave()}
-                    >
-                      Retry save
-                    </AppButton>
-                  ))}
-              </div>
+              </Alert>
             )}
 
             {submitError && (
-              <p role="alert" className="participant-error">
+              <Alert
+                variant="danger"
+                role="alert"
+                className="participant-error"
+              >
                 {submitError}
-              </p>
+              </Alert>
             )}
             {responseChangesDisabled && (
-              <p className="participant-error">
+              <Alert
+                variant="warning"
+                role="status"
+                className="participant-locked-notice"
+              >
                 {event.status !== "active"
                   ? `Responses are locked while this event is ${event.status}.`
                   : "The response deadline has passed."}
-              </p>
+              </Alert>
             )}
-            <div className="participant-submit-row">
+            <div className="d-flex flex-wrap gap-2">
               <AppButton
                 onClick={handleSubmit}
                 disabled={isSubmitting || responseChangesDisabled}
-                icon={<MdSend />}
+                busy={isSubmitting}
+                icon={<SendIcon />}
               >
                 {isSubmitting
                   ? "Submitting..."
@@ -708,16 +769,20 @@ function ParticipantView() {
                     : "Submit Availability"}
               </AppButton>
             </div>
-          </section>
-        </div>
+          </div>
+        </Panel>
 
         {viewPermission !== "own_only" && (
           <aside
-            className="participant-results-pane"
+            className="participant-results-pane d-flex flex-column gap-3 min-w-0"
             aria-label="Group availability"
           >
             {resultSnapshot.status === "refreshing" && (
-              <div className="participant-result-notice" role="status">
+              <Alert
+                variant="info"
+                role="status"
+                className="participant-result-notice"
+              >
                 Group availability is updating for revision{" "}
                 {resultSnapshot.requestedRevision ??
                   event.resultsRevision ??
@@ -726,72 +791,75 @@ function ParticipantView() {
                 {results
                   ? " Showing the last completed snapshot meanwhile."
                   : ""}
-              </div>
+              </Alert>
             )}
             {resultSnapshot.status === "failed" && (
-              <div
-                className="participant-result-notice participant-result-notice-error"
+              <Alert
+                variant="danger"
                 role="alert"
+                className="participant-result-notice"
               >
                 Group availability could not be refreshed yet.
                 {results ? " Showing the last completed snapshot." : ""}
-              </div>
+              </Alert>
             )}
             {results ? (
-              <section className="participant-results-card">
-                <h3>Group Availability</h3>
-                <p className="participant-results-summary">
+              <Panel title="Group Availability" headingLevel={3}>
+                <p className="text-secondary">
                   Based on {results.countedResponseTotal} submitted response(s).{" "}
                   {results.unansweredParticipantTotal} participant(s) are still
                   unanswered.
                 </p>
+                <AvailabilityLegend
+                  showValues
+                  virtual={mode === "virtual"}
+                  channels={mode === "mixed" ? "both" : "single"}
+                  className="mb-3"
+                />
                 <div className="participant-results-grids">
                   {mode !== "virtual" && (
-                    <div className="participant-result-grid">
-                      <ScheduleGrid
-                        schedule={avgInperson}
-                        slotGroups={event.slotGroups}
-                        readOnly={true}
-                        showValues={true}
-                        label={
-                          mode === "mixed"
-                            ? "In-Person Availability"
-                            : "Availability"
-                        }
-                      />
-                    </div>
+                    <ScheduleGrid
+                      schedule={avgInperson}
+                      slotGroups={event.slotGroups}
+                      readOnly={true}
+                      showValues={true}
+                      compact
+                      label={
+                        mode === "mixed"
+                          ? "In-Person Availability"
+                          : "Availability"
+                      }
+                    />
                   )}
                   {mode !== "inperson" && (
-                    <div className="participant-result-grid">
-                      <ScheduleGrid
-                        schedule={avgVirtual}
-                        slotGroups={event.slotGroups}
-                        readOnly={true}
-                        showValues={true}
-                        label={
-                          mode === "mixed"
-                            ? "Virtual Availability"
-                            : "Availability"
-                        }
-                        virtual
-                      />
-                    </div>
+                    <ScheduleGrid
+                      schedule={avgVirtual}
+                      slotGroups={event.slotGroups}
+                      readOnly={true}
+                      showValues={true}
+                      compact
+                      label={
+                        mode === "mixed"
+                          ? "Virtual Availability"
+                          : "Availability"
+                      }
+                      virtual
+                    />
                   )}
                 </div>
-              </section>
+              </Panel>
             ) : (
-              <section className="participant-results-card participant-results-empty">
-                <h3>Group Availability</h3>
-                <p>
+              <Panel title="Group Availability" headingLevel={3}>
+                <EmptyState icon={<ResultsIcon />}>
                   Submit a valid schedule before shared results become
                   available.
-                </p>
-              </section>
+                </EmptyState>
+              </Panel>
             )}
           </aside>
         )}
       </div>
-    </div>
+    </main>
   );
 }
 

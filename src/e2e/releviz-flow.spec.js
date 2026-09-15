@@ -147,12 +147,12 @@ async function fillTextbox(page, name, value) {
   await page.getByRole("textbox", { name }).fill(value);
 }
 
-// Material Web renders <md-outlined-select> as a combobox plus a listbox, so
-// the value is chosen from options rather than typed.
+// Event settings use native <select> controls, so the value is chosen by its
+// visible option label.
 async function selectOption(page, name, optionName) {
-  await page.getByRole("combobox", { name }).click();
-  await page.getByRole("option", { name: optionName, exact: true }).click();
-  await expect(page.getByRole("combobox", { name })).toContainText(optionName);
+  const select = page.getByRole("combobox", { name });
+  await select.selectOption({ label: optionName });
+  await expect(select).toHaveValue(optionName);
 }
 
 async function expandAdvancedOptions(page) {

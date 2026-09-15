@@ -1,4 +1,8 @@
-import { formatIsoForDateTimeLocal, zonedLocalDateTimeToIso } from "@/lib/time";
+import {
+  createLocalDateTimeResolver,
+  formatIsoForDateTimeLocal,
+  zonedLocalDateTimeToIso,
+} from "@/lib/time";
 
 describe("event timezone conversion", () => {
   test("converts valid local wall times to explicit UTC instants", () => {
@@ -42,5 +46,48 @@ describe("event timezone conversion", () => {
     expect(() =>
       formatIsoForDateTimeLocal("2026-07-20T09:00:00Z", "Moon/Base"),
     ).toThrow("valid IANA");
+  });
+});
+
+describe("createLocalDateTimeResolver", () => {
+  test("matches the exhaustive conversion on ordinary days", () => {
+    const resolve = createLocalDateTimeResolver("America/Los_Angeles");
+    for (const value of [
+      "2026-09-14T09:00",
+      "2026-09-14T23:45",
+      "2026-09-20T00:00",
+      "2026-01-05T12:30",
+    ]) {
+      expect(resolve(value)).toBe(
+        zonedLocalDateTimeToIso(value, "America/Los_Angeles"),
+      );
+    }
+    expect(createLocalDateTimeResolver("UTC")("2026-07-20T09:00")).toBe(
+      "2026-07-20T09:00:00.000Z",
+    );
+    expect(
+      createLocalDateTimeResolver("Asia/Kathmandu")("2026-07-20T09:00"),
+    ).toBe("2026-07-20T03:15:00.000Z");
+  });
+
+  test("surfaces daylight-saving errors on transition days", () => {
+    const resolve = createLocalDateTimeResolver("America/Los_Angeles");
+    expect(() => resolve("2026-03-08T02:30")).toThrow("does not exist");
+    expect(() => resolve("2026-11-01T01:30")).toThrow("ambiguous");
+    expect(resolve("2026-03-08T03:30")).toBe(
+      zonedLocalDateTimeToIso("2026-03-08T03:30", "America/Los_Angeles"),
+    );
+    expect(resolve("2026-11-01T03:00")).toBe(
+      zonedLocalDateTimeToIso("2026-11-01T03:00", "America/Los_Angeles"),
+    );
+  });
+
+  test("rejects malformed values and invalid zones like the base helper", () => {
+    expect(() => createLocalDateTimeResolver("UTC")("nope")).toThrow(
+      "complete local",
+    );
+    expect(() => createLocalDateTimeResolver("Moon/Base")).toThrow(
+      "valid IANA",
+    );
   });
 });

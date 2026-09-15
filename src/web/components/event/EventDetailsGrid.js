@@ -2,18 +2,18 @@
 
 import { useId, useState } from "react";
 import {
-  MdEventAvailable,
-  MdExpandMore,
-  MdGroups,
-  MdLockOutline,
-  MdSchedule,
-} from "react-icons/md";
+  CalendarCheckIcon,
+  ChevronDownIcon,
+  ClockIcon,
+  GroupIcon,
+  LockIcon,
+} from "@/components/ui/icons";
 import { DAY_LABELS } from "@/lib/constants";
 import { formatDateTimeInTimezone, formatMode, formatTime } from "@/lib/format";
 
 function InfoCard({ label, value }) {
   return (
-    <div className="event-info-item">
+    <div className="detail-list__item event-info-item">
       <dt className="event-info-label">{label}</dt>
       <dd className="event-info-value">{value ?? "Not set"}</dd>
     </div>
@@ -23,10 +23,12 @@ function InfoCard({ label, value }) {
 function SummaryItem({ icon: Icon, label, primary, secondary, confirmed }) {
   return (
     <div
-      className={`event-overview-summary__item${confirmed ? " event-overview-summary__item--confirmed" : ""}`}
+      className={`summary-tile event-overview-summary__item${confirmed ? " summary-tile--confirmed event-overview-summary__item--confirmed" : ""}`}
     >
       <dt className="event-overview-summary__label">
-        <Icon aria-hidden="true" />
+        <span className="summary-tile__icon" aria-hidden="true">
+          <Icon />
+        </span>
         <span>{label}</span>
       </dt>
       <dd className="event-overview-summary__value">
@@ -39,7 +41,7 @@ function SummaryItem({ icon: Icon, label, primary, secondary, confirmed }) {
 
 function DetailItem({ label, value }) {
   return (
-    <div className="event-overview-details__item">
+    <div className="detail-list__item event-overview-details__item">
       <dt>{label}</dt>
       <dd>{value ?? "Not set"}</dd>
     </div>
@@ -95,28 +97,31 @@ function OrganizerEventDetails({ event, extraCards }) {
 
   return (
     <div className="event-overview" aria-label="Event overview">
-      <dl className="event-overview-summary" aria-label="Key event information">
+      <dl
+        className="summary-tiles event-overview-summary"
+        aria-label="Key event information"
+      >
         <SummaryItem
-          icon={MdSchedule}
+          icon={ClockIcon}
           label="Schedule"
           primary={dayText || "Days not set"}
           secondary={`${timeWindow} · ${event?.timezone || "UTC"}`}
         />
         <SummaryItem
-          icon={MdGroups}
+          icon={GroupIcon}
           label="Meeting"
           primary={`${formatMode(mode)} · ${meetingDuration}`}
           secondary={event?.location || "Location not set"}
         />
         <SummaryItem
-          icon={MdLockOutline}
+          icon={LockIcon}
           label="Responses"
           primary={access}
           secondary={responseDeadline}
         />
         {finalMeeting && (
           <SummaryItem
-            icon={MdEventAvailable}
+            icon={CalendarCheckIcon}
             label="Confirmed meeting"
             primary={finalWindow}
             secondary={`${formatMode(finalMeeting.channel)} · ${finalMeeting.location || "Location not set"}`}
@@ -125,24 +130,30 @@ function OrganizerEventDetails({ event, extraCards }) {
         )}
       </dl>
 
-      <div className="event-overview-disclosure">
+      <div className="event-overview-disclosure mt-3">
         <button
           type="button"
-          className="event-overview-disclosure__toggle"
+          className="btn btn-link btn-sm px-0 app-btn event-overview-disclosure__toggle"
           aria-expanded={detailsOpen}
           aria-controls={detailsId}
           onClick={() => setDetailsOpen((open) => !open)}
         >
           <span>{detailsOpen ? "Hide details" : "Show all details"}</span>
-          <MdExpandMore
-            className="event-overview-disclosure__icon"
+          <span
+            className="app-btn-icon"
             aria-hidden="true"
-          />
+            style={{
+              transform: detailsOpen ? "rotate(180deg)" : undefined,
+              transition: "transform 150ms ease",
+            }}
+          >
+            <ChevronDownIcon />
+          </span>
         </button>
         {detailsOpen && (
           <dl
             id={detailsId}
-            className="event-overview-details"
+            className="detail-list detail-list--compact event-overview-details mt-2 p-3 rounded border bg-body-tertiary"
             aria-label="Additional event details"
           >
             <DetailItem
@@ -159,6 +170,11 @@ function OrganizerEventDetails({ event, extraCards }) {
   );
 }
 
+/**
+ * Event facts as a definition list. The `organizer` variant shows summary
+ * tiles with a collapsible detail list; every other variant renders a compact
+ * responsive grid of label/value pairs.
+ */
 function EventDetailsGrid({ event, extraCards = [], variant = "default" }) {
   const mode = event?.mode || "inperson";
   const dayText =
@@ -178,7 +194,7 @@ function EventDetailsGrid({ event, extraCards = [], variant = "default" }) {
 
   return (
     <dl
-      className={`event-details-grid event-details-grid--${variant}`}
+      className={`detail-list event-details-grid event-details-grid--${variant}`}
       aria-label="Event details"
     >
       {variant !== "organizer" && (

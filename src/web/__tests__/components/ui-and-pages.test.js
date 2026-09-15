@@ -28,18 +28,6 @@ function PendingDraftGuard({ flush, hasPending = () => true, pending = true }) {
   return null;
 }
 
-jest.mock("@material/web/textfield/outlined-text-field.js", () => ({}), {
-  virtual: true,
-});
-jest.mock("@material/web/select/outlined-select.js", () => ({}), {
-  virtual: true,
-});
-jest.mock("@material/web/select/select-option.js", () => ({}), {
-  virtual: true,
-});
-jest.mock("@material/web/slider/slider.js", () => ({}), { virtual: true });
-jest.mock("@material/web/checkbox/checkbox.js", () => ({}), { virtual: true });
-
 const push = jest.fn();
 const replace = jest.fn();
 const redirect = jest.fn();
@@ -196,11 +184,15 @@ describe("small UI modules", () => {
       </>,
     );
     expect(screen.getByText("Save").closest("button")).toHaveClass(
+      "btn",
+      "btn-primary",
+      "w-100",
       "app-btn-full",
       "extra",
     );
     expect(screen.getByTestId("icon")).toBeInTheDocument();
     expect(screen.getByText("Cancel").closest("button")).toHaveClass(
+      "btn-outline-secondary",
       "app-btn-outlined",
     );
   });
@@ -634,7 +626,7 @@ describe("role-aware headers", () => {
 
     render(<AppHeader pageTitle="Create event" contextLabel="Organizer" />);
 
-    expect(screen.getByText("/ Create event")).toBeInTheDocument();
+    expect(screen.getByText("Create event")).toBeInTheDocument();
     expect(screen.getByText("Organizer")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Prachi" }));
     expect(screen.getByRole("menuitem", { name: "Settings" })).toHaveAttribute(

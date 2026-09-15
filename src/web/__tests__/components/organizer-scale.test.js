@@ -13,12 +13,6 @@ import {
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 
-jest.mock("@material/web/checkbox/checkbox.js", () => ({}), { virtual: true });
-jest.mock("@material/web/slider/slider.js", () => ({}), { virtual: true });
-jest.mock("@material/web/textfield/outlined-text-field.js", () => ({}), {
-  virtual: true,
-});
-
 jest.mock("@/components/auth/AuthContext", () => ({ useAuth: jest.fn() }));
 jest.mock("@/components/event/CreateEventClient", () => ({
   __esModule: true,
@@ -41,6 +35,17 @@ jest.mock("@/components/event/CreateEventClient", () => ({
         }
       >
         Save changes
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          onSaved({
+            event: { ...initialEvent, version: initialEvent.version + 1 },
+            responsesReset: 2,
+          })
+        }
+      >
+        Save and reset responses
       </button>
     </div>
   ),
@@ -380,22 +385,34 @@ describe("scaled organizer workspace", () => {
     await screen.findByText("Ada Faculty");
     await screen.findByText(/Results are current at revision 3/);
 
+    // Event facts first, then the calendar picker and its confirmation step,
+    // then the roster that feeds them.
     const sectionIds = [
       "organizer-overview",
-      "organizer-roster",
       "organizer-results",
       "organizer-finalize",
+      "organizer-roster",
     ];
-    const labels = ["Overview", "Roster", "Results", "Finalize"];
+    const labels = ["Overview", "Results", "Finalize", "Roster"];
 
     labels.forEach((label, index) => {
       expect(document.getElementById(sectionIds[index])).toHaveAccessibleName(
         label,
       );
     });
-    expect(
-      screen.queryByRole("navigation", { name: "Organizer sections" }),
-    ).not.toBeInTheDocument();
+    const sectionNav = screen.getByRole("navigation", {
+      name: "Workspace sections",
+    });
+    const sectionLinks = within(sectionNav).getAllByRole("link");
+    expect(sectionLinks).toHaveLength(sectionIds.length);
+    labels.forEach((label, index) => {
+      expect(sectionLinks[index]).toHaveAccessibleName(label);
+      expect(sectionLinks[index]).toHaveAttribute(
+        "href",
+        `#${sectionIds[index]}`,
+      );
+      expect(sectionLinks[index]).not.toHaveAttribute("aria-current");
+    });
     expect(
       Array.from(document.querySelectorAll(".organizer-workspace-section")).map(
         (section) => section.id,
@@ -403,15 +420,12 @@ describe("scaled organizer workspace", () => {
     ).toEqual(sectionIds);
     expect(
       Array.from(
-        document.querySelector(".organizer-workspace-column--primary").children,
+        document.querySelector(".organizer-workspace-sections").children,
       ).map((section) => section.id),
-    ).toEqual(["organizer-overview", "organizer-roster"]);
+    ).toEqual(sectionIds);
     expect(
-      Array.from(
-        document.querySelector(".organizer-workspace-column--secondary")
-          .children,
-      ).map((section) => section.id),
-    ).toEqual(["organizer-results", "organizer-finalize"]);
+      screen.getByRole("grid", { name: /Meeting time calendar/ }),
+    ).toBeInTheDocument();
     expect(screen.queryAllByRole("tab")).toHaveLength(0);
     expect(screen.queryAllByRole("tabpanel")).toHaveLength(0);
 
@@ -1430,6 +1444,328 @@ describe("scaled organizer workspace", () => {
     expect(setEvent).toHaveBeenCalledWith(
       expect.objectContaining({ status: "finalized" }),
     );
+  });
+
+  test("keeps the names the end-to-end flow queries unique across the workspace", async () => {
+    previewFinalMeeting.mockResolvedValue({
+      attendance: {
+        availableParticipantTotal: 700,
+        partialParticipantTotal: 100,
+        unavailableParticipantTotal: 50,
+        unansweredParticipantTotal: 150,
+        excludedParticipantTotal: 0,
+      },
+    });
+    renderView(jest.fn(), { ...event, status: "active" });
+    await screen.findByText(/Results are current at revision 3/);
+
+    // Playwright's getByRole("heading", { name }) is a substring match, so
+    // only the two panel titles may mention results or finalizing.
+    expect(screen.getAllByRole("heading", { name: /results/i })).toEqual([
+      screen.getByRole("heading", { level: 3, name: "Results" }),
+    ]);
+    expect(screen.getAllByRole("heading", { name: /finali[sz]/i })).toEqual([
+      screen.getByRole("heading", { level: 3, name: "Finalize" }),
+    ]);
+    expect(
+      screen.getByText("Top continuous windows for a 60-minute meeting.", {
+        exact: false,
+      }),
+    ).toBeInTheDocument();
+
+    // The pick buttons live in the ranked rail only; the calendar itself
+    // exposes exactly one tab stop and no buttons.
+    const rail = screen.getByRole("complementary", { name: "Ranked windows" });
+    const chooseButtons = screen.getAllByRole("button", {
+      name: "Choose this time",
+    });
+    expect(chooseButtons).toHaveLength(1);
+    chooseButtons.forEach((button) => expect(rail).toContainElement(button));
+    const grid = screen.getByRole("grid", { name: /^Meeting time calendar/ });
+    expect(within(grid).queryAllByRole("button")).toHaveLength(0);
+    expect(
+      within(grid)
+        .getAllByRole("gridcell")
+        .filter((gridcell) => gridcell.tabIndex === 0),
+    ).toHaveLength(1);
+    expect(screen.queryByText("Available", { exact: true })).toBeNull();
+
+    await userEvent.click(chooseButtons[0]);
+    expect(screen.getByRole("heading", { name: "Finalize" })).toHaveFocus();
+    expect(
+      screen.getByRole("button", { name: "Selected time" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    // Revealing the chosen window scrolls the calendar, never the page:
+    // the only page scroll is the jump to the Finalize section.
+    await waitFor(() =>
+      expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledTimes(1),
+    );
+    expect(HTMLElement.prototype.scrollIntoView.mock.contexts).toEqual([
+      document.getElementById("organizer-finalize"),
+    ]);
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Review attendance" }),
+    );
+    await screen.findByText("Attendance review is current for this candidate.");
+    // The attendance tile is the only element whose whole text is "Available".
+    expect(screen.getAllByText("Available", { exact: true })).toHaveLength(1);
+    expect(screen.getAllByRole("heading", { name: /results/i })).toHaveLength(
+      1,
+    );
+    expect(
+      screen.getAllByRole("heading", { name: /finali[sz]/i }),
+    ).toHaveLength(1);
+  });
+
+  test("refreshes the roster when a saved edit reset responses", async () => {
+    renderView();
+    await screen.findByText("Ada Faculty");
+    await screen.findByText(/Results are current at revision 3/);
+    fetchRoster.mockClear();
+    fetchEventResults.mockClear();
+
+    const overviewSection = document.getElementById("organizer-overview");
+    await userEvent.click(
+      within(overviewSection).getByRole("button", { name: "Edit event" }),
+    );
+    await userEvent.click(
+      within(overviewSection).getByRole("button", {
+        name: "Save and reset responses",
+      }),
+    );
+
+    await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(1));
+    expect(fetchRoster).toHaveBeenCalledWith(
+      event.code,
+      expect.objectContaining({ page: 1 }),
+      "token",
+    );
+    await waitFor(() => expect(fetchEventResults).toHaveBeenCalledTimes(1));
+  });
+
+  test("jumps from the empty Finalize step to the results calendar", async () => {
+    renderView();
+    await screen.findByText("Ada Faculty");
+    await screen.findByText(/Results are current at revision 3/);
+    HTMLElement.prototype.scrollIntoView.mockClear();
+
+    const finalizeSection = document.getElementById("organizer-finalize");
+    await userEvent.click(
+      within(finalizeSection).getByRole("button", { name: "Browse results" }),
+    );
+
+    expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledWith({
+      behavior: "smooth",
+      block: "start",
+    });
+    expect(HTMLElement.prototype.scrollIntoView.mock.contexts).toContain(
+      document.getElementById("organizer-results"),
+    );
+    expect(screen.getByRole("heading", { name: "Results" })).toHaveFocus();
+  });
+
+  test("picks a custom window on the calendar and finalizes it", async () => {
+    // Four 30-minute slots on one date; a 60-minute meeting spans two of them.
+    const calendarEvent = {
+      ...event,
+      slotCount: 4,
+      meetingDurationMinutes: 60,
+      slotGroups: [
+        {
+          key: "date:2026-08-20",
+          label: "2026-08-20",
+          date: "2026-08-20",
+          slots: [
+            ["09:00", "09:30"],
+            ["09:30", "10:00"],
+            ["10:00", "10:30"],
+            ["10:30", "11:00"],
+          ].map(([localStart, localEnd], index) => ({
+            index,
+            localStart,
+            localEnd,
+            startDayOffset: 0,
+            endDayOffset: 0,
+            startsAt: `2026-08-20T${localStart}:00Z`,
+            endsAt: `2026-08-20T${localEnd}:00Z`,
+          })),
+        },
+      ],
+    };
+    fetchEventResults.mockResolvedValue({
+      status: "fresh",
+      requestedRevision: 3,
+      computedRevision: 3,
+      generatedAt: "2026-08-01T00:00:00Z",
+      results: {
+        countedResponseTotal: 4,
+        channels: {
+          inperson: {
+            weighted: [0.75, 0.5, 1, 0.25],
+            unweighted: [0.7, 0.6, 0.9, 0.3],
+          },
+        },
+        recommendations: [],
+      },
+    });
+    previewFinalMeeting.mockResolvedValue({
+      attendance: {
+        availableParticipantTotal: 2,
+        partialParticipantTotal: 1,
+        unavailableParticipantTotal: 1,
+        unansweredParticipantTotal: 0,
+        excludedParticipantTotal: 0,
+      },
+    });
+    confirmFinalMeeting.mockResolvedValue({
+      event: {
+        ...calendarEvent,
+        status: "finalized",
+        version: 3,
+        finalMeeting: {
+          startsAt: "2026-08-20T09:30:00Z",
+          endsAt: "2026-08-20T10:30:00Z",
+          channel: "inperson",
+          location: "Room 1",
+        },
+      },
+      finalMeeting: { attendance: { availableParticipantTotal: 2 } },
+      deliveryRequest: null,
+    });
+    const nowSpy = jest
+      .spyOn(Date, "now")
+      .mockReturnValue(Date.parse("2026-08-01T00:00:00Z"));
+
+    try {
+      const setEvent = jest.fn();
+      renderView(setEvent, calendarEvent);
+      await screen.findByText(/Results are current/);
+
+      const finalizeSection = document.getElementById("organizer-finalize");
+      expect(finalizeSection).toHaveTextContent("No time selected yet");
+      expect(screen.queryByText("Custom window")).not.toBeInTheDocument();
+
+      const cell = document.querySelector('[data-cell-idx="1"]');
+      expect(cell).toHaveAttribute("data-state", "startable");
+      expect(cell).not.toHaveAttribute("aria-disabled");
+      await userEvent.click(cell);
+
+      expect(finalizeSection).toHaveTextContent("Custom window");
+      expect(finalizeSection).toHaveTextContent("In person");
+      expect(finalizeSection).toHaveTextContent(/9:30/);
+      // The estimate is the lowest per-slot share across slots 1 and 2.
+      expect(finalizeSection).toHaveTextContent(
+        "At least 50% weighted · 60% unweighted across this window (lowest slot). Exact attendance counts appear after Review attendance.",
+      );
+      expect(screen.getByRole("heading", { name: "Finalize" })).toHaveFocus();
+      expect(cell).toHaveAttribute("aria-selected", "true");
+      expect(document.querySelector('[data-cell-idx="2"]')).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+      expect(document.querySelector('[data-cell-idx="0"]')).not.toHaveAttribute(
+        "aria-selected",
+      );
+
+      await userEvent.click(
+        screen.getByRole("button", { name: "Review attendance" }),
+      );
+      await waitFor(() =>
+        expect(previewFinalMeeting).toHaveBeenCalledWith(
+          event.code,
+          {
+            startsAt: "2026-08-20T09:30:00Z",
+            endsAt: "2026-08-20T10:30:00Z",
+            channel: "inperson",
+            location: "Room 1",
+          },
+          "token",
+        ),
+      );
+      expect(
+        await screen.findByRole("group", { name: "Attendance review" }),
+      ).toBeInTheDocument();
+
+      await userEvent.click(
+        screen.getByRole("button", { name: "Finalize meeting" }),
+      );
+      await waitFor(() =>
+        expect(confirmFinalMeeting).toHaveBeenCalledWith(
+          event.code,
+          expect.objectContaining({
+            startsAt: "2026-08-20T09:30:00Z",
+            endsAt: "2026-08-20T10:30:00Z",
+            channel: "inperson",
+            expectedVersion: 2,
+            idempotencyKey: "request-key",
+          }),
+          "token",
+        ),
+      );
+      expect(setEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "finalized" }),
+      );
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  test("switches the calendar channel when a virtual result is chosen", async () => {
+    fetchEventResults.mockResolvedValue({
+      status: "fresh",
+      requestedRevision: 3,
+      computedRevision: 3,
+      generatedAt: "2026-08-20T08:00:00Z",
+      results: {
+        recommendations: [
+          {
+            rank: 1,
+            label: "Thursday 9:00 AM online",
+            channel: "virtual",
+            groupKey: "2026-08-20",
+            slotIndices: [0, 1],
+            suggestedStartsAt: "2026-08-20T09:00:00Z",
+            suggestedEndsAt: "2026-08-20T10:00:00Z",
+            weightedAvailability: 0.9,
+            unweightedAvailability: 0.8,
+            fullyAvailableParticipantTotal: 700,
+          },
+        ],
+      },
+    });
+    renderView();
+    await screen.findByText(/Results are current at revision 3/);
+
+    const channelGroup = screen.getByRole("group", {
+      name: "Meeting channel",
+    });
+    expect(
+      within(channelGroup).getByRole("button", { name: "In person" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      within(channelGroup).getByRole("button", { name: "Virtual" }),
+    ).toHaveAttribute("aria-pressed", "false");
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Choose this time" }),
+    );
+
+    expect(
+      within(channelGroup).getByRole("button", { name: "Virtual" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      within(channelGroup).getByRole("button", { name: "In person" }),
+    ).toHaveAttribute("aria-pressed", "false");
+    expect(
+      screen.getByRole("button", { name: "Selected time" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    const finalizeSection = document.getElementById("organizer-finalize");
+    expect(finalizeSection).toHaveTextContent("Thursday 9:00 AM online");
+    expect(finalizeSection).toHaveTextContent("Virtual");
+    expect(finalizeSection).toHaveTextContent("Ranked #1");
+    expect(finalizeSection).not.toHaveTextContent("In person");
+    expect(screen.getByRole("heading", { name: "Finalize" })).toHaveFocus();
   });
 
   test("selects a legacy recommendation and honors reduced motion", async () => {

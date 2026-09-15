@@ -12,9 +12,29 @@ import {
   ResultsSnapshotPanel,
 } from "@/components/schedule/OrganizerScalePanels";
 import RosterPanel from "@/components/schedule/RosterPanel";
+import Alert from "@/components/ui/Alert";
+import LoadingState from "@/components/ui/LoadingState";
+import {
+  CalendarIcon,
+  FinalizeIcon,
+  ResultsIcon,
+  RosterIcon,
+} from "@/components/ui/icons";
 import { fetchEvent } from "@/lib/api/events";
+import { selectionFromRecommendation } from "@/lib/meetingWindows";
 
-const SECTION_IDS = ["overview", "roster", "results", "finalize"];
+// Workspace order: event facts, then the meeting-time calendar and its
+// confirmation step, then the roster that feeds them.
+const SECTION_LINKS = [
+  { id: "overview", label: "Overview", Icon: CalendarIcon },
+  { id: "results", label: "Results", Icon: ResultsIcon },
+  { id: "finalize", label: "Finalize", Icon: FinalizeIcon },
+  { id: "roster", label: "Roster", Icon: RosterIcon },
+];
+const SECTION_IDS = SECTION_LINKS.map((section) => section.id);
+// The section navigation is sticky, so anchored sections must scroll into
+// view below it rather than underneath it.
+const SECTION_SCROLL_STYLE = { scrollMarginTop: "4rem" };
 
 function deliveryStorageKey(eventCode) {
   return `releviz.delivery-request.${eventCode}`;
@@ -34,18 +54,6 @@ function readStoredDeliveryRequest(eventCode) {
   }
 }
 
-function selectedRecommendationKey(recommendation) {
-  if (!recommendation) return null;
-  return (
-    recommendation.id ||
-    [
-      recommendation.suggestedStartsAt || recommendation.startsAt,
-      recommendation.suggestedEndsAt || recommendation.endsAt,
-      recommendation.channel,
-    ].join("-")
-  );
-}
-
 function focusSection(sectionId, headingRef) {
   const reducedMotion =
     typeof window !== "undefined" &&
@@ -57,11 +65,33 @@ function focusSection(sectionId, headingRef) {
   headingRef.current?.focus({ preventScroll: true });
 }
 
+function WorkspaceSectionNav() {
+  return (
+    <nav className="section-nav" aria-label="Workspace sections">
+      <ul className="nav nav-pills">
+        {SECTION_LINKS.map(({ id, label, Icon }) => (
+          <li className="nav-item" key={id}>
+            <a
+              className="nav-link d-inline-flex align-items-center gap-2 py-2"
+              href={`#organizer-${id}`}
+            >
+              <span className="icon-inline" aria-hidden="true">
+                <Icon />
+              </span>
+              {label}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </nav>
+  );
+}
+
 export default function OrganizerScaleView() {
   const { event, setEvent } = useContext(EventContext);
   const { user, loading, getToken } = useAuth();
   const [deliveryRequest, setDeliveryRequestState] = useState(null);
-  const [selectedRecommendation, setSelectedRecommendation] = useState(null);
+  const [selection, setSelection] = useState(null);
   const [resultsInvalidationKey, setResultsInvalidationKey] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshStatus, setRefreshStatus] = useState("");
@@ -95,10 +125,12 @@ export default function OrganizerScaleView() {
     return () => clearTimeout(timer);
   }, [event.code]);
 
+  // Picking a window (from the calendar or the ranked list) hands the
+  // organizer straight to the confirmation step.
   useEffect(() => {
-    if (!selectedRecommendation) return;
+    if (!selection) return;
     focusSection("organizer-finalize", finalizeHeadingRef);
-  }, [selectedRecommendation]);
+  }, [selection]);
 
   useEffect(() => {
     const syncSectionFromHash = () => {
@@ -121,7 +153,7 @@ export default function OrganizerScaleView() {
     setRefreshing(true);
     setRefreshStatus("");
     setRefreshError("");
-    setSelectedRecommendation(null);
+    setSelection(null);
 
     try {
       const token = await getToken();
@@ -158,8 +190,19 @@ export default function OrganizerScaleView() {
     }
   }, [event.code, getToken, setEvent]);
 
+  const handleChoose = useCallback(
+    (recommendation) => {
+      setSelection(
+        selectionFromRecommendation(recommendation, event, {
+          now: Date.now(),
+        }),
+      );
+    },
+    [event],
+  );
+
   const invalidateResults = useCallback(() => {
-    setSelectedRecommendation(null);
+    setSelection(null);
     setResultsInvalidationKey((current) => current + 1);
   }, []);
 
@@ -185,14 +228,14 @@ export default function OrganizerScaleView() {
 
   if (loading || !user) {
     return (
-      <div className="page-pad organizer-loading">
-        <p>Loading…</p>
+      <div className="page-shell organizer-loading">
+        <LoadingState label="Loading…" />
       </div>
     );
   }
 
   return (
-    <main className="page-pad organizer-workspace">
+    <main className="page-shell page-shell--wide organizer-workspace">
       <OrganizerHeader
         event={event}
         onRefresh={refreshWorkspace}
@@ -208,16 +251,20 @@ export default function OrganizerScaleView() {
       />
 
       {(refreshStatus || refreshError) && (
-        <p
-          className="organizer-workspace__refresh-feedback"
-          role={refreshError ? "alert" : "status"}
+        <Alert
+          variant={refreshError ? "danger" : "success"}
+          role={null}
+          className="organizer-workspace__refresh-feedback mb-4"
         >
-          {refreshError || refreshStatus}
-        </p>
+          {/* The live-region role stays on the message element itself. */}
+          <p className="mb-0" role={refreshError ? "alert" : "status"}>
+            {refreshError || refreshStatus}
+          </p>
+        </Alert>
       )}
 
       {deliveryRequest && (
-        <div className="organizer-workspace__delivery">
+        <div className="organizer-workspace__delivery mb-4">
           <DeliveryRequestProgress
             key={deliveryRequest.id || "event-delivery"}
             initialRequest={deliveryRequest}
@@ -228,72 +275,69 @@ export default function OrganizerScaleView() {
         </div>
       )}
 
-      <div className="organizer-workspace-layout">
-        <div className="organizer-workspace-sections">
-          <div className="organizer-workspace-column organizer-workspace-column--primary">
-            <section
-              id="organizer-overview"
-              className="organizer-workspace-section"
-              aria-labelledby="organizer-overview-heading"
-            >
-              <OverviewPanel event={event} onEventSaved={handleEventSaved} />
-            </section>
+      <WorkspaceSectionNav />
 
-            <section
-              id="organizer-roster"
-              className="organizer-workspace-section"
-              aria-labelledby="organizer-roster-heading"
-            >
-              <RosterPanel
-                ref={rosterRef}
-                event={event}
-                setEvent={setEvent}
-                getToken={getToken}
-                onResultsInvalidated={invalidateResults}
-                onDeliveryRequestChange={setDeliveryRequest}
-              />
-            </section>
-          </div>
+      <div className="organizer-workspace-sections d-flex flex-column gap-4">
+        <section
+          id="organizer-overview"
+          className="organizer-workspace-section"
+          style={SECTION_SCROLL_STYLE}
+          aria-labelledby="organizer-overview-heading"
+        >
+          <OverviewPanel event={event} onEventSaved={handleEventSaved} />
+        </section>
 
-          <div className="organizer-workspace-column organizer-workspace-column--secondary">
-            <section
-              id="organizer-results"
-              className="organizer-workspace-section"
-              aria-labelledby="organizer-results-heading"
-            >
-              <ResultsSnapshotPanel
-                ref={resultsRef}
-                event={event}
-                getToken={getToken}
-                invalidationKey={resultsInvalidationKey}
-                selectedRecommendationKey={selectedRecommendationKey(
-                  selectedRecommendation,
-                )}
-                headingRef={resultsHeadingRef}
-                onChoose={(recommendation) => {
-                  setSelectedRecommendation(recommendation);
-                }}
-              />
-            </section>
+        <section
+          id="organizer-results"
+          className="organizer-workspace-section"
+          style={SECTION_SCROLL_STYLE}
+          aria-labelledby="organizer-results-heading"
+        >
+          <ResultsSnapshotPanel
+            ref={resultsRef}
+            event={event}
+            getToken={getToken}
+            invalidationKey={resultsInvalidationKey}
+            selection={selection}
+            headingRef={resultsHeadingRef}
+            onChoose={handleChoose}
+            onSelect={setSelection}
+          />
+        </section>
 
-            <section
-              id="organizer-finalize"
-              className="organizer-workspace-section"
-              aria-labelledby="organizer-finalize-heading"
-            >
-              <FinalizeScalePanel
-                event={event}
-                setEvent={setEvent}
-                getToken={getToken}
-                recommendation={selectedRecommendation}
-                headingRef={finalizeHeadingRef}
-                onBrowseResults={() =>
-                  focusSection("organizer-results", resultsHeadingRef)
-                }
-              />
-            </section>
-          </div>
-        </div>
+        <section
+          id="organizer-finalize"
+          className="organizer-workspace-section"
+          style={SECTION_SCROLL_STYLE}
+          aria-labelledby="organizer-finalize-heading"
+        >
+          <FinalizeScalePanel
+            event={event}
+            setEvent={setEvent}
+            getToken={getToken}
+            selection={selection}
+            headingRef={finalizeHeadingRef}
+            onBrowseResults={() =>
+              focusSection("organizer-results", resultsHeadingRef)
+            }
+          />
+        </section>
+
+        <section
+          id="organizer-roster"
+          className="organizer-workspace-section"
+          style={SECTION_SCROLL_STYLE}
+          aria-labelledby="organizer-roster-heading"
+        >
+          <RosterPanel
+            ref={rosterRef}
+            event={event}
+            setEvent={setEvent}
+            getToken={getToken}
+            onResultsInvalidated={invalidateResults}
+            onDeliveryRequestChange={setDeliveryRequest}
+          />
+        </section>
       </div>
     </main>
   );

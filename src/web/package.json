@@ -6,7 +6,7 @@
     "node": ">=24"
   },
   "dependencies": {
-    "@material/web": "^2.4.1",
+    "bootstrap": "^5.3.8",
     "next": "^16.2.11",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
@@ -28,7 +28,8 @@
     "jest": "^30.4.2",
     "jest-environment-jsdom": "^30.4.1",
     "postcss": "8.5.23",
-    "prettier": "^3.9.5"
+    "prettier": "^3.9.5",
+    "sass": "^1.104.1"
   },
   "overrides": {
     "brace-expansion": "file:./vendor/brace-expansion-compat",

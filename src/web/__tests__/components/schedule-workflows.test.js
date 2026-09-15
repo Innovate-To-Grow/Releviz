@@ -12,13 +12,6 @@ import {
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 
-jest.mock("@material/web/checkbox/checkbox.js", () => ({}), { virtual: true });
-jest.mock("@material/web/dialog/dialog.js", () => ({}), { virtual: true });
-jest.mock("@material/web/slider/slider.js", () => ({}), { virtual: true });
-jest.mock("@material/web/textfield/outlined-text-field.js", () => ({}), {
-  virtual: true,
-});
-
 jest.mock("@/components/auth/AuthContext", () => ({
   useAuth: jest.fn(),
 }));
@@ -128,11 +121,6 @@ function auth(user = member, loading = false) {
     loading,
     getToken: jest.fn().mockResolvedValue("token"),
   });
-}
-
-function setCustomElementValue(element, value) {
-  element.value = value;
-  fireEvent(element, new Event("input", { bubbles: true }));
 }
 
 function participant(id, userId, name, overrides = {}) {

@@ -53,6 +53,12 @@ const nextConfig = {
     ? {}
     : { output: isAmplifyStaticExport ? "export" : "standalone" }),
   skipTrailingSlashRedirect: true,
+  // Bootstrap 5.3 still uses Sass @import internally; keep the build output
+  // free of dependency deprecation noise without hiding warnings in our files.
+  sassOptions: {
+    quietDeps: true,
+    silenceDeprecations: ["import", "global-builtin", "color-functions"],
+  },
   ...(isAmplifyStaticExport
     ? {
         images: { unoptimized: true },
