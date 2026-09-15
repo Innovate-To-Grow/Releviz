@@ -1,0 +1,22 @@
+name: OIDC subject probe
+on:
+  workflow_dispatch:
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  probe:
+    name: Print the OIDC subject claim for the Production environment
+    runs-on: ubuntu-latest
+    environment:
+      name: Production
+    steps:
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            const token = await core.getIDToken("sts.amazonaws.com");
+            const payload = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8"));
+            core.info(`sub=${payload.sub}`);
+            core.info(`repository=${payload.repository}`);
+            core.info(`environment=${payload.environment}`);
+            core.info(`aud=${payload.aud}`);
