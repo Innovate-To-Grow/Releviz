@@ -15,7 +15,7 @@ from .helpers import (
     participant_for_path,
     roster_write_error,
 )
-from .queries import boolean_query, participant_summary, roster_queryset
+from .queries import boolean_query, group_stats, participant_summary, roster_queryset
 
 
 class RosterParticipantView(PrivateAPIView):
@@ -115,5 +115,7 @@ class RosterParticipantView(PrivateAPIView):
             {
                 "participant": participant_summary(enriched),
                 "resultsRevision": revision,
+                # A weight or group edit changes what the groups share.
+                "groups": group_stats(roster_queryset(event)),
             }
         )

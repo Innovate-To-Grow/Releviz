@@ -6,16 +6,13 @@ import AppButton from "@/components/ui/AppButton";
 import {
   AVAILABILITY_CHOICES,
   AvailabilityChoice,
-  AvailabilityLegend,
 } from "@/components/ui/Availability";
-import EmptyState from "@/components/ui/EmptyState";
 import LoadingState from "@/components/ui/LoadingState";
 import PageHeader from "@/components/ui/PageHeader";
 import Panel from "@/components/ui/Panel";
 import StatusBadge from "@/components/ui/StatusBadge";
 import {
   RefreshIcon,
-  ResultsIcon,
   SendIcon,
   SignInIcon,
   SuccessIcon,
@@ -23,30 +20,16 @@ import {
 } from "@/components/ui/icons";
 import EventContext from "@/components/event/EventContext";
 import ScheduleChannelEditor from "@/components/schedule/ScheduleChannelEditor";
-import ScheduleGrid from "@/components/schedule/ScheduleGrid";
 import { useAuth } from "@/components/auth/AuthContext";
 import {
   fetchCurrentParticipant,
   joinEvent,
   updateParticipant,
 } from "@/lib/api/participants";
-import { fetchEventResults } from "@/lib/api/events";
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
 import useAutosaveNavigationGuard from "@/components/schedule/useAutosaveNavigationGuard";
 
 const NOOP = () => {};
-
-function resultEnvelope(data) {
-  if (!data) return { status: "unavailable", results: null };
-  if (data.status) return data;
-  return {
-    status: "fresh",
-    requestedRevision: data.results?.revision,
-    computedRevision: data.results?.revision,
-    generatedAt: data.results?.generatedAt,
-    results: data.results || null,
-  };
-}
 
 function ParticipantView() {
   const {
@@ -57,7 +40,6 @@ function ParticipantView() {
   } = useContext(EventContext);
   const { user, loading: authLoading, getToken } = useAuth();
   const mode = event?.mode || "inperson";
-  const viewPermission = event?.participantViewPermission || "own_only";
 
   const [participantName, setParticipantName] = useState("");
   const [joined, setJoined] = useState(false);
@@ -66,12 +48,7 @@ function ParticipantView() {
   const [availabilityValue, setAvailabilityValue] = useState(1);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
-  const [resultSnapshot, setResultSnapshot] = useState({
-    status: "unavailable",
-    results: null,
-  });
   const [participantRefreshKey, setParticipantRefreshKey] = useState(0);
-  const [resultsRefreshKey, setResultsRefreshKey] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [joinError, setJoinError] = useState("");
   const [submitError, setSubmitError] = useState("");
@@ -387,37 +364,6 @@ function ParticipantView() {
     responseChangesDisabled,
   ]);
 
-  const loadResults = useCallback(async () => {
-    if (!event.code || viewPermission === "own_only") {
-      setResultSnapshot({ status: "unavailable", results: null });
-      return;
-    }
-    try {
-      const token = await getToken();
-      const data = await fetchEventResults(event.code, token);
-      setResultSnapshot(resultEnvelope(data));
-    } catch {
-      setResultSnapshot({ status: "unavailable", results: null });
-    }
-  }, [event.code, getToken, viewPermission]);
-
-  useEffect(() => {
-    const timer = setTimeout(loadResults, 0);
-    return () => clearTimeout(timer);
-  }, [loadResults, resultsRefreshKey]);
-
-  useEffect(() => {
-    if (resultSnapshot.status !== "refreshing") return undefined;
-    const timer = setInterval(loadResults, 2000);
-    return () => clearInterval(timer);
-  }, [loadResults, resultSnapshot.status]);
-
-  const results = resultSnapshot.results;
-  const avgInperson =
-    results?.channels?.inperson?.unweighted ?? Array(numSlots).fill(0);
-  const avgVirtual =
-    results?.channels?.virtual?.unweighted ?? Array(numSlots).fill(0);
-
   const handleJoin = async () => {
     setJoinError("");
 
@@ -425,7 +371,6 @@ function ParticipantView() {
       const token = await getToken();
       const { participant } = await joinEvent(event.code, token);
       applyParticipantResponse(participant);
-      setResultsRefreshKey((key) => key + 1);
     } catch (err) {
       setJoinError(`Failed to join: ${err.message}`);
     }
@@ -511,7 +456,6 @@ function ParticipantView() {
         token,
       );
       applyParticipantResponse(participant);
-      setResultsRefreshKey((key) => key + 1);
     } catch (err) {
       setSubmitError(`Failed to submit: ${err.message}`);
     } finally {
@@ -526,7 +470,6 @@ function ParticipantView() {
       const saved = await flushPendingDraft();
       if (!saved) return;
       setParticipantRefreshKey((key) => key + 1);
-      setResultsRefreshKey((key) => key + 1);
     } finally {
       setIsRefreshing(false);
     }
@@ -623,9 +566,9 @@ function ParticipantView() {
         }
       />
 
-      <div
-        className={`participant-columns${viewPermission !== "own_only" ? " participant-columns--split" : ""}`}
-      >
+      {/* Participants only ever see and edit their own calendar; group
+          availability is the organizer's view. */}
+      <div className="participant-columns">
         <Panel
           as="section"
           className="participant-editor"
@@ -771,93 +714,6 @@ function ParticipantView() {
             </div>
           </div>
         </Panel>
-
-        {viewPermission !== "own_only" && (
-          <aside
-            className="participant-results-pane d-flex flex-column gap-3 min-w-0"
-            aria-label="Group availability"
-          >
-            {resultSnapshot.status === "refreshing" && (
-              <Alert
-                variant="info"
-                role="status"
-                className="participant-result-notice"
-              >
-                Group availability is updating for revision{" "}
-                {resultSnapshot.requestedRevision ??
-                  event.resultsRevision ??
-                  "latest"}
-                .
-                {results
-                  ? " Showing the last completed snapshot meanwhile."
-                  : ""}
-              </Alert>
-            )}
-            {resultSnapshot.status === "failed" && (
-              <Alert
-                variant="danger"
-                role="alert"
-                className="participant-result-notice"
-              >
-                Group availability could not be refreshed yet.
-                {results ? " Showing the last completed snapshot." : ""}
-              </Alert>
-            )}
-            {results ? (
-              <Panel title="Group Availability" headingLevel={3}>
-                <p className="text-secondary">
-                  Based on {results.countedResponseTotal} submitted response(s).{" "}
-                  {results.unansweredParticipantTotal} participant(s) are still
-                  unanswered.
-                </p>
-                <AvailabilityLegend
-                  showValues
-                  virtual={mode === "virtual"}
-                  channels={mode === "mixed" ? "both" : "single"}
-                  className="mb-3"
-                />
-                <div className="participant-results-grids">
-                  {mode !== "virtual" && (
-                    <ScheduleGrid
-                      schedule={avgInperson}
-                      slotGroups={event.slotGroups}
-                      readOnly={true}
-                      showValues={true}
-                      compact
-                      label={
-                        mode === "mixed"
-                          ? "In-Person Availability"
-                          : "Availability"
-                      }
-                    />
-                  )}
-                  {mode !== "inperson" && (
-                    <ScheduleGrid
-                      schedule={avgVirtual}
-                      slotGroups={event.slotGroups}
-                      readOnly={true}
-                      showValues={true}
-                      compact
-                      label={
-                        mode === "mixed"
-                          ? "Virtual Availability"
-                          : "Availability"
-                      }
-                      virtual
-                    />
-                  )}
-                </div>
-              </Panel>
-            ) : (
-              <Panel title="Group Availability" headingLevel={3}>
-                <EmptyState icon={<ResultsIcon />}>
-                  Submit a valid schedule before shared results become
-                  available.
-                </EmptyState>
-              </Panel>
-            )}
-          </aside>
-        )}
       </div>
     </main>
   );

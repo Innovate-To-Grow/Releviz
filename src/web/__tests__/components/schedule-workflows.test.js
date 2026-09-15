@@ -636,7 +636,7 @@ describe("participant workflow", () => {
     jest.useRealTimers();
   });
 
-  test("shows authorized shared results and locks changes after finalization", async () => {
+  test("never shows group availability to a participant and locks changes after finalization", async () => {
     fetchCurrentParticipant.mockResolvedValue({
       participant: participant("mine", member.id, member.displayName, {
         submitted: true,
@@ -653,10 +653,21 @@ describe("participant workflow", () => {
       results: sharedResults,
     });
 
-    const view = renderParticipant();
+    // Even an event configured for realtime sharing shows only the person's
+    // own calendar: group availability is the organizer's view.
+    const view = renderParticipant({
+      ...baseEvent,
+      participantViewPermission: "realtime",
+    });
+    await waitFor(() => expect(fetchCurrentParticipant).toHaveBeenCalled());
     expect(
-      await screen.findByText(/Based on 2 submitted response/),
+      screen.getByRole("heading", { name: "Mark times as" }),
     ).toBeInTheDocument();
+    expect(fetchEventResults).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("heading", { name: /group availability/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/submitted response/)).not.toBeInTheDocument();
     expect(
       screen.queryByRole("heading", { name: "Individual Schedules" }),
     ).not.toBeInTheDocument();
@@ -664,6 +675,7 @@ describe("participant workflow", () => {
     await waitFor(() =>
       expect(fetchCurrentParticipant).toHaveBeenCalledTimes(2),
     );
+    expect(fetchEventResults).not.toHaveBeenCalled();
     view.unmount();
 
     renderParticipant({ ...baseEvent, status: "finalized" });
@@ -675,50 +687,6 @@ describe("participant workflow", () => {
     expect(
       screen.getByRole("button", { name: "Update Availability" }),
     ).toBeDisabled();
-  });
-
-  test("polls versioned group results until the requested revision is fresh", async () => {
-    jest.useFakeTimers();
-    fetchCurrentParticipant.mockResolvedValue({
-      participant: participant("mine", member.id, member.displayName, {
-        submitted: true,
-      }),
-      scheduleDataIncluded: true,
-    });
-    fetchEventResults
-      .mockResolvedValueOnce({
-        status: "refreshing",
-        requestedRevision: 5,
-        computedRevision: 4,
-        results: sharedResults,
-      })
-      .mockResolvedValueOnce({
-        status: "fresh",
-        requestedRevision: 5,
-        computedRevision: 5,
-        results: sharedResults,
-      });
-
-    const view = renderParticipant({ ...baseEvent, resultsRevision: 5 });
-    await act(async () => {
-      jest.advanceTimersByTime(0);
-    });
-    expect(
-      screen.getByText(/Group availability is updating for revision 5/),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/Based on 2 submitted response/),
-    ).toBeInTheDocument();
-
-    await act(async () => {
-      jest.advanceTimersByTime(2000);
-    });
-    expect(fetchEventResults).toHaveBeenCalledTimes(2);
-    expect(
-      screen.queryByText(/Group availability is updating/),
-    ).not.toBeInTheDocument();
-    view.unmount();
-    jest.useRealTimers();
   });
 
   test("renders loading and own-only empty-result semantics", async () => {

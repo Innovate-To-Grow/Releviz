@@ -187,9 +187,6 @@ function CreateEvent({
     inlineInitialEvent?.specificDates || [],
   );
   const [dateInput, setDateInput] = useState("");
-  const [participantViewPermission, setParticipantViewPermission] = useState(
-    inlineInitialEvent?.participantViewPermission || "own_only",
-  );
   const [accessMode, setAccessMode] = useState(
     inlineInitialEvent?.accessMode || "invite_only",
   );
@@ -243,7 +240,6 @@ function CreateEvent({
     setSelectedDays(event.days || []);
     setDaySelectionType(event.daySelectionType || "days_of_week");
     setSpecificDates(event.specificDates || []);
-    setParticipantViewPermission(event.participantViewPermission || "own_only");
     setAccessMode(event.accessMode || "invite_only");
     setEventTimezone(event.timezone || "UTC");
     setResponseDeadline(
@@ -432,7 +428,6 @@ function CreateEvent({
         days: daySelectionType === "days_of_week" ? selectedDays : [],
         mode,
         location: location.trim(),
-        participantViewPermission,
         accessMode,
         meetingDurationMinutes,
         daySelectionType,
@@ -992,28 +987,10 @@ function CreateEvent({
                     <option value="30">30 minutes</option>
                   </select>
                 </FormField>
-                <FormField id="participant-view" label="Participant View">
-                  <select
-                    className="form-select"
-                    aria-label="Participant View"
-                    value={participantViewPermission}
-                    onChange={(event) =>
-                      setParticipantViewPermission(event.target.value)
-                    }
-                  >
-                    <option value="own_only">Own schedule only</option>
-                    <option value="all_after_submit">
-                      Submitted schedules after I submit
-                    </option>
-                    <option value="realtime">
-                      Submitted schedules in real time
-                    </option>
-                  </select>
-                </FormField>
               </div>
               <p className="form-text mb-0">
-                Slot duration controls the availability grid. Participant View
-                controls when people can see submitted schedules.
+                Slot duration controls the availability grid. Participants only
+                ever see their own calendar.
               </p>
 
               <div className="form-row-2">

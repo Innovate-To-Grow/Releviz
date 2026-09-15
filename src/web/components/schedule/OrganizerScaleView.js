@@ -7,28 +7,21 @@ import { OrganizerHeader } from "@/components/schedule/OrganizerPanels";
 import {
   DeliveryRequestProgress,
   EventControls,
-  FinalizeScalePanel,
   OverviewPanel,
   ResultsSnapshotPanel,
 } from "@/components/schedule/OrganizerScalePanels";
 import RosterPanel from "@/components/schedule/RosterPanel";
 import Alert from "@/components/ui/Alert";
 import LoadingState from "@/components/ui/LoadingState";
-import {
-  CalendarIcon,
-  FinalizeIcon,
-  ResultsIcon,
-  RosterIcon,
-} from "@/components/ui/icons";
+import { CalendarIcon, ResultsIcon, RosterIcon } from "@/components/ui/icons";
 import { fetchEvent } from "@/lib/api/events";
 import { selectionFromRecommendation } from "@/lib/meetingWindows";
 
-// Workspace order: event facts, then the meeting-time calendar and its
-// confirmation step, then the roster that feeds them.
+// Workspace order: event facts, then the meeting-time calendar with its
+// ranked windows and confirmation step, then the roster that feeds them.
 const SECTION_LINKS = [
   { id: "overview", label: "Overview", Icon: CalendarIcon },
   { id: "results", label: "Results", Icon: ResultsIcon },
-  { id: "finalize", label: "Finalize", Icon: FinalizeIcon },
   { id: "roster", label: "Roster", Icon: RosterIcon },
 ];
 const SECTION_IDS = SECTION_LINKS.map((section) => section.id);
@@ -54,13 +47,15 @@ function readStoredDeliveryRequest(eventCode) {
   }
 }
 
-function focusSection(sectionId, headingRef) {
+// Brings the Finalize step into view (only as far as needed: it sits beside
+// the calendar, so a pick usually leaves it already visible) and focuses it.
+function focusFinalizeStep(headingRef) {
   const reducedMotion =
     typeof window !== "undefined" &&
     window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-  document.getElementById(sectionId)?.scrollIntoView({
+  document.getElementById("organizer-finalize")?.scrollIntoView({
     behavior: reducedMotion ? "auto" : "smooth",
-    block: "start",
+    block: "nearest",
   });
   headingRef.current?.focus({ preventScroll: true });
 }
@@ -94,6 +89,7 @@ export default function OrganizerScaleView() {
   const [selection, setSelection] = useState(null);
   const [resultsInvalidationKey, setResultsInvalidationKey] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
+  const [refreshCount, setRefreshCount] = useState(0);
   const [refreshStatus, setRefreshStatus] = useState("");
   const [refreshError, setRefreshError] = useState("");
   const refreshInFlight = useRef(false);
@@ -102,17 +98,14 @@ export default function OrganizerScaleView() {
   const resultsHeadingRef = useRef(null);
   const finalizeHeadingRef = useRef(null);
 
+  // The latest email run (invitations, reminders, finalization, cancellation)
+  // is remembered per event so its progress survives a reload.
   const setDeliveryRequest = useCallback(
-    (value) => {
-      setDeliveryRequestState((current) => {
-        const next = typeof value === "function" ? value(current) : value;
-        if (typeof window !== "undefined") {
-          const key = deliveryStorageKey(event.code);
-          if (next) window.sessionStorage.setItem(key, JSON.stringify(next));
-          else window.sessionStorage.removeItem(key);
-        }
-        return next;
-      });
+    (next) => {
+      const key = deliveryStorageKey(event.code);
+      if (next) window.sessionStorage.setItem(key, JSON.stringify(next));
+      else window.sessionStorage.removeItem(key);
+      setDeliveryRequestState(next);
     },
     [event.code],
   );
@@ -129,7 +122,7 @@ export default function OrganizerScaleView() {
   // organizer straight to the confirmation step.
   useEffect(() => {
     if (!selection) return;
-    focusSection("organizer-finalize", finalizeHeadingRef);
+    focusFinalizeStep(finalizeHeadingRef);
   }, [selection]);
 
   useEffect(() => {
@@ -147,6 +140,8 @@ export default function OrganizerScaleView() {
     return () => window.removeEventListener("hashchange", syncSectionFromHash);
   }, []);
 
+  // The header's Refresh is the only refresh control on the page: it re-reads
+  // the event, roster, results, and any delivery progress that is showing.
   const refreshWorkspace = useCallback(async () => {
     if (refreshInFlight.current) return;
     refreshInFlight.current = true;
@@ -154,6 +149,7 @@ export default function OrganizerScaleView() {
     setRefreshStatus("");
     setRefreshError("");
     setSelection(null);
+    setRefreshCount((current) => current + 1);
 
     try {
       const token = await getToken();
@@ -271,6 +267,7 @@ export default function OrganizerScaleView() {
             getToken={getToken}
             onChange={setDeliveryRequest}
             ariaLabel="Event delivery progress"
+            refreshKey={refreshCount}
           />
         </div>
       )}
@@ -296,30 +293,15 @@ export default function OrganizerScaleView() {
           <ResultsSnapshotPanel
             ref={resultsRef}
             event={event}
+            setEvent={setEvent}
             getToken={getToken}
             invalidationKey={resultsInvalidationKey}
             selection={selection}
             headingRef={resultsHeadingRef}
+            finalizeHeadingRef={finalizeHeadingRef}
+            onDeliveryRequest={setDeliveryRequest}
             onChoose={handleChoose}
             onSelect={setSelection}
-          />
-        </section>
-
-        <section
-          id="organizer-finalize"
-          className="organizer-workspace-section"
-          style={SECTION_SCROLL_STYLE}
-          aria-labelledby="organizer-finalize-heading"
-        >
-          <FinalizeScalePanel
-            event={event}
-            setEvent={setEvent}
-            getToken={getToken}
-            selection={selection}
-            headingRef={finalizeHeadingRef}
-            onBrowseResults={() =>
-              focusSection("organizer-results", resultsHeadingRef)
-            }
           />
         </section>
 

@@ -118,8 +118,6 @@ function session(overrides = {}) {
     event,
     participant: participant(),
     email: "taylor@example.com",
-    results: null,
-    canViewResults: false,
     ...overrides,
   };
 }
@@ -308,13 +306,8 @@ describe("temporary event access page", () => {
     ).not.toBeDisabled();
   });
 
-  test("refreshes permission-derived results when reloading a shared-response conflict", async () => {
+  test("reloads the latest response after a shared-response conflict", async () => {
     jest.useFakeTimers();
-    const visibleResults = {
-      countedResponseTotal: 1,
-      unansweredParticipantTotal: 0,
-      channels: { inperson: { unweighted: [1, 1] } },
-    };
     const latestDraft = participant({
       availabilityInperson: [0.5, 0],
       submitted: false,
@@ -322,19 +315,9 @@ describe("temporary event access page", () => {
     });
     fetchTempAccessSession
       .mockResolvedValueOnce(
-        session({
-          participant: participant({ submitted: true }),
-          canViewResults: true,
-          results: visibleResults,
-        }),
+        session({ participant: participant({ submitted: true }) }),
       )
-      .mockResolvedValueOnce(
-        session({
-          participant: latestDraft,
-          canViewResults: false,
-          results: null,
-        }),
-      );
+      .mockResolvedValueOnce(session({ participant: latestDraft }));
     updateTempAccessParticipant.mockRejectedValueOnce(
       Object.assign(new Error("Version conflict"), {
         status: 409,
@@ -344,8 +327,12 @@ describe("temporary event access page", () => {
 
     render(<TempAccessClient />);
     expect(
-      await screen.findByRole("heading", { name: "Group availability" }),
+      await screen.findByRole("heading", { name: "Your schedule" }),
     ).toBeInTheDocument();
+    // A temporary participant never sees anyone else's availability.
+    expect(
+      screen.queryByRole("heading", { name: /group availability/i }),
+    ).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Paint in-person" }));
     await act(async () => {
       jest.advanceTimersByTime(701);
@@ -355,9 +342,6 @@ describe("temporary event access page", () => {
     expect(
       await screen.findByText(/schedule changed somewhere else/i),
     ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("heading", { name: "Group availability" }),
-    ).not.toBeInTheDocument();
     fireEvent.click(
       screen.getByRole("button", { name: "Reload latest response" }),
     );
@@ -369,7 +353,7 @@ describe("temporary event access page", () => {
       expect(screen.getByTestId("schedule-editor")).toHaveTextContent("0.5,0"),
     );
     expect(
-      screen.queryByRole("heading", { name: "Group availability" }),
+      screen.queryByRole("heading", { name: /group availability/i }),
     ).not.toBeInTheDocument();
   });
 
@@ -592,27 +576,17 @@ describe("temporary event access page", () => {
     ).toBeInTheDocument();
   });
 
-  test("conservatively hides stale results after a submitted response becomes a draft", async () => {
+  test("autosaves a draft without re-reading the session", async () => {
     jest.useFakeTimers();
-    const visibleResults = {
-      countedResponseTotal: 1,
-      unansweredParticipantTotal: 0,
-      channels: { inperson: { unweighted: [1, 1] } },
-    };
-    fetchTempAccessSession
-      .mockResolvedValueOnce(
-        session({
-          participant: participant({ submitted: true }),
-          canViewResults: true,
-          results: visibleResults,
-        }),
-      )
-      .mockRejectedValueOnce(new Error("Results refresh unavailable"));
+    fetchTempAccessSession.mockResolvedValueOnce(
+      session({ participant: participant({ submitted: true }) }),
+    );
 
     render(<TempAccessClient />);
     expect(
-      await screen.findByRole("heading", { name: "Group availability" }),
+      await screen.findByRole("heading", { name: "Your schedule" }),
     ).toBeInTheDocument();
+    expect(screen.getByText("Submitted")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Paint in-person" }));
     await act(async () => {
       jest.advanceTimersByTime(701);
@@ -620,11 +594,10 @@ describe("temporary event access page", () => {
     });
 
     await waitFor(() => expect(updateTempAccessParticipant).toHaveBeenCalled());
-    await waitFor(() =>
-      expect(
-        screen.queryByRole("heading", { name: "Group availability" }),
-      ).not.toBeInTheDocument(),
-    );
+    // The response is a draft again, and nothing else needs refreshing:
+    // there is no shared view for a participant to keep current.
+    expect(screen.queryByText("Submitted")).not.toBeInTheDocument();
+    expect(fetchTempAccessSession).toHaveBeenCalledTimes(1);
     jest.useRealTimers();
   });
 
@@ -743,31 +716,20 @@ describe("temporary event access page", () => {
     ).toBeInTheDocument();
   });
 
-  test("fills both channels of a hybrid response, copies one into the other, and shows group results", async () => {
+  test("fills both channels of a hybrid response and copies one into the other", async () => {
     const mixedEvent = { ...event, mode: "mixed", slotCount: undefined };
-    fetchTempAccessSession.mockResolvedValue(
-      session({
-        event: mixedEvent,
-        canViewResults: true,
-        results: {
-          countedResponseTotal: 3,
-          unansweredParticipantTotal: 1,
-          channels: {
-            inperson: { unweighted: [1, 0.5] },
-            virtual: { unweighted: [0, 1] },
-          },
-        },
-      }),
-    );
+    fetchTempAccessSession.mockResolvedValue(session({ event: mixedEvent }));
     render(<TempAccessClient />);
     expect(
-      await screen.findByRole("heading", { name: "Group availability" }),
+      await screen.findByRole("heading", { name: "Your schedule" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("In-Person Availability")).toBeInTheDocument();
-    expect(screen.getByText("Virtual Availability")).toBeInTheDocument();
     expect(
-      screen.getByText(/Based on 3 submitted response/),
-    ).toBeInTheDocument();
+      screen.queryByRole("heading", { name: /group availability/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("In-Person Availability"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/submitted response/)).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Apply to all" }));
     expect(screen.getByTestId("schedule-editor")).toHaveTextContent("1,1");

@@ -3,6 +3,7 @@
  */
 
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -11,6 +12,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
+import { createRef } from "react";
 
 jest.mock("@/components/event/CreateEventClient", () => ({
   __esModule: true,
@@ -176,7 +178,7 @@ test("delivery progress refreshes, retries permanent failures, and reports cance
     operation: "reminder",
     summary: { recipientTotal: 5, pending: 2, sent: 3 },
   });
-  render(
+  const { rerender } = render(
     <DeliveryRequestProgress
       initialRequest={{
         id: "delivery-1",
@@ -184,6 +186,7 @@ test("delivery progress refreshes, retries permanent failures, and reports cance
       }}
       getToken={getToken}
       onChange={onChange}
+      refreshKey={0}
     />,
   );
 
@@ -193,8 +196,22 @@ test("delivery progress refreshes, retries permanent failures, and reports cance
   expect(screen.getByLabelText("Delivery progress")).toHaveTextContent(
     "1 canceled",
   );
-  await userEvent.click(
-    screen.getByRole("button", { name: "Refresh progress" }),
+  // The card has no refresh button of its own: the workspace's single
+  // Refresh bumps `refreshKey`, and mounting with 0 does not fetch.
+  expect(
+    screen.queryByRole("button", { name: /refresh/i }),
+  ).not.toBeInTheDocument();
+  expect(fetchDeliveryRequest).not.toHaveBeenCalled();
+  rerender(
+    <DeliveryRequestProgress
+      initialRequest={{
+        id: "delivery-1",
+        summary: { recipientTotal: 5, permanentFailure: 2, canceled: 1 },
+      }}
+      getToken={getToken}
+      onChange={onChange}
+      refreshKey={1}
+    />,
   );
   await waitFor(() =>
     expect(fetchDeliveryRequest).toHaveBeenCalledWith("delivery-1", "token"),
@@ -206,8 +223,10 @@ test("delivery progress refreshes, retries permanent failures, and reports cance
     expect(retryDeliveryRequest).toHaveBeenCalledWith("delivery-1", "token"),
   );
   expect(onChange).toHaveBeenCalledTimes(2);
-  expect(screen.getByLabelText("Delivery progress")).toHaveTextContent(
-    "2 queued",
+  await waitFor(() =>
+    expect(screen.getByLabelText("Delivery progress")).toHaveTextContent(
+      "2 queued",
+    ),
   );
 });
 
@@ -218,10 +237,8 @@ test("delivery progress exposes refresh and retry errors", async () => {
     <DeliveryRequestProgress
       initialRequest={{ id: "delivery-2", delivery: { permanentFailure: 1 } }}
       getToken={getToken}
+      refreshKey={3}
     />,
-  );
-  await userEvent.click(
-    screen.getByRole("button", { name: "Refresh progress" }),
   );
   expect(await screen.findByRole("alert")).toHaveTextContent(
     "progress unavailable",
@@ -750,13 +767,14 @@ test("finalize handles nested attendance, delivery progress, and confirmation er
     delivery: { recipientTotal: 4, pending: 4 },
   });
   const setEvent = jest.fn();
+  const onDeliveryRequest = jest.fn();
   render(
     <FinalizeScalePanel
       event={baseEvent}
       setEvent={setEvent}
       getToken={getToken}
       selection={recommendation}
-      onBrowseResults={jest.fn()}
+      onDeliveryRequest={onDeliveryRequest}
     />,
   );
   fireEvent.change(screen.getByLabelText("Location or meeting link"), {
@@ -770,9 +788,15 @@ test("finalize handles nested attendance, delivery progress, and confirmation er
     screen.getByRole("button", { name: "Finalize meeting" }),
   );
   await waitFor(() => expect(setEvent).toHaveBeenCalled());
+  // Delivery progress is handed to the workspace banner, not drawn here.
+  expect(onDeliveryRequest).toHaveBeenCalledWith({
+    id: "final-1",
+    operation: "final_confirmation",
+    delivery: { recipientTotal: 4, pending: 4 },
+  });
   expect(
-    screen.getByLabelText("Finalization delivery progress"),
-  ).toHaveTextContent("4 queued");
+    screen.queryByLabelText("Finalization delivery progress"),
+  ).not.toBeInTheDocument();
 
   confirmFinalMeeting.mockRejectedValueOnce(new Error("confirmation failed"));
   await userEvent.click(
@@ -817,7 +841,6 @@ test("finalized organizers can download ICS and see download errors", async () =
       setEvent={jest.fn()}
       getToken={getToken}
       selection={null}
-      onBrowseResults={jest.fn()}
     />,
   );
   await userEvent.click(
@@ -833,7 +856,6 @@ test("finalized organizers can download ICS and see download errors", async () =
       setEvent={jest.fn()}
       getToken={getToken}
       selection={null}
-      onBrowseResults={jest.fn()}
     />,
   );
   await userEvent.click(
@@ -843,19 +865,27 @@ test("finalized organizers can download ICS and see download errors", async () =
   click.mockRestore();
 });
 
-test("finalize empty and inactive states return to results and block review", async () => {
-  const onBrowseResults = jest.fn();
+test("finalize empty and inactive states point at the calendar and block review", async () => {
+  const headingRef = createRef();
   const { rerender } = render(
     <FinalizeScalePanel
       event={baseEvent}
       setEvent={jest.fn()}
       getToken={getToken}
       selection={null}
-      onBrowseResults={onBrowseResults}
+      headingRef={headingRef}
     />,
   );
-  await userEvent.click(screen.getByRole("button", { name: "Browse results" }));
-  expect(onBrowseResults).toHaveBeenCalled();
+  const block = document.getElementById("organizer-finalize");
+  expect(block).toHaveAccessibleName("Finalize");
+  expect(headingRef.current).toBe(
+    screen.getByRole("heading", { level: 4, name: "Finalize" }),
+  );
+  expect(block).toHaveTextContent("No time selected yet");
+  expect(block).toHaveTextContent(
+    "Pick a window on the calendar or choose a ranked one.",
+  );
+  expect(within(block).queryAllByRole("button")).toHaveLength(0);
 
   rerender(
     <FinalizeScalePanel
@@ -863,7 +893,7 @@ test("finalize empty and inactive states return to results and block review", as
       setEvent={jest.fn()}
       getToken={getToken}
       selection={recommendation}
-      onBrowseResults={onBrowseResults}
+      headingRef={headingRef}
     />,
   );
   expect(screen.getByRole("note")).toHaveTextContent("Reactivate this event");
@@ -893,7 +923,6 @@ function renderFinalize(selection) {
       setEvent={jest.fn()}
       getToken={getToken}
       selection={selection}
-      onBrowseResults={jest.fn()}
     />,
   );
 }
@@ -1151,7 +1180,7 @@ test("finalize lists partial and unavailable counts and reports review failures"
   );
 });
 
-test("results refresh on demand and show a finalized event's time zone fallback", async () => {
+test("results refresh through the workspace handle and show a finalized event's time zone fallback", async () => {
   fetchEventResults.mockResolvedValue({
     results: {
       status: "ready",
@@ -1161,9 +1190,12 @@ test("results refresh on demand and show a finalized event's time zone fallback"
     },
     revision: 2,
   });
+  const panel = createRef();
   render(
     <ResultsSnapshotPanel
+      ref={panel}
       event={{ ...baseEvent, timezone: "Not/AZone" }}
+      setEvent={jest.fn()}
       getToken={getToken}
       onChoose={jest.fn()}
       onSelect={jest.fn()}
@@ -1177,8 +1209,114 @@ test("results refresh on demand and show a finalized event's time zone fallback"
   expect(document.querySelector(".result-option__time")).toHaveTextContent(
     /\d{1,2}\/\d{1,2}\/2026.* – .*2026/,
   );
-  await userEvent.click(
-    await screen.findByRole("button", { name: "Refresh results" }),
+  // No refresh button of its own: the workspace header drives refreshes.
+  expect(
+    screen.queryByRole("button", { name: /refresh/i }),
+  ).not.toBeInTheDocument();
+  await act(async () => {
+    await panel.current.refresh("token");
+  });
+  expect(fetchEventResults).toHaveBeenCalledTimes(2);
+});
+
+test("the ranked list is collapsed by default and summarizes the best window", async () => {
+  fetchEventResults.mockResolvedValue({
+    status: "fresh",
+    requestedRevision: 2,
+    computedRevision: 2,
+    results: {
+      recommendations: [
+        { ...recommendation, rank: 1, label: "Tue 09:00–10:00" },
+        {
+          ...recommendation,
+          rank: 2,
+          label: "Wed 09:00–10:00",
+          startsAt: "2026-09-02T09:00:00Z",
+          endsAt: "2026-09-02T10:00:00Z",
+        },
+      ],
+    },
+  });
+  render(
+    <ResultsSnapshotPanel
+      event={baseEvent}
+      setEvent={jest.fn()}
+      getToken={getToken}
+      onChoose={jest.fn()}
+      onSelect={jest.fn()}
+    />,
   );
-  await waitFor(() => expect(fetchEventResults).toHaveBeenCalledTimes(2));
+  const rail = await screen.findByRole("complementary", {
+    name: "Ranked windows",
+  });
+  const disclosure = rail.querySelector("details");
+  expect(disclosure).not.toHaveAttribute("open");
+  await waitFor(() =>
+    expect(rail).toHaveTextContent("2 candidates · best Tue 09:00–10:00"),
+  );
+  // Buttons exist for tests and assistive tech, but are hidden until opened.
+  expect(
+    within(rail).getAllByRole("button", { name: "Choose this time" }),
+  ).toHaveLength(2);
+  expect(
+    within(rail).getAllByRole("button", { name: "Choose this time" })[0],
+  ).not.toBeVisible();
+  await userEvent.click(within(rail).getByText("Ranked windows"));
+  expect(disclosure).toHaveAttribute("open");
+  expect(
+    within(rail).getAllByRole("button", { name: "Choose this time" })[0],
+  ).toBeVisible();
+  // The Finalize step renders inside the same results panel.
+  expect(
+    screen.getByRole("heading", { level: 4, name: "Finalize" }),
+  ).toBeInTheDocument();
+  expect(document.getElementById("organizer-finalize")).toHaveTextContent(
+    "No time selected yet",
+  );
+});
+
+test("the ranked list explains an empty or still-computing snapshot", async () => {
+  fetchEventResults.mockResolvedValueOnce({
+    status: "refreshing",
+    requestedRevision: 3,
+    computedRevision: 2,
+    results: null,
+  });
+  const { unmount } = render(
+    <ResultsSnapshotPanel
+      event={baseEvent}
+      setEvent={jest.fn()}
+      getToken={getToken}
+      onChoose={jest.fn()}
+      onSelect={jest.fn()}
+    />,
+  );
+  const rail = await screen.findByRole("complementary", {
+    name: "Ranked windows",
+  });
+  await waitFor(() =>
+    expect(rail).toHaveTextContent("Calculating the best options"),
+  );
+  unmount();
+
+  fetchEventResults.mockResolvedValueOnce({
+    status: "fresh",
+    requestedRevision: 3,
+    computedRevision: 3,
+    results: { recommendations: [] },
+  });
+  render(
+    <ResultsSnapshotPanel
+      event={baseEvent}
+      setEvent={jest.fn()}
+      getToken={getToken}
+      onChoose={jest.fn()}
+      onSelect={jest.fn()}
+    />,
+  );
+  await waitFor(() =>
+    expect(
+      screen.getByRole("complementary", { name: "Ranked windows" }),
+    ).toHaveTextContent("No recommendation yet"),
+  );
 });

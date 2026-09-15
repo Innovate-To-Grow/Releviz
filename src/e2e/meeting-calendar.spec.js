@@ -2,6 +2,7 @@ const { expect, test } = require("@playwright/test");
 const { expectAccessible } = require("./helpers/accessibility");
 const {
   apiJson,
+  openRankedWindows,
   readSession,
   recomputeEventResults,
   registerAccount,
@@ -253,6 +254,13 @@ test.describe("Organizer meeting-time calendar", () => {
     await expect(grid.getByRole("columnheader").nth(1)).toContainText("Mon");
     await expect(grid.getByRole("columnheader").nth(5)).toContainText("Fri");
     const rail = page.getByRole("complementary", { name: "Ranked windows" });
+    // The list starts collapsed with a one-line summary of the best window.
+    await expect(rail.locator("details")).not.toHaveAttribute("open", "");
+    await expect(rail).toContainText(/\d+ candidates · best /);
+    await expect(
+      rail.getByRole("button", { name: "Choose this time" }).first(),
+    ).toBeHidden();
+    await openRankedWindows(page);
     await expect(
       rail.getByRole("button", { name: "Choose this time" }).first(),
     ).toBeVisible();
@@ -542,6 +550,7 @@ test.describe("Organizer meeting-time calendar", () => {
     ).toBeVisible();
     await expect(grid.getByRole("columnheader")).toHaveCount(8);
     const rail = page.getByRole("complementary", { name: "Ranked windows" });
+    await openRankedWindows(page);
     const channelGroup = page.getByRole("group", { name: "Meeting channel" });
     const inPerson = channelGroup.getByRole("button", { name: "In person" });
     const virtual = channelGroup.getByRole("button", { name: "Virtual" });

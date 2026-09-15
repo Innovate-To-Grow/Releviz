@@ -5,14 +5,10 @@ import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
 import ScheduleChannelEditor from "@/components/schedule/ScheduleChannelEditor";
-import ScheduleGrid from "@/components/schedule/ScheduleGrid";
 import useAutosaveNavigationGuard from "@/components/schedule/useAutosaveNavigationGuard";
 import Alert from "@/components/ui/Alert";
 import AppButton from "@/components/ui/AppButton";
-import {
-  AvailabilityChoice,
-  AvailabilityLegend,
-} from "@/components/ui/Availability";
+import { AvailabilityChoice } from "@/components/ui/Availability";
 import BrandLogo from "@/components/ui/BrandLogo";
 import FormField from "@/components/ui/FormField";
 import LoadingState from "@/components/ui/LoadingState";
@@ -72,8 +68,6 @@ function unwrapAccessPayload(payload = {}) {
     event: payload.event || session.event || null,
     participant: payload.participant || session.participant || null,
     email: payload.email || session.email || "",
-    results: payload.results ?? session.results ?? null,
-    canViewResults: Boolean(payload.canViewResults ?? session.canViewResults),
   };
 }
 
@@ -149,7 +143,6 @@ export default function TempAccessClient() {
   const autosaveRunnerRef = useRef(null);
   const draftSaveStateRef = useRef("idle");
   const requestStartedRef = useRef("");
-  const resultsRefreshRevisionRef = useRef(0);
 
   const applyParticipant = useCallback(
     (participant, event = access?.event) => {
@@ -199,7 +192,6 @@ export default function TempAccessClient() {
     scheduleVirtualRef.current = virtual;
     draftDirtyRef.current = false;
     autosavePendingRef.current = false;
-    resultsRefreshRevisionRef.current += 1;
     setScheduleInperson(inperson);
     setScheduleVirtual(virtual);
     setSubmitted(Boolean(next.participant.submitted));
@@ -218,7 +210,6 @@ export default function TempAccessClient() {
       window.clearTimeout(autosaveTimerRef.current);
       autosaveTimerRef.current = null;
     }
-    resultsRefreshRevisionRef.current += 1;
     draftDirtyRef.current = false;
     autosavePendingRef.current = false;
     draftSaveStateRef.current = "idle";
@@ -249,12 +240,6 @@ export default function TempAccessClient() {
 
       // A lifecycle or exclusion denial is authoritative even if refreshing the
       // latest payload fails. Lock first so the page cannot keep queuing writes.
-      resultsRefreshRevisionRef.current += 1;
-      setAccess((current) =>
-        current
-          ? { ...current, canViewResults: false, results: null }
-          : current,
-      );
       setServerWriteLock(
         error.message || "This response can no longer be changed.",
       );
@@ -284,31 +269,6 @@ export default function TempAccessClient() {
     },
     [applyAccessPayload, endTemporaryAccess, eventCode],
   );
-
-  const refreshResultsAfterDraft = useCallback(async () => {
-    const revision = resultsRefreshRevisionRef.current + 1;
-    resultsRefreshRevisionRef.current = revision;
-    setAccess((current) =>
-      current ? { ...current, canViewResults: false, results: null } : current,
-    );
-    try {
-      const latest = unwrapAccessPayload(
-        await fetchTempAccessSession(eventCode),
-      );
-      if (resultsRefreshRevisionRef.current !== revision) return;
-      setAccess((current) =>
-        current
-          ? {
-              ...current,
-              canViewResults: latest.canViewResults,
-              results: latest.canViewResults ? latest.results : null,
-            }
-          : current,
-      );
-    } catch {
-      // The conservative state above prevents stale or no-longer-authorized results.
-    }
-  }, [eventCode]);
 
   const sendCode = useCallback(
     async (token, { automatic = false } = {}) => {
@@ -459,7 +419,6 @@ export default function TempAccessClient() {
               }
             : current,
         );
-        void refreshResultsAfterDraft();
         const currentFingerprint = JSON.stringify([
           scheduleInpersonRef.current,
           scheduleVirtualRef.current,
@@ -472,12 +431,6 @@ export default function TempAccessClient() {
         draftDirtyRef.current = true;
         setDraftSaveState("failed");
         if (error.status === 409 && error.participant) {
-          resultsRefreshRevisionRef.current += 1;
-          setAccess((current) =>
-            current
-              ? { ...current, canViewResults: false, results: null }
-              : current,
-          );
           setSaveConflict(error.participant);
           setDraftSaveError(
             "This schedule changed somewhere else. Reload the latest response before editing again.",
@@ -504,12 +457,7 @@ export default function TempAccessClient() {
       }, 0);
     }
     return saved;
-  }, [
-    eventCode,
-    reconcileRejectedWrite,
-    refreshResultsAfterDraft,
-    responseChangesDisabled,
-  ]);
+  }, [eventCode, reconcileRejectedWrite, responseChangesDisabled]);
 
   useEffect(() => {
     autosaveRunnerRef.current = runAutosave;
@@ -681,14 +629,7 @@ export default function TempAccessClient() {
       }
 
       // The conflict payload is still the latest version returned by the
-      // rejected write. Use it as a safe fallback, but never retain cached
-      // permission-derived results when their refresh could not be verified.
-      resultsRefreshRevisionRef.current += 1;
-      setAccess((current) =>
-        current
-          ? { ...current, canViewResults: false, results: null }
-          : current,
-      );
+      // rejected write, so it is a safe fallback.
       applyParticipant(conflictParticipant, access?.event);
     } finally {
       setConflictReloadPending(false);
@@ -714,16 +655,10 @@ export default function TempAccessClient() {
       try {
         applyAccessPayload(await fetchTempAccessSession(eventCode));
       } catch {
-        // Submission succeeded even when the optional results refresh fails.
+        // Submission succeeded even when re-reading the session fails.
       }
     } catch (error) {
       if (error.status === 409 && error.participant) {
-        resultsRefreshRevisionRef.current += 1;
-        setAccess((current) =>
-          current
-            ? { ...current, canViewResults: false, results: null }
-            : current,
-        );
         setSaveConflict(error.participant);
         setDraftSaveState("failed");
         setDraftSaveError(
@@ -896,16 +831,8 @@ export default function TempAccessClient() {
   const event = access.event;
   const participant = access.participant;
   const mode = event.mode || "inperson";
-  const results = access.results;
-  const avgInperson =
-    results?.channels?.inperson?.unweighted ||
-    Array(scheduleLength(event, participant)).fill(0);
-  const avgVirtual =
-    results?.channels?.virtual?.unweighted ||
-    Array(scheduleLength(event, participant)).fill(0);
   const upgradeHref = event.code ? makeUpgradeHref(event.code) : "";
   const leavingPage = logoutPending || upgradePending;
-  const showResults = Boolean(access.canViewResults && results);
 
   const upgradeToFullAccess = async (clickEvent) => {
     clickEvent.preventDefault();
@@ -981,9 +908,8 @@ export default function TempAccessClient() {
             <EventDetailsGrid event={event} />
           </Panel>
 
-          <div
-            className={`participant-columns${showResults ? " participant-columns--split" : ""}`}
-          >
+          {/* Temporary participants only see and edit their own calendar. */}
+          <div className="participant-columns">
             <Panel
               as="section"
               aria-labelledby="your-schedule-heading"
@@ -1137,61 +1063,6 @@ export default function TempAccessClient() {
                 </div>
               </div>
             </Panel>
-
-            {showResults && (
-              <Panel
-                as="section"
-                aria-labelledby="group-availability-heading"
-                headingLevel={2}
-                titleId="group-availability-heading"
-                title="Group availability"
-                description={
-                  <>
-                    Based on {results.countedResponseTotal || 0} submitted
-                    response(s). {results.unansweredParticipantTotal || 0}{" "}
-                    participant(s) are still unanswered.
-                  </>
-                }
-              >
-                <AvailabilityLegend
-                  showValues
-                  virtual={mode === "virtual"}
-                  channels={mode === "mixed" ? "both" : "single"}
-                  className="mb-3"
-                />
-                <div className="participant-results-grids">
-                  {mode !== "virtual" && (
-                    <ScheduleGrid
-                      schedule={avgInperson}
-                      slotGroups={event.slotGroups || []}
-                      readOnly
-                      showValues
-                      compact
-                      label={
-                        mode === "mixed"
-                          ? "In-Person Availability"
-                          : "Availability"
-                      }
-                    />
-                  )}
-                  {mode !== "inperson" && (
-                    <ScheduleGrid
-                      schedule={avgVirtual}
-                      slotGroups={event.slotGroups || []}
-                      readOnly
-                      showValues
-                      compact
-                      label={
-                        mode === "mixed"
-                          ? "Virtual Availability"
-                          : "Availability"
-                      }
-                      virtual
-                    />
-                  )}
-                </div>
-              </Panel>
-            )}
           </div>
 
           <Alert as="aside" variant="info" role={null}>

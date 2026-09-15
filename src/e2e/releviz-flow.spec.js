@@ -18,8 +18,10 @@ const {
   latestVerificationCode,
   loginWithEmailCode,
   nextWeekdayDate,
+  openRankedWindows,
   readSession,
   recomputeEventResults,
+  refreshWorkspace,
   registerAccount,
   selectOption,
 } = require("./helpers/releviz");
@@ -424,9 +426,7 @@ test.describe("Releviz account and scheduling flow", () => {
       invitationStartedAt,
       (body) => body.includes(`/temp-access?code=${eventCode}`),
     );
-    await eventDeliveryProgress
-      .getByRole("button", { name: "Refresh progress" })
-      .click();
+    await refreshWorkspace(page);
     await expect(eventDeliveryProgress.getByText("1 sent")).toBeVisible();
     const sentRoster = await apiJson(
       request,
@@ -1290,9 +1290,7 @@ test.describe("Releviz account and scheduling flow", () => {
     const reminderDeliveryProgress = page.getByLabel("Event delivery progress");
     await expect(reminderDeliveryProgress.getByText("1 queued")).toBeVisible();
     dispatchEmailJobs();
-    await reminderDeliveryProgress
-      .getByRole("button", { name: "Refresh progress" })
-      .click();
+    await refreshWorkspace(page);
     await expect(reminderDeliveryProgress.getByText("1 sent")).toBeVisible();
     const reminder = await latestEmailFor(
       manualEmail,
@@ -1359,6 +1357,27 @@ test.describe("Releviz account and scheduling flow", () => {
     await participantWeight.press("Tab");
     await expect(page.getByText("Pat Participant was updated.")).toBeVisible();
 
+    // The Groups table manages a whole group at once: its shared weight is
+    // now mixed, and setting it re-applies one weight to every member.
+    const groupsTable = page.getByRole("region", { name: "Roster groups" });
+    const groupRow = groupsTable.locator('[data-roster-group="E2E Group"]');
+    await expect(groupRow).toContainText("2 people");
+    await expect(groupRow).toContainText("Mixed");
+    const groupWeight = groupsTable.getByRole("spinbutton", {
+      name: "Weight for group E2E Group",
+    });
+    await groupWeight.fill("0.6");
+    await groupWeight.press("Enter");
+    await expect(
+      page.getByText("Weight 0.6 now applies to 2 people in E2E Group."),
+    ).toBeVisible();
+    await expect(groupWeight).toHaveValue("0.6");
+    await expect(groupRow).not.toContainText("Mixed");
+    await expect(participantWeight).toHaveValue("0.6");
+    await participantWeight.fill("0.5");
+    await participantWeight.press("Tab");
+    await expect(page.getByText("Pat Participant was updated.")).toBeVisible();
+
     const rosterAfterWeights = await apiJson(
       request,
       "GET",
@@ -1380,7 +1399,9 @@ test.describe("Releviz account and scheduling flow", () => {
       rosterAfterWeights.payload.participants.find(
         (participant) => participant.email === manualEmail,
       );
-    expect(manualRosterParticipant.weight).toBe(0.75);
+    // The group weight (0.6) reached everyone in E2E Group; only Pat was
+    // changed again afterwards.
+    expect(manualRosterParticipant.weight).toBe(0.6);
 
     const deniedRosterPatch = await apiJson(
       request,
@@ -1461,6 +1482,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(
       page.getByText(/Results are current at revision/),
     ).toBeVisible();
+    await openRankedWindows(page);
     await page
       .getByRole("button", { name: "Choose this time" })
       .first()
@@ -1485,16 +1507,18 @@ test.describe("Releviz account and scheduling flow", () => {
         "The meeting is finalized and calendar invitations are queued.",
       ),
     ).toBeVisible();
+    // Invitation delivery joins the workspace banner with every other run.
     const finalizationDeliveryProgress = page.getByLabel(
-      "Finalization delivery progress",
+      "Event delivery progress",
+    );
+    await expect(finalizationDeliveryProgress).toContainText(
+      "Final confirmation delivery",
     );
     await expect(
       finalizationDeliveryProgress.getByText("2 queued"),
     ).toBeVisible();
     dispatchEmailJobs();
-    await finalizationDeliveryProgress
-      .getByRole("button", { name: "Refresh progress" })
-      .click();
+    await refreshWorkspace(page);
     await expect(
       finalizationDeliveryProgress.getByText("2 sent"),
     ).toBeVisible();
@@ -1552,9 +1576,7 @@ test.describe("Releviz account and scheduling flow", () => {
       cancellationDeliveryProgress.getByText("2 queued"),
     ).toBeVisible();
     dispatchEmailJobs();
-    await cancellationDeliveryProgress
-      .getByRole("button", { name: "Refresh progress" })
-      .click();
+    await refreshWorkspace(page);
     await expect(
       cancellationDeliveryProgress.getByText("2 sent"),
     ).toBeVisible();
@@ -1568,6 +1590,7 @@ test.describe("Releviz account and scheduling flow", () => {
     expect(cancellation).toContain("SEQUENCE:1");
 
     recomputeEventResults(eventCode);
+    await openRankedWindows(page);
     const candidateButtons = page.getByRole("button", {
       name: "Choose this time",
     });
@@ -1592,9 +1615,7 @@ test.describe("Releviz account and scheduling flow", () => {
       ),
     ).toBeVisible();
     dispatchEmailJobs();
-    await finalizationDeliveryProgress
-      .getByRole("button", { name: "Refresh progress" })
-      .click();
+    await refreshWorkspace(page);
     await expect(
       finalizationDeliveryProgress.getByText("2 sent"),
     ).toBeVisible();

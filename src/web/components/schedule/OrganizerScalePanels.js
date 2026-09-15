@@ -21,11 +21,11 @@ import {
   CalendarCheckIcon,
   CalendarIcon,
   CheckIcon,
+  ChevronDownIcon,
   DownloadIcon,
   EditIcon,
   FinalizeIcon,
   GroupIcon,
-  RefreshIcon,
   ReminderIcon,
   ResultsIcon,
   VirtualIcon,
@@ -113,11 +113,13 @@ export function DeliveryRequestProgress({
   getToken,
   onChange,
   ariaLabel = "Delivery progress",
+  refreshKey = 0,
 }) {
   const [request, setRequest] = useState(initialRequest || null);
   const [error, setError] = useState("");
   const [retrying, setRetrying] = useState(false);
   const requestId = request?.id;
+  const loadRef = useRef(null);
 
   const load = useCallback(async () => {
     if (!requestId) return;
@@ -132,6 +134,15 @@ export function DeliveryRequestProgress({
       setError(requestError.message || "Unable to refresh delivery progress.");
     }
   }, [getToken, onChange, requestId]);
+
+  useEffect(() => {
+    loadRef.current = load;
+  }, [load]);
+
+  // The workspace's single Refresh button re-reads delivery progress too.
+  useEffect(() => {
+    if (refreshKey) loadRef.current?.();
+  }, [refreshKey]);
 
   useEffect(() => {
     if (!request?.id || deliveryWaiting(deliveryFrom(request)) === 0)
@@ -188,21 +199,13 @@ export function DeliveryRequestProgress({
           <MetricListItem value={delivery.canceled} label="canceled" />
         )}
       </ul>
-      <div className="delivery-progress__actions">
-        <AppButton
-          variant="outlined"
-          icon={<RefreshIcon />}
-          onClick={load}
-          disabled={retrying}
-        >
-          Refresh progress
-        </AppButton>
-        {failed > 0 && (
+      {failed > 0 && (
+        <div className="delivery-progress__actions">
           <AppButton variant="filled" onClick={retry} disabled={retrying}>
             {retrying ? "Retrying…" : "Retry failed recipients"}
           </AppButton>
-        )}
-      </div>
+        </div>
+      )}
       {error && (
         <Alert variant="danger" role="alert">
           {error}
@@ -548,20 +551,187 @@ function defaultChannel(event) {
   return event?.mode === "virtual" ? "virtual" : "inperson";
 }
 
+function RankedWindowsRail({
+  event,
+  recommendations,
+  selection,
+  loading,
+  refreshing,
+  onChoose,
+}) {
+  const count = recommendations.length;
+  const best = recommendations[0];
+  const bestLabel = best
+    ? best.label ||
+      (best.suggestedStartsAt || best.startsAt
+        ? formatInTimezone(
+            best.suggestedStartsAt || best.startsAt,
+            event.timezone,
+          )
+        : "")
+    : "";
+  const hint =
+    count > 0
+      ? `${count} candidate${count === 1 ? "" : "s"}${bestLabel ? ` · best ${bestLabel}` : ""}`
+      : loading || refreshing
+        ? "Calculating the best options"
+        : "No recommendation yet";
+
+  return (
+    <aside
+      className="meeting-results__rail"
+      aria-labelledby="organizer-ranked-windows-heading"
+    >
+      {/* Collapsed by default: the calendar already draws every ranked
+          window, so the list is a detail the organizer opens on demand. */}
+      <details className="disclosure meeting-results__rail-disclosure">
+        <summary className="meeting-results__rail-summary">
+          <span className="disclosure__summary-copy">
+            <h4
+              id="organizer-ranked-windows-heading"
+              className="meeting-results__rail-title"
+            >
+              Ranked windows
+            </h4>
+            <small className="meeting-results__rail-hint">{hint}</small>
+          </span>
+          <span className="disclosure__chevron" aria-hidden="true">
+            <ChevronDownIcon />
+          </span>
+        </summary>
+        <div className="disclosure__content meeting-results__rail-content">
+          {count > 0 ? (
+            <ol className="results-list results-list--compact">
+              {recommendations.map((recommendation, index) => {
+                const key = recommendationKey(recommendation, index);
+                const selected = selectionMatchesRecommendation(
+                  selection,
+                  recommendation,
+                );
+                const weighted =
+                  recommendation.weightedAvailability ??
+                  recommendation.weightedScore ??
+                  0;
+                const unweighted =
+                  recommendation.unweightedAvailability ??
+                  recommendation.unweightedScore ??
+                  0;
+                const startsAt =
+                  recommendation.suggestedStartsAt || recommendation.startsAt;
+                const endsAt =
+                  recommendation.suggestedEndsAt || recommendation.endsAt;
+                const isBest = index === 0;
+                return (
+                  <li
+                    key={key}
+                    className={`result-option result-option--compact${isBest ? " result-option--best" : ""}${selected ? " result-option--selected" : ""}`}
+                  >
+                    <div className="result-option__content">
+                      <div className="result-option__heading">
+                        <span className="result-option__rank">
+                          #{recommendation.rank || index + 1}
+                        </span>
+                        <strong className="result-option__title">
+                          {recommendation.label ||
+                            (startsAt
+                              ? formatInTimezone(startsAt, event.timezone)
+                              : "Candidate window")}
+                        </strong>
+                        <ChannelBadge channel={recommendation.channel} />
+                        {isBest && (
+                          <StatusBadge status="primary" dot={false}>
+                            <span className="icon-inline" aria-hidden="true">
+                              <BestIcon />
+                            </span>
+                            Best match
+                          </StatusBadge>
+                        )}
+                      </div>
+                      {startsAt && endsAt && (
+                        <small className="result-option__time">
+                          {formatInTimezone(startsAt, event.timezone)} –{" "}
+                          {formatInTimezone(endsAt, event.timezone)}
+                        </small>
+                      )}
+                      <dl className="result-option__metrics">
+                        <div className="result-option__metric">
+                          <dt>Weighted</dt>
+                          <dd>{`${percentOf(weighted)}% weighted`}</dd>
+                        </div>
+                        <div className="result-option__metric">
+                          <dt>Unweighted</dt>
+                          <dd>{`${percentOf(unweighted)}% unweighted`}</dd>
+                        </div>
+                        <div className="result-option__metric">
+                          <dt>Participants</dt>
+                          <dd>{`${recommendation.fullyAvailableParticipantTotal || 0} fully available`}</dd>
+                        </div>
+                      </dl>
+                    </div>
+                    <div className="result-option__actions">
+                      <AppButton
+                        variant={selected ? "filled" : "outlined"}
+                        icon={selected ? <CheckIcon /> : null}
+                        aria-pressed={selected}
+                        onClick={() => onChoose(recommendation)}
+                      >
+                        {selected ? "Selected time" : "Choose this time"}
+                      </AppButton>
+                    </div>
+                  </li>
+                );
+              })}
+            </ol>
+          ) : loading || refreshing ? (
+            <EmptyState
+              headingLevel={5}
+              className="organizer-empty-state organizer-empty-state--loading"
+              icon={
+                <span
+                  className="spinner-border spinner-border-sm"
+                  aria-hidden="true"
+                />
+              }
+              title="Calculating the best options"
+            >
+              <p className="mb-0">
+                Recommendations will appear here as responses arrive.
+              </p>
+            </EmptyState>
+          ) : (
+            <EmptyState
+              headingLevel={5}
+              className="organizer-empty-state"
+              icon={<ResultsIcon />}
+              title="No recommendation yet"
+            >
+              <p className="mb-0">No valid meeting window is available yet.</p>
+            </EmptyState>
+          )}
+        </div>
+      </details>
+    </aside>
+  );
+}
+
 /**
  * Results: the meeting-time calendar (group availability heatmap with the
- * ranked windows drawn on it, any startable cell pickable) plus a compact
- * side list of the ranked windows.
+ * ranked windows drawn on it, any startable cell pickable) beside a side
+ * column holding the collapsible ranked list and the Finalize step, so a
+ * pick and its confirmation stay on one screen.
  */
 export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
   {
     event,
+    setEvent,
     getToken,
     invalidationKey,
     onChoose,
     onSelect,
     selection = null,
     headingRef,
+    finalizeHeadingRef,
+    onDeliveryRequest,
   },
   forwardedRef,
 ) {
@@ -682,17 +852,7 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
       headingProps={{ tabIndex: -1 }}
       titleId="organizer-results-heading"
       title="Results"
-      description={`Top continuous windows for a ${meetingMinutes}-minute meeting. Pick any window on the calendar or choose a ranked one.`}
-      actions={
-        <AppButton
-          variant="outlined"
-          icon={<RefreshIcon />}
-          onClick={() => load()}
-          disabled={loading}
-        >
-          Refresh results
-        </AppButton>
-      }
+      description={`Top continuous windows for a ${meetingMinutes}-minute meeting. Pick any window on the calendar or choose a ranked one, then confirm it in Finalize.`}
     >
       <div className="d-flex flex-column gap-3">
         {snapshot.status === "refreshing" && (
@@ -744,127 +904,24 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
             now={now}
           />
 
-          <aside
-            className="meeting-results__rail"
-            aria-labelledby="organizer-ranked-windows-heading"
-          >
-            <h4
-              id="organizer-ranked-windows-heading"
-              className="meeting-results__rail-title"
-            >
-              Ranked windows
-            </h4>
-            {recommendations.length > 0 ? (
-              <ol className="results-list results-list--compact">
-                {recommendations.map((recommendation, index) => {
-                  const key = recommendationKey(recommendation, index);
-                  const selected = selectionMatchesRecommendation(
-                    selection,
-                    recommendation,
-                  );
-                  const weighted =
-                    recommendation.weightedAvailability ??
-                    recommendation.weightedScore ??
-                    0;
-                  const unweighted =
-                    recommendation.unweightedAvailability ??
-                    recommendation.unweightedScore ??
-                    0;
-                  const startsAt =
-                    recommendation.suggestedStartsAt || recommendation.startsAt;
-                  const endsAt =
-                    recommendation.suggestedEndsAt || recommendation.endsAt;
-                  const best = index === 0;
-                  return (
-                    <li
-                      key={key}
-                      className={`result-option result-option--compact${best ? " result-option--best" : ""}${selected ? " result-option--selected" : ""}`}
-                    >
-                      <div className="result-option__content">
-                        <div className="result-option__heading">
-                          <span className="result-option__rank">
-                            #{recommendation.rank || index + 1}
-                          </span>
-                          <strong className="result-option__title">
-                            {recommendation.label ||
-                              (startsAt
-                                ? formatInTimezone(startsAt, event.timezone)
-                                : "Candidate window")}
-                          </strong>
-                          <ChannelBadge channel={recommendation.channel} />
-                          {best && (
-                            <StatusBadge status="primary" dot={false}>
-                              <span className="icon-inline" aria-hidden="true">
-                                <BestIcon />
-                              </span>
-                              Best match
-                            </StatusBadge>
-                          )}
-                        </div>
-                        {startsAt && endsAt && (
-                          <small className="result-option__time">
-                            {formatInTimezone(startsAt, event.timezone)} –{" "}
-                            {formatInTimezone(endsAt, event.timezone)}
-                          </small>
-                        )}
-                        <dl className="result-option__metrics">
-                          <div className="result-option__metric">
-                            <dt>Weighted</dt>
-                            <dd>{`${percentOf(weighted)}% weighted`}</dd>
-                          </div>
-                          <div className="result-option__metric">
-                            <dt>Unweighted</dt>
-                            <dd>{`${percentOf(unweighted)}% unweighted`}</dd>
-                          </div>
-                          <div className="result-option__metric">
-                            <dt>Participants</dt>
-                            <dd>{`${recommendation.fullyAvailableParticipantTotal || 0} fully available`}</dd>
-                          </div>
-                        </dl>
-                      </div>
-                      <div className="result-option__actions">
-                        <AppButton
-                          variant={selected ? "filled" : "outlined"}
-                          icon={selected ? <CheckIcon /> : null}
-                          aria-pressed={selected}
-                          onClick={() => handleChoose(recommendation)}
-                        >
-                          {selected ? "Selected time" : "Choose this time"}
-                        </AppButton>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ol>
-            ) : loading || snapshot.status === "refreshing" ? (
-              <EmptyState
-                headingLevel={5}
-                className="organizer-empty-state organizer-empty-state--loading"
-                icon={
-                  <span
-                    className="spinner-border spinner-border-sm"
-                    aria-hidden="true"
-                  />
-                }
-                title="Calculating the best options"
-              >
-                <p className="mb-0">
-                  Recommendations will appear here as responses arrive.
-                </p>
-              </EmptyState>
-            ) : (
-              <EmptyState
-                headingLevel={5}
-                className="organizer-empty-state"
-                icon={<ResultsIcon />}
-                title="No recommendation yet"
-              >
-                <p className="mb-0">
-                  No valid meeting window is available yet.
-                </p>
-              </EmptyState>
-            )}
-          </aside>
+          <div className="meeting-results__side">
+            <RankedWindowsRail
+              event={event}
+              recommendations={recommendations}
+              selection={selection}
+              loading={loading}
+              refreshing={snapshot.status === "refreshing"}
+              onChoose={handleChoose}
+            />
+            <FinalizeScalePanel
+              event={event}
+              setEvent={setEvent}
+              getToken={getToken}
+              selection={selection}
+              headingRef={finalizeHeadingRef}
+              onDeliveryRequest={onDeliveryRequest}
+            />
+          </div>
         </div>
 
         {error && (
@@ -970,15 +1027,14 @@ function FinalizeScalePanelContent({
   setEvent,
   getToken,
   selection,
-  onBrowseResults,
   headingRef,
+  onDeliveryRequest,
 }) {
   const [location, setLocation] = useState(event.location || "");
   const [review, setReview] = useState(null);
   const [reviewing, setReviewing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [downloading, setDownloading] = useState(false);
-  const [deliveryRequest, setDeliveryRequest] = useState(null);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
   const confirmationKey = useRef("");
@@ -1027,16 +1083,18 @@ function FinalizeScalePanelContent({
       );
       setEvent(data.event);
       setReview(data.finalMeeting?.attendance || review);
-      setDeliveryRequest(
+      // Invitation delivery is tracked in the workspace banner with every
+      // other email run, so it survives re-picks and refreshes.
+      const delivery =
         data.deliveryRequest ||
-          (data.deliveryRequestId
-            ? {
-                id: data.deliveryRequestId,
-                operation: "final_confirmation",
-                delivery: data.delivery,
-              }
-            : null),
-      );
+        (data.deliveryRequestId
+          ? {
+              id: data.deliveryRequestId,
+              operation: "final_confirmation",
+              delivery: data.delivery,
+            }
+          : null);
+      if (delivery) onDeliveryRequest?.(delivery);
       setStatus(
         "The meeting is finalized and calendar invitations are queued.",
       );
@@ -1079,183 +1137,175 @@ function FinalizeScalePanelContent({
     meeting.active !== false;
 
   return (
-    <div className="organizer-panel-stack d-flex flex-column gap-3">
-      <Panel
-        className="organizer-panel organizer-finalize-panel"
-        headingLevel={3}
-        headingRef={headingRef}
-        headingProps={{ tabIndex: -1 }}
-        titleId="organizer-finalize-heading"
-        title="Finalize"
-        description="Confirm the selected window and send an iCalendar update to invited people."
-      >
-        <FinalizeStepIndicator
-          selection={selection}
-          review={review}
-          finalized={finalized}
-        />
-        {finalized ? (
-          <div className="finalized-meeting">
-            <div className="finalized-meeting__summary">
-              <strong className="finalized-meeting__time">
-                {formatInTimezone(meeting.startsAt, event.timezone)} –{" "}
-                {formatInTimezone(meeting.endsAt, event.timezone)}
-              </strong>
-              <span className="finalized-meeting__meta">
-                <span className="icon-inline me-1" aria-hidden="true">
-                  <CalendarCheckIcon />
-                </span>
-                {meeting.channel === "virtual" ? "Virtual" : "In person"} ·{" "}
-                {meeting.location || "Location TBD"}
+    <section
+      id="organizer-finalize"
+      className="finalize-block"
+      aria-labelledby="organizer-finalize-heading"
+    >
+      <div className="finalize-block__header">
+        <h4
+          id="organizer-finalize-heading"
+          ref={headingRef}
+          tabIndex={-1}
+          className="finalize-block__title"
+        >
+          Finalize
+        </h4>
+        <p className="finalize-block__description">
+          Confirm the selected window and email calendar invitations.
+        </p>
+      </div>
+      <FinalizeStepIndicator
+        selection={selection}
+        review={review}
+        finalized={finalized}
+      />
+      {finalized ? (
+        <div className="finalized-meeting">
+          <div className="finalized-meeting__summary">
+            <strong className="finalized-meeting__time">
+              {formatInTimezone(meeting.startsAt, event.timezone)} –{" "}
+              {formatInTimezone(meeting.endsAt, event.timezone)}
+            </strong>
+            <span className="finalized-meeting__meta">
+              <span className="icon-inline me-1" aria-hidden="true">
+                <CalendarCheckIcon />
               </span>
-            </div>
-            <div className="finalized-meeting__actions">
-              <AppButton
-                variant="outlined"
-                icon={<DownloadIcon />}
-                onClick={download}
-                disabled={downloading}
-              >
-                {downloading ? "Preparing…" : "Download calendar (.ics)"}
-              </AppButton>
-            </div>
+              {meeting.channel === "virtual" ? "Virtual" : "In person"} ·{" "}
+              {meeting.location || "Location TBD"}
+            </span>
           </div>
-        ) : selection ? (
-          <div className="organizer-finalize-workspace d-flex flex-column gap-3">
-            <div className="final-candidate">
-              <div className="final-candidate__heading">
-                <strong className="final-candidate__title">
-                  {selection.label || "Selected window"}
-                </strong>
-                <ChannelBadge
-                  channel={selection.channel}
-                  className="final-candidate__channel"
-                />
-                {selection.metrics?.rank != null ? (
-                  <StatusBadge status="primary" dot={false}>
-                    Ranked #{selection.metrics.rank}
-                  </StatusBadge>
-                ) : (
-                  <StatusBadge status="neutral" dot={false}>
-                    Custom window
-                  </StatusBadge>
-                )}
-              </div>
-              <p className="final-candidate__time">
-                {formatInTimezone(selection.startsAt, event.timezone)} –{" "}
-                {formatInTimezone(selection.endsAt, event.timezone)}{" "}
-                <small className="text-secondary">
-                  ({event.timezone || "UTC"})
-                </small>
-              </p>
-              <SelectionMetrics metrics={selection.metrics} />
-              {selection.rescheduled && (
-                <p className="final-candidate__note mb-0 mt-1 small text-secondary">
-                  The suggested date has passed; this uses the next occurrence.
-                </p>
+          <div className="finalized-meeting__actions">
+            <AppButton
+              variant="outlined"
+              icon={<DownloadIcon />}
+              onClick={download}
+              disabled={downloading}
+            >
+              {downloading ? "Preparing…" : "Download calendar (.ics)"}
+            </AppButton>
+          </div>
+        </div>
+      ) : selection ? (
+        <div className="finalize-block__workspace d-flex flex-column gap-3">
+          <div className="final-candidate">
+            <div className="final-candidate__heading">
+              <strong className="final-candidate__title">
+                {selection.label || "Selected window"}
+              </strong>
+              <ChannelBadge
+                channel={selection.channel}
+                className="final-candidate__channel"
+              />
+              {selection.metrics?.rank != null ? (
+                <StatusBadge status="primary" dot={false}>
+                  Ranked #{selection.metrics.rank}
+                </StatusBadge>
+              ) : (
+                <StatusBadge status="neutral" dot={false}>
+                  Custom window
+                </StatusBadge>
               )}
             </div>
-            <FormField label="Location or meeting link">
-              <input
-                type="text"
-                className="form-control"
-                value={location}
-                maxLength={500}
-                onChange={(changeEvent) => {
-                  setLocation(changeEvent.target.value);
-                  setReview(null);
-                }}
-              />
-            </FormField>
-            <div className="organizer-finalize-workspace__actions d-flex flex-wrap gap-2">
-              <AppButton variant="text" onClick={onBrowseResults}>
-                Choose a different result
-              </AppButton>
-              <AppButton
-                variant="outlined"
-                onClick={preview}
-                disabled={!canFinalize || reviewing || confirming}
-              >
-                {reviewing ? "Reviewing…" : "Review attendance"}
-              </AppButton>
-              <AppButton
-                variant="filled"
-                icon={<FinalizeIcon />}
-                onClick={confirm}
-                disabled={!canFinalize || !review || reviewing || confirming}
-              >
-                {confirming ? "Finalizing…" : "Finalize meeting"}
-              </AppButton>
-            </div>
-            {!canFinalize && (
-              <Alert variant="warning" role="note">
-                Reactivate this event before reviewing and finalizing a meeting
-                time.
-              </Alert>
-            )}
-          </div>
-        ) : (
-          <EmptyState
-            headingLevel={4}
-            className="organizer-empty-state organizer-empty-state--finalize"
-            icon={<CalendarIcon />}
-            title="No time selected yet"
-            actions={
-              <AppButton variant="filled" onClick={onBrowseResults}>
-                Browse results
-              </AppButton>
-            }
-          >
-            <p className="mb-0">
-              Pick a window on the calendar or choose a ranked result.
+            <p className="final-candidate__time">
+              {formatInTimezone(selection.startsAt, event.timezone)} –{" "}
+              {formatInTimezone(selection.endsAt, event.timezone)}{" "}
+              <small className="text-secondary">
+                ({event.timezone || "UTC"})
+              </small>
             </p>
-          </EmptyState>
-        )}
+            <SelectionMetrics metrics={selection.metrics} />
+            {selection.rescheduled && (
+              <p className="final-candidate__note mb-0 mt-1 small text-secondary">
+                The suggested date has passed; this uses the next occurrence.
+              </p>
+            )}
+          </div>
+          <FormField label="Location or meeting link">
+            <input
+              type="text"
+              className="form-control"
+              value={location}
+              maxLength={500}
+              onChange={(changeEvent) => {
+                setLocation(changeEvent.target.value);
+                setReview(null);
+              }}
+            />
+          </FormField>
+          <div className="finalize-block__actions d-flex flex-wrap gap-2">
+            <AppButton
+              variant="outlined"
+              onClick={preview}
+              disabled={!canFinalize || reviewing || confirming}
+            >
+              {reviewing ? "Reviewing…" : "Review attendance"}
+            </AppButton>
+            <AppButton
+              variant="filled"
+              icon={<FinalizeIcon />}
+              onClick={confirm}
+              disabled={!canFinalize || !review || reviewing || confirming}
+            >
+              {confirming ? "Finalizing…" : "Finalize meeting"}
+            </AppButton>
+          </div>
+          {!canFinalize && (
+            <Alert variant="warning" role="note">
+              Reactivate this event before reviewing and finalizing a meeting
+              time.
+            </Alert>
+          )}
+        </div>
+      ) : (
+        <EmptyState
+          headingLevel={5}
+          className="organizer-empty-state organizer-empty-state--finalize"
+          icon={<CalendarIcon />}
+          title="No time selected yet"
+        >
+          <p className="mb-0">
+            Pick a window on the calendar or choose a ranked one.
+          </p>
+        </EmptyState>
+      )}
 
-        {review && (
-          <div
-            role="group"
-            className="metric-tiles attendance-review mt-3"
-            aria-label="Attendance review"
-          >
-            {[
-              ["Available", review.availableParticipantTotal],
-              ["Partial", review.partialParticipantTotal],
-              ["Unavailable", review.unavailableParticipantTotal],
-              ["Unanswered", review.unansweredParticipantTotal],
-              ["Excluded", review.excludedParticipantTotal],
-            ].map(([label, value]) => (
-              <div key={label} className="metric-tile attendance-review__item">
-                <span className="metric-tile__label">{label}</span>
-                <strong className="metric-tile__value attendance-review__value">
-                  {value || 0}
-                </strong>
-              </div>
-            ))}
-          </div>
-        )}
-        {(status || error) && (
-          <div className="d-flex flex-column gap-2 mt-3">
-            {status && (
-              <Alert variant="success" role="status">
-                {status}
-              </Alert>
-            )}
-            {error && (
-              <Alert variant="danger" role="alert">
-                {error}
-              </Alert>
-            )}
-          </div>
-        )}
-      </Panel>
-      <DeliveryRequestProgress
-        key={deliveryRequest?.id || "no-delivery"}
-        initialRequest={deliveryRequest}
-        getToken={getToken}
-        onChange={setDeliveryRequest}
-        ariaLabel="Finalization delivery progress"
-      />
-    </div>
+      {review && (
+        <div
+          role="group"
+          className="metric-tiles attendance-review mt-3"
+          aria-label="Attendance review"
+        >
+          {[
+            ["Available", review.availableParticipantTotal],
+            ["Partial", review.partialParticipantTotal],
+            ["Unavailable", review.unavailableParticipantTotal],
+            ["Unanswered", review.unansweredParticipantTotal],
+            ["Excluded", review.excludedParticipantTotal],
+          ].map(([label, value]) => (
+            <div key={label} className="metric-tile attendance-review__item">
+              <span className="metric-tile__label">{label}</span>
+              <strong className="metric-tile__value attendance-review__value">
+                {value || 0}
+              </strong>
+            </div>
+          ))}
+        </div>
+      )}
+      {(status || error) && (
+        <div className="d-flex flex-column gap-2 mt-3">
+          {status && (
+            <Alert variant="success" role="status">
+              {status}
+            </Alert>
+          )}
+          {error && (
+            <Alert variant="danger" role="alert">
+              {error}
+            </Alert>
+          )}
+        </div>
+      )}
+    </section>
   );
 }

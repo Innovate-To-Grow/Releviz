@@ -10,6 +10,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 
 jest.mock("@/components/schedule/RosterImportWizard", () => ({
@@ -705,5 +706,267 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
         delivery: {},
       }),
     );
+  });
+});
+
+describe("RosterPanel groups", () => {
+  const stats = {
+    total: 3,
+    submitted: 1,
+    notSubmitted: 2,
+    groups: [
+      { name: "Faculty", count: 2, weight: 1 },
+      { name: "", count: 1, weight: null },
+    ],
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    window.confirm = jest.fn(() => true);
+    Object.defineProperty(globalThis, "crypto", {
+      configurable: true,
+      value: { randomUUID: jest.fn().mockReturnValue("group-key") },
+    });
+    fetchRoster.mockResolvedValue(
+      rosterResponse(
+        [
+          participant({ id: "p-1", name: "Ada", group: "Faculty" }),
+          participant({ id: "p-2", name: "Ben", group: "Faculty" }),
+          participant({ id: "p-3", name: "Cara", group: "", weight: 0.5 }),
+        ],
+        { stats },
+      ),
+    );
+    patchRosterBulk.mockResolvedValue({ updatedCount: 2, resultsRevision: 9 });
+  });
+
+  test("sets a group weight and renames a group through bulk patches", async () => {
+    const onResultsInvalidated = jest.fn();
+    await renderPanel({ onResultsInvalidated });
+    await screen.findByText("Ada");
+    expect(screen.getByLabelText("Roster summary")).toHaveTextContent(
+      "1 group",
+    );
+    const groupsRegion = screen.getByRole("region", { name: "Roster groups" });
+    expect(groupsRegion).toHaveTextContent("Faculty");
+    expect(groupsRegion).toHaveTextContent("2 people");
+    // Existing names complete the per-person group inputs.
+    expect(screen.getByLabelText("Group for Ada")).toHaveAttribute("list");
+    expect(
+      document.querySelector(
+        `#${CSS.escape(screen.getByLabelText("Group for Ada").getAttribute("list"))} option[value="Faculty"]`,
+      ),
+    ).not.toBeNull();
+
+    const weight = screen.getByLabelText("Weight for group Faculty");
+    fireEvent.change(weight, { target: { value: "0.5" } });
+    fireEvent.blur(weight);
+    await waitFor(() =>
+      expect(patchRosterBulk).toHaveBeenCalledWith(
+        "ROSTER1",
+        {
+          group: "Faculty",
+          updates: { weight: 0.5 },
+          idempotencyKey: "group-key",
+        },
+        "token",
+      ),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Weight 0.5 now applies to 2 people in Faculty.",
+    );
+    expect(onResultsInvalidated).toHaveBeenCalledWith(9);
+    await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(2));
+
+    await userEvent.click(screen.getByRole("button", { name: "Rename" }));
+    fireEvent.change(screen.getByLabelText("New name for group Faculty"), {
+      target: { value: "Teachers" },
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Save name" }));
+    await waitFor(() =>
+      expect(patchRosterBulk).toHaveBeenLastCalledWith(
+        "ROSTER1",
+        {
+          group: "Faculty",
+          updates: { group: "Teachers" },
+          idempotencyKey: "group-key",
+        },
+        "token",
+      ),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Renamed Faculty to Teachers for 2 people.",
+    );
+  });
+
+  test("moves selected people, creates a group from them, and filters by group", async () => {
+    await renderPanel();
+    await screen.findByText("Ada");
+    fireEvent.click(screen.getByLabelText("Select Cara"));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Move selected here" }),
+    );
+    await waitFor(() =>
+      expect(patchRosterBulk).toHaveBeenCalledWith(
+        "ROSTER1",
+        {
+          participantIds: ["p-3"],
+          updates: { group: "Faculty" },
+          idempotencyKey: "group-key",
+        },
+        "token",
+      ),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Moved 2 people to Faculty.",
+    );
+    // The selection is spent once the move succeeds.
+    await waitFor(() =>
+      expect(screen.getByLabelText("Select Cara")).not.toBeChecked(),
+    );
+
+    fireEvent.click(screen.getByLabelText("Select Ada"));
+    fireEvent.click(screen.getByLabelText("Select Ben"));
+    await userEvent.click(screen.getByRole("button", { name: "New group" }));
+    fireEvent.change(screen.getByLabelText("New group name"), {
+      target: { value: "Board" },
+    });
+    fireEvent.change(screen.getByLabelText("New group weight"), {
+      target: { value: "0.75" },
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Create group" }));
+    await waitFor(() =>
+      expect(patchRosterBulk).toHaveBeenLastCalledWith(
+        "ROSTER1",
+        {
+          participantIds: ["p-1", "p-2"],
+          updates: { group: "Board", weight: 0.75 },
+          idempotencyKey: "group-key",
+        },
+        "token",
+      ),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Created Board with 2 people at weight 0.75.",
+    );
+
+    fireEvent.click(screen.getByLabelText("Select Ada"));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Ungroup selected" }),
+    );
+    await waitFor(() =>
+      expect(patchRosterBulk).toHaveBeenLastCalledWith(
+        "ROSTER1",
+        {
+          participantIds: ["p-1"],
+          updates: { group: "" },
+          idempotencyKey: "group-key",
+        },
+        "token",
+      ),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Removed 2 people from their groups.",
+    );
+
+    await userEvent.click(
+      screen.getAllByRole("button", { name: "Show people" })[0],
+    );
+    await waitFor(() =>
+      expect(fetchRoster).toHaveBeenLastCalledWith(
+        "ROSTER1",
+        expect.objectContaining({ group: "Faculty", page: 1 }),
+        "token",
+      ),
+    );
+    expect(screen.getByLabelText("Filter by group")).toHaveValue("Faculty");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Show everyone" }),
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText("Filter by group")).toHaveValue(""),
+    );
+  });
+
+  test("applies the group stats returned by a per-person patch", async () => {
+    patchRosterParticipant.mockResolvedValueOnce({
+      participant: participant({ id: "p-1", name: "Ada", weight: 0.5 }),
+      groups: [
+        { name: "Faculty", count: 2, weight: null },
+        { name: "", count: 1, weight: null },
+      ],
+    });
+    await renderPanel();
+    const weight = await screen.findByLabelText("Weight for Ada");
+    expect(screen.getByLabelText("Weight for group Faculty")).toHaveValue(1);
+    fireEvent.change(weight, { target: { value: "0.5" } });
+    fireEvent.blur(weight);
+    await waitFor(() =>
+      expect(screen.getByLabelText("Weight for group Faculty")).toHaveValue(
+        null,
+      ),
+    );
+    expect(
+      screen.getByRole("region", { name: "Roster groups" }),
+    ).toHaveTextContent("Mixed");
+    // No roster reload was needed for the table to update.
+    expect(fetchRoster).toHaveBeenCalledTimes(1);
+  });
+
+  test("reports group update failures and keeps the roster editable", async () => {
+    patchRosterBulk.mockRejectedValueOnce(new Error("Group patch failed"));
+    await renderPanel();
+    const weight = await screen.findByLabelText("Weight for group Faculty");
+    fireEvent.change(weight, { target: { value: "0.25" } });
+    fireEvent.blur(weight);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Group patch failed",
+    );
+    expect(screen.getByLabelText("Weight for group Faculty")).toBeEnabled();
+
+    patchRosterBulk.mockRejectedValueOnce(new Error(""));
+    fireEvent.change(weight, { target: { value: "0.3" } });
+    fireEvent.blur(weight);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Unable to update this group.",
+    );
+  });
+
+  test("moves people with the bulk action and locks groups while responses are closed", async () => {
+    const { unmount } = await renderPanel();
+    const bulk = await screen.findByLabelText("Bulk roster actions");
+    fireEvent.click(within(bulk).getByText("Bulk actions"));
+    expect(bulk).toHaveTextContent(
+      "Move to a group, change weight or inclusion",
+    );
+    fireEvent.click(screen.getByLabelText("Select Ada"));
+    fireEvent.click(within(bulk).getByLabelText("Apply bulk group"));
+    fireEvent.change(within(bulk).getByLabelText("Bulk group name"), {
+      target: { value: " Staff " },
+    });
+    fireEvent.click(within(bulk).getByRole("button", { name: "Apply update" }));
+    await waitFor(() =>
+      expect(patchRosterBulk).toHaveBeenCalledWith(
+        "ROSTER1",
+        {
+          participantIds: ["p-1"],
+          updates: { group: "Staff" },
+          idempotencyKey: "group-key",
+        },
+        "token",
+      ),
+    );
+    unmount();
+
+    await renderPanel({ event: { ...event, status: "closed" } });
+    expect(
+      await screen.findByLabelText("Weight for group Faculty"),
+    ).toBeDisabled();
+    expect(
+      screen.queryByRole("button", { name: "New group" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Move selected here" }),
+    ).not.toBeInTheDocument();
   });
 });

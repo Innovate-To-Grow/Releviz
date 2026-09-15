@@ -559,9 +559,9 @@ describe("organizer event management UI", () => {
     expect(advancedOptions).toContainElement(
       screen.getByLabelText("Slot Duration"),
     );
-    expect(advancedOptions).toContainElement(
-      screen.getByLabelText("Participant View"),
-    );
+    // Participants only ever see their own calendar, so there is no
+    // visibility setting to expose.
+    expect(screen.queryByLabelText("Participant View")).not.toBeInTheDocument();
     expect(advancedOptions).toContainElement(
       screen.getByLabelText("Response Deadline"),
     );

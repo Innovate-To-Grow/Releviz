@@ -570,7 +570,48 @@
   gap: 0.5rem;
 }
 
-/* Selected candidate summary in the finalize panel */
+/* Finalize step: lives beside the calendar in the results panel */
+.finalize-block {
+  border: 1px solid var(--bs-border-color);
+  border-radius: var(--bs-border-radius-lg);
+  background: var(--rv-surface-raised);
+  padding: 1rem;
+  scroll-margin-top: 4.5rem;
+}
+
+.finalize-block__header {
+  margin-bottom: 0.75rem;
+}
+
+.finalize-block__title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.finalize-block__description {
+  margin: 0.125rem 0 0;
+  color: var(--bs-secondary-color);
+  font-size: 0.875rem;
+}
+
+.finalize-block .step-indicator {
+  margin-bottom: 1rem;
+}
+
+.finalize-block .step-indicator__item {
+  font-size: 0.8125rem;
+}
+
+.finalize-block .metric-tiles {
+  grid-template-columns: repeat(auto-fit, minmax(5.5rem, 1fr));
+}
+
+.finalize-block__actions .btn {
+  flex: 1 1 auto;
+}
+
+/* Selected candidate summary in the finalize step */
 .final-candidate {
   border: 1px solid var(--bs-primary-border-subtle);
   background: var(--bs-primary-bg-subtle);
@@ -649,7 +690,7 @@
   gap: 0.5rem;
 }
 
-/* Participant layout: editor + optional group results */
+/* Participant layout: the person's own editor only */
 .participant-columns {
   display: grid;
   gap: 1.25rem;
@@ -658,18 +699,6 @@
 
 .participant-columns > * {
   min-width: 0;
-}
-
-@media (min-width: 1200px) {
-  .participant-columns--split {
-    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-  }
-}
-
-.participant-results-grids {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
 }
 
 /* ---------------------------------------------------------------------------
@@ -692,6 +721,82 @@
   white-space: nowrap;
 }
 
+/* Groups table: name, head count, shared weight, and row actions */
+.roster-groups__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.roster-groups__copy {
+  min-width: 0;
+  flex: 1 1 18rem;
+}
+
+.roster-groups__title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.roster-groups__description {
+  margin: 0.125rem 0 0;
+  color: var(--bs-secondary-color);
+  font-size: 0.875rem;
+}
+
+.roster-groups__create {
+  border: 1px solid var(--bs-border-color);
+  border-radius: var(--bs-border-radius-lg);
+  background: var(--bs-tertiary-bg);
+  padding: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.roster-groups__shell .table-responsive {
+  max-height: 24rem;
+}
+
+.roster-groups__table .roster-groups__name {
+  min-width: 11rem;
+}
+
+.roster-groups__table .roster-groups__count {
+  white-space: nowrap;
+  color: var(--bs-secondary-color);
+  font-variant-numeric: tabular-nums;
+}
+
+.roster-groups__weight {
+  width: 5.25rem;
+}
+
+.roster-groups__rename {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.roster-groups__rename input {
+  flex: 1 1 8rem;
+  min-width: 8rem;
+}
+
+.roster-groups__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.25rem 0.5rem;
+}
+
+.roster-groups__empty {
+  margin-top: 0.75rem;
+}
+
 /* Import preview inputs stay readable; the table scrolls horizontally instead. */
 .roster-import__table input.form-control:not([type="number"]) {
   min-width: 9rem;
@@ -711,30 +816,54 @@
   align-items: start;
 }
 
+/* Side column: the collapsed ranked list and the Finalize step stay in view
+   next to the calendar, so a pick and its confirmation share one screen. */
 @media (min-width: 992px) {
   .meeting-results {
-    grid-template-columns: minmax(0, 1fr) minmax(17rem, 21rem);
+    grid-template-columns: minmax(0, 1fr) minmax(19rem, 23rem);
   }
 
-  .meeting-results__rail {
+  .meeting-results__side {
     position: sticky;
     top: 4rem;
-    max-height: min(78vh, 820px);
+    max-height: calc(100vh - 5rem);
     overflow: auto;
+    scrollbar-gutter: stable;
   }
 }
 
-.meeting-results__rail {
+.meeting-results__side {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 1rem;
   min-width: 0;
+}
+
+.meeting-results__rail {
+  min-width: 0;
+}
+
+.meeting-results__rail-disclosure > summary {
+  padding: 0.75rem 1rem;
+  align-items: flex-start;
+}
+
+.meeting-results__rail-content {
+  padding: 0.75rem 1rem 1rem;
 }
 
 .meeting-results__rail-title {
   margin: 0;
-  font-size: 0.9375rem;
+  font-size: 1rem;
   font-weight: 600;
+}
+
+.meeting-results__rail-hint {
+  display: block;
+  margin-top: 0.125rem;
+  color: var(--bs-secondary-color);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
 }
 
 .meeting-calendar {
