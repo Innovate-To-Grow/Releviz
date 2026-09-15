@@ -1597,6 +1597,12 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(candidateButtons.first()).toBeVisible();
     expect(await candidateButtons.count()).toBeGreaterThanOrEqual(3);
     await candidateButtons.nth(2).click();
+    // The Finalize step re-keys on a new selection: wait for the new pick to
+    // land before driving its buttons.
+    await expect(page.getByRole("heading", { name: "Finalize" })).toBeFocused();
+    await expect(page.locator("#organizer-finalize")).toContainText(
+      "Ranked #3",
+    );
     await page.getByRole("button", { name: "Review attendance" }).click();
     await expect(
       page.getByText("Attendance review is current for this candidate."),
