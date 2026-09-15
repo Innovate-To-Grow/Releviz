@@ -20,6 +20,16 @@ import ScheduleGrid from "@/components/schedule/ScheduleGrid";
 import useAutosaveNavigationGuard from "@/components/schedule/useAutosaveNavigationGuard";
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
 import EventHeader from "@/components/event/EventHeader";
+import AccountMenu from "@/components/ui/AccountMenu";
+import StatusBadge, { toneFor } from "@/components/ui/StatusBadge";
+import {
+  AVAILABILITY_CHOICES,
+  AvailabilityChoice,
+  AvailabilityLegend,
+  AvailabilitySwatch,
+  availabilityKey,
+  availabilityLabel,
+} from "@/components/ui/Availability";
 import { DAY_LABELS, DAYS_PER_WEEK } from "@/lib/constants";
 import { formatHour, formatMode, formatTime } from "@/lib/format";
 
@@ -344,6 +354,77 @@ describe("small UI modules", () => {
     );
   });
 
+  test("ScheduleGrid moves keyboard focus across rows, columns and the whole grid", () => {
+    const painted = jest.fn();
+    const slot = (index, localStart, localEnd) => ({
+      index,
+      localStart,
+      localEnd,
+      startDayOffset: 0,
+      endDayOffset: 0,
+    });
+    const slotGroups = [
+      {
+        key: "weekday:1",
+        label: "Mon",
+        weekday: 1,
+        slots: [slot(0, "09:00", "09:30"), slot(1, "09:30", "10:00")],
+      },
+      {
+        key: "weekday:2",
+        label: "Tue",
+        weekday: 2,
+        slots: [slot(2, "09:00", "09:30"), slot(3, "09:30", "10:00")],
+      },
+      {
+        key: "weekday:3",
+        label: "Wed",
+        weekday: 3,
+        slots: [slot(4, "09:00", "09:30")],
+      },
+    ];
+    render(
+      <ScheduleGrid
+        schedule={Array(5).fill(0)}
+        slotGroups={slotGroups}
+        readOnly={false}
+        onCellPaint={painted}
+      />,
+    );
+    const cell = (index) =>
+      document.querySelector(`[data-cell-idx='${index}']`);
+    cell(0).focus();
+    fireEvent.keyDown(cell(0), { key: "ArrowRight" });
+    expect(cell(2)).toHaveFocus();
+    fireEvent.keyDown(cell(2), { key: "ArrowDown" });
+    expect(cell(3)).toHaveFocus();
+    fireEvent.keyDown(cell(3), { key: "ArrowLeft" });
+    expect(cell(1)).toHaveFocus();
+    fireEvent.keyDown(cell(1), { key: "ArrowUp" });
+    expect(cell(0)).toHaveFocus();
+    fireEvent.keyDown(cell(0), { key: "End" });
+    expect(cell(4)).toHaveFocus();
+    fireEvent.keyDown(cell(4), { key: "Home" });
+    expect(cell(0)).toHaveFocus();
+    fireEvent.keyDown(cell(0), { key: "End", ctrlKey: true });
+    expect(cell(4)).toHaveFocus();
+    fireEvent.keyDown(cell(4), { key: "Home", ctrlKey: true });
+    expect(cell(0)).toHaveFocus();
+    // Edges and unrelated keys leave focus alone; Space paints.
+    fireEvent.keyDown(cell(0), { key: "ArrowUp" });
+    fireEvent.keyDown(cell(0), { key: "Tab" });
+    expect(cell(0)).toHaveFocus();
+    fireEvent.keyDown(cell(0), { key: " " });
+    expect(painted).toHaveBeenCalledWith(
+      0,
+      expect.objectContaining({ phase: "keyboard", pointerType: "keyboard" }),
+    );
+    // A wider row has no cell beneath a short column's last row.
+    cell(4).focus();
+    fireEvent.keyDown(cell(4), { key: "ArrowDown" });
+    expect(cell(4)).toHaveFocus();
+  });
+
   test("ScheduleGrid supports read-only specific dates", () => {
     const painted = jest.fn();
     render(
@@ -614,6 +695,224 @@ describe("role-aware headers", () => {
       />,
     );
     expect(screen.getByText("Participant")).toBeInTheDocument();
+  });
+
+  test("EventHeader copies the share link and falls back when the clipboard is unavailable", async () => {
+    jest.useFakeTimers();
+    const writeText = jest.fn().mockResolvedValue();
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    try {
+      const { rerender } = render(
+        <EventHeader eventName="Team Sync" eventCode="ABC12345" />,
+      );
+      // Without a role the badge is omitted entirely.
+      expect(screen.queryByText("Organizer")).not.toBeInTheDocument();
+      expect(screen.queryByText("Participant")).not.toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Copy share link" }),
+        );
+      });
+      expect(writeText).toHaveBeenCalledWith(
+        `${window.location.origin}/event?code=ABC12345`,
+      );
+      expect(
+        screen.getByRole("button", { name: "Link copied" }),
+      ).toBeInTheDocument();
+      act(() => {
+        jest.advanceTimersByTime(2000);
+      });
+      expect(
+        screen.getByRole("button", { name: "Copy share link" }),
+      ).toBeInTheDocument();
+
+      // A rejected clipboard write copies through a temporary input instead.
+      writeText.mockRejectedValueOnce(new Error("denied"));
+      const execCommand = jest.fn().mockReturnValue(true);
+      document.execCommand = execCommand;
+      rerender(<EventHeader eventName="Team Sync" isOrganizer={false} />);
+      expect(screen.queryByText(/^#/)).not.toBeInTheDocument();
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Copy share link" }),
+        );
+      });
+      expect(execCommand).toHaveBeenCalledWith("copy");
+      expect(
+        screen.getByRole("button", { name: "Link copied" }),
+      ).toBeInTheDocument();
+      expect(document.querySelector("body > input")).toBeNull();
+      act(() => {
+        jest.advanceTimersByTime(2000);
+      });
+      expect(
+        screen.getByRole("button", { name: "Copy share link" }),
+      ).toBeInTheDocument();
+    } finally {
+      delete document.execCommand;
+      delete navigator.clipboard;
+      jest.useRealTimers();
+    }
+  });
+
+  test("AccountMenu renders the signed-out entry point and hides while loading", () => {
+    useAuth.mockReturnValue({ user: null, loading: true, logout: jest.fn() });
+    const { rerender } = render(<AccountMenu signedOutLabel="Log in" />);
+    expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
+    useAuth.mockReturnValue({ user: null, loading: false, logout: jest.fn() });
+    rerender(<AccountMenu signedOutLabel="Log in" />);
+    expect(screen.getByRole("link", { name: "Log in" })).toHaveAttribute(
+      "href",
+      "/login",
+    );
+  });
+
+  test("AccountMenu closes on outside presses, wraps keyboard focus, and reports logout failures", async () => {
+    const logout = jest.fn().mockRejectedValue(new Error("Session busy"));
+    useAuth.mockReturnValue({
+      user: { displayName: "Prachi" },
+      loading: false,
+      logout,
+    });
+    render(
+      <div>
+        <button type="button">Elsewhere</button>
+        <AccountMenu />
+      </div>,
+    );
+    const trigger = screen.getByRole("button", { name: "Prachi" });
+    fireEvent.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    // The header only shows an email when the account has one.
+    expect(screen.queryByText(/@/)).not.toBeInTheDocument();
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Elsewhere" }));
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.keyDown(trigger, { key: "ArrowUp" });
+    const items = screen.getAllByRole("menuitem");
+    expect(items[0]).toHaveFocus();
+    fireEvent.keyDown(items[0], { key: "ArrowUp" });
+    expect(items[items.length - 1]).toHaveFocus();
+    fireEvent.keyDown(items[items.length - 1], { key: "ArrowDown" });
+    expect(items[0]).toHaveFocus();
+    fireEvent.keyDown(items[0], { key: "End" });
+    expect(items[items.length - 1]).toHaveFocus();
+    fireEvent.keyDown(items[items.length - 1], { key: "Home" });
+    expect(items[0]).toHaveFocus();
+    fireEvent.keyDown(items[0], { key: "Tab" });
+    expect(items[0]).toHaveFocus();
+    const settings = screen.getByRole("menuitem", { name: "Settings" });
+    // jsdom cannot navigate; the menu still closes on the item's click.
+    settings.addEventListener("click", (event) => event.preventDefault());
+    fireEvent.click(settings);
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.click(trigger);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Log out" }));
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("Session busy"),
+    );
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  test("Availability helpers and controls cover every level", () => {
+    expect(availabilityKey(undefined)).toBe("busy");
+    expect(availabilityKey("abc")).toBe("busy");
+    expect(availabilityKey(0.5)).toBe("partial");
+    expect(availabilityKey(2)).toBe("free");
+    expect(availabilityLabel(1)).toBe("Available");
+    expect(availabilityLabel(0.25)).toBe("If needed");
+    expect(AVAILABILITY_CHOICES.map((choice) => choice.value)).toEqual([
+      0, 0.5, 1,
+    ]);
+
+    const { container, rerender } = render(
+      <AvailabilitySwatch level="free" virtual />,
+    );
+    expect(container.firstChild).toHaveClass(
+      "availability-swatch--free",
+      "availability-swatch--virtual",
+    );
+    expect(container.firstChild).toHaveTextContent("✓");
+    rerender(<AvailabilitySwatch level="partial" />);
+    expect(container.firstChild).toHaveTextContent("◐");
+    rerender(<AvailabilitySwatch />);
+    expect(container.firstChild).toHaveTextContent("");
+
+    rerender(<AvailabilityLegend channels="both" showValues />);
+    const legend = screen.getByRole("list", { name: "Availability legend" });
+    expect(legend).toHaveTextContent(
+      "Left swatch: in person · right swatch: virtual",
+    );
+    expect(legend).toHaveTextContent("(0.5)");
+    expect(
+      legend.querySelectorAll(".availability-swatch--virtual"),
+    ).toHaveLength(3);
+    rerender(<AvailabilityLegend virtual className="extra" />);
+    expect(screen.getByRole("list")).toHaveClass("extra");
+    expect(
+      screen
+        .getByRole("list")
+        .querySelectorAll(".availability-swatch--virtual"),
+    ).toHaveLength(3);
+    expect(screen.queryByText("(0.5)")).not.toBeInTheDocument();
+
+    const onChange = jest.fn();
+    rerender(
+      <AvailabilityChoice value={0.5} onChange={onChange} size="sm" virtual />,
+    );
+    const group = screen.getByRole("group", { name: "Availability status" });
+    expect(group).toHaveClass("btn-group-sm");
+    expect(screen.getByRole("button", { name: "If needed" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Available" }));
+    expect(onChange).toHaveBeenCalledWith(1);
+    rerender(
+      <AvailabilityChoice
+        value={0}
+        onChange={onChange}
+        disabled
+        label="Paint"
+      />,
+    );
+    expect(screen.getByRole("group", { name: "Paint" })).not.toHaveClass(
+      "btn-group-sm",
+    );
+    expect(screen.getByRole("button", { name: "Busy" })).toBeDisabled();
+  });
+
+  test("StatusBadge maps tones and renders with or without a dot", () => {
+    expect(toneFor("not_sent")).toBe(toneFor("not-sent"));
+    expect(toneFor("")).toBe("secondary");
+    expect(toneFor("something-unknown")).toBe("secondary");
+    const { container, rerender } = render(
+      <StatusBadge status="active" label="Live now" data-testid="badge" />,
+    );
+    expect(screen.getByTestId("badge")).toHaveTextContent("Live now");
+    expect(screen.getByTestId("badge")).not.toHaveClass("status-badge--word");
+    expect(container.querySelector(".status-badge__dot")).toBeInTheDocument();
+    rerender(<StatusBadge />);
+    expect(container.firstChild).toHaveTextContent("neutral");
+    rerender(<StatusBadge status="archived" dot={false} />);
+    expect(container.firstChild).toHaveTextContent("archived");
+    expect(container.firstChild).toHaveClass("status-badge--word");
+    expect(container.querySelector(".status-badge__dot")).toBeNull();
+    rerender(
+      <StatusBadge status="primary">
+        <span>Best match</span>
+      </StatusBadge>,
+    );
+    expect(container.firstChild).not.toHaveClass("status-badge--word");
   });
 
   test("AppHeader shows page context and handles authenticated navigation", async () => {

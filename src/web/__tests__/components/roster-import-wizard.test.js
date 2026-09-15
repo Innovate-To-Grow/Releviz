@@ -344,3 +344,239 @@ test("closes immediately before a preview exists", async () => {
   expect(cancelRosterImport).not.toHaveBeenCalled();
   expect(commitRosterImport).not.toHaveBeenCalled();
 });
+
+test("moves between sources with the keyboard, edits every preview column, and guards a rebuild", async () => {
+  const record = {
+    id: "import-5",
+    worksheets: [
+      {
+        name: "Pasted data",
+        rowCount: 2,
+        defaultHeaderRow: 1,
+        headers: ["Full Name", "E-mail", "Team", "Weight", "Included"],
+      },
+    ],
+    selectedWorksheet: "Pasted data",
+    headerRow: 1,
+    headers: ["Full Name", "E-mail", "Team", "Weight", "Included"],
+    columnMapping: {},
+    defaults: { group: "", weight: 1, included: true },
+    summary: { total: 1, selected: 1, valid: 1, invalid: 0, conflicts: 0 },
+  };
+  const row = {
+    id: "row-5",
+    rowNumber: 2,
+    name: "Ada",
+    email: "ada@example.com",
+    group: "",
+    weight: 1,
+    included: true,
+    selected: true,
+    valid: true,
+    duplicate: "unique",
+    errors: [],
+  };
+  createRosterImport.mockResolvedValue({ import: record });
+  configureRosterImport.mockResolvedValue({ import: record });
+  fetchRosterImportRows.mockResolvedValue({
+    import: record,
+    rows: [row],
+    pagination: { page: 1, pageSize: 50, total: 1, pages: 1 },
+  });
+  commitRosterImport.mockResolvedValue({
+    receipt: { importedCount: 1, createdCount: 0, updatedCount: 1 },
+    autoInvitedCount: 0,
+  });
+  const onCommitted = jest.fn();
+  renderWizard({ onCommitted });
+
+  // Arrow keys and Home/End move the source tab focus and selection.
+  const fileTab = screen.getByRole("tab", { name: "File upload" });
+  const pasteTab = screen.getByRole("tab", { name: "Paste spreadsheet" });
+  fileTab.focus();
+  fireEvent.keyDown(fileTab, { key: "ArrowRight" });
+  expect(pasteTab).toHaveAttribute("aria-selected", "true");
+  expect(pasteTab).toHaveFocus();
+  fireEvent.keyDown(pasteTab, { key: "ArrowLeft" });
+  expect(fileTab).toHaveAttribute("aria-selected", "true");
+  fireEvent.keyDown(fileTab, { key: "End" });
+  expect(pasteTab).toHaveAttribute("aria-selected", "true");
+  fireEvent.keyDown(pasteTab, { key: "Home" });
+  expect(fileTab).toHaveAttribute("aria-selected", "true");
+  fireEvent.keyDown(fileTab, { key: "Tab" });
+  expect(fileTab).toHaveAttribute("aria-selected", "true");
+  fireEvent.keyDown(fileTab, { key: "ArrowDown" });
+  expect(pasteTab).toHaveAttribute("aria-selected", "true");
+
+  await userEvent.click(
+    screen.getByRole("button", { name: "Continue to mapping" }),
+  );
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    "Paste rows copied from Google Sheets or Excel first.",
+  );
+  fireEvent.change(screen.getByLabelText("Pasted roster rows"), {
+    target: { value: "Full Name\tE-mail\nAda\tada@example.com" },
+  });
+  await userEvent.click(
+    screen.getByRole("button", { name: "Continue to mapping" }),
+  );
+  // Headers are matched by their normalized aliases; the preview refuses
+  // to continue until both mandatory columns are mapped.
+  const nameSelect = await screen.findByLabelText("Name *");
+  expect(nameSelect).toHaveValue("0");
+  expect(screen.getByLabelText("Email *")).toHaveValue("1");
+  expect(screen.getByLabelText("Group")).toHaveValue("2");
+  await userEvent.selectOptions(nameSelect, "");
+  await userEvent.click(screen.getByRole("button", { name: "Preview rows" }));
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    "Map both the name and email columns.",
+  );
+  await userEvent.selectOptions(nameSelect, "0");
+  await userEvent.click(screen.getByRole("button", { name: "Back" }));
+  expect(screen.getByRole("tab", { name: "Paste spreadsheet" })).toBeVisible();
+  await userEvent.click(
+    screen.getByRole("button", { name: "Continue to mapping" }),
+  );
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Preview rows" }),
+  );
+  await screen.findByDisplayValue("ada@example.com");
+
+  for (const [label, value, field] of [
+    ["Email for row 2", "ada@releviz.test", "email"],
+    ["Group for row 2", "Faculty", "group"],
+    ["Weight for row 2", "0.5", "weight"],
+  ]) {
+    const input = screen.getByLabelText(label);
+    fireEvent.change(input, { target: { value } });
+    fireEvent.blur(input);
+    await waitFor(() =>
+      expect(configureRosterImport).toHaveBeenLastCalledWith(
+        event.code,
+        "import-5",
+        {
+          rowUpdates: [
+            { id: "row-5", [field]: field === "weight" ? 0.5 : value },
+          ],
+        },
+        "token",
+      ),
+    );
+  }
+  // Unchanged values are not sent.
+  const groupInput = screen.getByLabelText("Group for row 2");
+  const callsBefore = configureRosterImport.mock.calls.length;
+  fireEvent.change(groupInput, { target: { value: "" } });
+  fireEvent.blur(groupInput);
+  expect(configureRosterImport.mock.calls.length).toBe(callsBefore);
+  await userEvent.click(screen.getByLabelText("Select row 2"));
+  await waitFor(() =>
+    expect(configureRosterImport).toHaveBeenLastCalledWith(
+      event.code,
+      "import-5",
+      { rowUpdates: [{ id: "row-5", selected: false }] },
+      "token",
+    ),
+  );
+
+  // A rebuild needs the exact event code before it can be committed.
+  await userEvent.click(screen.getByLabelText(/Rebuild the roster/));
+  const commit = screen.getByRole("button", {
+    name: "Rebuild roster and send invitations",
+  });
+  expect(commit).toBeDisabled();
+  fireEvent.change(screen.getByLabelText("Rebuild confirmation code"), {
+    target: { value: "WRONG" },
+  });
+  expect(commit).toBeDisabled();
+  fireEvent.change(screen.getByLabelText("Rebuild confirmation code"), {
+    target: { value: "IMPORT1" },
+  });
+  await userEvent.click(commit);
+  await waitFor(() =>
+    expect(commitRosterImport).toHaveBeenCalledWith(
+      event.code,
+      "import-5",
+      {
+        mode: "rebuild",
+        idempotencyKey: "import-key",
+        confirmationCode: "IMPORT1",
+      },
+      "token",
+    ),
+  );
+  expect(await screen.findByRole("status")).toHaveTextContent(
+    "Imported 1 people: no new participants were added, so no invitations were sent.",
+  );
+  expect(onCommitted).toHaveBeenCalled();
+});
+
+test("explains a closed event on commit and reports paging failures", async () => {
+  const record = {
+    id: "import-6",
+    worksheets: [
+      {
+        name: "Pasted data",
+        rowCount: 1,
+        defaultHeaderRow: 1,
+        headers: ["name", "email"],
+      },
+    ],
+    selectedWorksheet: "Pasted data",
+    headerRow: 1,
+    headers: ["name", "email"],
+    columnMapping: { name: 0, email: 1 },
+    defaults: { weight: 1, included: true },
+    summary: { total: 60, selected: 60, valid: 60, invalid: 0, conflicts: 0 },
+  };
+  createRosterImport.mockResolvedValue({ import: record });
+  configureRosterImport.mockResolvedValue({ import: record });
+  fetchRosterImportRows
+    .mockResolvedValueOnce({
+      import: record,
+      rows: [
+        {
+          id: "row-6",
+          rowNumber: 2,
+          name: "Ada",
+          email: "ada@example.com",
+          weight: 1,
+          included: true,
+          selected: true,
+          valid: true,
+          duplicate: "unique",
+          errors: [],
+        },
+      ],
+      pagination: { page: 2, pageSize: 50, total: 60, pages: 2 },
+    })
+    .mockRejectedValueOnce(new Error("page failed"));
+  const closedError = Object.assign(new Error("closed"), {
+    code: "event_not_active",
+    event: { code: "IMPORT1", status: "closed" },
+  });
+  commitRosterImport.mockRejectedValueOnce(closedError);
+  const onEventChange = jest.fn();
+  renderWizard({ onEventChange });
+  await userEvent.click(screen.getByRole("tab", { name: "Paste spreadsheet" }));
+  fireEvent.change(screen.getByLabelText("Pasted roster rows"), {
+    target: { value: "name\temail\nAda\tada@example.com" },
+  });
+  await userEvent.click(
+    screen.getByRole("button", { name: "Continue to mapping" }),
+  );
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Preview rows" }),
+  );
+  await screen.findByDisplayValue("ada@example.com");
+  expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
+  await userEvent.click(screen.getByRole("button", { name: "Previous" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("page failed");
+  await userEvent.click(
+    screen.getByRole("button", { name: "Merge roster and invite new people" }),
+  );
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "This event is closed. Reactivate it before committing this roster.",
+  );
+  expect(onEventChange).toHaveBeenCalledWith(closedError.event);
+});

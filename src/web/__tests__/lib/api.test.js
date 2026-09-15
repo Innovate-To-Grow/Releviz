@@ -1306,6 +1306,194 @@ describe("business API helpers", () => {
     });
   });
 
+  test("invitation and participant errors normalize every payload shape", async () => {
+    const responseWithText = (text, status) => ({
+      ok: false,
+      status,
+      text: jest.fn().mockResolvedValue(text),
+    });
+    const send = () =>
+      sendInvitations(
+        "ABC",
+        { emails: ["a@example.com"], message: "", idempotencyKey: "k" },
+        "tok",
+      );
+
+    // Plain-text bodies become the message; whitespace-only bodies fall back.
+    global.fetch.mockResolvedValueOnce(responseWithText("Mail is down", 503));
+    await expect(send()).rejects.toMatchObject({
+      message: "Mail is down",
+      status: 503,
+      errorCode: null,
+      event: null,
+      payload: "Mail is down",
+    });
+    global.fetch.mockResolvedValueOnce(responseWithText("   ", 500));
+    await expect(send()).rejects.toMatchObject({
+      message: "HTTP 500",
+      payload: "   ",
+    });
+    // Field-level validation arrays and strings are joined or used directly.
+    global.fetch.mockResolvedValueOnce(
+      responseWithText(
+        JSON.stringify({ emails: ["Enter an email.", "Too many."] }),
+        400,
+      ),
+    );
+    await expect(send()).rejects.toMatchObject({
+      message: "Enter an email. Too many.",
+    });
+    global.fetch.mockResolvedValueOnce(
+      responseWithText(JSON.stringify({ message: "Nested message" }), 400),
+    );
+    await expect(send()).rejects.toMatchObject({ message: "Nested message" });
+    global.fetch.mockResolvedValueOnce(
+      responseWithText(JSON.stringify({ count: 3 }), 400),
+    );
+    await expect(send()).rejects.toMatchObject({ message: "Request failed" });
+    global.fetch.mockResolvedValueOnce(
+      responseWithText(
+        JSON.stringify({
+          error: "",
+          detail: "Closed",
+          errorCode: "event_not_active",
+          event: { status: "closed" },
+        }),
+        409,
+      ),
+    );
+    await expect(send()).rejects.toMatchObject({
+      message: "Closed",
+      errorCode: "event_not_active",
+      event: { status: "closed" },
+    });
+    // A body that cannot be read at all still produces a status message.
+    global.fetch.mockResolvedValueOnce({
+      ok: false,
+      status: 504,
+      text: jest.fn().mockRejectedValue(new Error("aborted")),
+    });
+    await expect(send()).rejects.toMatchObject({
+      message: "HTTP 504",
+      payload: null,
+    });
+    // Responses without text() use json(), including when that fails.
+    global.fetch.mockResolvedValueOnce(
+      jsonResponse({ detail: "Use json" }, { status: 422 }),
+    );
+    await expect(send()).rejects.toMatchObject({ message: "Use json" });
+    global.fetch.mockResolvedValueOnce(textResponse("broken", { status: 500 }));
+    await expect(send()).rejects.toMatchObject({ message: "HTTP 500" });
+
+    // The participant helper shares the same normalization.
+    global.fetch.mockResolvedValueOnce(responseWithText("Locked", 423));
+    await expect(
+      createManagedParticipant(
+        "ABC",
+        { name: "A", email: "a@example.com", idempotencyKey: "k" },
+        "tok",
+      ),
+    ).rejects.toMatchObject({
+      message: "Locked",
+      status: 423,
+      payload: "Locked",
+    });
+    global.fetch.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      text: jest.fn().mockRejectedValue(new Error("aborted")),
+    });
+    await expect(
+      createManagedParticipant(
+        "ABC",
+        { name: "A", email: "a@example.com", idempotencyKey: "k" },
+        "tok",
+      ),
+    ).rejects.toMatchObject({ message: "HTTP 500", payload: null });
+    global.fetch.mockResolvedValueOnce(
+      responseWithText(JSON.stringify({ name: ["Required."] }), 400),
+    );
+    await expect(
+      createManagedParticipant(
+        "ABC",
+        { name: "", email: "a@example.com", idempotencyKey: "k" },
+        "tok",
+      ),
+    ).rejects.toMatchObject({ message: "Required." });
+    global.fetch.mockResolvedValueOnce(
+      responseWithText(JSON.stringify({ email: "Enter a valid email." }), 400),
+    );
+    await expect(
+      createManagedParticipant(
+        "ABC",
+        { name: "A", email: "bad", idempotencyKey: "k" },
+        "tok",
+      ),
+    ).rejects.toMatchObject({ message: "Enter a valid email." });
+    global.fetch.mockResolvedValueOnce(
+      jsonResponse({ detail: "Use json" }, { status: 422 }),
+    );
+    await expect(
+      createManagedParticipant(
+        "ABC",
+        { name: "A", email: "a@example.com", idempotencyKey: "k" },
+        "tok",
+      ),
+    ).rejects.toMatchObject({ message: "Use json", status: 422 });
+    global.fetch.mockResolvedValueOnce(textResponse("broken", { status: 500 }));
+    await expect(
+      createManagedParticipant(
+        "ABC",
+        { name: "A", email: "a@example.com", idempotencyKey: "k" },
+        "tok",
+      ),
+    ).rejects.toMatchObject({ message: "HTTP 500", payload: null });
+  });
+
+  test("event mutation errors carry reset metadata and fall back on unreadable bodies", async () => {
+    global.fetch
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            detail: "Responses must be reset",
+            event: { code: "ABC", version: 9 },
+            requiresResponseReset: true,
+            participantCount: 12,
+            retryable: true,
+          },
+          { status: 409 },
+        ),
+      )
+      .mockResolvedValueOnce(jsonResponse({}, { status: 400 }))
+      .mockResolvedValueOnce(textResponse("gateway", { status: 502 }));
+    await expect(
+      updateEvent("ABC", { name: "x" }, "tok"),
+    ).rejects.toMatchObject({
+      message: "Responses must be reset",
+      status: 409,
+      event: { code: "ABC", version: 9 },
+      requiresResponseReset: true,
+      participantCount: 12,
+      retryable: true,
+    });
+    await expect(
+      updateEvent("ABC", { name: "x" }, "tok"),
+    ).rejects.toMatchObject({
+      message: "Request failed",
+      status: 400,
+      event: null,
+      requiresResponseReset: false,
+      participantCount: 0,
+      retryable: false,
+    });
+    await expect(
+      updateEvent("ABC", { name: "x" }, "tok"),
+    ).rejects.toMatchObject({
+      message: "HTTP 502",
+      status: 502,
+    });
+  });
+
   test("managed participant mutations preserve structured error details", async () => {
     global.fetch.mockResolvedValueOnce({
       ok: false,

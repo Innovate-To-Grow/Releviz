@@ -81,7 +81,8 @@ function formatInTimezone(value, timezone) {
       minute: "2-digit",
     });
   } catch {
-    return date.toLocaleString([], { timeZone: timezone });
+    // An unknown zone name: fall back to the browser's own zone.
+    return date.toLocaleString();
   }
 }
 

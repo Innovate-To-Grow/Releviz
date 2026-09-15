@@ -446,8 +446,9 @@ const RosterPanel = forwardRef(function RosterPanel(
             onResultsInvalidated?.(data.resultsRevision);
           return true;
         } catch (requestError) {
-          setError(requestError.message || `Unable to update ${latest.name}.`);
+          // Reload first: loadRoster clears the panel error when it starts.
           if (requestError.status === 409) await loadRoster();
+          setError(requestError.message || `Unable to update ${latest.name}.`);
           return false;
         }
       });
@@ -660,10 +661,11 @@ const RosterPanel = forwardRef(function RosterPanel(
           "organizer_edit_full_account"
       ) {
         setEditor(null);
+        // Reload first: loadRoster clears the panel error when it starts.
+        loadRoster();
         setError(
           "This person now has a full account, so organizer editing is no longer allowed.",
         );
-        loadRoster();
       } else {
         setEditorError(requestError.message || "Unable to save this schedule.");
       }
@@ -1254,7 +1256,14 @@ const RosterPanel = forwardRef(function RosterPanel(
           )
         ) : (
           <div className="table-shell">
-            <div className="table-responsive">
+            {/* The table scrolls sideways on narrow screens, so the wrapper is
+                a focusable region for keyboard users. */}
+            <div
+              className="table-responsive"
+              role="region"
+              aria-label="Roster participants"
+              tabIndex={0}
+            >
               <table className="table table-hover align-middle roster-table">
                 <caption className="visually-hidden">
                   Roster participants

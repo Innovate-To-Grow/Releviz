@@ -2165,3 +2165,84 @@ describe("selectionKey and selectionMatchesRecommendation", () => {
     ).toBe(false);
   });
 });
+
+describe("invalid time zones", () => {
+  const brokenEvent = { ...weeklyEvent, timezone: "Mars/Olympus_Mons" };
+  const staleRecommendation = {
+    channel: "inperson",
+    rank: 1,
+    weekday: 1,
+    groupKey: "weekday:1",
+    slotIndices: [0, 1],
+    localStart: "09:00",
+    localEnd: "10:00",
+    startDayOffset: 0,
+    endDayOffset: 0,
+    label: "Mon 09:00–10:00",
+    suggestedStartsAt: "2026-09-07T09:00:00Z",
+    suggestedEndsAt: "2026-09-07T10:00:00Z",
+    weightedAvailability: 0.5,
+    unweightedAvailability: 0.5,
+  };
+
+  test("leave a stale weekly suggestion where it is", () => {
+    const selection = selectionFromRecommendation(
+      staleRecommendation,
+      brokenEvent,
+      { now: Date.parse("2026-09-14T12:00:00Z") },
+    );
+    expect(selection).toMatchObject({
+      startsAt: "2026-09-07T09:00:00Z",
+      rescheduled: false,
+    });
+    // The date label degrades to the browser locale instead of failing.
+    expect(selection.dateLabel).toEqual(expect.any(String));
+    // Nothing can be re-anchored without a working resolver, even a good one
+    // cannot place "today" in an unknown zone.
+    expect(
+      selectionFromRecommendation(staleRecommendation, brokenEvent, {
+        now: Date.parse("2026-09-14T12:00:00Z"),
+        resolver: utcResolver,
+      }),
+    ).toMatchObject({ startsAt: "2026-09-07T09:00:00Z", rescheduled: false });
+  });
+
+  test("fall back to today's week and the last page when anchors cannot be placed", () => {
+    const now = Date.parse("2026-09-15T12:00:00Z");
+    const groups = normalizeSlotGroups(brokenEvent);
+    expect(
+      defaultView({
+        groups,
+        selection: {
+          channel: "inperson",
+          startsAt: "2026-10-05T09:00:00Z",
+          endsAt: "2026-10-05T10:00:00Z",
+          slotIndices: [0, 1],
+          groupKey: "weekday:1",
+        },
+        now,
+        timeZone: brokenEvent.timezone,
+      }),
+    ).toEqual({ weekStart: "2026-09-13" });
+    expect(
+      defaultView({
+        groups,
+        finalMeeting: {
+          startsAt: "2026-10-05T09:00:00Z",
+          endsAt: "2026-10-05T10:00:00Z",
+          active: true,
+        },
+        now,
+        timeZone: brokenEvent.timezone,
+      }),
+    ).toEqual({ weekStart: "2026-09-13" });
+    const dateGroups = normalizeSlotGroups(nineDateEvent);
+    expect(
+      defaultView({
+        groups: dateGroups,
+        now,
+        timeZone: brokenEvent.timezone,
+      }),
+    ).toEqual({ page: 1 });
+  });
+});

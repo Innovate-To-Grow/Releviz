@@ -1378,4 +1378,136 @@ describe("MeetingCalendar", () => {
     expect(screen.queryByRole("button", { name: "Next week" })).toBeNull();
     expect(document.querySelector("[data-cell-idx]")).toBeNull();
   });
+
+  test("explains an unusable duration and an unknown time zone without offering picks", () => {
+    const { rerender } = renderCalendar({
+      event: { ...weeklyEvent, meetingDurationMinutes: 45 },
+    });
+    expect(cell(0)).toHaveAttribute("aria-disabled", "true");
+    expect(cell(0)).toHaveAttribute("data-state", "invalid-duration");
+    expect(cell(0)).toHaveAttribute(
+      "aria-label",
+      expect.stringContaining("No meeting window can start here."),
+    );
+    expect(
+      screen.getByText(/meeting duration .*slot length/i),
+    ).toBeInTheDocument();
+
+    // A time zone the browser cannot resolve leaves every boundary broken,
+    // and "This week" still lands on the UTC week of today.
+    rerender(
+      <MeetingCalendar
+        event={{ ...weeklyEvent, timezone: "Mars/Olympus_Mons" }}
+        results={results}
+        channel="inperson"
+        onSelect={jest.fn()}
+        now={NOW}
+      />,
+    );
+    expect(cell(0)).toHaveAttribute("data-state", "dst");
+    expect(cell(0)).toHaveAttribute(
+      "aria-label",
+      expect.stringContaining("Enter a valid IANA event timezone."),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Next week" }));
+    expect(columnHeaders()).toEqual(["Mon, Sep 14", "Wed, Sep 16"]);
+    fireEvent.click(screen.getByRole("button", { name: "This week" }));
+    expect(columnHeaders()).toEqual(["Mon, Sep 7", "Wed, Sep 9"]);
+  });
+
+  test("moves left and to row ends across three columns and hides the preview over the selection", async () => {
+    const threeDayEvent = {
+      ...weeklyEvent,
+      slotGroups: [
+        { key: "weekday:1", slots: weekdaySlots(0) },
+        { key: "weekday:2", slots: weekdaySlots(4) },
+        { key: "weekday:3", slots: weekdaySlots(8) },
+      ],
+    };
+    const threeDayResults = {
+      ...results,
+      channels: {
+        inperson: {
+          weighted: Array(12).fill(0.5),
+          unweighted: Array(12).fill(0.5),
+        },
+      },
+    };
+    const selection = {
+      channel: "inperson",
+      startsAt: "2026-09-14T09:00:00.000Z",
+      endsAt: "2026-09-14T10:00:00.000Z",
+      slotIndices: [0, 1],
+      groupKey: "weekday:1",
+    };
+    renderCalendar({
+      event: threeDayEvent,
+      results: threeDayResults,
+      selection,
+    });
+    act(() => cell(9).focus());
+    fireEvent.keyDown(cell(9), { key: "ArrowLeft" });
+    expect(document.activeElement).toBe(cell(5));
+    fireEvent.keyDown(cell(5), { key: "End" });
+    expect(document.activeElement).toBe(cell(9));
+    fireEvent.keyDown(cell(9), { key: "Home" });
+    expect(document.activeElement).toBe(cell(1));
+    // Unknown keys are ignored, and the row's first column has no left neighbour.
+    fireEvent.keyDown(cell(1), { key: "Tab" });
+    fireEvent.keyDown(cell(1), { key: "ArrowLeft" });
+    expect(document.activeElement).toBe(cell(1));
+
+    // Hovering a cell inside the selected window draws no extra preview.
+    await userEvent.hover(cell(0));
+    expect(
+      document.querySelector(".meeting-calendar__block--preview"),
+    ).toBeNull();
+    await userEvent.hover(cell(4));
+    expect(
+      document.querySelector(".meeting-calendar__block--preview"),
+    ).not.toBeNull();
+  });
+
+  test("labels overnight and offset slots so fall-back times stay distinct", () => {
+    const overnightEvent = {
+      ...weeklyEvent,
+      timezone: "UTC",
+      slotGroups: [
+        {
+          key: "weekday:6",
+          slots: [
+            {
+              index: 0,
+              localStart: "23:30",
+              localEnd: "00:00",
+              startDayOffset: 0,
+              endDayOffset: 1,
+              startOffset: "-07:00",
+            },
+            {
+              index: 1,
+              localStart: "00:00",
+              localEnd: "00:30",
+              startDayOffset: 1,
+              endDayOffset: 1,
+              startOffset: "-08:00",
+            },
+          ],
+        },
+      ],
+    };
+    renderCalendar({ event: overnightEvent, results: null });
+    expect(cell(0)).toHaveAttribute(
+      "aria-label",
+      expect.stringContaining("11:30 PM – 12:00 AM +1d (UTC-07:00)"),
+    );
+    expect(cell(1)).toHaveAttribute(
+      "aria-label",
+      expect.stringContaining("12:00 AM +1d – 12:30 AM +1d (UTC-08:00)"),
+    );
+    expect(screen.getByRole("rowheader", { name: /\+1d/ })).toBeInTheDocument();
+    expect(
+      document.querySelector(".meeting-calendar--overnight"),
+    ).not.toBeNull();
+  });
 });

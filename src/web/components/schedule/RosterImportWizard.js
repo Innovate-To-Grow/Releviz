@@ -781,7 +781,12 @@ export default function RosterImportWizard({
           </div>
 
           <div className="table-shell">
-            <div className="table-responsive">
+            <div
+              className="table-responsive"
+              role="region"
+              aria-label="Imported rows awaiting review"
+              tabIndex={0}
+            >
               <table className="table table-sm align-middle roster-import__table">
                 <caption className="visually-hidden">
                   Imported rows awaiting review

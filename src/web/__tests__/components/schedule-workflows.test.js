@@ -331,6 +331,84 @@ describe("participant workflow", () => {
     expect(await screen.findByText("Schedule submitted.")).toBeInTheDocument();
   });
 
+  test("marks everything busy, reports a failed submit, and warns before unloading", async () => {
+    fetchCurrentParticipant.mockResolvedValue({
+      participant: participant("mine", member.id, member.displayName, {
+        availabilityInperson: [1, 1],
+        availabilityVirtual: [1, 1],
+      }),
+      scheduleDataIncluded: true,
+    });
+    let release;
+    updateParticipant
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            release = resolve;
+          }),
+      )
+      .mockRejectedValueOnce(new Error("Network unavailable"));
+    renderParticipant();
+    expect(
+      await screen.findByText(`Welcome, ${member.displayName}`),
+    ).toBeInTheDocument();
+    const dispatchUnload = () => {
+      const unload = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(unload);
+      return unload.defaultPrevented;
+    };
+    expect(dispatchUnload()).toBe(false);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Mark all Busy" }),
+    );
+    expect(dispatchUnload()).toBe(true);
+    await waitFor(() => expect(release).toBeDefined());
+    await act(async () => {
+      release({
+        participant: participant("mine", member.id, member.displayName, {
+          availabilityInperson: [0, 0],
+          availabilityVirtual: [0, 0],
+          version: 2,
+        }),
+      });
+    });
+    expect(
+      await screen.findByText("Draft saved. Submit when you are ready."),
+    ).toBeInTheDocument();
+    expect(updateParticipant.mock.calls[0][2]).toEqual({
+      availabilityInperson: [0, 0],
+      availabilityVirtual: [0, 0],
+      submitted: 0,
+      expectedVersion: 1,
+    });
+    expect(dispatchUnload()).toBe(false);
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Submit Availability" }),
+    );
+    expect(
+      await screen.findByText("Failed to submit: Network unavailable"),
+    ).toBeInTheDocument();
+  });
+
+  test("explains when the token for an automatic join cannot be obtained", async () => {
+    const consumeRespondIntent = jest.fn();
+    useAuth.mockReturnValue({
+      user: member,
+      loading: false,
+      getToken: jest.fn().mockRejectedValue(new Error("Session expired")),
+    });
+    renderParticipant(baseEvent, {
+      respondIntent: true,
+      consumeRespondIntent,
+    });
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "We couldn't start your response: Session expired",
+    );
+    expect(joinEvent).not.toHaveBeenCalled();
+    expect(consumeRespondIntent).toHaveBeenCalledTimes(1);
+  });
+
   test("surfaces autosave conflicts and reloads the authoritative response", async () => {
     const latest = participant("mine", member.id, member.displayName, {
       availabilityInperson: [0.5, 0],

@@ -30,11 +30,25 @@ jest.mock("@/components/event/EventDetailsGrid", () => ({
 
 jest.mock("@/components/schedule/ScheduleChannelEditor", () => ({
   __esModule: true,
-  default: ({ inperson, readOnly, onInpersonPaint }) => (
+  default: ({
+    inperson,
+    virtual = [],
+    readOnly,
+    onInpersonPaint,
+    onVirtualPaint,
+    onCopy,
+  }) => (
     <div data-testid="schedule-editor">
       <span>{inperson.join(",")}</span>
+      <span data-testid="virtual-values">{virtual.join(",")}</span>
       <button disabled={readOnly} onClick={() => onInpersonPaint(0)}>
         Paint in-person
+      </button>
+      <button disabled={readOnly} onClick={() => onVirtualPaint?.(1)}>
+        Paint virtual
+      </button>
+      <button onClick={() => onCopy?.("inperson", "virtual")}>
+        Copy in-person to virtual
       </button>
     </div>
   ),
@@ -612,5 +626,246 @@ describe("temporary event access page", () => {
       ).not.toBeInTheDocument(),
     );
     jest.useRealTimers();
+  });
+
+  test("rejects malformed and throttled verification codes and reports resend failures", async () => {
+    searchParams = new URLSearchParams("code=ABC123&invitation=tok");
+    window.history.replaceState(
+      {},
+      "",
+      "/temp-access?code=ABC123&invitation=tok",
+    );
+    render(<TempAccessClient />);
+    expect(
+      await screen.findByRole("heading", { name: "Check your email" }),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(requestTempAccessCode).toHaveBeenCalled());
+
+    const verify = screen.getByRole("button", {
+      name: "Verify and open schedule",
+    });
+    const codeInput = screen.getByLabelText("Verification code");
+    await userEvent.type(codeInput, "12");
+    // The browser's own pattern check would stop a click, so submit directly.
+    fireEvent.submit(codeInput.closest("form"));
+    expect(
+      screen.getByText("Enter the six-digit code from your email."),
+    ).toBeInTheDocument();
+    expect(verifyTempAccess).not.toHaveBeenCalled();
+
+    verifyTempAccess.mockRejectedValueOnce(
+      Object.assign(new Error("throttled"), { status: 429 }),
+    );
+    await userEvent.type(screen.getByLabelText("Verification code"), "3456");
+    await userEvent.click(verify);
+    expect(
+      await screen.findByText(
+        "Too many attempts. Request a new code after waiting a moment.",
+      ),
+    ).toBeInTheDocument();
+
+    verifyTempAccess.mockRejectedValueOnce(new Error("nope"));
+    await userEvent.click(verify);
+    expect(
+      await screen.findByText(
+        "That code could not be verified. Check the code or request a new one.",
+      ),
+    ).toBeInTheDocument();
+
+    requestTempAccessCode.mockRejectedValueOnce(new Error("mail down"));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Send a new code" }),
+    );
+    expect(
+      await screen.findByText(
+        "We could not send a new code. Wait a moment and try again.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  test("explains when the automatic code request fails and when no session exists", async () => {
+    searchParams = new URLSearchParams("code=ABC123&invitation=tok");
+    window.history.replaceState(
+      {},
+      "",
+      "/temp-access?code=ABC123&invitation=tok",
+    );
+    requestTempAccessCode.mockRejectedValueOnce(new Error("mail down"));
+    const { unmount } = render(<TempAccessClient />);
+    expect(
+      await screen.findByText(
+        "We could not start verification. Try sending the code again.",
+      ),
+    ).toBeInTheDocument();
+    unmount();
+
+    window.sessionStorage.clear();
+    searchParams = new URLSearchParams("code=ABC123");
+    window.history.replaceState({}, "", "/temp-access?code=ABC123");
+    fetchTempAccessSession.mockRejectedValueOnce(
+      Object.assign(new Error("gone"), { status: 401 }),
+    );
+    render(<TempAccessClient />);
+    expect(
+      await screen.findByRole("heading", { name: "Access link required" }),
+    ).toBeInTheDocument();
+    expect(fetchTempAccessSession).toHaveBeenCalledTimes(1);
+  });
+
+  test("locks a response after the deadline and while the event is not active", async () => {
+    fetchTempAccessSession.mockResolvedValue(
+      session({
+        event: { ...event, responseDeadline: "2000-01-01T00:00:00Z" },
+      }),
+    );
+    const { unmount } = render(<TempAccessClient />);
+    expect(
+      await screen.findByText("The response deadline has passed."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Submit availability" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Paint in-person" }),
+    ).toBeDisabled();
+    unmount();
+
+    fetchTempAccessSession.mockResolvedValue(
+      session({
+        event: { ...event, status: "closed", responseDeadline: null },
+      }),
+    );
+    render(<TempAccessClient />);
+    expect(
+      await screen.findByText(
+        "Responses are locked while this event is closed.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  test("fills both channels of a hybrid response, copies one into the other, and shows group results", async () => {
+    const mixedEvent = { ...event, mode: "mixed", slotCount: undefined };
+    fetchTempAccessSession.mockResolvedValue(
+      session({
+        event: mixedEvent,
+        canViewResults: true,
+        results: {
+          countedResponseTotal: 3,
+          unansweredParticipantTotal: 1,
+          channels: {
+            inperson: { unweighted: [1, 0.5] },
+            virtual: { unweighted: [0, 1] },
+          },
+        },
+      }),
+    );
+    render(<TempAccessClient />);
+    expect(
+      await screen.findByRole("heading", { name: "Group availability" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("In-Person Availability")).toBeInTheDocument();
+    expect(screen.getByText("Virtual Availability")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Based on 3 submitted response/),
+    ).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Apply to all" }));
+    expect(screen.getByTestId("schedule-editor")).toHaveTextContent("1,1");
+    expect(screen.getByTestId("virtual-values")).toHaveTextContent("1,1");
+    await waitFor(() =>
+      expect(updateTempAccessParticipant).toHaveBeenLastCalledWith(
+        "ABC123",
+        expect.objectContaining({
+          availabilityInperson: [1, 1],
+          availabilityVirtual: [1, 1],
+        }),
+      ),
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Mark all Busy" }),
+    );
+    expect(screen.getByTestId("virtual-values")).toHaveTextContent("0,0");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Paint in-person" }),
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Paint virtual" }),
+    );
+    expect(screen.getByTestId("schedule-editor")).toHaveTextContent("1,0");
+    expect(screen.getByTestId("virtual-values")).toHaveTextContent("0,1");
+    // Painting the same value again is a no-op.
+    await userEvent.click(
+      screen.getByRole("button", { name: "Paint in-person" }),
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Copy in-person to virtual" }),
+    );
+    expect(screen.getByTestId("virtual-values")).toHaveTextContent("1,0");
+    await waitFor(() =>
+      expect(
+        screen.getByText("Draft saved. Submit when you are ready."),
+      ).toBeInTheDocument(),
+    );
+  });
+
+  test("reports a submit conflict and a generic submit failure", async () => {
+    render(<TempAccessClient />);
+    const submit = await screen.findByRole("button", {
+      name: "Submit availability",
+    });
+    updateTempAccessParticipant.mockRejectedValueOnce(
+      Object.assign(new Error("conflict"), {
+        status: 409,
+        participant: participant({ version: 9, availabilityInperson: [1, 1] }),
+      }),
+    );
+    await userEvent.click(submit);
+    expect(
+      await screen.findByText(
+        "This schedule changed somewhere else. Reload the latest response before submitting.",
+      ),
+    ).toBeInTheDocument();
+    expect(submit).toBeDisabled();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Reload latest response" }),
+    );
+    await waitFor(() => expect(submit).toBeEnabled());
+
+    updateTempAccessParticipant.mockRejectedValueOnce(new Error(""));
+    await userEvent.click(submit);
+    expect(
+      await screen.findByText("Failed to submit availability."),
+    ).toBeInTheDocument();
+  });
+
+  test("warns before unloading with unsaved work", async () => {
+    render(<TempAccessClient />);
+    await screen.findByRole("button", { name: "Paint in-person" });
+    const dispatch = () => {
+      const unload = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(unload);
+      return unload.defaultPrevented;
+    };
+    expect(dispatch()).toBe(false);
+    let release;
+    updateTempAccessParticipant.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Paint in-person" }),
+    );
+    await screen.findByText("Saving draft…");
+    expect(dispatch()).toBe(true);
+    await waitFor(() => expect(release).toBeDefined());
+    await act(async () => {
+      release({
+        participant: participant({ availabilityInperson: [1, 0], version: 2 }),
+      });
+    });
+    await screen.findByText("Draft saved. Submit when you are ready.");
+    expect(dispatch()).toBe(false);
   });
 });

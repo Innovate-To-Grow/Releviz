@@ -1084,3 +1084,101 @@ test("choosing a stale ranked window reveals its next occurrence and keeps it ma
     "true",
   );
 });
+
+test("event controls report reminder failures and legacy delivery summaries", async () => {
+  sendReminders
+    .mockRejectedValueOnce(new Error("Reminder service unavailable"))
+    .mockResolvedValueOnce({
+      deliveryRequest: {
+        id: "reminder-2",
+        recipientCount: 3,
+        summary: { total: 3, pending: 3 },
+      },
+    });
+  const setDeliveryRequest = jest.fn();
+  render(
+    <EventControls
+      event={baseEvent}
+      setEvent={jest.fn()}
+      getToken={getToken}
+      setDeliveryRequest={setDeliveryRequest}
+    />,
+  );
+  const controls = screen.getByRole("region", { name: "Event controls" });
+  await userEvent.click(
+    within(controls).getByRole("button", { name: "Queue reminders" }),
+  );
+  expect(await within(controls).findByRole("alert")).toHaveTextContent(
+    "Reminder service unavailable",
+  );
+  await userEvent.click(
+    within(controls).getByRole("button", { name: "Queue reminders" }),
+  );
+  await waitFor(() =>
+    expect(within(controls).getByRole("status")).toHaveTextContent(
+      "3 reminder emails were queued",
+    ),
+  );
+  expect(setDeliveryRequest).toHaveBeenCalledWith(
+    expect.objectContaining({ id: "reminder-2" }),
+  );
+});
+
+test("finalize lists partial and unavailable counts and reports review failures", async () => {
+  previewFinalMeeting.mockRejectedValueOnce(new Error(""));
+  renderFinalize({
+    ...calendarSelection,
+    metrics: {
+      exact: true,
+      weighted: 0.6,
+      unweighted: 0.5,
+      rank: 3,
+      fullyAvailableParticipantTotal: 4,
+      partiallyAvailableParticipantTotal: 2,
+      unavailableParticipantTotal: 1,
+    },
+  });
+  expect(
+    screen.getByText(
+      "60% weighted · 50% unweighted · 4 fully available · 2 partially available · 1 unavailable",
+    ),
+  ).toBeInTheDocument();
+  await userEvent.click(
+    screen.getByRole("button", { name: "Review attendance" }),
+  );
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Unable to review this meeting time.",
+  );
+});
+
+test("results refresh on demand and show a finalized event's time zone fallback", async () => {
+  fetchEventResults.mockResolvedValue({
+    results: {
+      status: "ready",
+      recommendations: [recommendation],
+      revision: 2,
+      generatedAt: "2026-08-19T12:00:00Z",
+    },
+    revision: 2,
+  });
+  render(
+    <ResultsSnapshotPanel
+      event={{ ...baseEvent, timezone: "Not/AZone" }}
+      getToken={getToken}
+      onChoose={jest.fn()}
+      onSelect={jest.fn()}
+    />,
+  );
+  await waitFor(() => expect(fetchEventResults).toHaveBeenCalledTimes(1));
+  // The ranked window still renders its times through the browser zone.
+  expect(
+    await screen.findByRole("button", { name: "Choose this time" }),
+  ).toBeInTheDocument();
+  expect(document.querySelector(".result-option__time")).toHaveTextContent(
+    /\d{1,2}\/\d{1,2}\/2026.* – .*2026/,
+  );
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Refresh results" }),
+  );
+  await waitFor(() => expect(fetchEventResults).toHaveBeenCalledTimes(2));
+});

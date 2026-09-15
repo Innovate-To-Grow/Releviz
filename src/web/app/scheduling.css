@@ -1076,7 +1076,7 @@
    ranked outlines stay for reference but recede behind it. */
 .meeting-calendar--finalized .meeting-calendar__block--rank {
   border-width: 1px;
-  opacity: 0.55;
+  border-color: color-mix(in srgb, var(--rv-cal-rank-outline) 55%, transparent);
 }
 
 .meeting-calendar--finalized .meeting-calendar__rank {

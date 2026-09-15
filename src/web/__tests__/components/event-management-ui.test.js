@@ -275,6 +275,65 @@ describe("organizer event management UI", () => {
     expect(navigateTo).toHaveBeenCalledWith("/event?code=A%20B%20C");
   });
 
+  test("dashboard reports archive and delete failures and blocks editing a finalized event", async () => {
+    const finalizedEvent = {
+      ...baseEvent,
+      code: "FINAL1",
+      name: "Finalized planning",
+      status: "finalized",
+      finalMeeting: {
+        startsAt: "2026-09-21T09:00:00Z",
+        endsAt: "2026-09-21T10:00:00Z",
+        active: true,
+      },
+    };
+    fetchDashboardEvents.mockResolvedValue({
+      organized: [baseEvent, finalizedEvent],
+      participating: [],
+    });
+    updateEventLifecycle.mockRejectedValueOnce(new Error("Archive refused"));
+    deleteEvent.mockRejectedValueOnce(
+      Object.assign(new Error("Delete refused"), {
+        event: { ...baseEvent, version: 9 },
+      }),
+    );
+    render(<DashboardPage />);
+    await screen.findByRole("heading", { name: "My Dashboard" });
+    const card = screen
+      .getByRole("link", { name: baseEvent.name })
+      .closest("article");
+    await userEvent.click(
+      within(card).getByRole("button", { name: "Archive" }),
+    );
+    expect(await screen.findByText("Archive refused")).toBeInTheDocument();
+
+    await userEvent.click(within(card).getByRole("button", { name: "Delete" }));
+    await userEvent.type(
+      screen.getByLabelText("Event code confirmation"),
+      baseEvent.code,
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Delete event permanently" }),
+    );
+    expect(await screen.findByText("Delete refused")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(deleteEvent).toHaveBeenCalledWith(
+        baseEvent.code,
+        expect.objectContaining({ confirmation: baseEvent.code }),
+        "token",
+      ),
+    );
+
+    const finalizedCard = screen
+      .getByRole("link", { name: finalizedEvent.name })
+      .closest("article");
+    const edit = within(finalizedCard).getByRole("link", { name: "Edit" });
+    expect(edit).toHaveAttribute("aria-disabled", "true");
+    const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+    edit.dispatchEvent(click);
+    expect(click.defaultPrevented).toBe(true);
+  });
+
   test("dashboard reports load failures and redirects unauthenticated users", async () => {
     fetchDashboardEvents.mockRejectedValueOnce(new Error("offline"));
     const first = render(<DashboardPage />);

@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import ScheduleChannelEditor from "@/components/schedule/ScheduleChannelEditor";
@@ -92,5 +92,72 @@ describe("ScheduleChannelEditor", () => {
       screen.getByRole("button", { name: "Replace schedule" }),
     );
     expect(onCopy).toHaveBeenCalledWith("virtual", "inperson");
+  });
+
+  test("wraps keyboard tab navigation in both directions and ignores other keys", async () => {
+    render(
+      <ScheduleChannelEditor
+        mode="mixed"
+        slotGroups={[]}
+        inperson={[1]}
+        virtual={[0.5]}
+        readOnly={false}
+      />,
+    );
+    const inpersonTab = screen.getByRole("tab", { name: "In person" });
+    const virtualTab = screen.getByRole("tab", { name: "Virtual" });
+    inpersonTab.focus();
+    fireEvent.keyDown(inpersonTab, { key: "ArrowLeft" });
+    expect(virtualTab).toHaveFocus();
+    fireEvent.keyDown(virtualTab, { key: "ArrowDown" });
+    expect(inpersonTab).toHaveFocus();
+    fireEvent.keyDown(inpersonTab, { key: "End" });
+    expect(virtualTab).toHaveFocus();
+    fireEvent.keyDown(virtualTab, { key: "Home" });
+    expect(inpersonTab).toHaveFocus();
+    fireEvent.keyDown(inpersonTab, { key: "Tab" });
+    expect(inpersonTab).toHaveFocus();
+    expect(inpersonTab).toHaveAttribute("aria-selected", "true");
+  });
+
+  test("renders a single channel without tabs and disables copying identical schedules", () => {
+    const { unmount } = render(
+      <ScheduleChannelEditor
+        mode="virtual"
+        slotGroups={[]}
+        inperson={[0]}
+        virtual={[1]}
+        readOnly={false}
+        legend={false}
+      />,
+    );
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+    expect(screen.getByTestId("channel-grid-Availability")).toHaveTextContent(
+      "1",
+    );
+    expect(
+      screen.queryByRole("list", { name: "Availability legend" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Copy/ }),
+    ).not.toBeInTheDocument();
+
+    unmount();
+    render(
+      <ScheduleChannelEditor
+        mode="mixed"
+        slotGroups={[]}
+        inperson={[1, 0]}
+        virtual={["1", 0]}
+        readOnly={false}
+        onCopy={jest.fn()}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: "Copy In-Person to Virtual" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("list", { name: "Availability legend" }),
+    ).toBeInTheDocument();
   });
 });
