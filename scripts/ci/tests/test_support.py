@@ -717,13 +717,32 @@ secrets = [
             workflow.write_text(
                 """
 on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
 permissions:
   actions: read
   id-token: write
 timeout-minutes: 160
+if: >-
+  ${{
+    github.ref == 'refs/heads/main' && (
+      github.event_name == 'workflow_dispatch' || (
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.head_repository.full_name == github.repository
+      )
+    )
+  }}
+DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 PRODUCTION_JOB_TIMEOUT_SECONDS: "9600"
 AMPLIFY_TIMEOUT_SECONDS: "1200"
+TF_VAR_backend_image_tag: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+TF_VAR_frontend_image_tag: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 TF_VAR_default_admin_email: ${{ vars.PROD_DEFAULT_ADMIN_EMAIL || 'admin@releviz.com' }}
 TF_VAR_default_admin_password_secret_arn: ${{ vars.PROD_DEFAULT_ADMIN_PASSWORD_SECRET_ARN }}
 steps:
@@ -734,7 +753,7 @@ steps:
     with:
       terraform_wrapper: false
   - run: |
-      if [ "$CONFIRMATION" != "DEPLOY" ]; then exit 1; fi
+      if [ "$TRIGGER_EVENT" = "workflow_dispatch" ] && [ "$CONFIRMATION" != "DEPLOY" ]; then exit 1; fi
       git rev-parse HEAD
       echo "CI Result"
       echo "TF_VAR_backend_image_tag: $DEPLOY_SHA"
@@ -762,7 +781,7 @@ steps:
       fi
   - run: |
       aws ecs describe-task-definition
-      echo "TF_VAR_frontend_image_tag: ${{ github.sha }}"
+      echo "TF_VAR_frontend_image_tag: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}"
       echo "Build and push immutable ECS fallback frontend image"
       echo "NEXT_PUBLIC_API_BASE_URL=https://${API_DOMAIN}"
       npm ci --workspace=releviz-web
@@ -922,7 +941,7 @@ steps:
       echo '.workflow_run.head_sha == $sha'
       echo '.workflow_run.head_branch == "main"'
       echo '.path == ".github/workflows/deploy-prod.yml"'
-      echo '.event == "workflow_dispatch"'
+      echo '(.event == "workflow_dispatch" or .event == "workflow_run")'
       echo '.status == "completed"'
       echo '.head_repository.full_name == $GITHUB_REPOSITORY'
       echo "artifact_id=$artifact_id"
@@ -1070,7 +1089,7 @@ steps:
         exit 1
       fi
       echo "Plan final production topology"
-      echo 'TF_VAR_frontend_image_tag: ${{ github.sha }}'
+      echo 'TF_VAR_frontend_image_tag: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}'
       echo 'TF_VAR_enable_legacy_api_compatibility: "false"'
       echo production-final.tfplan
       account_id="$(aws sts get-caller-identity --query Account --output text)"
@@ -1803,7 +1822,7 @@ steps:
                     "      echo 'TF_VAR_frontend_image_tag: "
                     "${{ steps.rollback_frontend.outputs.sha }}'",
                     'echo "Plan production infrastructure with current DNS state"\n'
-                    "      echo 'TF_VAR_frontend_image_tag: ${{ github.sha }}'",
+                    "      echo 'TF_VAR_frontend_image_tag: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}'",
                     "production CD omits the deployed ECS frontend SHA in the base Terraform plan",
                 ),
                 (
@@ -1813,14 +1832,14 @@ steps:
                     "${{ steps.rollback_frontend.outputs.sha }}'",
                     'echo "Plan reviewed Amplify domain association"\n'
                     "      echo 'TF_VAR_enable_amplify_domain: \"true\"'\n"
-                    "      echo 'TF_VAR_frontend_image_tag: ${{ github.sha }}'",
+                    "      echo 'TF_VAR_frontend_image_tag: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}'",
                     (
                         "production CD omits the deployed ECS frontend SHA in the domain "
                         "Terraform plan"
                     ),
                 ),
                 (
-                    "echo 'TF_VAR_frontend_image_tag: ${{ github.sha }}'\n"
+                    "echo 'TF_VAR_frontend_image_tag: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}'\n"
                     "      echo 'TF_VAR_enable_legacy_api_compatibility: \"false\"'\n"
                     "      echo production-final.tfplan",
                     "echo 'TF_VAR_frontend_image_tag: "
@@ -2140,9 +2159,9 @@ steps:
                     "production CD omits rollback artifact production-workflow binding",
                 ),
                 (
-                    '.event == "workflow_dispatch"',
-                    '.event == "push"',
-                    "production CD omits rollback artifact workflow-dispatch binding",
+                    '(.event == "workflow_dispatch" or .event == "workflow_run")',
+                    '(.event == "workflow_dispatch" or .event == "push")',
+                    "production CD omits rollback artifact release-event binding",
                 ),
                 (
                     '.status == "completed"',
@@ -2278,6 +2297,55 @@ steps:
                 "production CD retains unsupported Amplify StartJob retry rollback",
                 production_cd_errors(root),
             )
+
+            automatic_release_guards = (
+                (
+                    "    branches: [main]\n  workflow_dispatch:",
+                    "    branches: [develop]\n  workflow_dispatch:",
+                    "production CD omits automatic release requests from CI runs on main",
+                ),
+                (
+                    "github.event.workflow_run.event == 'push' &&",
+                    "github.event.workflow_run.event == 'pull_request' &&",
+                    (
+                        "production CD omits an automatic-release guard for successful push "
+                        "CI runs on main from this repository"
+                    ),
+                ),
+                (
+                    "github.event.workflow_run.head_repository.full_name == github.repository",
+                    "true",
+                    (
+                        "production CD omits an automatic-release guard for successful push "
+                        "CI runs on main from this repository"
+                    ),
+                ),
+                (
+                    "DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && "
+                    "github.event.workflow_run.head_sha || github.sha }}",
+                    "DEPLOY_SHA: ${{ github.sha }}",
+                    "production CD omits the release commit as the deploy SHA",
+                ),
+                (
+                    "TF_VAR_backend_image_tag: ${{ github.event_name == 'workflow_run' && "
+                    "github.event.workflow_run.head_sha || github.sha }}",
+                    "TF_VAR_backend_image_tag: ${{ github.sha }}",
+                    "production CD omits the release commit as the backend image tag",
+                ),
+                (
+                    '[ "$TRIGGER_EVENT" = "workflow_dispatch" ] && [ "$CONFIRMATION" != "DEPLOY" ]',
+                    '[ "$CONFIRMATION" = "DEPLOY" ]',
+                    "production CD omits the DEPLOY confirmation for manual releases",
+                ),
+            )
+            for needle, replacement, expected_error in automatic_release_guards:
+                with self.subTest(expected_error=expected_error):
+                    self.assertIn(needle, protected_source)
+                    workflow.write_text(
+                        protected_source.replace(needle, replacement, 1),
+                        encoding="utf-8",
+                    )
+                    self.assertIn(expected_error, production_cd_errors(root))
 
             workflow.write_text("name: Deploy\n", encoding="utf-8")
             self.assertIn("production CD omits manual dispatch", production_cd_errors(root))
@@ -2784,10 +2852,10 @@ class ProductionCdResolutionTests(TestCase):
 
             self.assertEqual(production_cd_path(root), active)
 
-    def test_repository_parks_production_cd_under_contract(self):
+    def test_repository_ships_active_production_cd_under_contract(self):
         self.assertEqual(
             production_cd_path().name,
-            "deploy-prod.yml.disabled",
-            "production CD is expected to stay parked until CD is enabled",
+            "deploy-prod.yml",
+            "production CD is enabled: automatic on green main, approved in the Production environment",
         )
         self.assertEqual(production_cd_errors(), [])

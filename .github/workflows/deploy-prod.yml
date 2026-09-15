@@ -1,6 +1,13 @@
 name: Deploy Production
 
 on:
+  # Every green CI run on main requests a production release; the run waits in
+  # the Production environment for reviewer approval before AWS credentials
+  # are issued. Manual dispatch stays available for redeploys and rollbacks.
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       confirmation:
@@ -24,7 +31,18 @@ jobs:
     name: Deploy to Production
     runs-on: ubuntu-latest
     timeout-minutes: 160
-    if: ${{ github.ref == 'refs/heads/main' }}
+    if: >-
+      ${{
+        github.ref == 'refs/heads/main' && (
+          github.event_name == 'workflow_dispatch' || (
+            github.event_name == 'workflow_run' &&
+            github.event.workflow_run.conclusion == 'success' &&
+            github.event.workflow_run.event == 'push' &&
+            github.event.workflow_run.head_branch == 'main' &&
+            github.event.workflow_run.head_repository.full_name == github.repository
+          )
+        )
+      }}
     environment:
       name: Production
       url: https://${{ vars.PROD_DOMAIN }}
@@ -39,13 +57,14 @@ jobs:
       API_DOMAIN: ${{ vars.PROD_API_DOMAIN || 'api.releviz.com' }}
       LEGACY_ORIGIN_DOMAIN: ${{ vars.PROD_LEGACY_ORIGIN_DOMAIN || 'origin.releviz.com' }}
       DEFAULT_ADMIN_EMAIL: ${{ vars.PROD_DEFAULT_ADMIN_EMAIL || 'admin@releviz.com' }}
-      DEPLOY_SHA: ${{ github.sha }}
+      # workflow_run: the CI run's head commit; dispatch: the selected main commit.
+      DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
       PRODUCTION_JOB_TIMEOUT_SECONDS: "9600"
       AMPLIFY_TIMEOUT_SECONDS: "1200"
-      AMPLIFY_ARTIFACT: ${{ github.workspace }}/releviz-amplify-${{ github.sha }}.zip
+      AMPLIFY_ARTIFACT: ${{ github.workspace }}/releviz-amplify-${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}.zip
       TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-west-2' }}
-      TF_VAR_backend_image_tag: ${{ github.sha }}
-      TF_VAR_frontend_image_tag: ${{ github.sha }}
+      TF_VAR_backend_image_tag: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      TF_VAR_frontend_image_tag: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
       TF_VAR_ecr_backend_repository: ${{ vars.ECR_PROD_BACKEND || 'releviz-prod-backend' }}
       TF_VAR_ecr_frontend_repository: ${{ vars.ECR_PROD_FRONTEND || 'releviz-prod-frontend' }}
       TF_VAR_custom_domain: ${{ vars.PROD_DOMAIN }}
@@ -73,10 +92,11 @@ jobs:
       - name: Confirm protected production release
         env:
           CONFIRMATION: ${{ inputs.confirmation }}
+          TRIGGER_EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          if [ "$CONFIRMATION" != "DEPLOY" ]; then
-            echo "::error::Production releases require the exact confirmation DEPLOY."
+          if [ "$TRIGGER_EVENT" = "workflow_dispatch" ] && [ "$CONFIRMATION" != "DEPLOY" ]; then
+            echo "::error::Manual production releases require the exact confirmation DEPLOY."
             exit 1
           fi
           if ! [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]; then
@@ -303,15 +323,28 @@ jobs:
         id: rollback_frontend
         run: |
           set -euo pipefail
-          cluster_name="$(terraform -chdir=infra/prod output -raw ecs_cluster_name)"
-          frontend_service="$(terraform -chdir=infra/prod output -raw frontend_service_name)"
-          task_definition="$(
-            aws ecs describe-services \
-              --cluster "$cluster_name" \
-              --services "$frontend_service" \
-              --query "services[0].taskDefinition" \
-              --output text
-          )"
+          cluster_name="$(terraform -chdir=infra/prod output -raw ecs_cluster_name 2>/dev/null || true)"
+          frontend_service="$(terraform -chdir=infra/prod output -raw frontend_service_name 2>/dev/null || true)"
+          task_definition=""
+          if [ -n "$cluster_name" ] && [ -n "$frontend_service" ]; then
+            task_definition="$(
+              aws ecs describe-services \
+                --cluster "$cluster_name" \
+                --services "$frontend_service" \
+                --query "services[?status == 'ACTIVE'].taskDefinition | [0]" \
+                --output text 2>/dev/null || true
+            )"
+          fi
+          if [ -z "$task_definition" ] || [ "$task_definition" = "None" ]; then
+            # No live ECS frontend to keep as a hot rollback (first release, or the
+            # cluster was removed): the base plan builds and rolls out the release SHA.
+            echo "::warning::No live ECS frontend service found; the base plan deploys ${DEPLOY_SHA} directly."
+            {
+              echo "sha=$DEPLOY_SHA"
+              echo "task_definition="
+            } >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
           image_uri="$(
             aws ecs describe-task-definition \
               --task-definition "$task_definition" \
@@ -1316,7 +1349,7 @@ jobs:
                 .head_sha == $sha
                 and .head_branch == "main"
                 and .path == ".github/workflows/deploy-prod.yml"
-                and .event == "workflow_dispatch"
+                and (.event == "workflow_dispatch" or .event == "workflow_run")
                 and .status == "completed"
                 and .repository.full_name == $repository
                 and .head_repository.full_name == $repository
@@ -2199,7 +2232,7 @@ jobs:
         env:
           TF_VAR_enable_amplify_domain: "true"
           TF_VAR_enable_legacy_api_compatibility: "false"
-          TF_VAR_frontend_image_tag: ${{ github.sha }}
+          TF_VAR_frontend_image_tag: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
         run: |
           set -euo pipefail
           terraform -chdir=infra/prod plan -input=false -out=production-final.tfplan
