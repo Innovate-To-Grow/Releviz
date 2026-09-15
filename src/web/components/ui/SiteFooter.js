@@ -9,19 +9,21 @@ const footerLinks = [
 export default function SiteFooter() {
   return (
     <footer className="site-footer">
-      <BrandHomeLink
-        className="site-footer-brand"
-        logoClassName="brand-logo brand-logo--footer"
-      />
-      <nav aria-label="Legal">
-        <ul className="site-footer-links">
-          {footerLinks.map((link) => (
-            <li key={link.href}>
-              <Link href={link.href}>{link.label}</Link>
-            </li>
-          ))}
-        </ul>
-      </nav>
+      <div className="site-footer-inner">
+        <BrandHomeLink
+          className="site-footer-brand"
+          logoClassName="brand-logo brand-logo--footer"
+        />
+        <nav aria-label="Legal">
+          <ul className="site-footer-links">
+            {footerLinks.map((link) => (
+              <li key={link.href}>
+                <Link href={link.href}>{link.label}</Link>
+              </li>
+            ))}
+          </ul>
+        </nav>
+      </div>
     </footer>
   );
 }

@@ -3,8 +3,16 @@
 import { Suspense, useState } from "react";
 import AppHeader from "@/components/ui/AppHeader";
 import { useSearchParams } from "next/navigation";
+import Alert from "@/components/ui/Alert";
 import AppButton from "@/components/ui/AppButton";
+import FormField from "@/components/ui/FormField";
+import LoadingState from "@/components/ui/LoadingState";
+import PageHeader from "@/components/ui/PageHeader";
+import Panel from "@/components/ui/Panel";
+import { SendIcon } from "@/components/ui/icons";
 import { submitFeedback } from "@/lib/api/feedback";
+
+const MESSAGE_MAX_LENGTH = 5000;
 
 export function safeFeedbackPath(value) {
   if (!value || !value.startsWith("/") || value.startsWith("//")) return "";
@@ -45,32 +53,32 @@ export function FeedbackForm() {
   };
 
   return (
-    <main className="page-pad legal-shell">
-      <div className="md-card feedback-panel">
-        <header>
-          <p className="legal-eyebrow">Help improve Releviz</p>
-          <h1>Send feedback</h1>
-          <p>
-            Report a problem, confusing workflow, or idea. Feedback is reviewed
-            by service operators.
-          </p>
-        </header>
+    <main className="page-shell page-shell--narrow">
+      <Panel className="feedback-panel">
+        <PageHeader
+          eyebrow="Help improve Releviz"
+          title="Send feedback"
+          lede="Report a problem, confusing workflow, or idea. Feedback is reviewed by service operators."
+        />
 
         {sent && (
-          <div className="auth-status" role="status" aria-live="polite">
+          <Alert variant="success" className="mb-3">
             Thank you. Your feedback was received.
-          </div>
+          </Alert>
         )}
         {error && (
-          <div className="auth-error" role="alert">
+          <Alert variant="danger" className="mb-3">
             {error}
-          </div>
+          </Alert>
         )}
 
-        <form className="feedback-form" onSubmit={handleSubmit}>
-          <label className="field-label">
-            Feedback type
+        <form
+          className="feedback-form d-flex flex-column gap-3"
+          onSubmit={handleSubmit}
+        >
+          <FormField id="feedback-category" label="Feedback type">
             <select
+              className="form-select"
               value={category}
               onChange={(event) => setCategory(event.target.value)}
             >
@@ -79,42 +87,59 @@ export function FeedbackForm() {
               <option value="idea">Idea</option>
               <option value="other">Other</option>
             </select>
-          </label>
+          </FormField>
 
-          <label className="field-label">
-            What happened, or what would you change?
+          <FormField
+            id="feedback-message"
+            label="What happened, or what would you change?"
+            help={
+              <>
+                Do not include passwords, verification codes, private invitation
+                links, or detailed participant availability.{" "}
+                <span className="tabular-nums">
+                  {message.length}/{MESSAGE_MAX_LENGTH}
+                </span>{" "}
+                characters
+              </>
+            }
+          >
             <textarea
+              className="form-control"
               value={message}
               onChange={(event) => setMessage(event.target.value)}
               minLength={3}
-              maxLength={5000}
+              maxLength={MESSAGE_MAX_LENGTH}
               rows={8}
               required
             />
-          </label>
-          <p className="field-help">
-            Do not include passwords, verification codes, private invitation
-            links, or detailed participant availability. {message.length}/5000
-            characters
-          </p>
+          </FormField>
 
-          <label className="feedback-consent">
+          <div className="form-check feedback-consent">
             <input
+              className="form-check-input"
               type="checkbox"
+              id="feedback-consent"
               checked={consentToFollowUp}
               onChange={(event) => setConsentToFollowUp(event.target.checked)}
             />
-            <span>
+            <label className="form-check-label" htmlFor="feedback-consent">
               If I am signed in, the service team may follow up using my account
               contact information.
-            </span>
-          </label>
+            </label>
+          </div>
 
-          <AppButton type="submit" disabled={submitting}>
-            {submitting ? "Sending…" : "Send feedback"}
-          </AppButton>
+          <div className="d-flex flex-wrap gap-2">
+            <AppButton
+              type="submit"
+              icon={<SendIcon />}
+              busy={submitting}
+              disabled={submitting}
+            >
+              {submitting ? "Sending…" : "Send feedback"}
+            </AppButton>
+          </div>
         </form>
-      </div>
+      </Panel>
     </main>
   );
 }
@@ -122,13 +147,13 @@ export function FeedbackForm() {
 export default function FeedbackPage() {
   return (
     <>
-      <AppHeader />
+      <AppHeader pageTitle="Feedback" />
       <Suspense
         fallback={
-          <main className="page-pad legal-shell">
-            <div className="md-card feedback-panel">
-              <p role="status">Loading feedback form…</p>
-            </div>
+          <main className="page-shell page-shell--narrow">
+            <Panel className="feedback-panel">
+              <LoadingState label="Loading feedback form…" />
+            </Panel>
           </main>
         }
       >

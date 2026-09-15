@@ -7,6 +7,8 @@ from django.db.models import (
     Count,
     DateTimeField,
     FloatField,
+    Max,
+    Min,
     OuterRef,
     Q,
     Subquery,
@@ -146,19 +148,38 @@ def participant_summary(participant) -> dict:
     }
 
 
-def roster_stats(queryset) -> dict:
+def group_stats(queryset) -> list[dict]:
+    """Every group with its head count and the weight its members share."""
+
+    return [
+        {
+            "name": item["group_name"] or "",
+            "count": item["count"],
+            # The weight shared by everyone in the group, or ``None`` when
+            # members carry different weights.
+            "weight": (
+                float(item["weight_min"]) if item["weight_min"] == item["weight_max"] else None
+            ),
+        }
+        for item in queryset.values("group_name")
+        .annotate(
+            count=Count("pk"),
+            weight_min=Min("roster_weight"),
+            weight_max=Max("roster_weight"),
+        )
+        .order_by("group_name")
+    ]
+
+
+def roster_stats(queryset, *, groups_queryset=None) -> dict:
     totals = queryset.aggregate(
         total=Count("pk"),
         submitted=Count("pk", filter=Q(submitted=True)),
         included=Count("pk", filter=Q(roster_included=True)),
     )
-    groups = [
-        {
-            "name": item["group_name"] or "",
-            "count": item["count"],
-        }
-        for item in queryset.values("group_name").annotate(count=Count("pk")).order_by("group_name")
-    ]
+    # Totals follow the active filters; the group list always describes the
+    # whole roster so organizers can manage groups while a filter is on.
+    groups = group_stats(queryset if groups_queryset is None else groups_queryset)
     return {
         "total": totals["total"],
         "submitted": totals["submitted"],

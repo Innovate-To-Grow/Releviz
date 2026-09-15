@@ -3,251 +3,28 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const { expect, test } = require("@playwright/test");
 const { expectAccessible } = require("./helpers/accessibility");
-
-const ROOT = path.resolve(__dirname, "../..");
-const BACKEND_URL = process.env.BACKEND_URL || "http://127.0.0.1:4100";
-const EMAIL_FILE_PATH = process.env.EMAIL_FILE_PATH || "/tmp/releviz-e2e-mail";
-const ADMIN_EMAIL = process.env.DJANGO_SUPERUSER_EMAIL || "admin@releviz.local";
-const ADMIN_PASSWORD = process.env.DJANGO_SUPERUSER_PASSWORD;
-const PYTHON_BIN = process.env.PYTHON_BIN || "python3";
-
-if (!ADMIN_PASSWORD) {
-  throw new Error(
-    "DJANGO_SUPERUSER_PASSWORD must be set before running Playwright.",
-  );
-}
-
-function decodeQuotedPrintable(value) {
-  if (!/^Content-Transfer-Encoding:\s*quoted-printable\s*$/im.test(value)) {
-    return value;
-  }
-  const unfolded = value.replace(/=\r?\n/g, "");
-  return unfolded.replace(/(?:=[0-9a-f]{2})+/gi, (encoded) => {
-    const bytes = encoded
-      .slice(1)
-      .split("=")
-      .map((hex) => Number.parseInt(hex, 16));
-    return Buffer.from(bytes).toString("utf8");
-  });
-}
-
-// The branded template renders the one-time code as its own block, so it
-// arrives on a line of its own rather than in a sentence.
-function codeFromEmailBody(body) {
-  return (
-    body
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find((line) => /^\d{6}$/.test(line)) || null
-  );
-}
-
-async function latestVerificationCode(email, afterMs) {
-  const body = await latestEmailFor(email, afterMs, (message) =>
-    Boolean(codeFromEmailBody(message)),
-  );
-  const code = codeFromEmailBody(body);
-  if (!code) throw new Error(`No verification code email found for ${email}`);
-  return code;
-}
-
-async function latestEmailFor(email, afterMs, predicate = () => true) {
-  const deadline = Date.now() + 20_000;
-  const normalizedEmail = email.trim().toLowerCase();
-  while (Date.now() < deadline) {
-    let entries = [];
-    try {
-      entries = await fs.readdir(EMAIL_FILE_PATH);
-    } catch {
-      entries = [];
-    }
-
-    const matches = [];
-    for (const entry of entries) {
-      const file = path.join(EMAIL_FILE_PATH, entry);
-      const stat = await fs.stat(file);
-      if (stat.mtimeMs < afterMs) continue;
-      const body = await fs.readFile(file, "utf8");
-      const messages = body.split(/\r?\n-{20,}\r?\n/);
-      for (const message of messages) {
-        const recipientHeader = message.match(/^To:\s*(.+)$/im)?.[1] || "";
-        const recipients = recipientHeader
-          .split(",")
-          .map((recipient) => recipient.trim().toLowerCase());
-        if (!recipients.includes(normalizedEmail)) continue;
-        const decodedMessage = decodeQuotedPrintable(message);
-        if (predicate(decodedMessage)) {
-          matches.push({ body: decodedMessage, mtimeMs: stat.mtimeMs });
-        }
-      }
-    }
-    matches.sort((a, b) => b.mtimeMs - a.mtimeMs);
-    if (matches[0]) return matches[0].body;
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  throw new Error(`No matching email found for ${email}`);
-}
-
-// Both /login and /signup render the same passwordless panel: request a code
-// for an email address, then confirm it. Existing accounts sign in and unknown
-// addresses are created, so this drives registration and login alike.
-async function continueWithEmail(page, email, startedAt) {
-  await page.getByLabel("Email").fill(email);
-  await page.getByRole("button", { name: "Continue with email" }).click();
-  await expect(
-    page.getByRole("heading", { name: "Check your email" }),
-  ).toBeVisible();
-  const code = await latestVerificationCode(email, startedAt);
-  await page.getByLabel("Verification code").fill(code);
-  await page.getByRole("button", { name: "Verify and continue" }).click();
-}
-
-async function expectDashboard(page) {
-  await expect(page).toHaveURL(/\/dashboard$/);
-  await expect(
-    page.getByRole("heading", { name: "My Dashboard" }),
-  ).toBeVisible();
-}
-
-async function registerAccount(page, email, firstName, lastName) {
-  const startedAt = Date.now() - 1000;
-  await page.goto("/signup");
-  await continueWithEmail(page, email, startedAt);
-
-  // A brand-new account carries no name yet, so verification lands on the
-  // profile-completion step before the dashboard.
-  await expect(page).toHaveURL(/complete_profile=1/);
-  await page.getByRole("textbox", { name: "First name" }).fill(firstName);
-  await page.getByRole("textbox", { name: "Last name" }).fill(lastName);
-  await page.getByRole("button", { name: "Continue" }).click();
-  await expectDashboard(page);
-
-  const storedCredentials = await page.evaluate(() => ({
-    local: window.localStorage.getItem("releviz.auth"),
-    session: window.sessionStorage.getItem("releviz.auth"),
-    visibleCookies: document.cookie,
-  }));
-  expect(storedCredentials.local).toBeNull();
-  expect(storedCredentials.session).toBeNull();
-  expect(storedCredentials.visibleCookies).not.toContain("releviz_refresh");
-  await page.reload();
-  await expect(
-    page.getByRole("heading", { name: "My Dashboard" }),
-  ).toBeVisible();
-}
-
-async function loginWithEmailCode(page, email) {
-  const startedAt = Date.now() - 1000;
-  await page.goto("/login");
-  await continueWithEmail(page, email, startedAt);
-  await expectDashboard(page);
-}
-
-async function fillTextbox(page, name, value) {
-  await page.getByRole("textbox", { name }).fill(value);
-}
-
-// Material Web renders <md-outlined-select> as a combobox plus a listbox, so
-// the value is chosen from options rather than typed.
-async function selectOption(page, name, optionName) {
-  await page.getByRole("combobox", { name }).click();
-  await page.getByRole("option", { name: optionName, exact: true }).click();
-  await expect(page.getByRole("combobox", { name })).toContainText(optionName);
-}
-
-async function expandAdvancedOptions(page) {
-  const panel = page.locator("details").filter({ hasText: "Advanced options" });
-  await panel.locator("summary").click();
-  await expect(panel).toHaveAttribute("open", "");
-}
-
-async function readSession(page) {
-  const payload = await page.evaluate(async (backendUrl) => {
-    const response = await fetch(`${backendUrl}/authn/refresh/`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: "{}",
-      credentials: "include",
-    });
-    if (!response.ok)
-      throw new Error(`Unable to refresh test session: ${response.status}`);
-    return response.json();
-  }, BACKEND_URL);
-  // The session payload identifies the member as `member_uuid`. Alias it to
-  // `id` so callers can use one stable name for the member identifier.
-  return {
-    ...payload,
-    user: { ...payload.user, id: payload.user.member_uuid },
-  };
-}
-
-function datetimeLocalHoursFromNow(hours) {
-  const value = new Date(Date.now() + hours * 60 * 60 * 1000);
-  value.setMinutes(value.getMinutes() - value.getTimezoneOffset());
-  return value.toISOString().slice(0, 16);
-}
-
-function nextWeekdayDate() {
-  const value = new Date();
-  value.setUTCHours(0, 0, 0, 0);
-  do {
-    value.setUTCDate(value.getUTCDate() + 1);
-  } while (value.getUTCDay() === 0 || value.getUTCDay() === 6);
-  return value.toISOString().slice(0, 10);
-}
-
-async function apiJson(request, method, url, token, body) {
-  const response = await request.fetch(`${BACKEND_URL}${url}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    data: body,
-  });
-  const text = await response.text();
-  let payload = null;
-  try {
-    payload = text ? JSON.parse(text) : null;
-  } catch {
-    payload = text;
-  }
-  return { response, payload };
-}
-
-function runBackendCommand(command, ...args) {
-  execFileSync(
-    PYTHON_BIN,
-    [
-      path.join(ROOT, "src/api/manage.py"),
-      command,
-      ...args,
-      "--settings=config.settings.e2e",
-    ],
-    {
-      cwd: ROOT,
-      env: {
-        ...process.env,
-        PYTHONPATH: path.join(ROOT, "src/api"),
-        DJANGO_SETTINGS_MODULE: "config.settings.e2e",
-      },
-      stdio: "pipe",
-    },
-  );
-}
-
-function dispatchEmailJobs() {
-  runBackendCommand(
-    "dispatch_email_jobs",
-    "--limit=1000",
-    "--concurrency=4",
-    "--rate-limit=1000",
-  );
-}
-
-function recomputeEventResults(eventCode) {
-  runBackendCommand("recompute_event_results", `--event-code=${eventCode}`);
-}
+const {
+  ADMIN_EMAIL,
+  ADMIN_PASSWORD,
+  BACKEND_URL,
+  PYTHON_BIN,
+  ROOT,
+  apiJson,
+  datetimeLocalHoursFromNow,
+  dispatchEmailJobs,
+  expandAdvancedOptions,
+  fillTextbox,
+  latestEmailFor,
+  latestVerificationCode,
+  loginWithEmailCode,
+  nextWeekdayDate,
+  openRankedWindows,
+  readSession,
+  recomputeEventResults,
+  refreshWorkspace,
+  registerAccount,
+  selectOption,
+} = require("./helpers/releviz");
 
 async function importRoster(request, eventCode, token, pastedText) {
   const preview = await apiJson(
@@ -649,9 +426,7 @@ test.describe("Releviz account and scheduling flow", () => {
       invitationStartedAt,
       (body) => body.includes(`/temp-access?code=${eventCode}`),
     );
-    await eventDeliveryProgress
-      .getByRole("button", { name: "Refresh progress" })
-      .click();
+    await refreshWorkspace(page);
     await expect(eventDeliveryProgress.getByText("1 sent")).toBeVisible();
     const sentRoster = await apiJson(
       request,
@@ -1515,9 +1290,7 @@ test.describe("Releviz account and scheduling flow", () => {
     const reminderDeliveryProgress = page.getByLabel("Event delivery progress");
     await expect(reminderDeliveryProgress.getByText("1 queued")).toBeVisible();
     dispatchEmailJobs();
-    await reminderDeliveryProgress
-      .getByRole("button", { name: "Refresh progress" })
-      .click();
+    await refreshWorkspace(page);
     await expect(reminderDeliveryProgress.getByText("1 sent")).toBeVisible();
     const reminder = await latestEmailFor(
       manualEmail,
@@ -1584,6 +1357,27 @@ test.describe("Releviz account and scheduling flow", () => {
     await participantWeight.press("Tab");
     await expect(page.getByText("Pat Participant was updated.")).toBeVisible();
 
+    // The Groups table manages a whole group at once: its shared weight is
+    // now mixed, and setting it re-applies one weight to every member.
+    const groupsTable = page.getByRole("region", { name: "Roster groups" });
+    const groupRow = groupsTable.locator('[data-roster-group="E2E Group"]');
+    await expect(groupRow).toContainText("2 people");
+    await expect(groupRow).toContainText("Mixed");
+    const groupWeight = groupsTable.getByRole("spinbutton", {
+      name: "Weight for group E2E Group",
+    });
+    await groupWeight.fill("0.6");
+    await groupWeight.press("Enter");
+    await expect(
+      page.getByText("Weight 0.6 now applies to 2 people in E2E Group."),
+    ).toBeVisible();
+    await expect(groupWeight).toHaveValue("0.6");
+    await expect(groupRow).not.toContainText("Mixed");
+    await expect(participantWeight).toHaveValue("0.6");
+    await participantWeight.fill("0.5");
+    await participantWeight.press("Tab");
+    await expect(page.getByText("Pat Participant was updated.")).toBeVisible();
+
     const rosterAfterWeights = await apiJson(
       request,
       "GET",
@@ -1605,7 +1399,9 @@ test.describe("Releviz account and scheduling flow", () => {
       rosterAfterWeights.payload.participants.find(
         (participant) => participant.email === manualEmail,
       );
-    expect(manualRosterParticipant.weight).toBe(0.75);
+    // The group weight (0.6) reached everyone in E2E Group; only Pat was
+    // changed again afterwards.
+    expect(manualRosterParticipant.weight).toBe(0.6);
 
     const deniedRosterPatch = await apiJson(
       request,
@@ -1686,6 +1482,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(
       page.getByText(/Results are current at revision/),
     ).toBeVisible();
+    await openRankedWindows(page);
     await page
       .getByRole("button", { name: "Choose this time" })
       .first()
@@ -1710,16 +1507,18 @@ test.describe("Releviz account and scheduling flow", () => {
         "The meeting is finalized and calendar invitations are queued.",
       ),
     ).toBeVisible();
+    // Invitation delivery joins the workspace banner with every other run.
     const finalizationDeliveryProgress = page.getByLabel(
-      "Finalization delivery progress",
+      "Event delivery progress",
+    );
+    await expect(finalizationDeliveryProgress).toContainText(
+      "Final confirmation delivery",
     );
     await expect(
       finalizationDeliveryProgress.getByText("2 queued"),
     ).toBeVisible();
     dispatchEmailJobs();
-    await finalizationDeliveryProgress
-      .getByRole("button", { name: "Refresh progress" })
-      .click();
+    await refreshWorkspace(page);
     await expect(
       finalizationDeliveryProgress.getByText("2 sent"),
     ).toBeVisible();
@@ -1777,9 +1576,7 @@ test.describe("Releviz account and scheduling flow", () => {
       cancellationDeliveryProgress.getByText("2 queued"),
     ).toBeVisible();
     dispatchEmailJobs();
-    await cancellationDeliveryProgress
-      .getByRole("button", { name: "Refresh progress" })
-      .click();
+    await refreshWorkspace(page);
     await expect(
       cancellationDeliveryProgress.getByText("2 sent"),
     ).toBeVisible();
@@ -1793,12 +1590,19 @@ test.describe("Releviz account and scheduling flow", () => {
     expect(cancellation).toContain("SEQUENCE:1");
 
     recomputeEventResults(eventCode);
+    await openRankedWindows(page);
     const candidateButtons = page.getByRole("button", {
       name: "Choose this time",
     });
     await expect(candidateButtons.first()).toBeVisible();
     expect(await candidateButtons.count()).toBeGreaterThanOrEqual(3);
     await candidateButtons.nth(2).click();
+    // The Finalize step re-keys on a new selection: wait for the new pick to
+    // land before driving its buttons.
+    await expect(page.getByRole("heading", { name: "Finalize" })).toBeFocused();
+    await expect(page.locator("#organizer-finalize")).toContainText(
+      "Ranked #3",
+    );
     await page.getByRole("button", { name: "Review attendance" }).click();
     await expect(
       page.getByText("Attendance review is current for this candidate."),
@@ -1817,9 +1621,7 @@ test.describe("Releviz account and scheduling flow", () => {
       ),
     ).toBeVisible();
     dispatchEmailJobs();
-    await finalizationDeliveryProgress
-      .getByRole("button", { name: "Refresh progress" })
-      .click();
+    await refreshWorkspace(page);
     await expect(
       finalizationDeliveryProgress.getByText("2 sent"),
     ).toBeVisible();

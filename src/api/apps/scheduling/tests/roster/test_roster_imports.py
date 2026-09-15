@@ -519,8 +519,8 @@ class RosterImportApiTests(TestCase):
         self.assertEqual(
             roster.data["stats"]["groups"],
             [
-                {"name": "A", "count": 2},
-                {"name": "B", "count": 1},
+                {"name": "A", "count": 2, "weight": 1.0},
+                {"name": "B", "count": 1, "weight": 1.0},
             ],
         )
         self.assertNotIn("availabilityInperson", roster.data["participants"][0])
@@ -548,6 +548,13 @@ class RosterImportApiTests(TestCase):
         self.assertEqual(patched.data["participant"]["weight"], 0.3)
         self.assertFalse(patched.data["participant"]["included"])
         self.assertEqual(patched.data["participant"]["group"], "C")
+        self.assertEqual(
+            patched.data["groups"],
+            [
+                {"name": "A", "count": 2, "weight": 1.0},
+                {"name": "C", "count": 1, "weight": 0.3},
+            ],
+        )
         stale = self.client.patch(
             f"/events/roster/{full_participant.pk}?code={self.event.code}",
             {"expectedVersion": full_participant.version, "weight": 0.8},
@@ -569,4 +576,31 @@ class RosterImportApiTests(TestCase):
         self.assertEqual(
             Weight.objects.filter(event=self.event, weight=0.6, included=False).count(),
             2,
+        )
+        # Group stats report the shared weight, or null once members differ.
+        regrouped = self.client.get(f"/events/roster?code={self.event.code}")
+        self.assertEqual(regrouped.status_code, 200)
+        self.assertEqual(
+            regrouped.data["stats"]["groups"],
+            [
+                {"name": "A", "count": 2, "weight": 0.6},
+                {"name": "C", "count": 1, "weight": 0.3},
+            ],
+        )
+        one = Participant.objects.get(event=self.event, participant_name="One")
+        split = self.client.patch(
+            f"/events/roster/{one.pk}?code={self.event.code}",
+            {"expectedVersion": one.version, "weight": 0.9},
+            format="json",
+        )
+        self.assertEqual(split.status_code, 200)
+        # Group stats describe the whole roster even while a filter is active.
+        mixed = self.client.get(f"/events/roster?code={self.event.code}&group=C")
+        self.assertEqual(mixed.data["pagination"]["total"], 1)
+        self.assertEqual(
+            mixed.data["stats"]["groups"],
+            [
+                {"name": "A", "count": 2, "weight": None},
+                {"name": "C", "count": 1, "weight": 0.3},
+            ],
         )

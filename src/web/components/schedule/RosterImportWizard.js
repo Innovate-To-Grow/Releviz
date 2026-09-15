@@ -1,7 +1,21 @@
 "use client";
 
 import { useId, useMemo, useRef, useState } from "react";
+import Alert from "@/components/ui/Alert";
 import AppButton from "@/components/ui/AppButton";
+import FormField from "@/components/ui/FormField";
+import Panel from "@/components/ui/Panel";
+import StatusBadge from "@/components/ui/StatusBadge";
+import {
+  ArrowRightIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  CloseIcon,
+  CopyIcon,
+  ImportIcon,
+  SpreadsheetIcon,
+  WarningIcon,
+} from "@/components/ui/icons";
 import {
   cancelRosterImport,
   commitRosterImport,
@@ -17,6 +31,22 @@ const FIELD_OPTIONS = [
   ["weight", "Weight", false],
   ["included", "Included", false],
 ];
+
+const STEPS = ["Upload or paste", "Map columns", "Review and commit", "Done"];
+
+const SOURCE_TABS = [
+  { key: "file", label: "File upload", Icon: SpreadsheetIcon },
+  { key: "paste", label: "Paste spreadsheet", Icon: CopyIcon },
+];
+
+const PHASE_STEP = { source: 1, mapping: 2, preview: 3, complete: 4 };
+
+const PHASE_DESCRIPTION = {
+  source: "Upload a CSV/XLSX file or paste cells from a spreadsheet.",
+  mapping: "Choose a worksheet and map its columns.",
+  preview: "Review validation issues before changing the event roster.",
+  complete: "The roster import was committed successfully.",
+};
 
 function normalizedHeader(value) {
   return String(value || "")
@@ -55,27 +85,78 @@ function importFrom(data) {
   return data?.import || data?.rosterImport || data || null;
 }
 
+// Invalid rows keep their server-provided error sentences as wrapping text
+// (they can run to several sentences), with a short badge for the colour cue.
+function validationStatus(row) {
+  if (!row.valid) {
+    return {
+      status: "danger",
+      text: "Invalid",
+      detail: (row.errors || []).join(" · ") || "",
+    };
+  }
+  if (row.duplicate === "identical") {
+    return { status: "info", text: "Identical duplicate merged", detail: "" };
+  }
+  if (row.duplicate === "conflict") {
+    return { status: "warning", text: "Conflicting duplicate", detail: "" };
+  }
+  return { status: "success", text: "Ready", detail: "" };
+}
+
+function StepIndicator({ phase }) {
+  const current = PHASE_STEP[phase] || 1;
+  return (
+    <ol className="step-indicator" aria-label="Import steps">
+      {STEPS.map((label, index) => {
+        const step = index + 1;
+        const modifier =
+          step < current
+            ? " step-indicator__item--done"
+            : step === current
+              ? " step-indicator__item--active"
+              : "";
+        return (
+          <li
+            key={label}
+            className={`step-indicator__item${modifier}`}
+            aria-current={step === current ? "step" : undefined}
+          >
+            {label}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
 function Pagination({ pagination, onPage }) {
   if (!pagination || pagination.pages <= 1) return null;
   return (
-    <div className="roster-import__pagination">
-      <AppButton
-        variant="outlined"
-        disabled={pagination.page <= 1}
-        onClick={() => onPage(pagination.page - 1)}
-      >
-        Previous
-      </AppButton>
-      <span>
-        Page {pagination.page} of {pagination.pages}
-      </span>
-      <AppButton
-        variant="outlined"
-        disabled={pagination.page >= pagination.pages}
-        onClick={() => onPage(pagination.page + 1)}
-      >
-        Next
-      </AppButton>
+    <div className="pagination-row roster-import__pagination">
+      <div className="d-flex flex-wrap align-items-center gap-2 ms-auto">
+        <AppButton
+          variant="outlined"
+          size="sm"
+          icon={<ChevronLeftIcon />}
+          disabled={pagination.page <= 1}
+          onClick={() => onPage(pagination.page - 1)}
+        >
+          Previous
+        </AppButton>
+        <span className="pagination-row__count">
+          Page {pagination.page} of {pagination.pages}
+        </span>
+        <AppButton
+          variant="outlined"
+          size="sm"
+          icon={<ChevronRightIcon />}
+          disabled={pagination.page >= pagination.pages}
+          onClick={() => onPage(pagination.page + 1)}
+        >
+          Next
+        </AppButton>
+      </div>
     </div>
   );
 }
@@ -110,6 +191,7 @@ export default function RosterImportWizard({
   const [status, setStatus] = useState("");
   const idempotencyKey = useRef("");
   const sourceTabsId = useId();
+  const fieldIds = useId();
   const sourceTabRefs = useRef({});
 
   const selectedSheet = useMemo(
@@ -406,94 +488,91 @@ export default function RosterImportWizard({
     }
   };
 
+  const includeByDefaultId = `${fieldIds}-include-by-default`;
+  const mergeModeId = `${fieldIds}-mode-merge`;
+  const rebuildModeId = `${fieldIds}-mode-rebuild`;
+  const commitDisabled =
+    busy ||
+    !record?.summary?.valid ||
+    (mode === "rebuild" && confirmationCode !== event.code);
+
   return (
-    <section
-      className="md-card roster-import"
-      aria-labelledby="roster-import-heading"
-    >
-      <div className="roster-import__header">
-        <div className="roster-import__heading-copy">
-          <h3 id="roster-import-heading" className="roster-import__title">
-            Import roster
-          </h3>
-          <p className="roster-import__subtitle">
-            {phase === "source" &&
-              "Upload a CSV/XLSX file or paste cells from a spreadsheet."}
-            {phase === "mapping" && "Choose a worksheet and map its columns."}
-            {phase === "preview" &&
-              "Review validation issues before changing the event roster."}
-            {phase === "complete" &&
-              "The roster import was committed successfully."}
-          </p>
-        </div>
-        {onClose && (
-          <AppButton variant="text" onClick={handleCancel} disabled={busy}>
+    <Panel
+      className="roster-import"
+      headingLevel={3}
+      titleId="roster-import-heading"
+      title="Import roster"
+      description={PHASE_DESCRIPTION[phase]}
+      actions={
+        onClose ? (
+          <AppButton
+            variant="text"
+            icon={<CloseIcon />}
+            onClick={handleCancel}
+            disabled={busy}
+          >
             Close
           </AppButton>
-        )}
-      </div>
+        ) : null
+      }
+      aria-labelledby="roster-import-heading"
+    >
+      <StepIndicator phase={phase} />
 
       {phase === "source" && (
-        <>
-          <div
-            className="roster-import__source-switcher"
+        <div className="d-flex flex-column gap-3">
+          <ul
+            className="nav nav-pills roster-import__source-switcher"
             role="tablist"
             aria-label="Roster source"
           >
-            <AppButton
-              role="tab"
-              id={`${sourceTabsId}-file-tab`}
-              aria-controls={`${sourceTabsId}-file-panel`}
-              aria-selected={sourceType === "file"}
-              tabIndex={sourceType === "file" ? 0 : -1}
-              ref={(node) => {
-                sourceTabRefs.current.file = node;
-              }}
-              variant={sourceType === "file" ? "filled" : "outlined"}
-              onClick={() => selectSourceType("file")}
-              onKeyDown={handleSourceTabKeyDown}
-            >
-              File upload
-            </AppButton>
-            <AppButton
-              role="tab"
-              id={`${sourceTabsId}-paste-tab`}
-              aria-controls={`${sourceTabsId}-paste-panel`}
-              aria-selected={sourceType === "paste"}
-              tabIndex={sourceType === "paste" ? 0 : -1}
-              ref={(node) => {
-                sourceTabRefs.current.paste = node;
-              }}
-              variant={sourceType === "paste" ? "filled" : "outlined"}
-              onClick={() => selectSourceType("paste")}
-              onKeyDown={handleSourceTabKeyDown}
-            >
-              Paste spreadsheet
-            </AppButton>
-          </div>
+            {SOURCE_TABS.map(({ key, label, Icon }) => (
+              <li className="nav-item" role="presentation" key={key}>
+                <button
+                  type="button"
+                  role="tab"
+                  className={`nav-link d-inline-flex align-items-center gap-2${
+                    sourceType === key ? " active" : ""
+                  }`}
+                  id={`${sourceTabsId}-${key}-tab`}
+                  aria-controls={`${sourceTabsId}-${key}-panel`}
+                  aria-selected={sourceType === key}
+                  tabIndex={sourceType === key ? 0 : -1}
+                  ref={(node) => {
+                    sourceTabRefs.current[key] = node;
+                  }}
+                  onClick={() => selectSourceType(key)}
+                  onKeyDown={handleSourceTabKeyDown}
+                >
+                  <Icon aria-hidden="true" />
+                  {label}
+                </button>
+              </li>
+            ))}
+          </ul>
           <div
             role="tabpanel"
             id={`${sourceTabsId}-${sourceType}-panel`}
             aria-labelledby={`${sourceTabsId}-${sourceType}-tab`}
+            className="d-flex flex-column gap-3"
           >
             {sourceType === "file" ? (
-              <label className="roster-import__field roster-import__source-field">
-                <strong>CSV or XLSX file</strong>
+              <FormField
+                label="CSV or XLSX file"
+                help="Maximum compressed size: 5 MiB. Legacy .xls files and formulas are not supported."
+              >
                 <input
-                  aria-label="CSV or XLSX file"
                   type="file"
+                  className="form-control"
+                  aria-label="CSV or XLSX file"
                   accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                   onChange={(event) => setFile(event.target.files?.[0] || null)}
                 />
-                <small>
-                  Maximum compressed size: 5 MiB. Legacy .xls files and formulas
-                  are not supported.
-                </small>
-              </label>
+              </FormField>
             ) : (
-              <label className="roster-import__field roster-import__source-field">
-                <strong>Rows copied from Google Sheets or Excel</strong>
+              <FormField label="Rows copied from Google Sheets or Excel">
                 <textarea
+                  className="form-control font-monospace"
                   aria-label="Pasted roster rows"
                   rows={9}
                   value={pastedText}
@@ -502,291 +581,381 @@ export default function RosterImportWizard({
                     "name\temail\tgroup\nAda\tada@example.com\tFaculty"
                   }
                 />
-              </label>
+              </FormField>
             )}
-            <div className="roster-import__actions">
-              <AppButton onClick={handleSource} disabled={busy}>
+            <div className="d-flex flex-wrap gap-2">
+              <AppButton
+                icon={<ArrowRightIcon />}
+                busy={busy}
+                onClick={handleSource}
+                disabled={busy}
+              >
                 {busy ? "Reading…" : "Continue to mapping"}
               </AppButton>
             </div>
           </div>
-        </>
+        </div>
       )}
 
       {phase === "mapping" && (
-        <>
-          {record?.worksheets?.length > 1 && (
-            <label className="roster-import__field">
-              <strong>Worksheet</strong>
-              <select
-                value={worksheet}
-                onChange={(event) => {
-                  const name = event.target.value;
-                  const selected = record.worksheets.find(
-                    (item) => item.name === name,
-                  );
-                  const sheetHeaders = selected?.headers || [];
-                  setWorksheet(name);
-                  setHeaderRow(selected?.defaultHeaderRow || 1);
-                  setMapping(suggestedMapping(sheetHeaders));
-                }}
-              >
-                <option value="">Choose a worksheet</option>
-                {record.worksheets.map((sheet) => (
-                  <option key={sheet.name} value={sheet.name}>
-                    {sheet.name} ({sheet.rowCount} rows)
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-          <label className="roster-import__field roster-import__header-row-field">
-            <strong>Header row</strong>
-            <input
-              type="number"
-              min="1"
-              value={headerRow}
-              onChange={(event) => {
-                const nextHeaderRow = Number(event.target.value);
-                setHeaderRow(nextHeaderRow);
-                setMapping(
-                  nextHeaderRow === Number(selectedSheet?.defaultHeaderRow || 1)
-                    ? suggestedMapping(selectedSheet?.headers || [])
-                    : {},
-                );
-              }}
-            />
-          </label>
-          <div className="roster-import__field-grid roster-import__mapping-grid">
-            {FIELD_OPTIONS.map(([field, label, mandatory]) => (
-              <label key={field} className="roster-import__field">
-                <strong>
-                  {label}
-                  {mandatory ? " *" : ""}
-                </strong>
-                <select
-                  value={mapping[field] || ""}
-                  onChange={(event) =>
-                    setMapping((current) => ({
-                      ...current,
-                      [field]: event.target.value || undefined,
-                    }))
-                  }
-                >
-                  <option value="">
-                    {mandatory ? "Select a column" : "Use default"}
-                  </option>
-                  {headers.map((header, index) => (
-                    <option key={`${index}:${header}`} value={String(index)}>
-                      {header || `Column ${index + 1}`}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ))}
+        <div className="d-flex flex-column gap-3">
+          <div className="row g-3">
+            {record?.worksheets?.length > 1 && (
+              <div className="col-12 col-md-6">
+                <FormField label="Worksheet">
+                  <select
+                    className="form-select"
+                    value={worksheet}
+                    onChange={(event) => {
+                      const name = event.target.value;
+                      const selected = record.worksheets.find(
+                        (item) => item.name === name,
+                      );
+                      const sheetHeaders = selected?.headers || [];
+                      setWorksheet(name);
+                      setHeaderRow(selected?.defaultHeaderRow || 1);
+                      setMapping(suggestedMapping(sheetHeaders));
+                    }}
+                  >
+                    <option value="">Choose a worksheet</option>
+                    {record.worksheets.map((sheet) => (
+                      <option key={sheet.name} value={sheet.name}>
+                        {sheet.name} ({sheet.rowCount} rows)
+                      </option>
+                    ))}
+                  </select>
+                </FormField>
+              </div>
+            )}
+            <div className="col-12 col-sm-6 col-md-3">
+              <FormField label="Header row">
+                <input
+                  type="number"
+                  className="form-control"
+                  min="1"
+                  value={headerRow}
+                  onChange={(event) => {
+                    const nextHeaderRow = Number(event.target.value);
+                    setHeaderRow(nextHeaderRow);
+                    setMapping(
+                      nextHeaderRow ===
+                        Number(selectedSheet?.defaultHeaderRow || 1)
+                        ? suggestedMapping(selectedSheet?.headers || [])
+                        : {},
+                    );
+                  }}
+                />
+              </FormField>
+            </div>
           </div>
-          <div className="roster-import__field-grid roster-import__defaults-grid">
-            <label className="roster-import__field">
-              <strong>Default group</strong>
-              <input
-                value={defaults.group}
-                onChange={(event) =>
-                  setDefaults((current) => ({
-                    ...current,
-                    group: event.target.value,
-                  }))
-                }
-              />
-            </label>
-            <label className="roster-import__field">
-              <strong>Default weight</strong>
-              <input
-                type="number"
-                min="0"
-                max="1"
-                step="0.05"
-                value={defaults.weight}
-                onChange={(event) =>
-                  setDefaults((current) => ({
-                    ...current,
-                    weight: Number(event.target.value),
-                  }))
-                }
-              />
-            </label>
-            <label className="roster-import__checkbox-field">
-              <input
-                type="checkbox"
-                checked={Boolean(defaults.included)}
-                onChange={(event) =>
-                  setDefaults((current) => ({
-                    ...current,
-                    included: event.target.checked,
-                  }))
-                }
-              />{" "}
-              Include by default
-            </label>
-          </div>
-          <div className="roster-import__actions">
+
+          <fieldset className="roster-import__mapping-grid">
+            <legend className="fs-6 fw-semibold mb-2">Column mapping</legend>
+            <div className="row g-3">
+              {FIELD_OPTIONS.map(([field, label, mandatory]) => (
+                <div className="col-12 col-md-4" key={field}>
+                  <FormField label={`${label}${mandatory ? " *" : ""}`}>
+                    <select
+                      className="form-select"
+                      value={mapping[field] || ""}
+                      onChange={(event) =>
+                        setMapping((current) => ({
+                          ...current,
+                          [field]: event.target.value || undefined,
+                        }))
+                      }
+                    >
+                      <option value="">
+                        {mandatory ? "Select a column" : "Use default"}
+                      </option>
+                      {headers.map((header, index) => (
+                        <option
+                          key={`${index}:${header}`}
+                          value={String(index)}
+                        >
+                          {header || `Column ${index + 1}`}
+                        </option>
+                      ))}
+                    </select>
+                  </FormField>
+                </div>
+              ))}
+            </div>
+          </fieldset>
+
+          <fieldset className="roster-import__defaults-grid">
+            <legend className="fs-6 fw-semibold mb-2">Defaults</legend>
+            <div className="row g-3 align-items-end">
+              <div className="col-12 col-md-4">
+                <FormField label="Default group">
+                  <input
+                    className="form-control"
+                    value={defaults.group}
+                    onChange={(event) =>
+                      setDefaults((current) => ({
+                        ...current,
+                        group: event.target.value,
+                      }))
+                    }
+                  />
+                </FormField>
+              </div>
+              <div className="col-12 col-md-4">
+                <FormField label="Default weight">
+                  <input
+                    type="number"
+                    className="form-control"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    value={defaults.weight}
+                    onChange={(event) =>
+                      setDefaults((current) => ({
+                        ...current,
+                        weight: Number(event.target.value),
+                      }))
+                    }
+                  />
+                </FormField>
+              </div>
+              <div className="col-12 col-md-4">
+                <div className="form-check mb-2">
+                  <input
+                    id={includeByDefaultId}
+                    className="form-check-input"
+                    type="checkbox"
+                    checked={Boolean(defaults.included)}
+                    onChange={(event) =>
+                      setDefaults((current) => ({
+                        ...current,
+                        included: event.target.checked,
+                      }))
+                    }
+                  />
+                  <label
+                    className="form-check-label"
+                    htmlFor={includeByDefaultId}
+                  >
+                    Include by default
+                  </label>
+                </div>
+              </div>
+            </div>
+          </fieldset>
+
+          <div className="d-flex flex-wrap gap-2">
             <AppButton
               variant="outlined"
+              icon={<ChevronLeftIcon />}
               onClick={() => setPhase("source")}
               disabled={busy}
             >
               Back
             </AppButton>
-            <AppButton onClick={handleConfigure} disabled={busy}>
+            <AppButton
+              icon={<ArrowRightIcon />}
+              busy={busy}
+              onClick={handleConfigure}
+              disabled={busy}
+            >
               {busy ? "Validating…" : "Preview rows"}
             </AppButton>
           </div>
-        </>
+        </div>
       )}
 
       {phase === "preview" && (
-        <>
-          <div className="roster-import__summary">
+        <div className="d-flex flex-column gap-3">
+          <div className="metric-tiles roster-import__summary">
             {[
               ["Selected", record?.summary?.selected],
               ["Valid", record?.summary?.valid],
               ["Invalid", record?.summary?.invalid],
               ["Conflicts", record?.summary?.conflicts],
             ].map(([label, value]) => (
-              <span key={label}>
-                <strong>{value || 0}</strong> {label.toLowerCase()}
-              </span>
+              <div className="metric-tile" key={label}>
+                <span className="metric-tile__label">{label}</span>
+                <strong className="metric-tile__value">{value || 0}</strong>
+              </div>
             ))}
           </div>
-          <div className="roster-import__table-scroll">
-            <table className="roster-import__table">
-              <thead>
-                <tr>
-                  <th scope="col">Use</th>
-                  <th scope="col">Row</th>
-                  <th scope="col">Name</th>
-                  <th scope="col">Email</th>
-                  <th scope="col">Group</th>
-                  <th scope="col">Weight</th>
-                  <th scope="col">Included</th>
-                  <th scope="col">Validation</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => (
-                  <tr key={row.id} style={{ opacity: row.selected ? 1 : 0.6 }}>
-                    <td>
-                      <input
-                        aria-label={`Select row ${row.rowNumber}`}
-                        type="checkbox"
-                        checked={Boolean(row.selected)}
-                        disabled={busy}
-                        onChange={(event) =>
-                          updateRow(row, { selected: event.target.checked })
-                        }
-                      />
-                    </td>
-                    <td>{row.rowNumber}</td>
-                    <td>
-                      <input
-                        aria-label={`Name for row ${row.rowNumber}`}
-                        value={rowDraftValue(row, "name", row.name || "")}
-                        disabled={busy}
-                        onChange={(event) =>
-                          updateRowDraft(row.id, "name", event.target.value)
-                        }
-                        onBlur={(event) =>
-                          void saveRowDraft(
-                            row,
-                            "name",
-                            event.target.value,
-                            row.name || "",
-                          )
-                        }
-                      />
-                    </td>
-                    <td>
-                      <input
-                        aria-label={`Email for row ${row.rowNumber}`}
-                        value={rowDraftValue(row, "email", row.email || "")}
-                        disabled={busy}
-                        onChange={(event) =>
-                          updateRowDraft(row.id, "email", event.target.value)
-                        }
-                        onBlur={(event) =>
-                          void saveRowDraft(
-                            row,
-                            "email",
-                            event.target.value,
-                            row.email || "",
-                          )
-                        }
-                      />
-                    </td>
-                    <td>
-                      <input
-                        aria-label={`Group for row ${row.rowNumber}`}
-                        value={rowDraftValue(row, "group", row.group || "")}
-                        disabled={busy}
-                        onChange={(event) =>
-                          updateRowDraft(row.id, "group", event.target.value)
-                        }
-                        onBlur={(event) =>
-                          void saveRowDraft(
-                            row,
-                            "group",
-                            event.target.value,
-                            row.group || "",
-                          )
-                        }
-                      />
-                    </td>
-                    <td>
-                      <input
-                        aria-label={`Weight for row ${row.rowNumber}`}
-                        type="number"
-                        min="0"
-                        max="1"
-                        step="0.05"
-                        value={rowDraftValue(row, "weight", row.weight ?? 1)}
-                        disabled={busy}
-                        onChange={(event) =>
-                          updateRowDraft(row.id, "weight", event.target.value)
-                        }
-                        onBlur={(event) =>
-                          void saveRowDraft(
-                            row,
-                            "weight",
-                            Number(event.target.value),
-                            Number(row.weight ?? 1),
-                          )
-                        }
-                      />
-                    </td>
-                    <td>
-                      <input
-                        aria-label={`Included for row ${row.rowNumber}`}
-                        type="checkbox"
-                        checked={Boolean(row.included)}
-                        disabled={busy}
-                        onChange={(event) =>
-                          updateRow(row, { included: event.target.checked })
-                        }
-                      />
-                    </td>
-                    <td>
-                      {!row.valid
-                        ? (row.errors || []).join(" · ") || "Invalid"
-                        : row.duplicate === "identical"
-                          ? "Identical duplicate merged"
-                          : row.duplicate === "conflict"
-                            ? "Conflicting duplicate"
-                            : "Ready"}
-                    </td>
+
+          <div className="table-shell">
+            <div
+              className="table-responsive"
+              role="region"
+              aria-label="Imported rows awaiting review"
+              tabIndex={0}
+            >
+              <table className="table table-sm align-middle roster-import__table">
+                <caption className="visually-hidden">
+                  Imported rows awaiting review
+                </caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Use</th>
+                    <th scope="col">Row</th>
+                    <th scope="col">Name</th>
+                    <th scope="col">Email</th>
+                    <th scope="col">Group</th>
+                    <th scope="col">Weight</th>
+                    <th scope="col">Included</th>
+                    <th scope="col">Validation</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {rows.map((row) => {
+                    const validation = validationStatus(row);
+                    return (
+                      <tr
+                        key={row.id}
+                        className={row.selected ? undefined : "opacity-50"}
+                      >
+                        <td>
+                          <input
+                            className="form-check-input"
+                            aria-label={`Select row ${row.rowNumber}`}
+                            type="checkbox"
+                            checked={Boolean(row.selected)}
+                            disabled={busy}
+                            onChange={(event) =>
+                              updateRow(row, { selected: event.target.checked })
+                            }
+                          />
+                        </td>
+                        <td className="tabular-nums">{row.rowNumber}</td>
+                        <td>
+                          <input
+                            className="form-control form-control-sm"
+                            aria-label={`Name for row ${row.rowNumber}`}
+                            value={rowDraftValue(row, "name", row.name || "")}
+                            disabled={busy}
+                            onChange={(event) =>
+                              updateRowDraft(row.id, "name", event.target.value)
+                            }
+                            onBlur={(event) =>
+                              void saveRowDraft(
+                                row,
+                                "name",
+                                event.target.value,
+                                row.name || "",
+                              )
+                            }
+                          />
+                        </td>
+                        <td>
+                          <input
+                            className="form-control form-control-sm"
+                            aria-label={`Email for row ${row.rowNumber}`}
+                            value={rowDraftValue(row, "email", row.email || "")}
+                            disabled={busy}
+                            onChange={(event) =>
+                              updateRowDraft(
+                                row.id,
+                                "email",
+                                event.target.value,
+                              )
+                            }
+                            onBlur={(event) =>
+                              void saveRowDraft(
+                                row,
+                                "email",
+                                event.target.value,
+                                row.email || "",
+                              )
+                            }
+                          />
+                        </td>
+                        <td>
+                          <input
+                            className="form-control form-control-sm"
+                            aria-label={`Group for row ${row.rowNumber}`}
+                            value={rowDraftValue(row, "group", row.group || "")}
+                            disabled={busy}
+                            onChange={(event) =>
+                              updateRowDraft(
+                                row.id,
+                                "group",
+                                event.target.value,
+                              )
+                            }
+                            onBlur={(event) =>
+                              void saveRowDraft(
+                                row,
+                                "group",
+                                event.target.value,
+                                row.group || "",
+                              )
+                            }
+                          />
+                        </td>
+                        <td>
+                          <input
+                            className="form-control form-control-sm"
+                            style={{ width: "6rem" }}
+                            aria-label={`Weight for row ${row.rowNumber}`}
+                            type="number"
+                            min="0"
+                            max="1"
+                            step="0.05"
+                            value={rowDraftValue(
+                              row,
+                              "weight",
+                              row.weight ?? 1,
+                            )}
+                            disabled={busy}
+                            onChange={(event) =>
+                              updateRowDraft(
+                                row.id,
+                                "weight",
+                                event.target.value,
+                              )
+                            }
+                            onBlur={(event) =>
+                              void saveRowDraft(
+                                row,
+                                "weight",
+                                Number(event.target.value),
+                                Number(row.weight ?? 1),
+                              )
+                            }
+                          />
+                        </td>
+                        <td>
+                          <input
+                            className="form-check-input"
+                            aria-label={`Included for row ${row.rowNumber}`}
+                            type="checkbox"
+                            checked={Boolean(row.included)}
+                            disabled={busy}
+                            onChange={(event) =>
+                              updateRow(row, { included: event.target.checked })
+                            }
+                          />
+                        </td>
+                        <td>
+                          <div className="d-flex flex-column align-items-start gap-1">
+                            <StatusBadge status={validation.status}>
+                              {validation.text}
+                            </StatusBadge>
+                            {validation.detail && (
+                              <small
+                                className="text-danger-emphasis text-wrap"
+                                style={{ maxWidth: "18rem" }}
+                              >
+                                {validation.detail}
+                              </small>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
+
           <Pagination
             pagination={pagination}
             onPage={(page) =>
@@ -795,69 +964,92 @@ export default function RosterImportWizard({
               )
             }
           />
-          <fieldset className="roster-import__mode-options">
-            <legend>Import behavior</legend>
-            <p className="roster-import__hint">
+
+          <fieldset className="roster-import__mode-options border rounded p-3">
+            <legend className="fs-6 fw-semibold float-none w-auto px-2 mb-2">
+              Import behavior
+            </legend>
+            <p className="roster-import__hint form-text mt-0 mb-3">
               New participants receive an invitation automatically. Existing
               participants are updated without another email.
             </p>
-            <label>
+            <div className="form-check">
               <input
+                id={mergeModeId}
+                className="form-check-input"
                 type="radio"
                 name="import-mode"
                 value="merge"
                 checked={mode === "merge"}
                 onChange={() => setMode("merge")}
-              />{" "}
-              Merge with the current roster and preserve schedules
-            </label>
-            <label>
+              />
+              <label className="form-check-label" htmlFor={mergeModeId}>
+                Merge with the current roster and preserve schedules
+              </label>
+            </div>
+            <div className="form-check">
               <input
+                id={rebuildModeId}
+                className="form-check-input"
                 type="radio"
                 name="import-mode"
                 value="rebuild"
                 checked={mode === "rebuild"}
                 onChange={() => setMode("rebuild")}
-              />{" "}
-              Rebuild the roster and clear schedules, invitations, and pending
-              delivery
-            </label>
+              />
+              <label className="form-check-label" htmlFor={rebuildModeId}>
+                Rebuild the roster and clear schedules, invitations, and pending
+                delivery
+              </label>
+            </div>
             {mode === "rebuild" && (
-              <>
-                <p className="roster-import__warning" role="note">
+              <div className="d-flex flex-column gap-3 mt-3">
+                <Alert
+                  variant="warning"
+                  role="note"
+                  className="roster-import__warning"
+                >
                   Rebuilding clears schedules, invitations, and pending
                   delivery, then sends a new invitation to every imported
                   participant.
-                </p>
-                <label className="roster-import__field roster-import__confirmation-field">
-                  <strong>Type {event.code} to confirm</strong>
-                  <input
-                    aria-label="Rebuild confirmation code"
-                    value={confirmationCode}
-                    onChange={(event) =>
-                      setConfirmationCode(event.target.value)
-                    }
-                    autoComplete="off"
-                  />
-                </label>
-              </>
+                </Alert>
+                <div className="row">
+                  <div className="col-12 col-md-6">
+                    <FormField
+                      label={`Type ${event.code} to confirm`}
+                      className="roster-import__confirmation-field"
+                    >
+                      <input
+                        className="form-control"
+                        aria-label="Rebuild confirmation code"
+                        value={confirmationCode}
+                        onChange={(event) =>
+                          setConfirmationCode(event.target.value)
+                        }
+                        autoComplete="off"
+                      />
+                    </FormField>
+                  </div>
+                </div>
+              </div>
             )}
           </fieldset>
-          <div className="roster-import__actions">
+
+          <div className="d-flex flex-wrap gap-2">
             <AppButton
               variant="outlined"
+              icon={<ChevronLeftIcon />}
               onClick={() => setPhase("mapping")}
               disabled={busy}
             >
               Back
             </AppButton>
             <AppButton
+              variant={mode === "rebuild" ? "danger-filled" : "filled"}
+              icon={mode === "rebuild" ? <WarningIcon /> : <ImportIcon />}
+              busy={busy}
               onClick={handleCommit}
-              disabled={
-                busy ||
-                !record?.summary?.valid ||
-                (mode === "rebuild" && confirmationCode !== event.code)
-              }
+              disabled={commitDisabled}
             >
               {busy
                 ? "Importing…"
@@ -866,27 +1058,43 @@ export default function RosterImportWizard({
                   : "Merge roster and invite new people"}
             </AppButton>
           </div>
-        </>
+        </div>
       )}
 
       {phase === "complete" && (
-        <div className="roster-import__complete">
-          <p role="status" className="roster-import__status">
+        <div className="roster-import__complete d-flex flex-column gap-3">
+          <Alert
+            variant="success"
+            role="status"
+            className="roster-import__status"
+          >
             {status}
-          </p>
-          <AppButton onClick={onClose}>Return to roster</AppButton>
+          </Alert>
+          <div className="d-flex flex-wrap gap-2">
+            <AppButton icon={<ArrowRightIcon />} onClick={onClose}>
+              Return to roster
+            </AppButton>
+          </div>
         </div>
       )}
       {phase !== "complete" && status && (
-        <p role="status" className="roster-import__status">
+        <Alert
+          variant="info"
+          role="status"
+          className="roster-import__status mt-3"
+        >
           {status}
-        </p>
+        </Alert>
       )}
       {error && (
-        <p role="alert" className="roster-import__error">
+        <Alert
+          variant="danger"
+          role="alert"
+          className="roster-import__error mt-3"
+        >
           {error}
-        </p>
+        </Alert>
       )}
-    </section>
+    </Panel>
   );
 }

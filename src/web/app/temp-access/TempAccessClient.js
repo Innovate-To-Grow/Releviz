@@ -3,13 +3,25 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { MdLogout, MdRefresh, MdSend, MdUpgrade } from "react-icons/md";
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
 import ScheduleChannelEditor from "@/components/schedule/ScheduleChannelEditor";
-import ScheduleGrid from "@/components/schedule/ScheduleGrid";
 import useAutosaveNavigationGuard from "@/components/schedule/useAutosaveNavigationGuard";
+import Alert from "@/components/ui/Alert";
 import AppButton from "@/components/ui/AppButton";
+import { AvailabilityChoice } from "@/components/ui/Availability";
 import BrandLogo from "@/components/ui/BrandLogo";
+import FormField from "@/components/ui/FormField";
+import LoadingState from "@/components/ui/LoadingState";
+import {
+  RefreshIcon,
+  SendIcon,
+  SignOutIcon,
+  TimezoneIcon,
+  UpgradeIcon,
+} from "@/components/ui/icons";
+import PageHeader from "@/components/ui/PageHeader";
+import Panel from "@/components/ui/Panel";
+import StatusBadge from "@/components/ui/StatusBadge";
 import {
   fetchTempAccessSession,
   logoutTempAccess,
@@ -18,13 +30,6 @@ import {
   verifyTempAccess,
 } from "@/lib/api/tempAccess";
 import { navigateTo, replaceUrl } from "@/lib/navigation";
-import styles from "./temp-access.module.css";
-
-const AVAILABILITY_CHOICES = [
-  { label: "Busy", value: 0 },
-  { label: "If needed", value: 0.5 },
-  { label: "Available", value: 1 },
-];
 
 function invitationStorageKey(code) {
   return `releviz.temp-access.invitation:${code}`;
@@ -63,8 +68,6 @@ function unwrapAccessPayload(payload = {}) {
     event: payload.event || session.event || null,
     participant: payload.participant || session.participant || null,
     email: payload.email || session.email || "",
-    results: payload.results ?? session.results ?? null,
-    canViewResults: Boolean(payload.canViewResults ?? session.canViewResults),
   };
 }
 
@@ -140,7 +143,6 @@ export default function TempAccessClient() {
   const autosaveRunnerRef = useRef(null);
   const draftSaveStateRef = useRef("idle");
   const requestStartedRef = useRef("");
-  const resultsRefreshRevisionRef = useRef(0);
 
   const applyParticipant = useCallback(
     (participant, event = access?.event) => {
@@ -190,7 +192,6 @@ export default function TempAccessClient() {
     scheduleVirtualRef.current = virtual;
     draftDirtyRef.current = false;
     autosavePendingRef.current = false;
-    resultsRefreshRevisionRef.current += 1;
     setScheduleInperson(inperson);
     setScheduleVirtual(virtual);
     setSubmitted(Boolean(next.participant.submitted));
@@ -209,7 +210,6 @@ export default function TempAccessClient() {
       window.clearTimeout(autosaveTimerRef.current);
       autosaveTimerRef.current = null;
     }
-    resultsRefreshRevisionRef.current += 1;
     draftDirtyRef.current = false;
     autosavePendingRef.current = false;
     draftSaveStateRef.current = "idle";
@@ -240,12 +240,6 @@ export default function TempAccessClient() {
 
       // A lifecycle or exclusion denial is authoritative even if refreshing the
       // latest payload fails. Lock first so the page cannot keep queuing writes.
-      resultsRefreshRevisionRef.current += 1;
-      setAccess((current) =>
-        current
-          ? { ...current, canViewResults: false, results: null }
-          : current,
-      );
       setServerWriteLock(
         error.message || "This response can no longer be changed.",
       );
@@ -275,31 +269,6 @@ export default function TempAccessClient() {
     },
     [applyAccessPayload, endTemporaryAccess, eventCode],
   );
-
-  const refreshResultsAfterDraft = useCallback(async () => {
-    const revision = resultsRefreshRevisionRef.current + 1;
-    resultsRefreshRevisionRef.current = revision;
-    setAccess((current) =>
-      current ? { ...current, canViewResults: false, results: null } : current,
-    );
-    try {
-      const latest = unwrapAccessPayload(
-        await fetchTempAccessSession(eventCode),
-      );
-      if (resultsRefreshRevisionRef.current !== revision) return;
-      setAccess((current) =>
-        current
-          ? {
-              ...current,
-              canViewResults: latest.canViewResults,
-              results: latest.canViewResults ? latest.results : null,
-            }
-          : current,
-      );
-    } catch {
-      // The conservative state above prevents stale or no-longer-authorized results.
-    }
-  }, [eventCode]);
 
   const sendCode = useCallback(
     async (token, { automatic = false } = {}) => {
@@ -450,7 +419,6 @@ export default function TempAccessClient() {
               }
             : current,
         );
-        void refreshResultsAfterDraft();
         const currentFingerprint = JSON.stringify([
           scheduleInpersonRef.current,
           scheduleVirtualRef.current,
@@ -463,12 +431,6 @@ export default function TempAccessClient() {
         draftDirtyRef.current = true;
         setDraftSaveState("failed");
         if (error.status === 409 && error.participant) {
-          resultsRefreshRevisionRef.current += 1;
-          setAccess((current) =>
-            current
-              ? { ...current, canViewResults: false, results: null }
-              : current,
-          );
           setSaveConflict(error.participant);
           setDraftSaveError(
             "This schedule changed somewhere else. Reload the latest response before editing again.",
@@ -495,12 +457,7 @@ export default function TempAccessClient() {
       }, 0);
     }
     return saved;
-  }, [
-    eventCode,
-    reconcileRejectedWrite,
-    refreshResultsAfterDraft,
-    responseChangesDisabled,
-  ]);
+  }, [eventCode, reconcileRejectedWrite, responseChangesDisabled]);
 
   useEffect(() => {
     autosaveRunnerRef.current = runAutosave;
@@ -672,14 +629,7 @@ export default function TempAccessClient() {
       }
 
       // The conflict payload is still the latest version returned by the
-      // rejected write. Use it as a safe fallback, but never retain cached
-      // permission-derived results when their refresh could not be verified.
-      resultsRefreshRevisionRef.current += 1;
-      setAccess((current) =>
-        current
-          ? { ...current, canViewResults: false, results: null }
-          : current,
-      );
+      // rejected write, so it is a safe fallback.
       applyParticipant(conflictParticipant, access?.event);
     } finally {
       setConflictReloadPending(false);
@@ -705,16 +655,10 @@ export default function TempAccessClient() {
       try {
         applyAccessPayload(await fetchTempAccessSession(eventCode));
       } catch {
-        // Submission succeeded even when the optional results refresh fails.
+        // Submission succeeded even when re-reading the session fails.
       }
     } catch (error) {
       if (error.status === 409 && error.participant) {
-        resultsRefreshRevisionRef.current += 1;
-        setAccess((current) =>
-          current
-            ? { ...current, canViewResults: false, results: null }
-            : current,
-        );
         setSaveConflict(error.participant);
         setDraftSaveState("failed");
         setDraftSaveError(
@@ -772,7 +716,7 @@ export default function TempAccessClient() {
   }
 
   if (phase === "loading") {
-    return <CenteredStatus title="Opening event access…" />;
+    return <CenteredStatus title="Opening event access…" busy />;
   }
 
   if (
@@ -802,59 +746,59 @@ export default function TempAccessClient() {
 
   if (phase === "code") {
     return (
-      <main className={styles.authPage}>
+      <main className="auth-page">
         <section
-          className={styles.authCard}
+          className="auth-panel text-center"
           aria-labelledby="temp-access-heading"
         >
-          <BrandLogo alt="Releviz" className={styles.authLogo} priority />
+          <BrandLogo
+            alt="Releviz"
+            className="brand-logo brand-logo--auth mx-auto"
+            priority
+          />
           <div>
-            <p className={styles.eyebrow}>Temporary event access</p>
+            <span className="eyebrow">Temporary event access</span>
             <h1 id="temp-access-heading">Check your email</h1>
-            <p className={styles.muted}>
+            <p className="text-secondary mb-0">
               Enter the six-digit code sent to the email address connected to
               this invitation. The code expires after 10 minutes.
             </p>
           </div>
           {requestMessage && (
-            <p
-              className={
-                requestState === "error"
-                  ? styles.errorNotice
-                  : styles.infoNotice
-              }
+            <Alert
+              variant={requestState === "error" ? "danger" : "info"}
               role={requestState === "error" ? "alert" : "status"}
+              className="text-start"
             >
               {requestMessage}
-            </p>
+            </Alert>
           )}
-          <form className={styles.codeForm} onSubmit={verifyCode}>
-            <label htmlFor="temporary-verification-code">
-              Verification code
-            </label>
-            <input
+          <form className="d-flex flex-column gap-3" onSubmit={verifyCode}>
+            <FormField
               id="temporary-verification-code"
-              value={verificationCode}
-              onChange={(event) =>
-                setVerificationCode(
-                  event.target.value.replace(/\D/g, "").slice(0, 6),
-                )
-              }
-              autoComplete="one-time-code"
-              inputMode="numeric"
-              pattern="[0-9]{6}"
-              maxLength={6}
-              autoFocus
-              required
-            />
-            {verificationError && (
-              <p className={styles.fieldError} role="alert">
-                {verificationError}
-              </p>
-            )}
+              label="Verification code"
+              error={verificationError || null}
+            >
+              <input
+                className="form-control form-control-lg text-center"
+                value={verificationCode}
+                onChange={(event) =>
+                  setVerificationCode(
+                    event.target.value.replace(/\D/g, "").slice(0, 6),
+                  )
+                }
+                autoComplete="one-time-code"
+                inputMode="numeric"
+                pattern="[0-9]{6}"
+                maxLength={6}
+                autoFocus
+                required
+              />
+            </FormField>
             <AppButton
               type="submit"
               fullWidth
+              busy={requestState === "verifying"}
               disabled={
                 requestState === "sending" || requestState === "verifying"
               }
@@ -867,6 +811,7 @@ export default function TempAccessClient() {
           <AppButton
             variant="outlined"
             fullWidth
+            busy={requestState === "sending"}
             disabled={
               requestState === "sending" || requestState === "verifying"
             }
@@ -874,7 +819,7 @@ export default function TempAccessClient() {
           >
             {requestState === "sending" ? "Sending…" : "Send a new code"}
           </AppButton>
-          <p className={styles.securityNote}>
+          <p className="small text-secondary mb-0">
             This verification only grants access to this event. It does not sign
             you in to a full Releviz account.
           </p>
@@ -886,13 +831,6 @@ export default function TempAccessClient() {
   const event = access.event;
   const participant = access.participant;
   const mode = event.mode || "inperson";
-  const results = access.results;
-  const avgInperson =
-    results?.channels?.inperson?.unweighted ||
-    Array(scheduleLength(event, participant)).fill(0);
-  const avgVirtual =
-    results?.channels?.virtual?.unweighted ||
-    Array(scheduleLength(event, participant)).fill(0);
   const upgradeHref = event.code ? makeUpgradeHref(event.code) : "";
   const leavingPage = logoutPending || upgradePending;
 
@@ -913,245 +851,225 @@ export default function TempAccessClient() {
   };
 
   return (
-    <main className={styles.page}>
-      <header className={styles.header}>
-        <div className={styles.brandBlock}>
-          <BrandLogo alt="Releviz" className={styles.headerLogo} priority />
-          <span className={styles.accessBadge}>Temporary event access</span>
-        </div>
-        <AppButton
-          variant="outlined"
-          icon={<MdLogout />}
-          disabled={leavingPage}
-          onClick={() => void logout()}
-        >
-          {logoutPending ? "Signing out…" : "Sign out"}
-        </AppButton>
+    <main className="temp-access-page">
+      <header className="app-header">
+        <nav className="navbar navbar-expand flex-wrap" aria-label="Site">
+          <div className="app-header-identity">
+            <BrandLogo
+              alt="Releviz"
+              className="brand-logo brand-logo--header"
+              priority
+            />
+            <span className="badge rounded-pill text-bg-primary">
+              Temporary event access
+            </span>
+          </div>
+          <AppButton
+            variant="outlined"
+            icon={<SignOutIcon />}
+            className="ms-auto flex-shrink-0"
+            busy={logoutPending}
+            disabled={leavingPage}
+            onClick={() => void logout()}
+          >
+            {logoutPending ? "Signing out…" : "Sign out"}
+          </AppButton>
+        </nav>
       </header>
 
-      <div className={styles.content}>
-        <section className={styles.hero}>
-          <div>
-            <p className={styles.eyebrow}>
-              You are responding as {participant.name}
-            </p>
-            <h1>{event.name}</h1>
-            <p className={styles.muted}>
-              Choose a status, then click or drag across the times that work for
-              you.
-            </p>
-          </div>
-          {upgradeHref && (
-            <Link
-              className={styles.upgradeLink}
-              href={upgradeHref}
-              aria-disabled={leavingPage}
-              onClick={(clickEvent) => void upgradeToFullAccess(clickEvent)}
-            >
-              <MdUpgrade aria-hidden="true" />
-              {upgradePending
-                ? "Saving before upgrade…"
-                : "Upgrade to full access"}
-            </Link>
-          )}
-        </section>
-
-        <EventDetailsGrid event={event} />
-
-        <div
-          className={
-            access.canViewResults && results ? styles.twoPane : undefined
-          }
-        >
-          <section
-            className={styles.scheduleCard}
-            aria-labelledby="your-schedule-heading"
-          >
-            <div className={styles.sectionHeading}>
-              <div>
-                <h2 id="your-schedule-heading">Your schedule</h2>
-                <p className={styles.muted}>
-                  Changes save automatically to the shared response.
-                </p>
-              </div>
-              {submitted && (
-                <span className={styles.submittedBadge}>Submitted</span>
-              )}
-            </div>
-
-            <div className={styles.controls}>
-              <p>Mark times as</p>
-              <div
-                className={styles.choiceRow}
-                role="group"
-                aria-label="Availability status"
+      <div className="page-shell page-shell--wide">
+        <PageHeader
+          eyebrow={`You are responding as ${participant.name}`}
+          title={event.name}
+          lede="Choose a status, then click or drag across the times that work for you."
+          actions={
+            upgradeHref ? (
+              <Link
+                className={`btn btn-outline-primary app-btn${leavingPage ? " disabled" : ""}`}
+                href={upgradeHref}
+                aria-disabled={leavingPage}
+                onClick={(clickEvent) => void upgradeToFullAccess(clickEvent)}
               >
-                {AVAILABILITY_CHOICES.map((choice) => (
-                  <AppButton
-                    key={choice.value}
-                    variant={
-                      availabilityValue === choice.value ? "filled" : "outlined"
-                    }
-                    aria-pressed={availabilityValue === choice.value}
-                    disabled={responseChangesDisabled || leavingPage}
-                    onClick={() => setAvailabilityValue(choice.value)}
-                  >
-                    {choice.label}
-                  </AppButton>
-                ))}
-              </div>
-              <div className={styles.choiceRow}>
-                <AppButton
-                  variant="outlined"
-                  disabled={responseChangesDisabled || leavingPage}
-                  onClick={() => fillAll(availabilityValue)}
-                >
-                  Apply to all
-                </AppButton>
-                <AppButton
-                  variant="outlined"
-                  disabled={responseChangesDisabled || leavingPage}
-                  onClick={() => fillAll(0)}
-                >
-                  Mark all Busy
-                </AppButton>
-              </div>
-            </div>
-
-            <ScheduleChannelEditor
-              mode={mode}
-              slotGroups={event.slotGroups || []}
-              inperson={scheduleInperson}
-              virtual={scheduleVirtual}
-              readOnly={
-                responseChangesDisabled || leavingPage || Boolean(saveConflict)
-              }
-              onInpersonPaint={handleInpersonPaint}
-              onVirtualPaint={handleVirtualPaint}
-              onCopy={copySchedule}
-            />
-
-            {draftSaveState !== "idle" && (
-              <div
-                className={
-                  draftSaveState === "failed"
-                    ? styles.errorNotice
-                    : styles.saveNotice
-                }
-                role={draftSaveState === "failed" ? "alert" : "status"}
-                aria-live={draftSaveState === "failed" ? "assertive" : "polite"}
-              >
-                <span>
-                  {draftSaveState === "saving" && "Saving draft…"}
-                  {draftSaveState === "saved" &&
-                    "Draft saved. Submit when you are ready."}
-                  {draftSaveState === "submitted" && "Schedule submitted."}
-                  {draftSaveState === "failed" &&
-                    (draftSaveError || "Draft autosave failed.")}
+                <span className="app-btn-icon" aria-hidden="true">
+                  <UpgradeIcon />
                 </span>
-                {draftSaveState === "failed" &&
-                  (saveConflict ? (
-                    <AppButton
-                      variant="outlined"
-                      icon={<MdRefresh />}
-                      disabled={conflictReloadPending}
-                      onClick={() => void reloadLatestResponse()}
-                    >
-                      {conflictReloadPending
-                        ? "Reloading…"
-                        : "Reload latest response"}
-                    </AppButton>
-                  ) : !responseChangesDisabled ? (
-                    <AppButton
-                      variant="outlined"
-                      onClick={() => void runAutosave()}
-                    >
-                      Retry save
-                    </AppButton>
-                  ) : null)}
-              </div>
-            )}
+                <span className="app-btn-label">
+                  {upgradePending
+                    ? "Saving before upgrade…"
+                    : "Upgrade to full access"}
+                </span>
+              </Link>
+            ) : null
+          }
+        />
 
-            {responseChangesDisabled && (
-              <p className={styles.fieldError} role="status">
-                {serverWriteLock
-                  ? serverWriteLock
-                  : event.status !== "active"
-                    ? `Responses are locked while this event is ${event.status}.`
-                    : "The response deadline has passed."}
-              </p>
-            )}
-            {submitError && (
-              <p className={styles.fieldError} role="alert">
-                {submitError}
-              </p>
-            )}
-            <div className={styles.submitRow}>
-              <AppButton
-                icon={<MdSend />}
-                disabled={
-                  isSubmitting ||
-                  responseChangesDisabled ||
-                  leavingPage ||
-                  Boolean(saveConflict)
-                }
-                onClick={() => void submitSchedule()}
-              >
-                {isSubmitting
-                  ? "Submitting…"
-                  : submitted
-                    ? "Update availability"
-                    : "Submit availability"}
-              </AppButton>
-            </div>
-          </section>
+        <div className="d-flex flex-column gap-4">
+          <Panel as="div">
+            <EventDetailsGrid event={event} />
+          </Panel>
 
-          {access.canViewResults && results && (
-            <section
-              className={styles.resultsCard}
-              aria-labelledby="group-availability-heading"
+          {/* Temporary participants only see and edit their own calendar. */}
+          <div className="participant-columns">
+            <Panel
+              as="section"
+              aria-labelledby="your-schedule-heading"
+              headingLevel={2}
+              titleId="your-schedule-heading"
+              title="Your schedule"
+              description="Changes save automatically to the shared response."
+              actions={
+                submitted ? (
+                  <StatusBadge status="submitted">Submitted</StatusBadge>
+                ) : null
+              }
             >
-              <h2 id="group-availability-heading">Group availability</h2>
-              <p className={styles.muted}>
-                Based on {results.countedResponseTotal || 0} submitted
-                response(s). {results.unansweredParticipantTotal || 0}{" "}
-                participant(s) are still unanswered.
-              </p>
-              <div className={styles.resultGrids}>
-                {mode !== "virtual" && (
-                  <ScheduleGrid
-                    schedule={avgInperson}
-                    slotGroups={event.slotGroups || []}
-                    readOnly
-                    showValues
-                    label={
-                      mode === "mixed"
-                        ? "In-Person Availability"
-                        : "Availability"
-                    }
-                  />
-                )}
-                {mode !== "inperson" && (
-                  <ScheduleGrid
-                    schedule={avgVirtual}
-                    slotGroups={event.slotGroups || []}
-                    readOnly
-                    showValues
-                    label={
-                      mode === "mixed" ? "Virtual Availability" : "Availability"
-                    }
-                    virtual
-                  />
-                )}
-              </div>
-            </section>
-          )}
-        </div>
+              <div className="d-flex flex-column gap-3">
+                <div>
+                  <div className="schedule-toolbar mb-2">
+                    <div className="schedule-toolbar__group">
+                      <p className="schedule-toolbar__label">Mark times as</p>
+                      <AvailabilityChoice
+                        value={availabilityValue}
+                        onChange={setAvailabilityValue}
+                        disabled={responseChangesDisabled || leavingPage}
+                        label="Availability status"
+                        virtual={mode === "virtual"}
+                        className="flex-wrap"
+                      />
+                    </div>
+                    <div className="schedule-toolbar__actions">
+                      <AppButton
+                        variant="outlined"
+                        size="sm"
+                        disabled={responseChangesDisabled || leavingPage}
+                        onClick={() => fillAll(availabilityValue)}
+                      >
+                        Apply to all
+                      </AppButton>
+                      <AppButton
+                        variant="outlined"
+                        size="sm"
+                        disabled={responseChangesDisabled || leavingPage}
+                        onClick={() => fillAll(0)}
+                      >
+                        Mark all Busy
+                      </AppButton>
+                    </div>
+                  </div>
+                  <p className="small text-secondary mb-0">
+                    <span className="icon-inline me-1" aria-hidden="true">
+                      <TimezoneIcon />
+                    </span>
+                    Times shown in {event.timezone || "UTC"}
+                  </p>
+                </div>
 
-        <aside className={styles.restrictedNote}>
-          This session can only access this event. Create a full account to
-          manage all of your events in one place.
-        </aside>
+                <ScheduleChannelEditor
+                  mode={mode}
+                  slotGroups={event.slotGroups || []}
+                  inperson={scheduleInperson}
+                  virtual={scheduleVirtual}
+                  readOnly={
+                    responseChangesDisabled ||
+                    leavingPage ||
+                    Boolean(saveConflict)
+                  }
+                  onInpersonPaint={handleInpersonPaint}
+                  onVirtualPaint={handleVirtualPaint}
+                  onCopy={copySchedule}
+                  legend={false}
+                />
+
+                {draftSaveState !== "idle" && (
+                  <Alert
+                    variant={
+                      draftSaveState === "failed"
+                        ? "danger"
+                        : draftSaveState === "submitted"
+                          ? "success"
+                          : "info"
+                    }
+                    role={draftSaveState === "failed" ? "alert" : "status"}
+                    actions={
+                      draftSaveState === "failed" ? (
+                        saveConflict ? (
+                          <AppButton
+                            variant="outlined"
+                            size="sm"
+                            icon={<RefreshIcon />}
+                            busy={conflictReloadPending}
+                            disabled={conflictReloadPending}
+                            onClick={() => void reloadLatestResponse()}
+                          >
+                            {conflictReloadPending
+                              ? "Reloading…"
+                              : "Reload latest response"}
+                          </AppButton>
+                        ) : !responseChangesDisabled ? (
+                          <AppButton
+                            variant="outlined"
+                            size="sm"
+                            onClick={() => void runAutosave()}
+                          >
+                            Retry save
+                          </AppButton>
+                        ) : null
+                      ) : null
+                    }
+                  >
+                    <span>
+                      {draftSaveState === "saving" && "Saving draft…"}
+                      {draftSaveState === "saved" &&
+                        "Draft saved. Submit when you are ready."}
+                      {draftSaveState === "submitted" && "Schedule submitted."}
+                      {draftSaveState === "failed" &&
+                        (draftSaveError || "Draft autosave failed.")}
+                    </span>
+                  </Alert>
+                )}
+
+                {responseChangesDisabled && (
+                  <Alert variant="warning" role="status">
+                    {serverWriteLock
+                      ? serverWriteLock
+                      : event.status !== "active"
+                        ? `Responses are locked while this event is ${event.status}.`
+                        : "The response deadline has passed."}
+                  </Alert>
+                )}
+                {submitError && (
+                  <Alert variant="danger" role="alert">
+                    {submitError}
+                  </Alert>
+                )}
+                <div className="d-flex justify-content-end">
+                  <AppButton
+                    icon={<SendIcon />}
+                    busy={isSubmitting}
+                    disabled={
+                      isSubmitting ||
+                      responseChangesDisabled ||
+                      leavingPage ||
+                      Boolean(saveConflict)
+                    }
+                    onClick={() => void submitSchedule()}
+                  >
+                    {isSubmitting
+                      ? "Submitting…"
+                      : submitted
+                        ? "Update availability"
+                        : "Submit availability"}
+                  </AppButton>
+                </div>
+              </div>
+            </Panel>
+          </div>
+
+          <Alert as="aside" variant="info" role={null}>
+            This session can only access this event. Create a full account to
+            manage all of your events in one place.
+          </Alert>
+        </div>
       </div>
     </main>
   );
@@ -1160,13 +1078,25 @@ export default function TempAccessClient() {
 function CenteredStatus({
   title,
   message = "Please wait while we check this event link.",
+  busy = false,
 }) {
   return (
-    <main className={styles.authPage}>
-      <section className={styles.authCard}>
-        <BrandLogo alt="Releviz" className={styles.authLogo} priority />
-        <h1>{title}</h1>
-        <p className={styles.muted}>{message}</p>
+    <main className="auth-page">
+      <section className="auth-panel text-center" aria-busy={busy || undefined}>
+        <BrandLogo
+          alt="Releviz"
+          className="brand-logo brand-logo--auth mx-auto"
+          priority
+        />
+        <div>
+          <span className="eyebrow">Temporary event access</span>
+          <h1>{title}</h1>
+          {busy ? (
+            <LoadingState label={message} className="p-0" />
+          ) : (
+            <p className="text-secondary mb-0">{message}</p>
+          )}
+        </div>
       </section>
     </main>
   );

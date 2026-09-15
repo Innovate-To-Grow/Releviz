@@ -12,13 +12,6 @@ import {
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 
-jest.mock("@material/web/checkbox/checkbox.js", () => ({}), { virtual: true });
-jest.mock("@material/web/dialog/dialog.js", () => ({}), { virtual: true });
-jest.mock("@material/web/slider/slider.js", () => ({}), { virtual: true });
-jest.mock("@material/web/textfield/outlined-text-field.js", () => ({}), {
-  virtual: true,
-});
-
 jest.mock("@/components/auth/AuthContext", () => ({
   useAuth: jest.fn(),
 }));
@@ -128,11 +121,6 @@ function auth(user = member, loading = false) {
     loading,
     getToken: jest.fn().mockResolvedValue("token"),
   });
-}
-
-function setCustomElementValue(element, value) {
-  element.value = value;
-  fireEvent(element, new Event("input", { bubbles: true }));
 }
 
 function participant(id, userId, name, overrides = {}) {
@@ -341,6 +329,84 @@ describe("participant workflow", () => {
       expectedVersion: 2,
     });
     expect(await screen.findByText("Schedule submitted.")).toBeInTheDocument();
+  });
+
+  test("marks everything busy, reports a failed submit, and warns before unloading", async () => {
+    fetchCurrentParticipant.mockResolvedValue({
+      participant: participant("mine", member.id, member.displayName, {
+        availabilityInperson: [1, 1],
+        availabilityVirtual: [1, 1],
+      }),
+      scheduleDataIncluded: true,
+    });
+    let release;
+    updateParticipant
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            release = resolve;
+          }),
+      )
+      .mockRejectedValueOnce(new Error("Network unavailable"));
+    renderParticipant();
+    expect(
+      await screen.findByText(`Welcome, ${member.displayName}`),
+    ).toBeInTheDocument();
+    const dispatchUnload = () => {
+      const unload = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(unload);
+      return unload.defaultPrevented;
+    };
+    expect(dispatchUnload()).toBe(false);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Mark all Busy" }),
+    );
+    expect(dispatchUnload()).toBe(true);
+    await waitFor(() => expect(release).toBeDefined());
+    await act(async () => {
+      release({
+        participant: participant("mine", member.id, member.displayName, {
+          availabilityInperson: [0, 0],
+          availabilityVirtual: [0, 0],
+          version: 2,
+        }),
+      });
+    });
+    expect(
+      await screen.findByText("Draft saved. Submit when you are ready."),
+    ).toBeInTheDocument();
+    expect(updateParticipant.mock.calls[0][2]).toEqual({
+      availabilityInperson: [0, 0],
+      availabilityVirtual: [0, 0],
+      submitted: 0,
+      expectedVersion: 1,
+    });
+    expect(dispatchUnload()).toBe(false);
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Submit Availability" }),
+    );
+    expect(
+      await screen.findByText("Failed to submit: Network unavailable"),
+    ).toBeInTheDocument();
+  });
+
+  test("explains when the token for an automatic join cannot be obtained", async () => {
+    const consumeRespondIntent = jest.fn();
+    useAuth.mockReturnValue({
+      user: member,
+      loading: false,
+      getToken: jest.fn().mockRejectedValue(new Error("Session expired")),
+    });
+    renderParticipant(baseEvent, {
+      respondIntent: true,
+      consumeRespondIntent,
+    });
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "We couldn't start your response: Session expired",
+    );
+    expect(joinEvent).not.toHaveBeenCalled();
+    expect(consumeRespondIntent).toHaveBeenCalledTimes(1);
   });
 
   test("surfaces autosave conflicts and reloads the authoritative response", async () => {
@@ -570,7 +636,7 @@ describe("participant workflow", () => {
     jest.useRealTimers();
   });
 
-  test("shows authorized shared results and locks changes after finalization", async () => {
+  test("never shows group availability to a participant and locks changes after finalization", async () => {
     fetchCurrentParticipant.mockResolvedValue({
       participant: participant("mine", member.id, member.displayName, {
         submitted: true,
@@ -587,10 +653,21 @@ describe("participant workflow", () => {
       results: sharedResults,
     });
 
-    const view = renderParticipant();
+    // Even an event configured for realtime sharing shows only the person's
+    // own calendar: group availability is the organizer's view.
+    const view = renderParticipant({
+      ...baseEvent,
+      participantViewPermission: "realtime",
+    });
+    await waitFor(() => expect(fetchCurrentParticipant).toHaveBeenCalled());
     expect(
-      await screen.findByText(/Based on 2 submitted response/),
+      screen.getByRole("heading", { name: "Mark times as" }),
     ).toBeInTheDocument();
+    expect(fetchEventResults).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("heading", { name: /group availability/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/submitted response/)).not.toBeInTheDocument();
     expect(
       screen.queryByRole("heading", { name: "Individual Schedules" }),
     ).not.toBeInTheDocument();
@@ -598,6 +675,7 @@ describe("participant workflow", () => {
     await waitFor(() =>
       expect(fetchCurrentParticipant).toHaveBeenCalledTimes(2),
     );
+    expect(fetchEventResults).not.toHaveBeenCalled();
     view.unmount();
 
     renderParticipant({ ...baseEvent, status: "finalized" });
@@ -609,50 +687,6 @@ describe("participant workflow", () => {
     expect(
       screen.getByRole("button", { name: "Update Availability" }),
     ).toBeDisabled();
-  });
-
-  test("polls versioned group results until the requested revision is fresh", async () => {
-    jest.useFakeTimers();
-    fetchCurrentParticipant.mockResolvedValue({
-      participant: participant("mine", member.id, member.displayName, {
-        submitted: true,
-      }),
-      scheduleDataIncluded: true,
-    });
-    fetchEventResults
-      .mockResolvedValueOnce({
-        status: "refreshing",
-        requestedRevision: 5,
-        computedRevision: 4,
-        results: sharedResults,
-      })
-      .mockResolvedValueOnce({
-        status: "fresh",
-        requestedRevision: 5,
-        computedRevision: 5,
-        results: sharedResults,
-      });
-
-    const view = renderParticipant({ ...baseEvent, resultsRevision: 5 });
-    await act(async () => {
-      jest.advanceTimersByTime(0);
-    });
-    expect(
-      screen.getByText(/Group availability is updating for revision 5/),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/Based on 2 submitted response/),
-    ).toBeInTheDocument();
-
-    await act(async () => {
-      jest.advanceTimersByTime(2000);
-    });
-    expect(fetchEventResults).toHaveBeenCalledTimes(2);
-    expect(
-      screen.queryByText(/Group availability is updating/),
-    ).not.toBeInTheDocument();
-    view.unmount();
-    jest.useRealTimers();
   });
 
   test("renders loading and own-only empty-result semantics", async () => {

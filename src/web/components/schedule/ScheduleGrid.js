@@ -2,7 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { lerpColor, lerpVirtualColor } from "@/components/ui/ColorUtils";
+import { availabilityKey } from "@/components/ui/Availability";
 import { formatTime } from "@/lib/format";
+
+const TIME_COLUMN_WIDTH = 72;
+const MIN_COLUMN_WIDTH = 88;
 
 function slotLabel(slot) {
   const startDay = slot.startDayOffset ? ` +${slot.startDayOffset}d` : "";
@@ -14,6 +18,24 @@ function slotLabel(slot) {
   )}${endDay}${endOffset}`;
 }
 
+// Non-color cue rendered inside editable cells. Read-only aggregate grids show
+// the numeric value instead (see `showValues`).
+function cellGlyph(level) {
+  if (level === "free") return "✓";
+  if (level === "partial") return "◐";
+  return "";
+}
+
+/**
+ * Availability grid: columns are days (or dates), rows are time slots.
+ *
+ * Interaction model (unchanged from the previous design):
+ * - pointer down starts a stroke and paints the cell; moving over other cells
+ *   while the pointer is held paints them once each (mouse, pen, touch);
+ * - Enter/Space paints the focused cell; arrow keys, Home/End and Ctrl+Home/End
+ *   move a roving tab stop between cells;
+ * - `readOnly` grids expose values without tab stops.
+ */
 function ScheduleGrid({
   schedule = [],
   slotGroups = [],
@@ -23,6 +45,7 @@ function ScheduleGrid({
   label,
   virtual = false,
   participantDetails,
+  compact = false,
 }) {
   const strokeRef = useRef({
     active: false,
@@ -164,10 +187,20 @@ function ScheduleGrid({
     cellRefs.current.get(target.index)?.focus();
   };
 
+  const columnWidth = compact ? 72 : MIN_COLUMN_WIDTH;
+  const rowTemplate = `${TIME_COLUMN_WIDTH}px repeat(${groups.length}, minmax(${columnWidth}px, 1fr))`;
+
   return (
-    <div className="schedule-grid-shell">
+    <div
+      className={`schedule-grid-shell${compact ? " schedule-grid-shell--compact" : ""}`}
+    >
       {label && <h4 className="schedule-grid-title">{label}</h4>}
-      <div className="schedule-grid-scroll">
+      <div
+        className="schedule-grid-scroll"
+        // Read-only grids have no focusable cells, so the scroll region itself
+        // must be reachable from the keyboard.
+        tabIndex={readOnly && groups.length > 0 ? 0 : undefined}
+      >
         {groups.length === 0 ? (
           <p className="schedule-grid-empty">
             No schedule slots are configured.
@@ -179,15 +212,16 @@ function ScheduleGrid({
             aria-label={label || "Availability"}
             aria-colcount={groups.length + 1}
             aria-rowcount={maxRows + 1}
-            style={{ minWidth: `${80 + groups.length * 96}px` }}
+            aria-readonly={readOnly ? "true" : undefined}
+            style={{
+              minWidth: `max(100%, ${TIME_COLUMN_WIDTH + groups.length * columnWidth}px)`,
+            }}
           >
             <div
               className="schedule-grid-header"
               role="row"
               aria-rowindex={1}
-              style={{
-                gridTemplateColumns: `80px repeat(${groups.length}, minmax(96px, 1fr))`,
-              }}
+              style={{ gridTemplateColumns: rowTemplate }}
             >
               <div
                 className="schedule-grid-time-header"
@@ -202,6 +236,7 @@ function ScheduleGrid({
                   role="columnheader"
                   aria-colindex={column + 2}
                   key={group.key}
+                  title={group.label}
                 >
                   {group.label}
                 </div>
@@ -218,9 +253,7 @@ function ScheduleGrid({
                     key={row}
                     role="row"
                     aria-rowindex={row + 2}
-                    style={{
-                      gridTemplateColumns: `80px repeat(${groups.length}, minmax(96px, 1fr))`,
-                    }}
+                    style={{ gridTemplateColumns: rowTemplate }}
                   >
                     <div
                       className="schedule-grid-row-header"
@@ -241,22 +274,17 @@ function ScheduleGrid({
                             aria-colindex={column + 2}
                             aria-label={`${group.label}, no slot at this time`}
                             aria-disabled="true"
-                            style={{
-                              borderTop:
-                                row === 0
-                                  ? "none"
-                                  : "1px solid var(--md-sys-color-surface-variant)",
-                              borderLeft:
-                                column === 0
-                                  ? "none"
-                                  : "1px solid var(--md-sys-color-surface-variant)",
-                            }}
+                            data-first-row={row === 0 ? "true" : undefined}
+                            data-first-column={
+                              column === 0 ? "true" : undefined
+                            }
                           />
                         );
                       }
 
                       const index = slot.index;
                       const value = Number(schedule[index] || 0);
+                      const level = availabilityKey(value);
                       const details = participantDetails
                         ? participantDetails
                             .filter(
@@ -296,6 +324,9 @@ function ScheduleGrid({
                           aria-readonly={readOnly ? "true" : undefined}
                           aria-selected={readOnly ? undefined : value > 0}
                           data-cell-idx={index}
+                          data-availability={level}
+                          data-first-row={row === 0 ? "true" : undefined}
+                          data-first-column={column === 0 ? "true" : undefined}
                           title={title}
                           onPointerDown={(event) => startStroke(index, event)}
                           onPointerMove={continueStroke}
@@ -315,20 +346,18 @@ function ScheduleGrid({
                             backgroundColor: virtual
                               ? lerpVirtualColor(value)
                               : lerpColor(value),
-                            borderTop:
-                              row === 0
-                                ? "none"
-                                : "1px solid var(--md-sys-color-surface-variant)",
-                            borderLeft:
-                              column === 0
-                                ? "none"
-                                : "1px solid var(--md-sys-color-surface-variant)",
-                            cursor: readOnly ? "default" : "pointer",
                           }}
                         >
-                          {showValues
-                            ? value.toFixed(2).replace(/\.00$/, "")
-                            : ""}
+                          {showValues ? (
+                            value.toFixed(2).replace(/\.00$/, "")
+                          ) : (
+                            <span
+                              className="schedule-grid-cell__glyph"
+                              aria-hidden="true"
+                            >
+                              {cellGlyph(level)}
+                            </span>
+                          )}
                         </div>
                       );
                     })}

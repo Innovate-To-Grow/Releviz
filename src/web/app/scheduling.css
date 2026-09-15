@@ -1,0 +1,1369 @@
+/*
+ * Releviz scheduling interactions: the availability grid, its legend and
+ * toolbar, channel tabs, ranked recommendations, and delivery progress.
+ * These are the product-specific pieces Bootstrap does not provide.
+ */
+
+/* ---------------------------------------------------------------------------
+ * Availability legend & status controls
+ * ------------------------------------------------------------------------- */
+
+.availability-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.875rem;
+  color: var(--bs-secondary-color);
+}
+
+.availability-legend__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.availability-swatch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.125rem;
+  height: 1.125rem;
+  border-radius: 0.25rem;
+  border: 1px solid rgba(33, 37, 41, 0.15);
+  color: var(--rv-avail-text);
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1;
+  flex: 0 0 auto;
+}
+
+.availability-swatch--busy {
+  background-color: var(--rv-avail-busy);
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent 0,
+    transparent 3px,
+    var(--rv-avail-hatch) 3px,
+    var(--rv-avail-hatch) 5px
+  );
+}
+
+.availability-swatch--partial {
+  background-color: var(--rv-avail-partial);
+}
+
+.availability-swatch--free {
+  background-color: var(--rv-avail-free);
+}
+
+.availability-swatch--virtual.availability-swatch--partial {
+  background-color: var(--rv-avail-virtual-partial);
+}
+
+.availability-swatch--virtual.availability-swatch--free {
+  background-color: var(--rv-avail-virtual-free);
+}
+
+/* Segmented Busy / If needed / Available control */
+.availability-choice-group {
+  align-self: flex-start;
+  flex-wrap: wrap;
+}
+
+.availability-choice-group .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+@media (max-width: 575.98px) {
+  .availability-choice-group .btn {
+    padding: 0.4rem 0.55rem;
+    font-size: 0.875rem;
+  }
+}
+
+/* Toolbar above the grid: choice group + bulk actions + legend */
+.schedule-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.75rem 1.25rem;
+  margin-bottom: 0.75rem;
+}
+
+.schedule-toolbar__group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+.schedule-toolbar__label {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--bs-secondary-color);
+  margin: 0;
+}
+
+.schedule-toolbar__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* ---------------------------------------------------------------------------
+ * Schedule grid
+ * ------------------------------------------------------------------------- */
+
+.schedule-grid-shell {
+  min-width: 0;
+}
+
+.schedule-grid-title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem;
+}
+
+.schedule-grid-scroll {
+  position: relative;
+  border: 1px solid var(--bs-border-color);
+  border-radius: var(--bs-border-radius-lg);
+  background: var(--rv-surface-raised);
+  overflow: auto;
+  max-height: min(72vh, 760px);
+  overscroll-behavior: contain;
+  scrollbar-color: var(--bs-border-color) transparent;
+}
+
+.schedule-grid-empty {
+  color: var(--bs-secondary-color);
+  margin: 0;
+  padding: 1rem;
+}
+
+.schedule-grid {
+  display: inline-block;
+  min-width: 100%;
+  font-variant-numeric: tabular-nums;
+}
+
+.schedule-grid-header,
+.schedule-grid-row {
+  display: grid;
+}
+
+/* The day header stays visible while scrolling vertically. */
+.schedule-grid-header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--bs-tertiary-bg);
+  border-bottom: 1px solid var(--bs-border-color);
+}
+
+.schedule-grid-time-header,
+.schedule-grid-column-header {
+  color: var(--bs-secondary-color);
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.5rem 0.5rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The time column stays visible while scrolling horizontally. */
+.schedule-grid-time-header {
+  position: sticky;
+  left: 0;
+  z-index: 4;
+  background: var(--bs-tertiary-bg);
+  text-align: right;
+  border-right: 1px solid var(--bs-border-color);
+}
+
+.schedule-grid-column-header {
+  text-align: center;
+  border-left: 1px solid var(--bs-border-color);
+}
+
+.schedule-grid-row-header,
+.schedule-grid-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: 36px;
+  min-width: 0;
+}
+
+.schedule-grid-row-header {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--bs-tertiary-bg);
+  border-top: 1px solid var(--bs-border-color);
+  border-right: 1px solid var(--bs-border-color);
+  color: var(--bs-secondary-color);
+  font-size: 0.75rem;
+  font-weight: 500;
+  justify-content: flex-end;
+  padding-right: 0.5rem;
+  white-space: nowrap;
+}
+
+.schedule-grid-row-header[data-first-row="true"] {
+  border-top: 0;
+}
+
+.schedule-grid-cell {
+  color: var(--rv-avail-text);
+  font-size: 0.75rem;
+  font-weight: 600;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  border-top: 1px solid rgba(33, 37, 41, 0.12);
+  border-left: 1px solid rgba(33, 37, 41, 0.12);
+  transition: box-shadow 100ms ease-out;
+}
+
+.schedule-grid-cell[data-first-row="true"] {
+  border-top: 0;
+}
+
+.schedule-grid-cell[data-first-column="true"] {
+  border-left: 0;
+}
+
+/* Non-color cues: busy cells are hatched, if-needed and available cells show
+   a glyph. The accessible name always carries the numeric value. */
+.schedule-grid-cell[data-availability="busy"] {
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent 0,
+    transparent 4px,
+    var(--rv-avail-hatch) 4px,
+    var(--rv-avail-hatch) 6px
+  );
+}
+
+.schedule-grid-cell__glyph {
+  pointer-events: none;
+  line-height: 1;
+}
+
+.schedule-grid-cell[data-availability="partial"] .schedule-grid-cell__glyph {
+  font-size: 0.8rem;
+}
+
+.schedule-grid-cell:not([aria-readonly="true"]) {
+  cursor: pointer;
+}
+
+.schedule-grid-cell:not([aria-readonly="true"]):hover {
+  box-shadow: inset 0 0 0 2px rgba(13, 110, 253, 0.45);
+}
+
+.schedule-grid-cell:focus-visible {
+  outline: 0;
+  box-shadow:
+    inset 0 0 0 3px var(--bs-primary),
+    inset 0 0 0 5px #fff;
+  position: relative;
+  z-index: 1;
+  border-radius: 0;
+}
+
+.schedule-grid-cell-empty {
+  background-color: var(--bs-tertiary-bg);
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent 0,
+    transparent 5px,
+    var(--bs-border-color) 5px,
+    var(--bs-border-color) 6px
+  );
+  cursor: not-allowed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .schedule-grid-cell {
+    transition: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Channel tabs (mixed events: In person / Virtual)
+ * ------------------------------------------------------------------------- */
+
+.schedule-channel-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.schedule-channel-editor__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.schedule-channel-tabs .nav-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 500;
+}
+
+/* Copy-channel confirmation */
+.schedule-copy-confirmation {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+}
+
+.schedule-copy-confirmation__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* Autosave / submission status line */
+.save-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.save-status__text {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* ---------------------------------------------------------------------------
+ * Home page availability preview
+ * ------------------------------------------------------------------------- */
+
+.home-preview-grid {
+  display: grid;
+  grid-template-columns: 3.5rem repeat(
+      var(--rv-preview-columns, 5),
+      minmax(0, 1fr)
+    );
+  gap: 3px;
+  font-size: 0.75rem;
+}
+
+.home-preview-grid > span,
+.home-preview-grid > strong {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--bs-secondary-color);
+  font-weight: 600;
+  min-height: 1.75rem;
+}
+
+.home-preview-grid > span {
+  justify-content: flex-end;
+  padding-right: 0.5rem;
+  font-weight: 500;
+}
+
+.home-preview-grid > i {
+  display: block;
+  min-height: 2rem;
+  border-radius: 0.25rem;
+  background: var(--rv-avail-busy);
+}
+
+.home-preview-scale > i {
+  display: block;
+  width: 1.125rem;
+  height: 1.125rem;
+  border-radius: 0.25rem;
+  background: var(--rv-avail-busy);
+}
+
+.home-preview-grid > i.overlap-1,
+.home-preview-scale > i.overlap-1 {
+  background: var(--rv-avail-busy);
+}
+
+.home-preview-grid > i.overlap-2,
+.home-preview-scale > i.overlap-2 {
+  background: color-mix(
+    in srgb,
+    var(--rv-avail-busy) 40%,
+    var(--rv-avail-partial)
+  );
+}
+
+.home-preview-grid > i.overlap-3,
+.home-preview-scale > i.overlap-3 {
+  background: var(--rv-avail-partial);
+}
+
+.home-preview-grid > i.overlap-4,
+.home-preview-scale > i.overlap-4 {
+  background: color-mix(
+    in srgb,
+    var(--rv-avail-partial) 40%,
+    var(--rv-avail-free)
+  );
+}
+
+.home-preview-grid > i.overlap-5,
+.home-preview-scale > i.overlap-5 {
+  background: var(--rv-avail-free);
+}
+
+.home-preview-grid > i.overlap-5 {
+  box-shadow: inset 0 0 0 2px var(--bs-success);
+}
+
+/* ---------------------------------------------------------------------------
+ * Ranked recommendations (organizer results)
+ * ------------------------------------------------------------------------- */
+
+.results-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: none;
+}
+
+.result-option {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding: 0.75rem 0.875rem;
+  border: 1px solid var(--bs-border-color);
+  border-radius: var(--bs-border-radius-lg);
+  background: var(--rv-surface-raised);
+}
+
+.result-option--best {
+  border-color: var(--bs-primary);
+  box-shadow: inset 0 0 0 1px var(--bs-primary);
+}
+
+.result-option--selected {
+  background: var(--bs-primary-bg-subtle);
+  border-color: var(--bs-primary-border-subtle);
+}
+
+.result-option__content {
+  flex: 1 1 16rem;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.result-option__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.result-option__rank {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.75rem;
+  height: 1.75rem;
+  padding: 0 0.4rem;
+  border-radius: 999px;
+  background: var(--bs-secondary-bg);
+  color: var(--bs-body-color);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.result-option--best .result-option__rank {
+  background: var(--bs-primary);
+  color: #fff;
+}
+
+.result-option__title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.result-option__time {
+  color: var(--bs-secondary-color);
+  font-size: 0.875rem;
+}
+
+/* Metrics sit on one scannable line; the visible text already names each
+   metric ("67% weighted"), so the <dt> is kept for assistive technology only. */
+.result-option__metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem 1.25rem;
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+.result-option__metric {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.result-option__metric dt {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.result-option__metric dd {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.result-option__metric .progress {
+  flex: 0 0 4.5rem;
+  width: 4.5rem;
+  height: 0.375rem;
+}
+
+.result-option__actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Finalize step: lives beside the calendar in the results panel */
+.finalize-block {
+  border: 1px solid var(--bs-border-color);
+  border-radius: var(--bs-border-radius-lg);
+  background: var(--rv-surface-raised);
+  padding: 1rem;
+  scroll-margin-top: 4.5rem;
+}
+
+.finalize-block__header {
+  margin-bottom: 0.75rem;
+}
+
+.finalize-block__title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.finalize-block__description {
+  margin: 0.125rem 0 0;
+  color: var(--bs-secondary-color);
+  font-size: 0.875rem;
+}
+
+.finalize-block .step-indicator {
+  margin-bottom: 1rem;
+}
+
+.finalize-block .step-indicator__item {
+  font-size: 0.8125rem;
+}
+
+.finalize-block .metric-tiles {
+  grid-template-columns: repeat(auto-fit, minmax(5.5rem, 1fr));
+}
+
+.finalize-block__actions .btn {
+  flex: 1 1 auto;
+}
+
+/* Selected candidate summary in the finalize step */
+.final-candidate {
+  border: 1px solid var(--bs-primary-border-subtle);
+  background: var(--bs-primary-bg-subtle);
+  border-radius: var(--bs-border-radius-lg);
+  padding: 0.875rem 1rem;
+}
+
+.final-candidate__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.final-candidate__time {
+  margin: 0;
+  color: var(--bs-body-color);
+}
+
+/* Confirmed meeting summary */
+.finalized-meeting {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+  border: 1px solid var(--bs-success-border-subtle);
+  background: var(--bs-success-bg-subtle);
+  border-radius: var(--bs-border-radius-lg);
+  padding: 0.875rem 1rem;
+}
+
+.finalized-meeting__summary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.finalized-meeting__time {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.finalized-meeting__meta {
+  color: var(--bs-secondary-color);
+  font-size: 0.9rem;
+}
+
+/* ---------------------------------------------------------------------------
+ * Delivery progress
+ * ------------------------------------------------------------------------- */
+
+.delivery-progress {
+  border: 1px solid var(--bs-border-color);
+  border-radius: var(--bs-border-radius-lg);
+  background: var(--rv-surface-raised);
+  padding: 0.875rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.delivery-progress__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.delivery-progress__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* Participant layout: the person's own editor only */
+.participant-columns {
+  display: grid;
+  gap: 1.25rem;
+  align-items: start;
+}
+
+.participant-columns > * {
+  min-width: 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * Roster table density
+ * ------------------------------------------------------------------------- */
+
+.roster-table .roster-table__person {
+  min-width: 11rem;
+  max-width: 18rem;
+}
+
+/* Group + weight share a line; "Included" wraps beneath them when the column
+   is narrow (organizer sidebar at 1200–1400px) and sits inline when wide. */
+.roster-table .roster-table__settings-cell {
+  min-width: 13rem;
+}
+
+.roster-table .roster-table__progress-cell {
+  min-width: 8rem;
+  white-space: nowrap;
+}
+
+/* Groups table: name, head count, shared weight, and row actions */
+.roster-groups__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.roster-groups__copy {
+  min-width: 0;
+  flex: 1 1 18rem;
+}
+
+.roster-groups__title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.roster-groups__description {
+  margin: 0.125rem 0 0;
+  color: var(--bs-secondary-color);
+  font-size: 0.875rem;
+}
+
+.roster-groups__create {
+  border: 1px solid var(--bs-border-color);
+  border-radius: var(--bs-border-radius-lg);
+  background: var(--bs-tertiary-bg);
+  padding: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.roster-groups__shell .table-responsive {
+  max-height: 24rem;
+}
+
+.roster-groups__table .roster-groups__name {
+  min-width: 11rem;
+}
+
+.roster-groups__table .roster-groups__count {
+  white-space: nowrap;
+  color: var(--bs-secondary-color);
+  font-variant-numeric: tabular-nums;
+}
+
+.roster-groups__weight {
+  width: 5.25rem;
+}
+
+.roster-groups__rename {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.roster-groups__rename input {
+  flex: 1 1 8rem;
+  min-width: 8rem;
+}
+
+.roster-groups__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.25rem 0.5rem;
+}
+
+.roster-groups__empty {
+  margin-top: 0.75rem;
+}
+
+/* Import preview inputs stay readable; the table scrolls horizontally instead. */
+.roster-import__table input.form-control:not([type="number"]) {
+  min-width: 9rem;
+}
+
+.roster-import__table input[type="number"].form-control {
+  min-width: 4.5rem;
+}
+
+/* ---------------------------------------------------------------------------
+ * Meeting time calendar (organizer results + picker)
+ * ------------------------------------------------------------------------- */
+
+.meeting-results {
+  display: grid;
+  gap: 1rem;
+  align-items: start;
+}
+
+/* Side column: the collapsed ranked list and the Finalize step stay in view
+   next to the calendar, so a pick and its confirmation share one screen. */
+@media (min-width: 992px) {
+  .meeting-results {
+    grid-template-columns: minmax(0, 1fr) minmax(19rem, 23rem);
+  }
+
+  .meeting-results__side {
+    position: sticky;
+    top: 4rem;
+    max-height: calc(100vh - 5rem);
+    overflow: auto;
+    scrollbar-gutter: stable;
+  }
+}
+
+.meeting-results__side {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.meeting-results__rail {
+  min-width: 0;
+}
+
+.meeting-results__rail-disclosure > summary {
+  padding: 0.75rem 1rem;
+  align-items: flex-start;
+}
+
+.meeting-results__rail-content {
+  padding: 0.75rem 1rem 1rem;
+}
+
+.meeting-results__rail-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.meeting-results__rail-hint {
+  display: block;
+  margin-top: 0.125rem;
+  color: var(--bs-secondary-color);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
+.meeting-calendar {
+  --rv-cal-time-w: 72px;
+  --rv-cal-col-w: 88px;
+  --rv-cal-row-h: 40px;
+  --rv-cal-header-h: 44px;
+  --rv-cal-columns: 5;
+  /* Ranked outlines always sit on pastel availability tones, so they use a
+     fixed deep blue (>= 3:1 on every tone) rather than a theme-flipping
+     token such as --bs-primary-border-subtle (about 1:1 on them in light). */
+  --rv-cal-rank-outline: color-mix(
+    in srgb,
+    var(--bs-primary) 75%,
+    var(--bs-gray-900)
+  );
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+/* Overnight events label rows like "12:00 AM +1d" and need a wider time column. */
+.meeting-calendar--overnight {
+  --rv-cal-time-w: 96px;
+}
+
+@media (max-width: 575.98px) {
+  .meeting-calendar {
+    --rv-cal-time-w: 64px;
+    --rv-cal-col-w: 64px;
+  }
+
+  .meeting-calendar--overnight {
+    --rv-cal-time-w: 84px;
+  }
+
+  .meeting-calendar__row-header {
+    padding-right: 0.375rem;
+    font-size: 0.6875rem;
+  }
+
+  .meeting-calendar__cell-value {
+    font-size: 0.625rem;
+  }
+
+  /* Narrow columns: keep the rank badge clear of the centred value. */
+  .meeting-calendar__rank {
+    top: 1px;
+    left: 1px;
+    min-width: 1.125rem;
+    height: 1rem;
+    padding: 0 0.2rem;
+    font-size: 0.6rem;
+  }
+}
+
+.meeting-calendar__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+}
+
+.meeting-calendar__toolbar .btn-group {
+  flex-wrap: wrap;
+}
+
+/* Toolbar controls stay comfortable touch targets (>= 40px). */
+.meeting-calendar__toolbar .btn {
+  min-height: 2.5rem;
+}
+
+.meeting-calendar__range {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  margin-left: auto;
+}
+
+.meeting-calendar__range-label {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  min-width: 9rem;
+  text-align: center;
+}
+
+.meeting-calendar__scroll {
+  position: relative;
+  border: 1px solid var(--bs-border-color);
+  border-radius: var(--bs-border-radius-lg);
+  background: var(--rv-surface-raised);
+  overflow: auto;
+  max-height: min(72vh, 760px);
+  overscroll-behavior: contain;
+  scrollbar-color: var(--bs-border-color) transparent;
+}
+
+.meeting-calendar__canvas {
+  position: relative;
+  min-width: max(
+    100%,
+    calc(var(--rv-cal-time-w) + var(--rv-cal-columns) * var(--rv-cal-col-w))
+  );
+}
+
+.meeting-calendar__grid {
+  font-variant-numeric: tabular-nums;
+}
+
+.meeting-calendar__header,
+.meeting-calendar__row {
+  display: grid;
+}
+
+.meeting-calendar__header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  height: var(--rv-cal-header-h);
+  background: var(--bs-tertiary-bg);
+  border-bottom: 1px solid var(--bs-border-color);
+}
+
+.meeting-calendar__time-header,
+.meeting-calendar__column-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.15;
+  color: var(--bs-secondary-color);
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0 0.25rem;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.meeting-calendar__time-header {
+  position: sticky;
+  left: 0;
+  z-index: 4;
+  align-items: flex-end;
+  padding-right: 0.5rem;
+  background: var(--bs-tertiary-bg);
+  border-right: 1px solid var(--bs-border-color);
+}
+
+.meeting-calendar__column-header {
+  border-left: 1px solid var(--bs-border-color);
+}
+
+.meeting-calendar__column-day {
+  color: var(--bs-body-color);
+}
+
+.meeting-calendar__column-date {
+  font-weight: 500;
+}
+
+.meeting-calendar__row-header,
+.meeting-calendar__cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: var(--rv-cal-row-h);
+  min-width: 0;
+}
+
+.meeting-calendar__row-header {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  justify-content: flex-end;
+  gap: 0.2rem;
+  padding-right: 0.5rem;
+  background: var(--bs-tertiary-bg);
+  border-top: 1px solid var(--bs-border-color);
+  border-right: 1px solid var(--bs-border-color);
+  color: var(--bs-secondary-color);
+  font-size: 0.75rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.meeting-calendar__row-header small {
+  font-size: 0.65rem;
+}
+
+.meeting-calendar__cell {
+  /* Tone cells keep their pastel fill in both appearances, so their grid
+     lines and "passed" hatching use a fixed dark tint. */
+  --rv-cal-line: rgba(33, 37, 41, 0.12);
+  --rv-cal-hatch: rgba(33, 37, 41, 0.18);
+  position: relative;
+  color: var(--rv-avail-text);
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-top: 1px solid var(--rv-cal-line);
+  border-left: 1px solid var(--rv-cal-line);
+  cursor: pointer;
+  user-select: none;
+  transition: box-shadow 100ms ease-out;
+}
+
+/* No snapshot yet: cells sit on the raised surface, which is dark in dark
+   mode, so the lines and hatching follow the theme tokens instead. */
+.meeting-calendar__cell--neutral {
+  --rv-cal-line: var(--bs-border-color);
+  --rv-cal-hatch: color-mix(in srgb, var(--bs-body-color) 22%, transparent);
+  background: var(--rv-surface-raised);
+  color: var(--bs-secondary-color);
+}
+
+.meeting-calendar__cell[data-level="busy"]:not(
+    .meeting-calendar__cell--neutral
+  ) {
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent 0,
+    transparent 4px,
+    var(--rv-avail-hatch) 4px,
+    var(--rv-avail-hatch) 6px
+  );
+}
+
+.meeting-calendar__cell[data-state="tail"],
+.meeting-calendar__cell[data-state="past"],
+.meeting-calendar__cell[data-state="dst"],
+.meeting-calendar__cell[data-state="invalid-duration"] {
+  cursor: not-allowed;
+}
+
+/* Unpickable cells are inactive (aria-disabled), so the dimmed figure is
+   exempt from the text-contrast minimum; 0.7 still keeps it above 4:1. */
+.meeting-calendar__cell[data-state="tail"] .meeting-calendar__cell-value,
+.meeting-calendar__cell[data-state="past"] .meeting-calendar__cell-value,
+.meeting-calendar__cell[data-state="dst"] .meeting-calendar__cell-value {
+  opacity: 0.7;
+}
+
+.meeting-calendar__cell[data-state="past"]::after,
+.meeting-calendar__cell[data-state="dst"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    45deg,
+    var(--rv-cal-hatch) 0,
+    var(--rv-cal-hatch) 2px,
+    transparent 2px,
+    transparent 8px
+  );
+  pointer-events: none;
+}
+
+.meeting-calendar__cell[data-state="startable"]:hover {
+  box-shadow: inset 0 0 0 2px rgba(13, 110, 253, 0.45);
+}
+
+.meeting-calendar__cell:focus-visible {
+  outline: 0;
+  box-shadow:
+    inset 0 0 0 3px var(--bs-primary),
+    inset 0 0 0 5px #fff;
+  z-index: 1;
+  border-radius: 0;
+}
+
+.meeting-calendar__cell--empty {
+  background-color: var(--bs-tertiary-bg);
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent 0,
+    transparent 5px,
+    var(--bs-border-color) 5px,
+    var(--bs-border-color) 6px
+  );
+  cursor: not-allowed;
+}
+
+.meeting-calendar__cell-value {
+  pointer-events: none;
+}
+
+/* Overlays: ranked windows, hover preview, selection, confirmed meeting.
+   Positioned purely from custom properties so no measuring is needed. */
+.meeting-calendar__overlays {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  /* Below the sticky time column (2) and header (3) so blocks slide under
+     them while the grid scrolls. */
+  z-index: 1;
+}
+
+.meeting-calendar__block {
+  position: absolute;
+  box-sizing: border-box;
+  left: calc(
+    var(--rv-cal-time-w) + (100% - var(--rv-cal-time-w)) * var(--rv-cal-col) /
+      var(--rv-cal-columns)
+  );
+  width: calc((100% - var(--rv-cal-time-w)) / var(--rv-cal-columns));
+  top: calc(var(--rv-cal-header-h) + var(--rv-cal-row) * var(--rv-cal-row-h));
+  height: calc(var(--rv-cal-span) * var(--rv-cal-row-h));
+  border-radius: 0.25rem;
+}
+
+.meeting-calendar__block--rank {
+  border: 2px solid var(--rv-cal-rank-outline);
+}
+
+.meeting-calendar__block--best {
+  border-width: 3px;
+}
+
+.meeting-calendar__block--preview {
+  border: 2px dashed var(--bs-primary);
+  background: rgba(13, 110, 253, 0.08);
+}
+
+.meeting-calendar__block--selected {
+  outline: 3px solid var(--bs-primary);
+  outline-offset: -1px;
+  box-shadow: 0 0 0 4px rgba(13, 110, 253, 0.25);
+  z-index: 1;
+}
+
+.meeting-calendar__block--confirmed {
+  border: 3px solid var(--bs-success);
+  background: rgba(25, 135, 84, 0.12);
+}
+
+/* A confirmed meeting is the point of a finalized event's calendar; the
+   ranked outlines stay for reference but recede behind it. */
+.meeting-calendar--finalized .meeting-calendar__block--rank {
+  border-width: 1px;
+  border-color: color-mix(in srgb, var(--rv-cal-rank-outline) 55%, transparent);
+}
+
+.meeting-calendar--finalized .meeting-calendar__rank {
+  font-weight: 600;
+}
+
+.meeting-calendar__rank {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5rem;
+  height: 1.25rem;
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: var(--bs-secondary-bg);
+  color: var(--bs-body-color);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.meeting-calendar__block--best .meeting-calendar__rank {
+  background: var(--bs-primary);
+  color: #fff;
+}
+
+.meeting-calendar__block-label {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  line-height: 1.2;
+  background: var(--bs-primary);
+  color: #fff;
+}
+
+.meeting-calendar__block--confirmed .meeting-calendar__block-label {
+  background: var(--bs-success);
+}
+
+.meeting-calendar__legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.8125rem;
+  color: var(--bs-secondary-color);
+}
+
+.meeting-calendar__legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.meeting-calendar__legend-gradient {
+  width: 4.5rem;
+  height: 0.75rem;
+  border-radius: 999px;
+  border: 1px solid rgba(33, 37, 41, 0.15);
+  background: linear-gradient(
+    90deg,
+    var(--rv-avail-busy),
+    var(--rv-avail-partial),
+    var(--rv-avail-free)
+  );
+}
+
+.meeting-calendar[data-channel="virtual"] .meeting-calendar__legend-gradient {
+  background: linear-gradient(
+    90deg,
+    var(--rv-avail-busy),
+    var(--rv-avail-virtual-partial),
+    var(--rv-avail-virtual-free)
+  );
+}
+
+.meeting-calendar__legend-swatch {
+  width: 1.125rem;
+  height: 0.875rem;
+  border-radius: 0.2rem;
+  box-sizing: border-box;
+}
+
+.meeting-calendar__legend-swatch--rank {
+  border: 2px solid var(--rv-cal-rank-outline);
+  background: var(--rv-avail-free);
+}
+
+.meeting-calendar__legend-swatch--selected {
+  outline: 2px solid var(--bs-primary);
+  outline-offset: -1px;
+  box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.25);
+  background: var(--rv-avail-free);
+}
+
+.meeting-calendar[data-channel="virtual"]
+  .meeting-calendar__legend-swatch--rank,
+.meeting-calendar[data-channel="virtual"]
+  .meeting-calendar__legend-swatch--selected {
+  background: var(--rv-avail-virtual-free);
+}
+
+.meeting-calendar__legend-swatch--confirmed {
+  border: 2px solid var(--bs-success);
+  background: rgba(25, 135, 84, 0.12);
+}
+
+.meeting-calendar__note {
+  margin: 0;
+  color: var(--bs-secondary-color);
+  font-size: 0.875rem;
+}
+
+/* Compact ranked list in the rail */
+.results-list--compact {
+  gap: 0.5rem;
+}
+
+.results-list--compact .result-option {
+  padding: 0.625rem 0.75rem;
+  gap: 0.5rem 0.75rem;
+}
+
+.results-list--compact .result-option__content {
+  flex: 1 1 100%;
+  gap: 0.25rem;
+}
+
+.results-list--compact .result-option__metrics {
+  font-size: 0.8125rem;
+  gap: 0.25rem 0.75rem;
+}
+
+.results-list--compact .result-option__actions {
+  flex: 1 1 100%;
+}
+
+.results-list--compact .result-option__actions .btn {
+  width: 100%;
+  min-height: 2.5rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .meeting-calendar__cell,
+  .meeting-calendar__block {
+    transition: none;
+  }
+}

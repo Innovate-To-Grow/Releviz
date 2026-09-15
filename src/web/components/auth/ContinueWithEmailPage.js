@@ -2,8 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@/components/auth/AuthContext";
+import Alert from "@/components/ui/Alert";
 import AppButton from "@/components/ui/AppButton";
 import AppHeader from "@/components/ui/AppHeader";
+import FormField from "@/components/ui/FormField";
+import LoadingState from "@/components/ui/LoadingState";
+import { ArrowRightIcon, EmailIcon } from "@/components/ui/icons";
 import { navigateTo, safeNextPath } from "@/lib/navigation";
 
 const AUTH_ENTRY_PATHS = new Set([
@@ -131,9 +135,14 @@ export default function ContinueWithEmailPage({
       <>
         <AppHeader />
         <main className="auth-page auth-page-with-header">
-          <div className="auth-panel" role="status" aria-live="polite">
-            {authLoading ? "Checking your session…" : "Opening your account…"}
-          </div>
+          <section className="auth-panel">
+            <LoadingState
+              label={
+                authLoading ? "Checking your session…" : "Opening your account…"
+              }
+              className="p-0"
+            />
+          </section>
         </main>
       </>
     );
@@ -153,21 +162,13 @@ export default function ContinueWithEmailPage({
             </p>
           </div>
 
-          {error && (
-            <div className="auth-error" role="alert">
-              {error}
-            </div>
-          )}
-          {status && (
-            <div className="auth-status" role="status" aria-live="polite">
-              {status}
-            </div>
-          )}
+          {error && <Alert variant="danger">{error}</Alert>}
+          {status && <Alert variant="success">{status}</Alert>}
 
           {!codeSent ? (
-            <label>
-              Email
+            <FormField label="Email">
               <input
+                className="form-control"
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
                 type="email"
@@ -175,12 +176,12 @@ export default function ContinueWithEmailPage({
                 autoFocus
                 required
               />
-            </label>
+            </FormField>
           ) : (
             <>
-              <label>
-                Verification code
+              <FormField label="Verification code">
                 <input
+                  className="form-control"
                   value={code}
                   onChange={(event) => setCode(event.target.value)}
                   inputMode="numeric"
@@ -190,10 +191,10 @@ export default function ContinueWithEmailPage({
                   autoFocus
                   required
                 />
-              </label>
+              </FormField>
               <button
                 type="button"
-                className="auth-inline-link"
+                className="btn btn-link p-0 align-self-start"
                 onClick={useDifferentEmail}
               >
                 Use a different email
@@ -201,7 +202,13 @@ export default function ContinueWithEmailPage({
             </>
           )}
 
-          <AppButton type="submit" fullWidth disabled={loading || authLoading}>
+          <AppButton
+            type="submit"
+            fullWidth
+            icon={codeSent ? <ArrowRightIcon /> : <EmailIcon />}
+            busy={loading}
+            disabled={loading || authLoading}
+          >
             {loading
               ? codeSent
                 ? "Verifying..."
@@ -211,7 +218,7 @@ export default function ContinueWithEmailPage({
                 : "Continue with email"}
           </AppButton>
 
-          <p className="auth-privacy-note">
+          <p className="small text-secondary mb-0">
             No password required. By continuing, you agree to receive a one-time
             verification email.
           </p>

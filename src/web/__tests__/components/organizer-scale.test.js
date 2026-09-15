@@ -13,12 +13,6 @@ import {
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 
-jest.mock("@material/web/checkbox/checkbox.js", () => ({}), { virtual: true });
-jest.mock("@material/web/slider/slider.js", () => ({}), { virtual: true });
-jest.mock("@material/web/textfield/outlined-text-field.js", () => ({}), {
-  virtual: true,
-});
-
 jest.mock("@/components/auth/AuthContext", () => ({ useAuth: jest.fn() }));
 jest.mock("@/components/event/CreateEventClient", () => ({
   __esModule: true,
@@ -41,6 +35,17 @@ jest.mock("@/components/event/CreateEventClient", () => ({
         }
       >
         Save changes
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          onSaved({
+            event: { ...initialEvent, version: initialEvent.version + 1 },
+            responsesReset: 2,
+          })
+        }
+      >
+        Save and reset responses
       </button>
     </div>
   ),
@@ -92,6 +97,7 @@ import EventContext from "@/components/event/EventContext";
 import OrganizerScaleView from "@/components/schedule/OrganizerScaleView";
 import {
   confirmFinalMeeting,
+  fetchDeliveryRequest,
   fetchEvent,
   fetchEventResults,
   previewFinalMeeting,
@@ -380,22 +386,33 @@ describe("scaled organizer workspace", () => {
     await screen.findByText("Ada Faculty");
     await screen.findByText(/Results are current at revision 3/);
 
+    // Event facts first, then the calendar picker with its confirmation step
+    // inside it, then the roster that feeds them.
     const sectionIds = [
       "organizer-overview",
-      "organizer-roster",
       "organizer-results",
-      "organizer-finalize",
+      "organizer-roster",
     ];
-    const labels = ["Overview", "Roster", "Results", "Finalize"];
+    const labels = ["Overview", "Results", "Roster"];
 
     labels.forEach((label, index) => {
       expect(document.getElementById(sectionIds[index])).toHaveAccessibleName(
         label,
       );
     });
-    expect(
-      screen.queryByRole("navigation", { name: "Organizer sections" }),
-    ).not.toBeInTheDocument();
+    const sectionNav = screen.getByRole("navigation", {
+      name: "Workspace sections",
+    });
+    const sectionLinks = within(sectionNav).getAllByRole("link");
+    expect(sectionLinks).toHaveLength(sectionIds.length);
+    labels.forEach((label, index) => {
+      expect(sectionLinks[index]).toHaveAccessibleName(label);
+      expect(sectionLinks[index]).toHaveAttribute(
+        "href",
+        `#${sectionIds[index]}`,
+      );
+      expect(sectionLinks[index]).not.toHaveAttribute("aria-current");
+    });
     expect(
       Array.from(document.querySelectorAll(".organizer-workspace-section")).map(
         (section) => section.id,
@@ -403,15 +420,12 @@ describe("scaled organizer workspace", () => {
     ).toEqual(sectionIds);
     expect(
       Array.from(
-        document.querySelector(".organizer-workspace-column--primary").children,
+        document.querySelector(".organizer-workspace-sections").children,
       ).map((section) => section.id),
-    ).toEqual(["organizer-overview", "organizer-roster"]);
+    ).toEqual(sectionIds);
     expect(
-      Array.from(
-        document.querySelector(".organizer-workspace-column--secondary")
-          .children,
-      ).map((section) => section.id),
-    ).toEqual(["organizer-results", "organizer-finalize"]);
+      screen.getByRole("grid", { name: /Meeting time calendar/ }),
+    ).toBeInTheDocument();
     expect(screen.queryAllByRole("tab")).toHaveLength(0);
     expect(screen.queryAllByRole("tabpanel")).toHaveLength(0);
 
@@ -425,6 +439,21 @@ describe("scaled organizer workspace", () => {
     ).toBeInTheDocument();
     expect(
       within(workspaceActions).getByRole("button", { name: "Refresh" }),
+    ).toBeInTheDocument();
+    // The header's Refresh is the only refresh control on the page.
+    expect(screen.getAllByRole("button", { name: /refresh/i })).toEqual([
+      within(workspaceActions).getByRole("button", { name: "Refresh" }),
+    ]);
+    // Finalize lives inside the results section, beside the calendar.
+    const resultsSection = document.getElementById("organizer-results");
+    expect(resultsSection).toContainElement(
+      document.getElementById("organizer-finalize"),
+    );
+    expect(
+      within(resultsSection).getByRole("heading", {
+        level: 4,
+        name: "Finalize",
+      }),
     ).toBeInTheDocument();
 
     const overviewSection = document.getElementById("organizer-overview");
@@ -507,7 +536,7 @@ describe("scaled organizer workspace", () => {
     );
   });
 
-  test.each(["roster", "results", "finalize"])(
+  test.each(["roster", "results"])(
     "scrolls to a directly linked %s section",
     async (section) => {
       window.history.replaceState(
@@ -564,6 +593,59 @@ describe("scaled organizer workspace", () => {
     expect(setEvent).toHaveBeenCalledWith(
       expect.objectContaining({ code: event.code, version: 3 }),
     );
+  });
+
+  test("ignores a second refresh while one is in flight and tolerates an event-less reply", async () => {
+    const setEvent = jest.fn();
+    let releaseEvent;
+    fetchEvent.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseEvent = resolve;
+        }),
+    );
+    renderView(setEvent);
+    await screen.findByText("Ada Faculty");
+    await screen.findByText(/Results are current at revision 3/);
+    fetchEvent.mockClear();
+    fetchRoster.mockClear();
+
+    const refresh = screen.getByRole("button", { name: "Refresh" });
+    await userEvent.click(refresh);
+    expect(refresh).toBeDisabled();
+    await waitFor(() => expect(releaseEvent).toBeDefined());
+    // A second press during the first run is a no-op.
+    fireEvent.click(refresh);
+    expect(fetchEvent).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      releaseEvent({});
+    });
+    expect(await screen.findByText("Workspace updated.")).toBeInTheDocument();
+    expect(setEvent).not.toHaveBeenCalled();
+    expect(fetchRoster).toHaveBeenCalledTimes(1);
+  });
+
+  test("reports when the roster cannot be re-read after a reset", async () => {
+    renderView();
+    await screen.findByText("Ada Faculty");
+    await screen.findByText(/Results are current at revision 3/);
+    fetchRoster.mockRejectedValueOnce(new Error(""));
+
+    const overviewSection = document.getElementById("organizer-overview");
+    await userEvent.click(
+      within(overviewSection).getByRole("button", { name: "Edit event" }),
+    );
+    await userEvent.click(
+      within(overviewSection).getByRole("button", {
+        name: "Save and reset responses",
+      }),
+    );
+
+    expect(
+      await screen.findByText(
+        "The event was saved, but the roster could not be refreshed.",
+      ),
+    ).toHaveAttribute("role", "alert");
   });
 
   test("reports a partial workspace refresh without discarding successful data", async () => {
@@ -1096,7 +1178,7 @@ describe("scaled organizer workspace", () => {
       within(bulk).getByRole("button", { name: "Apply update" }),
     );
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Choose weight, included status, or both",
+      "Choose a group, weight, included status, or a combination",
     );
     expect(patchRosterBulk).not.toHaveBeenCalled();
 
@@ -1393,7 +1475,11 @@ describe("scaled organizer workspace", () => {
         },
       },
       finalMeeting: { attendance: { availableParticipantTotal: 700 } },
-      deliveryRequest: null,
+      deliveryRequest: {
+        id: "final-9",
+        operation: "final_confirmation",
+        delivery: { total: 2, pending: 2 },
+      },
     });
     const setEvent = jest.fn();
     renderView(setEvent, { ...event, status: "active" });
@@ -1430,6 +1516,368 @@ describe("scaled organizer workspace", () => {
     expect(setEvent).toHaveBeenCalledWith(
       expect.objectContaining({ status: "finalized" }),
     );
+    // Invitation delivery shows in the workspace banner like every other run.
+    const banner = await screen.findByLabelText("Event delivery progress");
+    expect(banner).toHaveTextContent("Final confirmation delivery");
+    expect(banner).toHaveTextContent("2 queued");
+    expect(
+      screen.queryByLabelText("Finalization delivery progress"),
+    ).not.toBeInTheDocument();
+  });
+
+  test("keeps the names the end-to-end flow queries unique across the workspace", async () => {
+    previewFinalMeeting.mockResolvedValue({
+      attendance: {
+        availableParticipantTotal: 700,
+        partialParticipantTotal: 100,
+        unavailableParticipantTotal: 50,
+        unansweredParticipantTotal: 150,
+        excludedParticipantTotal: 0,
+      },
+    });
+    renderView(jest.fn(), { ...event, status: "active" });
+    await screen.findByText(/Results are current at revision 3/);
+
+    // Playwright's getByRole("heading", { name }) is a substring match, so
+    // only the panel title and the Finalize step may mention them.
+    expect(screen.getAllByRole("heading", { name: /results/i })).toEqual([
+      screen.getByRole("heading", { level: 3, name: "Results" }),
+    ]);
+    expect(screen.getAllByRole("heading", { name: /finali[sz]/i })).toEqual([
+      screen.getByRole("heading", { level: 4, name: "Finalize" }),
+    ]);
+    expect(
+      screen.getByText("Top continuous windows for a 60-minute meeting.", {
+        exact: false,
+      }),
+    ).toBeInTheDocument();
+
+    // The pick buttons live in the ranked rail only; the calendar itself
+    // exposes exactly one tab stop and no buttons.
+    const rail = screen.getByRole("complementary", { name: "Ranked windows" });
+    const chooseButtons = screen.getAllByRole("button", {
+      name: "Choose this time",
+    });
+    expect(chooseButtons).toHaveLength(1);
+    chooseButtons.forEach((button) => expect(rail).toContainElement(button));
+    const grid = screen.getByRole("grid", { name: /^Meeting time calendar/ });
+    expect(within(grid).queryAllByRole("button")).toHaveLength(0);
+    expect(
+      within(grid)
+        .getAllByRole("gridcell")
+        .filter((gridcell) => gridcell.tabIndex === 0),
+    ).toHaveLength(1);
+    expect(screen.queryByText("Available", { exact: true })).toBeNull();
+
+    await userEvent.click(chooseButtons[0]);
+    expect(screen.getByRole("heading", { name: "Finalize" })).toHaveFocus();
+    expect(
+      screen.getByRole("button", { name: "Selected time" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    // Revealing the chosen window scrolls the calendar, never the page:
+    // the only page scroll nudges the Finalize step into view if needed.
+    await waitFor(() =>
+      expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledTimes(1),
+    );
+    expect(HTMLElement.prototype.scrollIntoView.mock.contexts).toEqual([
+      document.getElementById("organizer-finalize"),
+    ]);
+    expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledWith({
+      behavior: "smooth",
+      block: "nearest",
+    });
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Review attendance" }),
+    );
+    await screen.findByText("Attendance review is current for this candidate.");
+    // The attendance tile is the only element whose whole text is "Available".
+    expect(screen.getAllByText("Available", { exact: true })).toHaveLength(1);
+    expect(screen.getAllByRole("heading", { name: /results/i })).toHaveLength(
+      1,
+    );
+    expect(
+      screen.getAllByRole("heading", { name: /finali[sz]/i }),
+    ).toHaveLength(1);
+  });
+
+  test("refreshes the roster when a saved edit reset responses", async () => {
+    renderView();
+    await screen.findByText("Ada Faculty");
+    await screen.findByText(/Results are current at revision 3/);
+    fetchRoster.mockClear();
+    fetchEventResults.mockClear();
+
+    const overviewSection = document.getElementById("organizer-overview");
+    await userEvent.click(
+      within(overviewSection).getByRole("button", { name: "Edit event" }),
+    );
+    await userEvent.click(
+      within(overviewSection).getByRole("button", {
+        name: "Save and reset responses",
+      }),
+    );
+
+    await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(1));
+    expect(fetchRoster).toHaveBeenCalledWith(
+      event.code,
+      expect.objectContaining({ page: 1 }),
+      "token",
+    );
+    await waitFor(() => expect(fetchEventResults).toHaveBeenCalledTimes(1));
+  });
+
+  test("keeps the empty Finalize step beside the calendar with no jump button", async () => {
+    renderView();
+    await screen.findByText("Ada Faculty");
+    await screen.findByText(/Results are current at revision 3/);
+
+    const finalizeSection = document.getElementById("organizer-finalize");
+    expect(finalizeSection).toHaveTextContent("No time selected yet");
+    expect(
+      within(finalizeSection).queryByRole("button", {
+        name: "Browse results",
+      }),
+    ).not.toBeInTheDocument();
+    expect(finalizeSection.closest(".meeting-results__side")).not.toBeNull();
+    // The ranked list beside it starts collapsed.
+    const rail = screen.getByRole("complementary", { name: "Ranked windows" });
+    expect(rail.querySelector("details")).not.toHaveAttribute("open");
+  });
+
+  test("the header refresh also re-reads visible delivery progress", async () => {
+    const key = `releviz.delivery-request.${event.code}`;
+    window.sessionStorage.setItem(
+      key,
+      JSON.stringify({
+        id: "delivery-9",
+        operation: "reminder",
+        delivery: { total: 3, sent: 3 },
+      }),
+    );
+    fetchDeliveryRequest.mockResolvedValue({
+      id: "delivery-9",
+      operation: "reminder",
+      delivery: { total: 3, sent: 2, permanentFailure: 1 },
+    });
+    renderView();
+    await screen.findByText("Ada Faculty");
+    const progress = await screen.findByLabelText("Event delivery progress");
+    expect(progress).toHaveTextContent("Complete");
+    expect(
+      within(progress).queryByRole("button", { name: /refresh/i }),
+    ).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() =>
+      expect(fetchDeliveryRequest).toHaveBeenCalledWith("delivery-9", "token"),
+    );
+    expect(await screen.findByText("Needs attention")).toBeInTheDocument();
+  });
+
+  test("picks a custom window on the calendar and finalizes it", async () => {
+    // Four 30-minute slots on one date; a 60-minute meeting spans two of them.
+    const calendarEvent = {
+      ...event,
+      slotCount: 4,
+      meetingDurationMinutes: 60,
+      slotGroups: [
+        {
+          key: "date:2026-08-20",
+          label: "2026-08-20",
+          date: "2026-08-20",
+          slots: [
+            ["09:00", "09:30"],
+            ["09:30", "10:00"],
+            ["10:00", "10:30"],
+            ["10:30", "11:00"],
+          ].map(([localStart, localEnd], index) => ({
+            index,
+            localStart,
+            localEnd,
+            startDayOffset: 0,
+            endDayOffset: 0,
+            startsAt: `2026-08-20T${localStart}:00Z`,
+            endsAt: `2026-08-20T${localEnd}:00Z`,
+          })),
+        },
+      ],
+    };
+    fetchEventResults.mockResolvedValue({
+      status: "fresh",
+      requestedRevision: 3,
+      computedRevision: 3,
+      generatedAt: "2026-08-01T00:00:00Z",
+      results: {
+        countedResponseTotal: 4,
+        channels: {
+          inperson: {
+            weighted: [0.75, 0.5, 1, 0.25],
+            unweighted: [0.7, 0.6, 0.9, 0.3],
+          },
+        },
+        recommendations: [],
+      },
+    });
+    previewFinalMeeting.mockResolvedValue({
+      attendance: {
+        availableParticipantTotal: 2,
+        partialParticipantTotal: 1,
+        unavailableParticipantTotal: 1,
+        unansweredParticipantTotal: 0,
+        excludedParticipantTotal: 0,
+      },
+    });
+    confirmFinalMeeting.mockResolvedValue({
+      event: {
+        ...calendarEvent,
+        status: "finalized",
+        version: 3,
+        finalMeeting: {
+          startsAt: "2026-08-20T09:30:00Z",
+          endsAt: "2026-08-20T10:30:00Z",
+          channel: "inperson",
+          location: "Room 1",
+        },
+      },
+      finalMeeting: { attendance: { availableParticipantTotal: 2 } },
+      deliveryRequest: null,
+    });
+    const nowSpy = jest
+      .spyOn(Date, "now")
+      .mockReturnValue(Date.parse("2026-08-01T00:00:00Z"));
+
+    try {
+      const setEvent = jest.fn();
+      renderView(setEvent, calendarEvent);
+      await screen.findByText(/Results are current/);
+
+      // The step re-keys on every new selection, so query it fresh.
+      const finalizeSection = () =>
+        document.getElementById("organizer-finalize");
+      expect(finalizeSection()).toHaveTextContent("No time selected yet");
+      expect(screen.queryByText("Custom window")).not.toBeInTheDocument();
+
+      const cell = document.querySelector('[data-cell-idx="1"]');
+      expect(cell).toHaveAttribute("data-state", "startable");
+      expect(cell).not.toHaveAttribute("aria-disabled");
+      await userEvent.click(cell);
+
+      expect(finalizeSection()).toHaveTextContent("Custom window");
+      expect(finalizeSection()).toHaveTextContent("In person");
+      expect(finalizeSection()).toHaveTextContent(/9:30/);
+      // The estimate is the lowest per-slot share across slots 1 and 2.
+      expect(finalizeSection()).toHaveTextContent(
+        "At least 50% weighted · 60% unweighted across this window (lowest slot). Exact attendance counts appear after Review attendance.",
+      );
+      expect(screen.getByRole("heading", { name: "Finalize" })).toHaveFocus();
+      expect(cell).toHaveAttribute("aria-selected", "true");
+      expect(document.querySelector('[data-cell-idx="2"]')).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+      expect(document.querySelector('[data-cell-idx="0"]')).not.toHaveAttribute(
+        "aria-selected",
+      );
+
+      await userEvent.click(
+        screen.getByRole("button", { name: "Review attendance" }),
+      );
+      await waitFor(() =>
+        expect(previewFinalMeeting).toHaveBeenCalledWith(
+          event.code,
+          {
+            startsAt: "2026-08-20T09:30:00Z",
+            endsAt: "2026-08-20T10:30:00Z",
+            channel: "inperson",
+            location: "Room 1",
+          },
+          "token",
+        ),
+      );
+      expect(
+        await screen.findByRole("group", { name: "Attendance review" }),
+      ).toBeInTheDocument();
+
+      await userEvent.click(
+        screen.getByRole("button", { name: "Finalize meeting" }),
+      );
+      await waitFor(() =>
+        expect(confirmFinalMeeting).toHaveBeenCalledWith(
+          event.code,
+          expect.objectContaining({
+            startsAt: "2026-08-20T09:30:00Z",
+            endsAt: "2026-08-20T10:30:00Z",
+            channel: "inperson",
+            expectedVersion: 2,
+            idempotencyKey: "request-key",
+          }),
+          "token",
+        ),
+      );
+      expect(setEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "finalized" }),
+      );
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  test("switches the calendar channel when a virtual result is chosen", async () => {
+    fetchEventResults.mockResolvedValue({
+      status: "fresh",
+      requestedRevision: 3,
+      computedRevision: 3,
+      generatedAt: "2026-08-20T08:00:00Z",
+      results: {
+        recommendations: [
+          {
+            rank: 1,
+            label: "Thursday 9:00 AM online",
+            channel: "virtual",
+            groupKey: "2026-08-20",
+            slotIndices: [0, 1],
+            suggestedStartsAt: "2026-08-20T09:00:00Z",
+            suggestedEndsAt: "2026-08-20T10:00:00Z",
+            weightedAvailability: 0.9,
+            unweightedAvailability: 0.8,
+            fullyAvailableParticipantTotal: 700,
+          },
+        ],
+      },
+    });
+    renderView();
+    await screen.findByText(/Results are current at revision 3/);
+
+    const channelGroup = screen.getByRole("group", {
+      name: "Meeting channel",
+    });
+    expect(
+      within(channelGroup).getByRole("button", { name: "In person" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      within(channelGroup).getByRole("button", { name: "Virtual" }),
+    ).toHaveAttribute("aria-pressed", "false");
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Choose this time" }),
+    );
+
+    expect(
+      within(channelGroup).getByRole("button", { name: "Virtual" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      within(channelGroup).getByRole("button", { name: "In person" }),
+    ).toHaveAttribute("aria-pressed", "false");
+    expect(
+      screen.getByRole("button", { name: "Selected time" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    const finalizeSection = document.getElementById("organizer-finalize");
+    expect(finalizeSection).toHaveTextContent("Thursday 9:00 AM online");
+    expect(finalizeSection).toHaveTextContent("Virtual");
+    expect(finalizeSection).toHaveTextContent("Ranked #1");
+    expect(finalizeSection).not.toHaveTextContent("In person");
+    expect(screen.getByRole("heading", { name: "Finalize" })).toHaveFocus();
   });
 
   test("selects a legacy recommendation and honors reduced motion", async () => {
@@ -1462,7 +1910,7 @@ describe("scaled organizer workspace", () => {
 
     expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledWith({
       behavior: "auto",
-      block: "start",
+      block: "nearest",
     });
     expect(document.getElementById("organizer-finalize")).toHaveTextContent(
       "Legacy result",
@@ -1495,6 +1943,7 @@ describe("scaled organizer workspace", () => {
     expect(
       await screen.findByText(/Results are updating for revision 4/),
     ).toHaveTextContent("Showing the last successful snapshot meanwhile");
-    expect(screen.getByText(/Previous best window/)).toBeInTheDocument();
+    // Named once in the collapsed summary and once in the list itself.
+    expect(screen.getAllByText(/Previous best window/)).toHaveLength(2);
   });
 });

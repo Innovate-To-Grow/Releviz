@@ -1,7 +1,10 @@
 "use client";
 
 import { useId, useRef, useState } from "react";
+import Alert from "@/components/ui/Alert";
 import AppButton from "@/components/ui/AppButton";
+import { AvailabilityLegend } from "@/components/ui/Availability";
+import { CopyIcon, GroupIcon, VirtualIcon } from "@/components/ui/icons";
 import ScheduleGrid from "@/components/schedule/ScheduleGrid";
 
 function schedulesMatch(first = [], second = []) {
@@ -15,6 +18,13 @@ function hasAvailability(schedule = []) {
   return schedule.some((value) => Number(value) > 0);
 }
 
+/**
+ * Single- or dual-channel availability editor.
+ *
+ * Mixed events keep independent In-person and Virtual schedules behind an
+ * accessible tablist. Copying one channel over another asks for confirmation
+ * whenever the target already contains availability.
+ */
 export default function ScheduleChannelEditor({
   mode,
   slotGroups,
@@ -25,6 +35,7 @@ export default function ScheduleChannelEditor({
   onInpersonPaint,
   onVirtualPaint,
   onCopy,
+  legend = true,
 }) {
   const [activeChannel, setActiveChannel] = useState(
     mode === "virtual" ? "virtual" : "inperson",
@@ -81,48 +92,46 @@ export default function ScheduleChannelEditor({
     selectChannel(channels[nextIndex], { focus: true });
   };
 
+  const tabs = [
+    { key: "inperson", label: "In person", Icon: GroupIcon },
+    { key: "virtual", label: "Virtual", Icon: VirtualIcon },
+  ];
+
   return (
     <div className="schedule-channel-editor">
       {mode === "mixed" && (
         <div className="schedule-channel-editor__toolbar">
-          <div
-            className="schedule-channel-tabs"
+          <ul
+            className="nav nav-pills schedule-channel-tabs"
             role="tablist"
             aria-label="Schedule channel"
           >
-            <button
-              type="button"
-              role="tab"
-              id={`${tabsId}-inperson-tab`}
-              aria-controls={`${tabsId}-inperson-panel`}
-              aria-selected={activeChannel === "inperson"}
-              tabIndex={activeChannel === "inperson" ? 0 : -1}
-              ref={(node) => {
-                tabRefs.current.inperson = node;
-              }}
-              onClick={() => selectChannel("inperson")}
-              onKeyDown={handleTabKeyDown}
-            >
-              In person
-            </button>
-            <button
-              type="button"
-              role="tab"
-              id={`${tabsId}-virtual-tab`}
-              aria-controls={`${tabsId}-virtual-panel`}
-              aria-selected={activeChannel === "virtual"}
-              tabIndex={activeChannel === "virtual" ? 0 : -1}
-              ref={(node) => {
-                tabRefs.current.virtual = node;
-              }}
-              onClick={() => selectChannel("virtual")}
-              onKeyDown={handleTabKeyDown}
-            >
-              Virtual
-            </button>
-          </div>
+            {tabs.map(({ key, label, Icon }) => (
+              <li className="nav-item" role="presentation" key={key}>
+                <button
+                  type="button"
+                  role="tab"
+                  className={`nav-link${activeChannel === key ? " active" : ""}`}
+                  id={`${tabsId}-${key}-tab`}
+                  aria-controls={`${tabsId}-${key}-panel`}
+                  aria-selected={activeChannel === key}
+                  tabIndex={activeChannel === key ? 0 : -1}
+                  ref={(node) => {
+                    tabRefs.current[key] = node;
+                  }}
+                  onClick={() => selectChannel(key)}
+                  onKeyDown={handleTabKeyDown}
+                >
+                  <Icon aria-hidden="true" />
+                  {label}
+                </button>
+              </li>
+            ))}
+          </ul>
           <AppButton
             variant="outlined"
+            size="sm"
+            icon={<CopyIcon />}
             onClick={requestCopy}
             disabled={readOnly || schedulesMatch(schedule, targetSchedule)}
           >
@@ -132,35 +141,44 @@ export default function ScheduleChannelEditor({
       )}
 
       {pendingCopy && (
-        <div
-          className="schedule-copy-confirmation"
+        <Alert
+          variant="warning"
           role="alertdialog"
           aria-labelledby="schedule-copy-title"
           aria-describedby="schedule-copy-description"
+          actions={
+            <>
+              <AppButton
+                variant="filled"
+                size="sm"
+                onClick={() =>
+                  copySchedule(pendingCopy.source, pendingCopy.target)
+                }
+              >
+                Replace schedule
+              </AppButton>
+              <AppButton
+                variant="outlined"
+                size="sm"
+                onClick={() => setPendingCopy(null)}
+              >
+                Cancel
+              </AppButton>
+            </>
+          }
         >
-          <div>
-            <strong id="schedule-copy-title">
-              Replace {targetLabel} availability?
-            </strong>
-            <p id="schedule-copy-description">
-              This copies every {channelLabel} value and replaces the current{" "}
-              {targetLabel} schedule.
-            </p>
-          </div>
-          <div>
-            <AppButton
-              variant="outlined"
-              onClick={() =>
-                copySchedule(pendingCopy.source, pendingCopy.target)
-              }
-            >
-              Replace schedule
-            </AppButton>
-            <AppButton variant="outlined" onClick={() => setPendingCopy(null)}>
-              Cancel
-            </AppButton>
-          </div>
-        </div>
+          <strong id="schedule-copy-title" className="d-block mb-1">
+            Replace {targetLabel} availability?
+          </strong>
+          <p id="schedule-copy-description" className="mb-0">
+            This copies every {channelLabel} value and replaces the current{" "}
+            {targetLabel} schedule.
+          </p>
+        </Alert>
+      )}
+
+      {legend && !showValues && (
+        <AvailabilityLegend virtual={channel === "virtual"} />
       )}
 
       <div

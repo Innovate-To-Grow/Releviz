@@ -355,40 +355,24 @@ class SchedulingPermissionTests(TestCase):
 
         self.assertIsNone(visible_participants_for_user(self.event, self.unrelated))
         self.assertFalse(can_view_event_results(self.event, self.unrelated))
-        self.assertEqual(
-            self.ids(visible_participants_for_user(self.event, self.first)),
-            {self.first.pk},
-        )
-        self.assertFalse(can_view_event_results(self.event, self.first))
 
-        self.event.participant_view_permission = "all_after_submit"
-        self.event.save(update_fields=["participant_view_permission"])
-        self.assertEqual(
-            self.ids(visible_participants_for_user(self.event, self.unsubmitted)),
-            {self.unsubmitted.pk},
-        )
-        self.assertFalse(can_view_event_results(self.event, self.unsubmitted))
-        self.assertEqual(
-            self.ids(visible_participants_for_user(self.event, self.first)),
-            {self.first.pk, self.second.pk},
-        )
-        self.assertTrue(can_view_event_results(self.event, self.first))
-
-        self.event.participant_view_permission = "realtime"
-        self.event.save(update_fields=["participant_view_permission"])
-        self.assertEqual(
-            self.ids(visible_participants_for_user(self.event, self.unsubmitted)),
-            {self.first.pk, self.second.pk, self.unsubmitted.pk},
-        )
-        self.assertTrue(can_view_event_results(self.event, self.unsubmitted))
-
-        for member in (self.hidden_member, self.excluded_member):
-            with self.subTest(member=member.email):
-                self.assertEqual(
-                    self.ids(visible_participants_for_user(self.event, member)),
-                    {member.pk},
-                )
-                self.assertFalse(can_view_event_results(self.event, member))
+        # Group availability is the organizer's view: whatever the stored
+        # setting says, every participant sees only themselves.
+        for permission in ("own_only", "all_after_submit", "realtime"):
+            self.event.participant_view_permission = permission
+            self.event.save(update_fields=["participant_view_permission"])
+            for member in (
+                self.first,
+                self.unsubmitted,
+                self.hidden_member,
+                self.excluded_member,
+            ):
+                with self.subTest(permission=permission, member=member.email):
+                    self.assertEqual(
+                        self.ids(visible_participants_for_user(self.event, member)),
+                        {member.pk},
+                    )
+                    self.assertFalse(can_view_event_results(self.event, member))
 
 
 class AggregationPermissionApiTests(TestCase):
@@ -482,48 +466,29 @@ class AggregationPermissionApiTests(TestCase):
         )
         self.assertIn("private", organizer_results["Cache-Control"])
 
-        self.event.participant_view_permission = "all_after_submit"
-        self.event.save(update_fields=["participant_view_permission"])
-        self.authenticate(self.unsubmitted)
-        before_submit = self.client.get(f"/events/participants?code={self.event.code}")
-        self.assertEqual(
-            [participant["id"] for participant in before_submit.data["participants"]],
-            [str(self.unsubmitted.pk)],
-        )
-        self.assertEqual(
-            self.client.get(f"/events/results?code={self.event.code}").status_code,
-            403,
-        )
-
-        self.authenticate(self.first)
-        after_submit = self.client.get(f"/events/participants?code={self.event.code}")
-        self.assertEqual(
-            [participant["id"] for participant in after_submit.data["participants"]],
-            [str(self.first.pk)],
-        )
-        self.assertEqual(
-            self.client.get(f"/events/results?code={self.event.code}").status_code,
-            200,
-        )
-
-        self.event.participant_view_permission = "realtime"
-        self.event.save(update_fields=["participant_view_permission"])
-        self.authenticate(self.unsubmitted)
-        realtime = self.client.get(f"/events/participants?code={self.event.code}")
-        self.assertEqual(
-            [participant["id"] for participant in realtime.data["participants"]],
-            [str(self.unsubmitted.pk)],
-        )
-        self.assertEqual(
-            self.client.get(f"/events/results?code={self.event.code}").status_code,
-            200,
-        )
+        # The stored setting never opens results or the roster to participants.
+        for permission in ("all_after_submit", "realtime"):
+            self.event.participant_view_permission = permission
+            self.event.save(update_fields=["participant_view_permission"])
+            for member in (self.unsubmitted, self.first):
+                with self.subTest(permission=permission, member=member.email):
+                    self.authenticate(member)
+                    listing = self.client.get(f"/events/participants?code={self.event.code}")
+                    self.assertEqual(
+                        [participant["id"] for participant in listing.data["participants"]],
+                        [str(member.pk)],
+                    )
+                    self.assertEqual(
+                        self.client.get(f"/events/results?code={self.event.code}").status_code,
+                        403,
+                    )
 
         Weight.objects.create(
             event=self.event,
             participant=self.draft_participant,
             included=False,
         )
+        self.authenticate(self.unsubmitted)
         self.assertEqual(
             self.client.get(f"/events/results?code={self.event.code}").status_code,
             403,

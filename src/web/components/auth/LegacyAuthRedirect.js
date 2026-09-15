@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
+import LoadingState from "@/components/ui/LoadingState";
 
 export default function LegacyAuthRedirect({ destination, label }) {
   const router = useRouter();
@@ -13,12 +14,12 @@ export default function LegacyAuthRedirect({ destination, label }) {
 
   return (
     <main className="auth-page">
-      <div className="auth-panel">
-        <p>Redirecting...</p>
-        <p className="auth-switch">
+      <section className="auth-panel">
+        <LoadingState label="Redirecting..." className="p-0" />
+        <p className="text-center mb-0">
           <Link href={destination}>Continue to {label}</Link>
         </p>
-      </div>
+      </section>
     </main>
   );
 }

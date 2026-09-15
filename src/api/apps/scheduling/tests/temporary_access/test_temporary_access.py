@@ -353,9 +353,11 @@ class TemporaryParticipantAccessTests(TestCase):
 
         recompute_event_results(self.event.pk)
         restored = temp_client.get(f"/events/temp-access/session?code={self.event.code}")
-        self.assertTrue(restored.data["canViewResults"])
-        self.assertIn("results", restored.data)
-        self.assertEqual(restored.data["results"]["countedResponseTotal"], 1)
+        # Even on a "realtime" event a temporary participant never receives
+        # group availability.
+        self.assertFalse(restored.data["canViewResults"])
+        self.assertNotIn("results", restored.data)
+        self.assertNotIn("resultSnapshot", restored.data)
 
         another = Event.objects.create(
             code="FOREIGN1",
