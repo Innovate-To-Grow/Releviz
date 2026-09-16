@@ -1,0 +1,215 @@
+name: Release preflight
+description: >-
+  Shared entry checks for every production release workflow: the manual
+  DEPLOY confirmation, the exact checked-out commit, a green CI Result for
+  it, the Production environment configuration, short-lived AWS credentials
+  through GitHub OIDC, and (for Terraform scopes) the protected remote
+  state. Reads the release job's environment variables.
+
+inputs:
+  scope:
+    description: backend, frontend, or infrastructure
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Confirm protected production release
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ "$TRIGGER_EVENT" = "workflow_dispatch" ] && [ "$CONFIRMATION" != "DEPLOY" ]; then
+          echo "::error::Manual production releases require the exact confirmation DEPLOY."
+          exit 1
+        fi
+        if ! [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "::error::The selected release is not an immutable Git commit SHA."
+          exit 1
+        fi
+        case "$RELEASE_SCOPE" in
+          backend | frontend | infrastructure) ;;
+          *)
+            echo "::error::Unknown release scope: ${RELEASE_SCOPE}"
+            exit 1
+            ;;
+        esac
+      env:
+        RELEASE_SCOPE: ${{ inputs.scope }}
+
+    - name: Verify the exact checked-out release
+      shell: bash
+      run: |
+        set -euo pipefail
+        checked_out_sha="$(git rev-parse HEAD)"
+        if [ "$checked_out_sha" != "$DEPLOY_SHA" ]; then
+          echo "::error::Checkout is ${checked_out_sha}; expected ${DEPLOY_SHA}."
+          exit 1
+        fi
+
+    - name: Verify CI Result passed for the release commit
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        conclusion="$(gh api \
+          -H 'Accept: application/vnd.github+json' \
+          "repos/${GITHUB_REPOSITORY}/commits/${DEPLOY_SHA}/check-runs?per_page=100" \
+          --jq '[.check_runs[] | select(.name == "CI Result")] | sort_by(.completed_at) | last | .conclusion // ""')"
+        if [ "$conclusion" != "success" ]; then
+          echo "::error::CI Result for ${DEPLOY_SHA} is '${conclusion:-missing}', not success."
+          exit 1
+        fi
+
+    - name: Validate production configuration
+      shell: bash
+      run: |
+        set -euo pipefail
+        for required in \
+          AWS_ROLE_ARN \
+          TF_STATE_BUCKET \
+          PROD_DOMAIN \
+          API_DOMAIN \
+          ROUTE53_ZONE_ID \
+          DJANGO_SECRET_KEY_ARN \
+          FIELD_ENCRYPTION_KEY_ARN \
+          METRICS_BEARER_TOKEN_ARN \
+          DEFAULT_ADMIN_EMAIL \
+          DEFAULT_ADMIN_PASSWORD_SECRET_ARN \
+          AMPLIFY_APP_ID \
+          ALARM_ACTION_ARNS; do
+          if [ -z "${!required:-}" ]; then
+            echo "::error::Missing required Production environment variable: $required"
+            exit 1
+          fi
+        done
+        if ! jq -e 'type == "array" and length > 0 and all(.[]; type == "string" and startswith("arn:"))' \
+          <<<"$ALARM_ACTION_ARNS" >/dev/null; then
+          echo "::error::PROD_ALARM_ACTION_ARNS_JSON must be a non-empty JSON array of SNS ARNs."
+          exit 1
+        fi
+        if ! [[ "$AMPLIFY_APP_ID" =~ ^d[a-z0-9]{1,19}$ ]]; then
+          echo "::error::PROD_AMPLIFY_APP_ID must be an exact Amplify app ID."
+          exit 1
+        fi
+        if [ "$DEFAULT_ADMIN_EMAIL" != "admin@releviz.com" ]; then
+          echo "::error::PROD_DEFAULT_ADMIN_EMAIL must be the reviewed address admin@releviz.com."
+          exit 1
+        fi
+        if ! [[ "$DEFAULT_ADMIN_PASSWORD_SECRET_ARN" =~ ^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:releviz/prod/default-admin-password-[A-Za-z0-9]{6}$ ]]; then
+          echo "::error::PROD_DEFAULT_ADMIN_PASSWORD_SECRET_ARN must be the complete ARN for releviz/prod/default-admin-password."
+          exit 1
+        fi
+        if ! jq -en \
+          --arg django "$DJANGO_SECRET_KEY_ARN" \
+          --arg field "$FIELD_ENCRYPTION_KEY_ARN" \
+          --arg metrics "$METRICS_BEARER_TOKEN_ARN" \
+          --arg admin "$DEFAULT_ADMIN_PASSWORD_SECRET_ARN" '
+            [$django, $field, $metrics, $admin] as $secrets
+            | ($secrets | length) == ($secrets | unique | length)
+          ' >/dev/null; then
+          echo "::error::Production application secrets must use four distinct ARNs."
+          exit 1
+        fi
+        for domain in "$PROD_DOMAIN" "$API_DOMAIN"; do
+          if ! [[ "$domain" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]]; then
+            echo "::error::Invalid production hostname: ${domain}"
+            exit 1
+          fi
+        done
+        if [ "$API_DOMAIN" = "$PROD_DOMAIN" ]; then
+          echo "::error::Frontend and API hostnames must be distinct."
+          exit 1
+        fi
+        if [ "$API_DOMAIN" != "api.releviz.com" ]; then
+          echo "::error::PROD_API_DOMAIN must be the reviewed hostname api.releviz.com."
+          exit 1
+        fi
+
+    - name: Configure AWS credentials with OIDC
+      uses: aws-actions/configure-aws-credentials@v6.2.2
+      with:
+        role-to-assume: ${{ env.AWS_ROLE_ARN }}
+        role-duration-seconds: 3600
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Verify deployment identity and managed dependencies
+      shell: bash
+      run: |
+        set -euo pipefail
+        aws sts get-caller-identity
+        for secret_arn in \
+          "$DJANGO_SECRET_KEY_ARN" \
+          "$FIELD_ENCRYPTION_KEY_ARN" \
+          "$METRICS_BEARER_TOKEN_ARN" \
+          "$DEFAULT_ADMIN_PASSWORD_SECRET_ARN" \
+          "${SENTRY_DSN_SECRET_ARN:-}"; do
+          if [ -n "$secret_arn" ]; then
+            aws secretsmanager describe-secret --secret-id "$secret_arn" >/dev/null
+          fi
+        done
+        default_admin_secret_name="$(
+          aws secretsmanager describe-secret \
+            --secret-id "$DEFAULT_ADMIN_PASSWORD_SECRET_ARN" \
+            --query Name \
+            --output text
+        )"
+        if [ "$default_admin_secret_name" != "releviz/prod/default-admin-password" ]; then
+          echo "::error::The default-admin ARN resolves to an unexpected Secrets Manager name."
+          exit 1
+        fi
+        aws kms describe-key --key-id alias/aws/rds >/dev/null
+        aws kms describe-key --key-id alias/aws/secretsmanager >/dev/null
+        aws amplify get-app --app-id "$AMPLIFY_APP_ID" >/dev/null
+
+    - name: Verify protected Terraform state bucket
+      if: ${{ inputs.scope != 'frontend' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        aws s3api head-bucket --bucket "$TF_STATE_BUCKET"
+        versioning="$(aws s3api get-bucket-versioning \
+          --bucket "$TF_STATE_BUCKET" --query Status --output text)"
+        if [ "$versioning" != "Enabled" ]; then
+          echo "::error::Production Terraform state bucket versioning must be enabled."
+          exit 1
+        fi
+        aws s3api get-bucket-encryption --bucket "$TF_STATE_BUCKET" >/dev/null
+        public_block="$(aws s3api get-public-access-block \
+          --bucket "$TF_STATE_BUCKET" \
+          --query 'PublicAccessBlockConfiguration.[BlockPublicAcls,IgnorePublicAcls,BlockPublicPolicy,RestrictPublicBuckets]' \
+          --output text)"
+        if [ "$public_block" != $'True\tTrue\tTrue\tTrue' ]; then
+          echo "::error::Production Terraform state bucket must block all public access."
+          exit 1
+        fi
+
+    - name: Set up Terraform
+      if: ${{ inputs.scope != 'frontend' }}
+      uses: hashicorp/setup-terraform@v4
+      with:
+        terraform_version: 1.15.8
+        terraform_wrapper: false
+
+    - name: Initialize Terraform with remote state
+      if: ${{ inputs.scope != 'frontend' }}
+      shell: bash
+      run: |
+        terraform -chdir=infra/prod init -reconfigure -input=false \
+          -backend-config="bucket=${TF_STATE_BUCKET}" \
+          -backend-config="key=prod/terraform.tfstate" \
+          -backend-config="region=${AWS_REGION}" \
+          -backend-config="use_lockfile=true"
+
+    - name: Require the completed Amplify domain and API-subdomain topology
+      if: ${{ inputs.scope != 'frontend' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        state_list="$(terraform -chdir=infra/prod state list)"
+        if ! grep -qx 'aws_amplify_domain_association.frontend\[0\]' <<<"$state_list" ||
+          ! grep -qx 'aws_route53_record.api' <<<"$state_list" ||
+          grep -qx 'aws_lb_listener_rule.backend\[0\]' <<<"$state_list"; then
+          echo "::error::Production is not on the completed Amplify-domain, API-subdomain topology; the split release workflows only operate on that steady state."
+          exit 1
+        fi

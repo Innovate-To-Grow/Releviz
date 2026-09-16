@@ -115,7 +115,12 @@ releviz-monorepo/
     perf/           # Pure aggregation and guarded PostgreSQL/HTTP scale tools
   .github/workflows/
     ci.yml          # Parallel CI for both workspaces
-    deploy-prod.yml # Production release: automatic on green main, approved in the Production environment
+    release-backend.yml        # API image, ECS rollout, workers, default admin
+    release-frontend.yml       # Amplify static release with candidate smoke and rollback
+    release-infrastructure.yml # Terraform for everything else in AWS
+  .github/actions/
+    release-scope/     # Skips a release when its paths did not change (no credentials)
+    release-preflight/ # DEPLOY confirmation, CI Result, configuration, OIDC, remote state
 ```
 
 ## Local Development
@@ -291,19 +296,47 @@ docker run --rm -p 3000:3000 releviz-web:local
 
 ### Production
 
-Production CD is a protected workflow on `main`. Every successful `CI` run for a push to `main`
-requests a release of that exact commit; the run waits in the GitHub `Production` environment
-until a configured reviewer approves it, and only then receives short-lived AWS credentials. The
-same workflow can also be dispatched manually for a redeploy or rollback, which additionally
-requires the exact confirmation `DEPLOY`. Either way it verifies that the immutable commit passed
-`CI Result`, assumes the production AWS role through GitHub OIDC, builds and pushes SHA-tagged
-backend and ECS-fallback frontend images, and creates one SHA-identified static ZIP from
-`src/web/out`. The workflow manually
-deploys that exact ZIP to an Amplify `candidate` branch, verifies the frontend plus the direct
+Production CD is three protected workflows on `main`, one per release surface, so a change only
+releases what it touched:
+
+| Workflow | Releases | Paths that trigger it |
+|---|---|---|
+| `release-backend.yml` | SHA-tagged API image, ECS backend/worker rollout, default admin | `src/api/**` |
+| `release-frontend.yml` | Amplify static site (candidate → production) and the ECS fallback image | `src/web/**`, root `package*.json`, Amplify deploy scripts, export validator, custom headers |
+| `release-infrastructure.yml` | Terraform for everything else in AWS | `infra/prod/**` |
+
+Every successful `CI` run for a push to `main` offers the commit to all three. Each workflow first
+runs a credential-free `scope` job that compares the commit with that workflow's last successful
+release (or, before its first release, the retired single workflow's last release); when none of
+its paths changed, the run ends there without an approval prompt. Changes to the workflows
+themselves are exercised by a manual dispatch. Otherwise
+the release job waits in the GitHub `Production` environment until a configured reviewer approves
+it, and only then receives short-lived AWS credentials. Any workflow can also be dispatched
+manually for a redeploy or rollback, which additionally requires the exact confirmation `DEPLOY`.
+A shared preflight action verifies that the immutable commit passed `CI Result`, validates the
+environment configuration, assumes the production AWS role through GitHub OIDC, and (for the
+Terraform releases) checks the protected remote state.
+
+The backend release builds and pushes the SHA-tagged backend image, plans Terraform with only the
+application runtime allowed to change (task definitions, services, autoscaling, alarms, logs, the
+reminder schedule — anything else is refused and belongs to the infrastructure release), applies
+the exact plan, waits for the backend, both durable workers, and the fallback frontend, verifies
+their task definitions and the worker commands, checks target health and API smoke, and runs the
+default-administrator one-off task. The ECS fallback frontend is held at the latest successfully
+released frontend commit. The infrastructure release plans with both application images held at
+their latest successful releases, refuses outright destroys and any change to the live Amplify
+branches or domain (the Amplify app may only change its redirect rules), and applies the exact plan.
+
+The frontend release builds one SHA-identified static ZIP from `src/web/out` and pushes the
+ECS-fallback frontend image. It requires `releviz.com` to already be an available Amplify domain
+serving the `main` branch at the apex (the split workflows operate only on the completed
+Amplify-domain, API-subdomain topology and fail closed otherwise; the one-time cutover and its
+apex-restore machinery were retired with the single release workflow), refuses to start while an
+Amplify job is active, captures the live release and its retained rollback artifact, deploys the
+exact ZIP to the Amplify `candidate` branch, verifies the frontend plus the direct
 `https://api.releviz.com` CORS/auth/admin boundary, promotes the same ZIP to Amplify `main`, and
-only then associates `releviz.com`. When no ECS frontend service is live (a first release, or
-after the cluster was removed), the base plan rolls out the release SHA directly instead of
-preserving a hot rollback. The reviewed infrastructure plan preserves the public TLS ALB
+smokes the canonical domain. If the canonical smoke fails, the previous ZIP is redeployed to
+`main` automatically. The reviewed infrastructure plan preserves the public TLS ALB
 and private ECS boundary and keeps the backend on a fixed one-hop ALB trust model. Separate private
 result and email ECS services use the same immutable backend release, database-aware health checks,
 graceful 120-second shutdown, circuit-breaker rollback, retained logs, and fail-closed running-task
