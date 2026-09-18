@@ -78,10 +78,6 @@ jest.mock("@/lib/api/auth", () => ({
   requestAccountDeletionCode: jest.fn(),
 }));
 
-jest.mock("@/lib/api/feedback", () => ({
-  submitFeedback: jest.fn(),
-}));
-
 jest.mock("@/lib/navigation", () => ({
   navigateTo: jest.fn(),
   safeNextPath: (value, fallback = "/dashboard") => {
@@ -138,9 +134,7 @@ import LoginPage from "@/app/login/page";
 import RecoverAccountPage from "@/app/recover/page";
 import SignupPage from "@/app/signup/page";
 import SettingsPage from "@/app/settings/page";
-import FeedbackPage, { safeFeedbackPath } from "@/app/feedback/page";
 import PrivacyPage, { metadata as privacyMetadata } from "@/app/privacy/page";
-import SupportPage, { metadata as supportMetadata } from "@/app/support/page";
 import TermsPage, { metadata as termsMetadata } from "@/app/terms/page";
 import SignInPage, {
   generateStaticParams as generateSignInStaticParams,
@@ -153,7 +147,6 @@ import {
   requestAccountDeletionCode,
   requestPasswordResetCode,
 } from "@/lib/api/auth";
-import { submitFeedback } from "@/lib/api/feedback";
 import { navigateTo } from "@/lib/navigation";
 
 describe("small UI modules", () => {
@@ -1078,8 +1071,8 @@ describe("app pages", () => {
     expect(screen.getByText("Page not found")).toBeInTheDocument();
     const footerNav = screen.getByRole("navigation", { name: "Footer" });
     expect(
-      within(footerNav).getByRole("link", { name: "Support" }),
-    ).toHaveAttribute("href", "/support");
+      within(footerNav).queryByRole("link", { name: "Support" }),
+    ).not.toBeInTheDocument();
     expect(
       within(footerNav).getByRole("link", { name: "Privacy" }),
     ).toHaveAttribute("href", "/privacy");
@@ -1116,128 +1109,34 @@ describe("app pages", () => {
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/signup"));
   });
 
-  test("privacy, terms, and support pages provide working entry points", () => {
+  test("privacy and terms pages provide working entry points", () => {
     expect(privacyMetadata.title).toBe("Privacy | Releviz");
     expect(termsMetadata.title).toBe("Terms | Releviz");
-    expect(supportMetadata.title).toBe("Support | Releviz");
     const privacy = render(<PrivacyPage />);
     expect(
       screen.getByRole("heading", { name: "Privacy notice" }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "support page" })).toHaveAttribute(
-      "href",
-      "/support",
-    );
+    expect(
+      screen.getByRole("link", { name: "Account settings" }),
+    ).toHaveAttribute("href", "/settings");
+    expect(
+      screen.queryByRole("link", { name: /support/i }),
+    ).not.toBeInTheDocument();
     privacy.unmount();
 
-    const terms = render(<TermsPage />);
+    render(<TermsPage />);
     expect(
       screen.getByRole("heading", { name: "Terms of service" }),
     ).toBeInTheDocument();
     expect(
+      screen.getByRole("link", { name: "Account settings" }),
+    ).toHaveAttribute("href", "/settings");
+    expect(
       screen.getByRole("link", { name: "privacy notice" }),
     ).toHaveAttribute("href", "/privacy");
-    terms.unmount();
-
-    render(<SupportPage />);
     expect(
-      screen.getByRole("heading", { name: "How can we help?" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("link", { name: "Open feedback form" }),
-    ).toHaveAttribute("href", "/feedback?from=/support");
-    expect(
-      screen.getByRole("link", { name: "account recovery" }),
-    ).toHaveAttribute("href", "/recover");
-  });
-
-  test("feedback path sanitization excludes origins and URL secrets", () => {
-    expect(safeFeedbackPath("")).toBe("");
-    expect(safeFeedbackPath("event")).toBe("");
-    expect(safeFeedbackPath("//evil.example/path")).toBe("");
-    expect(safeFeedbackPath("/event?code=SECRET#availability")).toBe("/event");
-    expect(safeFeedbackPath(`/${"a".repeat(600)}`)).toHaveLength(500);
-  });
-
-  test("feedback form submits bounded context and exposes progress and success", async () => {
-    let resolveFeedback;
-    submitFeedback.mockReturnValueOnce(
-      new Promise((resolve) => {
-        resolveFeedback = resolve;
-      }),
-    );
-    searchParams = new URLSearchParams("from=%2Fevent%3Fcode%3DSECRET");
-    render(<FeedbackPage />);
-
-    await userEvent.selectOptions(
-      screen.getByLabelText("Feedback type"),
-      "usability",
-    );
-    await userEvent.type(
-      screen.getByLabelText("What happened, or what would you change?"),
-      "The save state was hard to understand.",
-    );
-    await userEvent.click(
-      screen.getByLabelText(
-        /service team may follow up using my account contact information/i,
-      ),
-    );
-    await userEvent.click(
-      screen.getByRole("button", { name: "Send feedback" }),
-    );
-    expect(screen.getByRole("button", { name: "Sending…" })).toBeDisabled();
-    expect(submitFeedback).toHaveBeenCalledWith({
-      category: "usability",
-      message: "The save state was hard to understand.",
-      pagePath: "/event",
-      consentToFollowUp: true,
-    });
-
-    await act(async () => {
-      resolveFeedback({ status: "received" });
-    });
-    expect(
-      await screen.findByText("Thank you. Your feedback was received."),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByLabelText("What happened, or what would you change?"),
-    ).toHaveValue("");
-    expect(
-      screen.getByLabelText(
-        /service team may follow up using my account contact information/i,
-      ),
-    ).not.toBeChecked();
-  });
-
-  test("feedback form exposes specific and generic retryable failures", async () => {
-    submitFeedback.mockRejectedValueOnce(
-      new Error("Feedback service unavailable"),
-    );
-    const first = render(<FeedbackPage />);
-    await userEvent.type(
-      screen.getByLabelText("What happened, or what would you change?"),
-      "A useful report",
-    );
-    await userEvent.click(
-      screen.getByRole("button", { name: "Send feedback" }),
-    );
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Feedback service unavailable",
-    );
-    first.unmount();
-
-    submitFeedback.mockRejectedValueOnce(new Error());
-    render(<FeedbackPage />);
-    await userEvent.type(
-      screen.getByLabelText("What happened, or what would you change?"),
-      "Another useful report",
-    );
-    await userEvent.click(
-      screen.getByRole("button", { name: "Send feedback" }),
-    );
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Unable to send feedback. Please try again.",
-    );
+      screen.queryByRole("link", { name: /support/i }),
+    ).not.toBeInTheDocument();
   });
 
   test("Login uses the unified email flow and sanitizes next", async () => {

@@ -14,8 +14,6 @@ test.describe("automated accessibility baseline", () => {
       ["/recover", "Recover your account"],
       ["/privacy", "Privacy notice"],
       ["/terms", "Terms of service"],
-      ["/support", "How can we help?"],
-      ["/feedback", "Send feedback"],
     ]) {
       await page.goto(path);
       await expect(page.getByRole("heading", { name: heading })).toBeVisible();
@@ -50,42 +48,6 @@ test.describe("automated accessibility baseline", () => {
         focusIndicator.outlineWidth !== "0px" ||
         focusIndicator.boxShadow !== "none"
     ).toBeTruthy();
-  });
-
-  test("anonymous feedback submits at 320px without exposing source-page secrets", async ({
-    page,
-  }) => {
-    await page.goto("/feedback?from=%2Fevent%3Fcode%3DPRIVATE%23availability");
-    await page.getByLabel("Feedback type").selectOption("usability");
-    await page
-      .getByLabel("What happened, or what would you change?")
-      .fill("The final-time review needed a clearer explanation.");
-    await page
-      .getByLabel(/service team may follow up using my account contact information/)
-      .check();
-
-    const [response] = await Promise.all([
-      page.waitForResponse(
-        (candidate) =>
-          candidate.url().endsWith("/feedback") && candidate.request().method() === "POST"
-      ),
-      page.getByRole("button", { name: "Send feedback" }).click(),
-    ]);
-
-    expect(response.status()).toBe(201);
-    expect(response.request().postDataJSON()).toEqual({
-      category: "usability",
-      message: "The final-time review needed a clearer explanation.",
-      pagePath: "/event",
-      consentToFollowUp: true,
-    });
-    await expect(page.getByText("Thank you. Your feedback was received.")).toBeVisible();
-    await expect(page.getByLabel("What happened, or what would you change?")).toHaveValue("");
-    await expectAccessible(page, "submitted feedback");
-    const horizontalOverflow = await page.evaluate(
-      () => document.documentElement.scrollWidth > document.documentElement.clientWidth
-    );
-    expect(horizontalOverflow).toBeFalsy();
   });
 
   test.describe("organizer workspace at phone width", () => {
