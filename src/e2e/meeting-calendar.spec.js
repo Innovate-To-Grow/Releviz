@@ -48,6 +48,7 @@ async function gotoWeekWith(page, grid, date) {
   const dayHeader = grid.getByRole("columnheader", {
     name: shortDate(date),
   });
+  await page.getByRole("button", { name: "This week" }).click();
   for (let attempt = 0; attempt < 6; attempt += 1) {
     if (await dayHeader.count()) return;
     await page.getByRole("button", { name: "Next week" }).click();
@@ -278,7 +279,12 @@ test.describe("Organizer meeting-time calendar", () => {
     const thisWeek = weekStartMs();
     const nextWeek = thisWeek + 7 * DAY_MS;
     const nextMonday = isoDate(nextWeek + 1 * DAY_MS);
-    const nextWednesday = isoDate(nextWeek + 3 * DAY_MS);
+    // Ranked windows resolve to their next occurrence, which is always within
+    // the coming seven days, so a pick two weeks out is a custom window on
+    // any day of the week the suite happens to run.
+    const weekAfterNext = thisWeek + 14 * DAY_MS;
+    const customMonday = isoDate(weekAfterNext + 1 * DAY_MS);
+    const customWednesday = isoDate(weekAfterNext + 3 * DAY_MS);
     await expect(
       grid.getByRole("columnheader", { name: shortDate(nextMonday) }),
     ).toBeVisible();
@@ -333,9 +339,7 @@ test.describe("Organizer meeting-time calendar", () => {
     ).toBeVisible();
     await expect(rankBadges.first()).toHaveText("#1");
     await page.getByRole("button", { name: "Previous week" }).click();
-    await expect(
-      grid.getByRole("columnheader", { name: shortDate(nextMonday) }),
-    ).toBeVisible();
+    await gotoWeekWith(page, grid, customWednesday);
 
     // Pointer pick: Wednesday 14:00 starts a 60-minute custom window.
     const wednesday14 = cellAt(grid, 10, 2);
@@ -383,12 +387,12 @@ test.describe("Organizer meeting-time calendar", () => {
     await page.keyboard.press("PageDown");
     await expect(
       grid.getByRole("columnheader", {
-        name: shortDate(isoDate(nextWeek + 8 * DAY_MS)),
+        name: shortDate(isoDate(weekAfterNext + 8 * DAY_MS)),
       }),
     ).toBeVisible();
     await page.keyboard.press("PageUp");
     await expect(
-      grid.getByRole("columnheader", { name: shortDate(nextMonday) }),
+      grid.getByRole("columnheader", { name: shortDate(customMonday) }),
     ).toBeVisible();
 
     // Choosing a ranked window from the rail reveals it on the calendar, and
@@ -424,7 +428,7 @@ test.describe("Organizer meeting-time calendar", () => {
     );
 
     // Finalize a custom window and confirm the API stored the cell's instant.
-    await gotoWeekWith(page, grid, nextWednesday);
+    await gotoWeekWith(page, grid, customWednesday);
     await cellAt(grid, 10, 2).click();
     await expect(candidate).toContainText("Custom window");
     await finalizeCurrentSelection(page, event.code);
@@ -437,8 +441,8 @@ test.describe("Organizer meeting-time calendar", () => {
     expect(finalized.payload.event.status).toBe("finalized");
     expect(finalized.payload.event.finalMeeting).toEqual(
       expect.objectContaining({
-        startsAt: `${nextWednesday}T14:00:00+00:00`,
-        endsAt: `${nextWednesday}T15:00:00+00:00`,
+        startsAt: `${customWednesday}T14:00:00+00:00`,
+        endsAt: `${customWednesday}T15:00:00+00:00`,
         channel: "inperson",
       }),
     );
@@ -452,7 +456,7 @@ test.describe("Organizer meeting-time calendar", () => {
       page.locator(".meeting-calendar__block--confirmed"),
     ).toBeVisible();
     await expect(
-      grid.getByRole("columnheader", { name: shortDate(nextWednesday) }),
+      grid.getByRole("columnheader", { name: shortDate(customWednesday) }),
     ).toBeVisible();
     await expect(cellAt(grid, 10, 2)).toHaveAttribute(
       "aria-label",
