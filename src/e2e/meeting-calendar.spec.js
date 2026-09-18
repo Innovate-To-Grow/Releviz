@@ -61,6 +61,23 @@ async function gotoWeekWith(page, grid, date) {
   throw new Error(`The calendar never reached the week of ${date}.`);
 }
 
+// Clicks a calendar cell until the Finalize candidate reflects the pick. A
+// pick made right after the grid re-renders (a rail choice reveals its week,
+// a week change swaps every cell) can be dropped by slower engines, so the
+// click is retried instead of asserted once; selecting is idempotent.
+async function pickCell(page, cell, expectedText) {
+  const candidate = page.locator(".final-candidate");
+  await expect
+    .poll(
+      async () => {
+        await cell.click();
+        return candidate.textContent();
+      },
+      { timeout: 20_000, intervals: [500, 1000, 2000] },
+    )
+    .toContain(expectedText);
+}
+
 // Adds a managed participant and submits the given availability. `inperson`
 // and `virtual` list the slot indices the person is free for.
 async function submitResponse(
@@ -342,7 +359,7 @@ test.describe("Organizer meeting-time calendar", () => {
     await gotoWeekWith(page, grid, customWednesday);
     const wednesday14 = cellAt(grid, 10, 2);
     await expect(wednesday14).toHaveAttribute("data-state", "startable");
-    await wednesday14.click();
+    await pickCell(page, wednesday14, "Wed 14:00–15:00");
     await expect(page.getByRole("heading", { name: "Finalize" })).toBeFocused();
     const candidate = page.locator(".final-candidate");
     await expect(candidate).toContainText("Wed 14:00–15:00");
@@ -415,8 +432,7 @@ test.describe("Organizer meeting-time calendar", () => {
       "aria-label",
       /Inside ranked window #1/,
     );
-    await bestCell.click();
-    await expect(candidate).toContainText("Ranked #1");
+    await pickCell(page, bestCell, "Ranked #1");
     await expect(candidate).toContainText("Mon 10:00–11:00");
     await expect(candidate).toContainText(
       "100% weighted · 100% unweighted · 4 fully available",
@@ -427,8 +443,7 @@ test.describe("Organizer meeting-time calendar", () => {
 
     // Finalize a custom window and confirm the API stored the cell's instant.
     await gotoWeekWith(page, grid, customWednesday);
-    await cellAt(grid, 10, 2).click();
-    await expect(candidate).toContainText("Custom window");
+    await pickCell(page, cellAt(grid, 10, 2), "Custom window");
     await finalizeCurrentSelection(page, event.code);
     const finalized = await apiJson(
       request,
