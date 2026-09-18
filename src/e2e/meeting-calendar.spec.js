@@ -278,7 +278,15 @@ test.describe("Organizer meeting-time calendar", () => {
     const thisWeek = weekStartMs();
     const nextWeek = thisWeek + 7 * DAY_MS;
     const nextMonday = isoDate(nextWeek + 1 * DAY_MS);
-    const nextWednesday = isoDate(nextWeek + 3 * DAY_MS);
+    // A weekly recommendation's suggested date rolls forward to the nearest
+    // future occurrence of its weekday, which is at most one week ahead of
+    // "now" (see recommendations.py's weekly-suggestion search). Two weeks
+    // out is therefore always free of any ranked window, regardless of what
+    // day this suite runs — unlike one week out, which coincides with a
+    // ranked recommendation once its "this week" occurrence has passed.
+    const customWeek = nextWeek + 7 * DAY_MS;
+    const customMonday = isoDate(customWeek + 1 * DAY_MS);
+    const customWednesday = isoDate(customWeek + 3 * DAY_MS);
     await expect(
       grid.getByRole("columnheader", { name: shortDate(nextMonday) }),
     ).toBeVisible();
@@ -337,6 +345,13 @@ test.describe("Organizer meeting-time calendar", () => {
       grid.getByRole("columnheader", { name: shortDate(nextMonday) }),
     ).toBeVisible();
 
+    // Move two weeks out before picking a custom window, so the pick can
+    // never coincide with a rolled-forward recommendation (see above).
+    await page.getByRole("button", { name: "Next week" }).click();
+    await expect(
+      grid.getByRole("columnheader", { name: shortDate(customMonday) }),
+    ).toBeVisible();
+
     // Pointer pick: Wednesday 14:00 starts a 60-minute custom window.
     const wednesday14 = cellAt(grid, 10, 2);
     await expect(wednesday14).toHaveAttribute("data-state", "startable");
@@ -383,13 +398,17 @@ test.describe("Organizer meeting-time calendar", () => {
     await page.keyboard.press("PageDown");
     await expect(
       grid.getByRole("columnheader", {
-        name: shortDate(isoDate(nextWeek + 8 * DAY_MS)),
+        name: shortDate(isoDate(customWeek + 8 * DAY_MS)),
       }),
     ).toBeVisible();
     await page.keyboard.press("PageUp");
     await expect(
-      grid.getByRole("columnheader", { name: shortDate(nextMonday) }),
+      grid.getByRole("columnheader", { name: shortDate(customMonday) }),
     ).toBeVisible();
+
+    // Back to the current week so gotoWeekWith (forward-only) can reach
+    // whatever week the rolled-forward recommendations actually landed on.
+    await page.getByRole("button", { name: "This week" }).click();
 
     // Choosing a ranked window from the rail reveals it on the calendar, and
     // clicking the first cell of a ranked window yields that exact result.
@@ -424,7 +443,7 @@ test.describe("Organizer meeting-time calendar", () => {
     );
 
     // Finalize a custom window and confirm the API stored the cell's instant.
-    await gotoWeekWith(page, grid, nextWednesday);
+    await gotoWeekWith(page, grid, customWednesday);
     await cellAt(grid, 10, 2).click();
     await expect(candidate).toContainText("Custom window");
     await finalizeCurrentSelection(page, event.code);
@@ -437,8 +456,8 @@ test.describe("Organizer meeting-time calendar", () => {
     expect(finalized.payload.event.status).toBe("finalized");
     expect(finalized.payload.event.finalMeeting).toEqual(
       expect.objectContaining({
-        startsAt: `${nextWednesday}T14:00:00+00:00`,
-        endsAt: `${nextWednesday}T15:00:00+00:00`,
+        startsAt: `${customWednesday}T14:00:00+00:00`,
+        endsAt: `${customWednesday}T15:00:00+00:00`,
         channel: "inperson",
       }),
     );
@@ -452,7 +471,7 @@ test.describe("Organizer meeting-time calendar", () => {
       page.locator(".meeting-calendar__block--confirmed"),
     ).toBeVisible();
     await expect(
-      grid.getByRole("columnheader", { name: shortDate(nextWednesday) }),
+      grid.getByRole("columnheader", { name: shortDate(customWednesday) }),
     ).toBeVisible();
     await expect(cellAt(grid, 10, 2)).toHaveAttribute(
       "aria-label",
