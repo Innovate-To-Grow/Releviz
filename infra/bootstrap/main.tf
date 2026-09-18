@@ -42,7 +42,7 @@ variable "github_repository" {
 
 variable "github_environment" {
   type        = string
-  default     = "Production"
+  default     = "AWS ECS - Prod"
   description = "Protected GitHub Environment included in the OIDC subject"
 }
 

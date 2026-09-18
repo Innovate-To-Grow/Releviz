@@ -310,7 +310,7 @@ runs a credential-free `scope` job that compares the commit with that workflow's
 release (or, before its first release, the retired single workflow's last release); when none of
 its paths changed, the run ends there without an approval prompt. Changes to the workflows
 themselves are exercised by a manual dispatch. Otherwise
-the release job waits in the GitHub `Production` environment until a configured reviewer approves
+the release job waits in the GitHub `AWS ECS - Prod` environment until a configured reviewer approves
 it, and only then receives short-lived AWS credentials. Any workflow can also be dispatched
 manually for a redeploy or rollback, which additionally requires the exact confirmation `DEPLOY`.
 A shared preflight action verifies that the immutable commit passed `CI Result`, validates the
@@ -410,7 +410,7 @@ release resources.
 ### GitHub Actions Variables
 
 - `AWS_REGION` — `us-west-2`
-- `AWS_PROD_ROLE_ARN` — output of `infra/bootstrap`; trusted only for the `Production` Environment
+- `AWS_PROD_ROLE_ARN` — output of `infra/bootstrap`; trusted only for the `AWS ECS - Prod` Environment
 - `PROD_TF_STATE_BUCKET` — protected state bucket created by `infra/bootstrap`
 - `PROD_AMPLIFY_APP_ID` — exact administrator-provisioned `releviz-prod-frontend` app ID authorized
   by bootstrap and consumed as `TF_VAR_amplify_app_id`
@@ -434,4 +434,4 @@ release resources.
 - `PROD_DEFAULT_FROM_EMAIL` — verified production sender address
 
 Staging was permanently retired. Production application secret values live in AWS Secrets Manager;
-GitHub holds only their ARNs in the protected `Production` Environment.
+GitHub holds only their ARNs in the protected `AWS ECS - Prod` Environment.

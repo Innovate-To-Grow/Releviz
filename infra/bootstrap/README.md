@@ -36,7 +36,7 @@ terraform -chdir=infra/bootstrap apply -var-file=production.tfvars
 
 The bootstrap role can read metadata for only those exact secret ARNs; it
 cannot read their values. Store the fourth ARN—not the password—as the protected
-GitHub Production environment variable
+GitHub `AWS ECS - Prod` environment variable
 `PROD_DEFAULT_ADMIN_PASSWORD_SECRET_ARN`. Re-applying bootstrap is required
 before running production CD so its OIDC role can validate that secret and run
 the tightly scoped `releviz-prod-default-admin-task` task family in
@@ -75,7 +75,7 @@ to `events.amazonaws.com`.
      -var="production_amplify_app_id=${amplify_app_id}"
    ```
 
-3. Store the same value as the protected GitHub Production environment variable
+3. Store the same value as the protected GitHub `AWS ECS - Prod` environment variable
    `PROD_AMPLIFY_APP_ID`. Production Terraform consumes it as
    `TF_VAR_amplify_app_id`.
 

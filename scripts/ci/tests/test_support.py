@@ -1192,9 +1192,9 @@ class ProductionReleaseWorkflowTests(TestCase):
             ),
             (
                 backend,
-                "    environment:\n      name: Production",
+                "    environment:\n      name: AWS ECS - Prod",
                 "    environment:\n      name: Staging",
-                "backend release omits the Production environment gate",
+                "backend release omits the AWS ECS - Prod environment gate",
             ),
             (
                 frontend,

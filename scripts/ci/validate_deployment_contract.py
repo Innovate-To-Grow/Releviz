@@ -17,7 +17,7 @@ TERRAFORM_ENVIRONMENTS = {
 }
 # The production release is three workflows (backend, frontend, infrastructure)
 # that share two composite actions. Each workflow runs a no-credential scope
-# job, then a Production-environment release job.
+# job, then a release job gated by the "AWS ECS - Prod" environment.
 PRODUCTION_RELEASE_WORKFLOWS = {
     "backend": ROOT / ".github/workflows/release-backend.yml",
     "frontend": ROOT / ".github/workflows/release-frontend.yml",
@@ -115,7 +115,7 @@ COMMON_RELEASE_WORKFLOW_RULES = {
     r"if:\s*\$\{\{\s*needs\.scope\.outputs\.release\s*==\s*'true'\s*\}\}": (
         "a release job that only runs when its scope changed"
     ),
-    r"environment:\s*\n\s*name:\s*Production": "the Production environment gate",
+    r"environment:\s*\n\s*name:\s*AWS ECS - Prod": "the AWS ECS - Prod environment gate",
     r"TRIGGER_EVENT:\s*\$\{\{\s*github\.event_name\s*\}\}": (
         "the trigger event for the shared preflight"
     ),
@@ -405,7 +405,7 @@ RELEASE_PREFLIGHT_RULES = {
     r"\^\[0-9a-f\]\{40\}\$": "an immutable release SHA requirement",
     r"git rev-parse HEAD": "exact checked-out release verification",
     r"CI Result": "successful CI enforcement",
-    r"Missing required Production environment variable": "required configuration checks",
+    r"Missing required AWS ECS - Prod environment variable": "required configuration checks",
     r'DEFAULT_ADMIN_EMAIL"\s*!=\s*"admin@releviz\.com"': (
         "an exact production default-admin identity guard"
     ),

@@ -7,7 +7,7 @@ run-name: >-
 on:
   # Every green CI run on main is offered as a frontend release; the scope job
   # skips it when nothing the static site is built from changed. A release
-  # waits in the Production environment for reviewer approval before AWS
+  # waits in the "AWS ECS - Prod" environment for reviewer approval before AWS
   # credentials are issued. Manual dispatch stays available for redeploys.
   workflow_run:
     workflows: [CI]
@@ -84,7 +84,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment:
-      name: Production
+      name: AWS ECS - Prod
       url: https://${{ vars.PROD_DOMAIN }}
 
     env:

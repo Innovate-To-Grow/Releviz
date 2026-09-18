@@ -2,7 +2,7 @@ name: Release preflight
 description: >-
   Shared entry checks for every production release workflow: the manual
   DEPLOY confirmation, the exact checked-out commit, a green CI Result for
-  it, the Production environment configuration, short-lived AWS credentials
+  it, the AWS ECS - Prod environment configuration, short-lived AWS credentials
   through GitHub OIDC, and (for Terraform scopes) the protected remote
   state. Reads the release job's environment variables.
 
@@ -79,7 +79,7 @@ runs:
           AMPLIFY_APP_ID \
           ALARM_ACTION_ARNS; do
           if [ -z "${!required:-}" ]; then
-            echo "::error::Missing required Production environment variable: $required"
+            echo "::error::Missing required AWS ECS - Prod environment variable: $required"
             exit 1
           fi
         done
