@@ -43,7 +43,13 @@ variable "github_repository" {
 variable "github_environment" {
   type        = string
   default     = "AWS ECS - Prod"
-  description = "Protected GitHub Environment included in the OIDC subject"
+  description = "Protected GitHub Environment that gates backend and infrastructure releases; included in the production role's OIDC subject"
+}
+
+variable "github_frontend_environment" {
+  type        = string
+  default     = "AWS Amplify - Prod"
+  description = "Protected GitHub Environment that gates frontend (Amplify) releases; included in the frontend role's OIDC subject"
 }
 
 variable "existing_github_oidc_provider_arn" {
@@ -59,6 +65,11 @@ variable "existing_github_oidc_provider_arn" {
 variable "production_deploy_role_name" {
   type    = string
   default = "releviz-production-github-deploy"
+}
+
+variable "production_frontend_deploy_role_name" {
+  type    = string
+  default = "releviz-production-frontend-github-deploy"
 }
 
 variable "production_route53_zone_id" {
@@ -235,6 +246,8 @@ locals {
     for branch_arn in local.production_amplify_branch_arns : "${branch_arn}/deployments/*"
   ]
   production_amplify_domain_arn = "${local.production_amplify_app_arn}/domains/${var.production_domain_name}"
+  # The frontend role pushes only the ECS fallback frontend image.
+  production_frontend_ecr_arn = "arn:aws:ecr:${var.aws_region}:${data.aws_caller_identity.current.account_id}:repository/${var.production_ecr_repository_prefix}frontend"
 }
 
 locals {
@@ -735,6 +748,160 @@ resource "aws_iam_role_policy" "production_deploy_kms" {
   policy = local.production_kms_policy
 }
 
+# The frontend release (Amplify static site plus the ECS fallback image) runs
+# under its own GitHub Environment and its own role. That role can deploy the
+# two release branches of the exact pre-provisioned app, push the exact
+# fallback image, and read the canonical alias; it has no ECS, RDS, secret,
+# KMS, or Terraform-state access, so a frontend approval never carries
+# backend or infrastructure permissions.
+resource "aws_iam_role" "production_frontend_deploy" {
+  name                 = var.production_frontend_deploy_role_name
+  max_session_duration = 3600
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Federated = local.github_oidc_provider_arn
+      }
+      Action = "sts:AssumeRoleWithWebIdentity"
+      Condition = {
+        StringEquals = {
+          "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+          "token.actions.githubusercontent.com:sub" = "repo:${var.github_repository}:environment:${var.github_frontend_environment}"
+        }
+      }
+    }]
+  })
+}
+
+locals {
+  # Like the production role, the frontend role receives no Amplify
+  # permissions until the administrator registers the exact app ID.
+  production_frontend_amplify_policy_statements = [
+    for statement in jsondecode(jsonencode([
+      {
+        # GetApp verifies the app and reads the live redirect rules; UpdateApp
+        # installs the reviewed security headers before each release.
+        Sid    = "ReleaseExactProductionAmplifyApp"
+        Effect = "Allow"
+        Action = [
+          "amplify:GetApp",
+          "amplify:ListTagsForResource",
+          "amplify:UpdateApp",
+        ]
+        Resource = local.production_amplify_app_arn
+        Condition = {
+          StringEquals = {
+            "aws:ResourceTag/Project"     = "releviz"
+            "aws:ResourceTag/Environment" = "prod"
+          }
+        }
+      },
+      {
+        # Manual deployments of the exact ZIP to candidate and then main.
+        # Branch settings are owned by Terraform, so UpdateBranch is absent.
+        Sid    = "ReleaseExactProductionAmplifyBranches"
+        Effect = "Allow"
+        Action = [
+          "amplify:CreateDeployment",
+          "amplify:GetBranch",
+          "amplify:ListJobs",
+          "amplify:ListTagsForResource",
+          "amplify:StartDeployment",
+        ]
+        Resource = local.production_amplify_branch_arns
+        Condition = {
+          StringEquals = {
+            "aws:ResourceTag/Project"     = "releviz"
+            "aws:ResourceTag/Environment" = "prod"
+          }
+        }
+      },
+      {
+        Sid    = "ReleaseExactProductionAmplifyDeployments"
+        Effect = "Allow"
+        Action = [
+          "amplify:CreateDeployment",
+          "amplify:StartDeployment",
+        ]
+        Resource = local.production_amplify_deployment_arns
+      },
+      {
+        # The deployment helper polls its job and stops it when an upload
+        # times out; the release fails closed while another job is active.
+        Sid    = "ReleaseExactProductionAmplifyJobs"
+        Effect = "Allow"
+        Action = [
+          "amplify:GetJob",
+          "amplify:ListJobs",
+          "amplify:StopJob",
+        ]
+        Resource = local.production_amplify_job_arns
+      },
+      {
+        # The release only confirms that the canonical domain already serves
+        # the production branch; the association itself belongs to Terraform.
+        Sid    = "ReadExactProductionAmplifyDomain"
+        Effect = "Allow"
+        Action = [
+          "amplify:GetDomainAssociation",
+          "amplify:ListTagsForResource",
+        ]
+        Resource = local.production_amplify_domain_arn
+      },
+    ])) : statement if var.production_amplify_app_id != ""
+  ]
+
+  production_frontend_deploy_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = concat([
+      {
+        Sid      = "IdentityAndEcrLogin"
+        Effect   = "Allow"
+        Action   = ["ecr:GetAuthorizationToken", "sts:GetCallerIdentity"]
+        Resource = "*"
+      },
+      {
+        Sid    = "ImmutableProductionFrontendImages"
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:BatchGetImage",
+          "ecr:CompleteLayerUpload",
+          "ecr:CreateRepository",
+          "ecr:DescribeImages",
+          "ecr:DescribeRepositories",
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:InitiateLayerUpload",
+          "ecr:ListImages",
+          "ecr:PutImage",
+          "ecr:PutImageScanningConfiguration",
+          "ecr:PutImageTagMutability",
+          "ecr:TagResource",
+          "ecr:UploadLayerPart",
+        ]
+        Resource = local.production_frontend_ecr_arn
+      },
+      {
+        # The release refuses to start unless the canonical A alias already
+        # points at Amplify's apex target; it never changes records.
+        Sid      = "ReadProductionDnsAlias"
+        Effect   = "Allow"
+        Action   = ["route53:ListResourceRecordSets"]
+        Resource = "arn:aws:route53:::hostedzone/${var.production_route53_zone_id}"
+      },
+    ], local.production_frontend_amplify_policy_statements)
+  })
+}
+
+resource "aws_iam_role_policy" "production_frontend_deploy" {
+  name   = "releviz-production-frontend-deploy"
+  role   = aws_iam_role.production_frontend_deploy.id
+  policy = local.production_frontend_deploy_policy
+}
+
 output "state_bucket_name" {
   value = aws_s3_bucket.terraform_state.bucket
 }
@@ -744,7 +911,13 @@ output "lock_table_name" {
 }
 
 output "production_deploy_role_arn" {
-  value = aws_iam_role.production_deploy.arn
+  value       = aws_iam_role.production_deploy.arn
+  description = "Role assumed by backend and infrastructure releases from the GitHub Environment named by github_environment"
+}
+
+output "production_frontend_deploy_role_arn" {
+  value       = aws_iam_role.production_frontend_deploy.arn
+  description = "Role assumed by frontend releases from the GitHub Environment named by github_frontend_environment"
 }
 
 output "production_amplify_app_id" {

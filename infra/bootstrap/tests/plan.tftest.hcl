@@ -51,7 +51,114 @@ run "bootstrap_plan" {
       strcontains(aws_iam_role.production_deploy.assume_role_policy, "sts.amazonaws.com") &&
       strcontains(aws_iam_role.production_deploy.assume_role_policy, var.existing_github_oidc_provider_arn)
     )
-    error_message = "The production role must trust only the repository's Production Environment through the shared GitHub OIDC provider."
+    error_message = "The production role must trust only the repository's AWS ECS - Prod Environment through the shared GitHub OIDC provider."
+  }
+
+  assert {
+    condition = (
+      strcontains(aws_iam_role.production_frontend_deploy.assume_role_policy, "repo:Innovate-To-Grow/Releviz:environment:AWS Amplify - Prod") &&
+      !strcontains(aws_iam_role.production_frontend_deploy.assume_role_policy, "AWS ECS - Prod") &&
+      !strcontains(aws_iam_role.production_deploy.assume_role_policy, "AWS Amplify - Prod") &&
+      strcontains(aws_iam_role.production_frontend_deploy.assume_role_policy, "sts.amazonaws.com") &&
+      strcontains(aws_iam_role.production_frontend_deploy.assume_role_policy, var.existing_github_oidc_provider_arn)
+    )
+    error_message = "The frontend role must trust only the repository's AWS Amplify - Prod Environment through the shared GitHub OIDC provider, and neither release role may trust the other's Environment."
+  }
+
+  assert {
+    condition     = aws_iam_role.production_frontend_deploy.max_session_duration == 3600
+    error_message = "The frontend OIDC role must allow exactly the one-hour credentials the release preflight requests."
+  }
+
+  assert {
+    condition = (
+      length(local.production_frontend_deploy_policy) <= 10240 &&
+      alltrue([
+        for prefix in [
+          "\"ecs:", "\"secretsmanager:", "\"s3:", "\"rds:", "\"iam:", "\"kms:", "\"ec2:",
+          "\"elasticloadbalancing:", "\"logs:", "\"events:", "\"cloudwatch:",
+          "\"application-autoscaling:", "\"dynamodb:", "\"acm:",
+        ] : !strcontains(local.production_frontend_deploy_policy, prefix)
+      ]) &&
+      !strcontains(local.production_frontend_deploy_policy, "route53:ChangeResourceRecordSets") &&
+      !strcontains(local.production_frontend_deploy_policy, "route53:ListHostedZones") &&
+      !strcontains(local.production_frontend_deploy_policy, "amplify:CreateDomainAssociation") &&
+      !strcontains(local.production_frontend_deploy_policy, "amplify:UpdateDomainAssociation") &&
+      !strcontains(local.production_frontend_deploy_policy, "amplify:UpdateBranch") &&
+      !strcontains(local.production_frontend_deploy_policy, "\"amplify:CreateApp\"") &&
+      !strcontains(local.production_frontend_deploy_policy, "\"amplify:CreateBranch\"") &&
+      !strcontains(local.production_frontend_deploy_policy, "amplify:Delete") &&
+      !strcontains(local.production_frontend_deploy_policy, "\"amplify:StartJob\"") &&
+      !strcontains(local.production_frontend_deploy_policy, "arn:aws:amplify:us-west-2:123456789012:apps/*") &&
+      !strcontains(local.production_frontend_deploy_policy, "repository/releviz-prod-*") &&
+      !strcontains(local.production_frontend_deploy_policy, "repository/releviz-prod-backend")
+    )
+    error_message = "The frontend role must stay within Amplify releases, the exact fallback image, and a DNS read: no ECS, RDS, secret, KMS, state, DNS-write, domain-association, branch-setting, or backend-image permissions."
+  }
+
+  assert {
+    condition = (
+      alltrue([
+        for action in [
+          "amplify:GetApp",
+          "amplify:UpdateApp",
+          "amplify:GetBranch",
+          "amplify:CreateDeployment",
+          "amplify:StartDeployment",
+          "amplify:GetJob",
+          "amplify:ListJobs",
+          "amplify:StopJob",
+          "amplify:GetDomainAssociation",
+          "ecr:PutImage",
+          "route53:ListResourceRecordSets",
+        ] : strcontains(local.production_frontend_deploy_policy, "\"${action}\"")
+      ]) &&
+      one([
+        for statement in jsondecode(local.production_frontend_deploy_policy).Statement :
+        statement.Resource
+        if statement.Sid == "ImmutableProductionFrontendImages"
+      ]) == "arn:aws:ecr:us-west-2:123456789012:repository/releviz-prod-frontend" &&
+      one([
+        for statement in jsondecode(local.production_frontend_deploy_policy).Statement :
+        statement.Resource
+        if statement.Sid == "ReadProductionDnsAlias"
+      ]) == "arn:aws:route53:::hostedzone/Z1234567890" &&
+      one([
+        for statement in jsondecode(local.production_frontend_deploy_policy).Statement :
+        statement.Resource
+        if statement.Sid == "ReleaseExactProductionAmplifyBranches"
+        ]) == [
+        "arn:aws:amplify:us-west-2:123456789012:apps/dsecure123/branches/candidate",
+        "arn:aws:amplify:us-west-2:123456789012:apps/dsecure123/branches/main",
+      ] &&
+      one([
+        for statement in jsondecode(local.production_frontend_deploy_policy).Statement :
+        statement.Resource
+        if statement.Sid == "ReleaseExactProductionAmplifyDeployments"
+        ]) == [
+        "arn:aws:amplify:us-west-2:123456789012:apps/dsecure123/branches/candidate/deployments/*",
+        "arn:aws:amplify:us-west-2:123456789012:apps/dsecure123/branches/main/deployments/*",
+      ] &&
+      one([
+        for statement in jsondecode(local.production_frontend_deploy_policy).Statement :
+        statement.Resource
+        if statement.Sid == "ReleaseExactProductionAmplifyJobs"
+        ]) == [
+        "arn:aws:amplify:us-west-2:123456789012:apps/dsecure123/branches/candidate/jobs/*",
+        "arn:aws:amplify:us-west-2:123456789012:apps/dsecure123/branches/main/jobs/*",
+      ] &&
+      one([
+        for statement in jsondecode(local.production_frontend_deploy_policy).Statement :
+        statement.Resource
+        if statement.Sid == "ReadExactProductionAmplifyDomain"
+      ]) == "arn:aws:amplify:us-west-2:123456789012:apps/dsecure123/domains/releviz.com" &&
+      one([
+        for statement in jsondecode(local.production_frontend_deploy_policy).Statement :
+        statement.Condition.StringEquals["aws:ResourceTag/Project"]
+        if statement.Sid == "ReleaseExactProductionAmplifyApp"
+      ]) == "releviz"
+    )
+    error_message = "The frontend role must deploy exactly the two release branches of the pre-provisioned app, push exactly the fallback frontend image, and read exactly the production hosted zone."
   }
 
   assert {
@@ -400,9 +507,11 @@ run "bootstrap_plan_before_amplify_provisioning" {
   assert {
     condition = (
       length(local.production_amplify_policy_statements) == 0 &&
-      !strcontains(local.production_deploy_policy, "\"amplify:")
+      !strcontains(local.production_deploy_policy, "\"amplify:") &&
+      length(local.production_frontend_amplify_policy_statements) == 0 &&
+      !strcontains(local.production_frontend_deploy_policy, "\"amplify:")
     )
-    error_message = "Before the exact app ID is registered, the GitHub role must have no Amplify API permissions."
+    error_message = "Before the exact app ID is registered, neither GitHub role may have Amplify API permissions."
   }
 }
 

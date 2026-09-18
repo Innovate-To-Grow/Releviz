@@ -1,8 +1,23 @@
 # Production bootstrap
 
-The GitHub production role deliberately cannot create, tag, or delete Amplify
-apps and branches. Provision those resources once with administrator
-credentials, then bind the role to the resulting exact app ID.
+Bootstrap creates the versioned Terraform state bucket and two GitHub OIDC
+roles, one per protected GitHub Environment:
+
+| Role | Assumed from | Releases |
+|---|---|---|
+| `releviz-production-github-deploy` (`production_deploy_role_arn`) | `AWS ECS - Prod` (`github_environment`) | backend and infrastructure: Terraform state, ECS, the application secrets' metadata, both ECR repositories, DNS, and the Amplify app's Terraform-managed settings |
+| `releviz-production-frontend-github-deploy` (`production_frontend_deploy_role_arn`) | `AWS Amplify - Prod` (`github_frontend_environment`) | frontend only: manual deployments to the exact app's `candidate` and `main` branches, the reviewed security headers, the exact `releviz-prod-frontend` fallback image, and a read of the canonical alias |
+
+Each trust policy names exactly one `repo:<owner>/<repo>:environment:<name>`
+subject, so an approval in one Environment can never mint the other role's
+credentials. The frontend role has no ECS, RDS, Secrets Manager, KMS, state,
+DNS-write, or domain-association permissions. Store each output ARN as the
+matching Environment variable: `AWS_PROD_ROLE_ARN` in `AWS ECS - Prod` and
+`AWS_PROD_FRONTEND_ROLE_ARN` in `AWS Amplify - Prod`.
+
+Neither GitHub role can create, tag, or delete Amplify apps and branches.
+Provision those resources once with administrator credentials, then bind both
+roles to the resulting exact app ID.
 
 ## Production application secrets
 
@@ -75,16 +90,19 @@ to `events.amazonaws.com`.
      -var="production_amplify_app_id=${amplify_app_id}"
    ```
 
-3. Store the same value as the protected GitHub `AWS ECS - Prod` environment variable
-   `PROD_AMPLIFY_APP_ID`. Production Terraform consumes it as
-   `TF_VAR_amplify_app_id`.
+3. Store the same value as the protected GitHub environment variable
+   `PROD_AMPLIFY_APP_ID` in both `AWS ECS - Prod` (production Terraform
+   consumes it as `TF_VAR_amplify_app_id`) and `AWS Amplify - Prod` (the
+   frontend release deploys to it).
 
 The `infra/prod` import blocks then adopt the app and both branches on the first
 production plan. Leaving `production_amplify_app_id` empty is safe before
-provisioning because it grants the GitHub role no Amplify API permissions, but
-the production workflow must not run in that state.
+provisioning because it grants neither GitHub role any Amplify API permissions,
+but the release workflows must not run in that state.
 
-After the exact ID is configured, the GitHub role can refresh and update only
-that app, its `candidate` and `main` branches, their deployment jobs, and the
-canonical domain association. It has no Amplify `CreateApp`, `CreateBranch`,
-`TagResource`, `UntagResource`, or delete actions.
+After the exact ID is configured, the production role can refresh and update
+only that app, its `candidate` and `main` branches, their deployment jobs, and
+the canonical domain association, and the frontend role can deploy only those
+two branches and read the association. Neither has Amplify `CreateApp`,
+`CreateBranch`, `TagResource`, `UntagResource`, or delete actions, and only the
+production role may create or update the domain association.
