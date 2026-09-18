@@ -45,6 +45,5 @@ def render_branded_email(
             "notice": notice,
             "site_url": site_url,
             "logo_url": f"{site_url}/brand/releviz-logo.png",
-            "support_url": f"{site_url}/support",
         },
     )

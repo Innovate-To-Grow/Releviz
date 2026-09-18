@@ -33,7 +33,6 @@ import {
   verifyUnifiedEmailAuthCode,
 } from "@/lib/api/auth";
 import { fetchDashboardEvents } from "@/lib/api/dashboard";
-import { submitFeedback } from "@/lib/api/feedback";
 import {
   confirmFinalMeeting,
   createEvent,
@@ -1038,12 +1037,6 @@ describe("business API helpers", () => {
     await fetchParticipantsIncludeHidden("ABC 123", "tok");
     await unhideParticipant("ABC 123", "user 1", "tok");
     await deleteParticipant("ABC 123", "user 1", "tok");
-    await submitFeedback({
-      category: "problem",
-      message: "Something failed",
-      pagePath: "/event",
-      consentToFollowUp: true,
-    });
 
     const urls = global.fetch.mock.calls.map(([url]) => url);
     expect(urls).toContain("/dashboard/events");
@@ -1161,18 +1154,6 @@ describe("business API helpers", () => {
     expect(urls).toContain(
       "/events/participants/update/unhide?code=ABC%20123&participantId=user%201",
     );
-    expect(global.fetch).toHaveBeenCalledWith(
-      "/feedback",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
-          category: "problem",
-          message: "Something failed",
-          pagePath: "/event",
-          consentToFollowUp: true,
-        }),
-      }),
-    );
   });
 
   test("business API helpers throw extracted errors", async () => {
@@ -1230,12 +1211,6 @@ describe("business API helpers", () => {
     await expect(fetchParticipantsIncludeHidden("BAD")).rejects.toThrow("nope");
     await expect(unhideParticipant("BAD", "p")).rejects.toThrow("nope");
     await expect(deleteParticipant("BAD", "p")).rejects.toThrow("nope");
-    await expect(
-      submitFeedback({
-        category: "problem",
-        message: "Failed",
-      }),
-    ).rejects.toThrow("nope");
   });
 
   test("downloads the authenticated final calendar with the server filename", async () => {
