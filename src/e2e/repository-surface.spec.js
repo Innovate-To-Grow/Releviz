@@ -40,6 +40,7 @@ const RESOURCE_AUDIT_MANIFEST = [
   "src/api/apps/core/static/admin/js/material-web-text-field.js",
   "src/api/apps/core/static/images/i2glogo.png",
   "src/api/apps/core/static/images/releviz-mark.png",
+  "src/api/apps/core/templates/403.html",
   "src/api/apps/core/templates/404.html",
   "src/api/apps/core/templates/admin/actions.html",
   "src/api/apps/core/templates/admin/base_site.html",
