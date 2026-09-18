@@ -16,6 +16,8 @@ from apps.scheduling.models import (
     EventInvitation,
     FinalMeeting,
     Participant,
+    RosterImportBatch,
+    RosterImportReceipt,
     UserEvent,
 )
 
@@ -654,3 +656,52 @@ class EventManagementApiTests(TestCase):
             },
         )
         self.assertEqual(collision.status_code, 409)
+
+    def test_delete_succeeds_for_an_event_with_committed_roster_imports(self):
+        self.authenticate()
+        event = self.event(code="DELETE02")
+        participant = self.participant(event)
+        invitation = self.invitation(event)
+        meeting = self.final_meeting(event)
+        batch = RosterImportBatch.objects.create(
+            event=event,
+            created_by=self.organizer,
+            source_type=RosterImportBatch.SourceType.CSV,
+            status=RosterImportBatch.Status.COMMITTED,
+            expires_at=timezone.now() + timedelta(hours=1),
+        )
+        receipt = RosterImportReceipt.objects.create(
+            event=event,
+            batch=batch,
+            committed_by=self.organizer,
+            idempotency_key=uuid.uuid4(),
+            request_fingerprint="f" * 64,
+            mode=RosterImportReceipt.Mode.MERGE,
+            results_revision=1,
+        )
+        duplication_request = EventDuplicationRequest.objects.create(
+            source_event=event,
+            requested_by=self.organizer,
+            idempotency_key=uuid.uuid4(),
+            request_fingerprint="d" * 64,
+            source_version=event.version,
+        )
+
+        deleted = self.delete(
+            event,
+            {
+                "expectedVersion": event.version,
+                "idempotencyKey": str(uuid.uuid4()),
+                "confirmation": event.code,
+            },
+        )
+        self.assertEqual(deleted.status_code, 200)
+        self.assertFalse(deleted.data["idempotent"])
+        self.assertFalse(Event.objects.filter(pk=event.pk).exists())
+        self.assertFalse(RosterImportBatch.objects.filter(pk=batch.pk).exists())
+        self.assertFalse(RosterImportReceipt.objects.filter(pk=receipt.pk).exists())
+        self.assertFalse(Participant.objects.filter(pk=participant.pk).exists())
+        self.assertFalse(EventInvitation.objects.filter(pk=invitation.pk).exists())
+        self.assertFalse(FinalMeeting.objects.filter(pk=meeting.pk).exists())
+        self.assertFalse(EventDuplicationRequest.objects.filter(pk=duplication_request.pk).exists())
+        self.assertTrue(EventDeletionRecord.objects.filter(code=event.code).exists())

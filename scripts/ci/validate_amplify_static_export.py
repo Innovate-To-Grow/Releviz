@@ -96,6 +96,8 @@ def amplify_static_export_errors(
 
     if not (output_path / "index.html").is_file():
         errors.append("Amplify static export is missing index.html")
+    if not (output_path / "404.html").is_file():
+        errors.append("Amplify static export is missing 404.html")
     if not any(asset.is_file() for asset in (output_path / "_next/static").glob("**/*.js")):
         errors.append("Amplify static export has no _next/static JavaScript asset")
     return errors

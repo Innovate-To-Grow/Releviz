@@ -123,6 +123,13 @@ class FinalizationDomainTests(TestCase):
             first_sent_at=timezone.now(),
         )
 
+    def review_row(self, label, **fields):
+        return {
+            "participantId": str(self.members[label].pk),
+            "name": f"{label.title()} Person",
+            **fields,
+        }
+
     def test_attendance_review_recipient_rules_and_api_shapes(self):
         self.seed_responses()
         normalized = self.normalized()
@@ -136,9 +143,26 @@ class FinalizationDomainTests(TestCase):
         self.assertEqual(review["unansweredParticipantTotal"], 1)
         self.assertEqual(review["excludedParticipantTotal"], 2)
         self.assertNotIn("requiredConflictTotal", review)
+        # The per-person rows the organizer's attendance table renders: no
+        # email addresses, only the fields the workspace shows.
         self.assertEqual(
-            [participant["status"] for participant in review["participants"]],
-            ["available", "partial", "unavailable"],
+            review["participants"],
+            [
+                self.review_row("available", status="available", minimumAvailability=1.0),
+                self.review_row("partial", status="partial", minimumAvailability=0.5),
+                self.review_row("unavailable", status="unavailable", minimumAvailability=0.0),
+            ],
+        )
+        self.assertEqual(
+            review["unansweredParticipants"],
+            [self.review_row("unanswered")],
+        )
+        self.assertEqual(
+            review["excludedParticipants"],
+            [
+                self.review_row("hidden", reason="hidden"),
+                self.review_row("excluded", reason="organizerExcluded"),
+            ],
         )
         self.assertEqual(
             final_notification_recipients(self.event),
@@ -169,6 +193,12 @@ class FinalizationDomainTests(TestCase):
         self.assertEqual(self.event.version, 2)
         self.assertEqual(meeting.location, "Room 101")
         self.assertTrue(meeting.active)
+        # The stored snapshot keeps the same rows, still without emails.
+        for key in ("participants", "unansweredParticipants", "excludedParticipants"):
+            with self.subTest(key=key):
+                self.assertEqual(meeting.attendance_snapshot[key], review[key])
+                for row in meeting.attendance_snapshot[key]:
+                    self.assertNotIn("email", row)
         self.assertEqual(FinalizationRequest.objects.count(), 1)
         self.assertEqual(final_delivery_summary(self.event, meeting)["pending"], 5)
         self.assertEqual(api_event(self.event)["finalMeeting"]["calendarSequence"], 0)

@@ -6,7 +6,13 @@ from collections import defaultdict
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 
+from apps.authn.models import ContactEmail
 from apps.scheduling.models import RosterImportBatch, RosterImportRow
+from apps.scheduling.services.invitations.errors import (
+    INACTIVE_ACCOUNT_MESSAGE,
+    SHARED_ACCOUNT_MESSAGE,
+    UNVERIFIED_FULL_ACCOUNT_MESSAGE,
+)
 
 from .errors import RosterImportError
 from .limits import MAX_ROSTER_ROWS
@@ -135,6 +141,55 @@ def apply_duplicate_rules(rows: list[RosterImportRow]) -> None:
             )
 
 
+_ACCOUNT_MESSAGES = frozenset(
+    {INACTIVE_ACCOUNT_MESSAGE, UNVERIFIED_FULL_ACCOUNT_MESSAGE, SHARED_ACCOUNT_MESSAGE}
+)
+
+
+def _remove_account_errors(errors: list) -> list:
+    return [error for error in errors if error not in _ACCOUNT_MESSAGES]
+
+
+def apply_account_rules(rows: list[RosterImportRow]) -> None:
+    """Flag selected rows whose address the commit would refuse to bind."""
+
+    candidates = []
+    for row in rows:
+        row.validation_errors = _remove_account_errors(row.validation_errors or [])
+        if row.selected and row.email:
+            candidates.append(row)
+    contacts = {
+        contact.email_address.lower(): contact
+        for contact in ContactEmail.objects.select_related("member").filter(
+            email_address__in={row.email.lower() for row in candidates}
+        )
+    }
+    by_member = defaultdict(list)
+    for row in candidates:
+        contact = contacts.get(row.email.lower())
+        if contact is None or contact.member_id is None:
+            continue
+        by_member[contact.member_id].append(row)
+        member = contact.member
+        if not member.is_active:
+            message = INACTIVE_ACCOUNT_MESSAGE
+        elif getattr(member, "access_level", "full") == "full" and not contact.verified:
+            message = UNVERIFIED_FULL_ACCOUNT_MESSAGE
+        else:
+            continue
+        row.validation_errors = list(dict.fromkeys([*row.validation_errors, message]))
+    # Unknown and orphan addresses each mint their own member at commit time, so
+    # only rows bound to an existing member can collide on one account. Every row
+    # in a group is flagged so the survivors clear once the others are deselected.
+    for shared in by_member.values():
+        if len(shared) < 2:
+            continue
+        for row in shared:
+            row.validation_errors = list(
+                dict.fromkeys([*row.validation_errors, SHARED_ACCOUNT_MESSAGE])
+            )
+
+
 def rows_summary(rows: list[RosterImportRow]) -> dict:
     selected = [row for row in rows if row.selected]
     valid = [row for row in selected if not row.validation_errors]
@@ -177,6 +232,7 @@ def normalize_import_batch(batch: RosterImportBatch) -> None:
     for row in rows:
         _normalize_row(row, batch.column_mapping or {}, batch.defaults or {})
     apply_duplicate_rules(rows)
+    apply_account_rules(rows)
     if rows_summary(rows)["valid"] > MAX_ROSTER_ROWS:
         raise RosterImportError(
             f"An import may contain at most {MAX_ROSTER_ROWS} valid participants."

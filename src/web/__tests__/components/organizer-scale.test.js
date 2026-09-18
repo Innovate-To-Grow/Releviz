@@ -12,6 +12,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
+import { useState } from "react";
 
 jest.mock("@/components/auth/AuthContext", () => ({ useAuth: jest.fn() }));
 jest.mock("@/components/event/CreateEventClient", () => ({
@@ -102,6 +103,7 @@ import {
   fetchEventResults,
   previewFinalMeeting,
   sendReminders,
+  updateEventLifecycle,
 } from "@/lib/api/events";
 import { createManagedParticipant } from "@/lib/api/participants";
 import {
@@ -221,6 +223,92 @@ function renderView(setEvent = jest.fn(), currentEvent = event) {
       </EventContext.Provider>,
     ),
   };
+}
+
+// Stores the event like the page does, so lifecycle and finalization
+// responses re-render the whole workspace.
+function StatefulWorkspace({ initialEvent }) {
+  const [currentEvent, setEvent] = useState(initialEvent);
+  return (
+    <EventContext.Provider
+      value={{ event: currentEvent, setEvent, numSlots: 2 }}
+    >
+      <OrganizerScaleView />
+    </EventContext.Provider>
+  );
+}
+
+// Four 30-minute slots on one date; a 60-minute meeting spans two of them.
+const calendarEvent = {
+  ...event,
+  slotCount: 4,
+  meetingDurationMinutes: 60,
+  slotGroups: [
+    {
+      key: "date:2026-08-20",
+      label: "2026-08-20",
+      date: "2026-08-20",
+      slots: [
+        ["09:00", "09:30"],
+        ["09:30", "10:00"],
+        ["10:00", "10:30"],
+        ["10:30", "11:00"],
+      ].map(([localStart, localEnd], index) => ({
+        index,
+        localStart,
+        localEnd,
+        startDayOffset: 0,
+        endDayOffset: 0,
+        startsAt: `2026-08-20T${localStart}:00Z`,
+        endsAt: `2026-08-20T${localEnd}:00Z`,
+      })),
+    },
+  ],
+};
+
+// Results, review, and confirmation replies for picking slots 1-2 of
+// `calendarEvent` on the calendar and finalizing them.
+function mockCalendarWindowFlow() {
+  fetchEventResults.mockResolvedValue({
+    status: "fresh",
+    requestedRevision: 3,
+    computedRevision: 3,
+    generatedAt: "2026-08-01T00:00:00Z",
+    results: {
+      countedResponseTotal: 4,
+      channels: {
+        inperson: {
+          weighted: [0.75, 0.5, 1, 0.25],
+          unweighted: [0.7, 0.6, 0.9, 0.3],
+        },
+      },
+      recommendations: [],
+    },
+  });
+  previewFinalMeeting.mockResolvedValue({
+    attendance: {
+      availableParticipantTotal: 2,
+      partialParticipantTotal: 1,
+      unavailableParticipantTotal: 1,
+      unansweredParticipantTotal: 0,
+      excludedParticipantTotal: 0,
+    },
+  });
+  confirmFinalMeeting.mockResolvedValue({
+    event: {
+      ...calendarEvent,
+      status: "finalized",
+      version: 3,
+      finalMeeting: {
+        startsAt: "2026-08-20T09:30:00Z",
+        endsAt: "2026-08-20T10:30:00Z",
+        channel: "inperson",
+        location: "Room 1",
+      },
+    },
+    finalMeeting: { attendance: { availableParticipantTotal: 2 } },
+    deliveryRequest: null,
+  });
 }
 
 async function openInvitePersonForm() {
@@ -1533,6 +1621,14 @@ describe("scaled organizer workspace", () => {
         unavailableParticipantTotal: 50,
         unansweredParticipantTotal: 150,
         excludedParticipantTotal: 0,
+        participants: [
+          {
+            participantId: "member-1",
+            name: "Grace Faculty",
+            status: "available",
+            minimumAvailability: 1,
+          },
+        ],
       },
     });
     renderView(jest.fn(), { ...event, status: "active" });
@@ -1591,8 +1687,14 @@ describe("scaled organizer workspace", () => {
       screen.getByRole("button", { name: "Review attendance" }),
     );
     await screen.findByText("Attendance review is current for this candidate.");
-    // The attendance tile is the only element whose whole text is "Available".
+    // The attendance tile is the only element whose whole text is "Available":
+    // the per-person table spells out "Fully available" instead.
     expect(screen.getAllByText("Available", { exact: true })).toHaveLength(1);
+    expect(
+      within(screen.getByRole("region", { name: "Attendance by person" }))
+        .getByRole("rowheader", { name: "Grace Faculty" })
+        .closest("tr"),
+    ).toHaveTextContent("Fully available · 100%");
     expect(screen.getAllByRole("heading", { name: /results/i })).toHaveLength(
       1,
     );
@@ -1676,73 +1778,7 @@ describe("scaled organizer workspace", () => {
   });
 
   test("picks a custom window on the calendar and finalizes it", async () => {
-    // Four 30-minute slots on one date; a 60-minute meeting spans two of them.
-    const calendarEvent = {
-      ...event,
-      slotCount: 4,
-      meetingDurationMinutes: 60,
-      slotGroups: [
-        {
-          key: "date:2026-08-20",
-          label: "2026-08-20",
-          date: "2026-08-20",
-          slots: [
-            ["09:00", "09:30"],
-            ["09:30", "10:00"],
-            ["10:00", "10:30"],
-            ["10:30", "11:00"],
-          ].map(([localStart, localEnd], index) => ({
-            index,
-            localStart,
-            localEnd,
-            startDayOffset: 0,
-            endDayOffset: 0,
-            startsAt: `2026-08-20T${localStart}:00Z`,
-            endsAt: `2026-08-20T${localEnd}:00Z`,
-          })),
-        },
-      ],
-    };
-    fetchEventResults.mockResolvedValue({
-      status: "fresh",
-      requestedRevision: 3,
-      computedRevision: 3,
-      generatedAt: "2026-08-01T00:00:00Z",
-      results: {
-        countedResponseTotal: 4,
-        channels: {
-          inperson: {
-            weighted: [0.75, 0.5, 1, 0.25],
-            unweighted: [0.7, 0.6, 0.9, 0.3],
-          },
-        },
-        recommendations: [],
-      },
-    });
-    previewFinalMeeting.mockResolvedValue({
-      attendance: {
-        availableParticipantTotal: 2,
-        partialParticipantTotal: 1,
-        unavailableParticipantTotal: 1,
-        unansweredParticipantTotal: 0,
-        excludedParticipantTotal: 0,
-      },
-    });
-    confirmFinalMeeting.mockResolvedValue({
-      event: {
-        ...calendarEvent,
-        status: "finalized",
-        version: 3,
-        finalMeeting: {
-          startsAt: "2026-08-20T09:30:00Z",
-          endsAt: "2026-08-20T10:30:00Z",
-          channel: "inperson",
-          location: "Room 1",
-        },
-      },
-      finalMeeting: { attendance: { availableParticipantTotal: 2 } },
-      deliveryRequest: null,
-    });
+    mockCalendarWindowFlow();
     const nowSpy = jest
       .spyOn(Date, "now")
       .mockReturnValue(Date.parse("2026-08-01T00:00:00Z"));
@@ -1818,6 +1854,77 @@ describe("scaled organizer workspace", () => {
       expect(setEvent).toHaveBeenCalledWith(
         expect.objectContaining({ status: "finalized" }),
       );
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  test("reactivating a finalized event clears the previously chosen window", async () => {
+    mockCalendarWindowFlow();
+    updateEventLifecycle.mockResolvedValue({
+      event: {
+        ...calendarEvent,
+        status: "active",
+        version: 4,
+        finalMeeting: null,
+      },
+    });
+    const nowSpy = jest
+      .spyOn(Date, "now")
+      .mockReturnValue(Date.parse("2026-08-01T00:00:00Z"));
+
+    try {
+      render(<StatefulWorkspace initialEvent={calendarEvent} />);
+      await screen.findByText(/Results are current/);
+      const finalizeSection = () =>
+        document.getElementById("organizer-finalize");
+      const headerStatus = () =>
+        screen.getByTestId("organizer-header-event-status");
+
+      await userEvent.click(document.querySelector('[data-cell-idx="1"]'));
+      expect(finalizeSection()).toHaveTextContent("Custom window");
+      await userEvent.click(
+        screen.getByRole("button", { name: "Review attendance" }),
+      );
+      await screen.findByRole("group", { name: "Attendance review" });
+      await userEvent.click(
+        screen.getByRole("button", { name: "Finalize meeting" }),
+      );
+      await waitFor(() =>
+        expect(headerStatus()).toHaveTextContent("finalized"),
+      );
+      expect(finalizeSection()).toHaveTextContent("Download calendar (.ics)");
+      expect(
+        screen.getByText(
+          "The meeting is finalized. Reactivate the event to collect new responses.",
+        ),
+      ).toBeInTheDocument();
+
+      await userEvent.click(
+        screen.getByRole("button", { name: "Reactivate event" }),
+      );
+
+      await waitFor(() =>
+        expect(updateEventLifecycle).toHaveBeenCalledWith(
+          event.code,
+          expect.objectContaining({ status: "active", expectedVersion: 3 }),
+          "token",
+        ),
+      );
+      await waitFor(() => expect(headerStatus()).toHaveTextContent("active"));
+      // The old pick is gone: the step is back to its empty state.
+      expect(finalizeSection()).toHaveTextContent("No time selected yet");
+      expect(finalizeSection()).toHaveTextContent(
+        "Pick a window on the calendar or choose a ranked one.",
+      );
+      expect(screen.queryByText("Custom window")).not.toBeInTheDocument();
+      expect(screen.queryByText(/Ranked #/)).not.toBeInTheDocument();
+      expect(document.querySelector('[data-cell-idx="1"]')).not.toHaveAttribute(
+        "aria-selected",
+      );
+      expect(
+        screen.getAllByText("This event is active and accepting responses."),
+      ).toHaveLength(1);
     } finally {
       nowSpy.mockRestore();
     }

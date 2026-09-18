@@ -631,6 +631,147 @@ class RosterImportDatabaseEdgeTests(TestCase):
                 ]
             )
 
+    def test_account_rules_flag_only_selected_rows_bound_to_blocked_accounts(self):
+        ContactEmail.objects.create(
+            member=None,
+            email_address="orphan-rule-edge@example.com",
+            email_type="other",
+            verified=True,
+        )
+        create_member("inactive-rule-edge@example.com", is_active=False)
+        create_member("unverified-rule-edge@example.com", contact_verified=False)
+        create_member(
+            "temporary-rule-edge@example.com",
+            contact_verified=False,
+            access_level="temporary",
+        )
+        create_member("verified-rule-edge@example.com")
+        create_member("deselected-rule-edge@example.com", is_active=False)
+        batch = self.preview(
+            "name,email\n"
+            "Unknown,unknown-rule-edge@example.com\n"
+            "Orphan,orphan-rule-edge@example.com\n"
+            "Inactive,inactive-rule-edge@example.com\n"
+            "Unverified,unverified-rule-edge@example.com\n"
+            "Temporary,temporary-rule-edge@example.com\n"
+            "Verified,verified-rule-edge@example.com\n"
+            "Deselected,deselected-rule-edge@example.com\n"
+        )
+        deselected = batch.rows.get(email="deselected-rule-edge@example.com")
+        self.assertEqual(
+            deselected.validation_errors,
+            ["This email belongs to an inactive account."],
+        )
+        roster_imports.update_roster_import(
+            batch=batch,
+            data={"rowUpdates": [{"id": str(deselected.pk), "selected": False}]},
+        )
+
+        errors = {
+            row.email: row.validation_errors
+            for row in batch.rows.filter(row_number__gt=1).order_by("row_number")
+        }
+        self.assertEqual(
+            errors,
+            {
+                "unknown-rule-edge@example.com": [],
+                "orphan-rule-edge@example.com": [],
+                "inactive-rule-edge@example.com": ["This email belongs to an inactive account."],
+                "unverified-rule-edge@example.com": [
+                    "This email belongs to an unverified full account."
+                ],
+                "temporary-rule-edge@example.com": [],
+                "verified-rule-edge@example.com": [],
+                "deselected-rule-edge@example.com": [],
+            },
+        )
+        batch.refresh_from_db()
+        self.assertEqual(
+            batch.summary,
+            {"total": 7, "selected": 6, "valid": 4, "invalid": 2, "conflicts": 0},
+        )
+
+    def test_account_rules_flag_rows_sharing_one_account_until_one_is_deselected(self):
+        shared = create_member("shared-rule-edge@example.com")
+        ContactEmail.objects.create(
+            member=shared,
+            email_address="shared-alias-rule-edge@example.com",
+            email_type="secondary",
+            verified=True,
+        )
+        shared_message = "Another selected row already uses this person's account."
+        batch = self.preview(
+            "name,email\n"
+            "Primary,shared-rule-edge@example.com\n"
+            "Alias,shared-alias-rule-edge@example.com\n"
+        )
+
+        def errors():
+            return {
+                row.email: row.validation_errors
+                for row in batch.rows.filter(row_number__gt=1).order_by("row_number")
+            }
+
+        self.assertEqual(
+            errors(),
+            {
+                "shared-rule-edge@example.com": [shared_message],
+                "shared-alias-rule-edge@example.com": [shared_message],
+            },
+        )
+        self.assertEqual(
+            batch.summary,
+            {"total": 2, "selected": 2, "valid": 0, "invalid": 2, "conflicts": 0},
+        )
+
+        alias = batch.rows.get(email="shared-alias-rule-edge@example.com")
+        roster_imports.update_roster_import(
+            batch=batch,
+            data={"rowUpdates": [{"id": str(alias.pk), "selected": False}]},
+        )
+        self.assertEqual(
+            errors(),
+            {
+                "shared-rule-edge@example.com": [],
+                "shared-alias-rule-edge@example.com": [],
+            },
+        )
+        batch.refresh_from_db()
+        self.assertEqual(
+            batch.summary,
+            {"total": 2, "selected": 1, "valid": 1, "invalid": 0, "conflicts": 0},
+        )
+        committed = self.commit(batch)
+        self.assertEqual(committed.status_code, 201, committed.data)
+        self.assertEqual(committed.data["receipt"]["createdCount"], 1)
+        self.assertEqual(Participant.objects.get(event=self.event).member, shared)
+
+        inactive = create_member("inactive-shared-rule-edge@example.com", is_active=False)
+        ContactEmail.objects.create(
+            member=inactive,
+            email_address="inactive-alias-rule-edge@example.com",
+            email_type="secondary",
+            verified=True,
+        )
+        both_kinds = self.preview(
+            "name,email\n"
+            "Inactive,inactive-shared-rule-edge@example.com\n"
+            "Inactive alias,inactive-alias-rule-edge@example.com\n"
+        )
+        self.assertEqual(
+            {row.email: row.validation_errors for row in both_kinds.rows.filter(row_number__gt=1)},
+            {
+                "inactive-shared-rule-edge@example.com": [
+                    "This email belongs to an inactive account.",
+                    shared_message,
+                ],
+                "inactive-alias-rule-edge@example.com": [
+                    "This email belongs to an inactive account.",
+                    shared_message,
+                ],
+            },
+        )
+
     def test_merge_updates_existing_identity_invitation_weight_and_enforces_capacity(self):
         member = create_member("existing-roster-edge@example.com")
         participant = Participant.objects.create(

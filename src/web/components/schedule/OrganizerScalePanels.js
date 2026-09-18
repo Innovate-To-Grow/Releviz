@@ -215,16 +215,28 @@ export function DeliveryRequestProgress({
   );
 }
 
+// What each lifecycle state means for responses, shown beside the controls
+// from first paint rather than only as a toast after a change.
+const LIFECYCLE_SUMMARIES = {
+  active: "This event is active and accepting responses.",
+  closed: "Responses are now closed.",
+  finalized:
+    "The meeting is finalized. Reactivate the event to collect new responses.",
+  archived: "This event is archived.",
+};
+
 export function EventControls({
   event,
   setEvent,
   getToken,
   setDeliveryRequest,
+  onReactivated,
 }) {
   const [changing, setChanging] = useState(false);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
   const reminderKey = useRef("");
+  const lifecycleSummary = LIFECYCLE_SUMMARIES[event.status] || "";
 
   const changeLifecycle = async (nextStatus) => {
     setChanging(true);
@@ -248,6 +260,7 @@ export function EventControls({
         token,
       );
       setEvent(data.event);
+      if (nextStatus === "active") onReactivated?.();
       if (data.cancellationDeliveryRequestId) {
         setDeliveryRequest({
           id: data.cancellationDeliveryRequestId,
@@ -259,15 +272,6 @@ export function EventControls({
           },
         });
       }
-      setStatus(
-        nextStatus === "active"
-          ? "This event is active and accepting responses."
-          : nextStatus === "closed"
-            ? "Responses are now closed."
-            : nextStatus === "archived"
-              ? "Event archived."
-              : `Event is now ${nextStatus}.`,
-      );
     } catch (requestError) {
       setError(requestError.message || "Unable to change the event status.");
     } finally {
@@ -367,20 +371,26 @@ export function EventControls({
         </AppButton>
       )}
 
-      {(status || error) && (
-        <div className="organizer-event-controls__feedback w-100 d-flex flex-column gap-2">
-          {status && (
-            <Alert variant="success" role="status" className="py-2">
-              {status}
-            </Alert>
-          )}
-          {error && (
-            <Alert variant="danger" role="alert" className="py-2">
-              {error}
-            </Alert>
-          )}
-        </div>
-      )}
+      <div className="organizer-event-controls__feedback w-100 d-flex flex-column gap-2">
+        {lifecycleSummary && (
+          <p
+            className="organizer-event-controls__lifecycle small text-secondary mb-0"
+            role="status"
+          >
+            {lifecycleSummary}
+          </p>
+        )}
+        {status && (
+          <Alert variant="success" role="status" className="py-2">
+            {status}
+          </Alert>
+        )}
+        {error && (
+          <Alert variant="danger" role="alert" className="py-2">
+            {error}
+          </Alert>
+        )}
+      </div>
     </section>
   );
 }
@@ -1022,6 +1032,73 @@ function SelectionMetrics({ metrics }) {
   );
 }
 
+const ATTENDANCE_STATUS_LABELS = {
+  available: "Fully available",
+  partial: "Partly available",
+  unavailable: "Not available",
+};
+
+const EXCLUSION_REASON_LABELS = {
+  organizerExcluded: "Excluded by organizer",
+  hidden: "Hidden from results",
+  invalidResponse: "Invalid response",
+};
+
+// Per-person breakdown behind the attendance count tiles: counted responses
+// first, then people who never answered, then anyone left out of results.
+function AttendanceReviewTable({ review }) {
+  const rows = [
+    ...(review.participants || []).map((participant) => ({
+      key: `counted:${participant.participantId}`,
+      name: participant.name,
+      response: "Submitted",
+      availability: `${ATTENDANCE_STATUS_LABELS[participant.status]} · ${Math.round(participant.minimumAvailability * 100)}%`,
+    })),
+    ...(review.unansweredParticipants || []).map((participant) => ({
+      key: `unanswered:${participant.participantId}`,
+      name: participant.name,
+      response: "Not submitted",
+      availability: "—",
+    })),
+    ...(review.excludedParticipants || []).map((participant) => ({
+      key: `excluded:${participant.participantId}`,
+      name: participant.name,
+      response: "Not included",
+      availability:
+        EXCLUSION_REASON_LABELS[participant.reason] || participant.reason,
+    })),
+  ];
+  if (rows.length === 0) return null;
+  return (
+    <div
+      className="table-responsive attendance-table mt-3"
+      role="region"
+      aria-label="Attendance by person"
+      tabIndex={0}
+    >
+      <table className="table table-sm align-middle attendance-table__table">
+        <caption className="visually-hidden">Attendance by person</caption>
+        <thead>
+          <tr>
+            <th scope="col">Person</th>
+            <th scope="col">Response</th>
+            <th scope="col">Availability</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.key}>
+              <th scope="row">{row.name}</th>
+              <td>{row.response}</td>
+              <td>{row.availability}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function FinalizeScalePanelContent({
   event,
   setEvent,
@@ -1271,26 +1348,29 @@ function FinalizeScalePanelContent({
       )}
 
       {review && (
-        <div
-          role="group"
-          className="metric-tiles attendance-review mt-3"
-          aria-label="Attendance review"
-        >
-          {[
-            ["Available", review.availableParticipantTotal],
-            ["Partial", review.partialParticipantTotal],
-            ["Unavailable", review.unavailableParticipantTotal],
-            ["Unanswered", review.unansweredParticipantTotal],
-            ["Excluded", review.excludedParticipantTotal],
-          ].map(([label, value]) => (
-            <div key={label} className="metric-tile attendance-review__item">
-              <span className="metric-tile__label">{label}</span>
-              <strong className="metric-tile__value attendance-review__value">
-                {value || 0}
-              </strong>
-            </div>
-          ))}
-        </div>
+        <>
+          <div
+            role="group"
+            className="metric-tiles attendance-review mt-3"
+            aria-label="Attendance review"
+          >
+            {[
+              ["Available", review.availableParticipantTotal],
+              ["Partial", review.partialParticipantTotal],
+              ["Unavailable", review.unavailableParticipantTotal],
+              ["Unanswered", review.unansweredParticipantTotal],
+              ["Excluded", review.excludedParticipantTotal],
+            ].map(([label, value]) => (
+              <div key={label} className="metric-tile attendance-review__item">
+                <span className="metric-tile__label">{label}</span>
+                <strong className="metric-tile__value attendance-review__value">
+                  {value || 0}
+                </strong>
+              </div>
+            ))}
+          </div>
+          <AttendanceReviewTable review={review} />
+        </>
       )}
       {(status || error) && (
         <div className="d-flex flex-column gap-2 mt-3">

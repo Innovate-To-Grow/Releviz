@@ -168,6 +168,19 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
             "the API subdomain baked into the ECS frontend fallback"
         ),
         r"Detect API-subdomain transition state": ("one-time legacy API compatibility detection"),
+        r"Detect live Amplify not-found routing": "live Amplify not-found routing detection",
+        (
+            r"Plan production infrastructure with current DNS state"
+            r"[\s\S]{0,500}TF_VAR_enable_amplify_not_found_rule:\s*\$\{\{\s*"
+            r"steps\.not_found_rule\.outputs\.live\s*\}\}"
+            r"[\s\S]{0,500}production-base\.tfplan"
+        ): "the live Amplify not-found state in the base Terraform plan",
+        (
+            r"Plan reviewed Amplify domain association"
+            r"[\s\S]{0,500}TF_VAR_enable_amplify_not_found_rule:\s*\$\{\{\s*"
+            r"steps\.not_found_rule\.outputs\.live\s*\}\}"
+            r"[\s\S]{0,500}production-domain\.tfplan"
+        ): "the live Amplify not-found state in the domain Terraform plan",
         r"Install reviewed Amplify security headers": ("the reviewed cross-origin frontend policy"),
         r"amplify update-app[\s\S]{0,160}--custom-headers": (
             "an explicit Amplify custom-header update"
@@ -427,6 +440,10 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
             r"Plan final production topology"
             r"[\s\S]{0,700}TF_VAR_enable_legacy_api_compatibility:\s*\"false\""
         ): "retired API compatibility in the final Terraform plan",
+        (
+            r"Plan final production topology"
+            r"[\s\S]{0,700}TF_VAR_enable_amplify_not_found_rule:\s*\"true\""
+        ): "the Amplify not-found rule in the final Terraform plan",
         (
             r"Plan final production topology[\s\S]{0,700}production-final\.tfplan"
         ): "the exact final production topology plan",
@@ -902,6 +919,8 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         ),
         r"def\s+backend_proxy_source:": "the exact retired backend proxy-rule scope",
         r"def\s+reviewed_backend_rule:": ("validation of the retired backend proxy-rule shape"),
+        r"def\s+not_found_rule:": "the exact Amplify not-found rule shape",
+        r'\.target\s*==\s*"/404\.html"': "the exact exported Next 404 document target",
         r"def\s+prune_unknown:": "fail-closed unknown-value normalization",
         r"del\(\.custom_rule\)": "a custom-rule-only Amplify app update",
         r'\.\s*==\s*"/api"': "retired Amplify API-rule rejection",

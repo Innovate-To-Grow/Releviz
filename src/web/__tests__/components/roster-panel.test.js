@@ -12,6 +12,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
+import { createRef } from "react";
 
 jest.mock("@/components/schedule/RosterImportWizard", () => ({
   __esModule: true,
@@ -630,8 +631,13 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
     );
   });
 
-  test("reports bulk failures and reloads a row after a stale patch", async () => {
-    fetchRoster.mockResolvedValue(rosterResponse([participant()]));
+  test("reports bulk failures and offers the latest row after a stale patch", async () => {
+    const other = participant({
+      id: "p-2",
+      name: "Other Person",
+      canOrganizerEditAvailability: false,
+    });
+    fetchRoster.mockResolvedValue(rosterResponse([participant(), other]));
     patchRosterBulk.mockRejectedValueOnce(new Error("Bulk failed"));
     const onResultsInvalidated = jest.fn();
     await renderPanel({ onResultsInvalidated });
@@ -644,21 +650,55 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
       expect(screen.getByRole("alert")).toHaveTextContent("Bulk failed"),
     );
 
+    const latest = participant({ weight: 0.8, included: false, version: 9 });
     patchRosterParticipant.mockRejectedValueOnce(
-      Object.assign(new Error("Stale"), { status: 409 }),
+      Object.assign(new Error("The participant changed in another session."), {
+        status: 409,
+        participant: latest,
+      }),
     );
     const weight = screen.getByLabelText("Weight for Temp Person");
     fireEvent.change(weight, { target: { value: "0.25" } });
     fireEvent.blur(weight);
     await waitFor(() =>
-      expect(screen.getByRole("alert")).toHaveTextContent("Stale"),
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Temp Person was changed in another session.",
+      ),
     );
-    await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(2));
-    expect(screen.getByLabelText("Weight for Temp Person")).toHaveValue(1);
+    // The roster is not refreshed behind the organizer's back, and the typed
+    // value stays on screen while the row waits for a reload.
+    expect(fetchRoster).toHaveBeenCalledTimes(1);
+    expect(weight).toHaveValue(0.25);
+    expect(weight).toBeDisabled();
+    expect(screen.getByLabelText("Group for Temp Person")).toBeDisabled();
+    expect(screen.getByLabelText("Include Temp Person")).toBeDisabled();
+    expect(screen.getByLabelText("Select Temp Person")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Edit schedule" })).toBeEnabled();
+    expect(screen.getByLabelText("Weight for Other Person")).toBeEnabled();
 
-    // A successful row patch forwards the results revision.
+    fetchRoster.mockResolvedValueOnce(rosterResponse([latest, other]));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Reload latest participant" }),
+    );
+    expect(
+      screen.getByText("Latest values loaded for Temp Person."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Reload latest participant" }),
+    ).not.toBeInTheDocument();
+    await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(2));
+    expect(await screen.findByLabelText("Weight for Temp Person")).toHaveValue(
+      0.8,
+    );
+    expect(screen.getByLabelText("Weight for Temp Person")).toBeEnabled();
+    expect(screen.getByLabelText("Group for Temp Person")).toBeEnabled();
+    expect(screen.getByLabelText("Include Temp Person")).not.toBeChecked();
+    expect(screen.getByLabelText("Include Temp Person")).toBeEnabled();
+
+    // A successful row patch forwards the results revision and sends the
+    // reloaded version.
     patchRosterParticipant.mockResolvedValueOnce({
-      participant: participant({ weight: 0.5, version: 5 }),
+      participant: participant({ weight: 0.5, version: 10 }),
       resultsRevision: 7,
     });
     fireEvent.change(screen.getByLabelText("Weight for Temp Person"), {
@@ -666,6 +706,240 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
     });
     fireEvent.blur(screen.getByLabelText("Weight for Temp Person"));
     await waitFor(() => expect(onResultsInvalidated).toHaveBeenCalledWith(7));
+    expect(patchRosterParticipant).toHaveBeenLastCalledWith(
+      "ROSTER1",
+      "p-1",
+      { weight: 0.5, expectedVersion: 9 },
+      "token",
+    );
+  });
+
+  test("locks a row when toggling inclusion hits a newer version", async () => {
+    fetchRoster.mockResolvedValue(rosterResponse([participant()]));
+    patchRosterParticipant.mockRejectedValueOnce(
+      Object.assign(new Error("The participant changed in another session."), {
+        status: 409,
+        participant: participant({ included: false, version: 9 }),
+      }),
+    );
+    await renderPanel();
+    fireEvent.click(await screen.findByLabelText("Include Temp Person"));
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Temp Person was changed in another session. Reload the latest values before editing this row again.",
+      ),
+    );
+    expect(patchRosterParticipant).toHaveBeenCalledWith(
+      "ROSTER1",
+      "p-1",
+      { included: false, expectedVersion: 4 },
+      "token",
+    );
+    expect(fetchRoster).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("Include Temp Person")).toBeChecked();
+    expect(screen.getByLabelText("Include Temp Person")).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Reload latest participant" }),
+    ).toBeInTheDocument();
+  });
+
+  test("reloads the roster when a stale patch carries no participant", async () => {
+    fetchRoster.mockResolvedValue(rosterResponse([participant()]));
+    patchRosterParticipant.mockRejectedValueOnce(
+      Object.assign(new Error("Stale"), { status: 409 }),
+    );
+    await renderPanel();
+    const weight = await screen.findByLabelText("Weight for Temp Person");
+    fireEvent.change(weight, { target: { value: "0.25" } });
+    fireEvent.blur(weight);
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("Stale"),
+    );
+    await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Weight for Temp Person")).toHaveValue(1),
+    );
+    expect(screen.getByLabelText("Weight for Temp Person")).toBeEnabled();
+    expect(
+      screen.queryByRole("button", { name: "Reload latest participant" }),
+    ).not.toBeInTheDocument();
+
+    patchRosterParticipant.mockRejectedValueOnce(
+      Object.assign(new Error(""), { status: 409 }),
+    );
+    fireEvent.change(screen.getByLabelText("Weight for Temp Person"), {
+      target: { value: "0.3" },
+    });
+    fireEvent.blur(screen.getByLabelText("Weight for Temp Person"));
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Unable to update Temp Person.",
+      ),
+    );
+  });
+
+  test("drops row conflicts once the event is no longer active", async () => {
+    fetchRoster.mockResolvedValue(rosterResponse([participant()]));
+    patchRosterParticipant.mockRejectedValueOnce(
+      Object.assign(new Error("The participant changed in another session."), {
+        status: 409,
+        participant: participant({ weight: 0.8, version: 9 }),
+      }),
+    );
+    const props = {
+      event,
+      setEvent: jest.fn(),
+      getToken: jest.fn().mockResolvedValue("token"),
+      onResultsInvalidated: jest.fn(),
+      onDeliveryRequestChange: jest.fn(),
+    };
+    const { rerender } = render(<RosterPanel {...props} />);
+    const weight = await screen.findByLabelText("Weight for Temp Person");
+    fireEvent.change(weight, { target: { value: "0.25" } });
+    fireEvent.blur(weight);
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Temp Person was changed in another session.",
+      ),
+    );
+
+    rerender(<RosterPanel {...props} event={{ ...event, status: "closed" }} />);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Reload latest participant" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/read-only while responses are closed/),
+    ).toBeVisible();
+  });
+
+  // Drives a row into the locked state the way the other conflict tests do:
+  // a typed weight whose patch hits a newer version on the server.
+  async function lockRowThroughConflict(rows, conflictRow) {
+    fetchRoster.mockResolvedValue(rosterResponse(rows));
+    patchRosterParticipant.mockRejectedValueOnce(
+      Object.assign(new Error("The participant changed in another session."), {
+        status: 409,
+        participant: conflictRow,
+      }),
+    );
+    const panel = createRef();
+    await renderPanel({ ref: panel });
+    const weight = await screen.findByLabelText("Weight for Temp Person");
+    fireEvent.change(weight, { target: { value: "0.25" } });
+    fireEvent.blur(weight);
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Temp Person was changed in another session.",
+      ),
+    );
+    expect(weight).toHaveValue(0.25);
+    expect(weight).toBeDisabled();
+    return panel;
+  }
+
+  test("unlocks a conflicted row once a refresh catches up with the other session", async () => {
+    const other = participant({ id: "p-2", name: "Other Person" });
+    const panel = await lockRowThroughConflict(
+      [participant(), other],
+      participant({ weight: 0.8, version: 9 }),
+    );
+
+    // The workspace refresh re-reads the roster with the row already at the
+    // version the conflict carried: the lock, the banner, and the typed draft
+    // all go, and the server value shows.
+    fetchRoster.mockResolvedValueOnce(
+      rosterResponse([participant({ weight: 0.8, version: 9 }), other]),
+    );
+    await act(async () => {
+      await panel.current.refresh("token");
+    });
+    expect(fetchRoster).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Reload latest participant" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Weight for Temp Person")).toHaveValue(0.8);
+    expect(screen.getByLabelText("Weight for Temp Person")).toBeEnabled();
+    expect(screen.getByLabelText("Group for Temp Person")).toBeEnabled();
+    expect(screen.getByLabelText("Include Temp Person")).toBeEnabled();
+
+    // The next patch sends the refreshed version, not the one that conflicted.
+    patchRosterParticipant.mockResolvedValueOnce({
+      participant: participant({ weight: 0.5, version: 10 }),
+    });
+    fireEvent.change(screen.getByLabelText("Weight for Temp Person"), {
+      target: { value: "0.5" },
+    });
+    fireEvent.blur(screen.getByLabelText("Weight for Temp Person"));
+    await waitFor(() =>
+      expect(patchRosterParticipant).toHaveBeenLastCalledWith(
+        "ROSTER1",
+        "p-1",
+        { weight: 0.5, expectedVersion: 9 },
+        "token",
+      ),
+    );
+  });
+
+  test("keeps a conflicted row locked until a reload carries its newer version", async () => {
+    const other = participant({ id: "p-2", name: "Other Person" });
+    const panel = await lockRowThroughConflict(
+      [participant(), other],
+      participant({ weight: 0.8, version: 9 }),
+    );
+
+    // A read that still holds an older copy of the row has not caught up:
+    // the lock and the typed value stay.
+    fetchRoster.mockResolvedValueOnce(
+      rosterResponse([participant({ version: 8 }), other]),
+    );
+    await act(async () => {
+      await panel.current.refresh("token");
+    });
+    expect(fetchRoster).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Temp Person was changed in another session.",
+    );
+    expect(screen.getByLabelText("Weight for Temp Person")).toHaveValue(0.25);
+    expect(screen.getByLabelText("Weight for Temp Person")).toBeDisabled();
+    expect(screen.getByLabelText("Weight for Other Person")).toBeEnabled();
+
+    // A filtered page that does not hold the row says nothing about it
+    // either.
+    fetchRoster.mockResolvedValueOnce(rosterResponse([other]));
+    fireEvent.change(screen.getByLabelText("Filter by group"), {
+      target: { value: "Students" },
+    });
+    await waitFor(() =>
+      expect(
+        screen.queryByLabelText("Weight for Temp Person"),
+      ).not.toBeInTheDocument(),
+    );
+    expect(fetchRoster).toHaveBeenCalledTimes(3);
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Temp Person was changed in another session.",
+    );
+    expect(
+      screen.getByRole("button", { name: "Reload latest participant" }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Weight for Other Person")).toBeEnabled();
+
+    // Once a page holds the row at the conflict's version, the row unlocks
+    // and the draft is gone.
+    fetchRoster.mockResolvedValueOnce(
+      rosterResponse([participant({ weight: 0.8, version: 9 }), other]),
+    );
+    fireEvent.change(screen.getByLabelText("Filter by group"), {
+      target: { value: "" },
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
+    );
+    expect(fetchRoster).toHaveBeenCalledTimes(4);
+    expect(screen.getByLabelText("Weight for Temp Person")).toHaveValue(0.8);
+    expect(screen.getByLabelText("Weight for Temp Person")).toBeEnabled();
+    expect(screen.getByLabelText("Include Temp Person")).toBeEnabled();
   });
 
   test("recovers a legacy delivery id and validates invitation lengths", async () => {
@@ -705,6 +979,39 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
         recipientCount: 1,
         delivery: {},
       }),
+    );
+  });
+
+  test("explains why a blocked account cannot be invited", async () => {
+    fetchRoster.mockResolvedValue(rosterResponse([participant()]));
+    createManagedParticipant.mockRejectedValue(
+      Object.assign(new Error("This email belongs to an inactive account."), {
+        status: 409,
+      }),
+    );
+    await renderPanel();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Invite person" }),
+    );
+    const form = screen.getByRole("form", { name: /invite/i });
+    fireEvent.change(within(form).getByLabelText(/Full name/), {
+      target: { value: "Inactive Person" },
+    });
+    fireEvent.change(within(form).getByLabelText(/Email/), {
+      target: { value: "inactive@example.com" },
+    });
+    fireEvent.submit(form);
+    expect(await within(form).findByRole("alert")).toHaveTextContent(
+      "This email belongs to an inactive account.",
+    );
+    expect(createManagedParticipant).toHaveBeenCalledWith(
+      "ROSTER1",
+      {
+        name: "Inactive Person",
+        email: "inactive@example.com",
+        idempotencyKey: expect.any(String),
+      },
+      "token",
     );
   });
 });

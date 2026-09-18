@@ -307,6 +307,20 @@ jobs:
           echo "compatibility=$compatibility" >>"$GITHUB_OUTPUT"
           echo "::notice::Legacy API compatibility required for this release: ${compatibility}."
 
+      - name: Detect live Amplify not-found routing
+        id: not_found_rule
+        run: |
+          set -euo pipefail
+          live="$(
+            aws amplify get-app \
+              --app-id "$TF_VAR_amplify_app_id" \
+              --query app.customRules \
+              --output json |
+              jq -r 'any(.[]?; .source == "/<*>" and .target == "/404.html" and .status == "404")'
+          )"
+          echo "live=$live" >>"$GITHUB_OUTPUT"
+          echo "::notice::Live Amplify not-found routing for this release: ${live}."
+
       - name: Install reviewed Amplify security headers
         run: |
           set -euo pipefail
@@ -649,6 +663,7 @@ jobs:
       - name: Plan production infrastructure with current DNS state
         env:
           TF_VAR_enable_amplify_domain: ${{ steps.domain_state.outputs.preexisting }}
+          TF_VAR_enable_amplify_not_found_rule: ${{ steps.not_found_rule.outputs.live }}
           TF_VAR_enable_legacy_api_compatibility: ${{ steps.api_transition.outputs.compatibility }}
           TF_VAR_frontend_image_tag: ${{ steps.rollback_frontend.outputs.sha }}
         run: terraform -chdir=infra/prod plan -input=false -out=production-base.tfplan
@@ -1464,6 +1479,7 @@ jobs:
         env:
           AMPLIFY_DEFAULT_DOMAIN: ${{ steps.terraform.outputs.amplify_default_domain }}
           CANDIDATE_BRANCH: ${{ steps.terraform.outputs.candidate_branch }}
+          NOT_FOUND_RULE_LIVE: ${{ steps.not_found_rule.outputs.live }}
         run: |
           set -euo pipefail
           candidate_url="https://${CANDIDATE_BRANCH}.${AMPLIFY_DEFAULT_DOMAIN}"
@@ -1566,6 +1582,27 @@ jobs:
               exit 1
               ;;
           esac
+
+          # The app-level not-found rule only reaches the candidate branch once
+          # it is live; the final topology verification probes it unconditionally.
+          if [ "$NOT_FOUND_RULE_LIVE" = "true" ]; then
+            missing_page_body="${RUNNER_TEMP}/candidate-missing-page.html"
+            missing_page_status="$(
+              curl \
+                --connect-timeout 5 \
+                --max-time 20 \
+                --silent \
+                --show-error \
+                --output "$missing_page_body" \
+                --write-out "%{http_code}" \
+                "${candidate_url}/releviz-smoke-missing-${DEPLOY_SHA}/"
+            )"
+            if [ "$missing_page_status" != "404" ] ||
+              ! grep -Fq "Page not found" "$missing_page_body"; then
+              echo "::error::Candidate unknown path returned ${missing_page_status} without the app 404 page; expected 404."
+              exit 1
+            fi
+          fi
 
           static_asset="$(
             find src/web/out/_next/static -type f -name '*.js' -print -quit |
@@ -1967,6 +2004,7 @@ jobs:
       - name: Plan reviewed Amplify domain association
         env:
           TF_VAR_enable_amplify_domain: "true"
+          TF_VAR_enable_amplify_not_found_rule: ${{ steps.not_found_rule.outputs.live }}
           TF_VAR_enable_legacy_api_compatibility: ${{ steps.api_transition.outputs.compatibility }}
           TF_VAR_frontend_image_tag: ${{ steps.rollback_frontend.outputs.sha }}
         run: |
@@ -2237,6 +2275,7 @@ jobs:
       - name: Plan final production topology
         env:
           TF_VAR_enable_amplify_domain: "true"
+          TF_VAR_enable_amplify_not_found_rule: "true"
           TF_VAR_enable_legacy_api_compatibility: "false"
           TF_VAR_frontend_image_tag: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
         run: |
@@ -2271,6 +2310,10 @@ jobs:
                   (.target | startswith($legacy_origin_url + "/"))
                   and .status == "200"
                 end;
+              def not_found_rule:
+                .source == "/<*>"
+                and .target == "/404.html"
+                and .status == "404";
               def prune_unknown:
                 if type == "object" then
                   with_entries(.value |= prune_unknown)
@@ -2388,30 +2431,42 @@ jobs:
                 | .change.actions as $actions
                 | select(
                     if $address == "aws_amplify_app.frontend" then
-                      $actions != ["update"]
+                      (
+                        [
+                          .change.before.custom_rule[]
+                          | select(.source | backend_proxy_source | not)
+                        ]
+                        | sort_by(.source, .target, .status)
+                      ) as $before_rules
+                      | (
+                          [
+                            .change.after.custom_rule[]
+                            | select(.source | backend_proxy_source | not)
+                          ]
+                          | sort_by(.source, .target, .status)
+                        ) as $after_rules
+                      | [
+                          .change.before.custom_rule[]
+                          | select(.source | backend_proxy_source)
+                        ] as $retired_rules
+                      | [$after_rules[] | select(not_found_rule)] as $added_not_found_rules
+                      | (
+                          (any($before_rules[]; not_found_rule) | not)
+                          and ($added_not_found_rules | length) == 1
+                          and (
+                            ($before_rules + $added_not_found_rules)
+                            | sort_by(.source, .target, .status)
+                          ) == $after_rules
+                          and (.change.after.custom_rule | last | not_found_rule)
+                        ) as $adds_not_found_rule
+                      | $actions != ["update"]
                       or (
                         (.change.before | del(.custom_rule))
                         != (.change.after | del(.custom_rule))
                       )
+                      or ($before_rules != $after_rules and ($adds_not_found_rule | not))
                       or (
-                        [
-                          .change.before.custom_rule[]
-                          | select(.source | backend_proxy_source | not)
-                        ]
-                        | sort_by(.source, .target, .status)
-                      ) != (
-                        [
-                          .change.after.custom_rule[]
-                          | select(.source | backend_proxy_source | not)
-                        ]
-                        | sort_by(.source, .target, .status)
-                      )
-                      or (
-                        [
-                          .change.before.custom_rule[]
-                          | select(.source | backend_proxy_source)
-                        ] as $retired_rules
-                        | ($retired_rules | length) == 0
+                        (($retired_rules | length) == 0 and ($adds_not_found_rule | not))
                         or any($retired_rules[]; reviewed_backend_rule | not)
                       )
                       or any(
@@ -2854,6 +2909,35 @@ jobs:
           done
           if [ "$stable_retired_cycles" -lt 3 ]; then
             echo "::error::Retired frontend proxy and API-prefix URLs did not stabilize at 404."
+            exit 1
+          fi
+          missing_page_body="${RUNNER_TEMP}/final-missing-page.html"
+          missing_page_status=""
+          for attempt in $(seq 1 30); do
+            : >"$missing_page_body"
+            missing_page_status="$(
+              curl \
+                --connect-timeout 5 \
+                --header "Cache-Control: no-cache" \
+                --header "Pragma: no-cache" \
+                --max-time 20 \
+                --silent \
+                --show-error \
+                --output "$missing_page_body" \
+                --write-out "%{http_code}" \
+                "https://${PROD_DOMAIN}/releviz-smoke-missing-${DEPLOY_SHA}/?missing_check=${attempt}" ||
+                true
+            )"
+            if [ "$missing_page_status" = "404" ] &&
+              grep -Fq "Page not found" "$missing_page_body"; then
+              break
+            fi
+            echo "Unknown-path routing is still converging; status=${missing_page_status:-request-failed}, attempt=${attempt}/30"
+            sleep 5
+          done
+          if [ "$missing_page_status" != "404" ] ||
+            ! grep -Fq "Page not found" "$missing_page_body"; then
+            echo "::error::Canonical unknown path did not serve the app 404 page with a 404 status."
             exit 1
           fi
 

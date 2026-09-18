@@ -317,6 +317,16 @@ function DashboardPage() {
   };
 
   const deleting = Boolean(deleteTarget) && actionCode === deleteTarget.code;
+  const currentEvents = organized.filter(
+    (event) => event.status !== "archived",
+  );
+  const archivedEvents = organized.filter(
+    (event) => event.status === "archived",
+  );
+  const confirmationMismatch =
+    Boolean(deleteTarget) &&
+    deleteConfirmation.length > 0 &&
+    deleteConfirmation !== deleteTarget.code;
 
   return (
     <>
@@ -385,10 +395,15 @@ function DashboardPage() {
             </div>
           </Panel>
 
-          <Panel title={`My Events (${organized.length})`} headingLevel={2}>
-            {organized.length > 0 ? (
+          <Panel
+            title={`My Events (${currentEvents.length})`}
+            titleId="dashboard-my-events-heading"
+            headingLevel={2}
+            aria-labelledby="dashboard-my-events-heading"
+          >
+            {currentEvents.length > 0 ? (
               <div className="d-flex flex-column gap-3">
-                {organized.map((event) => (
+                {currentEvents.map((event) => (
                   <EventCard
                     key={event.code}
                     event={event}
@@ -400,6 +415,10 @@ function DashboardPage() {
                   />
                 ))}
               </div>
+            ) : archivedEvents.length > 0 ? (
+              <EmptyState icon={<CalendarIcon />} title="No active events.">
+                Your archived events are listed below.
+              </EmptyState>
             ) : (
               <EmptyState
                 icon={<CalendarIcon />}
@@ -422,6 +441,30 @@ function DashboardPage() {
               </EmptyState>
             )}
           </Panel>
+
+          {archivedEvents.length > 0 && (
+            <Panel
+              title={`Archived (${archivedEvents.length})`}
+              titleId="dashboard-archived-heading"
+              headingLevel={2}
+              description="Archived events are read-only. Duplicate one to start again, or delete it permanently."
+              aria-labelledby="dashboard-archived-heading"
+            >
+              <div className="d-flex flex-column gap-3">
+                {archivedEvents.map((event) => (
+                  <EventCard
+                    key={event.code}
+                    event={event}
+                    organizerActions
+                    busy={actionCode === event.code}
+                    onArchive={handleArchive}
+                    onDuplicate={handleDuplicate}
+                    onDeleteRequested={openDeletePanel}
+                  />
+                ))}
+              </div>
+            </Panel>
+          )}
 
           <Panel
             title={`Events I Participate In (${participating.length})`}
@@ -492,6 +535,13 @@ function DashboardPage() {
                 <>
                   Type <strong>{deleteTarget.code}</strong> to confirm
                 </>
+              }
+              // Mirrors the backend rejection in
+              // src/api/apps/scheduling/services/events/mutations.py.
+              error={
+                confirmationMismatch
+                  ? "Type the event code exactly to confirm deletion"
+                  : null
               }
             >
               <input

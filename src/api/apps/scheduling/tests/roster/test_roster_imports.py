@@ -219,6 +219,116 @@ class RosterImportApiTests(TestCase):
         self.assertIn("1000", response.data["error"])
         self.assertEqual(RosterImportBatch.objects.count(), 0)
 
+    def test_preview_flags_blocked_accounts_and_merge_succeeds_once_they_are_deselected(self):
+        create_member("inactive@example.com", "Inactive", "Member", is_active=False)
+        create_member("unverified@example.com", "Unverified", "Member", contact_verified=False)
+        preview = self.paste(
+            "name,email\n"
+            "Inactive Person,inactive@example.com\n"
+            "Unverified Person,unverified@example.com\n"
+            "Fresh Person,fresh@example.com\n"
+        )
+        self.assertEqual(preview.status_code, 201, preview.data)
+        import_id = preview.data["import"]["id"]
+        self.assertEqual(
+            preview.data["import"]["summary"],
+            {"total": 3, "selected": 3, "valid": 1, "invalid": 2, "conflicts": 0},
+        )
+
+        rows = self.client.get(f"/events/roster-imports/{import_id}/rows?code={self.event.code}")
+        self.assertEqual(rows.status_code, 200)
+        by_email = {row["email"]: row for row in rows.data["rows"]}
+        self.assertFalse(by_email["inactive@example.com"]["valid"])
+        self.assertEqual(
+            by_email["inactive@example.com"]["errors"],
+            ["This email belongs to an inactive account."],
+        )
+        self.assertFalse(by_email["unverified@example.com"]["valid"])
+        self.assertEqual(
+            by_email["unverified@example.com"]["errors"],
+            ["This email belongs to an unverified full account."],
+        )
+        self.assertTrue(by_email["fresh@example.com"]["valid"])
+        self.assertEqual(by_email["fresh@example.com"]["errors"], [])
+
+        blocked = self.commit(import_id)
+        self.assertEqual(blocked.status_code, 409)
+        self.assertEqual(
+            blocked.data["error"],
+            "Resolve or deselect invalid roster rows before committing.",
+        )
+        self.assertEqual(blocked.data["invalidRowCount"], 2)
+
+        deselected = self.client.put(
+            f"/events/roster-imports/{import_id}?code={self.event.code}",
+            {
+                "rowUpdates": [
+                    {"id": by_email["inactive@example.com"]["id"], "selected": False},
+                    {"id": by_email["unverified@example.com"]["id"], "selected": False},
+                ]
+            },
+            format="json",
+        )
+        self.assertEqual(deselected.status_code, 200, deselected.data)
+        self.assertEqual(
+            deselected.data["import"]["summary"],
+            {"total": 3, "selected": 1, "valid": 1, "invalid": 0, "conflicts": 0},
+        )
+
+        committed = self.commit(import_id)
+        self.assertEqual(committed.status_code, 201, committed.data)
+        self.assertEqual(committed.data["receipt"]["createdCount"], 1)
+        self.assertEqual(
+            list(self.event.participants.values_list("participant_name", flat=True)),
+            ["Fresh Person"],
+        )
+
+    def test_row_email_edits_reflag_and_clear_blocked_accounts(self):
+        create_member("inactive@example.com", "Inactive", "Member", is_active=False)
+        preview = self.paste("name,email\nFresh Person,fresh@example.com")
+        import_id = preview.data["import"]["id"]
+        self.assertEqual(preview.data["import"]["summary"]["valid"], 1)
+        rows = self.client.get(f"/events/roster-imports/{import_id}/rows?code={self.event.code}")
+        row_id = rows.data["rows"][0]["id"]
+
+        reflagged = self.client.put(
+            f"/events/roster-imports/{import_id}?code={self.event.code}",
+            {"rowUpdates": [{"id": row_id, "email": "Inactive@Example.com"}]},
+            format="json",
+        )
+        self.assertEqual(reflagged.status_code, 200, reflagged.data)
+        self.assertEqual(reflagged.data["import"]["summary"]["valid"], 0)
+        self.assertEqual(reflagged.data["import"]["summary"]["invalid"], 1)
+        rows = self.client.get(f"/events/roster-imports/{import_id}/rows?code={self.event.code}")
+        self.assertEqual(rows.data["rows"][0]["email"], "inactive@example.com")
+        self.assertFalse(rows.data["rows"][0]["valid"])
+        self.assertEqual(
+            rows.data["rows"][0]["errors"],
+            ["This email belongs to an inactive account."],
+        )
+
+        restored = self.client.put(
+            f"/events/roster-imports/{import_id}?code={self.event.code}",
+            {"rowUpdates": [{"id": row_id, "email": "fresh@example.com"}]},
+            format="json",
+        )
+        self.assertEqual(restored.status_code, 200, restored.data)
+        self.assertEqual(restored.data["import"]["summary"]["valid"], 1)
+        self.assertEqual(restored.data["import"]["summary"]["invalid"], 0)
+        rows = self.client.get(f"/events/roster-imports/{import_id}/rows?code={self.event.code}")
+        self.assertTrue(rows.data["rows"][0]["valid"])
+        self.assertEqual(rows.data["rows"][0]["errors"], [])
+
+    def test_blocked_rows_do_not_count_toward_the_valid_row_limit(self):
+        create_member("person0@example.com", "Blocked", "Member", is_active=False)
+        content = "name,email\n" + "\n".join(
+            f"Person {index},person{index}@example.com" for index in range(1001)
+        )
+        response = self.paste(content)
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data["import"]["summary"]["valid"], 1000)
+        self.assertEqual(response.data["import"]["summary"]["invalid"], 1)
+
     def test_merge_creates_temporary_accounts_reuses_verified_account_and_is_idempotent(self):
         full_member = create_member("verified@example.com", "Verified", "Member")
         preview = self.paste(
@@ -561,6 +671,17 @@ class RosterImportApiTests(TestCase):
             format="json",
         )
         self.assertEqual(stale.status_code, 409)
+        self.assertEqual(stale.data["error"], "The participant changed in another session.")
+        # The payload carries the row as it now stands so the organizer can
+        # reload it without refetching the roster.
+        self.assertEqual(stale.data["participant"]["id"], str(full_participant.pk))
+        self.assertEqual(stale.data["participant"]["weight"], 0.3)
+        self.assertFalse(stale.data["participant"]["included"])
+        self.assertEqual(stale.data["participant"]["group"], "C")
+        self.assertEqual(
+            stale.data["participant"]["version"],
+            patched.data["participant"]["version"],
+        )
 
         bulk = self.client.patch(
             f"/events/roster/bulk?code={self.event.code}",
