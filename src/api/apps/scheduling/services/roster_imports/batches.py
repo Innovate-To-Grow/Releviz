@@ -19,6 +19,7 @@ from .mapping import (
 )
 from .normalization import (
     active_rows,
+    apply_account_rules,
     apply_duplicate_rules,
     normalize_import_batch,
     rows_summary,
@@ -190,6 +191,7 @@ def _apply_row_updates(batch: RosterImportBatch, updates) -> None:
         row.duplicate_status = RosterImportRow.DuplicateStatus.UNIQUE
 
     apply_duplicate_rules(all_rows)
+    apply_account_rules(all_rows)
     if rows_summary(all_rows)["valid"] > MAX_ROSTER_ROWS:
         raise RosterImportError(
             f"An import may contain at most {MAX_ROSTER_ROWS} valid participants."

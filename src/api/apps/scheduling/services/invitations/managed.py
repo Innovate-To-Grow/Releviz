@@ -13,7 +13,11 @@ from apps.scheduling.models import Event, EventInvitation, Participant, UserEven
 from apps.scheduling.services.availability import default_availability
 from apps.scheduling.services.events.lifecycle import response_write_error
 
-from .errors import ManagedParticipantError
+from .errors import (
+    INACTIVE_ACCOUNT_MESSAGE,
+    UNVERIFIED_FULL_ACCOUNT_MESSAGE,
+    ManagedParticipantError,
+)
 
 security_logger = logging.getLogger("releviz.security")
 
@@ -122,20 +126,14 @@ def create_or_reuse_managed_participant(*, event: Event, organizer, name: str, e
         )
 
     if not member.is_active:
-        raise ManagedParticipantError(
-            "Unable to create a participant with this email address.",
-            status_code=409,
-        )
+        raise ManagedParticipantError(INACTIVE_ACCOUNT_MESSAGE, status_code=409)
 
     if (
         contact.member_id is not None
         and getattr(member, "access_level", "full") == "full"
         and not contact.verified
     ):
-        raise ManagedParticipantError(
-            "Unable to create a participant with this email address.",
-            status_code=409,
-        )
+        raise ManagedParticipantError(UNVERIFIED_FULL_ACCOUNT_MESSAGE, status_code=409)
 
     participant, participant_created = Participant.objects.get_or_create(
         event=event,

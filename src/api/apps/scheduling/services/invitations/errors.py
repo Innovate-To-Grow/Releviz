@@ -1,5 +1,9 @@
 """Errors raised while managing invitations and managed participants."""
 
+INACTIVE_ACCOUNT_MESSAGE = "This email belongs to an inactive account."
+UNVERIFIED_FULL_ACCOUNT_MESSAGE = "This email belongs to an unverified full account."
+SHARED_ACCOUNT_MESSAGE = "Another selected row already uses this person's account."
+
 
 class EventEmailRequestError(ValueError):
     def __init__(self, message: str, *, status_code: int = 400):

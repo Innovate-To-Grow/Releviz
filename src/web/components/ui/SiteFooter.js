@@ -2,6 +2,7 @@ import Link from "next/link";
 import { BrandHomeLink } from "@/components/ui/BrandLogo";
 
 const footerLinks = [
+  { href: "/support", label: "Support" },
   { href: "/privacy", label: "Privacy" },
   { href: "/terms", label: "Terms" },
 ];
@@ -14,7 +15,7 @@ export default function SiteFooter() {
           className="site-footer-brand"
           logoClassName="brand-logo brand-logo--footer"
         />
-        <nav aria-label="Legal">
+        <nav aria-label="Footer">
           <ul className="site-footer-links">
             {footerLinks.map((link) => (
               <li key={link.href}>

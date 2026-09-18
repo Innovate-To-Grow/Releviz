@@ -316,7 +316,8 @@ connected to GitHub and does not use a PAT or an auto-build webhook.
 The static build must match `src/web/amplify-routes.json`. Candidate smoke tests exercise
 clean and trailing-slash routes, deployed JavaScript, query-preserving redirects, credentialed
 CORS, protected non-GET auth requests, and a cookie/CSRF Django admin POST directly on the API
-hostname. During the first API-subdomain cutover only, the workflow temporarily preserves the old
+hostname. Unknown paths serve the exported 404 document through a final Amplify catch-all rule.
+During the first API-subdomain cutover only, the workflow temporarily preserves the old
 frontend proxy and `/api` prefix while the last-known-good ECS frontend remains the hot fallback.
 After the API-aware Amplify release passes canonical smoke, the final reviewed plan advances the
 ECS fallback to the current SHA, waits for it to become healthy, and removes that compatibility

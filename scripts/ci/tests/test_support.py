@@ -141,6 +141,7 @@ class AmplifyStaticExportTests(TestCase):
                 "Amplify static export has unlisted root route HTML: ['unlisted']",
                 errors,
             )
+            self.assertIn("Amplify static export is missing 404.html", errors)
             self.assertIn("Amplify static export has no _next/static JavaScript asset", errors)
 
 
@@ -793,6 +794,7 @@ steps:
       test "$release_sha" = "$DEPLOY_SHA"
       echo "Plan production infrastructure with current DNS state"
       echo 'TF_VAR_frontend_image_tag: ${{ steps.rollback_frontend.outputs.sha }}'
+      echo 'TF_VAR_enable_amplify_not_found_rule: ${{ steps.not_found_rule.outputs.live }}'
       echo production-base.tfplan
       echo "Verify base ECS services use Terraform-selected task definitions"
       for role in backend result_worker email_worker frontend; do
@@ -807,6 +809,7 @@ steps:
       echo 'all(.tasks[]; .lastStatus == "RUNNING" and .taskDefinitionArn == $expected)'
       terraform -chdir=infra/prod state list
       echo "Detect API-subdomain transition state"
+      echo "Detect live Amplify not-found routing"
       echo "Install reviewed Amplify security headers"
       aws amplify update-app --custom-headers "$custom_headers"
       echo "TF_VAR_amplify_app_id: ${{ vars.PROD_AMPLIFY_APP_ID }}"
@@ -1033,6 +1036,7 @@ steps:
       echo "Plan reviewed Amplify domain association"
       echo 'TF_VAR_enable_amplify_domain: "true"'
       echo 'TF_VAR_frontend_image_tag: ${{ steps.rollback_frontend.outputs.sha }}'
+      echo 'TF_VAR_enable_amplify_not_found_rule: ${{ steps.not_found_rule.outputs.live }}'
       terraform -chdir=infra/prod show -json production-domain.tfplan
       echo '.change.actions | index("delete")) == null'
       echo "Require a safe first-cutover time budget"
@@ -1089,6 +1093,7 @@ steps:
         exit 1
       fi
       echo "Plan final production topology"
+      echo 'TF_VAR_enable_amplify_not_found_rule: "true"'
       echo 'TF_VAR_frontend_image_tag: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}'
       echo 'TF_VAR_enable_legacy_api_compatibility: "false"'
       echo production-final.tfplan
@@ -1098,6 +1103,7 @@ steps:
         echo '--arg frontend_image "$expected_frontend_image"'
         echo 'def backend_proxy_source:'
         echo 'def reviewed_backend_rule:'
+        echo 'def not_found_rule:'
         echo 'def prune_unknown:'
         echo 'def normalized_task:'
         echo '.ipc_mode = (.ipc_mode // "")'
@@ -1127,6 +1133,7 @@ steps:
         echo 'startswith("/api/")'
         echo '.target | startswith($legacy_origin_url + "/")'
         echo '.status == "200"'
+        echo '.target == "/404.html"'
         echo '.change.after_unknown | prune_unknown'
         echo 'del(.ecs_target[0].task_definition_arn)'
         echo 'del(.task_definition)'
@@ -1885,6 +1892,55 @@ steps:
                         encoding="utf-8",
                     )
                     self.assertIn(expected_error, production_cd_errors(root))
+
+            not_found_routing_contract = (
+                (
+                    'echo "Detect live Amplify not-found routing"',
+                    'echo "Skip live Amplify not-found routing"',
+                    "production CD omits live Amplify not-found routing detection",
+                ),
+                (
+                    "echo 'TF_VAR_enable_amplify_not_found_rule: \"true\"'",
+                    "echo 'TF_VAR_enable_amplify_not_found_rule: \"false\"'",
+                    "production CD omits the Amplify not-found rule in the final Terraform plan",
+                ),
+                (
+                    "echo 'def not_found_rule:'",
+                    "echo 'def unreviewed_rule:'",
+                    "production CD omits the exact Amplify not-found rule shape",
+                ),
+                (
+                    "echo '.target == \"/404.html\"'",
+                    "echo '.target == \"/missing.html\"'",
+                    "production CD omits the exact exported Next 404 document target",
+                ),
+            )
+            for needle, replacement, expected_error in not_found_routing_contract:
+                with self.subTest(expected_error=expected_error):
+                    self.assertIn(needle, protected_source)
+                    workflow.write_text(
+                        protected_source.replace(needle, replacement, 1),
+                        encoding="utf-8",
+                    )
+                    self.assertIn(expected_error, production_cd_errors(root))
+
+            self.assertEqual(protected_source.count("steps.not_found_rule.outputs.live"), 2)
+            workflow.write_text(
+                protected_source.replace(
+                    "steps.not_found_rule.outputs.live",
+                    "steps.not_found_rule.outputs.unreviewed",
+                ),
+                encoding="utf-8",
+            )
+            errors = production_cd_errors(root)
+            self.assertIn(
+                "production CD omits the live Amplify not-found state in the base Terraform plan",
+                errors,
+            )
+            self.assertIn(
+                "production CD omits the live Amplify not-found state in the domain Terraform plan",
+                errors,
+            )
 
             retired_redirect_contract = (
                 (

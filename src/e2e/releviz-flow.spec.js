@@ -749,6 +749,10 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(
       page.getByRole("heading", { level: 2, name: eventName }),
     ).toBeVisible();
+    // The lifecycle summary sits beside the controls from first paint.
+    await expect(
+      page.getByText("This event is active and accepting responses."),
+    ).toBeVisible();
     await expectAccessible(page, "organizer event");
 
     const organizerSession = await readSession(page);
@@ -1493,6 +1497,18 @@ test.describe("Releviz account and scheduling flow", () => {
       page.getByText("Attendance review is current for this candidate."),
     ).toBeVisible();
     await expect(page.getByText("Available", { exact: true })).toBeVisible();
+    // The count tiles are backed by a per-person breakdown: a header row plus
+    // one row for each roster entry.
+    const attendanceTable = page
+      .locator("#organizer-finalize")
+      .getByRole("table", { name: "Attendance by person" });
+    await expect(attendanceTable).toBeVisible();
+    await expect(
+      attendanceTable.getByRole("columnheader", { name: "Person" }),
+    ).toBeVisible();
+    expect(
+      await attendanceTable.getByRole("row").count(),
+    ).toBeGreaterThanOrEqual(2);
 
     const firstFinalStartedAt = Date.now() - 1000;
     const firstFinalResponsePromise = page.waitForResponse(
@@ -1558,6 +1574,21 @@ test.describe("Releviz account and scheduling flow", () => {
       "METHOD:REQUEST",
     );
 
+    // The refresh above already cleared the pick, and the Finalize step
+    // ignores selections while the meeting is finalized, so re-establish a
+    // live one through the ranked rail before reactivating.
+    await openRankedWindows(page);
+    const rankedRail = page.getByRole("complementary", {
+      name: "Ranked windows",
+    });
+    await rankedRail
+      .getByRole("button", { name: "Choose this time" })
+      .first()
+      .click();
+    await expect(
+      rankedRail.getByRole("button", { name: "Selected time" }),
+    ).toHaveCount(1);
+
     const cancellationStartedAt = Date.now() - 1000;
     const cancellationResponsePromise = page.waitForResponse(
       (response) =>
@@ -1569,6 +1600,18 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(
       page.getByText("This event is active and accepting responses."),
     ).toBeVisible();
+    // Reactivating drops the stale pick: the Finalize step asks for a window
+    // again instead of still offering the meeting that was just cancelled.
+    const finalizeStep = page.locator("#organizer-finalize");
+    await expect(finalizeStep).toContainText("No time selected yet");
+    await expect(finalizeStep).toContainText(
+      "Pick a window on the calendar or choose a ranked one.",
+    );
+    await expect(finalizeStep).not.toContainText("Ranked #");
+    await expect(finalizeStep).not.toContainText("The meeting is finalized");
+    await expect(
+      rankedRail.getByRole("button", { name: "Selected time" }),
+    ).toHaveCount(0);
     const cancellationDeliveryProgress = page.getByLabel(
       "Event delivery progress",
     );
@@ -1694,6 +1737,9 @@ test.describe("Releviz account and scheduling flow", () => {
     await selectOption(page, "Event timezone", "UTC");
     await page.getByRole("button", { name: "Create Event" }).click();
     await page.waitForURL(/\/event\?code=/);
+    await expect(
+      page.getByText("This event is active and accepting responses."),
+    ).toBeVisible();
     const originalCode = new URL(page.url()).searchParams.get("code");
     const organizerSession = await readSession(page);
 
@@ -1838,13 +1884,37 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(
       updatedCard.getByRole("link", { name: "Edit" }),
     ).toHaveAttribute("aria-disabled", "true");
+    // Archiving moves the card out of the active list into its own section:
+    // the copy is the only active event left.
+    await expect(
+      page.getByRole("heading", { name: "My Events (1)", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Archived (1)", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page
+        .getByRole("region", { name: /Archived \(1\)/ })
+        .getByRole("link", { name: updatedName, exact: true }),
+    ).toBeVisible();
 
     await copyCard.getByRole("button", { name: "Delete" }).click();
     const deleteButton = page.getByRole("button", {
       name: "Delete event permanently",
     });
     await expect(deleteButton).toBeDisabled();
-    await page.getByLabel("Event code confirmation").fill(copyCode);
+    // A wrong code explains itself inline rather than only leaving the
+    // button disabled.
+    const confirmationInput = page.getByLabel("Event code confirmation");
+    const confirmationError = page.getByText(
+      "Type the event code exactly to confirm deletion",
+    );
+    await confirmationInput.fill("WRONG");
+    await expect(confirmationError).toBeVisible();
+    await expect(confirmationInput).toHaveAttribute("aria-invalid", "true");
+    await expect(deleteButton).toBeDisabled();
+    await confirmationInput.fill(copyCode);
+    await expect(confirmationError).toBeHidden();
     await expect(deleteButton).toBeEnabled();
     await deleteButton.click();
     await expect(
@@ -1947,6 +2017,27 @@ test.describe("Releviz account and scheduling flow", () => {
     const primaryFinalSession = await readSession(page);
     await loginWithEmailCode(otherPage, email);
     const otherFinalSession = await readSession(otherPage);
+
+    // Revoking one device from another only reaches that device on its next
+    // client-side route change: its cached access token still looks usable
+    // until the workspace asks the API again.
+    await page.goto("/settings");
+    const otherDevice = page
+      .getByRole("listitem")
+      .filter({ hasText: "Other device" });
+    await expect(otherDevice).toHaveCount(1);
+    await otherDevice.getByRole("button", { name: "Revoke" }).click();
+    await expect(otherDevice).toHaveCount(0);
+    const revokedOtherSession = await apiJson(
+      request,
+      "GET",
+      "/authn/profile/",
+      otherFinalSession.access,
+    );
+    expect(revokedOtherSession.response.status()).toBe(401);
+    await otherPage.getByRole("link", { name: "Create New Event" }).click();
+    await expect(otherPage).toHaveURL(/\/login\?next=%2Fcreate/);
+
     await page.goto("/settings");
     await page.getByRole("button", { name: "Sign out all devices" }).click();
     await expect(page).toHaveURL(/\/login\?status=signed-out-all$/);

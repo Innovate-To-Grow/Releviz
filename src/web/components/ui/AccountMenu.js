@@ -109,7 +109,7 @@ export default function AccountMenu({
         aria-controls={menuId}
         aria-expanded={open}
       >
-        {user.displayName}
+        <span className="account-menu-trigger__name">{user.displayName}</span>
         <span className="app-btn-icon ms-1" aria-hidden="true">
           <ChevronDownIcon size="0.8em" />
         </span>

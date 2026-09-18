@@ -257,6 +257,19 @@ export async function updateProfileApi(payload) {
   return user;
 }
 
+// Liveness check for the current session. It deliberately never writes the
+// session store: writing would change the user object identity and re-run
+// every effect keyed on `user` (for example the dashboard fetch).
+export async function fetchAuthSession() {
+  const res = await apiFetch(`${API_BASE}/authn/session/`);
+  if (!res.ok) {
+    const error = new Error(await extractError(res));
+    error.status = res.status;
+    throw error;
+  }
+  return res.json();
+}
+
 export async function fetchAuthSessions() {
   const res = await apiFetch(`${API_BASE}/authn/sessions/`);
   if (!res.ok) throw new Error(await extractError(res));

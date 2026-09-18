@@ -62,7 +62,7 @@ function EventHeader({ eventName, eventCode, isOrganizer }) {
             )}
           </div>
         </div>
-        <div className="d-flex align-items-center gap-2 flex-shrink-0 event-header-actions">
+        <div className="d-flex align-items-center gap-2 event-header-actions">
           <AppButton
             onClick={handleCopy}
             variant="outlined"
