@@ -194,6 +194,22 @@ jobs:
           fi
           echo "default_domain=$default_domain" >>"$GITHUB_OUTPUT"
 
+      - name: Detect live Amplify not-found routing
+        id: not_found_rule
+        run: |
+          set -euo pipefail
+          # The infrastructure release installs the app-level not-found rule;
+          # once it is live, every artifact must serve its 404 document.
+          live="$(
+            aws amplify get-app \
+              --app-id "$AMPLIFY_APP_ID" \
+              --query app.customRules \
+              --output json |
+              jq -r 'any(.[]?; .source == "/<*>" and .target == "/404.html" and .status == "404")'
+          )"
+          echo "live=$live" >>"$GITHUB_OUTPUT"
+          echo "::notice::Live Amplify not-found routing for this release: ${live}."
+
       - name: Fail closed when an Amplify release job is active
         run: |
           set -euo pipefail
@@ -499,6 +515,7 @@ jobs:
         env:
           AMPLIFY_DEFAULT_DOMAIN: ${{ steps.amplify.outputs.default_domain }}
           CANDIDATE_BRANCH: ${{ env.CANDIDATE_BRANCH }}
+          NOT_FOUND_RULE_LIVE: ${{ steps.not_found_rule.outputs.live }}
         run: |
           set -euo pipefail
           candidate_url="https://${CANDIDATE_BRANCH}.${AMPLIFY_DEFAULT_DOMAIN}"
@@ -601,6 +618,27 @@ jobs:
               exit 1
               ;;
           esac
+
+          # The app-level not-found rule reaches the candidate branch once it
+          # is live; the artifact must then serve its exported 404 document.
+          if [ "$NOT_FOUND_RULE_LIVE" = "true" ]; then
+            missing_page_body="${RUNNER_TEMP}/candidate-missing-page.html"
+            missing_page_status="$(
+              curl \
+                --connect-timeout 5 \
+                --max-time 20 \
+                --silent \
+                --show-error \
+                --output "$missing_page_body" \
+                --write-out "%{http_code}" \
+                "${candidate_url}/releviz-smoke-missing-${DEPLOY_SHA}/"
+            )"
+            if [ "$missing_page_status" != "404" ] ||
+              ! grep -Fq "Page not found" "$missing_page_body"; then
+              echo "::error::Candidate unknown path returned ${missing_page_status} without the app 404 page; expected 404."
+              exit 1
+            fi
+          fi
 
           static_asset="$(
             find src/web/out/_next/static -type f -name '*.js' -print -quit |
@@ -955,6 +993,8 @@ jobs:
 
       - name: Run canonical production smoke tests
         id: canonical_smoke
+        env:
+          NOT_FOUND_RULE_LIVE: ${{ steps.not_found_rule.outputs.live }}
         run: |
           set -euo pipefail
           phase_deadline=$((SECONDS + 600))
@@ -1059,6 +1099,41 @@ jobs:
           if [ "$release_sha" != "$DEPLOY_SHA" ]; then
             echo "::error::Canonical production release is ${release_sha}; expected ${DEPLOY_SHA}."
             exit 1
+          fi
+          if [ "$NOT_FOUND_RULE_LIVE" = "true" ]; then
+            missing_page_body="${RUNNER_TEMP}/canonical-missing-page.html"
+            missing_page_status=""
+            for attempt in $(seq 1 30); do
+              : >"$missing_page_body"
+              missing_page_status="$(
+                bounded_curl \
+                  --connect-timeout 5 \
+                  --header "Cache-Control: no-cache" \
+                  --header "Pragma: no-cache" \
+                  --max-time 20 \
+                  --silent \
+                  --show-error \
+                  --output "$missing_page_body" \
+                  --write-out "%{http_code}" \
+                  "https://${PROD_DOMAIN}/releviz-smoke-missing-${DEPLOY_SHA}/?missing_check=${attempt}" ||
+                  true
+              )"
+              if ((SECONDS >= phase_deadline)); then
+                echo "::error::Canonical production smoke exceeded its 600s deadline."
+                exit 1
+              fi
+              if [ "$missing_page_status" = "404" ] &&
+                grep -Fq "Page not found" "$missing_page_body"; then
+                break
+              fi
+              echo "Unknown-path routing is still converging; status=${missing_page_status:-request-failed}, attempt=${attempt}/30"
+              sleep 5
+            done
+            if [ "$missing_page_status" != "404" ] ||
+              ! grep -Fq "Page not found" "$missing_page_body"; then
+              echo "::error::Canonical unknown path did not serve the app 404 page with a 404 status."
+              exit 1
+            fi
           fi
 
       - name: Roll back production Amplify branch after failed release

@@ -1378,6 +1378,44 @@ class ProductionReleaseWorkflowTests(TestCase):
                 "use_lockfile=false",
                 "release preflight omits native Terraform state locking",
             ),
+            # Amplify not-found routing: released by infrastructure, held by
+            # the backend plan, and smoked by every release that can see it.
+            (
+                backend,
+                "TF_VAR_enable_amplify_not_found_rule: ${{ steps.not_found_rule.outputs.live }}",
+                'TF_VAR_enable_amplify_not_found_rule: "true"',
+                "backend release omits the live Amplify not-found state in the backend plan",
+            ),
+            (
+                backend,
+                "- name: Detect live Amplify not-found routing",
+                "- name: Skip live Amplify not-found routing",
+                "backend release omits live Amplify not-found routing detection",
+            ),
+            (
+                frontend,
+                "NOT_FOUND_RULE_LIVE: ${{ steps.not_found_rule.outputs.live }}",
+                'NOT_FOUND_RULE_LIVE: "false"',
+                "frontend release omits smoke tests keyed to the live Amplify not-found state",
+            ),
+            (
+                frontend,
+                "${candidate_url}/releviz-smoke-missing-${DEPLOY_SHA}/",
+                "${candidate_url}/",
+                "frontend release omits candidate unknown-path 404 smoke",
+            ),
+            (
+                frontend,
+                "https://${PROD_DOMAIN}/releviz-smoke-missing-${DEPLOY_SHA}/?missing_check=",
+                "https://${PROD_DOMAIN}/?missing_check=",
+                "frontend release omits canonical unknown-path 404 smoke",
+            ),
+            (
+                infrastructure,
+                'grep -Fq "Page not found"',
+                'grep -Fq "Not Found"',
+                "infrastructure release omits the exported Next 404 document in unknown-path smoke",
+            ),
             (
                 scope,
                 "runs?branch=main&status=success&per_page=1",

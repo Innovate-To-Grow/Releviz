@@ -189,6 +189,13 @@ SCOPED_RELEASE_WORKFLOW_RULES = {
         r"TF_VAR_frontend_image_tag:\s*\$\{\{\s*steps\.frontend_tag\.outputs\.sha\s*\}\}": (
             "the resolved fallback frontend tag in the plan"
         ),
+        r"Detect live Amplify not-found routing": "live Amplify not-found routing detection",
+        (
+            r"Plan the backend release[\s\S]{0,400}"
+            r"TF_VAR_enable_amplify_not_found_rule:\s*\$\{\{\s*"
+            r"steps\.not_found_rule\.outputs\.live\s*\}\}"
+            r"[\s\S]{0,400}backend-release\.tfplan"
+        ): "the live Amplify not-found state in the backend plan",
         r"-out=backend-release\.tfplan": "a saved backend plan",
         (
             r"aws_\(ecs_task_definition\|ecs_service\|appautoscaling_\(target\|policy\)"
@@ -253,6 +260,17 @@ SCOPED_RELEASE_WORKFLOW_RULES = {
         r'\.domainAssociation\.domainStatus == "AVAILABLE"': "an available Amplify domain",
         r"amplify-apex-target\.sh": "the Amplify apex target helper",
         r"list-resource-record-sets": "the canonical alias check",
+        r"Detect live Amplify not-found routing": "live Amplify not-found routing detection",
+        r"NOT_FOUND_RULE_LIVE:\s*\$\{\{\s*steps\.not_found_rule\.outputs\.live\s*\}\}": (
+            "smoke tests keyed to the live Amplify not-found state"
+        ),
+        r"\$\{candidate_url\}/releviz-smoke-missing-\$\{DEPLOY_SHA\}/": (
+            "candidate unknown-path 404 smoke"
+        ),
+        r"https://\$\{PROD_DOMAIN\}/releviz-smoke-missing-\$\{DEPLOY_SHA\}/\?missing_check=": (
+            "canonical unknown-path 404 smoke"
+        ),
+        r'grep -Fq "Page not found"': "the exported Next 404 document in unknown-path smoke",
         r"Fail closed when an Amplify release job is active": "an active-job fail-closed gate",
         r'--build-arg "NEXT_PUBLIC_API_BASE_URL=https://\$\{API_DOMAIN\}"': (
             "the API subdomain baked into the ECS frontend fallback"
@@ -338,6 +356,10 @@ SCOPED_RELEASE_WORKFLOW_RULES = {
         ),
         r"## Infrastructure plan": "a plan summary for the reviewer",
         r"jq -r '\.static_routes\[\]' src/web/amplify-routes\.json": "static route smoke",
+        r"https://\$\{PROD_DOMAIN\}/releviz-smoke-missing-\$\{DEPLOY_SHA\}/\?missing_check=": (
+            "canonical unknown-path 404 smoke"
+        ),
+        r'grep -Fq "Page not found"': "the exported Next 404 document in unknown-path smoke",
     },
 }
 
@@ -345,6 +367,7 @@ SCOPED_RELEASE_WORKFLOW_RULES = {
 FRONTEND_RELEASE_ORDER = (
     "Install reviewed Amplify security headers",
     "Require the live Amplify domain to serve the production branch",
+    "Detect live Amplify not-found routing",
     "Fail closed when an Amplify release job is active",
     "Build Amplify static artifact",
     "Retain immutable Amplify artifact for rollback",
@@ -366,6 +389,7 @@ BACKEND_RELEASE_ORDER = (
     "Release preflight",
     "Build and push immutable backend image",
     "Resolve the ECS fallback frontend image for this plan",
+    "Detect live Amplify not-found routing",
     "Plan the backend release",
     "Guard the backend release plan",
     "Apply the exact backend release plan",

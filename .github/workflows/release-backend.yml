@@ -214,8 +214,25 @@ jobs:
           echo "sha=$tag" >>"$GITHUB_OUTPUT"
           echo "::notice::ECS fallback frontend stays on ${tag} (${source})."
 
+      - name: Detect live Amplify not-found routing
+        id: not_found_rule
+        run: |
+          set -euo pipefail
+          # The not-found rule is released by the infrastructure workflow; a
+          # backend plan carries the live state so the Amplify app stays a no-op.
+          live="$(
+            aws amplify get-app \
+              --app-id "$AMPLIFY_APP_ID" \
+              --query app.customRules \
+              --output json |
+              jq -r 'any(.[]?; .source == "/<*>" and .target == "/404.html" and .status == "404")'
+          )"
+          echo "live=$live" >>"$GITHUB_OUTPUT"
+          echo "::notice::Live Amplify not-found routing for this plan: ${live}."
+
       - name: Plan the backend release
         env:
+          TF_VAR_enable_amplify_not_found_rule: ${{ steps.not_found_rule.outputs.live }}
           TF_VAR_frontend_image_tag: ${{ steps.frontend_tag.outputs.sha }}
         run: |
           terraform -chdir=infra/prod plan -input=false -lock-timeout=15m \

@@ -422,6 +422,37 @@ jobs:
                 "https://${PROD_DOMAIN}${path}" >/dev/null
             done
           done < <(jq -r '.static_routes[]' src/web/amplify-routes.json)
+          # The applied plan carries the app-level not-found rule; unknown
+          # paths must serve the exported 404 document with a 404 status.
+          missing_page_body="${RUNNER_TEMP}/canonical-missing-page.html"
+          missing_page_status=""
+          for attempt in $(seq 1 30); do
+            : >"$missing_page_body"
+            missing_page_status="$(
+              curl \
+                --connect-timeout 5 \
+                --header "Cache-Control: no-cache" \
+                --header "Pragma: no-cache" \
+                --max-time 20 \
+                --silent \
+                --show-error \
+                --output "$missing_page_body" \
+                --write-out "%{http_code}" \
+                "https://${PROD_DOMAIN}/releviz-smoke-missing-${DEPLOY_SHA}/?missing_check=${attempt}" ||
+                true
+            )"
+            if [ "$missing_page_status" = "404" ] &&
+              grep -Fq "Page not found" "$missing_page_body"; then
+              break
+            fi
+            echo "Unknown-path routing is still converging; status=${missing_page_status:-request-failed}, attempt=${attempt}/30"
+            sleep 5
+          done
+          if [ "$missing_page_status" != "404" ] ||
+            ! grep -Fq "Page not found" "$missing_page_body"; then
+            echo "::error::Canonical unknown path did not serve the app 404 page with a 404 status."
+            exit 1
+          fi
           preflight_headers="${RUNNER_TEMP}/canonical-api-preflight.headers"
           preflight_status="$(
             curl \
