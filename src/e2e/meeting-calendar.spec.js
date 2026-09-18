@@ -160,6 +160,17 @@ function slotIndex(event, groupKey, localStart) {
   return slot.index;
 }
 
+// Clicks a calendar cell and waits for the Finalize card to show the pick.
+// The grid re-renders around week navigation and selection, and WebKit has
+// dropped a click that landed mid-render, so the click is retried until the
+// card reflects it (re-picking the same cell is idempotent).
+async function pickCell(cell, candidate, expectedText) {
+  await expect(async () => {
+    await cell.click();
+    await expect(candidate).toContainText(expectedText, { timeout: 2000 });
+  }).toPass({ timeout: 20000 });
+}
+
 async function finalizeCurrentSelection(page, eventCode) {
   await page.getByRole("button", { name: "Review attendance" }).click();
   await expect(
@@ -344,10 +355,9 @@ test.describe("Organizer meeting-time calendar", () => {
     // Pointer pick: Wednesday 14:00 starts a 60-minute custom window.
     const wednesday14 = cellAt(grid, 10, 2);
     await expect(wednesday14).toHaveAttribute("data-state", "startable");
-    await wednesday14.click();
-    await expect(page.getByRole("heading", { name: "Finalize" })).toBeFocused();
     const candidate = page.locator(".final-candidate");
-    await expect(candidate).toContainText("Wed 14:00–15:00");
+    await pickCell(wednesday14, candidate, "Wed 14:00–15:00");
+    await expect(page.getByRole("heading", { name: "Finalize" })).toBeFocused();
     await expect(candidate).toContainText("Custom window");
     await expect(candidate).toContainText(
       "At least 57% weighted · 50% unweighted across this window (lowest slot).",
@@ -417,8 +427,7 @@ test.describe("Organizer meeting-time calendar", () => {
       "aria-label",
       /Inside ranked window #1/,
     );
-    await bestCell.click();
-    await expect(candidate).toContainText("Ranked #1");
+    await pickCell(bestCell, candidate, "Ranked #1");
     await expect(candidate).toContainText("Mon 10:00–11:00");
     await expect(candidate).toContainText(
       "100% weighted · 100% unweighted · 4 fully available",
@@ -429,8 +438,7 @@ test.describe("Organizer meeting-time calendar", () => {
 
     // Finalize a custom window and confirm the API stored the cell's instant.
     await gotoWeekWith(page, grid, customWednesday);
-    await cellAt(grid, 10, 2).click();
-    await expect(candidate).toContainText("Custom window");
+    await pickCell(cellAt(grid, 10, 2), candidate, "Custom window");
     await finalizeCurrentSelection(page, event.code);
     const finalized = await apiJson(
       request,
