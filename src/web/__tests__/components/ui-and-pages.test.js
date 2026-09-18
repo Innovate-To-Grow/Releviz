@@ -1071,8 +1071,8 @@ describe("app pages", () => {
     expect(screen.getByText("Page not found")).toBeInTheDocument();
     const footerNav = screen.getByRole("navigation", { name: "Footer" });
     expect(
-      within(footerNav).getByRole("link", { name: "Support" }),
-    ).toHaveAttribute("href", "/support");
+      within(footerNav).queryByRole("link", { name: "Support" }),
+    ).not.toBeInTheDocument();
     expect(
       within(footerNav).getByRole("link", { name: "Privacy" }),
     ).toHaveAttribute("href", "/privacy");
