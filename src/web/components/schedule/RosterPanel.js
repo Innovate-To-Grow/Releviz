@@ -26,6 +26,7 @@ import {
   GroupIcon,
   ImportIcon,
   InviteIcon,
+  RefreshIcon,
   SearchIcon,
   SendIcon,
 } from "@/components/ui/icons";
@@ -184,6 +185,10 @@ const RosterPanel = forwardRef(function RosterPanel(
   const [editorError, setEditorError] = useState("");
   const [editorStatus, setEditorStatus] = useState("");
   const [editorConflict, setEditorConflict] = useState(null);
+  // Rows whose last patch hit a newer version, shaped
+  // { [participantId]: { name, participant, message } }. A row stays locked
+  // until the organizer reloads the latest values.
+  const [rowConflicts, setRowConflicts] = useState({});
   const requestNumber = useRef(0);
   const bulkIdempotencyKey = useRef("");
   const inviteIdempotencyKey = useRef("");
@@ -192,6 +197,7 @@ const RosterPanel = forwardRef(function RosterPanel(
   const inviteEmailInput = useRef(null);
   const selectedRef = useRef(selected);
   const participantsRef = useRef(participants);
+  const rowConflictsRef = useRef(rowConflicts);
   const rowMutationQueuesRef = useRef(new Map());
   const controlIds = useId();
 
@@ -204,6 +210,17 @@ const RosterPanel = forwardRef(function RosterPanel(
       typeof updater === "function" ? updater(selectedRef.current) : updater;
     selectedRef.current = next;
     setSelected(next);
+  }, []);
+
+  // loadRoster reads the conflicts through the ref so a reload can settle
+  // them without re-creating the callback on every conflict change.
+  const updateRowConflicts = useCallback((updater) => {
+    const next =
+      typeof updater === "function"
+        ? updater(rowConflictsRef.current)
+        : updater;
+    rowConflictsRef.current = next;
+    setRowConflicts(next);
   }, []);
 
   const filters = useMemo(
@@ -229,6 +246,34 @@ const RosterPanel = forwardRef(function RosterPanel(
         const nextParticipants = data.participants || [];
         participantsRef.current = nextParticipants;
         setParticipants(nextParticipants);
+        // A load that holds a conflicted row at the version the 409 carried
+        // (or newer) has caught up with the other session: unlock the row
+        // and drop the draft that would otherwise overlay the fresh values.
+        // Rows off this page, or loaded at an older version, stay locked.
+        const caughtUp = Object.keys(rowConflictsRef.current).filter(
+          (participantId) => {
+            const loaded = nextParticipants.find(
+              (candidate) => candidate.id === participantId,
+            );
+            const conflict = rowConflictsRef.current[participantId];
+            return (
+              Boolean(loaded) &&
+              Number(loaded.version) >= Number(conflict.participant.version)
+            );
+          },
+        );
+        if (caughtUp.length) {
+          updateRowConflicts((current) => {
+            const next = { ...current };
+            for (const participantId of caughtUp) delete next[participantId];
+            return next;
+          });
+          setRowDrafts((current) => {
+            const next = { ...current };
+            for (const participantId of caughtUp) delete next[participantId];
+            return next;
+          });
+        }
         setPagination(
           data.pagination || { page, pageSize, total: 0, pages: 1 },
         );
@@ -251,7 +296,15 @@ const RosterPanel = forwardRef(function RosterPanel(
         if (currentRequest === requestNumber.current) setLoading(false);
       }
     },
-    [event.code, filters, getToken, onDeliveryRequestChange, page, pageSize],
+    [
+      event.code,
+      filters,
+      getToken,
+      onDeliveryRequestChange,
+      page,
+      pageSize,
+      updateRowConflicts,
+    ],
   );
 
   useImperativeHandle(
@@ -419,7 +472,8 @@ const RosterPanel = forwardRef(function RosterPanel(
     setEditorError("");
     setEditorStatus("");
     setEditorConflict(null);
-  }, [event.status, updateSelected]);
+    updateRowConflicts({});
+  }, [event.status, updateRowConflicts, updateSelected]);
 
   const patchRow = async (participant, updates) => {
     const previous =
@@ -458,20 +512,35 @@ const RosterPanel = forwardRef(function RosterPanel(
           // without reloading the whole page of people.
           if (Array.isArray(data.groups))
             setStats((current) => ({ ...current, groups: data.groups }));
-          return true;
+          return "saved";
         } catch (requestError) {
+          if (requestError.status === 409 && requestError.participant) {
+            // The server sent the row it now holds. Show the conflict and let
+            // the organizer choose when to load it instead of refreshing the
+            // roster behind their back.
+            const conflictParticipant = requestError.participant;
+            updateRowConflicts((current) => ({
+              ...current,
+              [participant.id]: {
+                name: latest.name,
+                participant: conflictParticipant,
+                message: `${latest.name} was changed in another session. Reload the latest values before editing this row again.`,
+              },
+            }));
+            return "conflict";
+          }
           // Reload first: loadRoster clears the panel error when it starts.
           if (requestError.status === 409) await loadRoster();
           setError(requestError.message || `Unable to update ${latest.name}.`);
-          return false;
+          return "failed";
         }
       });
     rowMutationQueuesRef.current.set(participant.id, request);
-    const saved = await request;
+    const result = await request;
     if (rowMutationQueuesRef.current.get(participant.id) === request) {
       rowMutationQueuesRef.current.delete(participant.id);
     }
-    return saved;
+    return result;
   };
 
   const rowDraftValue = (participant, field, serverValue) =>
@@ -505,10 +574,12 @@ const RosterPanel = forwardRef(function RosterPanel(
       clearRowDraft(participant.id, field, value);
       return;
     }
-    await patchRow(participant, { [field]: value });
+    const result = await patchRow(participant, { [field]: value });
     // On failure this restores the authoritative prop; on success patchRow has
-    // already replaced that prop with the server-normalized response.
-    clearRowDraft(participant.id, field, value);
+    // already replaced that prop with the server-normalized response. A
+    // conflict keeps the typed value on screen until the organizer reloads
+    // the row.
+    if (result !== "conflict") clearRowDraft(participant.id, field, value);
   };
 
   const bulkTarget = () => {
@@ -776,6 +847,33 @@ const RosterPanel = forwardRef(function RosterPanel(
     setEditorConflict(null);
     setEditorError("");
     setEditorStatus("Latest response loaded.");
+  };
+
+  // The reload button only renders while the row's conflict exists.
+  const reloadRowConflict = (participantId) => {
+    const conflict = rowConflicts[participantId];
+    setParticipants((current) => {
+      const next = current.map((candidate) =>
+        candidate.id === participantId
+          ? { ...candidate, ...conflict.participant }
+          : candidate,
+      );
+      participantsRef.current = next;
+      return next;
+    });
+    setRowDrafts((current) => {
+      const next = { ...current };
+      delete next[participantId];
+      return next;
+    });
+    updateRowConflicts((current) => {
+      const next = { ...current };
+      delete next[participantId];
+      return next;
+    });
+    setStatus(`Latest values loaded for ${conflict.name}.`);
+    // Group head counts and shared weights come from the whole roster.
+    void loadRoster();
   };
 
   const groupSummaries = summarizeGroups(stats.groups);
@@ -1474,6 +1572,8 @@ const RosterPanel = forwardRef(function RosterPanel(
                     const groupId = `${controlIds}-group-${participant.id}`;
                     const weightId = `${controlIds}-weight-${participant.id}`;
                     const includedId = `${controlIds}-included-${participant.id}`;
+                    const rowLocked =
+                      !rosterMutable || Boolean(rowConflicts[participant.id]);
                     return (
                       <tr
                         className="roster-table__row"
@@ -1545,7 +1645,7 @@ const RosterPanel = forwardRef(function RosterPanel(
                                   "group",
                                   groupValue(participant),
                                 )}
-                                disabled={!rosterMutable}
+                                disabled={rowLocked}
                                 onChange={(event) =>
                                   updateRowDraft(
                                     participant.id,
@@ -1584,7 +1684,7 @@ const RosterPanel = forwardRef(function RosterPanel(
                                   "weight",
                                   participant.weight ?? 1,
                                 )}
-                                disabled={!rosterMutable}
+                                disabled={rowLocked}
                                 onChange={(event) =>
                                   updateRowDraft(
                                     participant.id,
@@ -1609,7 +1709,7 @@ const RosterPanel = forwardRef(function RosterPanel(
                                 aria-label={`Include ${participant.name}`}
                                 type="checkbox"
                                 checked={Boolean(participant.included)}
-                                disabled={!rosterMutable}
+                                disabled={rowLocked}
                                 onChange={(event) =>
                                   void patchRow(participant, {
                                     included: event.target.checked,
@@ -1719,6 +1819,25 @@ const RosterPanel = forwardRef(function RosterPanel(
           {status}
         </Alert>
       )}
+      {Object.entries(rowConflicts).map(([participantId, conflict]) => (
+        <Alert
+          key={participantId}
+          variant="danger"
+          role="alert"
+          className="roster-panel__message roster-panel__message--error"
+          actions={
+            <AppButton
+              variant="outlined"
+              icon={<RefreshIcon />}
+              onClick={() => reloadRowConflict(participantId)}
+            >
+              Reload latest participant
+            </AppButton>
+          }
+        >
+          <p className="mb-0">{conflict.message}</p>
+        </Alert>
+      ))}
       {error && (
         <Alert
           variant="danger"

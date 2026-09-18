@@ -194,6 +194,24 @@ describe("organizer event management UI", () => {
     expect(
       within(archivedCard).getByRole("link", { name: "Edit" }),
     ).toHaveAttribute("aria-disabled", "true");
+    expect(
+      screen.getByRole("heading", { name: "My Events (1)" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Archived (1)" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("region", { name: /Archived \(1\)/ }),
+    ).toContainElement(archivedCard);
+    expect(
+      screen.getByRole("region", { name: /My Events \(1\)/ }),
+    ).not.toContainElement(archivedCard);
+    expect(
+      within(archivedCard).getByRole("button", { name: "Duplicate" }),
+    ).toBeInTheDocument();
+    expect(
+      within(archivedCard).getByRole("button", { name: "Delete" }),
+    ).toBeInTheDocument();
 
     const duplicateCard = screen
       .getByRole("link", { name: duplicate.name })
@@ -206,7 +224,18 @@ describe("organizer event management UI", () => {
       name: "Delete event permanently",
     });
     expect(deleteButton).toBeDisabled();
+    await userEvent.type(confirmation, "WRONG");
+    expect(
+      screen.getByText("Type the event code exactly to confirm deletion"),
+    ).toBeVisible();
+    expect(confirmation).toHaveAttribute("aria-invalid", "true");
+    expect(deleteButton).toBeDisabled();
+    await userEvent.clear(confirmation);
     await userEvent.type(confirmation, duplicate.code);
+    expect(
+      screen.queryByText("Type the event code exactly to confirm deletion"),
+    ).not.toBeInTheDocument();
+    expect(confirmation).not.toHaveAttribute("aria-invalid");
     expect(deleteButton).not.toBeDisabled();
     await userEvent.click(deleteButton);
     await waitFor(() =>
@@ -228,6 +257,49 @@ describe("organizer event management UI", () => {
     expect(
       screen.queryByRole("link", { name: duplicate.name }),
     ).not.toBeInTheDocument();
+  });
+
+  test("dashboard shows the archived panel when every organized event is archived", async () => {
+    const archivedEvent = { ...baseEvent, status: "archived" };
+    fetchDashboardEvents.mockResolvedValue({
+      organized: [archivedEvent],
+      participating: [],
+    });
+
+    render(<DashboardPage />);
+    await screen.findByRole("heading", { name: "My Dashboard" });
+    const myEvents = screen.getByRole("region", { name: "My Events (0)" });
+    expect(
+      within(myEvents).getByRole("heading", { name: "No active events." }),
+    ).toBeInTheDocument();
+    expect(
+      within(myEvents).getByText("Your archived events are listed below."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("No events organized yet."),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "Create your first event" }),
+    ).not.toBeInTheDocument();
+
+    const archived = screen.getByRole("region", { name: "Archived (1)" });
+    expect(
+      within(archived).getByText(
+        "Archived events are read-only. Duplicate one to start again, or delete it permanently.",
+      ),
+    ).toBeInTheDocument();
+    const archivedCard = within(archived)
+      .getByRole("link", { name: archivedEvent.name })
+      .closest("article");
+    expect(
+      within(archivedCard).queryByRole("button", { name: "Archive" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(archivedCard).getByRole("button", { name: "Duplicate" }),
+    ).toBeInTheDocument();
+    expect(
+      within(archivedCard).getByRole("button", { name: "Delete" }),
+    ).toBeInTheDocument();
   });
 
   test("dashboard retries duplicate requests with the same key and handles navigation", async () => {

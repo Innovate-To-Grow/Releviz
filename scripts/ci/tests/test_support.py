@@ -141,6 +141,7 @@ class AmplifyStaticExportTests(TestCase):
                 "Amplify static export has unlisted root route HTML: ['unlisted']",
                 errors,
             )
+            self.assertIn("Amplify static export is missing 404.html", errors)
             self.assertIn("Amplify static export has no _next/static JavaScript asset", errors)
 
 

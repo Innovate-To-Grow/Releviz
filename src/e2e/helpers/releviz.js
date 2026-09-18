@@ -14,6 +14,7 @@ const EMAIL_FILE_PATH = process.env.EMAIL_FILE_PATH || "/tmp/releviz-e2e-mail";
 const ADMIN_EMAIL = process.env.DJANGO_SUPERUSER_EMAIL || "admin@releviz.local";
 const ADMIN_PASSWORD = process.env.DJANGO_SUPERUSER_PASSWORD;
 const PYTHON_BIN = process.env.PYTHON_BIN || "python3";
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 if (!ADMIN_PASSWORD) {
   throw new Error(
@@ -232,6 +233,40 @@ async function apiJson(request, method, url, token, body) {
   return { response, payload };
 }
 
+// Creates an active weekday event through the API and returns its full
+// definition (slot groups included) so specs can seed responses by slot
+// index. `overrides` replaces any field of the default payload.
+async function createEvent(request, token, overrides) {
+  const created = await apiJson(request, "POST", "/events", token, {
+    startTime: "09:00",
+    endTime: "17:00",
+    slotMinutes: 30,
+    days: [1, 2, 3, 4, 5],
+    mode: "inperson",
+    location: "Calendar Room",
+    participantViewPermission: "realtime",
+    daySelectionType: "days_of_week",
+    specificDates: [],
+    responseDeadline: new Date(Date.now() + 5 * DAY_MS).toISOString(),
+    timezone: "UTC",
+    remindersEnabled: false,
+    reminderHoursBefore: 24,
+    accessMode: "invite_only",
+    meetingDurationMinutes: 60,
+    status: "active",
+    ...overrides,
+  });
+  expect(created.response.status()).toBe(201);
+  const definition = await apiJson(
+    request,
+    "GET",
+    `/events?code=${created.payload.event.code}`,
+    token,
+  );
+  expect(definition.response.status()).toBe(200);
+  return definition.payload.event;
+}
+
 function runBackendCommand(command, ...args) {
   execFileSync(
     PYTHON_BIN,
@@ -297,6 +332,7 @@ module.exports = {
   apiJson,
   codeFromEmailBody,
   continueWithEmail,
+  createEvent,
   datetimeLocalHoursFromNow,
   decodeQuotedPrintable,
   dispatchEmailJobs,

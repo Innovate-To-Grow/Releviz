@@ -16,6 +16,7 @@ import {
   changePasswordApi,
   confirmPasswordReset,
   deleteAccountApi,
+  fetchAuthSession,
   fetchAuthSessions,
   fetchProfile,
   loginWithPassword,
@@ -525,6 +526,55 @@ describe("auth API helpers", () => {
       "/authn/logout/",
       expect.objectContaining({ body: "{}", credentials: "include" }),
     );
+  });
+
+  test("fetchAuthSession checks liveness without writing the session store", async () => {
+    writeAuthSession({ access: "tok", user: { id: "u" } });
+    const before = readAuthSession();
+    global.fetch.mockResolvedValueOnce(
+      jsonResponse({ user: { member_uuid: "u" }, next_step: "account" }),
+    );
+
+    await expect(fetchAuthSession()).resolves.toEqual({
+      user: { member_uuid: "u" },
+      next_step: "account",
+    });
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/authn/session/",
+      expect.objectContaining({
+        credentials: "include",
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
+    expect(readAuthSession()).toBe(before);
+  });
+
+  test("fetchAuthSession rejects with the status once a refresh also fails", async () => {
+    writeAuthSession({ access: "tok", user: { id: "u" } });
+    global.fetch
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            detail: "This session has been signed out.",
+            code: "session_revoked",
+          },
+          { status: 401 },
+        ),
+      )
+      .mockResolvedValueOnce(textResponse("revoked", { status: 401 }));
+
+    await expect(fetchAuthSession()).rejects.toMatchObject({
+      message: "This session has been signed out.",
+      status: 401,
+    });
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      2,
+      "/authn/refresh/",
+      expect.objectContaining({ method: "POST", credentials: "include" }),
+    );
+    expect(readAuthSession()).toBeNull();
   });
 
   test("lists sessions and revokes one or every device", async () => {

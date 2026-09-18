@@ -242,6 +242,7 @@ export default function OrganizerScaleView() {
             setEvent={setEvent}
             getToken={getToken}
             setDeliveryRequest={setDeliveryRequest}
+            onReactivated={() => setSelection(null)}
           />
         }
       />

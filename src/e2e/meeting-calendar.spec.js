@@ -2,6 +2,7 @@ const { expect, test } = require("@playwright/test");
 const { expectAccessible } = require("./helpers/accessibility");
 const {
   apiJson,
+  createEvent,
   openRankedWindows,
   readSession,
   recomputeEventResults,
@@ -48,43 +49,33 @@ async function gotoWeekWith(page, grid, date) {
   const dayHeader = grid.getByRole("columnheader", {
     name: shortDate(date),
   });
-  await page.getByRole("button", { name: "This week" }).click();
-  for (let attempt = 0; attempt < 6; attempt += 1) {
+  if (await dayHeader.count()) return;
+  // Only "Next week" walks forward, so start from the current week when the
+  // target may be behind the week on screen.
+  const thisWeek = page.getByRole("button", { name: "This week" });
+  if (await thisWeek.isEnabled()) await thisWeek.click();
+  for (let attempt = 0; attempt < 8; attempt += 1) {
     if (await dayHeader.count()) return;
     await page.getByRole("button", { name: "Next week" }).click();
   }
   throw new Error(`The calendar never reached the week of ${date}.`);
 }
 
-async function createEvent(request, token, overrides) {
-  const created = await apiJson(request, "POST", "/events", token, {
-    startTime: "09:00",
-    endTime: "17:00",
-    slotMinutes: 30,
-    days: [1, 2, 3, 4, 5],
-    mode: "inperson",
-    location: "Calendar Room",
-    participantViewPermission: "realtime",
-    daySelectionType: "days_of_week",
-    specificDates: [],
-    responseDeadline: new Date(Date.now() + 5 * DAY_MS).toISOString(),
-    timezone: "UTC",
-    remindersEnabled: false,
-    reminderHoursBefore: 24,
-    accessMode: "invite_only",
-    meetingDurationMinutes: 60,
-    status: "active",
-    ...overrides,
-  });
-  expect(created.response.status()).toBe(201);
-  const definition = await apiJson(
-    request,
-    "GET",
-    `/events?code=${created.payload.event.code}`,
-    token,
-  );
-  expect(definition.response.status()).toBe(200);
-  return definition.payload.event;
+// Clicks a calendar cell until the Finalize candidate reflects the pick. A
+// pick made right after the grid re-renders (a rail choice reveals its week,
+// a week change swaps every cell) can be dropped by slower engines, so the
+// click is retried instead of asserted once; selecting is idempotent.
+async function pickCell(page, cell, expectedText) {
+  const candidate = page.locator(".final-candidate");
+  await expect
+    .poll(
+      async () => {
+        await cell.click();
+        return candidate.textContent();
+      },
+      { timeout: 20_000, intervals: [500, 1000, 2000] },
+    )
+    .toContain(expectedText);
 }
 
 // Adds a managed participant and submits the given availability. `inperson`
@@ -160,21 +151,16 @@ function slotIndex(event, groupKey, localStart) {
   return slot.index;
 }
 
-// Clicks a calendar cell and waits for the Finalize card to show the pick.
-// The grid re-renders around week navigation and selection, and WebKit has
-// dropped a click that landed mid-render, so the click is retried until the
-// card reflects it (re-picking the same cell is idempotent).
-async function pickCell(cell, candidate, expectedText) {
-  await expect(async () => {
-    await cell.click();
-    await expect(candidate).toContainText(expectedText, { timeout: 2000 });
-  }).toPass({ timeout: 20000 });
-}
-
 async function finalizeCurrentSelection(page, eventCode) {
   await page.getByRole("button", { name: "Review attendance" }).click();
   await expect(
     page.getByText("Attendance review is current for this candidate."),
+  ).toBeVisible();
+  // The count tiles are backed by a per-person breakdown.
+  await expect(
+    page
+      .locator("#organizer-finalize")
+      .getByRole("table", { name: "Attendance by person" }),
   ).toBeVisible();
   const finalization = page.waitForResponse(
     (response) =>
@@ -198,7 +184,14 @@ test.describe("Organizer meeting-time calendar", () => {
   }) => {
     const runId = `${Date.now()}-${Math.round(Math.random() * 100_000)}`;
     const organizerEmail = `calendar-organizer-${runId}@example.com`;
-    await registerAccount(page, organizerEmail, "Cal", "Organizer");
+    // A long display name makes the phone-width check below exercise the
+    // header's wrapping as well as the calendar's own scroll box.
+    await registerAccount(
+      page,
+      organizerEmail,
+      "Calendar",
+      "Organizer Longname",
+    );
     const session = await readSession(page);
     const token = session.access;
 
@@ -290,12 +283,20 @@ test.describe("Organizer meeting-time calendar", () => {
     const thisWeek = weekStartMs();
     const nextWeek = thisWeek + 7 * DAY_MS;
     const nextMonday = isoDate(nextWeek + 1 * DAY_MS);
-    // Ranked windows resolve to their next occurrence, which is always within
-    // the coming seven days, so a pick two weeks out is a custom window on
-    // any day of the week the suite happens to run.
-    const weekAfterNext = thisWeek + 14 * DAY_MS;
-    const customMonday = isoDate(weekAfterNext + 1 * DAY_MS);
-    const customWednesday = isoDate(weekAfterNext + 3 * DAY_MS);
+    const nextWednesday = isoDate(nextWeek + 3 * DAY_MS);
+    // Clicking a ranked window's suggested occurrence yields that ranked
+    // pick, so the custom Wednesday pick below must not be the one the
+    // ranking suggests; that depends on the weekday the suite runs on.
+    const wednesdayRecommendation =
+      results.payload.results.recommendations.find(
+        (entry) => entry.label === "Wed 14:00–15:00",
+      );
+    const customWeek =
+      wednesdayRecommendation?.suggestedStartsAt?.slice(0, 10) === nextWednesday
+        ? nextWeek + 7 * DAY_MS
+        : nextWeek;
+    const customMonday = isoDate(customWeek + 1 * DAY_MS);
+    const customWednesday = isoDate(customWeek + 3 * DAY_MS);
     await expect(
       grid.getByRole("columnheader", { name: shortDate(nextMonday) }),
     ).toBeVisible();
@@ -350,14 +351,18 @@ test.describe("Organizer meeting-time calendar", () => {
     ).toBeVisible();
     await expect(rankBadges.first()).toHaveText("#1");
     await page.getByRole("button", { name: "Previous week" }).click();
-    await gotoWeekWith(page, grid, customWednesday);
+    await expect(
+      grid.getByRole("columnheader", { name: shortDate(nextMonday) }),
+    ).toBeVisible();
 
     // Pointer pick: Wednesday 14:00 starts a 60-minute custom window.
+    await gotoWeekWith(page, grid, customWednesday);
     const wednesday14 = cellAt(grid, 10, 2);
     await expect(wednesday14).toHaveAttribute("data-state", "startable");
-    const candidate = page.locator(".final-candidate");
-    await pickCell(wednesday14, candidate, "Wed 14:00–15:00");
+    await pickCell(page, wednesday14, "Wed 14:00–15:00");
     await expect(page.getByRole("heading", { name: "Finalize" })).toBeFocused();
+    const candidate = page.locator(".final-candidate");
+    await expect(candidate).toContainText("Wed 14:00–15:00");
     await expect(candidate).toContainText("Custom window");
     await expect(candidate).toContainText(
       "At least 57% weighted · 50% unweighted across this window (lowest slot).",
@@ -397,7 +402,7 @@ test.describe("Organizer meeting-time calendar", () => {
     await page.keyboard.press("PageDown");
     await expect(
       grid.getByRole("columnheader", {
-        name: shortDate(isoDate(weekAfterNext + 8 * DAY_MS)),
+        name: shortDate(isoDate(customWeek + 8 * DAY_MS)),
       }),
     ).toBeVisible();
     await page.keyboard.press("PageUp");
@@ -427,7 +432,7 @@ test.describe("Organizer meeting-time calendar", () => {
       "aria-label",
       /Inside ranked window #1/,
     );
-    await pickCell(bestCell, candidate, "Ranked #1");
+    await pickCell(page, bestCell, "Ranked #1");
     await expect(candidate).toContainText("Mon 10:00–11:00");
     await expect(candidate).toContainText(
       "100% weighted · 100% unweighted · 4 fully available",
@@ -438,7 +443,7 @@ test.describe("Organizer meeting-time calendar", () => {
 
     // Finalize a custom window and confirm the API stored the cell's instant.
     await gotoWeekWith(page, grid, customWednesday);
-    await pickCell(cellAt(grid, 10, 2), candidate, "Custom window");
+    await pickCell(page, cellAt(grid, 10, 2), "Custom window");
     await finalizeCurrentSelection(page, event.code);
     const finalized = await apiJson(
       request,

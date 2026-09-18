@@ -254,7 +254,16 @@ code {
   max-width: 14rem;
 }
 
+/* Only the display name truncates; the chevron must stay visible next to
+   it, so the label is a shrinkable flex row rather than a clipped block. */
 .account-menu-trigger .app-btn-label {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.account-menu-trigger__name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1279,6 +1288,14 @@ code {
 
 .event-header-title {
   max-width: 100%;
+}
+
+/* At phone widths the copy-link button plus an account menu with a long
+   display name can be wider than the navbar; without wrapping the row
+   overflows and the whole page scrolls horizontally. */
+.event-header-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 @media (max-width: 767.98px) {

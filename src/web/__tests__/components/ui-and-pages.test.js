@@ -674,11 +674,14 @@ describe("role-aware headers", () => {
   });
 
   test("EventHeader shows event identity, role, and dashboard navigation", () => {
-    const { rerender } = render(
+    const { container, rerender } = render(
       <EventHeader eventName="Team Sync" eventCode="ABC12345" isOrganizer />,
     );
 
     expect(screen.getByText("Team Sync")).toBeInTheDocument();
+    const actions = container.querySelector(".event-header-actions");
+    expect(actions).toHaveClass("d-flex");
+    expect(actions).not.toHaveClass("flex-shrink-0");
     expect(screen.getByText("#ABC12345")).toBeInTheDocument();
     expect(screen.getByText("Organizer")).toBeInTheDocument();
 
@@ -1073,11 +1076,18 @@ describe("app pages", () => {
     expect(screen.getByText("edit client")).toBeInTheDocument();
     expect(screen.getByText("event client")).toBeInTheDocument();
     expect(screen.getByText("Page not found")).toBeInTheDocument();
+    const footerNav = screen.getByRole("navigation", { name: "Footer" });
     expect(
-      screen.getByRole("navigation", { name: "Legal" }),
-    ).toBeInTheDocument();
+      within(footerNav).getByRole("link", { name: "Support" }),
+    ).toHaveAttribute("href", "/support");
     expect(
-      screen.queryByRole("link", { name: "Support" }),
+      within(footerNav).getByRole("link", { name: "Privacy" }),
+    ).toHaveAttribute("href", "/privacy");
+    expect(
+      within(footerNav).getByRole("link", { name: "Terms" }),
+    ).toHaveAttribute("href", "/terms");
+    expect(
+      screen.queryByRole("navigation", { name: "Legal" }),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("link", { name: "Report a problem" }),

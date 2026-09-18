@@ -318,6 +318,21 @@ run "production_plan" {
 
   assert {
     condition = (
+      length([
+        for rule in aws_amplify_app.frontend.custom_rule : rule
+        if rule.source == "/<*>"
+      ]) == 1 &&
+      contains(
+        [for rule in aws_amplify_app.frontend.custom_rule : "${rule.source}|${rule.target}|${rule.status}"],
+        "/<*>|/404.html|404"
+      ) &&
+      aws_amplify_app.frontend.custom_rule[length(aws_amplify_app.frontend.custom_rule) - 1].source == "/<*>"
+    )
+    error_message = "Amplify must serve the exported Next 404 document through exactly one final catch-all rule."
+  }
+
+  assert {
+    condition = (
       aws_route53_record.api.name == "api.releviz.com" &&
       aws_route53_record.api.alias[0].name == aws_lb.app.dns_name &&
       aws_lb_listener_certificate.api.certificate_arn == aws_acm_certificate_validation.api.certificate_arn &&
@@ -611,6 +626,7 @@ run "production_plan_before_amplify_domain_cutover" {
     custom_domain                     = "releviz.com"
     route53_zone_id                   = "Z1234567890"
     enable_amplify_domain             = false
+    enable_amplify_not_found_rule     = false
     existing_acm_certificate_arn      = "arn:aws:acm:us-west-2:123456789012:certificate/test"
   }
 
@@ -621,6 +637,16 @@ run "production_plan_before_amplify_domain_cutover" {
       length(aws_route53_record.origin) == 0
     )
     error_message = "The initial apply must leave the frontend domain unassociated while provisioning the stable API hostname."
+  }
+
+  assert {
+    condition = (
+      length([
+        for rule in aws_amplify_app.frontend.custom_rule : rule
+        if rule.source == "/<*>"
+      ]) == 0
+    )
+    error_message = "The pre-cutover plan must not add the Amplify not-found rule until the release workflow enables it."
   }
 
   assert {
@@ -719,6 +745,21 @@ run "production_api_subdomain_transition" {
       )
     )
     error_message = "The migration plan must preserve the frontend host, old Amplify rollback routes, and the Django /api alias until the new frontend passes smoke tests."
+  }
+
+  assert {
+    condition = (
+      length([
+        for rule in aws_amplify_app.frontend.custom_rule : rule
+        if rule.source == "/<*>"
+      ]) == 1 &&
+      contains(
+        [for rule in aws_amplify_app.frontend.custom_rule : "${rule.source}|${rule.target}|${rule.status}"],
+        "/<*>|/404.html|404"
+      ) &&
+      aws_amplify_app.frontend.custom_rule[length(aws_amplify_app.frontend.custom_rule) - 1].source == "/<*>"
+    )
+    error_message = "The migration plan must keep the exported Next 404 catch-all rule last so the legacy proxy rules still win."
   }
 }
 

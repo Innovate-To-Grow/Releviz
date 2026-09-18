@@ -2,7 +2,13 @@
  * @jest-environment jsdom
  */
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 
@@ -579,4 +585,98 @@ test("explains a closed event on commit and reports paging failures", async () =
     "This event is closed. Reactivate it before committing this roster.",
   );
   expect(onEventChange).toHaveBeenCalledWith(closedError.event);
+});
+
+test("flags rows bound to blocked accounts and lets them be deselected", async () => {
+  const record = {
+    id: "import-7",
+    worksheets: [
+      {
+        name: "Pasted data",
+        rowCount: 6,
+        defaultHeaderRow: 1,
+        headers: ["name", "email"],
+      },
+    ],
+    selectedWorksheet: "Pasted data",
+    headerRow: 1,
+    headers: ["name", "email"],
+    columnMapping: { name: 0, email: 1 },
+    defaults: { weight: 1, included: true },
+    summary: { total: 6, selected: 6, valid: 5, invalid: 1, conflicts: 0 },
+  };
+  const rows = [
+    {
+      id: "row-7",
+      rowNumber: 2,
+      name: "Ada",
+      email: "ada@example.com",
+      weight: 1,
+      included: true,
+      selected: true,
+      valid: true,
+      duplicate: "unique",
+      errors: [],
+    },
+    {
+      id: "row-8",
+      rowNumber: 3,
+      name: "Inactive",
+      email: "inactive@example.com",
+      weight: 1,
+      included: true,
+      selected: true,
+      valid: false,
+      duplicate: "unique",
+      errors: ["This email belongs to an inactive account."],
+    },
+  ];
+  createRosterImport.mockResolvedValue({ import: record });
+  configureRosterImport.mockResolvedValue({ import: record });
+  fetchRosterImportRows.mockResolvedValue({
+    import: record,
+    rows,
+    pagination: { page: 1, pageSize: 50, total: 2, pages: 1 },
+  });
+  renderWizard();
+  await userEvent.click(screen.getByRole("tab", { name: "Paste spreadsheet" }));
+  fireEvent.change(screen.getByLabelText("Pasted roster rows"), {
+    target: {
+      value:
+        "name\temail\nAda\tada@example.com\nInactive\tinactive@example.com",
+    },
+  });
+  await userEvent.click(
+    screen.getByRole("button", { name: "Continue to mapping" }),
+  );
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Preview rows" }),
+  );
+  await screen.findByDisplayValue("inactive@example.com");
+
+  // The server-side account check surfaces as an Invalid badge with its
+  // sentence, and the summary tiles echo the server counts.
+  const region = screen.getByRole("region", {
+    name: "Imported rows awaiting review",
+  });
+  expect(
+    within(region).getByText("This email belongs to an inactive account."),
+  ).toBeVisible();
+  expect(within(region).getByText("Invalid")).toBeVisible();
+  expect(within(region).getByText("Ready")).toBeVisible();
+  expect(
+    screen
+      .getByText("Invalid", { selector: ".metric-tile__label" })
+      .closest(".metric-tile"),
+  ).toHaveTextContent("Invalid1");
+
+  await userEvent.click(screen.getByLabelText("Select row 3"));
+  await waitFor(() =>
+    expect(configureRosterImport).toHaveBeenLastCalledWith(
+      event.code,
+      "import-7",
+      { rowUpdates: [{ id: "row-8", selected: false }] },
+      "token",
+    ),
+  );
 });

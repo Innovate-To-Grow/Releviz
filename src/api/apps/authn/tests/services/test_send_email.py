@@ -233,6 +233,26 @@ class SendVerificationEmailTests(TestCase):
         self.assertNotIn("Continue Registration", html)
         self.assertNotIn("Sign In to Your Account", html)
 
+    @override_settings(FRONTEND_URL="https://www.example.com")
+    @patch("apps.authn.services.email.send_email._send_via_ses", return_value=True)
+    def test_register_purpose_sends_verify_subject_with_continue_registration_cta(self, mock_ses):
+        send_verification_email(
+            recipient="new-user@example.com",
+            code="123456",
+            purpose="register",
+            link_flow="register",
+            link_source="register",
+        )
+
+        mock_ses.assert_called_once()
+        self.assertEqual(mock_ses.call_args.kwargs["subject"], "Verify your email - Releviz")
+        html = mock_ses.call_args.kwargs["html_body"]
+        self.assertIn("Verify your email", html)
+        self.assertIn("Continue Registration", html)
+        self.assertIn("email-auth-link#flow=register", html)
+        self.assertIn("source=register", html)
+        self.assertNotIn("Sign In to Your Account", html)
+
     @patch("apps.authn.services.email.send_email._send_via_ses", return_value=True)
     def test_ses_success_completes(self, mock_ses):
         send_verification_email(recipient="a@b.com", code="123456", purpose="admin_login")

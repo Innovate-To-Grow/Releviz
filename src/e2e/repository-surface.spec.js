@@ -187,6 +187,28 @@ test.describe("repository resource audit", () => {
     expect(runner).toContain("export PRINT_EMAILS_TO_TERMINAL=0");
   });
 
+  test("unknown paths render the app 404 page", async ({ page }) => {
+    // The e2e frontend is a Next server (`next start`), which answers 404 for
+    // app/not-found.js; Amplify reproduces that status through its final
+    // catch-all rule, which must follow every 301 redirect rule.
+    const response = await page.goto("/this-page-does-not-exist/");
+    expect(response?.status()).toBe(404);
+    await expect(
+      page.getByRole("heading", { name: "Page not found" }),
+    ).toBeVisible();
+    await expect(page.getByRole("link", { name: "Go home" })).toBeVisible();
+
+    const terraform = fs.readFileSync(
+      path.join(ROOT, "infra/prod/main.tf"),
+      "utf8",
+    );
+    const notFoundRule = terraform.indexOf('source = "/<*>"');
+    expect(notFoundRule).toBeGreaterThan(-1);
+    expect(notFoundRule).toBeGreaterThan(
+      terraform.lastIndexOf('status = "301"'),
+    );
+  });
+
   test("API workspace scripts use the relocatable virtualenv interpreter", async () => {
     const packageJson = JSON.parse(
       fs.readFileSync(path.join(ROOT, "src/api/package.json"), "utf8"),

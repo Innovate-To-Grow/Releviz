@@ -12,7 +12,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
-import { createRef } from "react";
+import { createRef, useState } from "react";
 
 jest.mock("@/components/event/CreateEventClient", () => ({
   __esModule: true,
@@ -599,9 +599,9 @@ test("event controls queue reminders and close an active event", async () => {
       expect.objectContaining({ id: "reminder-1", operation: "reminder" }),
     ),
   );
-  expect(within(controls).getByRole("status")).toHaveTextContent(
-    "12 reminder emails were queued",
-  );
+  expect(
+    within(controls).getByText("12 reminder emails were queued."),
+  ).toBeInTheDocument();
   await userEvent.click(
     within(controls).getByRole("button", { name: "Close responses" }),
   );
@@ -625,6 +625,7 @@ test("event controls reopen a finalized event, clear an expired deadline, and tr
     cancellationDeliveryRequestId: "cancel-1",
     cancellationEnqueued: 9,
   });
+  // Rendered without onReactivated: reopening must not require the callback.
   render(
     <EventControls
       event={{
@@ -670,6 +671,190 @@ test("event controls surface lifecycle errors", async () => {
   );
   await userEvent.click(screen.getByRole("button", { name: "Archive event" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("cannot archive");
+});
+
+const LIFECYCLE_SUMMARIES = {
+  active: "This event is active and accepting responses.",
+  closed: "Responses are now closed.",
+  finalized:
+    "The meeting is finalized. Reactivate the event to collect new responses.",
+  archived: "This event is archived.",
+};
+
+// Holds the event like the workspace does so lifecycle changes re-render.
+function StatefulEventControls({ initialEvent, ...props }) {
+  const [event, setEvent] = useState(initialEvent);
+  return <EventControls event={event} setEvent={setEvent} {...props} />;
+}
+
+test.each(Object.entries(LIFECYCLE_SUMMARIES))(
+  "event controls summarize a %s event from first paint",
+  (status, summary) => {
+    render(
+      <EventControls
+        event={{ ...baseEvent, status }}
+        setEvent={jest.fn()}
+        getToken={getToken}
+        setDeliveryRequest={jest.fn()}
+      />,
+    );
+
+    const controls = screen.getByRole("region", { name: "Event controls" });
+    const lifecycle = within(controls).getByText(summary);
+    expect(lifecycle).toHaveAttribute("role", "status");
+    expect(lifecycle).toHaveClass("organizer-event-controls__lifecycle");
+    expect(within(controls).getAllByRole("status")).toEqual([lifecycle]);
+  },
+);
+
+test.each([
+  ["an unknown", "draft"],
+  ["a missing", undefined],
+])(
+  "event controls show no lifecycle summary for %s status",
+  (_label, status) => {
+    render(
+      <EventControls
+        event={{ ...baseEvent, status }}
+        setEvent={jest.fn()}
+        getToken={getToken}
+        setDeliveryRequest={jest.fn()}
+      />,
+    );
+
+    const controls = screen.getByRole("region", { name: "Event controls" });
+    expect(
+      controls.querySelector(".organizer-event-controls__lifecycle"),
+    ).toBeNull();
+    expect(within(controls).queryByRole("status")).not.toBeInTheDocument();
+  },
+);
+
+test("reactivating swaps the lifecycle summary and states the active sentence once", async () => {
+  const onReactivated = jest.fn();
+  updateEventLifecycle.mockResolvedValueOnce({
+    event: { ...baseEvent, status: "active", version: 6 },
+  });
+  render(
+    <StatefulEventControls
+      initialEvent={{ ...baseEvent, status: "closed", version: 5 }}
+      getToken={getToken}
+      setDeliveryRequest={jest.fn()}
+      onReactivated={onReactivated}
+    />,
+  );
+
+  const controls = screen.getByRole("region", { name: "Event controls" });
+  expect(
+    within(controls).getByText("Responses are now closed."),
+  ).toBeInTheDocument();
+  expect(
+    screen.queryByText("This event is active and accepting responses."),
+  ).not.toBeInTheDocument();
+
+  await userEvent.click(
+    within(controls).getByRole("button", { name: "Reactivate event" }),
+  );
+
+  expect(
+    await within(controls).findByText(
+      "This event is active and accepting responses.",
+    ),
+  ).toBeInTheDocument();
+  // The summary is the only place the sentence appears: no toast repeats it.
+  expect(
+    screen.getAllByText("This event is active and accepting responses."),
+  ).toHaveLength(1);
+  expect(within(controls).getAllByRole("status")).toHaveLength(1);
+  expect(
+    screen.queryByText("Responses are now closed."),
+  ).not.toBeInTheDocument();
+  expect(
+    within(controls).getByRole("button", { name: "Close responses" }),
+  ).toBeInTheDocument();
+  expect(onReactivated).toHaveBeenCalledTimes(1);
+});
+
+test("event controls report a reactivation once the reopened event is stored", async () => {
+  const setEvent = jest.fn();
+  const onReactivated = jest.fn();
+  updateEventLifecycle.mockResolvedValueOnce({
+    event: { ...baseEvent, status: "active", version: 5 },
+  });
+  render(
+    <EventControls
+      event={{ ...baseEvent, status: "finalized" }}
+      setEvent={setEvent}
+      getToken={getToken}
+      setDeliveryRequest={jest.fn()}
+      onReactivated={onReactivated}
+    />,
+  );
+
+  await userEvent.click(
+    screen.getByRole("button", { name: "Reactivate event" }),
+  );
+
+  await waitFor(() => expect(onReactivated).toHaveBeenCalledTimes(1));
+  expect(setEvent).toHaveBeenCalledTimes(1);
+  expect(setEvent.mock.invocationCallOrder[0]).toBeLessThan(
+    onReactivated.mock.invocationCallOrder[0],
+  );
+});
+
+test("closing responses does not report a reactivation", async () => {
+  const setEvent = jest.fn();
+  const onReactivated = jest.fn();
+  updateEventLifecycle.mockResolvedValueOnce({
+    event: { ...baseEvent, status: "closed", version: 5 },
+  });
+  render(
+    <EventControls
+      event={baseEvent}
+      setEvent={setEvent}
+      getToken={getToken}
+      setDeliveryRequest={jest.fn()}
+      onReactivated={onReactivated}
+    />,
+  );
+
+  await userEvent.click(
+    screen.getByRole("button", { name: "Close responses" }),
+  );
+
+  await waitFor(() =>
+    expect(setEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "closed" }),
+    ),
+  );
+  expect(onReactivated).not.toHaveBeenCalled();
+});
+
+test("a rejected reactivation shows the error and reports nothing", async () => {
+  const setEvent = jest.fn();
+  const onReactivated = jest.fn();
+  updateEventLifecycle.mockRejectedValueOnce(new Error("cannot reactivate"));
+  render(
+    <EventControls
+      event={{ ...baseEvent, status: "closed" }}
+      setEvent={setEvent}
+      getToken={getToken}
+      setDeliveryRequest={jest.fn()}
+      onReactivated={onReactivated}
+    />,
+  );
+
+  await userEvent.click(
+    screen.getByRole("button", { name: "Reactivate event" }),
+  );
+
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "cannot reactivate",
+  );
+  expect(setEvent).not.toHaveBeenCalled();
+  expect(onReactivated).not.toHaveBeenCalled();
+  // The summary still describes the unchanged event.
+  expect(screen.getByText("Responses are now closed.")).toBeInTheDocument();
 });
 
 test("results support the legacy envelope and failed or empty snapshots", async () => {
@@ -967,6 +1152,99 @@ test("finalize describes a custom calendar window with its estimated availabilit
     ),
   );
   expect(await screen.findByText("3")).toBeInTheDocument();
+  // A count-only payload draws the tiles without a per-person table.
+  expect(screen.queryByRole("table")).toBeNull();
+});
+
+test("finalize lists attendance by person behind the count tiles", async () => {
+  previewFinalMeeting.mockResolvedValueOnce({
+    attendance: {
+      availableParticipantTotal: 1,
+      partialParticipantTotal: 1,
+      unavailableParticipantTotal: 1,
+      unansweredParticipantTotal: 1,
+      excludedParticipantTotal: 4,
+      participants: [
+        {
+          participantId: "p-1",
+          name: "Ada Always",
+          status: "available",
+          minimumAvailability: 1,
+        },
+        {
+          participantId: "p-2",
+          name: "Pat Partly",
+          status: "partial",
+          minimumAvailability: 0.5,
+        },
+        {
+          participantId: "p-3",
+          name: "Uma Unable",
+          status: "unavailable",
+          minimumAvailability: 0,
+        },
+      ],
+      unansweredParticipants: [{ participantId: "p-4", name: "Nina Noreply" }],
+      excludedParticipants: [
+        { participantId: "p-5", name: "Hank Hidden", reason: "hidden" },
+        {
+          participantId: "p-6",
+          name: "Olive Omitted",
+          reason: "organizerExcluded",
+        },
+        {
+          participantId: "p-7",
+          name: "Ivan Invalid",
+          reason: "invalidResponse",
+        },
+        { participantId: "p-8", name: "Rex Reasonless", reason: "mystery" },
+      ],
+    },
+  });
+  renderFinalize(calendarSelection);
+
+  await userEvent.click(
+    screen.getByRole("button", { name: "Review attendance" }),
+  );
+
+  const region = await screen.findByRole("region", {
+    name: "Attendance by person",
+  });
+  expect(region).toHaveAttribute("tabindex", "0");
+  const table = within(region).getByRole("table", {
+    name: "Attendance by person",
+  });
+  expect(
+    within(table)
+      .getAllByRole("columnheader")
+      .map((cell) => cell.textContent),
+  ).toEqual(["Person", "Response", "Availability"]);
+  expect(
+    within(table)
+      .getAllByRole("rowheader")
+      .map((header) => [
+        header.textContent,
+        ...within(header.closest("tr"))
+          .getAllByRole("cell")
+          .map((cell) => cell.textContent),
+      ]),
+  ).toEqual([
+    ["Ada Always", "Submitted", "Fully available · 100%"],
+    ["Pat Partly", "Submitted", "Partly available · 50%"],
+    ["Uma Unable", "Submitted", "Not available · 0%"],
+    ["Nina Noreply", "Not submitted", "—"],
+    ["Hank Hidden", "Not included", "Hidden from results"],
+    ["Olive Omitted", "Not included", "Excluded by organizer"],
+    ["Ivan Invalid", "Not included", "Invalid response"],
+    ["Rex Reasonless", "Not included", "mystery"],
+  ]);
+  // The count tile stays the only element whose whole text is "Available".
+  expect(screen.getAllByText("Available", { exact: true })).toHaveLength(1);
+  expect(
+    within(screen.getByRole("group", { name: "Attendance review" })).getByText(
+      "4",
+    ),
+  ).toBeInTheDocument();
 });
 
 test("finalize shows exact ranked metrics and the rescheduled note", () => {
@@ -1144,9 +1422,9 @@ test("event controls report reminder failures and legacy delivery summaries", as
     within(controls).getByRole("button", { name: "Queue reminders" }),
   );
   await waitFor(() =>
-    expect(within(controls).getByRole("status")).toHaveTextContent(
-      "3 reminder emails were queued",
-    ),
+    expect(
+      within(controls).getByText("3 reminder emails were queued."),
+    ).toBeInTheDocument(),
   );
   expect(setDeliveryRequest).toHaveBeenCalledWith(
     expect.objectContaining({ id: "reminder-2" }),
