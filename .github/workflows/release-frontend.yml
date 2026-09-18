@@ -7,8 +7,9 @@ run-name: >-
 on:
   # Every green CI run on main is offered as a frontend release; the scope job
   # skips it when nothing the static site is built from changed. A release
-  # waits in the "AWS ECS - Prod" environment for reviewer approval before AWS
-  # credentials are issued. Manual dispatch stays available for redeploys.
+  # waits in the "AWS Amplify - Prod" environment for reviewer approval before
+  # the frontend-only AWS role is assumed. Manual dispatch stays available for
+  # redeploys.
   workflow_run:
     workflows: [CI]
     types: [completed]
@@ -84,9 +85,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment:
-      name: AWS ECS - Prod
+      name: AWS Amplify - Prod
       url: https://${{ vars.PROD_DOMAIN }}
 
+    # The frontend Environment holds only what a static release needs: the
+    # frontend-only role, the exact app, the canonical hostnames and zone, and
+    # the fallback image repository. Backend secrets, alarms, and Terraform
+    # state never reach this job.
     env:
       TRIGGER_EVENT: ${{ github.event_name }}
       CONFIRMATION: ${{ inputs.confirmation }}
@@ -95,20 +100,12 @@ jobs:
       AMPLIFY_ARTIFACT: ${{ github.workspace }}/releviz-amplify-${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}.zip
       AMPLIFY_TIMEOUT_SECONDS: "1200"
       AWS_REGION: ${{ vars.AWS_REGION || 'us-west-2' }}
-      AWS_ROLE_ARN: ${{ vars.AWS_PROD_ROLE_ARN }}
-      TF_STATE_BUCKET: ${{ vars.PROD_TF_STATE_BUCKET }}
+      AWS_ROLE_ARN: ${{ vars.AWS_PROD_FRONTEND_ROLE_ARN }}
       ECR_FRONTEND: ${{ vars.ECR_PROD_FRONTEND || 'releviz-prod-frontend' }}
       PROD_DOMAIN: ${{ vars.PROD_DOMAIN }}
       API_DOMAIN: ${{ vars.PROD_API_DOMAIN || 'api.releviz.com' }}
       ROUTE53_ZONE_ID: ${{ vars.PROD_ROUTE53_ZONE_ID }}
-      DJANGO_SECRET_KEY_ARN: ${{ vars.PROD_DJANGO_SECRET_KEY_ARN }}
-      FIELD_ENCRYPTION_KEY_ARN: ${{ vars.PROD_DJANGO_FIELD_ENCRYPTION_KEY_ARN }}
-      METRICS_BEARER_TOKEN_ARN: ${{ vars.PROD_METRICS_BEARER_TOKEN_ARN }}
-      DEFAULT_ADMIN_EMAIL: ${{ vars.PROD_DEFAULT_ADMIN_EMAIL || 'admin@releviz.com' }}
-      DEFAULT_ADMIN_PASSWORD_SECRET_ARN: ${{ vars.PROD_DEFAULT_ADMIN_PASSWORD_SECRET_ARN }}
-      SENTRY_DSN_SECRET_ARN: ${{ vars.PROD_SENTRY_DSN_SECRET_ARN || '' }}
       AMPLIFY_APP_ID: ${{ vars.PROD_AMPLIFY_APP_ID }}
-      ALARM_ACTION_ARNS: ${{ vars.PROD_ALARM_ACTION_ARNS_JSON }}
 
     steps:
       - name: Checkout release commit

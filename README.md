@@ -299,23 +299,29 @@ docker run --rm -p 3000:3000 releviz-web:local
 Production CD is three protected workflows on `main`, one per release surface, so a change only
 releases what it touched:
 
-| Workflow | Releases | Paths that trigger it |
-|---|---|---|
-| `release-backend.yml` | SHA-tagged API image, ECS backend/worker rollout, default admin | `src/api/**` |
-| `release-frontend.yml` | Amplify static site (candidate → production) and the ECS fallback image | `src/web/**`, root `package*.json`, Amplify deploy scripts, export validator, custom headers |
-| `release-infrastructure.yml` | Terraform for everything else in AWS | `infra/prod/**` |
+| Workflow | Releases | Environment (role) | Paths that trigger it |
+|---|---|---|---|
+| `release-backend.yml` | SHA-tagged API image, ECS backend/worker rollout, default admin | `AWS ECS - Prod` (`releviz-production-github-deploy`) | `src/api/**` |
+| `release-frontend.yml` | Amplify static site (candidate → production) and the ECS fallback image | `AWS Amplify - Prod` (`releviz-production-frontend-github-deploy`) | `src/web/**`, root `package*.json`, Amplify deploy scripts, export validator, custom headers |
+| `release-infrastructure.yml` | Terraform for everything else in AWS | `AWS ECS - Prod` (`releviz-production-github-deploy`) | `infra/prod/**` |
 
 Every successful `CI` run for a push to `main` offers the commit to all three. Each workflow first
 runs a credential-free `scope` job that compares the commit with that workflow's last successful
 release (or, before its first release, the retired single workflow's last release); when none of
 its paths changed, the run ends there without an approval prompt. Changes to the workflows
-themselves are exercised by a manual dispatch. Otherwise
-the release job waits in the GitHub `AWS ECS - Prod` environment until a configured reviewer approves
-it, and only then receives short-lived AWS credentials. Any workflow can also be dispatched
-manually for a redeploy or rollback, which additionally requires the exact confirmation `DEPLOY`.
-A shared preflight action verifies that the immutable commit passed `CI Result`, validates the
-environment configuration, assumes the production AWS role through GitHub OIDC, and (for the
-Terraform releases) checks the protected remote state.
+themselves are exercised by a manual dispatch. Otherwise the release job waits in its protected
+GitHub environment until a configured reviewer approves it, and only then receives short-lived
+AWS credentials for that environment's role: backend and infrastructure releases wait in
+`AWS ECS - Prod` and assume the production role, which owns Terraform state, ECS, and the
+application secrets' metadata; frontend releases wait in `AWS Amplify - Prod` and assume the
+frontend-only role, which can deploy the two Amplify release branches, push the fallback image,
+and read the canonical alias, and nothing else. Each role trusts exactly one environment's OIDC
+subject, so a frontend approval can never carry backend permissions. Any workflow can also be
+dispatched manually for a redeploy or rollback, which additionally requires the exact
+confirmation `DEPLOY`. A shared preflight action verifies that the immutable commit passed
+`CI Result`, validates the scope's environment configuration, assumes that scope's role through
+GitHub OIDC, confirms the assumed identity (and, for the frontend, that it cannot reach ECS), and
+(for the Terraform releases) checks the protected remote state.
 
 The backend release builds and pushes the SHA-tagged backend image, plans Terraform with only the
 application runtime allowed to change (task definitions, services, autoscaling, alarms, logs, the
@@ -381,12 +387,13 @@ Keeping the API load balancer private requires a separately reviewed architectur
 preferred direction is API Gateway with a VPC Link, or another documented private ingress design.
 The current `api.releviz.com` boundary is public HTTPS at the ALB; ECS tasks remain private.
 
-Run `infra/bootstrap` once with an administrator to create the versioned state bucket and the
-repository/environment-scoped OIDC role. Supply the existing account-wide GitHub OIDC provider ARN;
+Run `infra/bootstrap` once with an administrator to create the versioned state bucket and the two
+repository/environment-scoped OIDC roles. Supply the existing account-wide GitHub OIDC provider ARN;
 bootstrap never creates or deletes that shared provider. Initialize with `-backend=false` for the
 first apply, then migrate the local bootstrap state to `bootstrap/terraform.tfstate` in the new
-bucket. Set its `production_deploy_role_arn` output as `AWS_PROD_ROLE_ARN`; do not store long-lived
-production AWS keys in GitHub.
+bucket. Set its `production_deploy_role_arn` output as `AWS_PROD_ROLE_ARN` in the `AWS ECS - Prod`
+environment and its `production_frontend_deploy_role_arn` output as `AWS_PROD_FRONTEND_ROLE_ARN` in
+the `AWS Amplify - Prod` environment; do not store long-lived production AWS keys in GitHub.
 
 Before enabling production CD, create `releviz/prod/default-admin-password` in AWS Secrets Manager
 with a cryptographically generated password of at least 32 characters containing uppercase,
@@ -410,8 +417,15 @@ release resources.
 
 ### GitHub Actions Variables
 
+Both protected environments require reviewer approval and allow deployments only from `main`.
+Repository-level:
+
 - `AWS_REGION` — `us-west-2`
-- `AWS_PROD_ROLE_ARN` — output of `infra/bootstrap`; trusted only for the `AWS ECS - Prod` Environment
+
+`AWS ECS - Prod` (backend and infrastructure releases):
+
+- `AWS_PROD_ROLE_ARN` — `production_deploy_role_arn` output of `infra/bootstrap`; trusted only
+  for the `AWS ECS - Prod` Environment
 - `PROD_TF_STATE_BUCKET` — protected state bucket created by `infra/bootstrap`
 - `PROD_AMPLIFY_APP_ID` — exact administrator-provisioned `releviz-prod-frontend` app ID authorized
   by bootstrap and consumed as `TF_VAR_amplify_app_id`
@@ -433,6 +447,16 @@ release resources.
 - `PROD_SENTRY_DSN_SECRET_ARN`, `PROD_SECRET_KMS_KEY_ARN`, and
   `PROD_ACM_CERTIFICATE_ARN` — optional
 - `PROD_DEFAULT_FROM_EMAIL` — verified production sender address
+
+`AWS Amplify - Prod` (frontend releases; nothing backend-related belongs here):
+
+- `AWS_PROD_FRONTEND_ROLE_ARN` — `production_frontend_deploy_role_arn` output of
+  `infra/bootstrap`; trusted only for the `AWS Amplify - Prod` Environment
+- `PROD_AMPLIFY_APP_ID` — the same exact app ID as above
+- `PROD_DOMAIN` — `releviz.com`
+- `PROD_API_DOMAIN` — must be the reviewed hostname `api.releviz.com`
+- `PROD_ROUTE53_ZONE_ID` — hosted-zone ID for `releviz.com`; the frontend role may only read it
+- `ECR_PROD_FRONTEND` — `releviz-prod-frontend`
 
 Staging was permanently retired. Production application secret values live in AWS Secrets Manager;
 GitHub holds only their ARNs in the protected `AWS ECS - Prod` Environment.

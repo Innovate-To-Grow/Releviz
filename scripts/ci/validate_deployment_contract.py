@@ -17,7 +17,9 @@ TERRAFORM_ENVIRONMENTS = {
 }
 # The production release is three workflows (backend, frontend, infrastructure)
 # that share two composite actions. Each workflow runs a no-credential scope
-# job, then a release job gated by the "AWS ECS - Prod" environment.
+# job, then a release job gated by a protected environment: "AWS ECS - Prod"
+# (backend, infrastructure) or "AWS Amplify - Prod" (frontend), each with its
+# own bootstrap-managed OIDC role.
 PRODUCTION_RELEASE_WORKFLOWS = {
     "backend": ROOT / ".github/workflows/release-backend.yml",
     "frontend": ROOT / ".github/workflows/release-frontend.yml",
@@ -115,7 +117,6 @@ COMMON_RELEASE_WORKFLOW_RULES = {
     r"if:\s*\$\{\{\s*needs\.scope\.outputs\.release\s*==\s*'true'\s*\}\}": (
         "a release job that only runs when its scope changed"
     ),
-    r"environment:\s*\n\s*name:\s*AWS ECS - Prod": "the AWS ECS - Prod environment gate",
     r"TRIGGER_EVENT:\s*\$\{\{\s*github\.event_name\s*\}\}": (
         "the trigger event for the shared preflight"
     ),
@@ -123,20 +124,63 @@ COMMON_RELEASE_WORKFLOW_RULES = {
         "the manual confirmation for the shared preflight"
     ),
     r"DEPLOY_SHA:\s*" + RELEASE_SHA_EXPRESSION_RE: "the release commit as the deploy SHA",
-    r"AWS_ROLE_ARN:\s*\$\{\{\s*vars\.AWS_PROD_ROLE_ARN\s*\}\}": (
-        "the production OIDC role from the Production environment"
-    ),
     r"ref:\s*\$\{\{\s*env\.DEPLOY_SHA\s*\}\}": "checkout of the exact release commit",
     r"uses:\s*\./\.github/actions/release-preflight": "the shared release preflight",
+    r"if:\s*\$\{\{\s*always\(\)\s*\}\}[\s\S]{0,900}GITHUB_STEP_SUMMARY": (
+        "an always-written release summary"
+    ),
+}
+
+# Backend and infrastructure releases run from the "AWS ECS - Prod" environment
+# under the production role, which owns Terraform state, ECS, and the
+# application secrets' metadata.
+ECS_ENVIRONMENT_RULES = {
+    r"environment:\s*\n\s*name:\s*AWS ECS - Prod": "the AWS ECS - Prod environment gate",
+    r"AWS_ROLE_ARN:\s*\$\{\{\s*vars\.AWS_PROD_ROLE_ARN\s*\}\}": (
+        "the production OIDC role from the AWS ECS - Prod environment"
+    ),
     (
         r"TF_VAR_default_admin_email:\s*\$\{\{\s*"
         r"vars\.PROD_DEFAULT_ADMIN_EMAIL\s*\|\|\s*'admin@releviz\.com'\s*\}\}|"
         r"DEFAULT_ADMIN_EMAIL:\s*\$\{\{\s*"
         r"vars\.PROD_DEFAULT_ADMIN_EMAIL\s*\|\|\s*'admin@releviz\.com'\s*\}\}"
     ): "the reviewed production default-admin email input",
-    r"if:\s*\$\{\{\s*always\(\)\s*\}\}[\s\S]{0,900}GITHUB_STEP_SUMMARY": (
-        "an always-written release summary"
+}
+
+# The frontend release runs from the "AWS Amplify - Prod" environment under the
+# frontend-only role; it carries no backend configuration at all.
+AMPLIFY_ENVIRONMENT_RULES = {
+    r"environment:\s*\n\s*name:\s*AWS Amplify - Prod": "the AWS Amplify - Prod environment gate",
+    r"AWS_ROLE_ARN:\s*\$\{\{\s*vars\.AWS_PROD_FRONTEND_ROLE_ARN\s*\}\}": (
+        "the frontend-only OIDC role from the AWS Amplify - Prod environment"
     ),
+}
+
+# Text a release workflow may not contain because it belongs to the other
+# environment.
+SCOPED_FORBIDDEN_RELEASE_WORKFLOW_RULES = {
+    "backend": {
+        r"AWS Amplify - Prod": "the frontend environment",
+        r"AWS_PROD_FRONTEND_ROLE_ARN": "the frontend-only role variable",
+    },
+    "infrastructure": {
+        r"AWS Amplify - Prod": "the frontend environment",
+        r"AWS_PROD_FRONTEND_ROLE_ARN": "the frontend-only role variable",
+    },
+    "frontend": {
+        r"AWS ECS - Prod": "the backend environment",
+        r"AWS_PROD_ROLE_ARN": "the production role variable AWS_PROD_ROLE_ARN",
+        r"PROD_TF_STATE_BUCKET": "the Terraform state bucket",
+        r"PROD_DJANGO_SECRET_KEY_ARN|PROD_DJANGO_FIELD_ENCRYPTION_KEY_ARN": (
+            "application secret ARNs"
+        ),
+        r"PROD_METRICS_BEARER_TOKEN_ARN|PROD_SENTRY_DSN_SECRET_ARN": "monitoring secret ARNs",
+        r"PROD_DEFAULT_ADMIN_EMAIL|PROD_DEFAULT_ADMIN_PASSWORD_SECRET_ARN": (
+            "default-admin bootstrap inputs"
+        ),
+        r"PROD_ALARM_ACTION_ARNS_JSON": "alarm actions",
+        r"TF_VAR_": "Terraform inputs",
+    },
 }
 
 # Text no release workflow may contain.
@@ -173,6 +217,7 @@ TERRAFORM_STEADY_STATE_RULES = {
 
 SCOPED_RELEASE_WORKFLOW_RULES = {
     "backend": {
+        **ECS_ENVIRONMENT_RULES,
         **TERRAFORM_STEADY_STATE_RULES,
         r"TF_VAR_backend_image_tag:\s*" + RELEASE_SHA_EXPRESSION_RE: (
             "the release commit as the backend image tag"
@@ -244,6 +289,7 @@ SCOPED_RELEASE_WORKFLOW_RULES = {
         r'\[ "\$status" != "404" \]': "retired routes returning 404",
     },
     "frontend": {
+        **AMPLIFY_ENVIRONMENT_RULES,
         r'AMPLIFY_TIMEOUT_SECONDS:\s*"1200"': "the bounded Amplify deployment-helper timeout",
         r"AMPLIFY_ARTIFACT:.*releviz-amplify-" + RELEASE_SHA_EXPRESSION_RE + r"\.zip": (
             "a SHA-identified Amplify artifact"
@@ -334,6 +380,7 @@ SCOPED_RELEASE_WORKFLOW_RULES = {
         ): "a rollback gated on a verified artifact and a terminal production job",
     },
     "infrastructure": {
+        **ECS_ENVIRONMENT_RULES,
         **TERRAFORM_STEADY_STATE_RULES,
         r"aws amplify update-app[\s\S]{0,120}--custom-headers": (
             "installation of the reviewed Amplify security headers"
@@ -429,7 +476,26 @@ RELEASE_PREFLIGHT_RULES = {
     r"\^\[0-9a-f\]\{40\}\$": "an immutable release SHA requirement",
     r"git rev-parse HEAD": "exact checked-out release verification",
     r"CI Result": "successful CI enforcement",
-    r"Missing required AWS ECS - Prod environment variable": "required configuration checks",
+    r'environment_name="AWS ECS - Prod"': (
+        "the AWS ECS - Prod configuration contract for backend and infrastructure releases"
+    ),
+    r'environment_name="AWS Amplify - Prod"': (
+        "the AWS Amplify - Prod configuration contract for frontend releases"
+    ),
+    r"Missing required \$\{environment_name\} environment variable": (
+        "required configuration checks"
+    ),
+    r'expected_role_name="releviz-production-github-deploy"': (
+        "the reviewed production role name"
+    ),
+    r'expected_role_name="releviz-production-frontend-github-deploy"': (
+        "the reviewed frontend-only role name"
+    ),
+    r"role/\$\{expected_role_name\}\$": "an exact role ARN contract per scope",
+    r':assumed-role/\$\{expected_role_name\}/': "assumed-identity verification per scope",
+    r"aws ecs list-clusters --max-items 1 >/dev/null 2>&1; then": (
+        "a frontend least-privilege probe"
+    ),
     r'DEFAULT_ADMIN_EMAIL"\s*!=\s*"admin@releviz\.com"': (
         "an exact production default-admin identity guard"
     ),
@@ -503,6 +569,9 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
             if not re.search(pattern, source, re.MULTILINE | re.DOTALL):
                 errors.append(f"{label} omits {description}")
         for pattern, description in FORBIDDEN_RELEASE_WORKFLOW_RULES.items():
+            if re.search(pattern, source, re.MULTILINE | re.DOTALL):
+                errors.append(f"{label} retains {description}")
+        for pattern, description in SCOPED_FORBIDDEN_RELEASE_WORKFLOW_RULES[scope].items():
             if re.search(pattern, source, re.MULTILINE | re.DOTALL):
                 errors.append(f"{label} retains {description}")
         scope_pattern = rf"release-preflight\s*\n\s*with:\s*\n\s*scope:\s*{scope}\b"

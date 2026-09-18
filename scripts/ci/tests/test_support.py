@@ -1378,6 +1378,93 @@ class ProductionReleaseWorkflowTests(TestCase):
                 "use_lockfile=false",
                 "release preflight omits native Terraform state locking",
             ),
+            # Environment separation: the frontend releases from
+            # "AWS Amplify - Prod" under the frontend-only role; backend and
+            # infrastructure keep "AWS ECS - Prod" and the production role.
+            (
+                frontend,
+                "    environment:\n      name: AWS Amplify - Prod",
+                "    environment:\n      name: Staging",
+                "frontend release omits the AWS Amplify - Prod environment gate",
+            ),
+            (
+                frontend,
+                "    environment:\n      name: AWS Amplify - Prod",
+                "    environment:\n      name: AWS ECS - Prod",
+                "frontend release retains the backend environment",
+            ),
+            (
+                frontend,
+                "AWS_ROLE_ARN: ${{ vars.AWS_PROD_FRONTEND_ROLE_ARN }}",
+                "AWS_ROLE_ARN: ${{ vars.AWS_PROD_ROLE_ARN }}",
+                "frontend release omits the frontend-only OIDC role from the "
+                "AWS Amplify - Prod environment",
+            ),
+            (
+                frontend,
+                "AWS_ROLE_ARN: ${{ vars.AWS_PROD_FRONTEND_ROLE_ARN }}",
+                "AWS_ROLE_ARN: ${{ vars.AWS_PROD_ROLE_ARN }}",
+                "frontend release retains the production role variable AWS_PROD_ROLE_ARN",
+            ),
+            (
+                frontend,
+                "      AMPLIFY_APP_ID: ${{ vars.PROD_AMPLIFY_APP_ID }}",
+                "      AMPLIFY_APP_ID: ${{ vars.PROD_AMPLIFY_APP_ID }}\n"
+                "      TF_STATE_BUCKET: ${{ vars.PROD_TF_STATE_BUCKET }}",
+                "frontend release retains the Terraform state bucket",
+            ),
+            (
+                frontend,
+                "      AMPLIFY_APP_ID: ${{ vars.PROD_AMPLIFY_APP_ID }}",
+                "      AMPLIFY_APP_ID: ${{ vars.PROD_AMPLIFY_APP_ID }}\n"
+                "      DEFAULT_ADMIN_PASSWORD_SECRET_ARN: "
+                "${{ vars.PROD_DEFAULT_ADMIN_PASSWORD_SECRET_ARN }}",
+                "frontend release retains default-admin bootstrap inputs",
+            ),
+            (
+                backend,
+                "AWS_ROLE_ARN: ${{ vars.AWS_PROD_ROLE_ARN }}",
+                "AWS_ROLE_ARN: ${{ vars.AWS_PROD_FRONTEND_ROLE_ARN }}",
+                "backend release omits the production OIDC role from the AWS ECS - Prod environment",
+            ),
+            (
+                infrastructure,
+                "AWS_ROLE_ARN: ${{ vars.AWS_PROD_ROLE_ARN }}",
+                "AWS_ROLE_ARN: ${{ vars.AWS_PROD_FRONTEND_ROLE_ARN }}",
+                "infrastructure release retains the frontend-only role variable",
+            ),
+            (
+                preflight,
+                'environment_name="AWS Amplify - Prod"',
+                'environment_name="Staging"',
+                "release preflight omits the AWS Amplify - Prod configuration contract for "
+                "frontend releases",
+            ),
+            (
+                preflight,
+                'environment_name="AWS ECS - Prod"',
+                'environment_name="Production"',
+                "release preflight omits the AWS ECS - Prod configuration contract for backend "
+                "and infrastructure releases",
+            ),
+            (
+                preflight,
+                'expected_role_name="releviz-production-frontend-github-deploy"',
+                'expected_role_name="releviz-production-github-deploy"',
+                "release preflight omits the reviewed frontend-only role name",
+            ),
+            (
+                preflight,
+                ":assumed-role/${expected_role_name}/",
+                ":assumed-role/",
+                "release preflight omits assumed-identity verification per scope",
+            ),
+            (
+                preflight,
+                "aws ecs list-clusters --max-items 1 >/dev/null 2>&1; then",
+                "false; then",
+                "release preflight omits a frontend least-privilege probe",
+            ),
             # Amplify not-found routing: released by infrastructure, held by
             # the backend plan, and smoked by every release that can see it.
             (

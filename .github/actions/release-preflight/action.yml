@@ -2,9 +2,11 @@ name: Release preflight
 description: >-
   Shared entry checks for every production release workflow: the manual
   DEPLOY confirmation, the exact checked-out commit, a green CI Result for
-  it, the AWS ECS - Prod environment configuration, short-lived AWS credentials
-  through GitHub OIDC, and (for Terraform scopes) the protected remote
-  state. Reads the release job's environment variables.
+  it, the release scope's Environment configuration ("AWS ECS - Prod" for
+  backend and infrastructure, "AWS Amplify - Prod" for the frontend),
+  short-lived AWS credentials for that scope's role through GitHub OIDC, the
+  assumed identity, and (for Terraform scopes) the protected remote state.
+  Reads the release job's environment variables.
 
 inputs:
   scope:
@@ -63,33 +65,77 @@ runs:
 
     - name: Validate production configuration
       shell: bash
+      env:
+        RELEASE_SCOPE: ${{ inputs.scope }}
       run: |
         set -euo pipefail
-        for required in \
-          AWS_ROLE_ARN \
-          TF_STATE_BUCKET \
-          PROD_DOMAIN \
-          API_DOMAIN \
-          ROUTE53_ZONE_ID \
-          DJANGO_SECRET_KEY_ARN \
-          FIELD_ENCRYPTION_KEY_ARN \
-          METRICS_BEARER_TOKEN_ARN \
-          DEFAULT_ADMIN_EMAIL \
-          DEFAULT_ADMIN_PASSWORD_SECRET_ARN \
-          AMPLIFY_APP_ID \
-          ALARM_ACTION_ARNS; do
+        # Each scope releases from its own protected Environment with its own
+        # role; the frontend Environment carries no backend configuration.
+        case "$RELEASE_SCOPE" in
+          frontend)
+            environment_name="AWS Amplify - Prod"
+            expected_role_name="releviz-production-frontend-github-deploy"
+            required_variables=(
+              AWS_ROLE_ARN
+              PROD_DOMAIN
+              API_DOMAIN
+              ROUTE53_ZONE_ID
+              AMPLIFY_APP_ID
+            )
+            ;;
+          *)
+            environment_name="AWS ECS - Prod"
+            expected_role_name="releviz-production-github-deploy"
+            required_variables=(
+              AWS_ROLE_ARN
+              TF_STATE_BUCKET
+              PROD_DOMAIN
+              API_DOMAIN
+              ROUTE53_ZONE_ID
+              DJANGO_SECRET_KEY_ARN
+              FIELD_ENCRYPTION_KEY_ARN
+              METRICS_BEARER_TOKEN_ARN
+              DEFAULT_ADMIN_EMAIL
+              DEFAULT_ADMIN_PASSWORD_SECRET_ARN
+              AMPLIFY_APP_ID
+              ALARM_ACTION_ARNS
+            )
+            ;;
+        esac
+        for required in "${required_variables[@]}"; do
           if [ -z "${!required:-}" ]; then
-            echo "::error::Missing required AWS ECS - Prod environment variable: $required"
+            echo "::error::Missing required ${environment_name} environment variable: $required"
             exit 1
           fi
         done
-        if ! jq -e 'type == "array" and length > 0 and all(.[]; type == "string" and startswith("arn:"))' \
-          <<<"$ALARM_ACTION_ARNS" >/dev/null; then
-          echo "::error::PROD_ALARM_ACTION_ARNS_JSON must be a non-empty JSON array of SNS ARNs."
+        if ! [[ "$AWS_ROLE_ARN" =~ ^arn:aws[a-z-]*:iam::[0-9]{12}:role/${expected_role_name}$ ]]; then
+          echo "::error::The ${environment_name} role must be the bootstrap-managed ${expected_role_name} role."
           exit 1
         fi
         if ! [[ "$AMPLIFY_APP_ID" =~ ^d[a-z0-9]{1,19}$ ]]; then
           echo "::error::PROD_AMPLIFY_APP_ID must be an exact Amplify app ID."
+          exit 1
+        fi
+        for domain in "$PROD_DOMAIN" "$API_DOMAIN"; do
+          if ! [[ "$domain" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]]; then
+            echo "::error::Invalid production hostname: ${domain}"
+            exit 1
+          fi
+        done
+        if [ "$API_DOMAIN" = "$PROD_DOMAIN" ]; then
+          echo "::error::Frontend and API hostnames must be distinct."
+          exit 1
+        fi
+        if [ "$API_DOMAIN" != "api.releviz.com" ]; then
+          echo "::error::PROD_API_DOMAIN must be the reviewed hostname api.releviz.com."
+          exit 1
+        fi
+        if [ "$RELEASE_SCOPE" = "frontend" ]; then
+          exit 0
+        fi
+        if ! jq -e 'type == "array" and length > 0 and all(.[]; type == "string" and startswith("arn:"))' \
+          <<<"$ALARM_ACTION_ARNS" >/dev/null; then
+          echo "::error::PROD_ALARM_ACTION_ARNS_JSON must be a non-empty JSON array of SNS ARNs."
           exit 1
         fi
         if [ "$DEFAULT_ADMIN_EMAIL" != "admin@releviz.com" ]; then
@@ -111,20 +157,6 @@ runs:
           echo "::error::Production application secrets must use four distinct ARNs."
           exit 1
         fi
-        for domain in "$PROD_DOMAIN" "$API_DOMAIN"; do
-          if ! [[ "$domain" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]]; then
-            echo "::error::Invalid production hostname: ${domain}"
-            exit 1
-          fi
-        done
-        if [ "$API_DOMAIN" = "$PROD_DOMAIN" ]; then
-          echo "::error::Frontend and API hostnames must be distinct."
-          exit 1
-        fi
-        if [ "$API_DOMAIN" != "api.releviz.com" ]; then
-          echo "::error::PROD_API_DOMAIN must be the reviewed hostname api.releviz.com."
-          exit 1
-        fi
 
     - name: Configure AWS credentials with OIDC
       uses: aws-actions/configure-aws-credentials@v6.2.2
@@ -135,9 +167,30 @@ runs:
 
     - name: Verify deployment identity and managed dependencies
       shell: bash
+      env:
+        RELEASE_SCOPE: ${{ inputs.scope }}
       run: |
         set -euo pipefail
-        aws sts get-caller-identity
+        identity_arn="$(aws sts get-caller-identity --query Arn --output text)"
+        echo "Release identity: ${identity_arn}"
+        case "$RELEASE_SCOPE" in
+          frontend) expected_role_name="releviz-production-frontend-github-deploy" ;;
+          *) expected_role_name="releviz-production-github-deploy" ;;
+        esac
+        if [[ "$identity_arn" != *":assumed-role/${expected_role_name}/"* ]]; then
+          echo "::error::The ${RELEASE_SCOPE} release assumed ${identity_arn}; expected the ${expected_role_name} role."
+          exit 1
+        fi
+        if [ "$RELEASE_SCOPE" = "frontend" ]; then
+          # The frontend role has no ECS access; a successful read means the
+          # AWS Amplify - Prod Environment points at a broader role.
+          if aws ecs list-clusters --max-items 1 >/dev/null 2>&1; then
+            echo "::error::The frontend release identity can read ECS; the AWS Amplify - Prod Environment must use the frontend-only role."
+            exit 1
+          fi
+          aws amplify get-app --app-id "$AMPLIFY_APP_ID" >/dev/null
+          exit 0
+        fi
         for secret_arn in \
           "$DJANGO_SECRET_KEY_ARN" \
           "$FIELD_ENCRYPTION_KEY_ARN" \
