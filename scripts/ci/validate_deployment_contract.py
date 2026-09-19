@@ -485,14 +485,12 @@ RELEASE_PREFLIGHT_RULES = {
     r"Missing required \$\{environment_name\} environment variable": (
         "required configuration checks"
     ),
-    r'expected_role_name="releviz-production-github-deploy"': (
-        "the reviewed production role name"
-    ),
+    r'expected_role_name="releviz-production-github-deploy"': "the reviewed production role name",
     r'expected_role_name="releviz-production-frontend-github-deploy"': (
         "the reviewed frontend-only role name"
     ),
     r"role/\$\{expected_role_name\}\$": "an exact role ARN contract per scope",
-    r':assumed-role/\$\{expected_role_name\}/': "assumed-identity verification per scope",
+    r":assumed-role/\$\{expected_role_name\}/": "assumed-identity verification per scope",
     r"aws ecs list-clusters --max-items 1 >/dev/null 2>&1; then": (
         "a frontend least-privilege probe"
     ),
