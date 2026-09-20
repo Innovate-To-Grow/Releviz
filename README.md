@@ -26,7 +26,9 @@ accept responses as soon as participants join; creating an event by itself does 
 
 The Roster tab accepts `.xlsx`, `.csv`, or pasted CSV/TSV. Map the required `name` and `email`
 columns and optional `group`, `weight`, and `included` columns, preview and correct rows, then commit
-as:
+as one of the modes below. In the `group` column, blank means unassigned, `ALL` means every group
+(including groups created later), and several names are separated by `;` (for example
+`Faculty; Team 3`).
 
 - **Merge** — add/update people while preserving existing schedules and delivery history. Newly
   added or restored people receive an invitation automatically.
@@ -69,6 +71,8 @@ Roster, Results, and Finalize. The organizer can:
 - load one person's schedule only when its edit drawer opens;
 - co-edit a temporary participant while the event is active, until that identity upgrades to a
   verified full account;
+- create groups (empty at first) and fill them from the list checkboxes; a person may be in many
+  groups, and the `ALL` flag places them in every group;
 - apply group/filter/selection weight and included changes, then override an individual;
 - view the top ten meeting-duration candidates ranked by weighted availability, unweighted
   availability, fully available count, and configured-time order;

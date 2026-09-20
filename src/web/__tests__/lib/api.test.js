@@ -57,12 +57,16 @@ import {
   cancelRosterImport,
   commitRosterImport,
   configureRosterImport,
+  createRosterGroup,
   createRosterImport,
+  deleteRosterGroup,
   fetchRoster,
+  fetchRosterGroups,
   fetchRosterImportRows,
   fetchRosterSchedule,
   patchRosterBulk,
   patchRosterParticipant,
+  renameRosterGroup,
 } from "@/lib/api/roster";
 import {
   createManagedParticipant,
@@ -1019,6 +1023,10 @@ describe("business API helpers", () => {
       },
       "tok",
     );
+    await fetchRosterGroups("ABC 123", "tok");
+    await createRosterGroup("ABC 123", { name: "Faculty" }, "tok");
+    await renameRosterGroup("ABC 123", "group 7", { name: "Staff" }, "tok");
+    await deleteRosterGroup("ABC 123", "group 7", "tok");
     await fetchParticipants("ABC 123", "tok");
     await expect(fetchCurrentParticipant("ABC 123", "tok")).resolves.toEqual({
       participant: null,
@@ -1139,6 +1147,8 @@ describe("business API helpers", () => {
     );
     expect(urls).toContain("/events/roster/participant%201?code=ABC%20123");
     expect(urls).toContain("/events/roster/bulk?code=ABC%20123");
+    expect(urls).toContain("/events/roster/groups?code=ABC%20123");
+    expect(urls).toContain("/events/roster/groups/group%207?code=ABC%20123");
     expect(global.fetch).toHaveBeenCalledWith(
       "/events/invitations?code=ABC%20123",
       expect.objectContaining({
@@ -1223,6 +1233,14 @@ describe("business API helpers", () => {
       patchRosterParticipant("BAD", "participant", {}),
     ).rejects.toThrow("nope");
     await expect(patchRosterBulk("BAD", {})).rejects.toThrow("nope");
+    await expect(fetchRosterGroups("BAD")).rejects.toThrow("nope");
+    await expect(createRosterGroup("BAD", { name: "x" })).rejects.toThrow(
+      "nope",
+    );
+    await expect(
+      renameRosterGroup("BAD", "group", { name: "x" }),
+    ).rejects.toThrow("nope");
+    await expect(deleteRosterGroup("BAD", "group")).rejects.toThrow("nope");
     await expect(fetchParticipants("BAD")).rejects.toThrow("nope");
     await expect(fetchCurrentParticipant("BAD")).rejects.toThrow("nope");
     await expect(joinEvent("BAD")).rejects.toThrow("nope");
@@ -1353,6 +1371,124 @@ describe("business API helpers", () => {
       status: 502,
       errorCode: null,
       participant: null,
+    });
+  });
+
+  test("roster group helpers build authenticated requests and surface conflicts", async () => {
+    const group = { id: 7, name: "Faculty", count: 0, weight: null };
+    global.fetch
+      .mockResolvedValueOnce(jsonResponse({ groups: [group] }))
+      .mockResolvedValueOnce(
+        jsonResponse({ group, groups: [group] }, { status: 201 }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ group: { ...group, name: "Staff" }, groups: [] }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ groups: [] }));
+
+    await expect(fetchRosterGroups("ABC 123", "tok")).resolves.toEqual({
+      groups: [group],
+    });
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      "/events/roster/groups?code=ABC%20123",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+        credentials: "include",
+      }),
+    );
+    expect(global.fetch.mock.calls[0][1].method).toBeUndefined();
+
+    await expect(
+      createRosterGroup("ABC 123", { name: "Faculty" }, "tok"),
+    ).resolves.toEqual({ group, groups: [group] });
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      "/events/roster/groups?code=ABC%20123",
+      expect.objectContaining({
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer tok",
+        },
+        body: JSON.stringify({ name: "Faculty" }),
+        credentials: "include",
+      }),
+    );
+
+    await expect(
+      renameRosterGroup("ABC 123", 7, { name: "Staff" }, "tok"),
+    ).resolves.toEqual({ group: { ...group, name: "Staff" }, groups: [] });
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      "/events/roster/groups/7?code=ABC%20123",
+      expect.objectContaining({
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer tok",
+        },
+        body: JSON.stringify({ name: "Staff" }),
+        credentials: "include",
+      }),
+    );
+
+    await expect(deleteRosterGroup("ABC 123", 7, "tok")).resolves.toEqual({
+      groups: [],
+    });
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      "/events/roster/groups/7?code=ABC%20123",
+      expect.objectContaining({
+        method: "DELETE",
+        headers: { Authorization: "Bearer tok" },
+        credentials: "include",
+      }),
+    );
+    expect(global.fetch.mock.calls[3][1].body).toBeUndefined();
+
+    // Duplicate names are a 409 whose message is the server's own wording.
+    global.fetch
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { error: "A group named Faculty already exists." },
+          { status: 409 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { error: "A group named Faculty already exists." },
+          { status: 409 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ error: "Group not found" }, { status: 404 }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { error: "ALL is reserved for every group." },
+          {
+            status: 400,
+          },
+        ),
+      );
+    await expect(
+      createRosterGroup("ABC 123", { name: "faculty" }, "tok"),
+    ).rejects.toMatchObject({
+      message: "A group named Faculty already exists.",
+      status: 409,
+      code: null,
+    });
+    await expect(
+      renameRosterGroup("ABC 123", 8, { name: "FACULTY" }, "tok"),
+    ).rejects.toMatchObject({
+      message: "A group named Faculty already exists.",
+      status: 409,
+    });
+    await expect(
+      deleteRosterGroup("ABC 123", 999, "tok"),
+    ).rejects.toMatchObject({ message: "Group not found", status: 404 });
+    await expect(
+      createRosterGroup("ABC 123", { name: "ALL" }, "tok"),
+    ).rejects.toMatchObject({
+      message: "ALL is reserved for every group.",
+      status: 400,
     });
   });
 

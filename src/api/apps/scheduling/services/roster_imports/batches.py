@@ -21,6 +21,7 @@ from .normalization import (
     active_rows,
     apply_account_rules,
     apply_duplicate_rules,
+    normalize_group_cell,
     normalize_import_batch,
     rows_summary,
     validate_identity_fields,
@@ -170,11 +171,11 @@ def _apply_row_updates(batch: RosterImportBatch, updates) -> None:
         if "email" in item:
             email = str(item.get("email") or "").strip().lower()
         if "group" in item or "groupName" in item:
-            group_name = str(item.get("group", item.get("groupName")) or "").strip()
+            group_name = normalize_group_cell(item.get("group", item.get("groupName")) or "")
         identity_errors = validate_identity_fields(name, email, group_name)
         row.name = name[:100]
         row.email = email[:254]
-        row.group_name = group_name[:100]
+        row.group_name = group_name
         if "weight" in item:
             try:
                 weight = float(item.get("weight"))

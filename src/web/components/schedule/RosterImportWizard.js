@@ -578,7 +578,7 @@ export default function RosterImportWizard({
                   value={pastedText}
                   onChange={(event) => setPastedText(event.target.value)}
                   placeholder={
-                    "name\temail\tgroup\nAda\tada@example.com\tFaculty"
+                    "name\temail\tgroup\nAda\tada@example.com\tFaculty; Team 3"
                   }
                 />
               </FormField>
@@ -687,7 +687,10 @@ export default function RosterImportWizard({
             <legend className="fs-6 fw-semibold mb-2">Defaults</legend>
             <div className="row g-3 align-items-end">
               <div className="col-12 col-md-4">
-                <FormField label="Default group">
+                <FormField
+                  label="Default group"
+                  help="Blank = unassigned, ALL = every group, separate several names with ;"
+                >
                   <input
                     className="form-control"
                     value={defaults.group}

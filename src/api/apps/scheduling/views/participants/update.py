@@ -22,6 +22,8 @@ from apps.scheduling.services.results import (
     participant_is_excluded,
     request_event_results_recompute,
 )
+from apps.scheduling.services.roster_groups import parse_group_cell, set_participant_groups
+from apps.scheduling.services.roster_imports import RosterImportError
 
 from ..helpers import (
     organizer_participant_payload,
@@ -202,6 +204,9 @@ class ParticipantUpdateView(APIView):
                 return Response({"error": "submitted must be a boolean"}, status=400)
             updates["submitted"] = bool(submitted)
 
+        # Memberships live in a many-to-many table, so the parsed cell is kept
+        # apart from ``updates`` (which only ever holds Participant columns).
+        group_cell = None
         if "groupName" in request.data:
             if not is_organizer:
                 return Response(
@@ -211,7 +216,10 @@ class ParticipantUpdateView(APIView):
                     },
                     status=403,
                 )
-            updates["group_name"] = request.data.get("groupName") or None
+            try:
+                group_cell = parse_group_cell(request.data.get("groupName"))
+            except RosterImportError as exc:
+                return Response({"error": str(exc)}, status=400)
 
         if "sortOrder" in request.data:
             if not is_organizer:
@@ -231,7 +239,7 @@ class ParticipantUpdateView(APIView):
             except (TypeError, ValueError):
                 return Response({"error": "sortOrder must be an integer or null"}, status=400)
 
-        if not updates:
+        if not updates and group_cell is None:
             return private_response({"participant": response_participant_payload()})
 
         def values_match():
@@ -287,7 +295,17 @@ class ParticipantUpdateView(APIView):
                     status=409,
                 )
 
-        if values_match():
+        # Every 4xx exit is behind us, so the membership write is safe inside
+        # this atomic request; a change bumps the version like a rename does.
+        groups_changed = (
+            set_participant_groups(
+                participant=participant, all_groups=group_cell[0], names=group_cell[1]
+            )
+            if group_cell is not None
+            else False
+        )
+
+        if values_match() and not groups_changed:
             track_unchanged_response()
             timestamp_fields = []
             now = timezone.now()

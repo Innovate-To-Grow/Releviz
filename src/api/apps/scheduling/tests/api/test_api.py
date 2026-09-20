@@ -6,7 +6,14 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from apps.authn.tests.helpers import create_member, token_for
-from apps.scheduling.models import Event, EventInvitation, Participant, UserEvent, Weight
+from apps.scheduling.models import (
+    Event,
+    EventInvitation,
+    Participant,
+    ParticipantGroup,
+    UserEvent,
+    Weight,
+)
 from apps.scheduling.payloads import api_event
 from apps.scheduling.services.availability import (
     default_availability,
@@ -423,12 +430,51 @@ class RelevizApiTests(TestCase):
         self.assertEqual(response.status_code, 404)
 
         self.authenticate(self.organizer)
+        participant = Participant.objects.get(event__code=code, member=self.participant)
+        version = participant.version
+        results_revision = Event.objects.get(code=code).results_revision
         response = self.client.put(base, {"groupName": "A", "sortOrder": 3}, format="json")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["participant"]["group_name"], "A")
+        group_a = ParticipantGroup.objects.get(event__code=code, name="A")
+        self.assertEqual(response.data["participant"]["groups"], [{"id": group_a.pk, "name": "A"}])
+        self.assertFalse(response.data["participant"]["allGroups"])
+        self.assertEqual(response.data["participant"]["sort_order"], 3)
+        # A membership change bumps the version like a rename does.
+        self.assertEqual(response.data["participant"]["version"], version + 1)
+        # Repeating the same cell changes nothing.
+        repeated = self.client.put(base, {"groupName": "A"}, format="json")
+        self.assertEqual(repeated.status_code, 200)
+        self.assertEqual(repeated.data["participant"]["version"], version + 1)
+        # A multi-group cell with the ALL token.
+        response = self.client.put(base, {"groupName": "all; B; a"}, format="json")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["participant"]["group_name"], "ALL; A; B")
+        self.assertTrue(response.data["participant"]["allGroups"])
+        self.assertEqual(
+            [group["name"] for group in response.data["participant"]["groups"]], ["A", "B"]
+        )
+        self.assertEqual(response.data["participant"]["version"], version + 2)
+        # Invalid cells are rejected before any write.
+        response = self.client.put(base, {"groupName": "x" * 101}, format="json")
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["error"], "group is too long (max 100).")
         response = self.client.put(base, {"groupName": "", "sortOrder": None}, format="json")
         self.assertEqual(response.status_code, 200)
         self.assertIsNone(response.data["participant"]["group_name"])
+        self.assertEqual(response.data["participant"]["groups"], [])
+        self.assertFalse(response.data["participant"]["allGroups"])
+        self.assertIsNone(response.data["participant"]["sort_order"])
+        # The emptied groups remain as rows on the event.
+        self.assertEqual(
+            list(ParticipantGroup.objects.filter(event__code=code).values_list("name", flat=True)),
+            ["A", "B"],
+        )
+        participant.refresh_from_db()
+        self.assertEqual(participant.version, version + 3)
+        self.assertFalse(participant.all_groups)
+        # Roster metadata never dirties the results.
+        self.assertEqual(Event.objects.get(code=code).results_revision, results_revision)
 
         other = create_member("other@example.com")
         self.authenticate(self.participant)

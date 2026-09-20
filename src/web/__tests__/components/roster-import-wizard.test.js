@@ -176,7 +176,13 @@ test("supports multi-sheet headers, editable preview rows, pagination, and cance
   await userEvent.click(screen.getByRole("button", { name: "Preview rows" }));
   expect(await screen.findByRole("status")).toHaveTextContent("Columns loaded");
 
-  fireEvent.change(screen.getByLabelText("Default group"), {
+  // The default group cell accepts the same "ALL"/";" syntax as a column.
+  const defaultGroup = screen.getByLabelText("Default group");
+  expect(defaultGroup).toHaveAccessibleDescription(
+    "Blank = unassigned, ALL = every group, separate several names with ;",
+  );
+  expect(defaultGroup).not.toHaveAttribute("maxlength");
+  fireEvent.change(defaultGroup, {
     target: { value: "Guests" },
   });
   fireEvent.change(screen.getByLabelText("Default weight"), {
@@ -420,7 +426,13 @@ test("moves between sources with the keyboard, edits every preview column, and g
   expect(screen.getByRole("alert")).toHaveTextContent(
     "Paste rows copied from Google Sheets or Excel first.",
   );
-  fireEvent.change(screen.getByLabelText("Pasted roster rows"), {
+  // The paste example shows the multi-group cell syntax.
+  const pasteArea = screen.getByLabelText("Pasted roster rows");
+  expect(pasteArea).toHaveAttribute(
+    "placeholder",
+    "name\temail\tgroup\nAda\tada@example.com\tFaculty; Team 3",
+  );
+  fireEvent.change(pasteArea, {
     target: { value: "Full Name\tE-mail\nAda\tada@example.com" },
   });
   await userEvent.click(
@@ -448,12 +460,15 @@ test("moves between sources with the keyboard, edits every preview column, and g
   );
   await screen.findByDisplayValue("ada@example.com");
 
+  // Group cells stay free text so several names (or ALL) round-trip as one
+  // joined string, with no length cap on the cell.
   for (const [label, value, field] of [
     ["Email for row 2", "ada@releviz.test", "email"],
-    ["Group for row 2", "Faculty", "group"],
+    ["Group for row 2", "ALL; Faculty; Team 3", "group"],
     ["Weight for row 2", "0.5", "weight"],
   ]) {
     const input = screen.getByLabelText(label);
+    expect(input).not.toHaveAttribute("maxlength");
     fireEvent.change(input, { target: { value } });
     fireEvent.blur(input);
     await waitFor(() =>

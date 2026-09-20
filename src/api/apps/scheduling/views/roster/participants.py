@@ -4,6 +4,11 @@ from django.db import transaction
 from rest_framework.response import Response
 
 from apps.scheduling.models import Weight
+from apps.scheduling.services.roster_groups import (
+    parse_group_cell,
+    set_participant_groups,
+    validate_group_name,
+)
 from apps.scheduling.services.roster_imports import RosterImportError
 
 from ..helpers import PrivateAPIView
@@ -16,6 +21,44 @@ from .helpers import (
     roster_write_error,
 )
 from .queries import boolean_query, group_stats, participant_summary, roster_queryset
+
+# Any of these keys in the body rewrites the person's memberships.
+GROUP_KEYS = ("group", "groupName", "groups", "allGroups")
+
+
+def _group_name_list(value) -> list[str]:
+    """Validate a ``groups`` array; duplicate spellings keep the first one."""
+
+    if not isinstance(value, list) or not all(isinstance(name, str) for name in value):
+        raise RosterImportError("groups must be an array of group names.")
+    names = []
+    seen = set()
+    for name in value:
+        normalized = validate_group_name(name)
+        key = normalized.lower()
+        if key not in seen:
+            seen.add(key)
+            names.append(normalized)
+    return names
+
+
+def _requested_groups(data, participant) -> tuple[bool, list[str]]:
+    """Resolve the ``(all_groups, names)`` target from the body without writing.
+
+    A cell (``group``/``groupName``) replaces the current state; ``groups``
+    then overrides the names and ``allGroups`` the flag.
+    """
+
+    if "group" in data or "groupName" in data:
+        all_groups, names = parse_group_cell(data.get("group", data.get("groupName")))
+    else:
+        all_groups = participant.all_groups
+        names = [group.name for group in participant.groups.all()]
+    if "groups" in data:
+        names = _group_name_list(data.get("groups"))
+    if "allGroups" in data:
+        all_groups = boolean_query(data.get("allGroups"), "allGroups")
+    return all_groups, names
 
 
 class RosterParticipantView(PrivateAPIView):
@@ -44,6 +87,7 @@ class RosterParticipantView(PrivateAPIView):
                         status=409,
                     )
 
+                # Validate every field before the first write.
                 changed = False
                 if "name" in request.data:
                     name = str(request.data.get("name") or "").strip()
@@ -54,16 +98,9 @@ class RosterParticipantView(PrivateAPIView):
                     if participant.participant_name != name:
                         participant.participant_name = name
                         changed = True
-                if "group" in request.data or "groupName" in request.data:
-                    group_name = str(
-                        request.data.get("group", request.data.get("groupName")) or ""
-                    ).strip()
-                    if len(group_name) > 100:
-                        raise RosterImportError("group is too long (max 100).")
-                    normalized_group = group_name or None
-                    if participant.group_name != normalized_group:
-                        participant.group_name = normalized_group
-                        changed = True
+                groups_supplied = any(key in request.data for key in GROUP_KEYS)
+                if groups_supplied:
+                    all_groups, group_names = _requested_groups(request.data, participant)
 
                 weight = (
                     Weight.objects.select_for_update()
@@ -92,21 +129,23 @@ class RosterParticipantView(PrivateAPIView):
                         or float(weight.weight) != new_weight
                         or weight.included != new_included
                     )
-                    if weight_changed:
-                        weight.weight = new_weight
-                        weight.included = new_included
-                        weight.save()
+
+                if groups_supplied:
+                    # Persists ``all_groups`` and the memberships itself.
+                    changed |= set_participant_groups(
+                        participant=participant,
+                        all_groups=all_groups,
+                        names=group_names,
+                    )
+                if weight_changed:
+                    weight.weight = new_weight
+                    weight.included = new_included
+                    weight.save()
 
                 if changed or weight_changed:
                     participant.version += 1
-                    participant.save(
-                        update_fields=[
-                            "participant_name",
-                            "group_name",
-                            "version",
-                            "updated_at",
-                        ]
-                    )
+                    participant.save(update_fields=["participant_name", "version", "updated_at"])
+                # Results never read groups, so only a weight edit dirties them.
                 revision = mark_results_dirty(event) if weight_changed else event.results_revision
                 enriched = roster_queryset(event).get(pk=participant.pk)
         except RosterImportError as exc:
@@ -116,6 +155,6 @@ class RosterParticipantView(PrivateAPIView):
                 "participant": participant_summary(enriched),
                 "resultsRevision": revision,
                 # A weight or group edit changes what the groups share.
-                "groups": group_stats(roster_queryset(event)),
+                "groups": group_stats(event, roster_queryset(event)),
             }
         )

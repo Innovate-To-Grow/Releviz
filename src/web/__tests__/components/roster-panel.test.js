@@ -64,10 +64,14 @@ jest.mock("@/lib/api/participants", () => ({
 }));
 
 jest.mock("@/lib/api/roster", () => ({
+  createRosterGroup: jest.fn(),
+  deleteRosterGroup: jest.fn(),
   fetchRoster: jest.fn(),
+  fetchRosterGroups: jest.fn(),
   fetchRosterSchedule: jest.fn(),
   patchRosterBulk: jest.fn(),
   patchRosterParticipant: jest.fn(),
+  renameRosterGroup: jest.fn(),
 }));
 
 import RosterPanel from "@/components/schedule/RosterPanel";
@@ -76,10 +80,13 @@ import {
   updateParticipant,
 } from "@/lib/api/participants";
 import {
+  createRosterGroup,
+  deleteRosterGroup,
   fetchRoster,
   fetchRosterSchedule,
   patchRosterBulk,
   patchRosterParticipant,
+  renameRosterGroup,
 } from "@/lib/api/roster";
 
 const event = {
@@ -485,21 +492,21 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
     window.confirm = jest.fn(() => true);
   });
 
-  test("offers an Ungrouped filter, legacy group maps, and every delivery label", async () => {
+  test("offers an Ungrouped filter, multi-group cells, and every delivery label", async () => {
     fetchRoster.mockResolvedValue(
       rosterResponse(
         [
           participant({
             id: "a",
             name: "Alpha",
-            group: undefined,
-            groupName: "Legacy",
+            group: "ALL; Faculty",
+            groups: [{ id: 1, name: "Faculty" }],
+            allGroups: true,
           }),
           participant({
             id: "b",
             name: "Beta",
             group: null,
-            group_name: "Snake",
             invitationStatus: "opened",
             accountAccess: "full",
             canOrganizerEditAvailability: false,
@@ -513,6 +520,7 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
           participant({
             id: "d",
             name: "Delta",
+            group: "Faculty; Staff",
             invitationStatus: "submitted",
             submitted: 1,
           }),
@@ -522,7 +530,11 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
             total: 4,
             submitted: 1,
             notSubmitted: 3,
-            groups: [{ name: "Faculty" }, { name: "" }],
+            groups: [
+              { id: 1, name: "Faculty" },
+              { id: 2, name: "Staff" },
+              { id: null, name: "" },
+            ],
           },
         },
       ),
@@ -532,9 +544,24 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
     expect(
       within(groupFilter).getByRole("option", { name: "Ungrouped" }),
     ).toHaveValue("__ungrouped__");
-    expect(screen.getByLabelText("Group for Alpha")).toHaveValue("Legacy");
-    expect(screen.getByLabelText("Group for Beta")).toHaveValue("Snake");
-    expect(screen.getByLabelText("Group for Gamma")).toHaveValue("");
+    // The row edits the cell string the server formatted, and the flag shows
+    // as its own checkbox.
+    expect(screen.getByLabelText("Groups for Alpha")).toHaveValue(
+      "ALL; Faculty",
+    );
+    expect(screen.getByLabelText("All groups for Alpha")).toBeChecked();
+    expect(screen.getByLabelText("Groups for Beta")).toHaveValue("");
+    expect(screen.getByLabelText("All groups for Beta")).not.toBeChecked();
+    expect(screen.getByLabelText("Groups for Gamma")).toHaveValue("");
+    expect(screen.getByLabelText("Groups for Delta")).toHaveValue(
+      "Faculty; Staff",
+    );
+    expect(
+      screen.getByLabelText("Groups for Delta"),
+    ).toHaveAccessibleDescription("Separate names with ; or type ALL");
+    expect(screen.getByLabelText("Roster summary")).toHaveTextContent(
+      "2 groups",
+    );
     const table = screen.getByRole("region", { name: "Roster participants" });
     expect(within(table).getByText("Self-managed")).toBeInTheDocument();
     expect(
@@ -670,7 +697,7 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
     expect(fetchRoster).toHaveBeenCalledTimes(1);
     expect(weight).toHaveValue(0.25);
     expect(weight).toBeDisabled();
-    expect(screen.getByLabelText("Group for Temp Person")).toBeDisabled();
+    expect(screen.getByLabelText("Groups for Temp Person")).toBeDisabled();
     expect(screen.getByLabelText("Include Temp Person")).toBeDisabled();
     expect(screen.getByLabelText("Select Temp Person")).toBeEnabled();
     expect(screen.getByRole("button", { name: "Edit schedule" })).toBeEnabled();
@@ -691,7 +718,7 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
       0.8,
     );
     expect(screen.getByLabelText("Weight for Temp Person")).toBeEnabled();
-    expect(screen.getByLabelText("Group for Temp Person")).toBeEnabled();
+    expect(screen.getByLabelText("Groups for Temp Person")).toBeEnabled();
     expect(screen.getByLabelText("Include Temp Person")).not.toBeChecked();
     expect(screen.getByLabelText("Include Temp Person")).toBeEnabled();
 
@@ -861,7 +888,7 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
     ).not.toBeInTheDocument();
     expect(screen.getByLabelText("Weight for Temp Person")).toHaveValue(0.8);
     expect(screen.getByLabelText("Weight for Temp Person")).toBeEnabled();
-    expect(screen.getByLabelText("Group for Temp Person")).toBeEnabled();
+    expect(screen.getByLabelText("Groups for Temp Person")).toBeEnabled();
     expect(screen.getByLabelText("Include Temp Person")).toBeEnabled();
 
     // The next patch sends the refreshed version, not the one that conflicted.
@@ -1017,15 +1044,35 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
 });
 
 describe("RosterPanel groups", () => {
+  const facultyGroup = { id: 11, name: "Faculty", count: 2, weight: 1 };
+  const ungrouped = { id: null, name: "", count: 1, weight: null };
   const stats = {
     total: 3,
     submitted: 1,
     notSubmitted: 2,
-    groups: [
-      { name: "Faculty", count: 2, weight: 1 },
-      { name: "", count: 1, weight: null },
-    ],
+    groups: [facultyGroup, ungrouped],
   };
+  // What the roster and the group endpoints return once Faculty has been
+  // renamed to Teachers.
+  const teachersGroup = { ...facultyGroup, name: "Teachers" };
+  const renamedRoster = rosterResponse(
+    [
+      participant({ id: "p-1", name: "Ada", group: "Teachers" }),
+      participant({ id: "p-2", name: "Ben", group: "Teachers" }),
+      participant({ id: "p-3", name: "Cara", group: "", weight: 0.5 }),
+    ],
+    { stats: { ...stats, groups: [teachersGroup, ungrouped] } },
+  );
+  const renamedResponse = {
+    group: teachersGroup,
+    groups: [teachersGroup, ungrouped],
+  };
+
+  async function openBulk() {
+    const bulk = await screen.findByLabelText("Bulk roster actions");
+    fireEvent.click(within(bulk).getByText("Bulk actions"));
+    return bulk;
+  }
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -1047,7 +1094,8 @@ describe("RosterPanel groups", () => {
     patchRosterBulk.mockResolvedValue({ updatedCount: 2, resultsRevision: 9 });
   });
 
-  test("sets a group weight and renames a group through bulk patches", async () => {
+  test("sets a group weight through a bulk patch and renames a group through its endpoint", async () => {
+    renameRosterGroup.mockResolvedValue(renamedResponse);
     const onResultsInvalidated = jest.fn();
     await renderPanel({ onResultsInvalidated });
     await screen.findByText("Ada");
@@ -1058,10 +1106,10 @@ describe("RosterPanel groups", () => {
     expect(groupsRegion).toHaveTextContent("Faculty");
     expect(groupsRegion).toHaveTextContent("2 people");
     // Existing names complete the per-person group inputs.
-    expect(screen.getByLabelText("Group for Ada")).toHaveAttribute("list");
+    expect(screen.getByLabelText("Groups for Ada")).toHaveAttribute("list");
     expect(
       document.querySelector(
-        `#${CSS.escape(screen.getByLabelText("Group for Ada").getAttribute("list"))} option[value="Faculty"]`,
+        `#${CSS.escape(screen.getByLabelText("Groups for Ada").getAttribute("list"))} option[value="Faculty"]`,
       ),
     ).not.toBeNull();
 
@@ -1089,75 +1137,165 @@ describe("RosterPanel groups", () => {
     fireEvent.change(screen.getByLabelText("New name for group Faculty"), {
       target: { value: "Teachers" },
     });
+    fetchRoster.mockResolvedValue(renamedRoster);
     await userEvent.click(screen.getByRole("button", { name: "Save name" }));
     await waitFor(() =>
-      expect(patchRosterBulk).toHaveBeenLastCalledWith(
+      expect(renameRosterGroup).toHaveBeenCalledWith(
         "ROSTER1",
-        {
-          group: "Faculty",
-          updates: { group: "Teachers" },
-          idempotencyKey: "group-key",
-        },
+        11,
+        { name: "Teachers" },
         "token",
       ),
     );
     expect(await screen.findByRole("status")).toHaveTextContent(
-      "Renamed Faculty to Teachers for 2 people.",
+      "Renamed Faculty to Teachers.",
+    );
+    // The recounted groups arrive with the response, and the rows reload so
+    // their cell strings pick up the new spelling.
+    expect(
+      await screen.findByLabelText("Weight for group Teachers"),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(3));
+    expect(fetchRoster).toHaveBeenLastCalledWith(
+      "ROSTER1",
+      expect.objectContaining({ group: "" }),
+      "token",
+    );
+    expect(await screen.findByLabelText("Groups for Ada")).toHaveValue(
+      "Teachers",
     );
   });
 
-  test("moves selected people, creates a group from them, and filters by group", async () => {
+  test("keeps the group filter on a renamed group and reports rename failures", async () => {
+    renameRosterGroup
+      .mockRejectedValueOnce(
+        Object.assign(new Error("A group named Teachers already exists."), {
+          status: 409,
+        }),
+      )
+      .mockRejectedValueOnce(new Error(""))
+      .mockResolvedValueOnce(renamedResponse);
     await renderPanel();
     await screen.findByText("Ada");
-    fireEvent.click(screen.getByLabelText("Select Cara"));
     await userEvent.click(
-      screen.getByRole("button", { name: "Move selected here" }),
+      screen.getAllByRole("button", { name: "Show people" })[0],
     );
+    await waitFor(() =>
+      expect(screen.getByLabelText("Filter by group")).toHaveValue("Faculty"),
+    );
+    await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(2));
+
+    await userEvent.click(screen.getByRole("button", { name: "Rename" }));
+    fireEvent.change(screen.getByLabelText("New name for group Faculty"), {
+      target: { value: "Teachers" },
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Save name" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "A group named Teachers already exists.",
+    );
+    expect(screen.getByLabelText("Filter by group")).toHaveValue("Faculty");
+
+    await userEvent.click(screen.getByRole("button", { name: "Save name" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Unable to rename Faculty.",
+    );
+
+    fetchRoster.mockResolvedValue(renamedRoster);
+    await userEvent.click(screen.getByRole("button", { name: "Save name" }));
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Renamed Faculty to Teachers.",
+    );
+    // The filter follows the rename, which reloads the roster on its own.
+    await waitFor(() =>
+      expect(fetchRoster).toHaveBeenLastCalledWith(
+        "ROSTER1",
+        expect.objectContaining({ group: "Teachers", page: 1 }),
+        "token",
+      ),
+    );
+    expect(fetchRoster).toHaveBeenCalledTimes(3);
+    expect(screen.getByLabelText("Filter by group")).toHaveValue("Teachers");
+  });
+
+  test("adds and removes the selected people, creates a group, and ungroups", async () => {
+    createRosterGroup.mockResolvedValue({
+      group: { id: 12, name: "Board", count: 0, weight: null },
+      groups: [
+        { id: 12, name: "Board", count: 0, weight: null },
+        facultyGroup,
+        { id: null, name: "", count: 1, weight: null },
+      ],
+    });
+    await renderPanel();
+    await screen.findByText("Ada");
+    expect(screen.getByRole("button", { name: "Add selected" })).toBeDisabled();
+    fireEvent.click(screen.getByLabelText("Select Cara"));
+    await userEvent.click(screen.getByRole("button", { name: "Add selected" }));
     await waitFor(() =>
       expect(patchRosterBulk).toHaveBeenCalledWith(
         "ROSTER1",
         {
           participantIds: ["p-3"],
-          updates: { group: "Faculty" },
+          updates: { addGroups: ["Faculty"] },
           idempotencyKey: "group-key",
         },
         "token",
       ),
     );
     expect(await screen.findByRole("status")).toHaveTextContent(
-      "Moved 2 people to Faculty.",
+      "Added 2 people to Faculty.",
     );
-    // The selection is spent once the move succeeds.
-    await waitFor(() =>
-      expect(screen.getByLabelText("Select Cara")).not.toBeChecked(),
-    );
+    await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(2));
+    // Adding keeps the selection so the same people can go into another
+    // group next.
+    expect(screen.getByLabelText("Select Cara")).toBeChecked();
 
-    fireEvent.click(screen.getByLabelText("Select Ada"));
-    fireEvent.click(screen.getByLabelText("Select Ben"));
-    await userEvent.click(screen.getByRole("button", { name: "New group" }));
-    fireEvent.change(screen.getByLabelText("New group name"), {
-      target: { value: "Board" },
-    });
-    fireEvent.change(screen.getByLabelText("New group weight"), {
-      target: { value: "0.75" },
-    });
-    await userEvent.click(screen.getByRole("button", { name: "Create group" }));
+    patchRosterBulk.mockResolvedValueOnce({ updatedCount: 1 });
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove selected" }),
+    );
     await waitFor(() =>
       expect(patchRosterBulk).toHaveBeenLastCalledWith(
         "ROSTER1",
         {
-          participantIds: ["p-1", "p-2"],
-          updates: { group: "Board", weight: 0.75 },
+          participantIds: ["p-3"],
+          updates: { removeGroups: ["Faculty"] },
           idempotencyKey: "group-key",
         },
         "token",
       ),
     );
     expect(await screen.findByRole("status")).toHaveTextContent(
-      "Created Board with 2 people at weight 0.75.",
+      "Removed 1 person from Faculty.",
     );
+    await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(3));
 
-    fireEvent.click(screen.getByLabelText("Select Ada"));
+    // A group starts empty: no selection or weight is needed.
+    await userEvent.click(screen.getByRole("button", { name: "New group" }));
+    fireEvent.change(screen.getByLabelText("New group name"), {
+      target: { value: " Board " },
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Create group" }));
+    await waitFor(() =>
+      expect(createRosterGroup).toHaveBeenCalledWith(
+        "ROSTER1",
+        { name: "Board" },
+        "token",
+      ),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Created Board.",
+    );
+    // The response carried the recounted groups, so no reload was needed.
+    expect(
+      await screen.findByLabelText("Weight for group Board"),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Roster summary")).toHaveTextContent(
+      "2 groups",
+    );
+    expect(fetchRoster).toHaveBeenCalledTimes(3);
+    expect(screen.getByLabelText("Select Cara")).toBeChecked();
+
     await userEvent.click(
       screen.getByRole("button", { name: "Ungroup selected" }),
     );
@@ -1165,7 +1303,7 @@ describe("RosterPanel groups", () => {
       expect(patchRosterBulk).toHaveBeenLastCalledWith(
         "ROSTER1",
         {
-          participantIds: ["p-1"],
+          participantIds: ["p-3"],
           updates: { group: "" },
           idempotencyKey: "group-key",
         },
@@ -1175,7 +1313,150 @@ describe("RosterPanel groups", () => {
     expect(await screen.findByRole("status")).toHaveTextContent(
       "Removed 2 people from their groups.",
     );
+    // Ungrouping spends the selection.
+    await waitFor(() =>
+      expect(screen.getByLabelText("Select Cara")).not.toBeChecked(),
+    );
+  });
 
+  test("reloads the roster when a created group carries no stats and reports failures", async () => {
+    createRosterGroup
+      .mockRejectedValueOnce(
+        Object.assign(new Error("A group named Faculty already exists."), {
+          status: 409,
+        }),
+      )
+      .mockRejectedValueOnce(new Error(""))
+      .mockResolvedValueOnce({ group: { id: 13, name: "Staff" } });
+    await renderPanel();
+    await screen.findByText("Ada");
+    await userEvent.click(screen.getByRole("button", { name: "New group" }));
+    fireEvent.change(screen.getByLabelText("New group name"), {
+      target: { value: "Staff" },
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Create group" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "A group named Faculty already exists.",
+    );
+    expect(fetchRoster).toHaveBeenCalledTimes(1);
+
+    await userEvent.click(screen.getByRole("button", { name: "Create group" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Unable to create Staff.",
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Create group" }));
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Created Staff.",
+    );
+    await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(2));
+  });
+
+  test("deletes a group and reports delete failures", async () => {
+    deleteRosterGroup
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Group not found"), { status: 404 }),
+      )
+      .mockRejectedValueOnce(new Error(""))
+      .mockResolvedValue({
+        groups: [{ id: null, name: "", count: 3, weight: null }],
+      });
+    await renderPanel();
+    await screen.findByText("Ada");
+    fetchRoster.mockResolvedValue(
+      rosterResponse(
+        [
+          participant({ id: "p-1", name: "Ada", group: "" }),
+          participant({ id: "p-2", name: "Ben", group: "" }),
+          participant({ id: "p-3", name: "Cara", group: "", weight: 0.5 }),
+        ],
+        {
+          stats: {
+            ...stats,
+            groups: [{ id: null, name: "", count: 3, weight: null }],
+          },
+        },
+      ),
+    );
+
+    // Declining the confirmation sends nothing.
+    window.confirm.mockReturnValueOnce(false);
+    await userEvent.click(screen.getByRole("button", { name: "Delete group" }));
+    expect(window.confirm).toHaveBeenCalledWith(
+      "Delete group Faculty? People stay on the roster.",
+    );
+    expect(deleteRosterGroup).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete group" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Group not found",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Delete group" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Unable to delete Faculty.",
+    );
+    expect(fetchRoster).toHaveBeenCalledTimes(1);
+
+    // Deleting a group that is not being shown reloads the rows in place.
+    await userEvent.click(screen.getByRole("button", { name: "Delete group" }));
+    await waitFor(() =>
+      expect(deleteRosterGroup).toHaveBeenCalledWith("ROSTER1", 11, "token"),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Deleted Faculty.",
+    );
+    await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(2));
+    expect(fetchRoster).toHaveBeenLastCalledWith(
+      "ROSTER1",
+      expect.objectContaining({ group: "" }),
+      "token",
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByLabelText("Weight for group Faculty"),
+      ).not.toBeInTheDocument(),
+    );
+    expect(screen.getByLabelText("Groups for Ada")).toHaveValue("");
+    expect(screen.getByText(/No groups yet/)).toBeInTheDocument();
+  });
+
+  test("clears the group filter when the shown group is deleted", async () => {
+    deleteRosterGroup.mockResolvedValue({});
+    await renderPanel();
+    await screen.findByText("Ada");
+    await userEvent.click(
+      screen.getAllByRole("button", { name: "Show people" })[0],
+    );
+    await waitFor(() =>
+      expect(fetchRoster).toHaveBeenLastCalledWith(
+        "ROSTER1",
+        expect.objectContaining({ group: "Faculty", page: 1 }),
+        "token",
+      ),
+    );
+    expect(screen.getByLabelText("Filter by group")).toHaveValue("Faculty");
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete group" }));
+    await waitFor(() =>
+      expect(deleteRosterGroup).toHaveBeenCalledWith("ROSTER1", 11, "token"),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Deleted Faculty.",
+    );
+    await waitFor(() =>
+      expect(fetchRoster).toHaveBeenLastCalledWith(
+        "ROSTER1",
+        expect.objectContaining({ group: "", page: 1 }),
+        "token",
+      ),
+    );
+    expect(fetchRoster).toHaveBeenCalledTimes(3);
+    expect(screen.getByLabelText("Filter by group")).toHaveValue("");
+  });
+
+  test("filters by group from the group table", async () => {
+    await renderPanel();
+    await screen.findByText("Ada");
     await userEvent.click(
       screen.getAllByRole("button", { name: "Show people" })[0],
     );
@@ -1195,12 +1476,86 @@ describe("RosterPanel groups", () => {
     );
   });
 
+  test("edits a person's memberships and every-group flag from the row", async () => {
+    patchRosterParticipant
+      .mockResolvedValueOnce({
+        participant: participant({
+          id: "p-1",
+          name: "Ada",
+          group: "Board; Faculty",
+          groups: [
+            { id: 12, name: "Board" },
+            { id: 11, name: "Faculty" },
+          ],
+          version: 5,
+        }),
+        groups: [
+          { id: 12, name: "Board", count: 1, weight: 1 },
+          facultyGroup,
+          { id: null, name: "", count: 1, weight: null },
+        ],
+      })
+      .mockResolvedValueOnce({
+        participant: participant({
+          id: "p-1",
+          name: "Ada",
+          group: "ALL; Board; Faculty",
+          allGroups: true,
+          version: 6,
+        }),
+      });
+    await renderPanel();
+    const groupsInput = await screen.findByLabelText("Groups for Ada");
+    expect(groupsInput).toHaveAccessibleDescription(
+      "Separate names with ; or type ALL",
+    );
+    fireEvent.change(groupsInput, { target: { value: "Faculty; Board" } });
+    fireEvent.blur(groupsInput);
+    await waitFor(() =>
+      expect(patchRosterParticipant).toHaveBeenCalledWith(
+        "ROSTER1",
+        "p-1",
+        { group: "Faculty; Board", expectedVersion: 4 },
+        "token",
+      ),
+    );
+    // The server-normalized spelling replaces the draft and the group table
+    // picks up the new group without a reload.
+    await waitFor(() =>
+      expect(screen.getByLabelText("Groups for Ada")).toHaveValue(
+        "Board; Faculty",
+      ),
+    );
+    expect(screen.getByLabelText("Weight for group Board")).toBeInTheDocument();
+    expect(fetchRoster).toHaveBeenCalledTimes(1);
+
+    expect(screen.getByLabelText("All groups for Ada")).not.toBeChecked();
+    fireEvent.click(screen.getByLabelText("All groups for Ada"));
+    await waitFor(() =>
+      expect(patchRosterParticipant).toHaveBeenLastCalledWith(
+        "ROSTER1",
+        "p-1",
+        { allGroups: true, expectedVersion: 5 },
+        "token",
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText("All groups for Ada")).toBeChecked(),
+    );
+    expect(screen.getByLabelText("Groups for Ada")).toHaveValue(
+      "ALL; Board; Faculty",
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Ada was updated.",
+    );
+  });
+
   test("applies the group stats returned by a per-person patch", async () => {
     patchRosterParticipant.mockResolvedValueOnce({
       participant: participant({ id: "p-1", name: "Ada", weight: 0.5 }),
       groups: [
-        { name: "Faculty", count: 2, weight: null },
-        { name: "", count: 1, weight: null },
+        { id: 11, name: "Faculty", count: 2, weight: null },
+        { id: null, name: "", count: 1, weight: null },
       ],
     });
     await renderPanel();
@@ -1239,33 +1594,145 @@ describe("RosterPanel groups", () => {
     );
   });
 
-  test("moves people with the bulk action and locks groups while responses are closed", async () => {
-    const { unmount } = await renderPanel();
-    const bulk = await screen.findByLabelText("Bulk roster actions");
-    fireEvent.click(within(bulk).getByText("Bulk actions"));
-    expect(bulk).toHaveTextContent(
-      "Move to a group, change weight or inclusion",
-    );
+  test("adds, removes, replaces and clears groups with the bulk action", async () => {
+    await renderPanel();
+    const bulk = await openBulk();
+    expect(bulk).toHaveTextContent("Change groups, weight or inclusion");
+    const action = within(bulk).getByLabelText("Bulk group action");
+    const target = within(bulk).getByLabelText("Bulk target group");
+    const everyGroup = within(bulk).getByLabelText("Bulk every group");
+    expect(action).toBeDisabled();
+    expect(target).toBeDisabled();
+    expect(everyGroup).toBeDisabled();
+    fireEvent.click(within(bulk).getByLabelText("Apply bulk groups"));
+    expect(action).toBeEnabled();
+    expect(target).toBeEnabled();
+    expect(everyGroup).toBeEnabled();
+    // Only named groups are offered as targets.
+    expect(
+      within(target)
+        .getAllByRole("option")
+        .map((option) => option.textContent),
+    ).toEqual(["Choose group", "Faculty"]);
+
+    // A target is required for everything but "clear".
     fireEvent.click(screen.getByLabelText("Select Ada"));
-    fireEvent.click(within(bulk).getByLabelText("Apply bulk group"));
-    fireEvent.change(within(bulk).getByLabelText("Bulk group name"), {
-      target: { value: " Staff " },
-    });
+    fireEvent.click(within(bulk).getByRole("button", { name: "Apply update" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Choose a group for this bulk update.",
+    );
+    expect(patchRosterBulk).not.toHaveBeenCalled();
+
+    fireEvent.change(target, { target: { value: "Faculty" } });
     fireEvent.click(within(bulk).getByRole("button", { name: "Apply update" }));
     await waitFor(() =>
-      expect(patchRosterBulk).toHaveBeenCalledWith(
+      expect(patchRosterBulk).toHaveBeenLastCalledWith(
         "ROSTER1",
         {
           participantIds: ["p-1"],
-          updates: { group: "Staff" },
+          updates: { addGroups: ["Faculty"] },
           idempotencyKey: "group-key",
         },
         "token",
       ),
     );
-    unmount();
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Updated 2 roster entries.",
+    );
+    await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(2));
 
-    await renderPanel({ event: { ...event, status: "closed" } });
+    fireEvent.click(screen.getByLabelText("Select Ada"));
+    fireEvent.change(action, { target: { value: "remove" } });
+    fireEvent.click(within(bulk).getByRole("button", { name: "Apply update" }));
+    await waitFor(() =>
+      expect(patchRosterBulk).toHaveBeenLastCalledWith(
+        "ROSTER1",
+        {
+          participantIds: ["p-1"],
+          updates: { removeGroups: ["Faculty"] },
+          idempotencyKey: "group-key",
+        },
+        "token",
+      ),
+    );
+    await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(3));
+
+    fireEvent.click(screen.getByLabelText("Select Ada"));
+    fireEvent.change(action, { target: { value: "replace" } });
+    fireEvent.click(everyGroup);
+    fireEvent.click(within(bulk).getByRole("button", { name: "Apply update" }));
+    await waitFor(() =>
+      expect(patchRosterBulk).toHaveBeenLastCalledWith(
+        "ROSTER1",
+        {
+          participantIds: ["p-1"],
+          updates: { group: "Faculty", allGroups: true },
+          idempotencyKey: "group-key",
+        },
+        "token",
+      ),
+    );
+    await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(4));
+
+    // "Clear" needs no target and disables the picker; with "Every group"
+    // it drops the memberships and then sets the flag.
+    fireEvent.click(screen.getByLabelText("Select Ada"));
+    fireEvent.change(action, { target: { value: "clear" } });
+    expect(target).toBeDisabled();
+    fireEvent.click(within(bulk).getByRole("button", { name: "Apply update" }));
+    await waitFor(() =>
+      expect(patchRosterBulk).toHaveBeenLastCalledWith(
+        "ROSTER1",
+        {
+          participantIds: ["p-1"],
+          updates: { group: "", allGroups: true },
+          idempotencyKey: "group-key",
+        },
+        "token",
+      ),
+    );
+    await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(5));
+
+    fireEvent.click(screen.getByLabelText("Select Ada"));
+    fireEvent.click(everyGroup);
+    fireEvent.click(within(bulk).getByLabelText("Apply bulk weight"));
+    fireEvent.change(within(bulk).getByLabelText("Bulk weight"), {
+      target: { value: "0.5" },
+    });
+    fireEvent.click(within(bulk).getByRole("button", { name: "Apply update" }));
+    await waitFor(() =>
+      expect(patchRosterBulk).toHaveBeenLastCalledWith(
+        "ROSTER1",
+        {
+          participantIds: ["p-1"],
+          updates: { group: "", weight: 0.5 },
+          idempotencyKey: "group-key",
+        },
+        "token",
+      ),
+    );
+  });
+
+  test("resets the bulk group controls and locks groups while responses are closed", async () => {
+    const props = {
+      event,
+      setEvent: jest.fn(),
+      getToken: jest.fn().mockResolvedValue("token"),
+      onResultsInvalidated: jest.fn(),
+      onDeliveryRequestChange: jest.fn(),
+    };
+    const { rerender } = render(<RosterPanel {...props} />);
+    const bulk = await openBulk();
+    fireEvent.click(within(bulk).getByLabelText("Apply bulk groups"));
+    fireEvent.change(within(bulk).getByLabelText("Bulk group action"), {
+      target: { value: "replace" },
+    });
+    fireEvent.change(within(bulk).getByLabelText("Bulk target group"), {
+      target: { value: "Faculty" },
+    });
+    fireEvent.click(within(bulk).getByLabelText("Bulk every group"));
+
+    rerender(<RosterPanel {...props} event={{ ...event, status: "closed" }} />);
     expect(
       await screen.findByLabelText("Weight for group Faculty"),
     ).toBeDisabled();
@@ -1273,7 +1740,49 @@ describe("RosterPanel groups", () => {
       screen.queryByRole("button", { name: "New group" }),
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "Move selected here" }),
+      screen.queryByRole("button", { name: "Add selected" }),
     ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Delete group" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByLabelText("All groups for Ada")).toBeDisabled();
+    expect(
+      screen.queryByLabelText("Bulk roster actions"),
+    ).not.toBeInTheDocument();
+
+    // Reactivating brings the bulk form back at its defaults.
+    rerender(<RosterPanel {...props} event={{ ...event, status: "active" }} />);
+    const reopened = await openBulk();
+    expect(
+      within(reopened).getByLabelText("Apply bulk groups"),
+    ).not.toBeChecked();
+    expect(within(reopened).getByLabelText("Bulk group action")).toHaveValue(
+      "add",
+    );
+    expect(within(reopened).getByLabelText("Bulk target group")).toHaveValue(
+      "",
+    );
+    expect(
+      within(reopened).getByLabelText("Bulk every group"),
+    ).not.toBeChecked();
+  });
+
+  test("offers the group section on a roster without groups", async () => {
+    fetchRoster.mockResolvedValue(
+      rosterResponse(
+        [participant({ id: "p-1", name: "Ada", group: "", allGroups: true })],
+        {
+          stats: { total: 1, submitted: 0, notSubmitted: 1, groups: [] },
+        },
+      ),
+    );
+    await renderPanel();
+    await screen.findByText("Ada");
+    expect(screen.getByRole("button", { name: "New group" })).toBeEnabled();
+    expect(screen.getByText(/No groups yet/)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("region", { name: "Roster groups" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByLabelText("All groups for Ada")).toBeChecked();
   });
 });

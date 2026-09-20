@@ -85,12 +85,16 @@ jest.mock("@/lib/api/roster", () => ({
   cancelRosterImport: jest.fn(),
   commitRosterImport: jest.fn(),
   configureRosterImport: jest.fn(),
+  createRosterGroup: jest.fn(),
   createRosterImport: jest.fn(),
+  deleteRosterGroup: jest.fn(),
   fetchRoster: jest.fn(),
+  fetchRosterGroups: jest.fn(),
   fetchRosterImportRows: jest.fn(),
   fetchRosterSchedule: jest.fn(),
   patchRosterBulk: jest.fn(),
   patchRosterParticipant: jest.fn(),
+  renameRosterGroup: jest.fn(),
 }));
 
 import { useAuth } from "@/components/auth/AuthContext";
@@ -1018,7 +1022,8 @@ describe("scaled organizer workspace", () => {
     expect(screen.getByLabelText("Filter by group")).toBeEnabled();
     expect(screen.getByLabelText("Select all on page")).toBeDisabled();
     expect(screen.getByLabelText("Select Ada Faculty")).toBeDisabled();
-    expect(screen.getByLabelText("Group for Ada Faculty")).toBeDisabled();
+    expect(screen.getByLabelText("Groups for Ada Faculty")).toBeDisabled();
+    expect(screen.getByLabelText("All groups for Ada Faculty")).toBeDisabled();
     expect(screen.getByLabelText("Weight for Ada Faculty")).toBeDisabled();
     expect(screen.getByLabelText("Include Ada Faculty")).toBeDisabled();
     expect(
@@ -1377,7 +1382,7 @@ describe("scaled organizer workspace", () => {
       Object.assign(new Error("Group is not allowed"), { status: 400 }),
     );
     renderView();
-    const group = await screen.findByLabelText("Group for Ada Faculty");
+    const group = await screen.findByLabelText("Groups for Ada Faculty");
     fireEvent.change(group, { target: { value: "Invalid group" } });
     expect(group).toHaveValue("Invalid group");
     fireEvent.blur(group);
@@ -1405,7 +1410,7 @@ describe("scaled organizer workspace", () => {
         resultsRevision: 5,
       });
     renderView();
-    const group = await screen.findByLabelText("Group for Ada Faculty");
+    const group = await screen.findByLabelText("Groups for Ada Faculty");
     fireEvent.change(group, { target: { value: "Research" } });
     fireEvent.blur(group);
     await waitFor(() =>

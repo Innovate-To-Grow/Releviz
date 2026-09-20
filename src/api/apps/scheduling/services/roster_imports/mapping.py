@@ -3,6 +3,8 @@
 import math
 from collections import defaultdict
 
+from apps.scheduling.services.roster_groups import format_group_cell, parse_group_cell
+
 from .errors import RosterImportError
 from .limits import MAX_COLUMNS
 
@@ -90,9 +92,11 @@ def parse_defaults(value) -> dict:
         return {"group": "", "weight": 1.0, "included": True}
     if not isinstance(value, dict):
         raise RosterImportError("defaults must be an object.")
-    group_name = str(value.get("group", value.get("groupName", "")) or "").strip()
-    if len(group_name) > 100:
-        raise RosterImportError("defaults.group is too long (max 100).")
+    raw_group = value.get("group", value.get("groupName", "")) or ""
+    try:
+        group_name = format_group_cell(*parse_group_cell(raw_group))
+    except RosterImportError as exc:
+        raise RosterImportError(f"defaults.{exc}") from exc
     try:
         weight = float(value.get("weight", 1.0))
     except (TypeError, ValueError) as exc:

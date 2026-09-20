@@ -32,7 +32,7 @@ class RosterView(PrivateAPIView):
             queryset = apply_roster_filters(roster, request.query_params)
         except RosterImportError as exc:
             return error_response(exc)
-        stats = roster_stats(queryset, groups_queryset=roster)
+        stats = roster_stats(event, queryset, groups_queryset=roster)
         offset = (page - 1) * page_size
         participants = list(
             queryset.order_by("sort_order", "created_at")[offset : offset + page_size]

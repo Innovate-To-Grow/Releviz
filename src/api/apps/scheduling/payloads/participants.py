@@ -1,6 +1,25 @@
 """API payloads for participants and their weights."""
 
+from apps.scheduling.services.roster_groups import format_group_cell
+
 _INVITATION_NOT_PROVIDED = object()
+
+
+def participant_memberships(participant) -> dict:
+    """The group keys shared by every participant payload.
+
+    ``group`` is the cell form (``"ALL; A; B"``, ``""`` when none) so a single
+    group still round-trips as its plain name; ``groups`` lists the explicit
+    memberships in name order. Reads ``participant.groups`` (one query unless
+    prefetched).
+    """
+
+    groups = list(participant.groups.all())
+    return {
+        "group": format_group_cell(participant.all_groups, [group.name for group in groups]),
+        "groups": [{"id": group.pk, "name": group.name} for group in groups],
+        "allGroups": participant.all_groups,
+    }
 
 
 def api_participant(
@@ -9,6 +28,7 @@ def api_participant(
     organizer_private=False,
     invitation=_INVITATION_NOT_PROVIDED,
 ) -> dict:
+    memberships = participant_memberships(participant)
     data = {
         "id": str(participant.member_id),
         "user_id": str(participant.member_id),
@@ -18,7 +38,9 @@ def api_participant(
         "availabilityVirtual": participant.availability_virtual,
         "submitted": 1 if participant.submitted else 0,
         "hidden": 1 if participant.hidden else 0,
-        "group_name": participant.group_name,
+        "group_name": memberships["group"] or None,
+        "groups": memberships["groups"],
+        "allGroups": memberships["allGroups"],
         "sort_order": participant.sort_order,
         "version": participant.version,
         "created_at": participant.created_at.isoformat(),

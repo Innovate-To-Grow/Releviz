@@ -6,10 +6,15 @@ import uuid
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.db.models import Q
+from django.utils import timezone
 from rest_framework.response import Response
 
 from apps.scheduling.models import Participant, RosterBulkUpdateReceipt, Weight
+from apps.scheduling.services.roster_groups import (
+    parse_group_cell,
+    update_memberships,
+    validate_group_name,
+)
 from apps.scheduling.services.roster_imports import MAX_ROSTER_ROWS, RosterImportError
 
 from ..helpers import PrivateAPIView
@@ -22,6 +27,13 @@ from .helpers import (
     roster_write_error,
 )
 from .queries import apply_roster_filters, boolean_query, roster_queryset
+
+
+def _group_name_list(updates, key) -> list[str]:
+    value = updates.get(key)
+    if not isinstance(value, list) or not all(isinstance(name, str) for name in value):
+        raise RosterImportError(f"{key} must be an array of group names.")
+    return value
 
 
 def _bulk_selector(queryset, data):
@@ -39,10 +51,9 @@ def _bulk_selector(queryset, data):
     if "group" in data:
         has_selector = True
         group_name = str(data.get("group") or "").strip()
-        if group_name:
-            queryset = queryset.filter(group_name__iexact=group_name)
-        else:
-            queryset = queryset.filter(Q(group_name__isnull=True) | Q(group_name=""))
+        # A name selects its explicit members plus everyone flagged for all
+        # groups; a blank name selects the people in no group at all.
+        queryset = apply_roster_filters(queryset, {"group": group_name or "__ungrouped__"})
     if "filter" in data:
         has_selector = True
         filter_data = data.get("filter")
@@ -129,25 +140,52 @@ class RosterBulkView(PrivateAPIView):
                 updates = request.data.get("updates")
                 if not isinstance(updates, dict) or not updates:
                     raise RosterImportError("updates must be a non-empty object.")
-                allowed_updates = {"group", "groupName", "weight", "included"}
+                allowed_updates = {
+                    "group",
+                    "groupName",
+                    "addGroups",
+                    "removeGroups",
+                    "allGroups",
+                    "weight",
+                    "included",
+                }
                 unknown = set(updates) - allowed_updates
                 if unknown:
                     raise RosterImportError(f"Unknown bulk update field: {sorted(unknown)[0]}.")
 
                 selected = _bulk_selector(roster_queryset(event), request.data)
-                selected_ids = list(selected.values_list("pk", flat=True))
+                # The group filter joins memberships, so a person can match twice.
+                selected_ids = set(selected.values_list("pk", flat=True))
                 participants = list(
                     Participant.objects.select_for_update()
                     .filter(event=event, pk__in=selected_ids)
                     .order_by("pk")
                 )
-                group_supplied = "group" in updates or "groupName" in updates
-                new_group = None
-                if group_supplied:
-                    group_name = str(updates.get("group", updates.get("groupName")) or "").strip()
-                    if len(group_name) > 100:
-                        raise RosterImportError("group is too long (max 100).")
-                    new_group = group_name or None
+                # Validate every update before the first write. A cell replaces
+                # the memberships and the flag (blank clears both); add/remove
+                # adjust them; an explicit allGroups wins over the cell's flag.
+                replace = None
+                if "group" in updates or "groupName" in updates:
+                    replace = parse_group_cell(updates.get("group", updates.get("groupName")))
+                add_names = ()
+                if "addGroups" in updates:
+                    add_names = [
+                        validate_group_name(name) for name in _group_name_list(updates, "addGroups")
+                    ]
+                remove_names = ()
+                if "removeGroups" in updates:
+                    remove_names = _group_name_list(updates, "removeGroups")
+                all_groups_value = (
+                    boolean_query(updates.get("allGroups"), "allGroups")
+                    if "allGroups" in updates
+                    else None
+                )
+                group_supplied = (
+                    replace is not None
+                    or "addGroups" in updates
+                    or "removeGroups" in updates
+                    or all_groups_value is not None
+                )
                 weight_supplied = "weight" in updates
                 included_supplied = "included" in updates
                 new_weight = parse_weight(updates.get("weight")) if weight_supplied else None
@@ -164,15 +202,28 @@ class RosterBulkView(PrivateAPIView):
                         participant_id__in=selected_ids,
                     )
                 }
+                # One membership pass for the whole selection; the service
+                # persists ``all_groups`` and updates the instances in memory.
+                membership_changed = (
+                    update_memberships(
+                        event=event,
+                        participants=participants,
+                        replace=replace,
+                        add=add_names,
+                        remove=remove_names,
+                        all_groups=all_groups_value,
+                    )
+                    if group_supplied
+                    else set()
+                )
                 changed_participants = []
                 new_weights = []
                 changed_weights = []
+                # Results never read groups, so only weight edits dirty them.
                 results_changed = False
+                now = timezone.now()
                 for participant in participants:
-                    participant_changed = False
-                    if group_supplied and participant.group_name != new_group:
-                        participant.group_name = new_group
-                        participant_changed = True
+                    participant_changed = participant.pk in membership_changed
                     if weight_supplied or included_supplied:
                         weight = weights.get(participant.pk)
                         weight_is_new = weight is None
@@ -194,12 +245,14 @@ class RosterBulkView(PrivateAPIView):
                             participant_changed = True
                     if participant_changed:
                         participant.version += 1
+                        # bulk_update skips auto_now, so stamp the edit by hand.
+                        participant.updated_at = now
                         changed_participants.append(participant)
 
                 if changed_participants:
                     Participant.objects.bulk_update(
                         changed_participants,
-                        ["group_name", "version", "updated_at"],
+                        ["all_groups", "version", "updated_at"],
                     )
                 if new_weights:
                     Weight.objects.bulk_create(new_weights)

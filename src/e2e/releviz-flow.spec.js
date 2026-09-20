@@ -79,7 +79,8 @@ assert isinstance(participant.availability_inperson, list)
 assert isinstance(participant.availability_virtual, list)
 assert len(participant.availability_inperson) == expected_availability_length(event)
 assert len(participant.availability_virtual) == expected_availability_length(event)
-assert participant.group_name == "E2E Group"
+assert list(participant.groups.values_list("name", flat=True)) == ["E2E Group"]
+assert participant.all_groups is False
 assert participant.sort_order == 1
 assert participant.hidden is False
 assert weight.weight == 0.5
@@ -115,6 +116,9 @@ assert registered_invitation.joined_at is not None
 assert registered_invitation.draft_saved_at is not None
 assert registered_invitation.submitted_at is not None
 assert manual_invitation.member_id is not None
+manual_participant = Participant.objects.get(event=event, member_id=manual_invitation.member_id)
+assert sorted(manual_participant.groups.values_list("name", flat=True)) == ["E2E Group", "E2E Second"]
+assert sorted(event.participant_groups.values_list("name", flat=True)) == ["E2E Group", "E2E Second"]
 assert manual_invitation.status == "invited"
 assert manual_invitation.reminder_sent_at is not None
 # Authentication mail is delivered straight by the authn sender and is not
@@ -1406,6 +1410,47 @@ test.describe("Releviz account and scheduling flow", () => {
     // The group weight (0.6) reached everyone in E2E Group; only Pat was
     // changed again afterwards.
     expect(manualRosterParticipant.weight).toBe(0.6);
+
+    // Groups exist on their own: create an empty one from the Groups panel,
+    // then add one selected person to it without leaving E2E Group.
+    await page.getByRole("button", { name: "New group", exact: true }).click();
+    await page.getByLabel("New group name").fill("E2E Second");
+    await page.getByRole("button", { name: "Create group", exact: true }).click();
+    await expect(page.getByText("Created E2E Second.")).toBeVisible();
+    const secondGroupRow = groupsTable.locator(
+      '[data-roster-group="E2E Second"]',
+    );
+    await expect(secondGroupRow).toContainText("0 people");
+    await page.getByLabel("Select Manual Participant").check();
+    await secondGroupRow.getByRole("button", { name: "Add selected" }).click();
+    await expect(page.getByText("Added 1 person to E2E Second.")).toBeVisible();
+    await expect(secondGroupRow).toContainText("1 person");
+    await expect(groupRow).toContainText("2 people");
+    await page.getByLabel("Select Manual Participant").uncheck();
+    const rosterAfterGroups = await apiJson(
+      request,
+      "GET",
+      `/events/roster?code=${eventCode}`,
+      organizerSession.access,
+    );
+    expect(rosterAfterGroups.response.status()).toBe(200);
+    const manualAfterGroups = rosterAfterGroups.payload.participants.find(
+      (participant) => participant.email === manualEmail,
+    );
+    expect(manualAfterGroups.groups.map((group) => group.name)).toEqual([
+      "E2E Group",
+      "E2E Second",
+    ]);
+    expect(manualAfterGroups.group).toBe("E2E Group; E2E Second");
+    expect(
+      rosterAfterGroups.payload.stats.groups.map((group) => [
+        group.name,
+        group.count,
+      ]),
+    ).toEqual([
+      ["E2E Group", 2],
+      ["E2E Second", 1],
+    ]);
 
     const deniedRosterPatch = await apiJson(
       request,
