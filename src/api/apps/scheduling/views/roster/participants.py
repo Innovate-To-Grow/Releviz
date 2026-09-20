@@ -7,7 +7,7 @@ from apps.scheduling.models import Weight
 from apps.scheduling.services.roster_groups import (
     parse_group_cell,
     set_participant_groups,
-    validate_group_name,
+    validate_group_names,
 )
 from apps.scheduling.services.roster_imports import RosterImportError
 
@@ -31,15 +31,7 @@ def _group_name_list(value) -> list[str]:
 
     if not isinstance(value, list) or not all(isinstance(name, str) for name in value):
         raise RosterImportError("groups must be an array of group names.")
-    names = []
-    seen = set()
-    for name in value:
-        normalized = validate_group_name(name)
-        key = normalized.lower()
-        if key not in seen:
-            seen.add(key)
-            names.append(normalized)
-    return names
+    return validate_group_names(value)
 
 
 def _requested_groups(data, participant) -> tuple[bool, list[str]]:

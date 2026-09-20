@@ -623,7 +623,13 @@ const RosterPanel = forwardRef(function RosterPanel(
       );
       return;
     }
-    if (bulkApplyGroups && bulkGroupAction !== "clear" && !bulkGroupTarget) {
+    // The target must be one of the groups on screen: a group renamed or
+    // deleted since it was picked must not be resurrected by this request.
+    if (
+      bulkApplyGroups &&
+      bulkGroupAction !== "clear" &&
+      !namedGroups.some((item) => item.name === bulkGroupTarget)
+    ) {
       setError("Choose a group for this bulk update.");
       return;
     }
@@ -758,6 +764,7 @@ const RosterPanel = forwardRef(function RosterPanel(
         status: `Renamed ${entry.name} to ${nextName}.`,
         fallback: `Unable to rename ${entry.name}.`,
         onSuccess: async () => {
+          if (bulkGroupTarget === entry.name) setBulkGroupTarget(nextName);
           // Changing the filter reloads the roster on its own.
           if (group === entry.name) setGroup(nextName);
           else await loadRoster();
@@ -773,6 +780,7 @@ const RosterPanel = forwardRef(function RosterPanel(
         status: `Deleted ${entry.name}.`,
         fallback: `Unable to delete ${entry.name}.`,
         onSuccess: async () => {
+          if (bulkGroupTarget === entry.name) setBulkGroupTarget("");
           if (group === entry.name) {
             setGroup("");
             setPage(1);

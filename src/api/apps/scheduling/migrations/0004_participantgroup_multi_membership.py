@@ -1,6 +1,17 @@
 import django.db.models.deletion
 import django.db.models.functions.text
-from django.db import migrations, models
+from django.db import IntegrityError, migrations, models, transaction
+from django.db.models import Value
+from django.db.models.functions import Lower
+
+
+def legacy_group_name(value) -> str:
+    """A legacy name in the new grammar: no ``;`` and never the reserved ``ALL``."""
+
+    name = str(value or "").replace(";", ",").strip()
+    if name.upper() == "ALL":
+        name = f"{name} (group)"
+    return name
 
 
 def copy_group_names_to_memberships(apps, schema_editor):
@@ -18,16 +29,27 @@ def copy_group_names_to_memberships(apps, schema_editor):
         .order_by("pk")
     )
     for participant in participants:
-        name = participant.group_name.strip()
+        name = legacy_group_name(participant.group_name)
         if not name:
             continue
         key = (participant.event_id, name.lower())
         group = groups.get(key)
         if group is None:
-            group = ParticipantGroup.objects.using(alias).create(
-                event_id=participant.event_id,
-                name=name,
-            )
+            try:
+                with transaction.atomic(using=alias):
+                    group = ParticipantGroup.objects.using(alias).create(
+                        event_id=participant.event_id,
+                        name=name,
+                    )
+            except IntegrityError:
+                # The database folds case differently from Python for a few
+                # characters; reuse the row it already considers equal.
+                group = (
+                    ParticipantGroup.objects.using(alias)
+                    .annotate(name_key=Lower("name"))
+                    .filter(event_id=participant.event_id, name_key=Lower(Value(name)))
+                    .get()
+                )
             groups[key] = group
         participant.groups.add(group)
 

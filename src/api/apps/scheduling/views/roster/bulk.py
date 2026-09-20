@@ -11,9 +11,11 @@ from rest_framework.response import Response
 
 from apps.scheduling.models import Participant, RosterBulkUpdateReceipt, Weight
 from apps.scheduling.services.roster_groups import (
+    MAX_GROUPS_PER_CELL,
+    TOO_MANY_GROUPS_MESSAGE,
     parse_group_cell,
     update_memberships,
-    validate_group_name,
+    validate_group_names,
 )
 from apps.scheduling.services.roster_imports import MAX_ROSTER_ROWS, RosterImportError
 
@@ -33,6 +35,8 @@ def _group_name_list(updates, key) -> list[str]:
     value = updates.get(key)
     if not isinstance(value, list) or not all(isinstance(name, str) for name in value):
         raise RosterImportError(f"{key} must be an array of group names.")
+    if len(value) > MAX_GROUPS_PER_CELL:
+        raise RosterImportError(TOO_MANY_GROUPS_MESSAGE)
     return value
 
 
@@ -169,9 +173,7 @@ class RosterBulkView(PrivateAPIView):
                     replace = parse_group_cell(updates.get("group", updates.get("groupName")))
                 add_names = ()
                 if "addGroups" in updates:
-                    add_names = [
-                        validate_group_name(name) for name in _group_name_list(updates, "addGroups")
-                    ]
+                    add_names = validate_group_names(_group_name_list(updates, "addGroups"))
                 remove_names = ()
                 if "removeGroups" in updates:
                     remove_names = _group_name_list(updates, "removeGroups")

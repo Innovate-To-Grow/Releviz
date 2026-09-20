@@ -4,8 +4,12 @@ import uuid
 from unittest.mock import patch
 
 from django.contrib import admin
+from django.contrib.auth.models import Group, Permission
+from django.db import IntegrityError, connection
 from django.test import RequestFactory, TestCase
+from django.test.utils import CaptureQueriesContext
 from rest_framework.test import APIClient
+from unfold.admin import ModelAdmin as UnfoldModelAdmin
 
 from apps.authn.models import Member
 from apps.authn.tests.helpers import create_member, token_for
@@ -19,21 +23,37 @@ from apps.scheduling.models import (
     Weight,
 )
 from apps.scheduling.services.roster_groups import (
+    MAX_GROUPS_PER_CELL,
+    _create_group,
     add_participant_groups,
     assign_memberships,
+    create_group,
     ensure_groups,
     format_group_cell,
+    memberships_differ,
     parse_group_cell,
     remove_participant_groups,
     rename_group,
     set_participant_groups,
     update_memberships,
     validate_group_name,
+    validate_group_names,
 )
 from apps.scheduling.services.roster_imports import RosterImportError
 from apps.scheduling.views.roster.queries import roster_queryset, roster_stats
 
 MEMBERSHIPS = Participant.groups.through
+TOO_MANY_GROUPS = "group may list at most 100 names."
+
+
+def membership_deletes(queries):
+    """The captured DELETE statements that touch the membership table."""
+
+    return [
+        query["sql"]
+        for query in queries
+        if query["sql"].startswith("DELETE") and "participant_groups" in query["sql"]
+    ]
 
 
 def group_entry(group, count, weight):
@@ -104,6 +124,11 @@ class RosterGroupTestCase(TestCase):
     def group_names(self, participant):
         return sorted(participant.groups.values_list("name", flat=True))
 
+    def versions(self, *participants):
+        for participant in participants:
+            participant.refresh_from_db()
+        return tuple(participant.version for participant in participants)
+
     def groups_url(self, *, event=None, code=None):
         code = code if code is not None else (event or self.event).code
         return f"/events/roster/groups?code={code}"
@@ -134,6 +159,16 @@ class RosterGroupTestCase(TestCase):
             {**selector, "updates": updates, "idempotencyKey": str(uuid.uuid4())},
             format="json",
         )
+
+    def bulk_queries(self, participants, updates):
+        """Run a bulk edit that must change everyone; returns the captured queries."""
+
+        ids = [participant.pk for participant in participants]
+        with CaptureQueriesContext(connection) as captured:
+            response = self.bulk({"participantIds": ids}, updates)
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["updatedCount"], len(participants))
+        return captured.captured_queries
 
 
 class RosterGroupEndpointTests(RosterGroupTestCase):
@@ -213,6 +248,8 @@ class RosterGroupEndpointTests(RosterGroupTestCase):
         staff = ParticipantGroup.objects.create(event=self.event, name="Staff")
         other = ParticipantGroup.objects.create(event=self.event, name="Other")
         one = self.add_participant("One", groups=["Staff"], weight=0.5)
+        everywhere = self.add_participant("Everywhere", all_groups=True, weight=0.5)
+        elsewhere = self.add_participant("Elsewhere", groups=["Other"])
 
         response = self.client.patch(self.group_url(staff.pk), {"name": " Team "}, format="json")
 
@@ -222,13 +259,28 @@ class RosterGroupEndpointTests(RosterGroupTestCase):
         self.assertEqual(
             response.data,
             {
-                "group": group_entry(staff, 1, 0.5),
-                "groups": [group_entry(other, 0, None), group_entry(staff, 1, 0.5)],
+                "group": group_entry(staff, 2, 0.5),
+                "groups": [group_entry(other, 2, None), group_entry(staff, 2, 0.5)],
             },
         )
-        one.refresh_from_db()
         self.assertEqual(self.group_names(one), ["Team"])
-        self.assertEqual(one.version, 1)
+        # The rename changes the group string of every member, explicit or via
+        # ALL, so their versions move once; Elsewhere never showed the name.
+        self.assertEqual(self.versions(one, everywhere, elsewhere), (2, 2, 1))
+
+        cased = self.client.patch(self.group_url(staff.pk), {"name": "TEAM"}, format="json")
+        self.assertEqual(cased.status_code, 200)
+        self.assertEqual(cased.data["group"]["name"], "TEAM")
+        # A case-only rename still rewrites the string everyone sees.
+        self.assertEqual(self.versions(one, everywhere, elsewhere), (3, 3, 1))
+
+        same = self.client.patch(self.group_url(staff.pk), {"name": " TEAM "}, format="json")
+        self.assertEqual(same.status_code, 200)
+        self.assertEqual(same.data["group"]["name"], "TEAM")
+        # The identical name changes nothing, so nobody is bumped.
+        self.assertEqual(self.versions(one, everywhere, elsewhere), (3, 3, 1))
+        staff.refresh_from_db()
+        self.assertEqual(staff.name, "TEAM")
 
     def test_patch_allows_a_case_only_rename_and_an_identical_name(self):
         staff = ParticipantGroup.objects.create(event=self.event, name="staff")
@@ -306,6 +358,8 @@ class RosterGroupEndpointTests(RosterGroupTestCase):
         beta = ParticipantGroup.objects.create(event=self.event, name="Beta")
         one = self.add_participant("One", groups=["Alpha", "Beta"])
         two = self.add_participant("Two", groups=["Alpha"])
+        everywhere = self.add_participant("Everywhere", all_groups=True)
+        elsewhere = self.add_participant("Elsewhere", groups=["Beta"])
         self.assertEqual(MEMBERSHIPS.objects.filter(participantgroup=alpha).count(), 2)
 
         response = self.client.delete(self.group_url(alpha.pk))
@@ -314,16 +368,17 @@ class RosterGroupEndpointTests(RosterGroupTestCase):
         # Two is left in no group, so the ungrouped row closes the list.
         self.assertEqual(
             response.data,
-            {"groups": [group_entry(beta, 1, 1.0), ungrouped_entry(1, 1.0)]},
+            {"groups": [group_entry(beta, 3, 1.0), ungrouped_entry(1, 1.0)]},
         )
         self.assertFalse(ParticipantGroup.objects.filter(pk=alpha.pk).exists())
         self.assertFalse(MEMBERSHIPS.objects.filter(participantgroup_id=alpha.pk).exists())
-        self.assertEqual(Participant.objects.filter(event=self.event).count(), 2)
+        self.assertEqual(Participant.objects.filter(event=self.event).count(), 4)
         self.assertEqual(self.group_names(one), ["Beta"])
         self.assertEqual(self.group_names(two), [])
-        one.refresh_from_db()
-        two.refresh_from_db()
-        self.assertEqual((one.version, two.version), (1, 1))
+        self.assertEqual(self.group_names(elsewhere), ["Beta"])
+        # Everyone whose group string listed Alpha, explicitly or through ALL,
+        # is bumped exactly once; Elsewhere never listed it.
+        self.assertEqual(self.versions(one, two, everywhere, elsewhere), (2, 2, 2, 1))
 
     def test_delete_surfaces_a_service_error(self):
         staff = ParticipantGroup.objects.create(event=self.event, name="Staff")
@@ -426,6 +481,35 @@ class RosterGroupServiceTests(RosterGroupTestCase):
         self.assertEqual(str(raised.exception), "group is too long (max 100).")
         self.assertEqual(raised.exception.status_code, 400)
         self.assertEqual(parse_group_cell("x" * 100), (False, ["x" * 100]))
+
+    def test_parse_group_cell_rejects_values_that_are_not_strings(self):
+        # A JSON list or number must not be stringified into a group name.
+        for value in (["A"], {"name": "A"}, 5, True):
+            with self.subTest(value=value):
+                with self.assertRaises(RosterImportError) as raised:
+                    parse_group_cell(value)
+                self.assertEqual(str(raised.exception), "group must be a string.")
+
+        person = self.add_participant("Typed")
+        response = self.client.patch(
+            f"/events/roster/{person.pk}?code={self.event.code}",
+            {"expectedVersion": person.version, "group": ["A"]},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["error"], "group must be a string.")
+        bulk = self.client.patch(
+            f"/events/roster/bulk?code={self.event.code}",
+            {
+                "participantIds": [str(person.pk)],
+                "updates": {"group": 5},
+                "idempotencyKey": str(uuid.uuid4()),
+            },
+            format="json",
+        )
+        self.assertEqual(bulk.status_code, 400)
+        self.assertEqual(bulk.data["error"], "group must be a string.")
+        self.assertFalse(ParticipantGroup.objects.filter(event=self.event).exists())
 
     def test_format_group_cell(self):
         self.assertEqual(format_group_cell(True, []), "ALL")
@@ -637,6 +721,195 @@ class RosterGroupServiceTests(RosterGroupTestCase):
         self.assertEqual(str(raised.exception), "ALL is reserved for every group.")
         # The whole batch rolls back when one name is invalid.
         self.assertEqual(ParticipantGroup.objects.filter(event=self.event).count(), 2)
+
+    def test_ensure_groups_falls_back_to_the_database_lookup(self):
+        # The Python-side key misses the row (the database folds case
+        # differently), so the LOWER() lookup has to find it instead.
+        staff = ParticipantGroup.objects.create(event=self.event, name="Staff")
+
+        with patch(
+            "apps.scheduling.services.roster_groups._find_group", return_value=staff
+        ) as find_group:
+            groups = ensure_groups(event=self.event, names=["Team", " team "])
+
+        find_group.assert_called_once_with(self.event, "Team")
+        self.assertEqual(groups, [staff, staff])
+        self.assertEqual(ParticipantGroup.objects.filter(event=self.event).count(), 1)
+
+    def test_create_group_helper_returns_the_row_that_won_the_insert(self):
+        staff = ParticipantGroup.objects.create(event=self.event, name="Staff")
+
+        with patch(
+            "apps.scheduling.models.ParticipantGroup.objects.create",
+            side_effect=IntegrityError("one_group_name_per_event"),
+        ) as create:
+            group, created = _create_group(self.event, "STAFF")
+
+        create.assert_called_once_with(event=self.event, name="STAFF")
+        self.assertEqual((group, created), (staff, False))
+        self.assertEqual(ParticipantGroup.objects.filter(event=self.event).count(), 1)
+
+    def test_create_group_helper_survives_a_real_constraint_violation(self):
+        staff = ParticipantGroup.objects.create(event=self.event, name="Staff")
+
+        self.assertEqual(_create_group(self.event, "staff"), (staff, False))
+
+        # The savepoint kept the surrounding transaction usable.
+        team, created = _create_group(self.event, "Team")
+        self.assertTrue(created)
+        self.assertEqual(team.name, "Team")
+        self.assertEqual(
+            list(ParticipantGroup.objects.filter(event=self.event).values_list("name", flat=True)),
+            ["Staff", "Team"],
+        )
+
+    def test_create_group_helper_re_raises_when_no_row_owns_the_name(self):
+        with patch(
+            "apps.scheduling.models.ParticipantGroup.objects.create",
+            side_effect=IntegrityError("participant_group_event_fk"),
+        ):
+            with self.assertRaises(IntegrityError):
+                _create_group(self.event, "Nobody")
+        self.assertFalse(ParticipantGroup.objects.filter(event=self.event).exists())
+
+    def test_create_group_refuses_a_row_that_appeared_during_the_insert(self):
+        # A concurrent writer's row that the pre-insert lookup could not see.
+        staff = ParticipantGroup.objects.create(event=self.event, name="Staff")
+
+        with patch(
+            "apps.scheduling.services.roster_groups._create_group", return_value=(staff, False)
+        ) as helper:
+            with self.assertRaises(RosterImportError) as raised:
+                create_group(event=self.event, name="Team")
+
+        helper.assert_called_once_with(self.event, "Team")
+        self.assertEqual(str(raised.exception), "A group named Staff already exists.")
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertFalse(ParticipantGroup.objects.filter(event=self.event, name="Team").exists())
+
+        # The same race through the real constraint: the first lookup misses,
+        # the insert collides, and the second lookup names the winner.
+        with patch("apps.scheduling.services.roster_groups._find_group", side_effect=[None, staff]):
+            with self.assertRaises(RosterImportError) as raised:
+                create_group(event=self.event, name="staff")
+        self.assertEqual(str(raised.exception), "A group named Staff already exists.")
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertEqual(ParticipantGroup.objects.filter(event=self.event).count(), 1)
+
+    def test_rename_group_refuses_a_clash_the_database_catches(self):
+        staff = ParticipantGroup.objects.create(event=self.event, name="Staff")
+        one = self.add_participant("One", groups=["Staff"])
+
+        with patch(
+            "apps.scheduling.models.ParticipantGroup.save",
+            side_effect=IntegrityError("one_group_name_per_event"),
+        ):
+            with self.assertRaises(RosterImportError) as raised:
+                rename_group(group=staff, name="Team")
+
+        self.assertEqual(str(raised.exception), "A group named Team already exists.")
+        self.assertEqual(raised.exception.status_code, 409)
+        # The in-memory name is restored, and nobody's version moved.
+        self.assertEqual(staff.name, "Staff")
+        staff.refresh_from_db()
+        self.assertEqual(staff.name, "Staff")
+        self.assertEqual(self.versions(one), (1,))
+
+        # A real collision names the row that owns the spelling.
+        team = ParticipantGroup.objects.create(event=self.event, name="TEAM")
+        with patch("apps.scheduling.services.roster_groups._find_group", side_effect=[None, team]):
+            with self.assertRaises(RosterImportError) as raised:
+                rename_group(group=staff, name="team")
+        self.assertEqual(str(raised.exception), "A group named TEAM already exists.")
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertEqual(staff.name, "Staff")
+        self.assertEqual(
+            list(ParticipantGroup.objects.filter(event=self.event).values_list("name", flat=True)),
+            ["Staff", "TEAM"],
+        )
+        self.assertEqual(self.versions(one), (1,))
+
+    def test_memberships_differ(self):
+        one = self.add_participant("One", groups=["Alpha", "Beta"])
+        everywhere = self.add_participant("Everywhere", all_groups=True)
+        loose = self.add_participant("Loose")
+
+        same = [
+            (one, False, ["Alpha", "Beta"]),
+            (one, False, ["Beta", "Alpha"]),
+            (one, False, [" beta ", "ALPHA", "alpha"]),
+            (one, False, ("Alpha", "Beta")),
+            (everywhere, True, []),
+            (loose, False, []),
+            (loose, 0, ()),
+        ]
+        for participant, all_groups, names in same:
+            with self.subTest(participant=participant.participant_name, names=names):
+                self.assertFalse(
+                    memberships_differ(participant=participant, all_groups=all_groups, names=names)
+                )
+
+        different = [
+            (one, True, ["Alpha", "Beta"]),
+            (one, False, ["Alpha"]),
+            (one, False, ["Alpha", "Beta", "Gamma"]),
+            (one, False, ["Alpha", "Bet"]),
+            (one, False, []),
+            (everywhere, False, []),
+            (everywhere, True, ["Alpha"]),
+            (loose, True, []),
+            (loose, False, ["Alpha"]),
+        ]
+        for participant, all_groups, names in different:
+            with self.subTest(participant=participant.participant_name, names=names):
+                self.assertTrue(
+                    memberships_differ(participant=participant, all_groups=all_groups, names=names)
+                )
+
+    def test_validate_group_names_dedupes_and_caps_the_list(self):
+        self.assertEqual(validate_group_names([" A ", "a", "B", "b ", "A"]), ["A", "B"])
+        self.assertEqual(validate_group_names([]), [])
+        self.assertEqual(validate_group_names(("Solo",)), ["Solo"])
+
+        self.assertEqual(MAX_GROUPS_PER_CELL, 100)
+        names = [f"g{index}" for index in range(101)]
+        self.assertEqual(validate_group_names(names[:100]), names[:100])
+        with self.assertRaises(RosterImportError) as raised:
+            validate_group_names(names)
+        self.assertEqual(str(raised.exception), TOO_MANY_GROUPS)
+        self.assertEqual(raised.exception.status_code, 400)
+        # The cap guards the payload size, so it counts entries before deduping.
+        with self.assertRaises(RosterImportError) as raised:
+            validate_group_names(["Same"] * 101)
+        self.assertEqual(str(raised.exception), TOO_MANY_GROUPS)
+
+        for names, message in [
+            (["A", "ALL"], "ALL is reserved for every group."),
+            (["A", ""], "Group name is required."),
+            (["A", None], "Group name is required."),
+            (["a;b"], "Group names cannot contain ;."),
+            (["A", "x" * 101], "group is too long (max 100)."),
+        ]:
+            with self.subTest(names=names):
+                with self.assertRaises(RosterImportError) as raised:
+                    validate_group_names(names)
+                self.assertEqual(str(raised.exception), message)
+
+    def test_parse_group_cell_caps_distinct_names_only(self):
+        names = [f"g{index}" for index in range(100)]
+        self.assertEqual(parse_group_cell("; ".join(names)), (False, names))
+        # ALL is a flag, not a name, so it never counts toward the cap.
+        self.assertEqual(parse_group_cell("ALL; " + "; ".join(names)), (True, names))
+
+        with self.assertRaises(RosterImportError) as raised:
+            parse_group_cell("; ".join([*names, "g100"]))
+        self.assertEqual(str(raised.exception), TOO_MANY_GROUPS)
+        self.assertEqual(raised.exception.status_code, 400)
+
+        # Repeated spellings collapse before the count, so 150 tokens can fit.
+        tokens = [*names, *(name.upper() for name in names[:50])]
+        self.assertEqual(len(tokens), 150)
+        self.assertEqual(parse_group_cell("; ".join(tokens)), (False, names))
 
 
 class RosterGroupStatsTests(RosterGroupTestCase):
@@ -879,6 +1152,25 @@ class RosterParticipantGroupPatchTests(RosterGroupTestCase):
         self.assertTrue(coerced.data["participant"]["allGroups"])
         self.assertEqual(coerced.data["participant"]["group"], "ALL; A")
 
+    def test_groups_array_and_cell_are_capped_at_one_hundred_names(self):
+        one = self.add_participant("One", groups=["A"])
+        names = [f"g{index}" for index in range(101)]
+
+        for payload in [{"groups": names}, {"group": "; ".join(names)}]:
+            with self.subTest(key=next(iter(payload))):
+                response = self.patch_participant(one, payload)
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.data, {"error": TOO_MANY_GROUPS})
+        self.assertEqual(self.group_names(one), ["A"])
+        self.assertEqual(self.versions(one), (1,))
+        self.assertEqual(ParticipantGroup.objects.filter(event=self.event).count(), 1)
+
+        accepted = self.patch_participant(one, {"groups": names[:100]})
+        self.assertEqual(accepted.status_code, 200)
+        self.assertEqual(len(accepted.data["participant"]["groups"]), 100)
+        self.assertEqual(self.versions(one), (2,))
+        self.assertEqual(ParticipantGroup.objects.filter(event=self.event).count(), 101)
+
     def test_blank_cell_clears_memberships_and_the_flag(self):
         one = self.add_participant("One", groups=["A"], all_groups=True)
         a = ParticipantGroup.objects.get(event=self.event, name="A")
@@ -1076,6 +1368,71 @@ class RosterBulkGroupTests(RosterGroupTestCase):
         self.assertEqual(one.version, 1)
         self.assertEqual(self.group_names(one), ["A"])
         self.assertEqual(ParticipantGroup.objects.filter(event=self.event).count(), 1)
+
+    def test_group_lists_are_capped_at_one_hundred_names(self):
+        one = self.add_participant("One", groups=["A"])
+        names = [f"g{index}" for index in range(101)]
+
+        for updates in [
+            {"addGroups": names},
+            {"removeGroups": names},
+            {"group": "; ".join(names)},
+        ]:
+            with self.subTest(key=next(iter(updates))):
+                response = self.bulk({"participantIds": [one.pk]}, updates)
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.data, {"error": TOO_MANY_GROUPS})
+        self.assertEqual(self.group_names(one), ["A"])
+        self.assertEqual(self.versions(one), (1,))
+        self.assertEqual(ParticipantGroup.objects.filter(event=self.event).count(), 1)
+
+        # Exactly one hundred unknown names to remove is fine and changes nobody.
+        boundary = self.bulk({"participantIds": [one.pk]}, {"removeGroups": names[:100]})
+        self.assertEqual(boundary.status_code, 200)
+        self.assertEqual((boundary.data["updatedCount"], boundary.data["matchedCount"]), (0, 1))
+        self.assertEqual(ParticipantGroup.objects.filter(event=self.event).count(), 1)
+
+    def test_add_groups_collapses_case_variants_onto_one_group(self):
+        one = self.add_participant("One")
+
+        response = self.bulk({"participantIds": [one.pk]}, {"addGroups": ["A", "a"]})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual((response.data["updatedCount"], response.data["matchedCount"]), (1, 1))
+        # The first spelling wins and only one membership row is written.
+        self.assertEqual(
+            list(ParticipantGroup.objects.filter(event=self.event).values_list("name", flat=True)),
+            ["A"],
+        )
+        self.assertEqual(self.group_names(one), ["A"])
+        self.assertEqual(MEMBERSHIPS.objects.filter(participant=one).count(), 1)
+
+    def test_dropping_memberships_runs_one_delete_whatever_the_selection_size(self):
+        ParticipantGroup.objects.create(event=self.event, name="Other")
+        bystander = self.add_participant("Bystander", groups=["A"])
+        cases = [
+            ({"group": ""}, []),
+            ({"removeGroups": ["A"]}, []),
+            ({"group": "Other"}, ["Other"]),
+        ]
+        for updates, expected in cases:
+            with self.subTest(updates=updates):
+                few = [self.add_participant("Few", groups=["A"]) for _ in range(5)]
+                many = [self.add_participant("Many", groups=["A"]) for _ in range(30)]
+
+                few_queries = self.bulk_queries(few, updates)
+                many_queries = self.bulk_queries(many, updates)
+
+                deletes = membership_deletes(many_queries)
+                self.assertEqual(len(deletes), 1, deletes)
+                # The dropped rows go by their own primary keys, not per person.
+                self.assertIn('"scheduling_participant_groups"."id" IN (', deletes[0])
+                self.assertEqual(len(membership_deletes(few_queries)), 1)
+                # Nothing in the request scales with the number of people.
+                self.assertEqual(len(few_queries), len(many_queries))
+                for participant in [*few, *many]:
+                    self.assertEqual(self.group_names(participant), expected)
+                self.assertEqual(self.group_names(bystander), ["A"])
 
     def test_group_selector_includes_all_groups_people(self):
         one = self.add_participant("One", groups=["A"])
@@ -1277,3 +1634,90 @@ class ParticipantGroupAdminTests(RosterGroupTestCase):
         with self.assertNumQueries(2):
             names = [participant_admin.group_names(row) for row in queryset]
         self.assertEqual(sorted(names), ["", "Alpha; Beta"])
+
+    def admin_request(self, path, user):
+        request = RequestFactory().get(path)
+        request.user = user
+        return request
+
+    def superuser(self):
+        return Member.objects.create_superuser(
+            password="AdminPass123!", first_name="Site", last_name="Admin"
+        )
+
+    def test_get_form_remembers_the_participant_and_scopes_the_groups_field(self):
+        participant_admin = ParticipantAdmin(Participant, admin.site)
+        other_event = self.create_event("GROUPS02", "Other event")
+        local = ParticipantGroup.objects.create(event=self.event, name="Local")
+        ParticipantGroup.objects.create(event=other_event, name="Foreign")
+        one = self.add_participant("One", groups=["Local"])
+        user = self.superuser()
+
+        change_request = self.admin_request(f"/admin/scheduling/participant/{one.pk}/change/", user)
+        change_form = participant_admin.get_form(change_request, one, change=True)
+
+        self.assertIs(change_request._participant_admin_obj, one)
+        self.assertEqual(list(change_form.base_fields["groups"].queryset), [local])
+
+        # The add form has no participant yet, so no event to draw groups from.
+        add_request = self.admin_request("/admin/scheduling/participant/add/", user)
+        add_form = participant_admin.get_form(add_request)
+
+        self.assertIsNone(add_request._participant_admin_obj)
+        self.assertEqual(list(add_form.base_fields["groups"].queryset), [])
+
+    def test_formfield_for_manytomany_limits_groups_to_the_participants_event(self):
+        participant_admin = ParticipantAdmin(Participant, admin.site)
+        other_event = self.create_event("GROUPS02", "Other event")
+        local = ParticipantGroup.objects.create(event=self.event, name="Local")
+        also_local = ParticipantGroup.objects.create(event=self.event, name="Also local")
+        ParticipantGroup.objects.create(event=other_event, name="Foreign")
+        one = self.add_participant("One")
+        abroad = self.add_participant("Abroad", event=other_event)
+        groups_field = Participant._meta.get_field("groups")
+        request = self.admin_request("/admin/scheduling/participant/add/", self.superuser())
+
+        request._participant_admin_obj = one
+        formfield = participant_admin.formfield_for_manytomany(groups_field, request)
+        self.assertEqual(list(formfield.queryset), [also_local, local])
+
+        request._participant_admin_obj = abroad
+        formfield = participant_admin.formfield_for_manytomany(groups_field, request)
+        self.assertEqual([group.name for group in formfield.queryset], ["Foreign"])
+
+        # No participant (the add form) and a request that never went through
+        # get_form both offer nothing rather than every event's groups.
+        request._participant_admin_obj = None
+        formfield = participant_admin.formfield_for_manytomany(groups_field, request)
+        self.assertEqual(list(formfield.queryset), [])
+        bare = self.admin_request("/admin/scheduling/participant/add/", request.user)
+        formfield = participant_admin.formfield_for_manytomany(groups_field, bare)
+        self.assertEqual(list(formfield.queryset), [])
+
+    def test_formfield_for_manytomany_leaves_other_fields_alone(self):
+        participant_admin = ParticipantAdmin(Participant, admin.site)
+        one = self.add_participant("One", groups=["Local"])
+        request = self.admin_request("/admin/scheduling/participant/add/", self.superuser())
+        request._participant_admin_obj = one
+        permissions = Group._meta.get_field("permissions")
+
+        formfield = participant_admin.formfield_for_manytomany(permissions, request)
+
+        self.assertIs(formfield.queryset.model, Permission)
+        self.assertEqual(formfield.queryset.count(), Permission.objects.count())
+        self.assertGreater(formfield.queryset.count(), 0)
+
+        # The call reaches the base admin with its arguments untouched.
+        with patch.object(UnfoldModelAdmin, "formfield_for_manytomany") as base:
+            result = participant_admin.formfield_for_manytomany(
+                permissions, request, widget="custom"
+            )
+        self.assertIs(result, base.return_value)
+        base.assert_called_once_with(permissions, request, widget="custom")
+
+        with patch.object(UnfoldModelAdmin, "formfield_for_manytomany") as base:
+            participant_admin.formfield_for_manytomany(
+                Participant._meta.get_field("groups"), request
+            )
+        _args, kwargs = base.call_args
+        self.assertEqual([group.name for group in kwargs["queryset"]], ["Local"])

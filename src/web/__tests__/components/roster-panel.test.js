@@ -1713,6 +1713,179 @@ describe("RosterPanel groups", () => {
     );
   });
 
+  // Points the bulk "Change groups" action (add) at a named group, the way
+  // an organizer would before touching the Groups table.
+  async function chooseBulkTarget(name) {
+    const bulk = await openBulk();
+    fireEvent.click(within(bulk).getByLabelText("Apply bulk groups"));
+    const target = within(bulk).getByLabelText("Bulk target group");
+    fireEvent.change(target, { target: { value: name } });
+    expect(target).toHaveValue(name);
+    return { bulk, target };
+  }
+
+  const bulkTargetOptions = (target) =>
+    within(target)
+      .getAllByRole("option")
+      .map((option) => option.textContent);
+
+  test("moves the bulk target group along with a rename", async () => {
+    renameRosterGroup.mockResolvedValue(renamedResponse);
+    await renderPanel();
+    await screen.findByText("Ada");
+    const { bulk, target } = await chooseBulkTarget("Faculty");
+
+    await userEvent.click(screen.getByRole("button", { name: "Rename" }));
+    fireEvent.change(screen.getByLabelText("New name for group Faculty"), {
+      target: { value: "Teachers" },
+    });
+    fetchRoster.mockResolvedValue(renamedRoster);
+    await userEvent.click(screen.getByRole("button", { name: "Save name" }));
+    await waitFor(() =>
+      expect(renameRosterGroup).toHaveBeenCalledWith(
+        "ROSTER1",
+        11,
+        { name: "Teachers" },
+        "token",
+      ),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Renamed Faculty to Teachers.",
+    );
+    await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(2));
+    // The picker followed the group rather than keeping a name the server
+    // no longer knows.
+    expect(target).toHaveValue("Teachers");
+    expect(bulkTargetOptions(target)).toEqual(["Choose group", "Teachers"]);
+
+    fireEvent.click(screen.getByLabelText("Select Ada"));
+    fireEvent.click(within(bulk).getByRole("button", { name: "Apply update" }));
+    await waitFor(() =>
+      expect(patchRosterBulk).toHaveBeenCalledWith(
+        "ROSTER1",
+        {
+          participantIds: ["p-1"],
+          updates: { addGroups: ["Teachers"] },
+          idempotencyKey: "group-key",
+        },
+        "token",
+      ),
+    );
+    expect(patchRosterBulk).toHaveBeenCalledTimes(1);
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Updated 2 roster entries.",
+    );
+    await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(3));
+  });
+
+  test("drops the bulk target group when that group is deleted", async () => {
+    deleteRosterGroup.mockResolvedValue({ groups: [] });
+    await renderPanel();
+    await screen.findByText("Ada");
+    const { bulk, target } = await chooseBulkTarget("Faculty");
+    fetchRoster.mockResolvedValue(
+      rosterResponse(
+        [
+          participant({ id: "p-1", name: "Ada", group: "" }),
+          participant({ id: "p-2", name: "Ben", group: "" }),
+          participant({ id: "p-3", name: "Cara", group: "", weight: 0.5 }),
+        ],
+        { stats: { ...stats, groups: [{ ...ungrouped, count: 3 }] } },
+      ),
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete group" }));
+    expect(window.confirm).toHaveBeenCalledWith(
+      "Delete group Faculty? People stay on the roster.",
+    );
+    await waitFor(() =>
+      expect(deleteRosterGroup).toHaveBeenCalledWith("ROSTER1", 11, "token"),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Deleted Faculty.",
+    );
+    await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(2));
+    // The picker is back at "Choose group": nothing is left to point at.
+    expect(target).toHaveValue("");
+    expect(bulkTargetOptions(target)).toEqual(["Choose group"]);
+    expect(within(bulk).getByLabelText("Apply bulk groups")).toBeChecked();
+    expect(within(bulk).getByLabelText("Bulk group action")).toHaveValue("add");
+
+    fireEvent.click(screen.getByLabelText("Select Ada"));
+    fireEvent.click(within(bulk).getByRole("button", { name: "Apply update" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Choose a group for this bulk update.",
+    );
+    expect(patchRosterBulk).not.toHaveBeenCalled();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  test("refuses a bulk target group the reloaded roster no longer lists", async () => {
+    await renderPanel();
+    await screen.findByText("Ada");
+    const { bulk, target } = await chooseBulkTarget("Faculty");
+
+    // Another session replaced Faculty with Board: the next read brings the
+    // new group list while the picker's state still says Faculty.
+    const boardGroup = { id: 12, name: "Board", count: 3, weight: 1 };
+    fetchRoster.mockResolvedValue(
+      rosterResponse(
+        [
+          participant({ id: "p-1", name: "Ada", group: "Board" }),
+          participant({ id: "p-2", name: "Ben", group: "Board" }),
+          participant({ id: "p-3", name: "Cara", group: "Board", weight: 0.5 }),
+        ],
+        { stats: { ...stats, groups: [boardGroup] } },
+      ),
+    );
+    fireEvent.change(screen.getByLabelText("Filter by response"), {
+      target: { value: "false" },
+    });
+    await waitFor(() =>
+      expect(fetchRoster).toHaveBeenLastCalledWith(
+        "ROSTER1",
+        expect.objectContaining({ submitted: "false", page: 1 }),
+        "token",
+      ),
+    );
+    expect(
+      await screen.findByLabelText("Weight for group Board"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByLabelText("Weight for group Faculty"),
+    ).not.toBeInTheDocument();
+    expect(bulkTargetOptions(target)).toEqual(["Choose group", "Board"]);
+    // With Faculty gone from the options the picker reads as "Choose group",
+    // so the stale name must not be what the request carries.
+    expect(target).toHaveValue("");
+
+    fireEvent.click(screen.getByLabelText("Select Ada"));
+    fireEvent.click(within(bulk).getByRole("button", { name: "Apply update" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Choose a group for this bulk update.",
+    );
+    expect(patchRosterBulk).not.toHaveBeenCalled();
+    expect(fetchRoster).toHaveBeenCalledTimes(2);
+
+    // Picking a group that is on screen sends the request as usual.
+    fireEvent.change(target, { target: { value: "Board" } });
+    fireEvent.click(within(bulk).getByRole("button", { name: "Apply update" }));
+    await waitFor(() =>
+      expect(patchRosterBulk).toHaveBeenCalledWith(
+        "ROSTER1",
+        {
+          participantIds: ["p-1"],
+          updates: { addGroups: ["Board"] },
+          idempotencyKey: "group-key",
+        },
+        "token",
+      ),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Updated 2 roster entries.",
+    );
+  });
+
   test("resets the bulk group controls and locks groups while responses are closed", async () => {
     const props = {
       event,

@@ -16,9 +16,11 @@ from apps.scheduling.models import (
 )
 
 GROUP_TOO_LONG = "group is too long (max 100)."
+TOO_MANY_GROUPS = "group may list at most 100 names."
 LONG_TOKEN = "x" * 101
 # Thirty short names whose joined cell is far longer than one name may be.
 MANY_NAMES = "; ".join(f"g{index:03d}" for index in range(1, 31))
+HUNDRED_NAMES = [f"n{index:03d}" for index in range(1, 101)]
 
 
 def group_names(participant) -> list[str]:
@@ -537,6 +539,109 @@ class ParticipantUpdateGroupTests(RosterGroupImportTestCase):
         self.assertEqual(self.temporary.version, 2)
         self.assertEqual(group_names(self.temporary), ["Z"])
         self.assertEqual(event_group_names(self.event), ["Z"])
+        self.assert_results_revision_unchanged()
+
+    def assert_membership_untouched(self):
+        self.temporary.refresh_from_db()
+        self.assertEqual(self.temporary.version, 1)
+        self.assertEqual(self.temporary.participant_name, "Temp")
+        self.assertFalse(self.temporary.all_groups)
+        self.assertEqual(group_names(self.temporary), [])
+        self.assertEqual(
+            Participant.groups.through.objects.filter(participant_id=self.temporary.pk).count(),
+            0,
+        )
+        self.assertEqual(event_group_names(self.event), [])
+
+    def test_stale_version_with_a_changed_group_cell_is_a_conflict(self):
+        # An unchanged name used to slip a stale request through as a no-op;
+        # the changed cell now makes it a conflict, and nothing is written.
+        for expected_version, cell in ((0, "A"), (7, "ALL"), (2, "A; b")):
+            with self.subTest(expected_version=expected_version, cell=cell):
+                conflict = self.put(
+                    {"name": "Temp", "expectedVersion": expected_version, "groupName": cell}
+                )
+                self.assertEqual(conflict.status_code, 409, conflict.data)
+                self.assertIn("no-store", conflict["Cache-Control"])
+                self.assertEqual(conflict.data["errorCode"], "participant_version_conflict")
+                self.assertEqual(conflict.data["participant"]["version"], 1)
+                self.assertIsNone(conflict.data["participant"]["group_name"])
+                self.assertFalse(conflict.data["participant"]["allGroups"])
+                self.assert_membership_untouched()
+
+        # The same holds for a response field the organizer may fill in.
+        response_conflict = self.put({"submitted": 0, "expectedVersion": 0, "groupName": "A"})
+        self.assertEqual(response_conflict.status_code, 409, response_conflict.data)
+        self.assertEqual(response_conflict.data["errorCode"], "participant_version_conflict")
+        self.assert_membership_untouched()
+        self.assert_results_revision_unchanged()
+
+        # Retrying with the version the conflict reported applies the name and
+        # the cell together, bumping the version exactly once.
+        applied = self.put({"name": "Temp Renamed", "expectedVersion": 1, "groupName": "A; b"})
+        self.assertEqual(applied.status_code, 200, applied.data)
+        self.assertEqual(applied.data["participant"]["name"], "Temp Renamed")
+        self.assertEqual(applied.data["participant"]["group_name"], "A; b")
+        self.assertEqual(applied.data["participant"]["version"], 2)
+        self.temporary.refresh_from_db()
+        self.assertEqual(self.temporary.participant_name, "Temp Renamed")
+        self.assertEqual(self.temporary.version, 2)
+        self.assertEqual(group_names(self.temporary), ["A", "b"])
+        self.assertEqual(event_group_names(self.event), ["A", "b"])
+        self.assert_results_revision_unchanged()
+
+    def test_stale_version_with_an_unchanged_group_cell_is_still_a_no_op(self):
+        # Without memberships, a blank cell (even one made of empty tokens)
+        # changes nothing, so the stale version is ignored as before.
+        for payload in (
+            {"name": "Temp", "expectedVersion": 0, "groupName": ""},
+            {"name": "Temp", "expectedVersion": 9, "groupName": " ; "},
+            {"name": "Temp", "expectedVersion": 0},
+        ):
+            with self.subTest(payload=payload):
+                unchanged = self.put(payload)
+                self.assertEqual(unchanged.status_code, 200, unchanged.data)
+                self.assertEqual(unchanged.data["participant"]["version"], 1)
+                self.assertIsNone(unchanged.data["participant"]["group_name"])
+                self.assert_membership_untouched()
+
+        grouped = self.put({"groupName": "ALL; A; b"})
+        self.assertEqual(grouped.status_code, 200, grouped.data)
+        self.assertEqual(grouped.data["participant"]["version"], 2)
+
+        # The current memberships in another order or case are the same cell.
+        for cell in ("ALL; A; b", " b ;all; A ", "all; B; a; A"):
+            with self.subTest(cell=cell):
+                same = self.put({"name": "Temp", "expectedVersion": 1, "groupName": cell})
+                self.assertEqual(same.status_code, 200, same.data)
+                self.assertEqual(same.data["participant"]["version"], 2)
+                self.assertEqual(same.data["participant"]["group_name"], "ALL; A; b")
+                self.temporary.refresh_from_db()
+                self.assertEqual(self.temporary.version, 2)
+                self.assertTrue(self.temporary.all_groups)
+                self.assertEqual(group_names(self.temporary), ["A", "b"])
+        self.assertEqual(event_group_names(self.event), ["A", "b"])
+        self.assert_results_revision_unchanged()
+
+    def test_group_cell_may_list_at_most_one_hundred_names(self):
+        too_many = self.put({"groupName": "; ".join([*HUNDRED_NAMES, "n101"])})
+        self.assertEqual(too_many.status_code, 400)
+        self.assertEqual(too_many.data, {"error": TOO_MANY_GROUPS})
+        self.assert_membership_untouched()
+        self.assert_results_revision_unchanged()
+
+        # ALL and a repeated spelling do not count: this cell names 100 groups.
+        at_limit = self.put({"groupName": "; ".join(["ALL", *HUNDRED_NAMES, "N001"])})
+        self.assertEqual(at_limit.status_code, 200, at_limit.data)
+        payload = at_limit.data["participant"]
+        self.assertEqual(payload["version"], 2)
+        self.assertTrue(payload["allGroups"])
+        self.assertEqual([group["name"] for group in payload["groups"]], HUNDRED_NAMES)
+        self.assertEqual(payload["group_name"], "; ".join(["ALL", *HUNDRED_NAMES]))
+        self.assertEqual(event_group_names(self.event), HUNDRED_NAMES)
+        self.temporary.refresh_from_db()
+        self.assertEqual(self.temporary.version, 2)
+        self.assertEqual(group_names(self.temporary), HUNDRED_NAMES)
         self.assert_results_revision_unchanged()
 
     def test_closed_event_locks_group_edits_without_creating_groups(self):

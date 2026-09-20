@@ -49,6 +49,20 @@ class ParticipantAdmin(ModelAdmin):
     def get_queryset(self, request):
         return super().get_queryset(request).prefetch_related("groups")
 
+    def get_form(self, request, obj=None, **kwargs):
+        # Remembered for formfield_for_manytomany, which only receives the request.
+        request._participant_admin_obj = obj
+        return super().get_form(request, obj, **kwargs)
+
+    def formfield_for_manytomany(self, db_field, request, **kwargs):
+        if db_field.name == "groups":
+            # Only the participant's own event has groups they can belong to.
+            participant = getattr(request, "_participant_admin_obj", None)
+            kwargs["queryset"] = ParticipantGroup.objects.filter(
+                event_id=participant.event_id if participant is not None else None
+            )
+        return super().formfield_for_manytomany(db_field, request, **kwargs)
+
     @admin.display(description="Groups")
     def group_names(self, participant):
         return "; ".join(group.name for group in participant.groups.all())
