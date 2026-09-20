@@ -190,6 +190,9 @@ const RosterPanel = forwardRef(function RosterPanel(
   // until the organizer reloads the latest values.
   const [rowConflicts, setRowConflicts] = useState({});
   const requestNumber = useRef(0);
+  // The whole-roster digest the last listing carried, for the workspace's
+  // live sync to compare against its activity poll. Null until loaded.
+  const activityRef = useRef(null);
   const bulkIdempotencyKey = useRef("");
   const inviteIdempotencyKey = useRef("");
   const inviteRequestInFlight = useRef(false);
@@ -229,11 +232,16 @@ const RosterPanel = forwardRef(function RosterPanel(
   );
   const inviteAllowed = event.status === "active";
 
+  // A silent load (the workspace's live sync) swaps the page in place: the
+  // table stays mounted so focus and typing survive, the panel's own error
+  // is left alone, and a failure is reported to the caller instead.
   const loadRoster = useCallback(
-    async (providedToken, { throwOnError = false } = {}) => {
+    async (providedToken, { throwOnError = false, silent = false } = {}) => {
       const currentRequest = ++requestNumber.current;
-      setLoading(true);
-      setError("");
+      if (!silent) {
+        setLoading(true);
+        setError("");
+      }
       try {
         const token =
           providedToken === undefined ? await getToken() : providedToken;
@@ -243,7 +251,17 @@ const RosterPanel = forwardRef(function RosterPanel(
           token,
         );
         if (currentRequest !== requestNumber.current) return;
-        const nextParticipants = data.participants || [];
+        activityRef.current = data.activity || null;
+        // A row this session already holds at a newer version (a patch that
+        // landed while the listing was in flight) keeps its values: a reload
+        // never moves a row backwards.
+        const previous = participantsRef.current;
+        const nextParticipants = (data.participants || []).map((loaded) => {
+          const held = previous.find((candidate) => candidate.id === loaded.id);
+          return held && Number(held.version) > Number(loaded.version)
+            ? held
+            : loaded;
+        });
         participantsRef.current = nextParticipants;
         setParticipants(nextParticipants);
         // A load that holds a conflicted row at the version the 409 carried
@@ -287,7 +305,7 @@ const RosterPanel = forwardRef(function RosterPanel(
         if (recoveredDelivery) onDeliveryRequestChange?.(recoveredDelivery);
         return data;
       } catch (requestError) {
-        if (currentRequest === requestNumber.current) {
+        if (!silent && currentRequest === requestNumber.current) {
           setError(requestError.message || "Unable to load this roster.");
         }
         if (throwOnError) throw requestError;
@@ -310,7 +328,9 @@ const RosterPanel = forwardRef(function RosterPanel(
   useImperativeHandle(
     forwardedRef,
     () => ({
-      refresh: (token) => loadRoster(token, { throwOnError: true }),
+      refresh: (token, { silent = false } = {}) =>
+        loadRoster(token, { throwOnError: true, silent }),
+      activity: () => activityRef.current,
     }),
     [loadRoster],
   );

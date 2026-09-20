@@ -760,24 +760,37 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
   const [now, setNow] = useState(() => Date.now());
   const sectionRef = useRef(null);
   const calendarRef = useRef(null);
+  // The freshness of the snapshot on screen, for the workspace's live sync to
+  // compare against its activity poll. Null until the first successful load.
+  const shownRef = useRef(null);
 
+  // A silent load (the workspace's live sync) swaps the snapshot in place:
+  // no loading hint, and a failure is reported to the caller, not the panel.
   const load = useCallback(
-    async (providedToken, { throwOnError = false } = {}) => {
-      setLoading(true);
+    async (providedToken, { throwOnError = false, silent = false } = {}) => {
+      if (!silent) setLoading(true);
       try {
         const token =
           providedToken === undefined ? await getToken() : providedToken;
         const data = await fetchEventResults(event.code, token);
-        setSnapshot(resultEnvelope(data));
+        const envelope = resultEnvelope(data);
+        shownRef.current = {
+          status: envelope.status,
+          requestedRevision: envelope.requestedRevision ?? null,
+          computedRevision: envelope.computedRevision ?? null,
+          generatedAt: envelope.generatedAt ?? null,
+        };
+        setSnapshot(envelope);
         setNow(Date.now());
         setError("");
         return data;
       } catch (requestError) {
-        setError(requestError.message || "Unable to load results.");
+        if (!silent)
+          setError(requestError.message || "Unable to load results.");
         if (throwOnError) throw requestError;
         return null;
       } finally {
-        setLoading(false);
+        if (!silent) setLoading(false);
       }
     },
     [event.code, getToken],
@@ -786,7 +799,9 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
   useImperativeHandle(
     forwardedRef,
     () => ({
-      refresh: (token) => load(token, { throwOnError: true }),
+      refresh: (token, { silent = false } = {}) =>
+        load(token, { throwOnError: true, silent }),
+      activity: () => shownRef.current,
     }),
     [load],
   );

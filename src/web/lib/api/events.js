@@ -178,6 +178,19 @@ export async function fetchEventResults(code, token) {
   return res.json();
 }
 
+// The small change digest the organizer workspace polls: event version and
+// status, result-snapshot freshness, and roster head counts with the time of
+// the latest roster write.
+export async function fetchEventActivity(code, token) {
+  const res = await apiFetch(
+    `${API_BASE}/events/activity?code=${encodeURIComponent(code)}`,
+    {},
+    token,
+  );
+  if (!res.ok) throw new Error(await extractError(res));
+  return res.json();
+}
+
 export async function previewFinalMeeting(code, payload, token) {
   const res = await apiFetch(
     `${API_BASE}/events/finalization/preview?code=${encodeURIComponent(code)}`,

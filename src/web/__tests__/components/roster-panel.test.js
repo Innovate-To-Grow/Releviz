@@ -942,6 +942,123 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
     expect(screen.getByLabelText("Include Temp Person")).toBeEnabled();
   });
 
+  test("a silent reload swaps the page in place and hands back its digest", async () => {
+    const activity = {
+      total: 1,
+      submitted: 0,
+      changedAt: "2026-08-20T08:00:00Z",
+    };
+    fetchRoster.mockResolvedValue(
+      rosterResponse([participant()], { activity }),
+    );
+    const panel = createRef();
+    await renderPanel({ ref: panel });
+    await screen.findByLabelText("Weight for Temp Person");
+    expect(panel.current.activity()).toEqual(activity);
+
+    // The organizer is typing in a row while the live sync re-reads the page:
+    // the table never unmounts, so the field keeps focus and its draft.
+    const weight = screen.getByLabelText("Weight for Temp Person");
+    weight.focus();
+    fireEvent.change(weight, { target: { value: "0.7" } });
+    const moved = { total: 1, submitted: 1, changedAt: "2026-08-20T09:00:00Z" };
+    let releaseRoster;
+    fetchRoster.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseRoster = resolve;
+        }),
+    );
+    let silent;
+    act(() => {
+      silent = panel.current.refresh("token", { silent: true });
+    });
+    expect(screen.queryByText("Loading roster…")).not.toBeInTheDocument();
+    await act(async () => {
+      releaseRoster(
+        rosterResponse(
+          [participant({ submitted: 1, invitationStatus: "submitted" })],
+          {
+            activity: moved,
+          },
+        ),
+      );
+      await silent;
+    });
+    expect(fetchRoster).toHaveBeenCalledTimes(2);
+    expect(panel.current.activity()).toEqual(moved);
+    expect(screen.getByLabelText("Roster summary")).toHaveTextContent(
+      "1 submitted",
+    );
+    expect(screen.getByLabelText("Weight for Temp Person")).toHaveFocus();
+    expect(screen.getByLabelText("Weight for Temp Person")).toHaveValue(0.7);
+
+    // A silent failure is the caller's to report; the panel shows nothing
+    // and keeps what it has. A listing without a digest clears the digest.
+    fetchRoster.mockRejectedValueOnce(new Error("offline"));
+    await act(async () => {
+      await expect(
+        panel.current.refresh("token", { silent: true }),
+      ).rejects.toThrow("offline");
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Roster summary")).toHaveTextContent(
+      "1 submitted",
+    );
+    fetchRoster.mockResolvedValueOnce(
+      rosterResponse([participant({ submitted: 1 })]),
+    );
+    await act(async () => {
+      await panel.current.refresh("token", { silent: true });
+    });
+    expect(panel.current.activity()).toBeNull();
+  });
+
+  test("a reload never moves a row behind a patch that landed while it was in flight", async () => {
+    fetchRoster.mockResolvedValue(rosterResponse([participant()]));
+    const panel = createRef();
+    await renderPanel({ ref: panel });
+    const weight = await screen.findByLabelText("Weight for Temp Person");
+
+    // The listing was read before the patch and still carries version 4.
+    let releaseRoster;
+    fetchRoster.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseRoster = resolve;
+        }),
+    );
+    let silent;
+    act(() => {
+      silent = panel.current.refresh("token", { silent: true });
+    });
+    patchRosterParticipant.mockResolvedValueOnce({
+      participant: participant({ weight: 0.5, version: 5 }),
+    });
+    fireEvent.change(weight, { target: { value: "0.5" } });
+    fireEvent.blur(weight);
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "Temp Person was updated.",
+      ),
+    );
+    await act(async () => {
+      releaseRoster(rosterResponse([participant({ weight: 1, version: 4 })]));
+      await silent;
+    });
+    // The stale listing did not undo the saved weight.
+    expect(screen.getByLabelText("Weight for Temp Person")).toHaveValue(0.5);
+
+    // A newer listing still wins.
+    fetchRoster.mockResolvedValueOnce(
+      rosterResponse([participant({ weight: 0.9, version: 6 })]),
+    );
+    await act(async () => {
+      await panel.current.refresh("token", { silent: true });
+    });
+    expect(screen.getByLabelText("Weight for Temp Person")).toHaveValue(0.9);
+  });
+
   test("recovers a legacy delivery id and validates invitation lengths", async () => {
     fetchRoster.mockResolvedValue(rosterResponse([participant()]));
     const onDeliveryRequestChange = jest.fn();

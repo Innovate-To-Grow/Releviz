@@ -314,6 +314,17 @@ print(json.dumps({
   return JSON.parse(output.trim());
 }
 
+// The revision the Results panel says it is current at, or -1 while it is
+// still updating.
+async function currentResultsRevision(page) {
+  const text = await page
+    .getByText(/Results are current at revision \d+/)
+    .textContent({ timeout: 500 })
+    .catch(() => "");
+  const match = String(text || "").match(/revision (\d+)/);
+  return match ? Number(match[1]) : -1;
+}
+
 function temporaryAccessPathFromEmail(body) {
   const rawLink = body.match(/Link:\s*(https?:\/\/[^\s<]+)/i)?.[1];
   if (!rawLink)
@@ -478,6 +489,18 @@ test.describe("Releviz account and scheduling flow", () => {
       temporaryPage.getByText("You are responding as Temporary Taylor"),
     ).toBeVisible();
 
+    await expect(page.getByLabel("Roster summary")).toContainText("0 submitted");
+    let revisionBeforeResponse = -1;
+    await expect
+      .poll(
+        async () => {
+          revisionBeforeResponse = await currentResultsRevision(page);
+          return revisionBeforeResponse;
+        },
+        { timeout: 20_000 },
+      )
+      .toBeGreaterThan(0);
+
     await temporaryPage.getByRole("button", { name: "Apply to all" }).click();
     await expect(temporaryPage.getByText("Saving draft…")).toBeVisible();
     await expect(
@@ -487,6 +510,18 @@ test.describe("Releviz account and scheduling flow", () => {
       .getByRole("button", { name: "Submit availability" })
       .click();
     await expect(temporaryPage.getByText("Schedule submitted.")).toBeVisible();
+
+    // The organizer workspace picks the response up on its own (its live
+    // sync polls every 5 s): the roster counts it and the results move on to
+    // a newer revision, with no Refresh press.
+    await expect(page.getByLabel("Roster summary")).toContainText("1 submitted", {
+      timeout: 20_000,
+    });
+    await expect(participantCard).toContainText(/Response\s*Submitted/);
+    await expect
+      .poll(() => currentResultsRevision(page), { timeout: 20_000 })
+      .toBeGreaterThan(revisionBeforeResponse);
+    await expect(page.getByText("New responses load automatically.")).toBeVisible();
 
     await organizerDrawer.getByRole("button", { name: "Save draft" }).click();
     await expect(

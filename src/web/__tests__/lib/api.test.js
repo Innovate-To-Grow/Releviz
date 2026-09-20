@@ -42,6 +42,7 @@ import {
   duplicateEvent,
   fetchDeliveryRequest,
   fetchEvent,
+  fetchEventActivity,
   fetchEventResults,
   fetchFinalization,
   fetchInvitations,
@@ -924,6 +925,7 @@ describe("business API helpers", () => {
       "tok",
     );
     await fetchEventResults("ABC 123", "tok");
+    await fetchEventActivity("ABC 123", "tok");
     await previewFinalMeeting(
       "ABC 123",
       {
@@ -1105,6 +1107,7 @@ describe("business API helpers", () => {
       }),
     );
     expect(urls).toContain("/events/results?code=ABC%20123");
+    expect(urls).toContain("/events/activity?code=ABC%20123");
     expect(urls).toContain("/events/finalization/preview?code=ABC%20123");
     expect(urls).toContain("/events/finalization?code=ABC%20123");
     expect(urls).toContain("/events/lifecycle?code=ABC%20123");
@@ -1186,6 +1189,7 @@ describe("business API helpers", () => {
     await expect(duplicateEvent("BAD", {})).rejects.toThrow("nope");
     await expect(deleteEvent("BAD", {})).rejects.toThrow("nope");
     await expect(fetchEventResults("BAD")).rejects.toThrow("nope");
+    await expect(fetchEventActivity("BAD")).rejects.toThrow("nope");
     await expect(previewFinalMeeting("BAD", {})).rejects.toThrow("nope");
     await expect(confirmFinalMeeting("BAD", {})).rejects.toThrow("nope");
     await expect(fetchFinalization("BAD")).rejects.toThrow("nope");

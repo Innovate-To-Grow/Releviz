@@ -6,13 +6,61 @@ import AppButton from "@/components/ui/AppButton";
 import { AvailabilityChoice } from "@/components/ui/Availability";
 import FormField from "@/components/ui/FormField";
 import { RefreshIcon, SaveIcon, VerifiedIcon } from "@/components/ui/icons";
+import StatusBadge from "@/components/ui/StatusBadge";
 import ScheduleChannelEditor from "@/components/schedule/ScheduleChannelEditor";
+
+function formatClockTime(value) {
+  return new Date(value).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+/**
+ * The live-sync line under the event name: whether new responses are being
+ * picked up on their own, and when the workspace last changed because of it.
+ * `live` is null when the workspace is not syncing (the event is not active).
+ */
+export function LiveSyncStatus({ live }) {
+  if (!live) return null;
+  const paused = Boolean(live.error);
+  return (
+    <p className="organizer-heading__live small mb-0">
+      <StatusBadge
+        status={paused ? "warning" : "success"}
+        className="organizer-heading__live-badge me-2"
+      >
+        {paused ? "Live updates paused" : "Live"}
+      </StatusBadge>
+      {/* Only the state line is announced; the timestamp changes too often
+          to be read out every time. */}
+      <span role="status" className="text-secondary">
+        {paused
+          ? `${live.error} Use Refresh to load new responses.`
+          : "New responses load automatically."}
+      </span>
+      {live.updatedAt ? (
+        <>
+          {" "}
+          {/* The separator and the time wrap as one unit on narrow screens. */}
+          <span className="organizer-heading__live-time text-secondary text-nowrap">
+            <span aria-hidden="true">·</span>{" "}
+            <time dateTime={new Date(live.updatedAt).toISOString()}>
+              Updated {formatClockTime(live.updatedAt)}
+            </time>
+          </span>
+        </>
+      ) : null}
+    </p>
+  );
+}
 
 export function OrganizerHeader({
   event,
   onRefresh,
   refreshing = false,
   controls = null,
+  live = null,
 }) {
   return (
     <header className="organizer-heading page-header">
@@ -21,6 +69,7 @@ export function OrganizerHeader({
         <h2 className="organizer-title mb-1">
           {event?.name?.trim() || "Untitled event"}
         </h2>
+        <LiveSyncStatus live={live} />
       </div>
       {/* The lifecycle badge lives in EventControls (passed as `controls`), so
           the header does not repeat it. `mw-100` lets the action row wrap
