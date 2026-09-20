@@ -6,6 +6,7 @@
     "email-auth-link",
     "event",
     "feedback",
+    "impersonate-login",
     "login",
     "privacy",
     "recover",

@@ -19,6 +19,7 @@ import {
   fetchAuthSession,
   fetchAuthSessions,
   fetchProfile,
+  impersonateLogin,
   loginWithPassword,
   logoutApi,
   requestPasswordResetCode,
@@ -429,6 +430,50 @@ describe("auth API helpers", () => {
         }),
       }),
     );
+  });
+
+  test("impersonateLogin exchanges the admin token for a session", async () => {
+    const authBody = {
+      access: "impersonated",
+      user: { id: "member" },
+      next_step: "account",
+      requires_profile_completion: false,
+      message: "Signed in",
+    };
+    global.fetch.mockResolvedValueOnce(jsonResponse(authBody));
+
+    await expect(impersonateLogin({ token: "abc123" })).resolves.toEqual(
+      authBody,
+    );
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/authn/impersonate-login/",
+      expect.objectContaining({
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: "abc123" }),
+        credentials: "include",
+      }),
+    );
+    expect(readAuthSession()).toEqual(
+      expect.objectContaining({
+        access: "impersonated",
+        user: expect.objectContaining({ id: "member" }),
+        nextStep: "account",
+        requiresProfileCompletion: false,
+      }),
+    );
+  });
+
+  test("impersonateLogin rejects with the backend detail and leaves no session", async () => {
+    global.fetch.mockResolvedValueOnce(
+      jsonResponse({ detail: "Invalid impersonation link." }, { status: 400 }),
+    );
+
+    await expect(impersonateLogin({ token: "stale" })).rejects.toThrow(
+      "Invalid impersonation link.",
+    );
+    expect(readAuthSession()).toBeNull();
   });
 
   test("auth helpers throw extracted errors and update profile sessions", async () => {

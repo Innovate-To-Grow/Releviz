@@ -13,6 +13,7 @@ const {
   datetimeLocalHoursFromNow,
   dispatchEmailJobs,
   expandAdvancedOptions,
+  expectDashboard,
   fillTextbox,
   latestEmailFor,
   latestVerificationCode,
@@ -1982,7 +1983,14 @@ test.describe("Releviz account and scheduling flow", () => {
       expect(revoked.response.status()).toBe(401);
     }
 
-    await loginWithEmailCode(page, email);
+    // Password mode proves the password set through /recover works in the UI.
+    await page
+      .getByRole("button", { name: "Sign in with password instead" })
+      .click();
+    await page.getByLabel("Email").fill(email);
+    await page.getByLabel("Password", { exact: true }).fill(resetPassword);
+    await page.getByRole("button", { name: "Sign In", exact: true }).click();
+    await expectDashboard(page);
     const resetSession = await readSession(page);
     await page.goto("/settings");
     // The change-password fields sit inside a collapsed disclosure.
