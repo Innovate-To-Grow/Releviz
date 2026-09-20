@@ -84,7 +84,9 @@ export function formatWeekLabel(weekStart) {
  * Normalizes `event.slotGroups` into `{ key, kind, label, weekday, date, slots }`.
  * Accepts the API shape (weekday:N / date:YYYY-MM-DD groups) and older
  * fixtures whose slots only carry `startsAt`/`endsAt` and whose key is a bare
- * date; groups without usable slots are dropped.
+ * date; groups without usable slots are dropped. Every slot carries
+ * `blocked` (organizer-blocked for this event; false when the API or an
+ * older fixture omits it).
  */
 export function normalizeSlotGroups(event) {
   const timeZone = event?.timezone || "UTC";
@@ -140,6 +142,7 @@ export function normalizeSlotGroups(event) {
         endsAt: slot.endsAt ?? null,
         startOffset: slot.startOffset ?? null,
         endOffset: slot.endOffset ?? null,
+        blocked: Boolean(slot.blocked),
       });
     });
     if (!slots.length) return;
@@ -293,7 +296,18 @@ export function formatRangeLabel({ kind, view, groups, columns }) {
 
 // --- windows ----------------------------------------------------------------
 
-/** The window of `k` slots starting at `row`, or an `error` when it cannot start there. */
+/** Whether any slot of the `k`-slot window at `row` is blocked for the event. */
+function windowBlocked(column, row, k) {
+  return column.slots.slice(row, row + k).some((slot) => slot.blocked);
+}
+
+/**
+ * The window of `k` slots starting at `row`, or an `error` when it cannot
+ * start there: `invalid-duration`, then `blocked` (an organizer-blocked slot
+ * among the window's rows, checked before the window is known to fit so it
+ * also wins at the column's end), then `tail`, then the boundary's own
+ * resolution message (a daylight-saving gap).
+ */
 export function windowAt(column, row, k) {
   if (!(k >= 1)) {
     return {
@@ -301,6 +315,14 @@ export function windowAt(column, row, k) {
       startsAt: null,
       endsAt: null,
       error: "invalid-duration",
+    };
+  }
+  if (windowBlocked(column, row, k)) {
+    return {
+      slotIndices: null,
+      startsAt: null,
+      endsAt: null,
+      error: "blocked",
     };
   }
   if (row < 0 || row + k > column.slots.length) {
@@ -325,8 +347,14 @@ export function windowAt(column, row, k) {
   };
 }
 
+/**
+ * Why the window starting at `row` cannot be picked, or `startable`. In
+ * precedence order: `invalid-duration`, `blocked`, `tail`, `dst` (any
+ * unresolvable boundary), `past`.
+ */
 export function cellState({ column, row, k, now }) {
   if (!(k >= 1)) return "invalid-duration";
+  if (windowBlocked(column, row, k)) return "blocked";
   if (row + k > column.slots.length) return "tail";
   const window = windowAt(column, row, k);
   if (window.error) return "dst";

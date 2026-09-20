@@ -22,6 +22,14 @@ Go to the home page and fill out the event form:
 Create an account or log in before creating an event. New events are active immediately and can
 accept responses as soon as participants join; creating an event by itself does not send email.
 
+**Blocked times.** The organizer workspace opens on the **Blocked times** editor right after the
+event is created. Paint the parts of each day that are not available (a lunch break on Mondays, a
+late start on Fridays) and save; the event keeps one start/end/days configuration while every day
+gets its own usable window. Blocked slots stay in the schedule grid but are greyed out and cannot be
+painted, count as 0 in the results, never appear in ranked windows, and cannot be finalized into.
+Blocked times can be changed at any time from the Overview panel without resetting responses;
+after finalization the event must be reactivated first.
+
 ### 2. Build the Roster
 
 The Roster tab accepts `.xlsx`, `.csv`, or pasted CSV/TSV. Map the required `name` and `email`
@@ -54,7 +62,9 @@ Each participant:
 4. Clicks **Submit Schedule** when done
 
 The grid uses color coding plus text cues: hatched red (busy) -> yellow ◐ (if needed) -> green ✓
-(available). Virtual channels use a red -> purple -> blue scale.
+(available). Virtual channels use a red -> purple -> blue scale. Grey striped cells are times the
+organizer blocked for the event: they cannot be painted, "Apply to all" skips them, and anything
+marked there before the block was added is ignored.
 
 Depending on the event's visibility setting, participants can see the latest published group
 snapshot. While a newer response is being calculated, the UI labels the result as refreshing and
@@ -74,6 +84,12 @@ Roster, Results, and Finalize. The organizer can:
   availability, fully available count, and configured-time order;
 - finalize one authoritative continuous interval, queue stable-UID iCalendar `REQUEST`/`CANCEL`
   notifications, and download the calendar file.
+
+On the meeting-time calendar the organizer's blocked times are hatched, show no percentage, and
+cannot be picked; an open slot whose meeting window would run into a block keeps its percentage but
+cannot start a meeting either. Blocked times are excluded from the results (their availability is
+reported as 0), never form part of a ranked window, and cannot be finalized into; edit them from
+**Blocked times** on the Overview panel.
 
 For a multi-slot meeting, each person's candidate score is their minimum availability across the
 whole interval. The weighted score is `sum(person_score * weight) / sum(positive weights)` across

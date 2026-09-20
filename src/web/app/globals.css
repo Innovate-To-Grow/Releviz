@@ -16,6 +16,10 @@
   --rv-avail-virtual-free: #9ec5fe;
   --rv-avail-text: #212529;
   --rv-avail-hatch: rgba(33, 37, 41, 0.14);
+  /* Organizer-painted blocked slots (the editor only; participants see them
+     as grey stripes). */
+  --rv-avail-blocked: #dc3545;
+  --rv-avail-blocked-text: #ffffff;
 
   /* Layout */
   --rv-header-height: 64px;
@@ -41,6 +45,8 @@
     /* Availability tones stay constant so the heatmap reads the same in both
        appearances; only the surrounding chrome changes. */
     --rv-focus-ring: 0 0 0 0.25rem rgba(110, 168, 254, 0.45);
+    --rv-avail-blocked: #dc3545;
+    --rv-avail-blocked-text: #ffffff;
   }
 }
 
