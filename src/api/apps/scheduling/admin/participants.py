@@ -6,10 +6,21 @@ from unfold.admin import ModelAdmin
 from apps.scheduling.models import (
     EventInvitation,
     Participant,
+    ParticipantGroup,
     TemporaryEventSession,
     UserEvent,
     Weight,
 )
+
+
+@admin.register(ParticipantGroup)
+class ParticipantGroupAdmin(ModelAdmin):
+    list_display = ("name", "event", "member_count", "created_at")
+    search_fields = ("name", "event__code", "event__name")
+
+    @admin.display(description="Members")
+    def member_count(self, group):
+        return group.participants.count()
 
 
 @admin.register(Participant)
@@ -20,17 +31,27 @@ class ParticipantAdmin(ModelAdmin):
         "member",
         "submitted",
         "hidden",
-        "group_name",
+        "group_names",
+        "all_groups",
         "sort_order",
     )
-    list_filter = ("submitted", "hidden", "group_name")
+    list_filter = ("submitted", "hidden", "all_groups")
     search_fields = (
         "participant_name",
         "event__code",
         "event__name",
         "member__first_name",
         "member__last_name",
+        "groups__name",
     )
+    filter_horizontal = ("groups",)
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).prefetch_related("groups")
+
+    @admin.display(description="Groups")
+    def group_names(self, participant):
+        return "; ".join(group.name for group in participant.groups.all())
 
 
 @admin.register(EventInvitation)
