@@ -1,0 +1,934 @@
+name: Releviz Backend Release
+run-name: >-
+  ${{ github.event_name == 'workflow_run'
+      && format('Backend release: {0}', github.event.workflow_run.display_title)
+      || format('Backend release (manual): {0}', github.sha) }}
+
+on:
+  # Every green CI run on main is offered as a backend release; the scope job
+  # skips it when nothing under src/api changed. A release waits in the
+  # "AWS ECS - Prod" environment for reviewer approval before AWS credentials are
+  # issued. Manual dispatch stays available for redeploys and rollbacks.
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type DEPLOY to release the selected main commit to production
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  checks: read
+  contents: read
+  deployments: write
+  id-token: write
+
+concurrency:
+  group: release-backend
+  cancel-in-progress: false
+
+jobs:
+  scope:
+    name: Decide whether the backend changed
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: >-
+      ${{
+        github.ref == 'refs/heads/main' && (
+          github.event_name == 'workflow_dispatch' || (
+            github.event_name == 'workflow_run' &&
+            github.event.workflow_run.conclusion == 'success' &&
+            github.event.workflow_run.event == 'push' &&
+            github.event.workflow_run.head_branch == 'main' &&
+            github.event.workflow_run.head_repository.full_name == github.repository
+          )
+        )
+      }}
+    outputs:
+      release: ${{ steps.scope.outputs.release }}
+    steps:
+      - name: Checkout release commit with history
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Compare with the last successful backend release
+        id: scope
+        uses: ./.github/actions/release-scope
+        with:
+          workflow-file: release-backend.yml
+          release-sha: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          trigger-event: ${{ github.event_name }}
+          paths: |
+            src/api
+
+  release:
+    name: Release backend to production
+    needs: scope
+    if: ${{ needs.scope.outputs.release == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment:
+      name: AWS ECS - Prod
+      url: https://${{ vars.PROD_API_DOMAIN || 'api.releviz.com' }}
+
+    env:
+      TRIGGER_EVENT: ${{ github.event_name }}
+      CONFIRMATION: ${{ inputs.confirmation }}
+      # workflow_run: the CI run's head commit; dispatch: the selected main commit.
+      DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-west-2' }}
+      AWS_ROLE_ARN: ${{ vars.AWS_PROD_ROLE_ARN }}
+      TF_STATE_BUCKET: ${{ vars.PROD_TF_STATE_BUCKET }}
+      ECR_BACKEND: ${{ vars.ECR_PROD_BACKEND || 'releviz-prod-backend' }}
+      ECR_FRONTEND: ${{ vars.ECR_PROD_FRONTEND || 'releviz-prod-frontend' }}
+      PROD_DOMAIN: ${{ vars.PROD_DOMAIN }}
+      API_DOMAIN: ${{ vars.PROD_API_DOMAIN || 'api.releviz.com' }}
+      ROUTE53_ZONE_ID: ${{ vars.PROD_ROUTE53_ZONE_ID }}
+      DJANGO_SECRET_KEY_ARN: ${{ vars.PROD_DJANGO_SECRET_KEY_ARN }}
+      FIELD_ENCRYPTION_KEY_ARN: ${{ vars.PROD_DJANGO_FIELD_ENCRYPTION_KEY_ARN }}
+      METRICS_BEARER_TOKEN_ARN: ${{ vars.PROD_METRICS_BEARER_TOKEN_ARN }}
+      DEFAULT_ADMIN_EMAIL: ${{ vars.PROD_DEFAULT_ADMIN_EMAIL || 'admin@releviz.com' }}
+      DEFAULT_ADMIN_PASSWORD_SECRET_ARN: ${{ vars.PROD_DEFAULT_ADMIN_PASSWORD_SECRET_ARN }}
+      SENTRY_DSN_SECRET_ARN: ${{ vars.PROD_SENTRY_DSN_SECRET_ARN || '' }}
+      AMPLIFY_APP_ID: ${{ vars.PROD_AMPLIFY_APP_ID }}
+      ALARM_ACTION_ARNS: ${{ vars.PROD_ALARM_ACTION_ARNS_JSON }}
+      TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-west-2' }}
+      TF_VAR_backend_image_tag: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      TF_VAR_ecr_backend_repository: ${{ vars.ECR_PROD_BACKEND || 'releviz-prod-backend' }}
+      TF_VAR_ecr_frontend_repository: ${{ vars.ECR_PROD_FRONTEND || 'releviz-prod-frontend' }}
+      TF_VAR_custom_domain: ${{ vars.PROD_DOMAIN }}
+      TF_VAR_api_domain: ${{ vars.PROD_API_DOMAIN || 'api.releviz.com' }}
+      TF_VAR_enable_amplify_domain: "true"
+      TF_VAR_enable_legacy_api_compatibility: "false"
+      TF_VAR_route53_zone_id: ${{ vars.PROD_ROUTE53_ZONE_ID }}
+      TF_VAR_django_secret_key_arn: ${{ vars.PROD_DJANGO_SECRET_KEY_ARN }}
+      TF_VAR_django_field_encryption_key_arn: ${{ vars.PROD_DJANGO_FIELD_ENCRYPTION_KEY_ARN }}
+      TF_VAR_metrics_bearer_token_arn: ${{ vars.PROD_METRICS_BEARER_TOKEN_ARN }}
+      TF_VAR_default_admin_email: ${{ vars.PROD_DEFAULT_ADMIN_EMAIL || 'admin@releviz.com' }}
+      TF_VAR_default_admin_password_secret_arn: ${{ vars.PROD_DEFAULT_ADMIN_PASSWORD_SECRET_ARN }}
+      TF_VAR_sentry_dsn_secret_arn: ${{ vars.PROD_SENTRY_DSN_SECRET_ARN || '' }}
+      TF_VAR_secret_kms_key_arn: ${{ vars.PROD_SECRET_KMS_KEY_ARN || '' }}
+      TF_VAR_existing_acm_certificate_arn: ${{ vars.PROD_ACM_CERTIFICATE_ARN || '' }}
+      TF_VAR_alarm_action_arns: ${{ vars.PROD_ALARM_ACTION_ARNS_JSON }}
+      TF_VAR_default_from_email: ${{ vars.PROD_DEFAULT_FROM_EMAIL || 'noreply@releviz.com' }}
+      TF_VAR_amplify_app_id: ${{ vars.PROD_AMPLIFY_APP_ID }}
+
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+
+      - name: Release preflight
+        uses: ./.github/actions/release-preflight
+        with:
+          scope: backend
+
+      - name: Ensure the immutable backend ECR repository exists
+        run: |
+          set -euo pipefail
+          if ! aws ecr describe-repositories --repository-names "$ECR_BACKEND" >/dev/null 2>&1; then
+            aws ecr create-repository \
+              --repository-name "$ECR_BACKEND" \
+              --image-tag-mutability IMMUTABLE \
+              --image-scanning-configuration scanOnPush=true >/dev/null
+          else
+            aws ecr put-image-tag-mutability \
+              --repository-name "$ECR_BACKEND" \
+              --image-tag-mutability IMMUTABLE >/dev/null
+            aws ecr put-image-scanning-configuration \
+              --repository-name "$ECR_BACKEND" \
+              --image-scanning-configuration scanOnPush=true >/dev/null
+          fi
+
+      - name: Check whether the immutable backend image already exists
+        id: backend_image
+        run: |
+          set -euo pipefail
+          if aws ecr describe-images \
+            --repository-name "$ECR_BACKEND" \
+            --image-ids "imageTag=${DEPLOY_SHA}" >/dev/null 2>&1; then
+            echo "exists=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Login to Amazon ECR
+        if: ${{ steps.backend_image.outputs.exists != 'true' }}
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push immutable backend image
+        if: ${{ steps.backend_image.outputs.exists != 'true' }}
+        run: |
+          set -euo pipefail
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          image_uri="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_BACKEND}:${DEPLOY_SHA}"
+          docker build --pull --tag "$image_uri" ./src/api
+          docker push "$image_uri"
+
+      - name: Resolve the ECS fallback frontend image for this plan
+        id: frontend_tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The fallback frontend follows the latest successful frontend release
+          # whose image is in ECR; otherwise it stays on its deployed image.
+          released="$(
+            gh api \
+              -H 'Accept: application/vnd.github+json' \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/release-frontend.yml/runs?branch=main&status=success&per_page=1" \
+              --jq '.workflow_runs[0].head_sha // ""' 2>/dev/null || true
+          )"
+          tag=""
+          if [[ "$released" =~ ^[0-9a-f]{40}$ ]] &&
+            aws ecr describe-images --repository-name "$ECR_FRONTEND" \
+              --image-ids "imageTag=${released}" >/dev/null 2>&1; then
+            tag="$released"
+            source="latest successful frontend release"
+          else
+            deployed_definition="$(
+              terraform -chdir=infra/prod output -raw frontend_task_definition_arn 2>/dev/null || true
+            )"
+            if [ -n "$deployed_definition" ]; then
+              image_uri="$(
+                aws ecs describe-task-definition \
+                  --task-definition "$deployed_definition" \
+                  --query "taskDefinition.containerDefinitions[0].image" \
+                  --output text
+              )"
+              tag="${image_uri##*:}"
+              source="deployed fallback frontend"
+            fi
+          fi
+          if ! [[ "$tag" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::No immutable ECS fallback frontend image is available; run the frontend release first."
+            exit 1
+          fi
+          echo "sha=$tag" >>"$GITHUB_OUTPUT"
+          echo "::notice::ECS fallback frontend stays on ${tag} (${source})."
+
+      - name: Detect live Amplify not-found routing
+        id: not_found_rule
+        run: |
+          set -euo pipefail
+          # The not-found rule is released by the infrastructure workflow; a
+          # backend plan carries the live state so the Amplify app stays a no-op.
+          live="$(
+            aws amplify get-app \
+              --app-id "$AMPLIFY_APP_ID" \
+              --query app.customRules \
+              --output json |
+              jq -r 'any(.[]?; .source == "/<*>" and .target == "/404.html" and .status == "404")'
+          )"
+          echo "live=$live" >>"$GITHUB_OUTPUT"
+          echo "::notice::Live Amplify not-found routing for this plan: ${live}."
+
+      - name: Plan the backend release
+        env:
+          TF_VAR_enable_amplify_not_found_rule: ${{ steps.not_found_rule.outputs.live }}
+          TF_VAR_frontend_image_tag: ${{ steps.frontend_tag.outputs.sha }}
+        run: |
+          terraform -chdir=infra/prod plan -input=false -lock-timeout=15m \
+            -out=backend-release.tfplan
+
+      - name: Guard the backend release plan
+        run: |
+          set -euo pipefail
+          # A backend release may only roll the application runtime (ECS task
+          # definitions and services, autoscaling, alarms, logs, the reminder
+          # schedule). Anything else belongs to the infrastructure release.
+          unexpected="$(
+            terraform -chdir=infra/prod show -json backend-release.tfplan |
+              jq -c '
+                [
+                  .resource_changes[]?
+                  | select(.change.actions != ["no-op"])
+                  | select(
+                      (
+                        .address
+                        | test("^aws_(ecs_task_definition|ecs_service|appautoscaling_(target|policy)|cloudwatch_(metric_alarm|log_group|log_metric_filter|event_rule|event_target))\\.")
+                        | not
+                      )
+                      or .change.actions == ["delete"]
+                    )
+                  | {address, actions: .change.actions}
+                ]
+              '
+          )"
+          if [ "$unexpected" != "[]" ]; then
+            echo "::error::The backend release plan changes resources outside the application runtime: ${unexpected}"
+            echo "::error::Release those changes through the infrastructure workflow first."
+            exit 1
+          fi
+
+      - name: Apply the exact backend release plan
+        run: terraform -chdir=infra/prod apply -input=false -auto-approve backend-release.tfplan
+
+      - name: Capture deployed AWS resources
+        id: terraform
+        run: |
+          {
+            echo "cluster_name=$(terraform -chdir=infra/prod output -raw ecs_cluster_name)"
+            echo "backend_service=$(terraform -chdir=infra/prod output -raw backend_service_name)"
+            echo "result_worker_service=$(terraform -chdir=infra/prod output -raw result_worker_service_name)"
+            echo "email_worker_service=$(terraform -chdir=infra/prod output -raw email_worker_service_name)"
+            echo "frontend_service=$(terraform -chdir=infra/prod output -raw frontend_service_name)"
+            echo "default_admin_task_definition=$(terraform -chdir=infra/prod output -raw default_admin_task_definition_arn)"
+            echo "default_admin_container=$(terraform -chdir=infra/prod output -raw default_admin_container_name)"
+            echo "event_reminders_rule=$(terraform -chdir=infra/prod output -raw event_reminders_rule_name)"
+            echo "api_domain=$(terraform -chdir=infra/prod output -raw api_domain)"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Wait for backend, workers, and fallback frontend ECS services
+        run: |
+          aws ecs wait services-stable \
+            --cluster "${{ steps.terraform.outputs.cluster_name }}" \
+            --services \
+              "${{ steps.terraform.outputs.backend_service }}" \
+              "${{ steps.terraform.outputs.result_worker_service }}" \
+              "${{ steps.terraform.outputs.email_worker_service }}" \
+              "${{ steps.terraform.outputs.frontend_service }}"
+
+      - name: Verify ECS services use Terraform-selected task definitions
+        run: |
+          set -euo pipefail
+          for role in backend result_worker email_worker frontend; do
+            case "$role" in
+              backend) service="${{ steps.terraform.outputs.backend_service }}" ;;
+              result_worker) service="${{ steps.terraform.outputs.result_worker_service }}" ;;
+              email_worker) service="${{ steps.terraform.outputs.email_worker_service }}" ;;
+              frontend) service="${{ steps.terraform.outputs.frontend_service }}" ;;
+            esac
+            expected="$(
+              terraform -chdir=infra/prod output -raw "${role}_task_definition_arn"
+            )"
+            service_state="$(
+              aws ecs describe-services \
+                --cluster "${{ steps.terraform.outputs.cluster_name }}" \
+                --services "$service" \
+                --output json
+            )"
+            if ! jq -e --arg expected "$expected" '
+              (.failures | length) == 0
+              and (.services | length) == 1
+              and .services[0].taskDefinition == $expected
+              and (
+                [.services[0].deployments[] | select(.status == "PRIMARY")]
+                | length
+              ) == 1
+              and (
+                [
+                  .services[0].deployments[]
+                  | select(.status == "PRIMARY")
+                  | .taskDefinition
+                ] == [$expected]
+              )
+            ' <<<"$service_state" >/dev/null; then
+              echo "::error::The ${role} service stabilized on a task definition other than the reviewed Terraform release."
+              jq -r '
+                .services[0]
+                | {
+                    taskDefinition,
+                    deployments: [
+                      .deployments[]
+                      | {status, rolloutState, taskDefinition}
+                    ]
+                  }
+              ' <<<"$service_state" >&2
+              exit 1
+            fi
+
+            task_list="$(
+              aws ecs list-tasks \
+                --cluster "${{ steps.terraform.outputs.cluster_name }}" \
+                --service-name "$service" \
+                --desired-status RUNNING \
+                --output json
+            )"
+            mapfile -t task_arns < <(jq -r '.taskArns[]' <<<"$task_list")
+            if [ "${#task_arns[@]}" -eq 0 ]; then
+              echo "::error::The ${role} service has no running tasks after stabilization."
+              exit 1
+            fi
+            running_tasks="$(
+              aws ecs describe-tasks \
+                --cluster "${{ steps.terraform.outputs.cluster_name }}" \
+                --tasks "${task_arns[@]}" \
+                --output json
+            )"
+            if ! jq -e --arg expected "$expected" '
+              (.failures | length) == 0
+              and (.tasks | length) > 0
+              and all(
+                .tasks[];
+                .lastStatus == "RUNNING"
+                and .taskDefinitionArn == $expected
+              )
+            ' <<<"$running_tasks" >/dev/null; then
+              echo "::error::The ${role} service has running tasks outside the reviewed Terraform release."
+              jq -r '
+                .tasks[]
+                | {taskArn, lastStatus, taskDefinitionArn}
+              ' <<<"$running_tasks" >&2
+              exit 1
+            fi
+          done
+
+      - name: Verify the backend release identity and worker contract
+        env:
+          FALLBACK_FRONTEND_SHA: ${{ steps.frontend_tag.outputs.sha }}
+        run: |
+          set -euo pipefail
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          expected_backend_image="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_BACKEND}:${DEPLOY_SHA}"
+          expected_frontend_image="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_FRONTEND}:${FALLBACK_FRONTEND_SHA}"
+          backend_task_definition="$(
+            terraform -chdir=infra/prod output -raw backend_task_definition_arn
+          )"
+          backend_image="$(
+            aws ecs describe-task-definition \
+              --task-definition "$backend_task_definition" \
+              --query "taskDefinition.containerDefinitions[0].image" \
+              --output text
+          )"
+          if [ "$backend_image" != "$expected_backend_image" ]; then
+            echo "::error::The ECS backend is not the selected release: ${backend_image}"
+            exit 1
+          fi
+          for role in result_worker email_worker; do
+            if [ "$role" = "result_worker" ]; then
+              expected_command='["python","manage.py","recompute_event_results","--watch","--poll-interval=1"]'
+            else
+              expected_command='["python","manage.py","dispatch_email_jobs","--watch","--limit=1000","--concurrency=10","--rate-limit=10","--poll-interval=1"]'
+            fi
+            worker_task_definition="$(
+              terraform -chdir=infra/prod output -raw "${role}_task_definition_arn"
+            )"
+            worker_task_state="$(
+              aws ecs describe-task-definition \
+                --task-definition "$worker_task_definition" \
+                --output json
+            )"
+            if ! jq -e \
+              --arg image "$expected_backend_image" \
+              --argjson command "$expected_command" '
+                .taskDefinition.containerDefinitions[0].image == $image
+                and .taskDefinition.containerDefinitions[0].command == $command
+                and .taskDefinition.containerDefinitions[0].stopTimeout == 120
+                and .taskDefinition.containerDefinitions[0].healthCheck.retries == 3
+                and (
+                  [
+                    .taskDefinition.containerDefinitions[0].environment[]
+                    | select(.name == "DJANGO_SKIP_STARTUP_TASKS" and .value == "1")
+                  ] | length
+                ) == 1
+                and (
+                  [
+                    .taskDefinition.containerDefinitions[0].environment[]
+                    | select(.name == "DJANGO_MIGRATE_ON_START" and .value == "1")
+                  ] | length
+                ) == 1
+              ' <<<"$worker_task_state" >/dev/null; then
+              echo "::error::The ${role} task does not match the reviewed image, migration, command, health, and shutdown contract."
+              exit 1
+            fi
+          done
+          frontend_task_definition="$(
+            terraform -chdir=infra/prod output -raw frontend_task_definition_arn
+          )"
+          frontend_image="$(
+            aws ecs describe-task-definition \
+              --task-definition "$frontend_task_definition" \
+              --query "taskDefinition.containerDefinitions[0].image" \
+              --output text
+          )"
+          if [ "$frontend_image" != "$expected_frontend_image" ]; then
+            echo "::error::The ECS fallback frontend is not the resolved release: ${frontend_image}"
+            exit 1
+          fi
+          event_targets="$(
+            aws events list-targets-by-rule \
+              --rule "${{ steps.terraform.outputs.event_reminders_rule }}" \
+              --output json
+          )"
+          if ! jq -e \
+            --arg expected "$backend_task_definition" \
+            '(.Targets | length) == 1
+              and .Targets[0].EcsParameters.TaskDefinitionArn == $expected' \
+              <<<"$event_targets" >/dev/null; then
+            echo "::error::The reminder rule must have exactly one target pinned to the released backend task definition."
+            exit 1
+          fi
+
+      - name: Verify backend ALB target health
+        run: |
+          set -euo pipefail
+          target_group="$(
+            aws ecs describe-services \
+              --cluster "${{ steps.terraform.outputs.cluster_name }}" \
+              --services "${{ steps.terraform.outputs.backend_service }}" \
+              --query "services[0].loadBalancers[0].targetGroupArn" \
+              --output text
+          )"
+          for attempt in $(seq 1 30); do
+            health="$(aws elbv2 describe-target-health --target-group-arn "$target_group")"
+            if jq -e '
+              [.TargetHealthDescriptions[].TargetHealth.State] as $states
+              | ($states | length) > 0
+              and all($states[]; . == "healthy")
+            ' <<<"$health" >/dev/null; then
+              exit 0
+            fi
+            echo "Backend target health is converging; attempt=${attempt}/30"
+            jq -r '.TargetHealthDescriptions[].TargetHealth.State' <<<"$health"
+            sleep 10
+          done
+          echo "::error::Backend ALB targets did not become healthy."
+          exit 1
+
+      - name: Run backend smoke tests
+        env:
+          DEPLOYED_API_DOMAIN: ${{ steps.terraform.outputs.api_domain }}
+        run: |
+          set -euo pipefail
+          for path in /health/live /health /admin/; do
+            curl \
+              --connect-timeout 5 \
+              --fail \
+              --location \
+              --max-time 20 \
+              --show-error \
+              --retry 20 \
+              --retry-all-errors \
+              --retry-delay 5 \
+              "https://${DEPLOYED_API_DOMAIN}${path}" >/dev/null
+          done
+          curl \
+            --connect-timeout 5 \
+            --fail \
+            --max-time 20 \
+            --show-error \
+            --retry 20 \
+            --retry-all-errors \
+            --retry-delay 5 \
+            "https://${DEPLOYED_API_DOMAIN}/static/admin/css/base.css" >/dev/null
+          preflight_headers="${RUNNER_TEMP}/api-preflight.headers"
+          preflight_status="$(
+            curl \
+              --connect-timeout 5 \
+              --max-time 20 \
+              --silent \
+              --show-error \
+              --request OPTIONS \
+              --header "Origin: https://${PROD_DOMAIN}" \
+              --header "Access-Control-Request-Method: PUT" \
+              --header "Access-Control-Request-Headers: authorization,content-type" \
+              --dump-header "$preflight_headers" \
+              --output /dev/null \
+              --write-out "%{http_code}" \
+              "https://${DEPLOYED_API_DOMAIN}/authn/profile/"
+          )"
+          if [ "$preflight_status" != "200" ] ||
+            ! grep -Fqi "access-control-allow-origin: https://${PROD_DOMAIN}" "$preflight_headers" ||
+            ! grep -qiE '^access-control-allow-credentials:[[:space:]]*true' "$preflight_headers"; then
+            echo "::error::The API did not accept the canonical frontend credentialed CORS preflight."
+            exit 1
+          fi
+          for path in /api/health /api/health/live; do
+            status="$(
+              curl \
+                --connect-timeout 5 \
+                --max-time 20 \
+                --silent \
+                --show-error \
+                --output /dev/null \
+                --write-out "%{http_code}" \
+                "https://${DEPLOYED_API_DOMAIN}${path}?check=${DEPLOY_SHA}"
+            )"
+            if [ "$status" != "404" ]; then
+              echo "::error::Retired legacy route ${path} returned ${status}; expected 404."
+              exit 1
+            fi
+          done
+
+      - name: Ensure production default administrator through one-off ECS task
+        id: default_admin
+        env:
+          CLUSTER_NAME: ${{ steps.terraform.outputs.cluster_name }}
+          BACKEND_SERVICE: ${{ steps.terraform.outputs.backend_service }}
+          DEFAULT_ADMIN_TASK_DEFINITION: ${{ steps.terraform.outputs.default_admin_task_definition }}
+          DEFAULT_ADMIN_CONTAINER: ${{ steps.terraform.outputs.default_admin_container }}
+        run: |
+          set -euo pipefail
+          task_arn=""
+          started_by="admin-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          admin_task_verified="false"
+          if ! [[ "$started_by" =~ ^[A-Za-z0-9_-]{1,36}$ ]]; then
+            echo "::error::The generated ECS started-by token is invalid."
+            exit 1
+          fi
+          echo "started_by=${started_by}" >>"$GITHUB_OUTPUT"
+
+          discover_default_admin_tasks() {
+            local attempt
+            local discovered=""
+            for attempt in 1 2 3 4 5 6; do
+              discovered="$(
+                aws ecs list-tasks \
+                  --cluster "$CLUSTER_NAME" \
+                  --started-by "$started_by" \
+                  --query taskArns \
+                  --output text 2>/dev/null || true
+              )"
+              if [ -n "$discovered" ] && [ "$discovered" != "None" ]; then
+                printf '%s\n' "$discovered"
+                return
+              fi
+              if [ "$attempt" -lt 6 ]; then
+                sleep 2
+              fi
+            done
+          }
+
+          cleanup_default_admin_task() {
+            local candidate
+            local discovered_tasks=""
+            local task_status=""
+            local -a discovered=()
+            local -A seen=()
+            if [ "$admin_task_verified" = "true" ]; then
+              return
+            fi
+            discovered_tasks="$(discover_default_admin_tasks)"
+            read -r -a discovered <<<"$discovered_tasks"
+            if [ -n "$task_arn" ]; then
+              discovered+=("$task_arn")
+            fi
+            for candidate in "${discovered[@]}"; do
+              if [ -z "$candidate" ] || [ -n "${seen[$candidate]:-}" ]; then
+                continue
+              fi
+              seen["$candidate"]=1
+              task_status="$(
+                aws ecs describe-tasks \
+                  --cluster "$CLUSTER_NAME" \
+                  --tasks "$candidate" \
+                  --query 'tasks[0].lastStatus' \
+                  --output text 2>/dev/null || true
+              )"
+              if [ -n "$task_status" ] &&
+                [ "$task_status" != "None" ] &&
+                [ "$task_status" != "STOPPED" ]; then
+                aws ecs stop-task \
+                  --cluster "$CLUSTER_NAME" \
+                  --task "$candidate" \
+                  --reason "Production default-admin bootstrap cleanup" >/dev/null || true
+                timeout --signal=TERM 180s \
+                  aws ecs wait tasks-stopped \
+                  --cluster "$CLUSTER_NAME" \
+                  --tasks "$candidate" || true
+              fi
+            done
+          }
+          trap cleanup_default_admin_task EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+
+          expected_task_definition="$(
+            terraform -chdir=infra/prod output -raw default_admin_task_definition_arn
+          )"
+          expected_container="$(
+            terraform -chdir=infra/prod output -raw default_admin_container_name
+          )"
+          if [ "$DEFAULT_ADMIN_TASK_DEFINITION" != "$expected_task_definition" ] ||
+            [ "$DEFAULT_ADMIN_CONTAINER" != "$expected_container" ]; then
+            echo "::error::Captured default-admin task identity differs from the reviewed Terraform outputs."
+            exit 1
+          fi
+
+          task_definition_state="$(
+            aws ecs describe-task-definition \
+              --task-definition "$expected_task_definition" \
+              --output json
+          )"
+          if ! jq -e \
+            --arg expected "$expected_task_definition" \
+            --arg container "$expected_container" \
+            --arg email "$DEFAULT_ADMIN_EMAIL" \
+            --arg password_secret "${TF_VAR_default_admin_password_secret_arn}:password::" '
+              .taskDefinition.taskDefinitionArn == $expected
+              and .taskDefinition.family == "releviz-prod-default-admin-task"
+              and .taskDefinition.networkMode == "awsvpc"
+              and (.taskDefinition.requiresCompatibilities | index("FARGATE")) != null
+              and ((.taskDefinition.taskRoleArn // "") == "")
+              and (.taskDefinition.containerDefinitions | length) == 1
+              and .taskDefinition.containerDefinitions[0].name == $container
+              and .taskDefinition.containerDefinitions[0].command
+                == ["python", "manage.py", "ensure_default_admin", "--yes", "--create-only"]
+              and (
+                [
+                  .taskDefinition.containerDefinitions[0].environment[]
+                  | select(.name == "DJANGO_SKIP_STARTUP_TASKS" and .value == "1")
+                ] | length
+              ) == 1
+              and (
+                [
+                  .taskDefinition.containerDefinitions[0].environment[]
+                  | select(.name == "DJANGO_CREATE_DEFAULT_ADMIN" and .value == "0")
+                ] | length
+              ) == 1
+              and (
+                [
+                  .taskDefinition.containerDefinitions[0].environment[]
+                  | select(.name == "DJANGO_SUPERUSER_EMAIL" and .value == $email)
+                ] | length
+              ) == 1
+              and (
+                [
+                  .taskDefinition.containerDefinitions[0].secrets[]
+                  | select(
+                      .name == "DJANGO_SUPERUSER_PASSWORD"
+                      and .valueFrom == $password_secret
+                    )
+                ] | length
+              ) == 1
+            ' <<<"$task_definition_state" >/dev/null; then
+            echo "::error::The default-admin task definition does not match the reviewed bootstrap contract."
+            exit 1
+          fi
+          default_admin_image="$(
+            jq -er '.taskDefinition.containerDefinitions[0].image' <<<"$task_definition_state"
+          )"
+
+          service_state="$(
+            aws ecs describe-services \
+              --cluster "$CLUSTER_NAME" \
+              --services "$BACKEND_SERVICE" \
+              --output json
+          )"
+          if ! jq -e '
+            (.failures | length) == 0
+            and (.services | length) == 1
+            and (
+              .services[0].networkConfiguration.awsvpcConfiguration
+              | (.subnets | length) > 0
+              and (.securityGroups | length) > 0
+              and .assignPublicIp == "DISABLED"
+            )
+          ' <<<"$service_state" >/dev/null; then
+            echo "::error::The backend service does not expose a valid private Fargate network configuration."
+            exit 1
+          fi
+          backend_task_definition="$(jq -er '.services[0].taskDefinition' <<<"$service_state")"
+          backend_task_state="$(
+            aws ecs describe-task-definition \
+              --task-definition "$backend_task_definition" \
+              --output json
+          )"
+          if ! jq -e \
+            --arg expected "$backend_task_definition" '
+              .taskDefinition.taskDefinitionArn == $expected
+              and all(
+                .taskDefinition.containerDefinitions[].secrets[]?;
+                .name != "DJANGO_SUPERUSER_PASSWORD"
+              )
+              and all(
+                .taskDefinition.containerDefinitions[].environment[]?;
+                .name != "DJANGO_SUPERUSER_EMAIL"
+              )
+              and (
+                [
+                  .taskDefinition.containerDefinitions[].environment[]
+                  | select(.name == "DJANGO_CREATE_DEFAULT_ADMIN" and .value == "0")
+                ] | length
+              ) == 1
+            ' <<<"$backend_task_state" >/dev/null; then
+            echo "::error::The long-running backend task exposes administrator bootstrap inputs."
+            exit 1
+          fi
+          backend_image="$(
+            jq -er '.taskDefinition.containerDefinitions[0].image' <<<"$backend_task_state"
+          )"
+          if [ "$default_admin_image" != "$backend_image" ]; then
+            echo "::error::The default-admin task does not use the deployed immutable backend image."
+            exit 1
+          fi
+          network_configuration="$(
+            jq -cer '
+              {
+                awsvpcConfiguration:
+                  .services[0].networkConfiguration.awsvpcConfiguration
+              }
+            ' <<<"$service_state"
+          )"
+
+          run_state="$(
+            aws ecs run-task \
+              --cluster "$CLUSTER_NAME" \
+              --launch-type FARGATE \
+              --task-definition "$expected_task_definition" \
+              --network-configuration "$network_configuration" \
+              --count 1 \
+              --started-by "$started_by" \
+              --tags \
+                key=Project,value=releviz \
+                key=Environment,value=prod \
+                key=Purpose,value=default-admin-bootstrap \
+              --output json
+          )"
+          task_arn="$(jq -er '.tasks[0].taskArn // empty' <<<"$run_state" || true)"
+          if [ -n "$task_arn" ]; then
+            echo "task_arn=${task_arn}" >>"$GITHUB_OUTPUT"
+          fi
+          if ! jq -e \
+            --arg expected "$expected_task_definition" '
+              (.failures | length) == 0
+              and (.tasks | length) == 1
+              and .tasks[0].taskDefinitionArn == $expected
+            ' <<<"$run_state" >/dev/null; then
+            echo "::error::ECS did not start exactly one reviewed default-admin task."
+            jq -c '{failures, taskCount: (.tasks | length)}' <<<"$run_state" >&2
+            exit 1
+          fi
+
+          if ! timeout --signal=TERM 900s \
+            aws ecs wait tasks-stopped \
+              --cluster "$CLUSTER_NAME" \
+              --tasks "$task_arn"; then
+            echo "::error::Timed out waiting for the default-admin task to stop."
+            exit 1
+          fi
+          stopped_state="$(
+            aws ecs describe-tasks \
+              --cluster "$CLUSTER_NAME" \
+              --tasks "$task_arn" \
+              --output json
+          )"
+          if ! jq -e \
+            --arg expected "$expected_task_definition" \
+            --arg container "$expected_container" '
+              (.failures | length) == 0
+              and (.tasks | length) == 1
+              and .tasks[0].taskDefinitionArn == $expected
+              and .tasks[0].lastStatus == "STOPPED"
+              and .tasks[0].stopCode == "EssentialContainerExited"
+              and (
+                [
+                  .tasks[0].containers[]
+                  | select(
+                      .name == $container
+                      and .lastStatus == "STOPPED"
+                      and .exitCode == 0
+                    )
+                ] | length
+              ) == 1
+            ' <<<"$stopped_state" >/dev/null; then
+            echo "::error::The production default administrator was not created or verified."
+            jq -c '
+              {
+                failures,
+                tasks: [
+                  .tasks[]
+                  | {
+                      taskArn,
+                      taskDefinitionArn,
+                      lastStatus,
+                      stopCode,
+                      stoppedReason,
+                      containers: [
+                        .containers[]
+                        | {name, lastStatus, exitCode, reason}
+                      ]
+                    }
+                ]
+              }
+            ' <<<"$stopped_state" >&2
+            exit 1
+          fi
+          admin_task_verified="true"
+          trap - EXIT INT TERM
+
+      - name: Clean up an interrupted default-administrator task
+        if: ${{ always() && steps.default_admin.outcome != 'success' && steps.default_admin.outputs.started_by != '' }}
+        env:
+          CLUSTER_NAME: ${{ steps.terraform.outputs.cluster_name }}
+          DEFAULT_ADMIN_STARTED_BY: ${{ steps.default_admin.outputs.started_by }}
+        run: |
+          set -euo pipefail
+          discover_default_admin_tasks() {
+            local attempt
+            local discovered=""
+            for attempt in 1 2 3 4 5 6; do
+              discovered="$(
+                aws ecs list-tasks \
+                  --cluster "$CLUSTER_NAME" \
+                  --started-by "$DEFAULT_ADMIN_STARTED_BY" \
+                  --query taskArns \
+                  --output text
+              )"
+              if [ -n "$discovered" ] && [ "$discovered" != "None" ]; then
+                printf '%s\n' "$discovered"
+                return
+              fi
+              if [ "$attempt" -lt 6 ]; then
+                sleep 2
+              fi
+            done
+          }
+
+          discovered_tasks="$(discover_default_admin_tasks)"
+          read -r -a task_arns <<<"$discovered_tasks"
+          for task_arn in "${task_arns[@]}"; do
+            if [ -z "$task_arn" ]; then
+              continue
+            fi
+            task_status="$(
+              aws ecs describe-tasks \
+                --cluster "$CLUSTER_NAME" \
+                --tasks "$task_arn" \
+                --query 'tasks[0].lastStatus' \
+                --output text
+            )"
+            if [ "$task_status" != "STOPPED" ]; then
+              aws ecs stop-task \
+                --cluster "$CLUSTER_NAME" \
+                --task "$task_arn" \
+                --reason "Production default-admin bootstrap compensation" >/dev/null
+              timeout --signal=TERM 180s \
+                aws ecs wait tasks-stopped \
+                  --cluster "$CLUSTER_NAME" \
+                  --tasks "$task_arn"
+            fi
+            stopped_status="$(
+              aws ecs describe-tasks \
+                --cluster "$CLUSTER_NAME" \
+                --tasks "$task_arn" \
+                --query 'tasks[0].lastStatus' \
+                --output text
+            )"
+            if [ "$stopped_status" != "STOPPED" ]; then
+              echo "::error::The interrupted default-admin task is still running."
+              exit 1
+            fi
+          done
+
+      - name: Summarize the backend release
+        if: ${{ always() }}
+        env:
+          FALLBACK_FRONTEND_SHA: ${{ steps.frontend_tag.outputs.sha }}
+        run: |
+          {
+            echo "## Backend release"
+            echo
+            echo "- Release commit: \`${DEPLOY_SHA}\`"
+            echo "- Backend image: \`${ECR_BACKEND}:${DEPLOY_SHA}\`"
+            echo "- ECS fallback frontend: \`${ECR_FRONTEND}:${FALLBACK_FRONTEND_SHA:-unchanged}\`"
+            echo "- API: https://${API_DOMAIN}"
+          } >>"$GITHUB_STEP_SUMMARY"
