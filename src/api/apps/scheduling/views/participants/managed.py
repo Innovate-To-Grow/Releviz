@@ -43,9 +43,15 @@ class ManagedParticipantView(APIView):
             idempotency_key = uuid.UUID(str(request.data.get("idempotencyKey") or ""))
         except (ValueError, TypeError, AttributeError):
             return Response({"error": "idempotencyKey must be a UUID"}, status=400)
+        organizer_managed = request.data.get("organizerManaged")
+        if organizer_managed is None:
+            organizer_managed = False
+        if not isinstance(organizer_managed, bool):
+            return Response({"error": "organizerManaged must be true or false"}, status=400)
         normalized_email = str(request.data.get("email") or "").strip().lower()
         if (
-            normalized_email
+            not organizer_managed
+            and normalized_email
             and not event.invitations.filter(email__iexact=normalized_email).exists()
             and not EmailDeliveryRequest.objects.filter(
                 event=event,
@@ -68,9 +74,15 @@ class ManagedParticipantView(APIView):
                 name=request.data.get("name"),
                 email=request.data.get("email"),
                 idempotency_key=idempotency_key,
+                phone=request.data.get("phone") or "",
+                organizer_managed=organizer_managed,
             )
         except (ManagedParticipantError, EventEmailRequestError) as exc:
-            return Response({"error": str(exc)}, status=exc.status_code)
+            payload = {"error": str(exc)}
+            error_code = getattr(exc, "error_code", None)
+            if error_code:
+                payload["errorCode"] = error_code
+            return Response(payload, status=exc.status_code)
         participant = result["participant"]
         if result["participantCreated"] or result["participantRestored"]:
             mark_event_results_dirty(event)

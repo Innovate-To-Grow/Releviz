@@ -55,6 +55,7 @@ function groupValue(participant) {
 }
 
 function accountLabel(participant) {
+  if (participant.organizerManaged) return "Organizer-managed";
   return participant.accountAccess === "temporary"
     ? "Temporary"
     : "Full account";
@@ -106,6 +107,18 @@ function emailAddressError(value) {
     return "Email address must be 254 characters or fewer.";
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized))
     return "Enter a valid email address.";
+  return "";
+}
+
+function phoneNumberError(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) return "";
+  if (normalized.length > 32) return "Phone must be 32 characters or fewer.";
+  if (
+    !/^[0-9 +().-]+$/.test(normalized) ||
+    normalized.replace(/\D/g, "").length < 7
+  )
+    return "Enter a valid phone number.";
   return "";
 }
 
@@ -162,6 +175,8 @@ const RosterPanel = forwardRef(function RosterPanel(
   const [showInvite, setShowInvite] = useState(false);
   const [inviteName, setInviteName] = useState("");
   const [inviteEmail, setInviteEmail] = useState("");
+  const [invitePhone, setInvitePhone] = useState("");
+  const [inviteManaged, setInviteManaged] = useState(false);
   const [inviteErrors, setInviteErrors] = useState({});
   const [inviteNotice, setInviteNotice] = useState("");
   const [inviteFormError, setInviteFormError] = useState("");
@@ -195,6 +210,7 @@ const RosterPanel = forwardRef(function RosterPanel(
   const inviteRequestInFlight = useRef(false);
   const inviteNameInput = useRef(null);
   const inviteEmailInput = useRef(null);
+  const invitePhoneInput = useRef(null);
   const selectedRef = useRef(selected);
   const participantsRef = useRef(participants);
   const rowConflictsRef = useRef(rowConflicts);
@@ -328,6 +344,8 @@ const RosterPanel = forwardRef(function RosterPanel(
     setShowInvite(false);
     setInviteName("");
     setInviteEmail("");
+    setInvitePhone("");
+    setInviteManaged(false);
     setInviteErrors({});
     setInviteFormError("");
     inviteIdempotencyKey.current = "";
@@ -338,9 +356,11 @@ const RosterPanel = forwardRef(function RosterPanel(
     if (inviteRequestInFlight.current) return;
     const normalizedName = inviteName.trim();
     const normalizedEmail = inviteEmail.trim().toLowerCase();
+    const normalizedPhone = invitePhone.trim();
     const nextErrors = {
       name: fullNameError(inviteName),
       email: emailAddressError(inviteEmail),
+      phone: phoneNumberError(invitePhone),
     };
     setInviteErrors(nextErrors);
     setInviteNotice("");
@@ -348,9 +368,10 @@ const RosterPanel = forwardRef(function RosterPanel(
     setError("");
     setStatus("");
 
-    if (nextErrors.name || nextErrors.email) {
+    if (nextErrors.name || nextErrors.email || nextErrors.phone) {
       if (nextErrors.name) inviteNameInput.current?.focus();
-      else inviteEmailInput.current?.focus();
+      else if (nextErrors.email) inviteEmailInput.current?.focus();
+      else invitePhoneInput.current?.focus();
       return;
     }
     if (!inviteAllowed) {
@@ -373,6 +394,8 @@ const RosterPanel = forwardRef(function RosterPanel(
         {
           name: normalizedName,
           email: normalizedEmail,
+          phone: normalizedPhone,
+          organizerManaged: inviteManaged,
           idempotencyKey: inviteIdempotencyKey.current,
         },
         token,
@@ -392,14 +415,22 @@ const RosterPanel = forwardRef(function RosterPanel(
 
       setPage(1);
       await loadRoster();
+      const addedName = addedParticipant.name || normalizedName;
+      const alreadyOnRoster = `${addedName} is already on this roster. No new invitation was sent.`;
       setInviteNotice(
-        autoInvitedCount > 0
-          ? `${addedParticipant.name || normalizedName} is ready to respond. Their invitation was queued.`
-          : `${addedParticipant.name || normalizedName} is already on this roster. No new invitation was sent.`,
+        inviteManaged
+          ? data.created || data.restored
+            ? `${addedName} was added. Use Edit schedule to enter their availability.`
+            : alreadyOnRoster
+          : autoInvitedCount > 0
+            ? `${addedName} is ready to respond. Their invitation was queued.`
+            : alreadyOnRoster,
       );
       setShowInvite(false);
       setInviteName("");
       setInviteEmail("");
+      setInvitePhone("");
+      setInviteManaged(false);
       setInviteErrors({});
       setInviteFormError("");
       inviteIdempotencyKey.current = "";
@@ -448,6 +479,8 @@ const RosterPanel = forwardRef(function RosterPanel(
     setShowInvite(false);
     setInviteName("");
     setInviteEmail("");
+    setInvitePhone("");
+    setInviteManaged(false);
     setInviteErrors({});
     setInviteNotice("");
     setInviteFormError("");
@@ -917,6 +950,13 @@ const RosterPanel = forwardRef(function RosterPanel(
       : bulkScope === "group"
         ? "Changes apply to everyone in the chosen group."
         : "Changes apply to everyone matching the current filters.";
+  const inviteSubmitLabel = inviteManaged
+    ? inviteBusy
+      ? "Adding…"
+      : "Add person"
+    : inviteBusy
+      ? "Adding and sending…"
+      : "Add and send invitation";
   const bulkApplyGroupId = `${controlIds}-bulk-apply-group`;
   const bulkGroupNameId = `${controlIds}-bulk-group-name`;
   const groupListId = `${controlIds}-group-names`;
@@ -1062,6 +1102,11 @@ const RosterPanel = forwardRef(function RosterPanel(
                   id="roster-invite-email"
                   label="Email address"
                   required
+                  help={
+                    inviteManaged
+                      ? "Enter one of your own verified email addresses. No invitation is sent."
+                      : null
+                  }
                   error={inviteErrors.email || null}
                   errorId="roster-invite-email-error"
                 >
@@ -1094,6 +1139,64 @@ const RosterPanel = forwardRef(function RosterPanel(
                 </FormField>
               </div>
 
+              <div className="form-row-2 mt-3">
+                <FormField
+                  id="roster-invite-phone"
+                  label="Phone (optional)"
+                  error={inviteErrors.phone || null}
+                  errorId="roster-invite-phone-error"
+                >
+                  <input
+                    ref={invitePhoneInput}
+                    name="phone"
+                    type="tel"
+                    className="form-control"
+                    inputMode="tel"
+                    autoComplete="tel"
+                    maxLength={32}
+                    value={invitePhone}
+                    disabled={inviteBusy}
+                    onChange={(changeEvent) => {
+                      setInvitePhone(changeEvent.target.value);
+                      setInviteErrors((current) => ({
+                        ...current,
+                        phone: "",
+                      }));
+                      setInviteFormError("");
+                      inviteIdempotencyKey.current = "";
+                    }}
+                    onBlur={() =>
+                      setInviteErrors((current) => ({
+                        ...current,
+                        phone: phoneNumberError(invitePhone),
+                      }))
+                    }
+                  />
+                </FormField>
+              </div>
+
+              <div className="form-check mt-3">
+                <input
+                  id="roster-invite-managed"
+                  className="form-check-input"
+                  type="checkbox"
+                  checked={inviteManaged}
+                  disabled={inviteBusy}
+                  onChange={(changeEvent) => {
+                    setInviteManaged(changeEvent.target.checked);
+                    setInviteFormError("");
+                    inviteIdempotencyKey.current = "";
+                  }}
+                />
+                <label
+                  className="form-check-label"
+                  htmlFor="roster-invite-managed"
+                >
+                  No email of their own — use one of mine and I&apos;ll enter
+                  their schedule
+                </label>
+              </div>
+
               {inviteFormError && (
                 <Alert
                   variant="danger"
@@ -1114,13 +1217,11 @@ const RosterPanel = forwardRef(function RosterPanel(
                 </AppButton>
                 <AppButton
                   type="submit"
-                  icon={<SendIcon />}
+                  icon={inviteManaged ? null : <SendIcon />}
                   busy={inviteBusy}
                   disabled={inviteBusy || !inviteAllowed}
                 >
-                  {inviteBusy
-                    ? "Adding and sending…"
-                    : "Add and send invitation"}
+                  {inviteSubmitLabel}
                 </AppButton>
               </div>
             </form>
@@ -1143,7 +1244,7 @@ const RosterPanel = forwardRef(function RosterPanel(
                     aria-label="Search roster"
                     value={searchInput}
                     onChange={(event) => setSearchInput(event.target.value)}
-                    placeholder="Search name or email"
+                    placeholder="Search name, email or phone"
                   />
                 </div>
               </div>
@@ -1570,6 +1671,7 @@ const RosterPanel = forwardRef(function RosterPanel(
                 <tbody>
                   {participants.map((participant) => {
                     const groupId = `${controlIds}-group-${participant.id}`;
+                    const phoneId = `${controlIds}-phone-${participant.id}`;
                     const weightId = `${controlIds}-weight-${participant.id}`;
                     const includedId = `${controlIds}-included-${participant.id}`;
                     const rowLocked =
@@ -1603,7 +1705,9 @@ const RosterPanel = forwardRef(function RosterPanel(
                             {participant.name}
                           </strong>
                           <small className="d-block text-secondary">
-                            {participant.email || "No email"} ·{" "}
+                            {participant.email || "No email"}
+                            {participant.phone ? ` · ${participant.phone}` : ""}
+                            {" · "}
                             {accountLabel(participant)}
                           </small>
                           <div className="mt-2">
@@ -1659,6 +1763,43 @@ const RosterPanel = forwardRef(function RosterPanel(
                                     "group",
                                     event.target.value,
                                     groupValue(participant),
+                                  )
+                                }
+                              />
+                            </div>
+                            <div>
+                              <label
+                                className="form-label small text-secondary mb-1"
+                                htmlFor={phoneId}
+                              >
+                                Phone
+                              </label>
+                              <input
+                                id={phoneId}
+                                className="form-control form-control-sm"
+                                style={{ width: "9rem" }}
+                                aria-label={`Phone for ${participant.name}`}
+                                type="tel"
+                                maxLength={32}
+                                value={rowDraftValue(
+                                  participant,
+                                  "phone",
+                                  participant.phone || "",
+                                )}
+                                disabled={rowLocked}
+                                onChange={(event) =>
+                                  updateRowDraft(
+                                    participant.id,
+                                    "phone",
+                                    event.target.value,
+                                  )
+                                }
+                                onBlur={(event) =>
+                                  void saveRowDraft(
+                                    participant,
+                                    "phone",
+                                    event.target.value,
+                                    participant.phone || "",
                                   )
                                 }
                               />

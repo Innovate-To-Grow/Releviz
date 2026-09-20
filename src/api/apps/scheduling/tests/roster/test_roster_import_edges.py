@@ -76,6 +76,12 @@ class RosterImportParserEdgeTests(SimpleTestCase):
             roster_imports.mapping.auto_mapping(["Participant Name", "E-mail", "Team", "Priority"]),
             {"name": 0, "email": 1, "group": 2, "weight": 3},
         )
+        for header in ("Phone", "Phone_Number", "Mobile", "Cell", "Telephone"):
+            with self.subTest(header=header):
+                self.assertEqual(
+                    roster_imports.mapping.auto_mapping(["Name", "Email", header]),
+                    {"name": 0, "email": 1, "phone": 2},
+                )
         metadata = roster_imports.mapping.worksheet_metadata(
             [
                 {"worksheet": "Sheet", "row_number": 3, "raw_values": ["A", "B"]},
@@ -141,6 +147,17 @@ class RosterImportParserEdgeTests(SimpleTestCase):
             roster_imports.normalization.validate_identity_fields("Name", "not-an-email", ""),
             ["email is invalid."],
         )
+        for phone, expected in [
+            ("", []),
+            ("+1 (555) 010-2000", []),
+            ("555.010.2000", []),
+            ("12345", ["phone is invalid."]),
+            ("555-CALL-NOW", ["phone is invalid."]),
+            ("1" * 33, ["phone is too long (max 32)."]),
+            ("x" * 33, ["phone is too long (max 32)."]),
+        ]:
+            with self.subTest(phone=phone):
+                self.assertEqual(roster_imports.normalization.validate_phone(phone), expected)
 
     def test_delimited_parser_rejects_malformed_and_bounded_input(self):
         with (
@@ -348,6 +365,43 @@ class RosterImportParserEdgeTests(SimpleTestCase):
         )
         self.assertIn("weight cannot contain a formula.", formula_options.validation_errors)
         self.assertIn("included cannot contain a formula.", formula_options.validation_errors)
+        self.assertEqual(formula_options.phone, "")
+
+        formula_phone = RosterImportRow(
+            raw_values=["Name", "name@example.com", {"formula": "PHONE"}]
+        )
+        roster_imports.normalization._normalize_row(
+            formula_phone,
+            {"name": 0, "email": 1, "phone": 2},
+            {"group": "", "weight": 1, "included": True},
+        )
+        self.assertEqual(formula_phone.validation_errors, ["phone cannot contain a formula."])
+        self.assertEqual(formula_phone.phone, "")
+        long_phone = RosterImportRow(raw_values=["Name", "name@example.com", "1" * 33])
+        roster_imports.normalization._normalize_row(
+            long_phone,
+            {"name": 0, "email": 1, "phone": 2},
+            {"group": "", "weight": 1, "included": True},
+        )
+        self.assertEqual(long_phone.validation_errors, ["phone is too long (max 32)."])
+        self.assertEqual(long_phone.phone, "1" * 32)
+
+        same_phone = [
+            RosterImportRow(name="A", email="dup@example.com", phone="555-010-1000", selected=True),
+            RosterImportRow(name="A", email="dup@example.com", phone="555-010-1000", selected=True),
+        ]
+        roster_imports.normalization.apply_duplicate_rules(same_phone)
+        self.assertEqual(same_phone[1].duplicate_status, RosterImportRow.DuplicateStatus.IDENTICAL)
+        self.assertFalse(same_phone[1].selected)
+        other_phone = [
+            RosterImportRow(name="A", email="dup@example.com", phone="555-010-1000", selected=True),
+            RosterImportRow(name="A", email="dup@example.com", phone="555-010-2000", selected=True),
+        ]
+        roster_imports.normalization.apply_duplicate_rules(other_phone)
+        self.assertEqual(
+            [row.duplicate_status for row in other_phone],
+            [RosterImportRow.DuplicateStatus.CONFLICT] * 2,
+        )
 
         tail = RosterImportRow(name="Tail", email="tail@example.com", selected=True)
         second.duplicate_status = RosterImportRow.DuplicateStatus.UNIQUE
@@ -461,6 +515,27 @@ class RosterImportDatabaseEdgeTests(TestCase):
         payload_batch.rows.filter(row_number=1).delete()
         payload = roster_payloads.roster_import_payload(payload_batch)
         self.assertEqual(payload["headers"], ["name", "email"])
+        row_payload = roster_payloads.roster_import_row_payload(
+            RosterImportRow(row_number=2, name="Payload", phone="555-010-2000")
+        )
+        self.assertEqual(row_payload["phone"], "555-010-2000")
+        self.assertEqual(
+            list(row_payload),
+            [
+                "id",
+                "rowNumber",
+                "name",
+                "email",
+                "phone",
+                "group",
+                "weight",
+                "included",
+                "selected",
+                "valid",
+                "duplicate",
+                "errors",
+            ],
+        )
 
     def test_row_update_validation_and_every_editable_field(self):
         batch = self.preview()
@@ -497,6 +572,7 @@ class RosterImportDatabaseEdgeTests(TestCase):
                         "id": str(row.pk),
                         "name": " Grace ",
                         "email": " GRACE-EDGE@EXAMPLE.COM ",
+                        "phone": " +1 (555) 010-2000 ",
                         "groupName": " Faculty ",
                         "weight": "0.3",
                         "included": "false",
@@ -508,9 +584,27 @@ class RosterImportDatabaseEdgeTests(TestCase):
         edited = updated.rows.get(pk=row.pk)
         self.assertEqual(edited.name, "Grace")
         self.assertEqual(edited.email, "grace-edge@example.com")
+        self.assertEqual(edited.phone, "+1 (555) 010-2000")
         self.assertEqual(edited.group_name, "Faculty")
         self.assertEqual(edited.weight, 0.3)
         self.assertFalse(edited.included)
+        self.assertEqual(edited.validation_errors, [])
+        # A bad phone flags the row instead of raising, and edits that leave the
+        # phone out keep it.
+        roster_imports.update_roster_import(
+            batch=batch,
+            data={"rowUpdates": [{"id": str(row.pk), "phone": "555-CALL-NOW"}]},
+        )
+        flagged = batch.rows.get(pk=row.pk)
+        self.assertEqual(flagged.phone, "555-CALL-NOW")
+        self.assertEqual(flagged.validation_errors, ["phone is invalid."])
+        roster_imports.update_roster_import(
+            batch=batch,
+            data={"rowUpdates": [{"id": str(row.pk), "name": "Grace Hopper"}]},
+        )
+        self.assertEqual(batch.rows.get(pk=row.pk).phone, "555-CALL-NOW")
+        batch.refresh_from_db()
+        self.assertEqual(batch.summary["invalid"], 1)
 
         two_rows = self.preview(
             "name,email\nOne,one-update-cap@example.com\nTwo,two-update-cap@example.com"
@@ -568,6 +662,45 @@ class RosterImportDatabaseEdgeTests(TestCase):
         roster_imports.commit._rebuild_event_roster(self.event, timezone.now())
         self.assertEqual(self.event.status, Event.Status.ACTIVE)
         self.assertEqual(self.event.version, 2)
+
+    def test_rebuild_deletes_the_members_backing_organizer_managed_people(self):
+        Member = type(self.organizer)
+        backing = Member(
+            email="",
+            first_name="Managed",
+            is_active=True,
+            access_level=Member.AccessLevel.TEMPORARY,
+        )
+        backing.set_unusable_password()
+        backing.save()
+        Participant.objects.create(
+            event=self.event,
+            member=backing,
+            participant_name="Managed",
+            contact_email=self.organizer.email,
+            contact_phone="555-010-2000",
+            organizer_managed=True,
+            availability_inperson=[0, 0],
+            availability_virtual=[0, 0],
+        )
+        regular = create_member("regular-rebuild-edge@example.com")
+        Participant.objects.create(
+            event=self.event,
+            member=regular,
+            participant_name="Regular",
+            availability_inperson=[0, 0],
+            availability_virtual=[0, 0],
+        )
+
+        batch = self.preview("name,email,phone\nRebuilt,rebuilt-edge@example.com,555-010-3000")
+        rebuilt = self.commit(batch, mode="rebuild", confirmationCode=self.event.code)
+        self.assertEqual(rebuilt.status_code, 201, rebuilt.data)
+        self.assertFalse(Member.objects.filter(pk=backing.pk).exists())
+        self.assertTrue(Member.objects.filter(pk=regular.pk).exists())
+        self.assertEqual(
+            list(self.event.participants.values_list("participant_name", "contact_phone")),
+            [("Rebuilt", "555-010-3000")],
+        )
 
     def test_member_resolution_rejects_unsafe_identities_and_adopts_orphan(self):
         inactive = create_member("inactive-edge@example.com", is_active=False)

@@ -4,6 +4,7 @@ from django.db import transaction
 from rest_framework.response import Response
 
 from apps.scheduling.models import Weight
+from apps.scheduling.services.invitations import ManagedParticipantError, normalize_phone
 from apps.scheduling.services.roster_imports import RosterImportError
 
 from ..helpers import PrivateAPIView
@@ -64,6 +65,14 @@ class RosterParticipantView(PrivateAPIView):
                     if participant.group_name != normalized_group:
                         participant.group_name = normalized_group
                         changed = True
+                if "phone" in request.data:
+                    try:
+                        phone = normalize_phone(request.data.get("phone"))
+                    except ManagedParticipantError as exc:
+                        raise RosterImportError(str(exc)) from exc
+                    if participant.contact_phone != phone:
+                        participant.contact_phone = phone
+                        changed = True
 
                 weight = (
                     Weight.objects.select_for_update()
@@ -103,6 +112,7 @@ class RosterParticipantView(PrivateAPIView):
                         update_fields=[
                             "participant_name",
                             "group_name",
+                            "contact_phone",
                             "version",
                             "updated_at",
                         ]

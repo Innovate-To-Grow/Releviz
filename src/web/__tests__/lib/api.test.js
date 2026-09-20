@@ -1061,6 +1061,7 @@ describe("business API helpers", () => {
         }),
       }),
     );
+    // Phone and the organizer-managed flag default to "" / false.
     expect(global.fetch).toHaveBeenCalledWith(
       "/events/participants/managed?code=ABC%20123",
       expect.objectContaining({
@@ -1068,6 +1069,8 @@ describe("business API helpers", () => {
         body: JSON.stringify({
           name: "Temporary Person",
           email: "temp@example.com",
+          phone: "",
+          organizerManaged: false,
           idempotencyKey: "managed-key",
         }),
       }),
@@ -1576,5 +1579,35 @@ describe("business API helpers", () => {
       participant: { id: "participant-1", version: 2 },
       payload: expect.objectContaining({ code: "participant_exists" }),
     });
+  });
+
+  test("managed participant requests carry the phone and organizer-managed flag", async () => {
+    global.fetch.mockResolvedValue(jsonResponse({ ok: true }));
+
+    await createManagedParticipant(
+      "ABC",
+      {
+        name: "Managed Person",
+        email: "organizer@example.com",
+        phone: "+1 (555) 010-0199",
+        organizerManaged: true,
+        idempotencyKey: "managed-key",
+      },
+      "tok",
+    );
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/events/participants/managed?code=ABC",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          name: "Managed Person",
+          email: "organizer@example.com",
+          phone: "+1 (555) 010-0199",
+          organizerManaged: true,
+          idempotencyKey: "managed-key",
+        }),
+      }),
+    );
   });
 });

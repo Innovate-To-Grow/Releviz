@@ -1,6 +1,12 @@
 """Invitation delivery, reminders, and status tracking."""
 
-from .addresses import member_invitation_emails, resolve_invited_member, split_invitation_emails
+from .addresses import (
+    member_invitation_emails,
+    normalize_phone,
+    phone_issue,
+    resolve_invited_member,
+    split_invitation_emails,
+)
 from .delivery import (
     create_or_reuse_managed_participant_and_send,
     enqueue_manual_reminders,
@@ -37,6 +43,8 @@ __all__ = [
     "mark_invitation_opened",
     "mark_invitation_response_withdrawn",
     "member_invitation_emails",
+    "normalize_phone",
+    "phone_issue",
     "reminder_cycle",
     "resolve_invited_member",
     "send_due_event_reminders",

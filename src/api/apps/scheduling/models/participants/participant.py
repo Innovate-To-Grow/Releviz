@@ -16,6 +16,12 @@ class Participant(TimestampedModel):
         related_name="schedule_participations",
     )
     participant_name = models.CharField(max_length=100)
+    # Display-only contact details. ``contact_email`` is set for organizer-managed
+    # people, whose address belongs to the organizer and never becomes an identity;
+    # ``contact_phone`` is free text and is never used for delivery or login.
+    contact_email = models.EmailField(blank=True, default="")
+    contact_phone = models.CharField(max_length=32, blank=True, default="")
+    organizer_managed = models.BooleanField(default=False, db_index=True)
     availability_inperson = models.JSONField(default=list)
     availability_virtual = models.JSONField(default=list)
     submitted = models.BooleanField(default=False)

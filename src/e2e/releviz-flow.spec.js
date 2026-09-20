@@ -157,6 +157,53 @@ assert EmailMessageLog.objects.filter(event=event, message_type="final_cancellat
   });
 }
 
+function assertOrganizerManagedState(payload) {
+  const script = `
+import json
+import os
+import django
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.e2e")
+django.setup()
+
+from apps.authn.models import ContactEmail, Member
+from apps.mail.models import EmailDeliveryJob, EmailMessageLog
+from apps.scheduling.models import Event, EventInvitation, Participant
+
+data = json.loads(${JSON.stringify(JSON.stringify(payload))})
+event = Event.objects.get(code=data["code"])
+organizer = Member.objects.get(pk=data["organizer_id"])
+
+assert EventInvitation.objects.filter(event=event).count() == 0
+# The email worker webServer is always running, so count by type rather than
+# by status: no invitation is ever queued for an organizer-managed person.
+assert EmailDeliveryJob.objects.filter(
+    event=event,
+    message_type=EmailMessageLog.MessageType.INVITATION,
+).count() == 0
+managed = Participant.objects.filter(event=event, organizer_managed=True)
+assert managed.count() == 1
+participant = managed.get()
+assert participant.contact_email == data["organizer_email"]
+assert participant.contact_phone == data["phone"]
+assert participant.member_id != organizer.pk
+assert participant.member.access_level == "temporary"
+assert participant.member.email == ""
+assert not ContactEmail.objects.filter(member=participant.member).exists()
+# The shared address still belongs to the organizer alone.
+assert ContactEmail.objects.get(email_address=data["organizer_email"]).member_id == organizer.pk
+`;
+  execFileSync(PYTHON_BIN, ["-c", script], {
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      PYTHONPATH: path.join(ROOT, "src/api"),
+      DJANGO_SETTINGS_MODULE: "config.settings.e2e",
+    },
+    stdio: "pipe",
+  });
+}
+
 function assertDeletedAccountState(payload) {
   const script = `
 import json
@@ -713,6 +760,63 @@ test.describe("Releviz account and scheduling flow", () => {
     );
 
     await temporaryContext.close();
+  });
+
+  test("adds a person under the organizer's own email without inviting them", async ({
+    page,
+  }) => {
+    const runId = `${Date.now()}-${Math.round(Math.random() * 100_000)}`;
+    const organizerEmail = `managing-organizer-${runId}@example.com`;
+    const eventName = `Organizer-managed roster ${runId}`;
+    const managedName = "Managed Morgan Junior";
+    const managedPhone = "+1 (555) 010-2030";
+
+    await registerAccount(page, organizerEmail, "Morgan", "Manager");
+    await page.getByRole("link", { name: "Create New Event" }).click();
+    await fillTextbox(page, "Event Name", eventName);
+    await page.getByRole("button", { name: "Create Event" }).click();
+    await page.waitForURL(/\/event\?code=/);
+    const eventCode = new URL(page.url()).searchParams.get("code");
+    expect(eventCode).toMatch(/^[A-Z0-9]+$/);
+    const organizerSession = await readSession(page);
+
+    await page.getByRole("button", { name: "Invite person" }).click();
+    await fillTextbox(page, "Full name", managedName);
+    await fillTextbox(page, "Email address", organizerEmail);
+    await fillTextbox(page, "Phone (optional)", managedPhone);
+    await page
+      .getByRole("checkbox", {
+        name: "No email of their own — use one of mine and I'll enter their schedule",
+      })
+      .check();
+    await expect(
+      page.getByText(
+        "Enter one of your own verified email addresses. No invitation is sent.",
+      ),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Add person" }).click();
+    await expect(
+      page.getByText(
+        `${managedName} was added. Use Edit schedule to enter their availability.`,
+      ),
+    ).toBeVisible();
+
+    const managedRow = page.locator("tr.roster-table__row", {
+      hasText: managedName,
+    });
+    await expect(managedRow).toContainText("Organizer-managed");
+    await expect(managedRow).toContainText(managedPhone);
+    await expect(managedRow).toContainText("Not sent");
+    await expect(
+      managedRow.getByRole("button", { name: "Edit schedule" }),
+    ).toBeVisible();
+
+    assertOrganizerManagedState({
+      code: eventCode,
+      organizer_id: organizerSession.user.id,
+      organizer_email: organizerEmail,
+      phone: managedPhone,
+    });
   });
 
   test("runs the scaled roster-to-calendar workflow and persists it to Postgres", async ({

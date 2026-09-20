@@ -800,6 +800,8 @@ describe("scaled organizer workspace", () => {
         {
           name: "Manual Person",
           email: "manual@example.com",
+          phone: "",
+          organizerManaged: false,
           idempotencyKey: "request-key",
         },
         "token",
@@ -934,6 +936,160 @@ describe("scaled organizer workspace", () => {
     );
   });
 
+  test("adds a person the organizer manages under one of their own addresses", async () => {
+    createManagedParticipant.mockResolvedValueOnce({
+      participant: {
+        id: "managed-1",
+        memberId: "managed-1",
+        name: "Managed Person",
+        email: "organizer@example.com",
+        phone: "+1 555 010 0199",
+        accountAccess: "temporary",
+        organizerManaged: true,
+        canOrganizerEditAvailability: true,
+        invitationStatus: "not_sent",
+        version: 1,
+      },
+      created: true,
+      restored: false,
+      memberCreated: true,
+      autoInvitedCount: 0,
+      deliveryRequest: {
+        id: "managed-delivery",
+        operation: "invitation",
+        recipientCount: 0,
+        delivery: { total: 0, pending: 0, sent: 0 },
+      },
+    });
+    renderView();
+    const invite = await openInvitePersonForm();
+    const managed = within(invite.section).getByRole("checkbox", {
+      name: "No email of their own — use one of mine and I'll enter their schedule",
+    });
+    const phone = within(invite.section).getByLabelText("Phone (optional)");
+    expect(managed).not.toBeChecked();
+    expect(invite.submit.querySelector(".app-btn-icon")).not.toBeNull();
+    expect(
+      within(invite.section).queryByText(
+        "Enter one of your own verified email addresses. No invitation is sent.",
+      ),
+    ).not.toBeInTheDocument();
+
+    await userEvent.click(managed);
+    expect(managed).toBeChecked();
+    expect(invite.email).toHaveAccessibleDescription(
+      "Enter one of your own verified email addresses. No invitation is sent.",
+    );
+    const submit = within(invite.section).getByRole("button", {
+      name: "Add person",
+    });
+    expect(submit.querySelector(".app-btn-icon")).toBeNull();
+    expect(
+      within(invite.section).queryByRole("button", {
+        name: "Add and send invitation",
+      }),
+    ).not.toBeInTheDocument();
+
+    await userEvent.type(invite.name, "Managed Person");
+    await userEvent.type(invite.email, "organizer@example.com");
+    await userEvent.type(phone, "+1 555 010 0199");
+    fetchRoster.mockResolvedValueOnce({
+      participants: [
+        {
+          id: "managed-1",
+          memberId: "managed-1",
+          name: "Managed Person",
+          email: "organizer@example.com",
+          phone: "+1 555 010 0199",
+          group: "",
+          weight: 1,
+          included: true,
+          submitted: false,
+          accountAccess: "temporary",
+          organizerManaged: true,
+          canOrganizerEditAvailability: true,
+          invitationStatus: "not_sent",
+          version: 1,
+        },
+      ],
+      pagination: { page: 1, pageSize: 50, total: 1, pages: 1 },
+      stats: { total: 1, submitted: 0, notSubmitted: 1, groups: [] },
+    });
+    await userEvent.click(submit);
+
+    await waitFor(() =>
+      expect(createManagedParticipant).toHaveBeenCalledWith(
+        event.code,
+        {
+          name: "Managed Person",
+          email: "organizer@example.com",
+          phone: "+1 555 010 0199",
+          organizerManaged: true,
+          idempotencyKey: "request-key",
+        },
+        "token",
+      ),
+    );
+    expect(await within(invite.section).findByRole("status")).toHaveTextContent(
+      /^Managed Person was added\. Use Edit schedule to enter their availability\.$/,
+    );
+    expect(
+      screen.queryByLabelText("Event delivery progress"),
+    ).not.toBeInTheDocument();
+    const row = (
+      await within(invite.section).findByRole("rowheader", {
+        name: /Managed Person/,
+      })
+    ).closest("tr");
+    expect(row).toHaveTextContent(
+      "organizer@example.com · +1 555 010 0199 · Organizer-managed",
+    );
+    expect(within(row).getByText("Not sent")).toBeInTheDocument();
+    expect(
+      within(row).getByRole("button", { name: "Edit schedule" }),
+    ).toBeEnabled();
+    expect(within(row).getByLabelText("Phone for Managed Person")).toHaveValue(
+      "+1 555 010 0199",
+    );
+  });
+
+  test("shows the server hint when the organizer's own address is typed without the checkbox", async () => {
+    createManagedParticipant.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          'That is one of your own addresses. Check "No email of their own" to add a person you manage.',
+        ),
+        { status: 409, errorCode: "organizer_own_email" },
+      ),
+    );
+    renderView();
+    const invite = await openInvitePersonForm();
+    await userEvent.type(invite.name, "Managed Person");
+    await userEvent.type(invite.email, "organizer@example.com");
+    await userEvent.click(invite.submit);
+
+    const error = await within(invite.section).findByRole("alert");
+    expect(error).toHaveClass("roster-invite-form__error");
+    expect(error).toHaveTextContent(
+      'That is one of your own addresses. Check "No email of their own" to add a person you manage.',
+    );
+    expect(createManagedParticipant).toHaveBeenCalledWith(
+      event.code,
+      expect.objectContaining({ organizerManaged: false, phone: "" }),
+      "token",
+    );
+    // Ticking the box clears the hint and the spent idempotency key.
+    await userEvent.click(
+      within(invite.section).getByRole("checkbox", {
+        name: "No email of their own — use one of mine and I'll enter their schedule",
+      }),
+    );
+    expect(within(invite.section).queryByRole("alert")).not.toBeInTheDocument();
+    expect(
+      within(invite.section).getByRole("button", { name: "Add person" }),
+    ).toBeEnabled();
+  });
+
   test("keeps invite values and reuses the idempotency key after a failed request", async () => {
     createManagedParticipant
       .mockRejectedValueOnce(new Error("delivery service unavailable"))
@@ -1019,6 +1175,7 @@ describe("scaled organizer workspace", () => {
     expect(screen.getByLabelText("Select all on page")).toBeDisabled();
     expect(screen.getByLabelText("Select Ada Faculty")).toBeDisabled();
     expect(screen.getByLabelText("Group for Ada Faculty")).toBeDisabled();
+    expect(screen.getByLabelText("Phone for Ada Faculty")).toBeDisabled();
     expect(screen.getByLabelText("Weight for Ada Faculty")).toBeDisabled();
     expect(screen.getByLabelText("Include Ada Faculty")).toBeDisabled();
     expect(
@@ -1370,6 +1527,48 @@ describe("scaled organizer workspace", () => {
         "token",
       ),
     );
+  });
+
+  test("patches a row's phone on blur with the row version and skips unchanged values", async () => {
+    patchRosterParticipant.mockResolvedValueOnce({
+      participant: {
+        id: "roster-1",
+        phone: "+1 (555) 010-0199",
+        included: true,
+        version: 2,
+      },
+      resultsRevision: 4,
+    });
+    renderView();
+    const phone = await screen.findByLabelText("Phone for Ada Faculty");
+    expect(phone).toHaveValue("");
+    expect(screen.getByLabelText("Search roster")).toHaveAttribute(
+      "placeholder",
+      "Search name, email or phone",
+    );
+
+    fireEvent.blur(phone);
+    expect(patchRosterParticipant).not.toHaveBeenCalled();
+
+    fireEvent.change(phone, { target: { value: "+1 (555) 010-0199" } });
+    fireEvent.blur(phone);
+    await waitFor(() =>
+      expect(patchRosterParticipant).toHaveBeenCalledWith(
+        event.code,
+        "roster-1",
+        { phone: "+1 (555) 010-0199", expectedVersion: 1 },
+        "token",
+      ),
+    );
+    const row = screen
+      .getByRole("rowheader", { name: /Ada Faculty/ })
+      .closest("tr");
+    await waitFor(() =>
+      expect(row).toHaveTextContent(
+        "ada@example.com · +1 (555) 010-0199 · Temporary",
+      ),
+    );
+    expect(phone).toHaveValue("+1 (555) 010-0199");
   });
 
   test("rolls an inline roster draft back when the server rejects it", async () => {
