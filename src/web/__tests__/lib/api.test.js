@@ -67,6 +67,7 @@ import {
   patchRosterBulk,
   patchRosterParticipant,
   renameRosterGroup,
+  sendRosterInvitations,
 } from "@/lib/api/roster";
 import {
   createManagedParticipant,
@@ -992,7 +993,7 @@ describe("business API helpers", () => {
     await commitRosterImport(
       "ABC 123",
       "import 1",
-      { mode: "merge", idempotencyKey: "import-key" },
+      { mode: "merge", idempotencyKey: "import-key", sendInvitations: false },
       "tok",
     );
     await cancelRosterImport("ABC 123", "import 1", "tok");
@@ -1027,6 +1028,15 @@ describe("business API helpers", () => {
     await createRosterGroup("ABC 123", { name: "Faculty" }, "tok");
     await renameRosterGroup("ABC 123", "group 7", { name: "Staff" }, "tok");
     await deleteRosterGroup("ABC 123", "group 7", "tok");
+    await sendRosterInvitations(
+      "ABC 123",
+      {
+        participantIds: ["participant 1", "participant 2"],
+        resend: true,
+        idempotencyKey: "roster-invite-key",
+      },
+      "tok",
+    );
     await fetchParticipants("ABC 123", "tok");
     await expect(fetchCurrentParticipant("ABC 123", "tok")).resolves.toEqual({
       participant: null,
@@ -1039,6 +1049,7 @@ describe("business API helpers", () => {
         name: "Temporary Person",
         email: "temp@example.com",
         idempotencyKey: "managed-key",
+        sendInvitation: false,
       },
       "tok",
     );
@@ -1077,6 +1088,7 @@ describe("business API helpers", () => {
           name: "Temporary Person",
           email: "temp@example.com",
           idempotencyKey: "managed-key",
+          sendInvitation: false,
         }),
       }),
     );
@@ -1136,8 +1148,16 @@ describe("business API helpers", () => {
     expect(urls).toContain(
       "/events/roster-imports/import%201/rows?code=ABC+123&page=2&pageSize=25",
     );
-    expect(urls).toContain(
+    expect(global.fetch).toHaveBeenCalledWith(
       "/events/roster-imports/import%201/commit?code=ABC%20123",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          mode: "merge",
+          idempotencyKey: "import-key",
+          sendInvitations: false,
+        }),
+      }),
     );
     expect(urls).toContain(
       "/events/roster?code=ABC+123&page=2&pageSize=100&search=Ada&group=Faculty&submitted=true",
@@ -1149,6 +1169,21 @@ describe("business API helpers", () => {
     expect(urls).toContain("/events/roster/bulk?code=ABC%20123");
     expect(urls).toContain("/events/roster/groups?code=ABC%20123");
     expect(urls).toContain("/events/roster/groups/group%207?code=ABC%20123");
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/events/roster/invitations?code=ABC%20123",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          Authorization: "Bearer tok",
+        }),
+        body: JSON.stringify({
+          participantIds: ["participant 1", "participant 2"],
+          resend: true,
+          idempotencyKey: "roster-invite-key",
+        }),
+      }),
+    );
     expect(global.fetch).toHaveBeenCalledWith(
       "/events/invitations?code=ABC%20123",
       expect.objectContaining({
@@ -1241,6 +1276,13 @@ describe("business API helpers", () => {
       renameRosterGroup("BAD", "group", { name: "x" }),
     ).rejects.toThrow("nope");
     await expect(deleteRosterGroup("BAD", "group")).rejects.toThrow("nope");
+    await expect(
+      sendRosterInvitations("BAD", {
+        participantIds: ["p"],
+        resend: false,
+        idempotencyKey: "roster-invite-key",
+      }),
+    ).rejects.toThrow("nope");
     await expect(fetchParticipants("BAD")).rejects.toThrow("nope");
     await expect(fetchCurrentParticipant("BAD")).rejects.toThrow("nope");
     await expect(joinEvent("BAD")).rejects.toThrow("nope");
@@ -1489,6 +1531,72 @@ describe("business API helpers", () => {
     ).rejects.toMatchObject({
       message: "ALL is reserved for every group.",
       status: 400,
+    });
+  });
+
+  test("roster invitation sends expose throttling, closed events, and HTTP fallbacks", async () => {
+    const payload = {
+      participantIds: ["participant-1"],
+      resend: false,
+      idempotencyKey: "roster-invite-key",
+    };
+    global.fetch
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            deliveryRequest: { id: "dr-1", recipientCount: 1 },
+            requestedCount: 1,
+            queuedCount: 1,
+            skippedCount: 0,
+            idempotent: false,
+          },
+          { status: 202 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { detail: "Request was throttled. Expected available in 9 seconds." },
+          { status: 429 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            error: "Responses are closed",
+            errorCode: "event_not_active",
+            event: { code: "ABC", status: "closed" },
+          },
+          { status: 409 },
+        ),
+      )
+      .mockResolvedValueOnce(textResponse("gateway", { status: 502 }));
+
+    await expect(
+      sendRosterInvitations("ABC", payload, "tok"),
+    ).resolves.toMatchObject({ queuedCount: 1, skippedCount: 0 });
+    await expect(
+      sendRosterInvitations("ABC", payload, "tok"),
+    ).rejects.toMatchObject({
+      message: "Request was throttled. Expected available in 9 seconds.",
+      status: 429,
+      code: null,
+      event: null,
+    });
+    await expect(
+      sendRosterInvitations("ABC", payload, "tok"),
+    ).rejects.toMatchObject({
+      message: "Responses are closed",
+      status: 409,
+      code: "event_not_active",
+      event: { code: "ABC", status: "closed" },
+    });
+    await expect(
+      sendRosterInvitations("ABC", payload, "tok"),
+    ).rejects.toMatchObject({
+      message: "HTTP 502",
+      status: 502,
+      code: null,
+      event: null,
     });
   });
 

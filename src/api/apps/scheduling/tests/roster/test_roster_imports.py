@@ -56,7 +56,16 @@ class RosterImportApiTests(TestCase):
             format="json",
         )
 
-    def commit(self, import_id, *, mode="merge", key=None, confirmation=None, event=None):
+    def commit(
+        self,
+        import_id,
+        *,
+        mode="merge",
+        key=None,
+        confirmation=None,
+        event=None,
+        send_invitations=None,
+    ):
         event = event or self.event
         payload = {
             "mode": mode,
@@ -64,6 +73,8 @@ class RosterImportApiTests(TestCase):
         }
         if confirmation is not None:
             payload["confirmationCode"] = confirmation
+        if send_invitations is not None:
+            payload["sendInvitations"] = send_invitations
         return self.client.post(
             f"/events/roster-imports/{import_id}/commit?code={event.code}",
             payload,
@@ -394,6 +405,92 @@ class RosterImportApiTests(TestCase):
             confirmation=self.event.code,
         )
         self.assertEqual(conflict.status_code, 409)
+
+    def test_commit_without_invitations_adds_people_and_replays_only_with_the_same_flag(self):
+        full_member = create_member("verified@example.com", "Verified", "Member")
+        preview = self.paste(
+            "name,email\nTemporary Person,temp@example.com\nKnown Person,verified@example.com\n"
+        )
+        import_id = preview.data["import"]["id"]
+        key = uuid.uuid4()
+
+        for value in ["false", 0]:
+            with self.subTest(value=value):
+                invalid = self.commit(import_id, key=key, send_invitations=value)
+                self.assertEqual(invalid.status_code, 400, invalid.data)
+                self.assertEqual(invalid.data["error"], "sendInvitations must be a boolean.")
+        self.assertEqual(self.event.participants.count(), 0)
+
+        committed = self.commit(import_id, key=key, send_invitations=False)
+        self.assertEqual(committed.status_code, 201, committed.data)
+        self.assertFalse(committed.data["idempotent"])
+        self.assertEqual(committed.data["autoInvitedCount"], 0)
+        self.assertIsNone(committed.data["deliveryRequest"])
+        self.assertEqual(committed.data["receipt"]["createdCount"], 2)
+        self.assertEqual(committed.data["receipt"]["updatedCount"], 0)
+        self.assertEqual(self.event.participants.count(), 2)
+        self.assertTrue(Participant.objects.filter(event=self.event, member=full_member).exists())
+        self.assertEqual(
+            EventInvitation.objects.filter(event=self.event, first_sent_at__isnull=True).count(),
+            2,
+        )
+        self.assertFalse(EmailDeliveryJob.objects.exists())
+        self.assertFalse(EmailDeliveryRequest.objects.exists())
+        self.assertEqual(RosterImportBatch.objects.get(pk=import_id).rows.count(), 0)
+        roster = self.client.get(f"/events/roster?code={self.event.code}")
+        self.assertEqual(roster.status_code, 200, roster.data)
+        self.assertEqual(
+            {item["invitationStatus"] for item in roster.data["participants"]},
+            {"not_sent"},
+        )
+        self.assertIsNone(roster.data["latestDeliveryRequest"])
+
+        replay = self.commit(import_id, key=key, send_invitations=False)
+        self.assertEqual(replay.status_code, 200, replay.data)
+        self.assertTrue(replay.data["idempotent"])
+        self.assertEqual(replay.data["autoInvitedCount"], 0)
+        self.assertIsNone(replay.data["deliveryRequest"])
+        self.assertEqual(replay.data["receipt"]["id"], committed.data["receipt"]["id"])
+        self.assertEqual(RosterImportReceipt.objects.count(), 1)
+        self.assertFalse(EmailDeliveryJob.objects.exists())
+
+        for send_invitations in [True, None]:
+            with self.subTest(send_invitations=send_invitations):
+                conflict = self.commit(import_id, key=key, send_invitations=send_invitations)
+                self.assertEqual(conflict.status_code, 409, conflict.data)
+                self.assertEqual(
+                    conflict.data["error"],
+                    "This idempotency key was already used for a different import.",
+                )
+        self.assertEqual(RosterImportReceipt.objects.count(), 1)
+        self.assertFalse(EmailDeliveryJob.objects.exists())
+
+        rebuild = self.paste("name,email\nRebuilt Person,rebuilt@example.com")
+        rebuilt = self.commit(
+            rebuild.data["import"]["id"],
+            mode="rebuild",
+            confirmation=self.event.code,
+            send_invitations=False,
+        )
+        self.assertEqual(rebuilt.status_code, 201, rebuilt.data)
+        self.assertEqual(rebuilt.data["autoInvitedCount"], 0)
+        self.assertIsNone(rebuilt.data["deliveryRequest"])
+        self.assertEqual(
+            list(self.event.participants.values_list("participant_name", flat=True)),
+            ["Rebuilt Person"],
+        )
+        rebuilt_invitation = EventInvitation.objects.get(event=self.event)
+        self.assertEqual(rebuilt_invitation.email, "rebuilt@example.com")
+        self.assertIsNone(rebuilt_invitation.first_sent_at)
+        self.assertFalse(EmailDeliveryJob.objects.exists())
+        reminders = self.client.post(
+            f"/events/reminders?code={self.event.code}",
+            {"idempotencyKey": str(uuid.uuid4())},
+            format="json",
+        )
+        self.assertEqual(reminders.status_code, 202, reminders.data)
+        self.assertEqual(reminders.data["recipientCount"], 0)
+        self.assertFalse(EmailDeliveryJob.objects.exists())
 
     def test_import_invitation_enqueue_failure_rolls_back_the_full_commit(self):
         email = "import-rollback@example.com"

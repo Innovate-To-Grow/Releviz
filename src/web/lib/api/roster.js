@@ -173,6 +173,23 @@ export async function patchRosterBulk(code, payload, token) {
   return jsonOrError(res);
 }
 
+export async function sendRosterInvitations(
+  code,
+  { participantIds, resend, idempotencyKey },
+  token,
+) {
+  const res = await apiFetch(
+    `${API_BASE}/events/roster/invitations?code=${encodeURIComponent(code)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ participantIds, resend, idempotencyKey }),
+    },
+    token,
+  );
+  return jsonOrError(res);
+}
+
 export async function fetchRosterGroups(code, token) {
   const res = await apiFetch(
     `${API_BASE}/events/roster/groups?code=${encodeURIComponent(code)}`,

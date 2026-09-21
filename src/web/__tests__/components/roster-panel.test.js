@@ -72,6 +72,7 @@ jest.mock("@/lib/api/roster", () => ({
   patchRosterBulk: jest.fn(),
   patchRosterParticipant: jest.fn(),
   renameRosterGroup: jest.fn(),
+  sendRosterInvitations: jest.fn(),
 }));
 
 import RosterPanel from "@/components/schedule/RosterPanel";
@@ -87,6 +88,7 @@ import {
   patchRosterBulk,
   patchRosterParticipant,
   renameRosterGroup,
+  sendRosterInvitations,
 } from "@/lib/api/roster";
 
 const event = {
@@ -122,7 +124,7 @@ function participant(overrides = {}) {
     version: 4,
     accountAccess: "temporary",
     canOrganizerEditAvailability: true,
-    invitationStatus: "invited",
+    invitationStatus: "sent",
     ...overrides,
   };
 }
@@ -507,7 +509,7 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
             id: "b",
             name: "Beta",
             group: null,
-            invitationStatus: "opened",
+            invitationStatus: "accepted",
             accountAccess: "full",
             canOrganizerEditAvailability: false,
           }),
@@ -521,7 +523,7 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
             id: "d",
             name: "Delta",
             group: "Faculty; Staff",
-            invitationStatus: "submitted",
+            invitationStatus: "accepted",
             submitted: 1,
           }),
         ],
@@ -567,10 +569,25 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
     expect(
       within(table).getByText("Full account", { exact: false }),
     ).toBeInTheDocument();
-    expect(within(table).getByText("Opened")).toBeInTheDocument();
+    expect(within(table).getAllByText("Invitation")).toHaveLength(4);
+    expect(within(table).getByText("Sent")).toBeInTheDocument();
     expect(within(table).getByText("Not sent")).toBeInTheDocument();
-    expect(within(table).getAllByText("Submitted")).toHaveLength(2);
-    expect(within(table).getByText("Invited")).toBeInTheDocument();
+    expect(within(table).getAllByText("Accepted")).toHaveLength(2);
+    // Only the Response badge says Submitted now.
+    expect(within(table).getAllByText("Submitted")).toHaveLength(1);
+    expect(within(table).queryByText("Invited")).not.toBeInTheDocument();
+    expect(within(table).queryByText("Opened")).not.toBeInTheDocument();
+    const invitationFilter = screen.getByLabelText("Filter by invitation");
+    expect(
+      within(invitationFilter)
+        .getAllByRole("option")
+        .map((option) => [option.textContent, option.value]),
+    ).toEqual([
+      ["Any invitation", ""],
+      ["Not sent", "not_sent"],
+      ["Sent", "sent"],
+      ["Accepted", "accepted"],
+    ]);
 
     fireEvent.change(groupFilter, { target: { value: "__ungrouped__" } });
     await waitFor(() =>
@@ -603,14 +620,14 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
       ).toBeInTheDocument(),
     );
     fireEvent.change(screen.getByLabelText("Filter by invitation"), {
-      target: { value: "opened" },
+      target: { value: "sent" },
     });
     await waitFor(() =>
       expect(fetchRoster).toHaveBeenLastCalledWith(
         "ROSTER1",
         expect.objectContaining({
           submitted: "false",
-          invitationStatus: "opened",
+          invitationStatus: "sent",
         }),
         "token",
       ),
@@ -979,10 +996,8 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
       recipientCount: 1,
     });
     await renderPanel({ onDeliveryRequestChange });
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Invite person" }),
-    );
-    const form = screen.getByRole("form", { name: /invite/i });
+    fireEvent.click(await screen.findByRole("button", { name: "Add person" }));
+    const form = screen.getByRole("form", { name: /add a person/i });
     const name = within(form).getByLabelText(/Full name/);
     const email = within(form).getByLabelText(/Email/);
     fireEvent.change(name, { target: { value: "x".repeat(101) } });
@@ -996,9 +1011,17 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
     expect(
       within(form).getByText("Email address must be 254 characters or fewer."),
     ).toBeVisible();
+    expect(createManagedParticipant).not.toHaveBeenCalled();
+    // Both actions share the same client validation.
+    fireEvent.click(
+      within(form).getByRole("button", { name: "Add and send invitation" }),
+    );
+    expect(createManagedParticipant).not.toHaveBeenCalled();
     fireEvent.change(name, { target: { value: "Newbie" } });
     fireEvent.change(email, { target: { value: "newbie@example.com" } });
-    fireEvent.submit(form);
+    fireEvent.click(
+      within(form).getByRole("button", { name: "Add and send invitation" }),
+    );
     await waitFor(() =>
       expect(onDeliveryRequestChange).toHaveBeenCalledWith({
         id: "dr-legacy",
@@ -1006,6 +1029,19 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
         recipientCount: 1,
         delivery: {},
       }),
+    );
+    expect(createManagedParticipant).toHaveBeenCalledWith(
+      "ROSTER1",
+      {
+        name: "Newbie",
+        email: "newbie@example.com",
+        idempotencyKey: expect.any(String),
+        sendInvitation: true,
+      },
+      "token",
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Newbie is ready to respond. Their invitation was queued.",
     );
   });
 
@@ -1017,10 +1053,8 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
       }),
     );
     await renderPanel();
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Invite person" }),
-    );
-    const form = screen.getByRole("form", { name: /invite/i });
+    fireEvent.click(await screen.findByRole("button", { name: "Add person" }));
+    const form = screen.getByRole("form", { name: /add a person/i });
     fireEvent.change(within(form).getByLabelText(/Full name/), {
       target: { value: "Inactive Person" },
     });
@@ -1037,9 +1071,474 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
         name: "Inactive Person",
         email: "inactive@example.com",
         idempotencyKey: expect.any(String),
+        sendInvitation: false,
       },
       "token",
     );
+  });
+});
+
+describe("RosterPanel adds people and sends invitations", () => {
+  const onDeliveryRequestChange = jest.fn();
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    Object.defineProperty(globalThis, "crypto", {
+      configurable: true,
+      value: { randomUUID: jest.fn().mockReturnValue("roster-key") },
+    });
+    fetchRoster.mockResolvedValue(
+      rosterResponse([
+        participant({ id: "p-1", name: "Ada", invitationStatus: "not_sent" }),
+        participant({ id: "p-2", name: "Ben" }),
+      ]),
+    );
+  });
+
+  async function openAddPersonForm(props = {}) {
+    await renderPanel({ onDeliveryRequestChange, ...props });
+    const trigger = await screen.findByRole("button", { name: "Add person" });
+    expect(trigger).toHaveAttribute("id", "roster-invite-trigger");
+    fireEvent.click(trigger);
+    const form = screen.getByRole("form", { name: "Add a person" });
+    expect(
+      within(form).getByRole("heading", { name: "Add a person" }),
+    ).toBeInTheDocument();
+    expect(form).toHaveTextContent(
+      "Add one person to the roster. Enter adds them without emailing; use Add and send invitation to email their secure link now, or Send invitation later.",
+    );
+    expect(screen.getByRole("button", { name: "Close add person" })).toBe(
+      trigger,
+    );
+    return {
+      form,
+      name: within(form).getByLabelText(/Full name/),
+      email: within(form).getByLabelText(/Email/),
+      addOnly: within(form).getByRole("button", { name: "Add only" }),
+      addAndSend: within(form).getByRole("button", {
+        name: "Add and send invitation",
+      }),
+    };
+  }
+
+  test("Add only adds the person without queuing an invitation", async () => {
+    let resolveCreate;
+    createManagedParticipant.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveCreate = resolve;
+      }),
+    );
+    const { form, name, email, addOnly, addAndSend } =
+      await openAddPersonForm();
+    expect(addOnly).toHaveAttribute("type", "submit");
+    expect(addAndSend).toHaveAttribute("type", "button");
+    fireEvent.change(name, { target: { value: "  Newbie " } });
+    fireEvent.change(email, { target: { value: " Newbie@Example.com " } });
+    fireEvent.click(addOnly);
+    await waitFor(() =>
+      expect(createManagedParticipant).toHaveBeenCalledWith(
+        "ROSTER1",
+        {
+          name: "Newbie",
+          email: "newbie@example.com",
+          idempotencyKey: "roster-key",
+          sendInvitation: false,
+        },
+        "token",
+      ),
+    );
+    expect(
+      within(form).getByRole("button", { name: "Adding…" }),
+    ).toBeDisabled();
+    expect(addAndSend).toBeDisabled();
+    expect(addAndSend).toHaveTextContent("Add and send invitation");
+    expect(
+      screen.getByRole("button", { name: "Close add person" }),
+    ).toBeDisabled();
+    // A second submit while the request is in flight is ignored.
+    fireEvent.submit(form);
+    expect(createManagedParticipant).toHaveBeenCalledTimes(1);
+
+    resolveCreate({
+      participant: { id: "new-1", name: "Newbie" },
+      created: true,
+      autoInvitedCount: 0,
+      deliveryRequest: null,
+    });
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Newbie was added. No invitation was sent.",
+    );
+    expect(onDeliveryRequestChange).not.toHaveBeenCalled();
+    expect(screen.queryByRole("form")).not.toBeInTheDocument();
+    await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Add person" })).toHaveFocus(),
+    );
+  });
+
+  test("Add only recognises a restored person and someone already on the roster", async () => {
+    createManagedParticipant.mockResolvedValueOnce({
+      participant: { id: "old-1", name: "Returning" },
+      created: false,
+      restored: true,
+      autoInvitedCount: 0,
+      deliveryRequest: null,
+    });
+    const { form, name, email } = await openAddPersonForm();
+    fireEvent.change(name, { target: { value: "Returning" } });
+    fireEvent.change(email, { target: { value: "returning@example.com" } });
+    fireEvent.submit(form);
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Returning was added. No invitation was sent.",
+    );
+    expect(onDeliveryRequestChange).not.toHaveBeenCalled();
+
+    createManagedParticipant.mockResolvedValueOnce({
+      participant: { id: "p-2", name: "Ben" },
+      created: false,
+      restored: false,
+      autoInvitedCount: 0,
+      deliveryRequest: null,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add person" }));
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    const reopened = screen.getByRole("form", { name: "Add a person" });
+    fireEvent.change(within(reopened).getByLabelText(/Full name/), {
+      target: { value: "Ben" },
+    });
+    fireEvent.change(within(reopened).getByLabelText(/Email/), {
+      target: { value: "ben@example.com" },
+    });
+    fireEvent.click(within(reopened).getByRole("button", { name: "Add only" }));
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Ben is already on this roster. No new invitation was sent.",
+    );
+    expect(onDeliveryRequestChange).not.toHaveBeenCalled();
+  });
+
+  test("Add and send invitation queues the email and shows its own busy label", async () => {
+    let resolveCreate;
+    createManagedParticipant.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveCreate = resolve;
+      }),
+    );
+    const { form, name, email, addOnly, addAndSend } =
+      await openAddPersonForm();
+    fireEvent.change(name, { target: { value: "Newbie" } });
+    fireEvent.change(email, { target: { value: "newbie@example.com" } });
+    fireEvent.click(addAndSend);
+    await waitFor(() =>
+      expect(createManagedParticipant).toHaveBeenCalledWith(
+        "ROSTER1",
+        {
+          name: "Newbie",
+          email: "newbie@example.com",
+          idempotencyKey: "roster-key",
+          sendInvitation: true,
+        },
+        "token",
+      ),
+    );
+    expect(
+      within(form).getByRole("button", { name: "Adding and sending…" }),
+    ).toBeDisabled();
+    expect(addOnly).toBeDisabled();
+    expect(addOnly).toHaveTextContent("Add only");
+    fireEvent.click(addAndSend);
+    expect(createManagedParticipant).toHaveBeenCalledTimes(1);
+
+    resolveCreate({
+      participant: { id: "new-1", name: "Newbie" },
+      created: true,
+      autoInvitedCount: 1,
+      deliveryRequest: {
+        id: "dr-1",
+        operation: "invitation",
+        recipientCount: 1,
+        delivery: {},
+      },
+    });
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Newbie is ready to respond. Their invitation was queued.",
+    );
+    expect(onDeliveryRequestChange).toHaveBeenCalledWith({
+      id: "dr-1",
+      operation: "invitation",
+      recipientCount: 1,
+      delivery: {},
+    });
+
+    // Sending to someone who is already on the roster queues nothing.
+    createManagedParticipant.mockResolvedValueOnce({
+      participant: { id: "p-2", name: "Ben" },
+      created: false,
+      autoInvitedCount: 0,
+      deliveryRequest: null,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add person" }));
+    const reopened = screen.getByRole("form", { name: "Add a person" });
+    fireEvent.change(within(reopened).getByLabelText(/Full name/), {
+      target: { value: "Ben" },
+    });
+    fireEvent.change(within(reopened).getByLabelText(/Email/), {
+      target: { value: "ben@example.com" },
+    });
+    fireEvent.click(
+      within(reopened).getByRole("button", { name: "Add and send invitation" }),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Ben is already on this roster. No new invitation was sent.",
+    );
+    expect(onDeliveryRequestChange).toHaveBeenCalledTimes(1);
+  });
+
+  test("reports add failures and keeps the typed values", async () => {
+    createManagedParticipant.mockRejectedValueOnce(new Error(""));
+    const setEvent = jest.fn();
+    const { form, name, email } = await openAddPersonForm({ setEvent });
+    fireEvent.change(name, { target: { value: "Newbie" } });
+    fireEvent.change(email, { target: { value: "newbie@example.com" } });
+    fireEvent.submit(form);
+    expect(await within(form).findByRole("alert")).toHaveTextContent(
+      "Unable to add this person.",
+    );
+    expect(name).toHaveValue("Newbie");
+    expect(email).toHaveValue("newbie@example.com");
+    expect(onDeliveryRequestChange).not.toHaveBeenCalled();
+
+    const closedEvent = { ...event, status: "closed" };
+    createManagedParticipant.mockRejectedValueOnce(
+      Object.assign(new Error("Closed"), {
+        errorCode: "event_not_active",
+        event: closedEvent,
+      }),
+    );
+    fireEvent.submit(form);
+    await waitFor(() =>
+      expect(within(form).getByRole("alert")).toHaveTextContent(
+        "This event is closed. Reactivate it before adding participants.",
+      ),
+    );
+    expect(setEvent).toHaveBeenCalledWith(closedEvent);
+
+    createManagedParticipant.mockResolvedValueOnce({ participant: {} });
+    fireEvent.submit(form);
+    await waitFor(() =>
+      expect(within(form).getByRole("alert")).toHaveTextContent(
+        "The participant was added without a roster ID.",
+      ),
+    );
+    expect(createManagedParticipant).toHaveBeenCalledTimes(3);
+    // The same idempotency key is reused until the values change.
+    expect(globalThis.crypto.randomUUID).toHaveBeenCalledTimes(1);
+    fireEvent.change(name, { target: { value: "Newbie Two" } });
+    createManagedParticipant.mockRejectedValueOnce(new Error("Nope"));
+    fireEvent.submit(form);
+    await waitFor(() =>
+      expect(within(form).getByRole("alert")).toHaveTextContent("Nope"),
+    );
+    expect(globalThis.crypto.randomUUID).toHaveBeenCalledTimes(2);
+  });
+
+  test("sends invitations to the selected people from either bar", async () => {
+    let resolveSend;
+    sendRosterInvitations.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveSend = resolve;
+      }),
+    );
+    await renderPanel({ onDeliveryRequestChange });
+    await screen.findByText("Ada");
+    const sendButtons = screen.getAllByRole("button", {
+      name: "Send invitation",
+    });
+    expect(sendButtons).toHaveLength(2);
+    sendButtons.forEach((button) => expect(button).toBeDisabled());
+    const resendBoxes = screen.getAllByLabelText(
+      "Resend to people already invited",
+    );
+    expect(resendBoxes).toHaveLength(2);
+    expect(resendBoxes[0].id).not.toBe(resendBoxes[1].id);
+    resendBoxes.forEach((box) => expect(box).not.toBeChecked());
+    expect(screen.getAllByText("0 selected")).toHaveLength(2);
+
+    const list = screen.getByRole("region", { name: "Roster entries" });
+    const [topBar, bottomBar] = within(list).getAllByText(/selected$/);
+    const table = screen.getByRole("region", { name: "Roster participants" });
+    expect(
+      topBar.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      table.compareDocumentPosition(bottomBar) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText("Select Ada"));
+    expect(screen.getAllByText("1 selected")).toHaveLength(2);
+    sendButtons.forEach((button) => expect(button).toBeEnabled());
+    fireEvent.click(screen.getByLabelText("Select all on page"));
+    expect(screen.getAllByText("2 selected")).toHaveLength(2);
+
+    fireEvent.click(sendButtons[1]);
+    await waitFor(() =>
+      expect(sendRosterInvitations).toHaveBeenCalledWith(
+        "ROSTER1",
+        {
+          participantIds: ["p-1", "p-2"],
+          resend: false,
+          idempotencyKey: "roster-key",
+        },
+        "token",
+      ),
+    );
+    expect(screen.getAllByRole("button", { name: "Sending…" })).toHaveLength(2);
+    screen
+      .getAllByRole("button", { name: "Sending…" })
+      .forEach((button) => expect(button).toBeDisabled());
+
+    resolveSend({
+      deliveryRequest: {
+        id: "dr-roster",
+        operation: "invitation",
+        recipientCount: 1,
+        delivery: { total: 1, pending: 1 },
+      },
+      requestedCount: 2,
+      queuedCount: 1,
+      skippedCount: 1,
+    });
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Queued 1 invitation(s). 1 already invited were skipped.",
+    );
+    expect(onDeliveryRequestChange).toHaveBeenCalledWith({
+      id: "dr-roster",
+      operation: "invitation",
+      recipientCount: 1,
+      delivery: { total: 1, pending: 1 },
+    });
+    await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(2));
+    expect(screen.getAllByText("0 selected")).toHaveLength(2);
+    expect(screen.getByLabelText("Select Ada")).not.toBeChecked();
+    expect(screen.getByLabelText("Select Ben")).not.toBeChecked();
+    screen
+      .getAllByRole("button", { name: "Send invitation" })
+      .forEach((button) => expect(button).toBeDisabled());
+  });
+
+  test("resends to people already invited and skips delivery progress when nothing was queued", async () => {
+    sendRosterInvitations.mockResolvedValueOnce({
+      deliveryRequest: {
+        id: "dr-empty",
+        operation: "invitation",
+        recipientCount: 0,
+        delivery: {},
+      },
+      requestedCount: 1,
+      queuedCount: 0,
+      skippedCount: 1,
+    });
+    await renderPanel({ onDeliveryRequestChange });
+    await screen.findByText("Ada");
+    const [topResend, bottomResend] = screen.getAllByLabelText(
+      "Resend to people already invited",
+    );
+    fireEvent.click(topResend);
+    expect(topResend).toBeChecked();
+    expect(bottomResend).toBeChecked();
+    fireEvent.click(screen.getByLabelText("Select Ben"));
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Send invitation" })[0],
+    );
+    await waitFor(() =>
+      expect(sendRosterInvitations).toHaveBeenCalledWith(
+        "ROSTER1",
+        {
+          participantIds: ["p-2"],
+          resend: true,
+          idempotencyKey: "roster-key",
+        },
+        "token",
+      ),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Queued 0 invitation(s). 1 already invited were skipped.",
+    );
+    expect(onDeliveryRequestChange).not.toHaveBeenCalled();
+    // The checkbox keeps its value for the next send.
+    expect(topResend).toBeChecked();
+
+    sendRosterInvitations.mockResolvedValueOnce({});
+    fireEvent.click(screen.getByLabelText("Select Ada"));
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Send invitation" })[1],
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "Queued 0 invitation(s). 0 already invited were skipped.",
+      ),
+    );
+    expect(sendRosterInvitations).toHaveBeenLastCalledWith(
+      "ROSTER1",
+      { participantIds: ["p-1"], resend: true, idempotencyKey: "roster-key" },
+      "token",
+    );
+    expect(onDeliveryRequestChange).not.toHaveBeenCalled();
+  });
+
+  test("reports send failures and keeps the selection", async () => {
+    sendRosterInvitations
+      .mockRejectedValueOnce(new Error("Too many invitations"))
+      .mockRejectedValueOnce(new Error(""));
+    await renderPanel({ onDeliveryRequestChange });
+    await screen.findByText("Ada");
+    fireEvent.click(screen.getByLabelText("Select Ada"));
+    const [sendButton] = screen.getAllByRole("button", {
+      name: "Send invitation",
+    });
+    fireEvent.click(sendButton);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Too many invitations",
+    );
+    expect(screen.getByLabelText("Select Ada")).toBeChecked();
+    expect(fetchRoster).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+
+    fireEvent.click(sendButton);
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Unable to send invitations.",
+      ),
+    );
+    expect(sendRosterInvitations).toHaveBeenCalledTimes(2);
+    expect(onDeliveryRequestChange).not.toHaveBeenCalled();
+  });
+
+  test("hides the send bars while the roster is read-only or empty", async () => {
+    const { unmount } = await renderPanel({
+      event: { ...event, status: "closed" },
+    });
+    await screen.findByText("Ada");
+    expect(
+      screen.queryByRole("button", { name: "Send invitation" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByLabelText("Resend to people already invited"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/selected$/)).not.toBeInTheDocument();
+    unmount();
+
+    fetchRoster.mockResolvedValue(rosterResponse([]));
+    await renderPanel();
+    expect(
+      await screen.findByText(
+        "Add someone or import a roster to start collecting availability.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Send invitation" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add person" })).toBeEnabled();
   });
 });
 

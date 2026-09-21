@@ -340,9 +340,7 @@ test("surfaces preview-row, commit, and cancel failures", async () => {
   fireEvent.blur(rowName);
   expect(await screen.findByRole("alert")).toHaveTextContent("row failed");
   await waitFor(() => expect(rowName).toHaveValue("Ada"));
-  await userEvent.click(
-    screen.getByRole("button", { name: "Merge roster and invite new people" }),
-  );
+  await userEvent.click(screen.getByRole("button", { name: "Merge roster" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("commit failed");
   await userEvent.click(screen.getByRole("button", { name: "Close" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("cancel failed");
@@ -500,11 +498,22 @@ test("moves between sources with the keyboard, edits every preview column, and g
     ),
   );
 
+  // Invitations are off by default, and the hint says so.
+  const behavior = screen.getByRole("group", { name: "Import behavior" });
+  expect(behavior).toHaveTextContent(
+    "Existing participants are updated without another email. New people are emailed only if you tick the box; you can also send invitations later from the roster.",
+  );
+  expect(
+    within(behavior).getByLabelText("Send invitations to newly added people"),
+  ).not.toBeChecked();
+  expect(screen.queryByRole("note")).not.toBeInTheDocument();
+
   // A rebuild needs the exact event code before it can be committed.
   await userEvent.click(screen.getByLabelText(/Rebuild the roster/));
-  const commit = screen.getByRole("button", {
-    name: "Rebuild roster and send invitations",
-  });
+  const commit = screen.getByRole("button", { name: "Rebuild roster" });
+  expect(screen.getByRole("note")).toHaveTextContent(
+    "Rebuilding clears schedules, invitations, and pending delivery. With invitations enabled below it sends a new invitation to every imported participant; otherwise everyone starts as Not sent and gets no reminders until you send invitations.",
+  );
   expect(commit).toBeDisabled();
   fireEvent.change(screen.getByLabelText("Rebuild confirmation code"), {
     target: { value: "WRONG" },
@@ -521,15 +530,218 @@ test("moves between sources with the keyboard, edits every preview column, and g
       {
         mode: "rebuild",
         idempotencyKey: "import-key",
+        sendInvitations: false,
         confirmationCode: "IMPORT1",
       },
       "token",
     ),
   );
   expect(await screen.findByRole("status")).toHaveTextContent(
+    "Imported 1 people: 0 added, 1 updated. No invitations were sent.",
+  );
+  expect(onCommitted).toHaveBeenCalledWith({
+    receipt: { importedCount: 1, createdCount: 0, updatedCount: 1 },
+    autoInvitedCount: 0,
+    sendInvitations: false,
+  });
+});
+
+test("emails newly added people only when the invitation box is ticked", async () => {
+  const record = {
+    id: "import-8",
+    worksheets: [
+      {
+        name: "Pasted data",
+        rowCount: 2,
+        defaultHeaderRow: 1,
+        headers: ["name", "email"],
+      },
+    ],
+    selectedWorksheet: "Pasted data",
+    headerRow: 1,
+    headers: ["name", "email"],
+    columnMapping: { name: 0, email: 1 },
+    defaults: { weight: 1, included: true },
+    summary: { total: 2, selected: 2, valid: 2, invalid: 0, conflicts: 0 },
+  };
+  createRosterImport.mockResolvedValue({ import: record });
+  configureRosterImport.mockResolvedValue({ import: record });
+  fetchRosterImportRows.mockResolvedValue({
+    import: record,
+    rows: [
+      {
+        id: "row-9",
+        rowNumber: 2,
+        name: "Ada",
+        email: "ada@example.com",
+        weight: 1,
+        included: true,
+        selected: true,
+        valid: true,
+        duplicate: "unique",
+        errors: [],
+      },
+      {
+        id: "row-10",
+        rowNumber: 3,
+        name: "Grace",
+        email: "grace@example.com",
+        weight: 1,
+        included: true,
+        selected: true,
+        valid: true,
+        duplicate: "unique",
+        errors: [],
+      },
+    ],
+    pagination: { page: 1, pageSize: 50, total: 2, pages: 1 },
+  });
+  const commitResponse = {
+    receipt: {
+      mode: "merge",
+      importedCount: 2,
+      createdCount: 2,
+      updatedCount: 0,
+    },
+    autoInvitedCount: 2,
+    deliveryRequest: {
+      id: "import-delivery",
+      operation: "invitation",
+      recipientCount: 2,
+      delivery: { total: 2, pending: 2 },
+    },
+  };
+  commitRosterImport.mockResolvedValue(commitResponse);
+  const onCommitted = jest.fn();
+  renderWizard({ onCommitted });
+  await userEvent.click(screen.getByRole("tab", { name: "Paste spreadsheet" }));
+  fireEvent.change(screen.getByLabelText("Pasted roster rows"), {
+    target: {
+      value: "name\temail\nAda\tada@example.com\nGrace\tgrace@example.com",
+    },
+  });
+  await userEvent.click(
+    screen.getByRole("button", { name: "Continue to mapping" }),
+  );
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Preview rows" }),
+  );
+  await screen.findByDisplayValue("grace@example.com");
+
+  const sendBox = screen.getByLabelText(
+    "Send invitations to newly added people",
+  );
+  expect(sendBox).not.toBeChecked();
+  expect(
+    screen.getByRole("button", { name: "Merge roster" }),
+  ).toBeInTheDocument();
+  await userEvent.click(sendBox);
+  expect(sendBox).toBeChecked();
+  expect(
+    screen.getByRole("button", { name: "Merge roster and invite new people" }),
+  ).toBeInTheDocument();
+
+  // The same box governs a rebuild.
+  await userEvent.click(screen.getByLabelText(/Rebuild the roster/));
+  expect(
+    screen.getByRole("button", { name: "Rebuild roster and send invitations" }),
+  ).toBeDisabled();
+  expect(screen.getByLabelText("Send invitations to newly added people")).toBe(
+    sendBox,
+  );
+  expect(sendBox).toBeChecked();
+  await userEvent.click(screen.getByLabelText(/Merge with the current roster/));
+
+  await userEvent.click(
+    screen.getByRole("button", { name: "Merge roster and invite new people" }),
+  );
+  await waitFor(() =>
+    expect(commitRosterImport).toHaveBeenCalledWith(
+      event.code,
+      "import-8",
+      { mode: "merge", idempotencyKey: "import-key", sendInvitations: true },
+      "token",
+    ),
+  );
+  expect(await screen.findByRole("status")).toHaveTextContent(
+    "Imported 2 people: 2 added, 0 updated. 2 invitations queued.",
+  );
+  expect(onCommitted).toHaveBeenCalledWith({
+    ...commitResponse,
+    sendInvitations: true,
+  });
+});
+
+test("reports that nothing was emailed when a ticked merge adds nobody new", async () => {
+  const record = {
+    id: "import-9",
+    worksheets: [
+      {
+        name: "Pasted data",
+        rowCount: 1,
+        defaultHeaderRow: 1,
+        headers: ["name", "email"],
+      },
+    ],
+    selectedWorksheet: "Pasted data",
+    headerRow: 1,
+    headers: ["name", "email"],
+    columnMapping: { name: 0, email: 1 },
+    defaults: { weight: 1, included: true },
+    summary: { total: 1, selected: 1, valid: 1, invalid: 0, conflicts: 0 },
+  };
+  createRosterImport.mockResolvedValue({ import: record });
+  configureRosterImport.mockResolvedValue({ import: record });
+  fetchRosterImportRows.mockResolvedValue({
+    import: record,
+    rows: [
+      {
+        id: "row-11",
+        rowNumber: 2,
+        name: "Ada",
+        email: "ada@example.com",
+        weight: 1,
+        included: true,
+        selected: true,
+        valid: true,
+        duplicate: "unique",
+        errors: [],
+      },
+    ],
+    pagination: { page: 1, pageSize: 50, total: 1, pages: 1 },
+  });
+  commitRosterImport.mockResolvedValue({
+    receipt: { importedCount: 1, createdCount: 0, updatedCount: 1 },
+    autoInvitedCount: 0,
+    deliveryRequest: null,
+  });
+  renderWizard();
+  await userEvent.click(screen.getByRole("tab", { name: "Paste spreadsheet" }));
+  fireEvent.change(screen.getByLabelText("Pasted roster rows"), {
+    target: { value: "name\temail\nAda\tada@example.com" },
+  });
+  await userEvent.click(
+    screen.getByRole("button", { name: "Continue to mapping" }),
+  );
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Preview rows" }),
+  );
+  await screen.findByDisplayValue("ada@example.com");
+  await userEvent.click(
+    screen.getByLabelText("Send invitations to newly added people"),
+  );
+  await userEvent.click(
+    screen.getByRole("button", { name: "Merge roster and invite new people" }),
+  );
+  expect(await screen.findByRole("status")).toHaveTextContent(
     "Imported 1 people: no new participants were added, so no invitations were sent.",
   );
-  expect(onCommitted).toHaveBeenCalled();
+  expect(commitRosterImport).toHaveBeenCalledWith(
+    event.code,
+    "import-9",
+    { mode: "merge", idempotencyKey: "import-key", sendInvitations: true },
+    "token",
+  );
 });
 
 test("explains a closed event on commit and reports paging failures", async () => {
@@ -593,9 +805,7 @@ test("explains a closed event on commit and reports paging failures", async () =
   expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
   await userEvent.click(screen.getByRole("button", { name: "Previous" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("page failed");
-  await userEvent.click(
-    screen.getByRole("button", { name: "Merge roster and invite new people" }),
-  );
+  await userEvent.click(screen.getByRole("button", { name: "Merge roster" }));
   expect(await screen.findByRole("alert")).toHaveTextContent(
     "This event is closed. Reactivate it before committing this roster.",
   );

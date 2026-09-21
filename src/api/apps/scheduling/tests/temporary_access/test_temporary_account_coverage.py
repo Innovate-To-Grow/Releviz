@@ -476,7 +476,7 @@ class TemporaryAccountCoverageTests(TestCase):
         payload = api_participant(participant, organizer_private=True)
 
         self.assertEqual(payload["email"], "contact-only@example.com")
-        self.assertEqual(payload["invitationStatus"], "invited")
+        self.assertEqual(payload["invitationStatus"], "sent")
         self.assertEqual(payload["accountAccess"], "full")
         self.assertFalse(payload["canOrganizerEditAvailability"])
 

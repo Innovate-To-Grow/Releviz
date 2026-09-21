@@ -405,7 +405,12 @@ def commit_roster_import(*, event: Event, batch_id, organizer, data):
         idempotency_key = uuid.UUID(str(data.get("idempotencyKey") or ""))
     except (TypeError, ValueError, AttributeError) as exc:
         raise RosterImportError("idempotencyKey must be a UUID.") from exc
-    fingerprint = _fingerprint({"batchId": str(batch_id), "mode": mode})
+    send_invitations = data.get("sendInvitations", True)
+    if not isinstance(send_invitations, bool):
+        raise RosterImportError("sendInvitations must be a boolean.")
+    fingerprint = _fingerprint(
+        {"batchId": str(batch_id), "mode": mode, "sendInvitations": send_invitations}
+    )
 
     try:
         with transaction.atomic():
@@ -516,6 +521,8 @@ def commit_roster_import(*, event: Event, batch_id, organizer, data):
                 },
             )
             delivery_request = None
+            if not send_invitations:
+                invitation_emails = []
             if invitation_emails:
                 delivery_result = upsert_and_send_invitations(
                     event=event,
