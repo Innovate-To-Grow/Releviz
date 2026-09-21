@@ -7,15 +7,32 @@ import { AvailabilityLegend } from "@/components/ui/Availability";
 import { CopyIcon, GroupIcon, VirtualIcon } from "@/components/ui/icons";
 import ScheduleGrid from "@/components/schedule/ScheduleGrid";
 
-function schedulesMatch(first = [], second = []) {
+function blockedSlotIndices(slotGroups) {
+  const blocked = new Set();
+  for (const group of Array.isArray(slotGroups) ? slotGroups : []) {
+    for (const slot of group?.slots || []) {
+      if (slot?.blocked) blocked.add(slot.index);
+    }
+  }
+  return blocked;
+}
+
+// Organizer-blocked indices are hidden in the grid and ignored by results,
+// so they never drive the copy button or the replace confirmation.
+function schedulesMatch(first = [], second = [], blocked = new Set()) {
   return (
     first.length === second.length &&
-    first.every((value, index) => Number(value) === Number(second[index]))
+    first.every(
+      (value, index) =>
+        blocked.has(index) || Number(value) === Number(second[index]),
+    )
   );
 }
 
-function hasAvailability(schedule = []) {
-  return schedule.some((value) => Number(value) > 0);
+function hasAvailability(schedule = [], blocked = new Set()) {
+  return schedule.some(
+    (value, index) => !blocked.has(index) && Number(value) > 0,
+  );
 }
 
 /**
@@ -51,6 +68,10 @@ export default function ScheduleChannelEditor({
   const targetSchedule = schedules[otherChannel] || [];
   const channelLabel = channel === "virtual" ? "Virtual" : "In-Person";
   const targetLabel = otherChannel === "virtual" ? "Virtual" : "In-Person";
+  // Organizer-blocked slots render grey-striped in the grid, so the legend
+  // needs a "Blocked" item even when the availability legend is hidden.
+  const blockedIndices = blockedSlotIndices(slotGroups);
+  const hasBlocked = blockedIndices.size > 0;
 
   const copySchedule = (source, target) => {
     onCopy?.(source, target);
@@ -59,8 +80,8 @@ export default function ScheduleChannelEditor({
   };
 
   const requestCopy = () => {
-    if (schedulesMatch(schedule, targetSchedule)) return;
-    if (hasAvailability(targetSchedule)) {
+    if (schedulesMatch(schedule, targetSchedule, blockedIndices)) return;
+    if (hasAvailability(targetSchedule, blockedIndices)) {
       setPendingCopy({ source: channel, target: otherChannel });
       return;
     }
@@ -133,7 +154,10 @@ export default function ScheduleChannelEditor({
             size="sm"
             icon={<CopyIcon />}
             onClick={requestCopy}
-            disabled={readOnly || schedulesMatch(schedule, targetSchedule)}
+            disabled={
+              readOnly ||
+              schedulesMatch(schedule, targetSchedule, blockedIndices)
+            }
           >
             Copy {channelLabel} to {targetLabel}
           </AppButton>
@@ -177,9 +201,19 @@ export default function ScheduleChannelEditor({
         </Alert>
       )}
 
-      {legend && !showValues && (
-        <AvailabilityLegend virtual={channel === "virtual"} />
-      )}
+      {!showValues &&
+        (legend ? (
+          <AvailabilityLegend
+            virtual={channel === "virtual"}
+            hasBlocked={hasBlocked}
+          />
+        ) : hasBlocked ? (
+          <AvailabilityLegend
+            virtual={channel === "virtual"}
+            hasBlocked
+            blockedOnly
+          />
+        ) : null)}
 
       <div
         role={mode === "mixed" ? "tabpanel" : undefined}

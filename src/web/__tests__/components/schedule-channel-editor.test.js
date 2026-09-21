@@ -160,4 +160,129 @@ describe("ScheduleChannelEditor", () => {
       screen.getByRole("list", { name: "Availability legend" }),
     ).toBeInTheDocument();
   });
+
+  // Deliberately ragged: a null group, a group without slots and a null slot
+  // must not break the blocked-slot scan.
+  const blockedSlotGroups = [
+    null,
+    { key: "weekday:0", label: "Sun" },
+    {
+      key: "weekday:1",
+      label: "Mon",
+      slots: [
+        null,
+        { index: 0, localStart: "09:00", localEnd: "09:30", blocked: false },
+        { index: 1, localStart: "09:30", localEnd: "10:00", blocked: true },
+      ],
+    },
+  ];
+
+  test("adds the Blocked legend item when any slot is blocked", () => {
+    const { unmount } = render(
+      <ScheduleChannelEditor
+        mode="inperson"
+        slotGroups={blockedSlotGroups}
+        inperson={[1, 1]}
+        virtual={[0, 0]}
+        readOnly={false}
+      />,
+    );
+    let legend = screen.getByRole("list", { name: "Availability legend" });
+    let items = legend.querySelectorAll(".availability-legend__item");
+    expect(items).toHaveLength(4);
+    expect(items[0]).toHaveTextContent("Busy");
+    expect(items[3]).toHaveTextContent("Blocked");
+    expect(
+      items[3].querySelector(".availability-swatch--blocked"),
+    ).toBeInTheDocument();
+    unmount();
+
+    // Hiding the availability legend still surfaces the blocked-only legend.
+    render(
+      <ScheduleChannelEditor
+        mode="virtual"
+        slotGroups={blockedSlotGroups}
+        inperson={[0, 0]}
+        virtual={[1, 1]}
+        readOnly={false}
+        legend={false}
+      />,
+    );
+    legend = screen.getByRole("list", { name: "Availability legend" });
+    items = legend.querySelectorAll(".availability-legend__item");
+    expect(items).toHaveLength(1);
+    expect(items[0]).toHaveTextContent("Blocked");
+    expect(screen.queryByText("Busy")).not.toBeInTheDocument();
+  });
+
+  test("ignores stale marks under blocked slots when copying channels", async () => {
+    // Slot 1 is blocked: the only difference between the channels is hidden,
+    // so the schedules are effectively identical and the copy is disabled.
+    const { unmount } = render(
+      <ScheduleChannelEditor
+        mode="mixed"
+        slotGroups={blockedSlotGroups}
+        inperson={[0, 1]}
+        virtual={[0, 0]}
+        readOnly={false}
+        onCopy={jest.fn()}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: "Copy In-Person to Virtual" }),
+    ).toBeDisabled();
+    unmount();
+
+    // The target's only availability is a stale mark under the blocked slot,
+    // so the copy proceeds without asking to replace anything.
+    const onCopy = jest.fn();
+    render(
+      <ScheduleChannelEditor
+        mode="mixed"
+        slotGroups={blockedSlotGroups}
+        inperson={[1, 0]}
+        virtual={[0, 1]}
+        readOnly={false}
+        onCopy={onCopy}
+      />,
+    );
+    const copyButton = screen.getByRole("button", {
+      name: "Copy In-Person to Virtual",
+    });
+    expect(copyButton).toBeEnabled();
+    await userEvent.click(copyButton);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(onCopy).toHaveBeenCalledWith("inperson", "virtual");
+  });
+
+  test("omits every legend for aggregate values and for unblocked grids", () => {
+    const { unmount } = render(
+      <ScheduleChannelEditor
+        mode="inperson"
+        slotGroups={blockedSlotGroups}
+        inperson={[1, 1]}
+        virtual={[0, 0]}
+        readOnly
+        showValues
+      />,
+    );
+    expect(
+      screen.queryByRole("list", { name: "Availability legend" }),
+    ).not.toBeInTheDocument();
+    unmount();
+
+    render(
+      <ScheduleChannelEditor
+        mode="inperson"
+        slotGroups={{ invalid: true }}
+        inperson={[1, 1]}
+        virtual={[0, 0]}
+        readOnly={false}
+        legend={false}
+      />,
+    );
+    expect(
+      screen.queryByRole("list", { name: "Availability legend" }),
+    ).not.toBeInTheDocument();
+  });
 });

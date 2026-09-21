@@ -101,6 +101,33 @@ const event = {
   ],
 };
 
+// A hybrid event with one organizer-blocked slot per day (indices 1 and 3).
+const blockedEvent = {
+  ...event,
+  mode: "mixed",
+  slotCount: 4,
+  slotGroups: [
+    {
+      key: "mon",
+      label: "Monday",
+      slots: [
+        { index: 0, localStart: "09:00", localEnd: "09:30", blocked: false },
+        { index: 1, localStart: "09:30", localEnd: "10:00", blocked: true },
+      ],
+    },
+    {
+      key: "tue",
+      label: "Tuesday",
+      slots: [
+        { index: 2, localStart: "09:00", localEnd: "09:30" },
+        { index: 3, localStart: "09:30", localEnd: "10:00", blocked: true },
+      ],
+    },
+  ],
+};
+const BLOCKED_NOTE =
+  "Grey striped times are blocked by the organizer and do not apply to this event.";
+
 function participant(overrides = {}) {
   return {
     id: "person-1",
@@ -768,6 +795,44 @@ describe("temporary event access page", () => {
         screen.getByText("Draft saved. Submit when you are ready."),
       ).toBeInTheDocument(),
     );
+  });
+
+  test("explains organizer-blocked times and never fills them", async () => {
+    fetchTempAccessSession.mockResolvedValue(session({ event: blockedEvent }));
+    render(<TempAccessClient />);
+    expect(
+      await screen.findByRole("heading", { name: "Your schedule" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("note")).toHaveTextContent(BLOCKED_NOTE);
+
+    // Both channels fill around the blocked indices.
+    await userEvent.click(screen.getByRole("button", { name: "Apply to all" }));
+    expect(screen.getByTestId("schedule-editor")).toHaveTextContent("1,0,1,0");
+    expect(screen.getByTestId("virtual-values")).toHaveTextContent("1,0,1,0");
+    await waitFor(() =>
+      expect(updateTempAccessParticipant).toHaveBeenLastCalledWith(
+        "ABC123",
+        expect.objectContaining({
+          availabilityInperson: [1, 0, 1, 0],
+          availabilityVirtual: [1, 0, 1, 0],
+        }),
+      ),
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Mark all Busy" }),
+    );
+    expect(screen.getByTestId("schedule-editor")).toHaveTextContent("0,0,0,0");
+    expect(screen.getByTestId("virtual-values")).toHaveTextContent("0,0,0,0");
+  });
+
+  test("omits the blocked-times note when no slot is blocked", async () => {
+    render(<TempAccessClient />);
+    expect(
+      await screen.findByRole("heading", { name: "Your schedule" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+    expect(screen.queryByText(BLOCKED_NOTE)).not.toBeInTheDocument();
   });
 
   test("reports a submit conflict and a generic submit failure", async () => {

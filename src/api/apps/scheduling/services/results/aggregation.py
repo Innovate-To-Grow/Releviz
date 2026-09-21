@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from apps.scheduling.services.availability import expected_availability_length
+from apps.scheduling.services.slots import blocked_slot_indices
 
 from .recommendations import build_ranked_recommendations
 
@@ -137,16 +138,19 @@ def build_event_results(event, *, now=None) -> dict:
                     weighted_totals[channel][index] += value * weight_value
 
     counted_total = len(counted)
+    # Stale marks on organizer-blocked slots are masked here rather than
+    # rewritten on the participant, so lifting a block restores them.
+    blocked = blocked_slot_indices(event)
     channel_results = {}
     for channel in channels:
         channel_results[channel] = {
             "unweighted": [
-                round(value / counted_total, 4) if counted_total else 0.0
-                for value in unweighted_totals[channel]
+                round(value / counted_total, 4) if counted_total and index not in blocked else 0.0
+                for index, value in enumerate(unweighted_totals[channel])
             ],
             "weighted": [
-                round(value / total_weight, 4) if total_weight else 0.0
-                for value in weighted_totals[channel]
+                round(value / total_weight, 4) if total_weight and index not in blocked else 0.0
+                for index, value in enumerate(weighted_totals[channel])
             ],
         }
 
@@ -160,6 +164,7 @@ def build_event_results(event, *, now=None) -> dict:
     return {
         "eventCode": event.code,
         "slotCount": slot_count,
+        "blockedSlotIndices": sorted(blocked),
         "countedResponseTotal": counted_total,
         "unansweredParticipantTotal": len(unanswered),
         "excludedParticipantTotal": sum(excluded_reasons.values()),

@@ -518,11 +518,13 @@ describe("organizer event management UI", () => {
     expect(replace).not.toHaveBeenCalled();
     first.unmount();
 
+    // The source event carries stored blocks, so the payload assertion below
+    // proves the form drops them rather than merely lacking them.
     render(
       <CreateEvent
         operation="edit"
         presentation="inline"
-        initialEvent={baseEvent}
+        initialEvent={{ ...baseEvent, blockedSlots: { "weekday:1": [0] } }}
         onSaved={onSaved}
         onCancel={onCancel}
       />,
@@ -536,6 +538,9 @@ describe("organizer event management UI", () => {
         "token",
       ),
     );
+    // Blocked times have their own editor: the form never sends them, so the
+    // server keeps (or prunes) the stored blocks.
+    expect(updateEvent.mock.calls[0][1]).not.toHaveProperty("blockedSlots");
     expect(onSaved).toHaveBeenCalledWith(result);
     expect(replace).not.toHaveBeenCalled();
   });
@@ -695,6 +700,7 @@ describe("organizer event management UI", () => {
         status: "active",
       }),
     );
+    expect(createEvent.mock.calls[0][0]).not.toHaveProperty("blockedSlots");
     expect(replace).toHaveBeenCalledWith("/event?code=CREATED1");
   });
 

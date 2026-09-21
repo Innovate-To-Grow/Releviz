@@ -75,6 +75,7 @@ jest.mock("@/lib/api/events", () => ({
   previewFinalMeeting: jest.fn(),
   retryDeliveryRequest: jest.fn(),
   sendReminders: jest.fn(),
+  updateEvent: jest.fn(),
   updateEventLifecycle: jest.fn(),
 }));
 jest.mock("@/lib/api/participants", () => ({
@@ -136,6 +137,7 @@ const event = {
   mode: "mixed",
   timezone: "UTC",
   location: "Room 1",
+  blockedSlots: {},
   slotGroups: [
     {
       key: "2026-08-20",
@@ -313,6 +315,14 @@ function mockCalendarWindowFlow() {
     finalMeeting: { attendance: { availableParticipantTotal: 2 } },
     deliveryRequest: null,
   });
+}
+
+// The Overview's blocked-times editor also renders `data-cell-idx` cells, so
+// calendar cells are looked up inside the results section.
+function calendarCell(index) {
+  return document
+    .getElementById("organizer-results")
+    .querySelector(`[data-cell-idx="${index}"]`);
 }
 
 async function openInvitePersonForm() {
@@ -562,6 +572,18 @@ describe("scaled organizer workspace", () => {
     expect(
       within(overviewSection).queryByRole("link", { name: "Edit event" }),
     ).not.toBeInTheDocument();
+    // The blocked-times editor lives in the Overview, open while the event
+    // has no blocks, with its own grid name beside the meeting calendar.
+    expect(
+      within(overviewSection)
+        .getByRole("grid", { name: "Blocked times" })
+        .closest("details"),
+    ).toHaveAttribute("open");
+    expect(
+      within(overviewSection).getByRole("button", {
+        name: "Save blocked times",
+      }),
+    ).toBeInTheDocument();
     expect(
       within(overviewSection).getByRole("button", {
         name: "Show all details",
@@ -1799,7 +1821,7 @@ describe("scaled organizer workspace", () => {
       expect(finalizeSection()).toHaveTextContent("No time selected yet");
       expect(screen.queryByText("Custom window")).not.toBeInTheDocument();
 
-      const cell = document.querySelector('[data-cell-idx="1"]');
+      const cell = calendarCell(1);
       expect(cell).toHaveAttribute("data-state", "startable");
       expect(cell).not.toHaveAttribute("aria-disabled");
       await userEvent.click(cell);
@@ -1813,13 +1835,8 @@ describe("scaled organizer workspace", () => {
       );
       expect(screen.getByRole("heading", { name: "Finalize" })).toHaveFocus();
       expect(cell).toHaveAttribute("aria-selected", "true");
-      expect(document.querySelector('[data-cell-idx="2"]')).toHaveAttribute(
-        "aria-selected",
-        "true",
-      );
-      expect(document.querySelector('[data-cell-idx="0"]')).not.toHaveAttribute(
-        "aria-selected",
-      );
+      expect(calendarCell(2)).toHaveAttribute("aria-selected", "true");
+      expect(calendarCell(0)).not.toHaveAttribute("aria-selected");
 
       await userEvent.click(
         screen.getByRole("button", { name: "Review attendance" }),
@@ -1886,7 +1903,7 @@ describe("scaled organizer workspace", () => {
       const headerStatus = () =>
         screen.getByTestId("organizer-header-event-status");
 
-      await userEvent.click(document.querySelector('[data-cell-idx="1"]'));
+      await userEvent.click(calendarCell(1));
       expect(finalizeSection()).toHaveTextContent("Custom window");
       await userEvent.click(
         screen.getByRole("button", { name: "Review attendance" }),
@@ -1924,9 +1941,7 @@ describe("scaled organizer workspace", () => {
       );
       expect(screen.queryByText("Custom window")).not.toBeInTheDocument();
       expect(screen.queryByText(/Ranked #/)).not.toBeInTheDocument();
-      expect(document.querySelector('[data-cell-idx="1"]')).not.toHaveAttribute(
-        "aria-selected",
-      );
+      expect(calendarCell(1)).not.toHaveAttribute("aria-selected");
       expect(
         screen.getAllByText("This event is active and accepting responses."),
       ).toHaveLength(1);

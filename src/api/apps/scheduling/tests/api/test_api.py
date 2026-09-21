@@ -350,6 +350,98 @@ class RelevizApiTests(TestCase):
             list(range(8)),
         )
 
+    def test_event_create_validates_and_canonicalizes_blocked_slots(self):
+        self.authenticate(self.organizer)
+        shape_error = "blockedSlots must be an object keyed by slot group."
+        range_error = "blockedSlots references a slot outside the event window."
+        base = {
+            "name": "Blocked",
+            "startTime": "09:00",
+            "endTime": "10:00",
+            "slotMinutes": 30,
+            "days": [1, 2],
+            "accessMode": "open_link",
+        }
+        invalid_payloads = [
+            ({**base, "blockedSlots": [[0]]}, shape_error),
+            ({**base, "blockedSlots": {"weekday:5": [0]}}, shape_error),
+            ({**base, "blockedSlots": {"weekday:1": 0}}, shape_error),
+            ({**base, "blockedSlots": {"weekday:1": ["0"]}}, shape_error),
+            ({**base, "blockedSlots": {"weekday:1": [True]}}, shape_error),
+            ({**base, "blockedSlots": {"weekday:1": [1, 1]}}, shape_error),
+            ({**base, "blockedSlots": {"weekday:1": [-1]}}, range_error),
+            ({**base, "blockedSlots": {"weekday:1": [2]}}, range_error),
+            (
+                {
+                    **base,
+                    "days": [1],
+                    "meetingDurationMinutes": 60,
+                    "blockedSlots": {"weekday:1": [1]},
+                },
+                "Blocked slots leave no open window for a 60-minute meeting.",
+            ),
+            (
+                {
+                    **base,
+                    "meetingDurationMinutes": 60,
+                    "blockedSlots": {"weekday:1": [0], "weekday:2": [1]},
+                },
+                "Blocked slots leave no open window for a 60-minute meeting.",
+            ),
+        ]
+        for payload, message in invalid_payloads:
+            with self.subTest(payload=payload):
+                response = self.client.post("/events", payload, format="json")
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.data["error"], message)
+
+        # A default create stores nothing blocked, and an empty map is the same.
+        untouched = self.client.post("/events", base, format="json")
+        self.assertEqual(untouched.status_code, 201)
+        self.assertEqual(untouched.data["event"]["blockedSlots"], {})
+        emptied = self.client.post("/events", {**base, "blockedSlots": {}}, format="json")
+        self.assertEqual(emptied.status_code, 201)
+        self.assertEqual(emptied.data["event"]["blockedSlots"], {})
+
+        created = self.client.post(
+            "/events",
+            {**base, "blockedSlots": {"weekday:2": [1, 0], "weekday:1": []}},
+            format="json",
+        )
+        self.assertEqual(created.status_code, 201)
+        self.assertEqual(created.data["event"]["blockedSlots"], {"weekday:2": [0, 1]})
+        self.assertEqual(created.data["event"]["slotCount"], 4)
+        self.assertEqual(
+            [
+                (slot["index"], slot["blocked"])
+                for group in created.data["event"]["slotGroups"]
+                for slot in group["slots"]
+            ],
+            [(0, False), (1, False), (2, True), (3, True)],
+        )
+        event = Event.objects.get(code=created.data["event"]["code"])
+        self.assertEqual(event.blocked_slots, {"weekday:2": [0, 1]})
+        self.assertEqual(
+            api_event(event, include_slot_groups=False)["blockedSlots"], event.blocked_slots
+        )
+
+        # Participants may still submit marks on blocked slots; results ignore them.
+        self.assertIsNone(validate_availability([1, 0.5, 1, 1], event, "x"))
+        self.authenticate(self.participant)
+        joined = self.client.post(f"/events/participants?code={event.code}", {}, format="json")
+        self.assertEqual(joined.status_code, 201)
+        saved = self.client.put(
+            f"/events/participants/update?code={event.code}&participantId={self.participant.pk}",
+            {
+                "availabilityInperson": [0, 0, 1, 0.5],
+                "submitted": 1,
+                "expectedVersion": joined.data["participant"]["version"],
+            },
+            format="json",
+        )
+        self.assertEqual(saved.status_code, 200)
+        self.assertEqual(saved.data["participant"]["availabilityInperson"], [0, 0, 1, 0.5])
+
     def test_event_code_generation_failure(self):
         self.authenticate(self.organizer)
         with patch(

@@ -99,6 +99,46 @@ const slots = [
     ],
   },
 ];
+// Two days with one organizer-blocked slot each (indices 1 and 3).
+const blockedSlots = [
+  {
+    key: "2026-08-18",
+    label: "Tuesday",
+    slots: [
+      {
+        index: 0,
+        startsAt: "2026-08-18T09:00:00Z",
+        endsAt: "2026-08-18T09:30:00Z",
+        blocked: false,
+      },
+      {
+        index: 1,
+        startsAt: "2026-08-18T09:30:00Z",
+        endsAt: "2026-08-18T10:00:00Z",
+        blocked: true,
+      },
+    ],
+  },
+  {
+    key: "2026-08-19",
+    label: "Wednesday",
+    slots: [
+      {
+        index: 2,
+        startsAt: "2026-08-19T09:00:00Z",
+        endsAt: "2026-08-19T09:30:00Z",
+      },
+      {
+        index: 3,
+        startsAt: "2026-08-19T09:30:00Z",
+        endsAt: "2026-08-19T10:00:00Z",
+        blocked: true,
+      },
+    ],
+  },
+];
+const BLOCKED_NOTE =
+  "Grey striped times are blocked by the organizer and do not apply to this event.";
 const baseEvent = {
   code: "EVENT123",
   name: "Planning session",
@@ -712,5 +752,74 @@ describe("participant workflow", () => {
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText("Group Availability")).not.toBeInTheDocument();
+  });
+
+  test("explains organizer-blocked times and never fills them", async () => {
+    fetchCurrentParticipant.mockResolvedValue({
+      participant: participant("mine", member.id, member.displayName, {
+        availabilityInperson: [0, 0, 0, 0],
+        availabilityVirtual: [0, 0, 0, 0],
+      }),
+      scheduleDataIncluded: true,
+    });
+    updateParticipant.mockImplementation(async (_code, _id, payload) => ({
+      participant: participant("mine", member.id, member.displayName, {
+        availabilityInperson: payload.availabilityInperson,
+        availabilityVirtual: payload.availabilityVirtual,
+        version: 2,
+      }),
+    }));
+
+    renderParticipant(
+      { ...baseEvent, slotGroups: blockedSlots },
+      { numSlots: 4 },
+    );
+    await screen.findByText(`Welcome, ${member.displayName}`);
+    expect(screen.getByRole("note")).toHaveTextContent(BLOCKED_NOTE);
+
+    // Both channels of a mixed event fill around the blocked indices.
+    await userEvent.click(
+      screen.getByRole("button", { name: "Apply Available to all" }),
+    );
+    expect(screen.getByTestId("grid-In-Person")).toHaveTextContent("1,0,1,0");
+    await waitFor(() =>
+      expect(updateParticipant).toHaveBeenLastCalledWith(
+        baseEvent.code,
+        "mine",
+        expect.objectContaining({
+          availabilityInperson: [1, 0, 1, 0],
+          availabilityVirtual: [1, 0, 1, 0],
+        }),
+        "token",
+      ),
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Mark all Busy" }),
+    );
+    expect(screen.getByTestId("grid-In-Person")).toHaveTextContent("0,0,0,0");
+    await waitFor(() =>
+      expect(updateParticipant).toHaveBeenLastCalledWith(
+        baseEvent.code,
+        "mine",
+        expect.objectContaining({
+          availabilityInperson: [0, 0, 0, 0],
+          availabilityVirtual: [0, 0, 0, 0],
+        }),
+        "token",
+      ),
+    );
+  });
+
+  test("omits the blocked-times note when no slot is blocked", async () => {
+    fetchCurrentParticipant.mockResolvedValue({
+      participant: participant("mine", member.id, member.displayName),
+      scheduleDataIncluded: true,
+    });
+
+    renderParticipant();
+    await screen.findByText(`Welcome, ${member.displayName}`);
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+    expect(screen.queryByText(BLOCKED_NOTE)).not.toBeInTheDocument();
   });
 });

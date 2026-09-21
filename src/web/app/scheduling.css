@@ -68,6 +68,30 @@
   background-color: var(--rv-avail-virtual-free);
 }
 
+/* Organizer-blocked times: the same grey stripes as the grid's blocked cells. */
+.availability-swatch--blocked {
+  background-color: var(--bs-tertiary-bg);
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent 0,
+    transparent 3px,
+    var(--bs-border-color) 3px,
+    var(--bs-border-color) 4px
+  );
+}
+
+/* The organizer's blocked-times editor paints blocked cells red; its "Open"
+   brush shows the raised surface an unblocked cell sits on. */
+.availability-swatch--blocked-paint {
+  background-color: var(--rv-avail-blocked);
+  color: var(--rv-avail-blocked-text);
+}
+
+.availability-swatch--open {
+  background-color: var(--rv-surface-raised);
+  border-color: var(--bs-border-color);
+}
+
 /* Segmented Busy / If needed / Available control */
 .availability-choice-group {
   align-self: flex-start;
@@ -282,7 +306,11 @@
   border-radius: 0;
 }
 
-.schedule-grid-cell-empty {
+/* Ragged empties and organizer-blocked slots share one grey striped, inert
+   treatment; blocked cells keep their grid position (and index) but never
+   show an availability colour or glyph. */
+.schedule-grid-cell-empty,
+.schedule-grid-cell-blocked {
   background-color: var(--bs-tertiary-bg);
   background-image: repeating-linear-gradient(
     135deg,
@@ -292,6 +320,27 @@
     var(--bs-border-color) 6px
   );
   cursor: not-allowed;
+}
+
+.schedule-grid-cell.schedule-grid-cell-blocked,
+.schedule-grid-cell.schedule-grid-cell-blocked:hover {
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+/* Blocked-times editor (organizer): painted cells are red with a ✕ glyph,
+   open cells sit on the raised surface, which is dark in dark mode, so their
+   grid lines follow the theme border token (as .meeting-calendar__cell--neutral
+   does) instead of the fixed tint chosen for the pastel availability fills. */
+.schedule-grid-cell[data-blocked-paint="false"] {
+  background-color: var(--rv-surface-raised);
+  color: var(--bs-secondary-color);
+  border-color: var(--bs-border-color);
+}
+
+.schedule-grid-cell[data-blocked-paint="true"] {
+  background-color: var(--rv-avail-blocked);
+  color: var(--rv-avail-blocked-text);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1105,6 +1154,7 @@
 .meeting-calendar__cell[data-state="tail"],
 .meeting-calendar__cell[data-state="past"],
 .meeting-calendar__cell[data-state="dst"],
+.meeting-calendar__cell[data-state="blocked"],
 .meeting-calendar__cell[data-state="invalid-duration"] {
   cursor: not-allowed;
 }
@@ -1113,12 +1163,17 @@
    exempt from the text-contrast minimum; 0.7 still keeps it above 4:1. */
 .meeting-calendar__cell[data-state="tail"] .meeting-calendar__cell-value,
 .meeting-calendar__cell[data-state="past"] .meeting-calendar__cell-value,
-.meeting-calendar__cell[data-state="dst"] .meeting-calendar__cell-value {
+.meeting-calendar__cell[data-state="dst"] .meeting-calendar__cell-value,
+.meeting-calendar__cell[data-state="blocked"] .meeting-calendar__cell-value {
   opacity: 0.7;
 }
 
+/* Organizer-blocked slots are neutral (no tone, no figure); open cells whose
+   window merely runs into a block keep their figure. Both sit under the same
+   hatching as passed times. */
 .meeting-calendar__cell[data-state="past"]::after,
-.meeting-calendar__cell[data-state="dst"]::after {
+.meeting-calendar__cell[data-state="dst"]::after,
+.meeting-calendar__cell[data-state="blocked"]::after {
   content: "";
   position: absolute;
   inset: 0;
