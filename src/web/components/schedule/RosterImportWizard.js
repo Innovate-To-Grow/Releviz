@@ -23,6 +23,7 @@ import {
   createRosterImport,
   fetchRosterImportRows,
 } from "@/lib/api/roster";
+import { rosterImportStatusMessage } from "@/lib/roster-import-status";
 
 const FIELD_OPTIONS = [
   ["name", "Name", true],
@@ -185,6 +186,7 @@ export default function RosterImportWizard({
   const [pagination, setPagination] = useState(null);
   const [phase, setPhase] = useState("source");
   const [mode, setMode] = useState("merge");
+  const [sendInvitations, setSendInvitations] = useState(false);
   const [confirmationCode, setConfirmationCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -443,23 +445,20 @@ export default function RosterImportWizard({
         {
           mode,
           idempotencyKey: idempotencyKey.current,
+          sendInvitations,
           ...(mode === "rebuild" ? { confirmationCode } : {}),
         },
         token,
       );
-      const receipt = data.receipt || {};
-      const importedCount = receipt.importedCount || 0;
-      const createdCount = receipt.createdCount || 0;
-      const updatedCount = receipt.updatedCount || 0;
-      const invitedCount =
-        data.autoInvitedCount ?? receipt.invitedCount ?? createdCount;
       setStatus(
-        createdCount > 0 || invitedCount > 0
-          ? `Imported ${importedCount} people: ${createdCount} added, ${updatedCount} updated. ${invitedCount} invitation${invitedCount === 1 ? "" : "s"} queued.`
-          : `Imported ${importedCount} people: no new participants were added, so no invitations were sent.`,
+        rosterImportStatusMessage({
+          receipt: data.receipt,
+          autoInvitedCount: data.autoInvitedCount,
+          sendInvitations,
+        }),
       );
       setPhase("complete");
-      onCommitted?.(data);
+      onCommitted?.({ ...data, sendInvitations });
     } catch (requestError) {
       if (requestError.event) onEventChange?.(requestError.event);
       setError(
@@ -491,6 +490,7 @@ export default function RosterImportWizard({
   const includeByDefaultId = `${fieldIds}-include-by-default`;
   const mergeModeId = `${fieldIds}-mode-merge`;
   const rebuildModeId = `${fieldIds}-mode-rebuild`;
+  const sendInvitationsId = `${fieldIds}-send-invitations`;
   const commitDisabled =
     busy ||
     !record?.summary?.valid ||
@@ -970,8 +970,9 @@ export default function RosterImportWizard({
               Import behavior
             </legend>
             <p className="roster-import__hint form-text mt-0 mb-3">
-              New participants receive an invitation automatically. Existing
-              participants are updated without another email.
+              Existing participants are updated without another email. New
+              people are emailed only if you tick the box; you can also send
+              invitations later from the roster.
             </p>
             <div className="form-check">
               <input
@@ -1010,8 +1011,10 @@ export default function RosterImportWizard({
                   className="roster-import__warning"
                 >
                   Rebuilding clears schedules, invitations, and pending
-                  delivery, then sends a new invitation to every imported
-                  participant.
+                  delivery. With invitations enabled below it sends a new
+                  invitation to every imported participant; otherwise everyone
+                  starts as Not sent and gets no reminders until you send
+                  invitations.
                 </Alert>
                 <div className="row">
                   <div className="col-12 col-md-6">
@@ -1033,6 +1036,18 @@ export default function RosterImportWizard({
                 </div>
               </div>
             )}
+            <div className="form-check mt-3">
+              <input
+                id={sendInvitationsId}
+                className="form-check-input"
+                type="checkbox"
+                checked={sendInvitations}
+                onChange={(event) => setSendInvitations(event.target.checked)}
+              />
+              <label className="form-check-label" htmlFor={sendInvitationsId}>
+                Send invitations to newly added people
+              </label>
+            </div>
           </fieldset>
 
           <div className="d-flex flex-wrap gap-2">
@@ -1054,8 +1069,12 @@ export default function RosterImportWizard({
               {busy
                 ? "Importing…"
                 : mode === "rebuild"
-                  ? "Rebuild roster and send invitations"
-                  : "Merge roster and invite new people"}
+                  ? sendInvitations
+                    ? "Rebuild roster and send invitations"
+                    : "Rebuild roster"
+                  : sendInvitations
+                    ? "Merge roster and invite new people"
+                    : "Merge roster"}
             </AppButton>
           </div>
         </div>
