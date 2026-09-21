@@ -103,6 +103,11 @@ urlpatterns = [
     ),
     path("events/roster/bulk", views.RosterBulkView.as_view(), name="api-roster-bulk"),
     path(
+        "events/roster/invitations",
+        views.RosterInvitationsView.as_view(),
+        name="api-roster-invitations",
+    ),
+    path(
         "events/roster/<str:participant_id>/schedule",
         views.RosterParticipantScheduleView.as_view(),
         name="api-roster-participant-schedule",
