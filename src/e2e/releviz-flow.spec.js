@@ -374,6 +374,26 @@ function temporaryAccessPathFromEmail(body) {
   return `${link.pathname}${link.search}`;
 }
 
+// Clicks "Review attendance" until the preview lands. The Finalize step
+// re-keys when a pick changes, so a click made right after can be dropped by
+// slower engines (seen on WebKit); the preview is read-only, so retrying is
+// safe.
+async function reviewAttendance(page) {
+  const notice = page.getByText(
+    "Attendance review is current for this candidate.",
+  );
+  await expect
+    .poll(
+      async () => {
+        if (await notice.isVisible()) return true;
+        await page.getByRole("button", { name: "Review attendance" }).click();
+        return notice.isVisible();
+      },
+      { timeout: 20_000, intervals: [500, 1000, 2000] },
+    )
+    .toBe(true);
+}
+
 test.describe("Releviz account and scheduling flow", () => {
   test("imports and auto-invites a roster, shares one temporary response, and upgrades it in place", async ({
     browser,
@@ -1472,8 +1492,10 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(
       page.getByText("1 reminder emails were queued."),
     ).toBeVisible();
+    // The background email worker may deliver before the panel renders, so
+    // assert the run's size rather than its transient "queued" count.
     const reminderDeliveryProgress = page.getByLabel("Event delivery progress");
-    await expect(reminderDeliveryProgress.getByText("1 queued")).toBeVisible();
+    await expect(reminderDeliveryProgress.getByText("1 total")).toBeVisible();
     dispatchEmailJobs();
     await refreshWorkspace(page);
     await expect(reminderDeliveryProgress.getByText("1 sent")).toBeVisible();
@@ -1673,10 +1695,7 @@ test.describe("Releviz account and scheduling flow", () => {
       .first()
       .click();
     await expect(page.getByRole("heading", { name: "Finalize" })).toBeFocused();
-    await page.getByRole("button", { name: "Review attendance" }).click();
-    await expect(
-      page.getByText("Attendance review is current for this candidate."),
-    ).toBeVisible();
+    await reviewAttendance(page);
     await expect(page.getByText("Available", { exact: true })).toBeVisible();
     // The count tiles are backed by a per-person breakdown: a header row plus
     // one row for each roster entry.
@@ -1712,7 +1731,7 @@ test.describe("Releviz account and scheduling flow", () => {
       "Final confirmation delivery",
     );
     await expect(
-      finalizationDeliveryProgress.getByText("2 queued"),
+      finalizationDeliveryProgress.getByText("2 total"),
     ).toBeVisible();
     dispatchEmailJobs();
     await refreshWorkspace(page);
@@ -1762,13 +1781,23 @@ test.describe("Releviz account and scheduling flow", () => {
     const rankedRail = page.getByRole("complementary", {
       name: "Ranked windows",
     });
-    await rankedRail
-      .getByRole("button", { name: "Choose this time" })
-      .first()
-      .click();
-    await expect(
-      rankedRail.getByRole("button", { name: "Selected time" }),
-    ).toHaveCount(1);
+    // The sticky section nav can intercept the first click while the rail
+    // is still scrolling the option into view (seen on WebKit), so retry the
+    // pick until the rail reflects it; choosing is idempotent.
+    await expect
+      .poll(
+        async () => {
+          await rankedRail
+            .getByRole("button", { name: "Choose this time" })
+            .first()
+            .click();
+          return rankedRail
+            .getByRole("button", { name: "Selected time" })
+            .count();
+        },
+        { timeout: 20_000, intervals: [500, 1000, 2000] },
+      )
+      .toBe(1);
 
     const cancellationStartedAt = Date.now() - 1000;
     const cancellationResponsePromise = page.waitForResponse(
@@ -1797,7 +1826,7 @@ test.describe("Releviz account and scheduling flow", () => {
       "Event delivery progress",
     );
     await expect(
-      cancellationDeliveryProgress.getByText("2 queued"),
+      cancellationDeliveryProgress.getByText("2 total"),
     ).toBeVisible();
     dispatchEmailJobs();
     await refreshWorkspace(page);
@@ -1827,10 +1856,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(page.locator("#organizer-finalize")).toContainText(
       "Ranked #3",
     );
-    await page.getByRole("button", { name: "Review attendance" }).click();
-    await expect(
-      page.getByText("Attendance review is current for this candidate."),
-    ).toBeVisible();
+    await reviewAttendance(page);
     const secondFinalStartedAt = Date.now() - 1000;
     const secondFinalResponsePromise = page.waitForResponse(
       (response) =>
