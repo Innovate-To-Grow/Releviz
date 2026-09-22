@@ -52,10 +52,15 @@ jest.mock("@/components/event/CreateEventClient", () => ({
   ),
 }));
 jest.mock("@/components/schedule/OrganizerPanels", () => ({
-  OrganizerHeader: ({ event, onRefresh, refreshing, controls }) => (
+  OrganizerHeader: ({ event, onRefresh, refreshing, controls, live }) => (
     <header>
       <h2>{event.name}</h2>
       <span data-testid="organizer-header-event-status">{event.status}</span>
+      {live && (
+        <p data-testid="live-sync" data-updated={live.updatedAt ? "yes" : "no"}>
+          {live.error || "Live"}
+        </p>
+      )}
       <div role="group" aria-label="Workspace actions">
         {controls}
         <button onClick={onRefresh} disabled={refreshing}>
@@ -71,6 +76,7 @@ jest.mock("@/lib/api/events", () => ({
   downloadFinalCalendar: jest.fn(),
   fetchDeliveryRequest: jest.fn(),
   fetchEvent: jest.fn(),
+  fetchEventActivity: jest.fn(),
   fetchEventResults: jest.fn(),
   previewFinalMeeting: jest.fn(),
   retryDeliveryRequest: jest.fn(),
@@ -106,6 +112,7 @@ import {
   confirmFinalMeeting,
   fetchDeliveryRequest,
   fetchEvent,
+  fetchEventActivity,
   fetchEventResults,
   previewFinalMeeting,
   sendReminders,
@@ -157,6 +164,32 @@ const event = {
     },
   ],
 };
+
+// The digest that matches the default roster, results, and event mocks, so
+// a live-sync pass finds nothing to reload unless a test moves a section.
+const rosterActivity = {
+  total: 1,
+  submitted: 0,
+  changedAt: "2026-08-20T07:00:00Z",
+};
+const baseActivity = {
+  event: { version: 2, status: "active", resultsRevision: 3 },
+  results: {
+    status: "fresh",
+    requestedRevision: 3,
+    computedRevision: 3,
+    generatedAt: "2026-08-20T08:00:00Z",
+  },
+  roster: rosterActivity,
+};
+
+function activityWith({ event: eventPart, results, roster } = {}) {
+  return {
+    event: { ...baseActivity.event, ...eventPart },
+    results: { ...baseActivity.results, ...results },
+    roster: { ...baseActivity.roster, ...roster },
+  };
+}
 
 const rosterImportRecord = {
   id: "import-1",
@@ -400,7 +433,9 @@ describe("scaled organizer workspace", () => {
         excluded: 0,
         groups: [{ name: "Faculty", count: 1 }],
       },
+      activity: rosterActivity,
     });
+    fetchEventActivity.mockResolvedValue(baseActivity);
     patchRosterParticipant.mockResolvedValue({
       participant: { id: "roster-1", included: false, version: 2 },
       resultsRevision: 4,
@@ -2331,6 +2366,367 @@ describe("scaled organizer workspace", () => {
     expect(document.getElementById("organizer-finalize")).toHaveTextContent(
       "Legacy result",
     );
+  });
+
+  describe("live sync", () => {
+    const LIVE_INTERVAL = 5000;
+
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      delete document.visibilityState;
+      jest.useRealTimers();
+    });
+
+    async function renderLiveWorkspace(
+      setEvent = jest.fn(),
+      currentEvent = event,
+    ) {
+      const view = renderView(setEvent, currentEvent);
+      await screen.findByText("Ada Faculty");
+      await screen.findByText(/Results are current at revision 3/);
+      fetchEvent.mockClear();
+      fetchRoster.mockClear();
+      fetchEventResults.mockClear();
+      fetchEventActivity.mockClear();
+      return view;
+    }
+
+    async function tick(ms = LIVE_INTERVAL) {
+      await act(async () => {
+        jest.advanceTimersByTime(ms);
+      });
+    }
+
+    function setTabVisibility(state) {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => state,
+      });
+    }
+
+    test("loads a new response into every section without Refresh and keeps the pick", async () => {
+      const { setEvent } = await renderLiveWorkspace();
+      await userEvent.click(
+        screen.getByRole("button", { name: "Choose this time" }),
+      );
+      const finalize = document.getElementById("organizer-finalize");
+      expect(finalize).toHaveTextContent("Thursday 9:00 AM");
+      expect(screen.getByTestId("live-sync")).toHaveTextContent("Live");
+      expect(screen.getByTestId("live-sync")).toHaveAttribute(
+        "data-updated",
+        "no",
+      );
+
+      // Ada submits: the digest moves for the event revision, the roster,
+      // and the (now recomputing) results.
+      const moved = {
+        ...rosterActivity,
+        submitted: 1,
+        changedAt: "2026-08-20T09:00:00Z",
+      };
+      fetchEventActivity.mockResolvedValue(
+        activityWith({
+          event: { resultsRevision: 4 },
+          results: { status: "refreshing", requestedRevision: 4 },
+          roster: moved,
+        }),
+      );
+      fetchRoster.mockResolvedValue({
+        participants: [
+          {
+            id: "roster-1",
+            memberId: "member-1",
+            name: "Ada Faculty",
+            email: "ada@example.com",
+            group: "Faculty",
+            weight: 0.8,
+            included: true,
+            submitted: true,
+            accountAccess: "temporary",
+            canOrganizerEditAvailability: true,
+            invitationStatus: "submitted",
+            version: 2,
+          },
+        ],
+        pagination: { page: 1, pageSize: 50, total: 1, pages: 1 },
+        stats: {
+          total: 1,
+          submitted: 1,
+          notSubmitted: 0,
+          included: 1,
+          excluded: 0,
+          groups: [{ name: "Faculty", count: 1 }],
+        },
+        activity: moved,
+      });
+      fetchEventResults.mockResolvedValue({
+        status: "refreshing",
+        requestedRevision: 4,
+        computedRevision: 3,
+        generatedAt: "2026-08-20T08:00:00Z",
+        results: {
+          recommendations: [
+            {
+              rank: 1,
+              label: "Thursday 9:00 AM",
+              channel: "inperson",
+              suggestedStartsAt: "2026-08-20T09:00:00Z",
+              suggestedEndsAt: "2026-08-20T10:00:00Z",
+              weightedAvailability: 0.95,
+              unweightedAvailability: 0.9,
+              fullyAvailableParticipantTotal: 701,
+            },
+          ],
+        },
+      });
+
+      await tick();
+      await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(1));
+      expect(fetchEventActivity).toHaveBeenCalledWith(event.code, "token");
+      expect(fetchRoster).toHaveBeenCalledWith(
+        event.code,
+        expect.objectContaining({ page: 1, pageSize: 50 }),
+        "token",
+      );
+      expect(
+        await screen.findByText(/Results are updating for revision 4/),
+      ).toBeInTheDocument();
+      expect(screen.getByLabelText("Roster summary")).toHaveTextContent(
+        "1 submitted",
+      );
+      // Only the revision moved, so the event is patched rather than re-read.
+      expect(fetchEvent).not.toHaveBeenCalled();
+      expect(setEvent).toHaveBeenCalledWith({ ...event, resultsRevision: 4 });
+      // The organizer's pick and the silent nature of the pass both hold.
+      expect(finalize).toHaveTextContent("Thursday 9:00 AM");
+      expect(screen.queryByText("Workspace updated.")).not.toBeInTheDocument();
+      expect(screen.queryByText("Loading roster…")).not.toBeInTheDocument();
+      await waitFor(() =>
+        expect(screen.getByTestId("live-sync")).toHaveAttribute(
+          "data-updated",
+          "yes",
+        ),
+      );
+      expect(screen.getByTestId("live-sync")).toHaveTextContent("Live");
+    });
+
+    test("leaves every section alone while the digest matches what is shown", async () => {
+      const { setEvent } = await renderLiveWorkspace();
+      await tick();
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(1));
+      await tick();
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(2));
+      expect(fetchEvent).not.toHaveBeenCalled();
+      expect(fetchRoster).not.toHaveBeenCalled();
+      expect(fetchEventResults).not.toHaveBeenCalled();
+      expect(setEvent).not.toHaveBeenCalled();
+      expect(screen.getByTestId("live-sync")).toHaveAttribute(
+        "data-updated",
+        "no",
+      );
+
+      // A digest without a revision does not touch the event either.
+      fetchEventActivity.mockResolvedValue({
+        ...baseActivity,
+        event: { version: 2, status: "active" },
+      });
+      await tick();
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(3));
+      expect(setEvent).not.toHaveBeenCalled();
+    });
+
+    test("re-reads the event when it changed in another session and tolerates an event-less reply", async () => {
+      const { setEvent } = await renderLiveWorkspace();
+      fetchEventActivity.mockResolvedValue(
+        activityWith({ event: { version: 3 } }),
+      );
+      fetchEvent.mockResolvedValueOnce({ event: { ...event, version: 3 } });
+      await tick();
+      await waitFor(() =>
+        expect(setEvent).toHaveBeenCalledWith(
+          expect.objectContaining({ code: event.code, version: 3 }),
+        ),
+      );
+      expect(fetchEvent).toHaveBeenCalledWith(event.code, "token");
+      expect(fetchRoster).not.toHaveBeenCalled();
+      expect(fetchEventResults).not.toHaveBeenCalled();
+
+      setEvent.mockClear();
+      fetchEvent.mockResolvedValueOnce({});
+      await tick();
+      await waitFor(() => expect(fetchEvent).toHaveBeenCalledTimes(2));
+      expect(setEvent).not.toHaveBeenCalled();
+    });
+
+    test("skips a hidden tab and catches up the moment it is shown again", async () => {
+      await renderLiveWorkspace();
+      setTabVisibility("hidden");
+      await tick();
+      await tick();
+      expect(fetchEventActivity).not.toHaveBeenCalled();
+      // Going hidden (again) is not a trigger.
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(fetchEventActivity).not.toHaveBeenCalled();
+
+      setTabVisibility("visible");
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(fetchEventActivity).toHaveBeenCalledTimes(1);
+      // The interval then continues from the catch-up pass.
+      await tick(LIVE_INTERVAL - 1);
+      expect(fetchEventActivity).toHaveBeenCalledTimes(1);
+      await tick(1);
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(2));
+    });
+
+    test("reports a failed pass in the header and recovers on the next one", async () => {
+      await renderLiveWorkspace();
+      fetchEventActivity.mockRejectedValueOnce(new Error("offline"));
+      await tick();
+      await waitFor(() =>
+        expect(screen.getByTestId("live-sync")).toHaveTextContent(
+          "New responses could not be loaded automatically (offline).",
+        ),
+      );
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+      // A section that fails to re-read is reported the same way.
+      fetchEventActivity.mockResolvedValueOnce(
+        activityWith({ roster: { submitted: 1 } }),
+      );
+      fetchRoster.mockRejectedValueOnce(new Error(""));
+      await tick();
+      await waitFor(() =>
+        expect(screen.getByTestId("live-sync")).toHaveTextContent(
+          "New responses could not be loaded automatically.",
+        ),
+      );
+      // The roster keeps what it showed; nothing was replaced by an error.
+      expect(screen.getByText("Ada Faculty")).toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+      // The next clean pass clears the notice even though nothing changed.
+      await tick();
+      await waitFor(() =>
+        expect(screen.getByTestId("live-sync")).toHaveTextContent("Live"),
+      );
+      expect(screen.getByTestId("live-sync")).toHaveAttribute(
+        "data-updated",
+        "no",
+      );
+    });
+
+    test("waits for a manual refresh and never overlaps its own passes", async () => {
+      await renderLiveWorkspace();
+      let releaseEvent;
+      fetchEvent.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseEvent = resolve;
+          }),
+      );
+      await act(async () => {
+        await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+      });
+      await waitFor(() => expect(releaseEvent).toBeDefined());
+      await tick();
+      expect(fetchEventActivity).not.toHaveBeenCalled();
+      await act(async () => {
+        releaseEvent({ event: { ...event, version: 2 } });
+      });
+      expect(await screen.findByText("Workspace updated.")).toBeInTheDocument();
+      fetchRoster.mockClear();
+
+      // A pass still waiting on the digest is not doubled by a catch-up.
+      let releaseActivity;
+      fetchEventActivity.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseActivity = resolve;
+          }),
+      );
+      await tick();
+      await waitFor(() => expect(releaseActivity).toBeDefined());
+      setTabVisibility("visible");
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(fetchEventActivity).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        releaseActivity(baseActivity);
+      });
+      expect(fetchRoster).not.toHaveBeenCalled();
+    });
+
+    test("waits for a section's first load before comparing it", async () => {
+      let releaseRoster;
+      fetchRoster.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseRoster = resolve;
+          }),
+      );
+      // Results never land in this test: the panel keeps polling its own
+      // initial refreshing state, and there is nothing on screen to compare.
+      fetchEventResults.mockImplementation(() => new Promise(() => {}));
+      renderView();
+      await waitFor(() => expect(releaseRoster).toBeDefined());
+      fetchEventActivity.mockResolvedValue(
+        activityWith({
+          results: { computedRevision: 9 },
+          roster: { submitted: 1 },
+        }),
+      );
+      await tick();
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(1));
+      // Neither section has anything on screen to compare, so the pass
+      // changes nothing and the roster is not re-read on top of its pending
+      // first load.
+      expect(fetchRoster).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId("live-sync")).toHaveAttribute(
+        "data-updated",
+        "no",
+      );
+
+      await act(async () => {
+        releaseRoster({
+          participants: [],
+          pagination: { page: 1, pageSize: 50, total: 0, pages: 0 },
+          stats: { total: 0, submitted: 0, notSubmitted: 0, groups: [] },
+          activity: rosterActivity,
+        });
+      });
+      // Once the roster is on screen, the next pass compares and reloads it.
+      fetchRoster.mockResolvedValue({
+        participants: [],
+        pagination: { page: 1, pageSize: 50, total: 0, pages: 0 },
+        stats: { total: 1, submitted: 1, notSubmitted: 0, groups: [] },
+        activity: { ...rosterActivity, submitted: 1 },
+      });
+      await tick();
+      await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(2));
+      await waitFor(() =>
+        expect(screen.getByTestId("live-sync")).toHaveAttribute(
+          "data-updated",
+          "yes",
+        ),
+      );
+    });
+
+    test("does not poll while responses are closed", async () => {
+      renderView(jest.fn(), { ...event, status: "closed" });
+      await screen.findByText("Ada Faculty");
+      fetchEventActivity.mockClear();
+      expect(screen.queryByTestId("live-sync")).not.toBeInTheDocument();
+      await tick(LIVE_INTERVAL * 2);
+      expect(fetchEventActivity).not.toHaveBeenCalled();
+    });
   });
 
   test("shows the previous snapshot while a newer result revision is refreshing", async () => {

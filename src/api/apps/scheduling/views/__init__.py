@@ -7,6 +7,7 @@ and the ``operations`` delivery endpoints.
 
 from .events import (
     DashboardEventsView,
+    EventActivityView,
     EventDuplicateView,
     EventLifecycleView,
     EventResultsView,
@@ -55,6 +56,7 @@ __all__ = [
     "health_ready",
     # Events
     "DashboardEventsView",
+    "EventActivityView",
     "EventDuplicateView",
     "EventLifecycleView",
     "EventResultsView",

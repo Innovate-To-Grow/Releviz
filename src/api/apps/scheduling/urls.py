@@ -125,6 +125,7 @@ urlpatterns = [
     ),
     path("events/roster", views.RosterView.as_view(), name="api-roster"),
     path("events/results", views.EventResultsView.as_view(), name="api-event-results"),
+    path("events/activity", views.EventActivityView.as_view(), name="api-event-activity"),
     path("events/weights", views.WeightsView.as_view(), name="api-weights"),
     path("events/duplicate", views.EventDuplicateView.as_view(), name="api-event-duplicate"),
     path("events", views.EventsView.as_view(), name="api-events"),

@@ -14,7 +14,7 @@ import RosterPanel from "@/components/schedule/RosterPanel";
 import Alert from "@/components/ui/Alert";
 import LoadingState from "@/components/ui/LoadingState";
 import { CalendarIcon, ResultsIcon, RosterIcon } from "@/components/ui/icons";
-import { fetchEvent } from "@/lib/api/events";
+import { fetchEvent, fetchEventActivity } from "@/lib/api/events";
 import { selectionFromRecommendation } from "@/lib/meetingWindows";
 
 // Workspace order: event facts, then the meeting-time calendar with its
@@ -28,6 +28,25 @@ const SECTION_IDS = SECTION_LINKS.map((section) => section.id);
 // The section navigation is sticky, so anchored sections must scroll into
 // view below it rather than underneath it.
 const SECTION_SCROLL_STYLE = { scrollMarginTop: "4rem" };
+
+// Live sync: while the event is active and this tab is visible, the
+// workspace polls a small activity digest and silently re-reads only the
+// sections whose digest moved, so new responses, invitation opens, and edits
+// from another session appear without pressing Refresh and without touching
+// what the organizer is doing (a pick, a row draft, an open drawer).
+const LIVE_SYNC_INTERVAL_MS = 5000;
+const EVENT_DIGEST_KEYS = ["version", "status"];
+const RESULTS_DIGEST_KEYS = [
+  "status",
+  "requestedRevision",
+  "computedRevision",
+  "generatedAt",
+];
+const ROSTER_DIGEST_KEYS = ["total", "submitted", "changedAt"];
+
+function digestMoved(next, shown, keys) {
+  return keys.some((key) => (next?.[key] ?? null) !== (shown?.[key] ?? null));
+}
 
 function deliveryStorageKey(eventCode) {
   return `releviz.delivery-request.${eventCode}`;
@@ -92,7 +111,10 @@ export default function OrganizerScaleView() {
   const [refreshCount, setRefreshCount] = useState(0);
   const [refreshStatus, setRefreshStatus] = useState("");
   const [refreshError, setRefreshError] = useState("");
+  const [liveSync, setLiveSync] = useState({ error: "", updatedAt: null });
   const refreshInFlight = useRef(false);
+  const syncInFlight = useRef(false);
+  const eventRef = useRef(event);
   const rosterRef = useRef(null);
   const resultsRef = useRef(null);
   const resultsHeadingRef = useRef(null);
@@ -140,8 +162,9 @@ export default function OrganizerScaleView() {
     return () => window.removeEventListener("hashchange", syncSectionFromHash);
   }, []);
 
-  // The header's Refresh is the only refresh control on the page: it re-reads
-  // the event, roster, results, and any delivery progress that is showing.
+  // The header's Refresh is the only manual refresh control on the page: it
+  // re-reads the event, roster, results, and any delivery progress that is
+  // showing, and clears the current pick.
   const refreshWorkspace = useCallback(async () => {
     if (refreshInFlight.current) return;
     refreshInFlight.current = true;
@@ -185,6 +208,111 @@ export default function OrganizerScaleView() {
       setRefreshing(false);
     }
   }, [event.code, getToken, setEvent]);
+
+  useEffect(() => {
+    eventRef.current = event;
+  }, [event]);
+
+  // One live-sync pass: compare the server's digest with what each section
+  // shows and re-read only what moved. The manual Refresh wins over it.
+  const syncWorkspace = useCallback(async () => {
+    if (refreshInFlight.current || syncInFlight.current) return;
+    syncInFlight.current = true;
+    try {
+      const token = await getToken();
+      const activity = await fetchEventActivity(event.code, token);
+      const shownEvent = eventRef.current;
+      const tasks = [];
+      let changed = false;
+      if (digestMoved(activity.event, shownEvent, EVENT_DIGEST_KEYS)) {
+        tasks.push(
+          fetchEvent(event.code, token).then((data) => {
+            if (data?.event) setEvent(data.event);
+          }),
+        );
+      } else if (
+        activity.event?.resultsRevision != null &&
+        activity.event.resultsRevision !== shownEvent.resultsRevision
+      ) {
+        // Only the result revision advanced (a response arrived); every
+        // other event field is unchanged, so no full re-read is needed.
+        setEvent({
+          ...shownEvent,
+          resultsRevision: activity.event.resultsRevision,
+        });
+        changed = true;
+      }
+      const shownRoster = rosterRef.current?.activity();
+      if (
+        shownRoster &&
+        digestMoved(activity.roster, shownRoster, ROSTER_DIGEST_KEYS)
+      ) {
+        tasks.push(rosterRef.current.refresh(token, { silent: true }));
+      }
+      const shownResults = resultsRef.current?.activity();
+      if (
+        shownResults &&
+        digestMoved(activity.results, shownResults, RESULTS_DIGEST_KEYS)
+      ) {
+        tasks.push(resultsRef.current.refresh(token, { silent: true }));
+      }
+      if (tasks.length) {
+        const settled = await Promise.allSettled(tasks);
+        const failure = settled.find((result) => result.status === "rejected");
+        if (failure) throw failure.reason;
+        changed = true;
+      }
+      setLiveSync((current) =>
+        changed
+          ? { error: "", updatedAt: Date.now() }
+          : current.error
+            ? { ...current, error: "" }
+            : current,
+      );
+    } catch (requestError) {
+      const detail = requestError?.message ? ` (${requestError.message})` : "";
+      setLiveSync((current) => ({
+        ...current,
+        error: `New responses could not be loaded automatically${detail}.`,
+      }));
+    } finally {
+      syncInFlight.current = false;
+    }
+  }, [event.code, getToken, setEvent]);
+
+  const syncRef = useRef(syncWorkspace);
+  useEffect(() => {
+    syncRef.current = syncWorkspace;
+  }, [syncWorkspace]);
+
+  // Responses are only collected while the event is active, so that is the
+  // only time the digest is polled. A hidden tab skips its turns and catches
+  // up the moment it is shown again.
+  const live = event.status === "active";
+  useEffect(() => {
+    if (!live) return undefined;
+    let generation = 0;
+    let timer = null;
+    const run = async (chain) => {
+      if (chain !== generation) return;
+      if (document.visibilityState === "visible") await syncRef.current();
+      if (chain !== generation) return;
+      timer = window.setTimeout(() => run(chain), LIVE_SYNC_INTERVAL_MS);
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState !== "visible") return;
+      generation += 1;
+      window.clearTimeout(timer);
+      void run(generation);
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    timer = window.setTimeout(() => run(generation), LIVE_SYNC_INTERVAL_MS);
+    return () => {
+      generation += 1;
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [event.code, live]);
 
   const handleChoose = useCallback(
     (recommendation) => {
@@ -236,6 +364,7 @@ export default function OrganizerScaleView() {
         event={event}
         onRefresh={refreshWorkspace}
         refreshing={refreshing}
+        live={live ? liveSync : null}
         controls={
           <EventControls
             event={event}

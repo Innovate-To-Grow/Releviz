@@ -142,6 +142,13 @@ cannot start a meeting either. Blocked times are excluded from the results (thei
 reported as 0), never form part of a ranked window, and cannot be finalized into; edit them from
 **Blocked times** on the Overview panel.
 
+While the event is active, the workspace keeps itself current: every 5 seconds (only while the tab
+is visible) it reads a small activity digest (`GET /events/activity`) and silently re-reads just the
+sections that changed, so new responses, invitation opens, and edits made in another session appear
+without pressing Refresh and without disturbing a pick, a row draft, or an open drawer. The header
+shows a "Live" badge with the time of the last such update, or "Live updates paused" with the
+reason if a pass fails. Refresh remains the manual, everything-at-once re-read.
+
 For a multi-slot meeting, each person's candidate score is their minimum availability across the
 whole interval. The weighted score is `sum(person_score * weight) / sum(positive weights)` across
 included submitted people. Weight zero still contributes to the unweighted score. There are no

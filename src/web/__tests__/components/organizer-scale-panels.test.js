@@ -64,6 +64,7 @@ import {
   ResultsSnapshotPanel,
 } from "@/components/schedule/OrganizerScalePanels";
 import {
+  LiveSyncStatus,
   ManagedScheduleDrawer,
   OrganizerHeader,
 } from "@/components/schedule/OrganizerPanels";
@@ -307,6 +308,69 @@ test("organizer header keeps lifecycle controls beside the workspace refresh act
   expect(
     within(actions).getByRole("button", { name: "Refreshing…" }),
   ).toHaveAttribute("aria-busy", "true");
+});
+
+test("organizer header states whether new responses are loading on their own", () => {
+  const { rerender } = render(
+    <OrganizerHeader event={baseEvent} onRefresh={jest.fn()} />,
+  );
+  // Not syncing (the event is not active): no live line at all.
+  expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  expect(screen.queryByText("Live")).not.toBeInTheDocument();
+
+  rerender(
+    <OrganizerHeader
+      event={baseEvent}
+      onRefresh={jest.fn()}
+      live={{ error: "", updatedAt: null }}
+    />,
+  );
+  expect(screen.getByText("Live")).toBeInTheDocument();
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "New responses load automatically.",
+  );
+  expect(screen.queryByText(/^Updated /)).not.toBeInTheDocument();
+
+  // The last time the workspace changed because of a sync sits outside the
+  // announced status text, as a machine-readable time.
+  const updatedAt = Date.parse("2026-08-20T08:05:00Z");
+  rerender(
+    <OrganizerHeader
+      event={baseEvent}
+      onRefresh={jest.fn()}
+      live={{ error: "", updatedAt }}
+    />,
+  );
+  const stamp = screen.getByText(/^Updated /);
+  expect(stamp.tagName).toBe("TIME");
+  expect(stamp).toHaveAttribute("dateTime", "2026-08-20T08:05:00.000Z");
+  expect(stamp).toHaveTextContent(
+    `Updated ${new Date(updatedAt).toLocaleTimeString([], {
+      hour: "numeric",
+      minute: "2-digit",
+    })}`,
+  );
+  expect(screen.getByRole("status")).not.toHaveTextContent("Updated");
+
+  rerender(
+    <OrganizerHeader
+      event={baseEvent}
+      onRefresh={jest.fn()}
+      live={{
+        error: "New responses could not be loaded automatically (offline).",
+        updatedAt,
+      }}
+    />,
+  );
+  expect(screen.getByText("Live updates paused")).toBeInTheDocument();
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "New responses could not be loaded automatically (offline). Use Refresh to load new responses.",
+  );
+  expect(screen.getByText(/^Updated /)).toBeInTheDocument();
+
+  expect(
+    render(<LiveSyncStatus live={null} />).container,
+  ).toBeEmptyDOMElement();
 });
 
 test("managed schedule drawer is a labelled modal dialog that traps focus and closes on Escape", async () => {
@@ -1503,6 +1567,100 @@ test("results refresh through the workspace handle and show a finalized event's 
     await panel.current.refresh("token");
   });
   expect(fetchEventResults).toHaveBeenCalledTimes(2);
+});
+
+test("results hand the workspace their freshness and reload silently for it", async () => {
+  fetchEventResults.mockResolvedValue({
+    status: "fresh",
+    requestedRevision: 7,
+    computedRevision: 7,
+    generatedAt: "2026-08-19T12:00:00Z",
+    results: { recommendations: [] },
+  });
+  const panel = createRef();
+  render(
+    <ResultsSnapshotPanel
+      ref={panel}
+      event={baseEvent}
+      setEvent={jest.fn()}
+      getToken={getToken}
+      onChoose={jest.fn()}
+      onSelect={jest.fn()}
+    />,
+  );
+  // Nothing to compare against before the first load lands.
+  expect(panel.current.activity()).toBeNull();
+  await screen.findByText(/Results are current at revision 7/);
+  expect(panel.current.activity()).toEqual({
+    status: "fresh",
+    requestedRevision: 7,
+    computedRevision: 7,
+    generatedAt: "2026-08-19T12:00:00Z",
+  });
+  // Named once in the collapsed summary and once in the empty state.
+  expect(screen.getAllByText("No recommendation yet")).toHaveLength(2);
+
+  // A silent reload never flips the empty state into "calculating" while it
+  // is in flight; it just swaps the snapshot in when it lands.
+  let release;
+  fetchEventResults.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  );
+  let silent;
+  act(() => {
+    silent = panel.current.refresh("token", { silent: true });
+  });
+  expect(screen.getAllByText("No recommendation yet")).toHaveLength(2);
+  expect(
+    screen.queryByText("Calculating the best options"),
+  ).not.toBeInTheDocument();
+  await act(async () => {
+    release({
+      status: "refreshing",
+      requestedRevision: 8,
+      computedRevision: 7,
+      generatedAt: "2026-08-19T12:00:00Z",
+      results: { recommendations: [] },
+    });
+    await silent;
+  });
+  expect(
+    screen.getByText(/Results are updating for revision 8/),
+  ).toBeInTheDocument();
+  expect(panel.current.activity()).toEqual({
+    status: "refreshing",
+    requestedRevision: 8,
+    computedRevision: 7,
+    generatedAt: "2026-08-19T12:00:00Z",
+  });
+
+  // A silent failure is reported to the caller, not shown in the panel, and
+  // the snapshot on screen is kept.
+  fetchEventResults.mockRejectedValueOnce(new Error("offline"));
+  await act(async () => {
+    await expect(
+      panel.current.refresh("token", { silent: true }),
+    ).rejects.toThrow("offline");
+  });
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(
+    screen.getByText(/Results are updating for revision 8/),
+  ).toBeInTheDocument();
+
+  // A legacy envelope without freshness fields reports nulls for them.
+  fetchEventResults.mockResolvedValueOnce({ results: { recommendations: [] } });
+  await act(async () => {
+    await panel.current.refresh("token", { silent: true });
+  });
+  expect(panel.current.activity()).toEqual({
+    status: "fresh",
+    requestedRevision: null,
+    computedRevision: null,
+    generatedAt: null,
+  });
 });
 
 test("the ranked list is collapsed by default and summarizes the best window", async () => {
