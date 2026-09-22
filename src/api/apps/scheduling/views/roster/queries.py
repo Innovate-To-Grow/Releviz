@@ -54,8 +54,8 @@ def roster_queryset(event):
             invitation_query.values("first_sent_at")[:1],
             output_field=DateTimeField(),
         ),
-        roster_invitation_opened=Subquery(
-            invitation_query.values("opened_at")[:1],
+        roster_invitation_accepted=Subquery(
+            invitation_query.values("accepted_at")[:1],
             output_field=DateTimeField(),
         ),
     )
@@ -68,23 +68,32 @@ def roster_queryset(event):
             output_field=CharField(),
         ),
         roster_invitation_status=Case(
-            When(submitted=True, then=Value("submitted")),
             When(roster_invitation_first_sent__isnull=True, then=Value("not_sent")),
             When(
-                Q(roster_invitation_opened__isnull=False)
+                Q(roster_invitation_accepted__isnull=False)
                 | Q(
                     roster_invitation_state__in=[
-                        EventInvitation.Status.OPENED,
                         EventInvitation.Status.JOINED,
                         EventInvitation.Status.DRAFT_SAVED,
+                        EventInvitation.Status.SUBMITTED,
                     ]
                 ),
-                then=Value("opened"),
+                then=Value("accepted"),
             ),
-            default=Value("invited"),
+            default=Value("sent"),
             output_field=CharField(),
         ),
     )
+
+
+INVITATION_STATUS_ALIASES = {
+    "not_sent": "not_sent",
+    "sent": "sent",
+    "accepted": "accepted",
+    "invited": "sent",
+    "opened": "sent",
+    "submitted": "accepted",
+}
 
 
 def boolean_query(value, label):
@@ -120,9 +129,11 @@ def apply_roster_filters(queryset, params):
         )
     invitation_status = str(params.get("invitationStatus") or "").strip()
     if invitation_status:
-        if invitation_status not in {"not_sent", "invited", "opened", "submitted"}:
+        if invitation_status not in INVITATION_STATUS_ALIASES:
             raise RosterImportError("invitationStatus is invalid.")
-        queryset = queryset.filter(roster_invitation_status=invitation_status)
+        queryset = queryset.filter(
+            roster_invitation_status=INVITATION_STATUS_ALIASES[invitation_status]
+        )
     account_access = str(params.get("accountAccess") or "").strip()
     if account_access:
         if account_access not in {"temporary", "full"}:

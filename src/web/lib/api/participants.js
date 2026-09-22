@@ -80,7 +80,14 @@ export async function joinEvent(code, token) {
 
 export async function createManagedParticipant(
   code,
-  { name, email, phone = "", organizerManaged = false, idempotencyKey },
+  {
+    name,
+    email,
+    phone = "",
+    organizerManaged = false,
+    idempotencyKey,
+    sendInvitation,
+  },
   token,
 ) {
   const res = await apiFetch(
@@ -94,6 +101,7 @@ export async function createManagedParticipant(
         phone,
         organizerManaged,
         idempotencyKey,
+        sendInvitation,
       }),
     },
     token,

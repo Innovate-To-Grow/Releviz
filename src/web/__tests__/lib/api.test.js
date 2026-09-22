@@ -19,6 +19,7 @@ import {
   fetchAuthSession,
   fetchAuthSessions,
   fetchProfile,
+  impersonateLogin,
   loginWithPassword,
   logoutApi,
   requestPasswordResetCode,
@@ -63,6 +64,7 @@ import {
   fetchRosterSchedule,
   patchRosterBulk,
   patchRosterParticipant,
+  sendRosterInvitations,
 } from "@/lib/api/roster";
 import {
   createManagedParticipant,
@@ -429,6 +431,50 @@ describe("auth API helpers", () => {
         }),
       }),
     );
+  });
+
+  test("impersonateLogin exchanges the admin token for a session", async () => {
+    const authBody = {
+      access: "impersonated",
+      user: { id: "member" },
+      next_step: "account",
+      requires_profile_completion: false,
+      message: "Signed in",
+    };
+    global.fetch.mockResolvedValueOnce(jsonResponse(authBody));
+
+    await expect(impersonateLogin({ token: "abc123" })).resolves.toEqual(
+      authBody,
+    );
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/authn/impersonate-login/",
+      expect.objectContaining({
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: "abc123" }),
+        credentials: "include",
+      }),
+    );
+    expect(readAuthSession()).toEqual(
+      expect.objectContaining({
+        access: "impersonated",
+        user: expect.objectContaining({ id: "member" }),
+        nextStep: "account",
+        requiresProfileCompletion: false,
+      }),
+    );
+  });
+
+  test("impersonateLogin rejects with the backend detail and leaves no session", async () => {
+    global.fetch.mockResolvedValueOnce(
+      jsonResponse({ detail: "Invalid impersonation link." }, { status: 400 }),
+    );
+
+    await expect(impersonateLogin({ token: "stale" })).rejects.toThrow(
+      "Invalid impersonation link.",
+    );
+    expect(readAuthSession()).toBeNull();
   });
 
   test("auth helpers throw extracted errors and update profile sessions", async () => {
@@ -988,7 +1034,7 @@ describe("business API helpers", () => {
     await commitRosterImport(
       "ABC 123",
       "import 1",
-      { mode: "merge", idempotencyKey: "import-key" },
+      { mode: "merge", idempotencyKey: "import-key", sendInvitations: false },
       "tok",
     );
     await cancelRosterImport("ABC 123", "import 1", "tok");
@@ -1019,6 +1065,15 @@ describe("business API helpers", () => {
       },
       "tok",
     );
+    await sendRosterInvitations(
+      "ABC 123",
+      {
+        participantIds: ["participant 1", "participant 2"],
+        resend: true,
+        idempotencyKey: "roster-invite-key",
+      },
+      "tok",
+    );
     await fetchParticipants("ABC 123", "tok");
     await expect(fetchCurrentParticipant("ABC 123", "tok")).resolves.toEqual({
       participant: null,
@@ -1031,6 +1086,7 @@ describe("business API helpers", () => {
         name: "Temporary Person",
         email: "temp@example.com",
         idempotencyKey: "managed-key",
+        sendInvitation: false,
       },
       "tok",
     );
@@ -1072,6 +1128,7 @@ describe("business API helpers", () => {
           phone: "",
           organizerManaged: false,
           idempotencyKey: "managed-key",
+          sendInvitation: false,
         }),
       }),
     );
@@ -1131,8 +1188,16 @@ describe("business API helpers", () => {
     expect(urls).toContain(
       "/events/roster-imports/import%201/rows?code=ABC+123&page=2&pageSize=25",
     );
-    expect(urls).toContain(
+    expect(global.fetch).toHaveBeenCalledWith(
       "/events/roster-imports/import%201/commit?code=ABC%20123",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          mode: "merge",
+          idempotencyKey: "import-key",
+          sendInvitations: false,
+        }),
+      }),
     );
     expect(urls).toContain(
       "/events/roster?code=ABC+123&page=2&pageSize=100&search=Ada&group=Faculty&submitted=true",
@@ -1142,6 +1207,21 @@ describe("business API helpers", () => {
     );
     expect(urls).toContain("/events/roster/participant%201?code=ABC%20123");
     expect(urls).toContain("/events/roster/bulk?code=ABC%20123");
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/events/roster/invitations?code=ABC%20123",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          Authorization: "Bearer tok",
+        }),
+        body: JSON.stringify({
+          participantIds: ["participant 1", "participant 2"],
+          resend: true,
+          idempotencyKey: "roster-invite-key",
+        }),
+      }),
+    );
     expect(global.fetch).toHaveBeenCalledWith(
       "/events/invitations?code=ABC%20123",
       expect.objectContaining({
@@ -1226,6 +1306,13 @@ describe("business API helpers", () => {
       patchRosterParticipant("BAD", "participant", {}),
     ).rejects.toThrow("nope");
     await expect(patchRosterBulk("BAD", {})).rejects.toThrow("nope");
+    await expect(
+      sendRosterInvitations("BAD", {
+        participantIds: ["p"],
+        resend: false,
+        idempotencyKey: "roster-invite-key",
+      }),
+    ).rejects.toThrow("nope");
     await expect(fetchParticipants("BAD")).rejects.toThrow("nope");
     await expect(fetchCurrentParticipant("BAD")).rejects.toThrow("nope");
     await expect(joinEvent("BAD")).rejects.toThrow("nope");
@@ -1356,6 +1443,72 @@ describe("business API helpers", () => {
       status: 502,
       errorCode: null,
       participant: null,
+    });
+  });
+
+  test("roster invitation sends expose throttling, closed events, and HTTP fallbacks", async () => {
+    const payload = {
+      participantIds: ["participant-1"],
+      resend: false,
+      idempotencyKey: "roster-invite-key",
+    };
+    global.fetch
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            deliveryRequest: { id: "dr-1", recipientCount: 1 },
+            requestedCount: 1,
+            queuedCount: 1,
+            skippedCount: 0,
+            idempotent: false,
+          },
+          { status: 202 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { detail: "Request was throttled. Expected available in 9 seconds." },
+          { status: 429 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            error: "Responses are closed",
+            errorCode: "event_not_active",
+            event: { code: "ABC", status: "closed" },
+          },
+          { status: 409 },
+        ),
+      )
+      .mockResolvedValueOnce(textResponse("gateway", { status: 502 }));
+
+    await expect(
+      sendRosterInvitations("ABC", payload, "tok"),
+    ).resolves.toMatchObject({ queuedCount: 1, skippedCount: 0 });
+    await expect(
+      sendRosterInvitations("ABC", payload, "tok"),
+    ).rejects.toMatchObject({
+      message: "Request was throttled. Expected available in 9 seconds.",
+      status: 429,
+      code: null,
+      event: null,
+    });
+    await expect(
+      sendRosterInvitations("ABC", payload, "tok"),
+    ).rejects.toMatchObject({
+      message: "Responses are closed",
+      status: 409,
+      code: "event_not_active",
+      event: { code: "ABC", status: "closed" },
+    });
+    await expect(
+      sendRosterInvitations("ABC", payload, "tok"),
+    ).rejects.toMatchObject({
+      message: "HTTP 502",
+      status: 502,
+      code: null,
+      event: null,
     });
   });
 

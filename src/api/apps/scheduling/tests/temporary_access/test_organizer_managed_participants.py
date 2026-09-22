@@ -356,7 +356,8 @@ class OrganizerManagedParticipantTests(TestCase):
         )
         self.assertEqual(saved.status_code, 200, saved.data)
         self.assertEqual(saved.data["participant"]["submitted"], 1)
-        self.assertEqual(saved.data["participant"]["invitationStatus"], "submitted")
+        # The Invitation badge only describes email: nothing was ever sent.
+        self.assertEqual(saved.data["participant"]["invitationStatus"], "not_sent")
         self.assertEqual(saved.data["participant"]["email"], ORGANIZER_EMAIL)
         self.assertTrue(saved.data["participant"]["organizerManaged"])
         participant = Participant.objects.get(member_id=member_id)
@@ -364,7 +365,7 @@ class OrganizerManagedParticipantTests(TestCase):
         self.assertEqual(participant.availability_inperson, [1, 1])
         self.assertEqual(participant.version, created.data["participant"]["version"] + 1)
         row = next(row for row in self.roster_rows() if row["memberId"] == member_id)
-        self.assertEqual(row["invitationStatus"], "submitted")
+        self.assertEqual(row["invitationStatus"], "not_sent")
         self.assertTrue(row["submitted"])
 
         mark_invitation_for_member(event=self.event, member=managed_member, submitted=True)

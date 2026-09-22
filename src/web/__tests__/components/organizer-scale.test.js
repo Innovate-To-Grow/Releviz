@@ -91,6 +91,7 @@ jest.mock("@/lib/api/roster", () => ({
   fetchRosterSchedule: jest.fn(),
   patchRosterBulk: jest.fn(),
   patchRosterParticipant: jest.fn(),
+  sendRosterInvitations: jest.fn(),
 }));
 
 import { useAuth } from "@/components/auth/AuthContext";
@@ -315,7 +316,7 @@ async function openInvitePersonForm() {
   await screen.findByText("Ada Faculty");
   const rosterSection = document.getElementById("organizer-roster");
   await userEvent.click(
-    within(rosterSection).getByRole("button", { name: "Invite person" }),
+    within(rosterSection).getByRole("button", { name: "Add person" }),
   );
   return {
     section: rosterSection,
@@ -323,6 +324,7 @@ async function openInvitePersonForm() {
     email: within(rosterSection).getByRole("textbox", {
       name: "Email address",
     }),
+    addOnly: within(rosterSection).getByRole("button", { name: "Add only" }),
     submit: within(rosterSection).getByRole("button", {
       name: "Add and send invitation",
     }),
@@ -770,6 +772,8 @@ describe("scaled organizer workspace", () => {
     renderView();
     const invite = await openInvitePersonForm();
     const form = invite.submit.closest("form");
+    expect(invite.addOnly).toHaveAttribute("type", "submit");
+    expect(invite.submit).toHaveAttribute("type", "button");
 
     fireEvent.submit(form);
     expect(
@@ -785,6 +789,60 @@ describe("scaled organizer workspace", () => {
       await screen.findByText("Enter a valid email address."),
     ).toBeInTheDocument();
     expect(createManagedParticipant).not.toHaveBeenCalled();
+    await userEvent.click(invite.submit);
+    expect(
+      screen.getByText("Enter a valid email address."),
+    ).toBeInTheDocument();
+    expect(createManagedParticipant).not.toHaveBeenCalled();
+  });
+
+  test("adds a person without emailing them when the form is submitted", async () => {
+    createManagedParticipant.mockResolvedValueOnce({
+      participant: {
+        id: "manual-1",
+        memberId: "manual-1",
+        name: "Manual Person",
+        email: "manual@example.com",
+        accountAccess: "temporary",
+        canOrganizerEditAvailability: true,
+        invitationStatus: "not_sent",
+        version: 1,
+      },
+      created: true,
+      memberCreated: true,
+      idempotent: false,
+      autoInvitedCount: 0,
+      deliveryRequest: null,
+    });
+    renderView();
+    const invite = await openInvitePersonForm();
+    await userEvent.type(invite.name, "Manual Person");
+    await userEvent.type(invite.email, "manual@example.com");
+    await userEvent.click(invite.addOnly);
+
+    await waitFor(() =>
+      expect(createManagedParticipant).toHaveBeenCalledWith(
+        event.code,
+        {
+          name: "Manual Person",
+          email: "manual@example.com",
+          phone: "",
+          organizerManaged: false,
+          idempotencyKey: "request-key",
+          sendInvitation: false,
+        },
+        "token",
+      ),
+    );
+    expect(await within(invite.section).findByRole("status")).toHaveTextContent(
+      /^Manual Person was added\. No invitation was sent\.$/,
+    );
+    expect(
+      screen.queryByLabelText("Event delivery progress"),
+    ).not.toBeInTheDocument();
+    expect(
+      within(invite.section).queryByRole("heading", { name: "Add a person" }),
+    ).not.toBeInTheDocument();
   });
 
   test("adds an active invitee and queues its invitation atomically", async () => {
@@ -803,6 +861,7 @@ describe("scaled organizer workspace", () => {
           phone: "",
           organizerManaged: false,
           idempotencyKey: "request-key",
+          sendInvitation: true,
         },
         "token",
       ),
@@ -811,23 +870,23 @@ describe("scaled organizer workspace", () => {
       /^Manual Person is ready to respond\. Their invitation was queued\.$/,
     );
     expect(
-      within(invite.section).queryByRole("heading", {
-        name: "Invite someone to respond",
-      }),
+      within(invite.section).queryByRole("heading", { name: "Add a person" }),
     ).not.toBeInTheDocument();
     expect(
       await screen.findByLabelText("Event delivery progress"),
     ).toHaveTextContent("1 queued");
 
     await userEvent.click(
-      within(invite.section).getByRole("button", { name: "Invite person" }),
+      within(invite.section).getByRole("button", { name: "Add person" }),
     );
     expect(
       within(invite.section).queryByRole("status"),
     ).not.toBeInTheDocument();
 
+    // The Add only button is the form's submit action, so pressing Enter
+    // runs the same validation without emailing anyone.
     const reopenedForm = within(invite.section)
-      .getByRole("button", { name: "Add and send invitation" })
+      .getByRole("button", { name: "Add only" })
       .closest("form");
     fireEvent.submit(reopenedForm);
 
@@ -865,9 +924,7 @@ describe("scaled organizer workspace", () => {
       /^Manual Person is already on this roster\. No new invitation was sent\.$/,
     );
     expect(
-      within(invite.section).queryByRole("heading", {
-        name: "Invite someone to respond",
-      }),
+      within(invite.section).queryByRole("heading", { name: "Add a person" }),
     ).not.toBeInTheDocument();
   });
 
@@ -1026,6 +1083,7 @@ describe("scaled organizer workspace", () => {
           phone: "+1 555 010 0199",
           organizerManaged: true,
           idempotencyKey: "request-key",
+          sendInvitation: false,
         },
         "token",
       ),
@@ -1162,10 +1220,13 @@ describe("scaled organizer workspace", () => {
       "This roster is read-only while responses are closed",
     );
     expect(
-      screen.queryByRole("button", { name: "Invite person" }),
+      screen.queryByRole("button", { name: "Add person" }),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Import roster" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Send invitation" }),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByLabelText("Bulk roster actions"),
@@ -1197,18 +1258,21 @@ describe("scaled organizer workspace", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Invite someone or import a roster to start collecting availability.",
+        "Add someone or import a roster to start collecting availability.",
       ),
     ).toBeInTheDocument();
-    expect(
-      screen.getAllByRole("button", { name: "Invite person" }),
-    ).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Add person" })).toHaveLength(
+      1,
+    );
     expect(
       screen.getAllByRole("button", { name: "Import roster" }),
     ).toHaveLength(1);
     expect(screen.queryByLabelText("Search roster")).not.toBeInTheDocument();
     expect(
       screen.queryByLabelText("Bulk roster actions"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Send invitation" }),
     ).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Rows per page")).not.toBeInTheDocument();
   });
@@ -1659,6 +1723,16 @@ describe("scaled organizer workspace", () => {
       expect.objectContaining({ columnMapping: { name: "0", email: "1" } }),
       "token",
     );
+    // Invitations are opt-in: the box is unchecked until the organizer
+    // ticks it, and the commit label follows.
+    const sendBox = screen.getByLabelText(
+      "Send invitations to newly added people",
+    );
+    expect(sendBox).not.toBeChecked();
+    expect(
+      screen.getByRole("button", { name: "Merge roster" }),
+    ).toBeInTheDocument();
+    await userEvent.click(sendBox);
     await userEvent.click(
       screen.getByRole("button", {
         name: "Merge roster and invite new people",
@@ -1669,7 +1743,7 @@ describe("scaled organizer workspace", () => {
       expect(commitRosterImport).toHaveBeenCalledWith(
         event.code,
         "import-1",
-        { mode: "merge", idempotencyKey: "request-key" },
+        { mode: "merge", idempotencyKey: "request-key", sendInvitations: true },
         "token",
       ),
     );
@@ -1679,6 +1753,13 @@ describe("scaled organizer workspace", () => {
     expect(
       await screen.findByLabelText("Event delivery progress"),
     ).toHaveTextContent("1 queued");
+    expect(
+      (
+        await screen.findByText(
+          "Imported 1 people: 1 added, 0 updated. 1 invitation queued.",
+        )
+      ).closest("[role]"),
+    ).toHaveAttribute("role", "status");
   });
 
   test("requires the exact event code before a destructive roster rebuild", async () => {
@@ -1706,10 +1787,10 @@ describe("scaled organizer workspace", () => {
     );
 
     const rebuildButton = screen.getByRole("button", {
-      name: "Rebuild roster and send invitations",
+      name: "Rebuild roster",
     });
     expect(screen.getByRole("note")).toHaveTextContent(
-      "sends a new invitation to every imported participant",
+      "Rebuilding clears schedules, invitations, and pending delivery. With invitations enabled below it sends a new invitation to every imported participant; otherwise everyone starts as Not sent and gets no reminders until you send invitations.",
     );
     expect(rebuildButton).toBeDisabled();
     await userEvent.type(
@@ -1732,11 +1813,20 @@ describe("scaled organizer workspace", () => {
           mode: "rebuild",
           confirmationCode: event.code,
           idempotencyKey: "request-key",
+          sendInvitations: false,
         },
         "token",
       ),
     );
     expect(setEvent).toHaveBeenCalledWith(rebuiltEvent);
+    expect(
+      await screen.findByText(
+        "Imported 1 people: 1 added, 0 updated. No invitations were sent.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByLabelText("Event delivery progress"),
+    ).not.toBeInTheDocument();
   });
 
   test("shows snapshot freshness and finalizes a chosen continuous recommendation", async () => {

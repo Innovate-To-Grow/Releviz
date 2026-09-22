@@ -7,6 +7,7 @@ from .imports import (
     RosterImportDetailView,
     RosterImportRowsView,
 )
+from .invitations import RosterInvitationsView
 from .listing import RosterParticipantScheduleView, RosterView
 from .participants import RosterParticipantView
 
@@ -16,6 +17,7 @@ __all__ = [
     "RosterImportCommitView",
     "RosterImportDetailView",
     "RosterImportRowsView",
+    "RosterInvitationsView",
     "RosterParticipantScheduleView",
     "RosterParticipantView",
     "RosterView",

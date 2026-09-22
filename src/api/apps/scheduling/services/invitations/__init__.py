@@ -10,6 +10,7 @@ from .addresses import (
 from .delivery import (
     create_or_reuse_managed_participant_and_send,
     enqueue_manual_reminders,
+    send_roster_invitations,
     upsert_and_send_invitations,
 )
 from .errors import EventEmailRequestError, ManagedParticipantError
@@ -49,6 +50,7 @@ __all__ = [
     "resolve_invited_member",
     "send_due_event_reminders",
     "send_event_reminders",
+    "send_roster_invitations",
     "split_invitation_emails",
     "upsert_and_send_invitations",
 ]

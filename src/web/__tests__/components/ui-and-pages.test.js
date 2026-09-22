@@ -1043,9 +1043,10 @@ describe("role-aware headers", () => {
 
     useAuth.mockReturnValue({ user: null, loading: false, logout: jest.fn() });
     render(<AppHeader pageTitle="My Dashboard" />);
-    expect(
-      screen.getByRole("link", { name: "Continue with email" }),
-    ).toHaveAttribute("href", "/login");
+    expect(screen.getByRole("link", { name: "Sign in" })).toHaveAttribute(
+      "href",
+      "/login",
+    );
   });
 });
 
@@ -1247,16 +1248,12 @@ describe("app pages", () => {
     searchParams = new URLSearchParams("next=//evil.example");
     const firstLogin = render(<LoginPage />);
     await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
-    await userEvent.click(
-      screen.getByRole("button", { name: "Continue with email" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     await userEvent.type(
-      await screen.findByLabelText("Verification code"),
+      await screen.findByLabelText("Verification Code"),
       "123456",
     );
-    await userEvent.click(
-      screen.getByRole("button", { name: "Verify and continue" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/dashboard"));
     expect(verifyEmailAuthCode).toHaveBeenCalledWith({
       email: "ada@example.com",
@@ -1267,9 +1264,7 @@ describe("app pages", () => {
     requestEmailAuthCode.mockRejectedValueOnce(new Error("No code"));
     render(<LoginPage />);
     await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
-    await userEvent.click(
-      screen.getByRole("button", { name: "Continue with email" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     expect(await screen.findByText("No code")).toBeInTheDocument();
   });
 
@@ -1308,32 +1303,24 @@ describe("app pages", () => {
     searchParams = new URLSearchParams("next=/event?code=ABC123");
     const firstLogin = render(<LoginPage />);
     await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
-    await userEvent.click(
-      screen.getByRole("button", { name: "Continue with email" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     await userEvent.type(
-      await screen.findByLabelText("Verification code"),
+      await screen.findByLabelText("Verification Code"),
       "123456",
     );
-    await userEvent.click(
-      screen.getByRole("button", { name: "Verify and continue" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     expect(navigateTo).toHaveBeenCalledWith("/event?code=ABC123");
     firstLogin.unmount();
 
     searchParams = new URLSearchParams();
     render(<LoginPage />);
     await userEvent.type(screen.getByLabelText("Email"), "new@example.com");
-    await userEvent.click(
-      screen.getByRole("button", { name: "Continue with email" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     await userEvent.type(
-      await screen.findByLabelText("Verification code"),
+      await screen.findByLabelText("Verification Code"),
       "654321",
     );
-    await userEvent.click(
-      screen.getByRole("button", { name: "Verify and continue" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     await waitFor(() =>
       expect(navigateTo).toHaveBeenCalledWith(
         "/settings?complete_profile=1&next=%2Fdashboard",
@@ -1505,21 +1492,17 @@ describe("app pages", () => {
     expect(screen.queryByLabelText("First name")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Password")).not.toBeInTheDocument();
     await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
-    await userEvent.click(
-      screen.getByRole("button", { name: "Continue with email" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     expect(requestEmailAuthCode).toHaveBeenCalledWith({
       email: "ada@example.com",
       next: "/dashboard",
       source: "login",
     });
     await userEvent.type(
-      await screen.findByLabelText("Verification code"),
+      await screen.findByLabelText("Verification Code"),
       "123456",
     );
-    await userEvent.click(
-      screen.getByRole("button", { name: "Verify and continue" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/dashboard"));
   });
 
@@ -1535,16 +1518,12 @@ describe("app pages", () => {
     render(<SignupPage />);
 
     await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
-    await userEvent.click(
-      screen.getByRole("button", { name: "Continue with email" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     await userEvent.type(
-      await screen.findByLabelText("Verification code"),
+      await screen.findByLabelText("Verification Code"),
       "123456",
     );
-    await userEvent.click(
-      screen.getByRole("button", { name: "Verify and continue" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
 
     await waitFor(() =>
       expect(navigateTo).toHaveBeenCalledWith("/event?code=ABC123"),

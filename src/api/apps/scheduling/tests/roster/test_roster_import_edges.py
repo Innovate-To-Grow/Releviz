@@ -33,7 +33,10 @@ from apps.scheduling.models import (
 )
 from apps.scheduling.payloads import roster as roster_payloads
 from apps.scheduling.services import roster_imports
-from apps.scheduling.services.invitations import EventEmailRequestError
+from apps.scheduling.services.invitations import (
+    EventEmailRequestError,
+    mark_invitation_for_member,
+)
 from apps.scheduling.views.roster import helpers as roster_helpers
 from apps.scheduling.views.roster import queries as roster_queries
 
@@ -1220,6 +1223,10 @@ class RosterImportDatabaseEdgeTests(TestCase):
         )
         ada.submitted = True
         ada.save(update_fields=["submitted", "updated_at"])
+        ada_invitation = self.event.invitations.get(member=ada.member)
+        ada_invitation.first_sent_at = timezone.now()
+        ada_invitation.save(update_fields=["first_sent_at", "updated_at"])
+        mark_invitation_for_member(event=self.event, member=ada.member, submitted=True)
         invitation = self.event.invitations.get(member=grace.member)
         invitation.first_sent_at = timezone.now()
         invitation.save(update_fields=["first_sent_at", "updated_at"])
@@ -1252,8 +1259,11 @@ class RosterImportDatabaseEdgeTests(TestCase):
             ("submitted=no", 1),
             ("included=true", 1),
             ("included=false", 1),
+            ("invitationStatus=accepted", 1),
+            ("invitationStatus=sent", 1),
             ("invitationStatus=submitted", 1),
             ("invitationStatus=invited", 1),
+            ("invitationStatus=opened", 1),
             ("accountAccess=temporary", 2),
         ]:
             with self.subTest(query=query):
@@ -1264,6 +1274,20 @@ class RosterImportDatabaseEdgeTests(TestCase):
                     response.data["latestDeliveryRequest"]["delivery"]["pending"],
                     1,
                 )
+        legacy_bulk = self.client.patch(
+            f"/events/roster/bulk?code={self.event.code}",
+            {
+                "filter": {"invitationStatus": "invited"},
+                "updates": {"group": "Sent"},
+                "idempotencyKey": str(uuid.uuid4()),
+            },
+            format="json",
+        )
+        self.assertEqual(legacy_bulk.status_code, 200, legacy_bulk.data)
+        self.assertEqual(legacy_bulk.data["matchedCount"], 1)
+        self.assertEqual(legacy_bulk.data["updatedCount"], 1)
+        grace.refresh_from_db()
+        self.assertEqual(grace.group_name, "Sent")
         for query in [
             "submitted=maybe",
             "included=maybe",

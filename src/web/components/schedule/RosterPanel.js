@@ -46,7 +46,15 @@ import {
   fetchRosterSchedule,
   patchRosterBulk,
   patchRosterParticipant,
+  sendRosterInvitations,
 } from "@/lib/api/roster";
+import { rosterImportStatusMessage } from "@/lib/roster-import-status";
+
+const DELIVERY_LABELS = {
+  not_sent: "Not sent",
+  sent: "Sent",
+  accepted: "Accepted",
+};
 
 function groupValue(participant) {
   return (
@@ -62,20 +70,17 @@ function accountLabel(participant) {
 }
 
 function deliveryLabel(participant) {
-  const value = participant.invitationStatus || "not_sent";
-  return String(value)
-    .replaceAll("_", " ")
-    .replace(/^./, (character) => character.toUpperCase());
+  return (
+    DELIVERY_LABELS[participant.invitationStatus] || DELIVERY_LABELS.not_sent
+  );
 }
 
 function deliveryStatusVariant(participant) {
-  switch (participant.invitationStatus || "not_sent") {
-    case "invited":
-      return "invited";
-    case "opened":
-      return "opened";
-    case "submitted":
-      return "submitted";
+  switch (participant.invitationStatus) {
+    case "sent":
+      return "sent";
+    case "accepted":
+      return "accepted";
     default:
       return "not-sent";
   }
@@ -180,7 +185,9 @@ const RosterPanel = forwardRef(function RosterPanel(
   const [inviteErrors, setInviteErrors] = useState({});
   const [inviteNotice, setInviteNotice] = useState("");
   const [inviteFormError, setInviteFormError] = useState("");
-  const [inviteBusy, setInviteBusy] = useState(false);
+  const [inviteBusyAction, setInviteBusyAction] = useState("");
+  const [sendingInvitations, setSendingInvitations] = useState(false);
+  const [resendInvitations, setResendInvitations] = useState(false);
   const [bulkScope, setBulkScope] = useState("selected");
   const [bulkApplyWeight, setBulkApplyWeight] = useState(false);
   const [bulkWeight, setBulkWeight] = useState(1);
@@ -244,6 +251,7 @@ const RosterPanel = forwardRef(function RosterPanel(
     [group, invitationStatus, search, submitted],
   );
   const inviteAllowed = event.status === "active";
+  const inviteBusy = Boolean(inviteBusyAction);
 
   const loadRoster = useCallback(
     async (providedToken, { throwOnError = false } = {}) => {
@@ -351,8 +359,7 @@ const RosterPanel = forwardRef(function RosterPanel(
     inviteIdempotencyKey.current = "";
   };
 
-  const submitInvitation = async (submitEvent) => {
-    submitEvent.preventDefault();
+  const addPerson = async (sendInvitation) => {
     if (inviteRequestInFlight.current) return;
     const normalizedName = inviteName.trim();
     const normalizedEmail = inviteEmail.trim().toLowerCase();
@@ -375,15 +382,13 @@ const RosterPanel = forwardRef(function RosterPanel(
       return;
     }
     if (!inviteAllowed) {
-      setInviteFormError(
-        "Reactivate this event before adding and inviting another person.",
-      );
+      setInviteFormError("Reactivate this event before adding another person.");
       return;
     }
 
     let addedParticipant = null;
     inviteRequestInFlight.current = true;
-    setInviteBusy(true);
+    setInviteBusyAction(sendInvitation ? "send" : "add");
     try {
       const token = await getToken();
       if (!inviteIdempotencyKey.current) {
@@ -397,6 +402,7 @@ const RosterPanel = forwardRef(function RosterPanel(
           phone: normalizedPhone,
           organizerManaged: inviteManaged,
           idempotencyKey: inviteIdempotencyKey.current,
+          sendInvitation,
         },
         token,
       );
@@ -408,6 +414,7 @@ const RosterPanel = forwardRef(function RosterPanel(
       updateSelected((current) => new Set([...current, addedParticipant.id]));
       onResultsInvalidated?.();
       const autoInvitedCount = data.autoInvitedCount || 0;
+      const alreadyOnRoster = data.created === false && !data.restored;
       const nextDeliveryRequest = invitationDeliveryRequest(data);
       if (nextDeliveryRequest && autoInvitedCount > 0) {
         onDeliveryRequestChange?.(nextDeliveryRequest);
@@ -415,16 +422,18 @@ const RosterPanel = forwardRef(function RosterPanel(
 
       setPage(1);
       await loadRoster();
-      const addedName = addedParticipant.name || normalizedName;
-      const alreadyOnRoster = `${addedName} is already on this roster. No new invitation was sent.`;
+      const displayName = addedParticipant.name || normalizedName;
+      const alreadyOnRosterNotice = `${displayName} is already on this roster. No new invitation was sent.`;
       setInviteNotice(
         inviteManaged
           ? data.created || data.restored
-            ? `${addedName} was added. Use Edit schedule to enter their availability.`
-            : alreadyOnRoster
+            ? `${displayName} was added. Use Edit schedule to enter their availability.`
+            : alreadyOnRosterNotice
           : autoInvitedCount > 0
-            ? `${addedName} is ready to respond. Their invitation was queued.`
-            : alreadyOnRoster,
+            ? `${displayName} is ready to respond. Their invitation was queued.`
+            : sendInvitation || alreadyOnRoster
+              ? alreadyOnRosterNotice
+              : `${displayName} was added. No invitation was sent.`,
       );
       setShowInvite(false);
       setInviteName("");
@@ -448,12 +457,51 @@ const RosterPanel = forwardRef(function RosterPanel(
         );
       } else {
         setInviteFormError(
-          requestError.message || "Unable to add and invite this person.",
+          requestError.message || "Unable to add this person.",
         );
       }
     } finally {
       inviteRequestInFlight.current = false;
-      setInviteBusy(false);
+      setInviteBusyAction("");
+    }
+  };
+
+  const submitAddOnly = (submitEvent) => {
+    submitEvent.preventDefault();
+    void addPerson(false);
+  };
+
+  const sendSelectedInvitations = async () => {
+    if (sendingInvitations || selected.size === 0) return;
+    setError("");
+    setStatus("");
+    setInviteNotice("");
+    setSendingInvitations(true);
+    try {
+      const token = await getToken();
+      const data = await sendRosterInvitations(
+        event.code,
+        {
+          participantIds: [...selected],
+          resend: resendInvitations,
+          idempotencyKey: crypto.randomUUID(),
+        },
+        token,
+      );
+      const queuedCount = data.queuedCount || 0;
+      const skippedCount = data.skippedCount || 0;
+      setStatus(
+        `Queued ${queuedCount} invitation(s). ${skippedCount} already invited were skipped.`,
+      );
+      if (data.deliveryRequest?.recipientCount > 0) {
+        onDeliveryRequestChange?.(data.deliveryRequest);
+      }
+      updateSelected(new Set());
+      await loadRoster();
+    } catch (requestError) {
+      setError(requestError.message || "Unable to send invitations.");
+    } finally {
+      setSendingInvitations(false);
     }
   };
 
@@ -487,6 +535,7 @@ const RosterPanel = forwardRef(function RosterPanel(
     inviteIdempotencyKey.current = "";
 
     updateSelected(new Set());
+    setResendInvitations(false);
     setBulkScope("selected");
     setBulkApplyWeight(false);
     setBulkWeight(1);
@@ -951,12 +1000,12 @@ const RosterPanel = forwardRef(function RosterPanel(
         ? "Changes apply to everyone in the chosen group."
         : "Changes apply to everyone matching the current filters.";
   const inviteSubmitLabel = inviteManaged
-    ? inviteBusy
+    ? inviteBusyAction === "add"
       ? "Adding…"
       : "Add person"
-    : inviteBusy
-      ? "Adding and sending…"
-      : "Add and send invitation";
+    : inviteBusyAction === "add"
+      ? "Adding…"
+      : "Add only";
   const bulkApplyGroupId = `${controlIds}-bulk-apply-group`;
   const bulkGroupNameId = `${controlIds}-bulk-group-name`;
   const groupListId = `${controlIds}-group-names`;
@@ -965,6 +1014,41 @@ const RosterPanel = forwardRef(function RosterPanel(
   const bulkApplyIncludedId = `${controlIds}-bulk-apply-included`;
   const bulkIncludedId = `${controlIds}-bulk-included`;
   const pageSizeId = `${controlIds}-page-size`;
+
+  const renderSelectionBar = (position) => {
+    if (!rosterMutable || !hasRosterEntries) return null;
+    const resendId = `${controlIds}-resend-${position}`;
+    return (
+      <div
+        className={`roster-panel__selection d-flex flex-wrap align-items-center gap-3 ${
+          position === "top" ? "mb-3" : "mt-3"
+        }`}
+      >
+        <span className="small text-secondary">{selected.size} selected</span>
+        <AppButton
+          variant="outlined"
+          icon={<SendIcon />}
+          busy={sendingInvitations}
+          disabled={sendingInvitations || selected.size === 0}
+          onClick={sendSelectedInvitations}
+        >
+          {sendingInvitations ? "Sending…" : "Send invitation"}
+        </AppButton>
+        <div className="form-check mb-0">
+          <input
+            id={resendId}
+            className="form-check-input"
+            type="checkbox"
+            checked={resendInvitations}
+            onChange={(event) => setResendInvitations(event.target.checked)}
+          />
+          <label className="form-check-label" htmlFor={resendId}>
+            Resend to people already invited
+          </label>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div
@@ -1011,7 +1095,7 @@ const RosterPanel = forwardRef(function RosterPanel(
                 aria-expanded={showInvite}
                 aria-controls="roster-invite-form"
               >
-                {showInvite ? "Close invite" : "Invite person"}
+                {showInvite ? "Close add person" : "Add person"}
               </AppButton>
               <AppButton
                 variant="outlined"
@@ -1056,14 +1140,15 @@ const RosterPanel = forwardRef(function RosterPanel(
               className="roster-invite-form border rounded p-3 bg-body-tertiary"
               aria-labelledby="roster-invite-title"
               noValidate
-              onSubmit={submitInvitation}
+              onSubmit={submitAddOnly}
             >
               <h4 id="roster-invite-title" className="h5 mb-1">
-                Invite someone to respond
+                Add a person
               </h4>
               <p className="text-secondary mb-3">
-                Add one person and email them a secure link to fill in their
-                availability.
+                Add one person to the roster. Enter adds them without emailing;
+                use Add and send invitation to email their secure link now, or
+                Send invitation later.
               </p>
 
               <div className="form-row-2">
@@ -1217,12 +1302,24 @@ const RosterPanel = forwardRef(function RosterPanel(
                 </AppButton>
                 <AppButton
                   type="submit"
-                  icon={inviteManaged ? null : <SendIcon />}
-                  busy={inviteBusy}
+                  busy={inviteBusyAction === "add"}
                   disabled={inviteBusy || !inviteAllowed}
                 >
                   {inviteSubmitLabel}
                 </AppButton>
+                {!inviteManaged && (
+                  <AppButton
+                    variant="outlined"
+                    icon={<SendIcon />}
+                    busy={inviteBusyAction === "send"}
+                    disabled={inviteBusy || !inviteAllowed}
+                    onClick={() => void addPerson(true)}
+                  >
+                    {inviteBusyAction === "send"
+                      ? "Adding and sending…"
+                      : "Add and send invitation"}
+                  </AppButton>
+                )}
               </div>
             </form>
           )}
@@ -1293,9 +1390,8 @@ const RosterPanel = forwardRef(function RosterPanel(
                 >
                   <option value="">Any invitation</option>
                   <option value="not_sent">Not sent</option>
-                  <option value="invited">Invited</option>
-                  <option value="opened">Opened</option>
-                  <option value="submitted">Submitted</option>
+                  <option value="sent">Sent</option>
+                  <option value="accepted">Accepted</option>
                 </select>
               </div>
             </div>
@@ -1568,15 +1664,12 @@ const RosterPanel = forwardRef(function RosterPanel(
             if (nextDeliveryRequest) {
               onDeliveryRequestChange?.(nextDeliveryRequest);
             }
-            const importedCount = receipt.importedCount || 0;
-            const createdCount = receipt.createdCount || 0;
-            const updatedCount = receipt.updatedCount || 0;
-            const invitedCount =
-              data?.autoInvitedCount ?? receipt.invitedCount ?? createdCount;
             setStatus(
-              createdCount > 0 || invitedCount > 0
-                ? `Imported ${importedCount} people: ${createdCount} added, ${updatedCount} updated. ${invitedCount} invitation${invitedCount === 1 ? "" : "s"} queued.`
-                : `Imported ${importedCount} people: no new participants were added, so no invitations were sent.`,
+              rosterImportStatusMessage({
+                receipt,
+                autoInvitedCount: data?.autoInvitedCount,
+                sendInvitations: data?.sendInvitations,
+              }),
             );
             setShowImport(false);
             setPage(1);
@@ -1588,6 +1681,7 @@ const RosterPanel = forwardRef(function RosterPanel(
       )}
 
       <Panel className="roster-panel__list" aria-label="Roster entries">
+        {renderSelectionBar("top")}
         {loading ? (
           <LoadingState label="Loading roster…" />
         ) : participants.length === 0 ? (
@@ -1614,7 +1708,7 @@ const RosterPanel = forwardRef(function RosterPanel(
                 {hasActiveFilters
                   ? "Try a different search or clear the current filters."
                   : rosterMutable
-                    ? "Invite someone or import a roster to start collecting availability."
+                    ? "Add someone or import a roster to start collecting availability."
                     : "This event does not have any participants."}
               </p>
             </EmptyState>
@@ -1883,7 +1977,9 @@ const RosterPanel = forwardRef(function RosterPanel(
                               </StatusBadge>
                             </span>
                             <span className="d-flex flex-column align-items-start gap-1">
-                              <small className="text-secondary">Invite</small>
+                              <small className="text-secondary">
+                                Invitation
+                              </small>
                               <StatusBadge
                                 status={deliveryStatusVariant(participant)}
                               >
@@ -1949,6 +2045,7 @@ const RosterPanel = forwardRef(function RosterPanel(
             </div>
           </div>
         )}
+        {renderSelectionBar("bottom")}
       </Panel>
 
       {status && (

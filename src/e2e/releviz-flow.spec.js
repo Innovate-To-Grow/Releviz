@@ -13,6 +13,7 @@ const {
   datetimeLocalHoursFromNow,
   dispatchEmailJobs,
   expandAdvancedOptions,
+  expectDashboard,
   fillTextbox,
   latestEmailFor,
   latestVerificationCode,
@@ -40,7 +41,11 @@ async function importRoster(request, eventCode, token, pastedText) {
     "POST",
     `/events/roster-imports/${preview.payload.import.id}/commit?code=${eventCode}`,
     token,
-    { mode: "merge", idempotencyKey: crypto.randomUUID() },
+    {
+      mode: "merge",
+      sendInvitations: true,
+      idempotencyKey: crypto.randomUUID(),
+    },
   );
   expect(committed.response.status()).toBe(201);
   return committed.payload;
@@ -419,6 +424,7 @@ test.describe("Releviz account and scheduling flow", () => {
       temporaryEmail,
     );
     await expect(page.getByText("Ready", { exact: true })).toBeVisible();
+    await page.getByLabel("Send invitations to newly added people").check();
     const invitationStartedAt = Date.now() - 1000;
     await page.getByRole("button", { name: "Merge roster" }).click();
     await expect(
@@ -486,7 +492,7 @@ test.describe("Releviz account and scheduling flow", () => {
       sentRoster.payload.participants.find(
         (participant) => participant.id === managedParticipant.id,
       )?.invitationStatus,
-    ).toBe("invited");
+    ).toBe("sent");
     const accessPath = temporaryAccessPathFromEmail(invitationEmail);
     const sentState = temporaryAccountState({
       code: eventCode,
@@ -759,6 +765,77 @@ test.describe("Releviz account and scheduling flow", () => {
       beforeUpgrade.availabilityInperson,
     );
 
+    const addedEmail = `added-${runId}@example.com`;
+    await page.getByRole("button", { name: "Add person", exact: true }).click();
+    await fillTextbox(page, "Full name", "Added Avery");
+    await fillTextbox(page, "Email address", addedEmail);
+    await page.getByRole("button", { name: "Add only" }).click();
+    await expect(
+      page.getByText("Added Avery was added. No invitation was sent."),
+    ).toBeVisible();
+
+    const rosterAfterAdd = await apiJson(
+      request,
+      "GET",
+      `/events/roster?code=${eventCode}`,
+      organizerSession.access,
+    );
+    expect(rosterAfterAdd.response.status()).toBe(200);
+    const addedParticipant = rosterAfterAdd.payload.participants.find(
+      (participant) => participant.email === addedEmail,
+    );
+    expect(addedParticipant).toEqual(
+      expect.objectContaining({ invitationStatus: "not_sent" }),
+    );
+    const addedCard = page.locator(
+      `[data-roster-participant-id="${addedParticipant.id}"]`,
+    );
+    await expect(addedCard.getByText("Not sent")).toBeVisible();
+    const addedState = temporaryAccountState({
+      code: eventCode,
+      email: addedEmail,
+    });
+    expect(addedState).toEqual(
+      expect.objectContaining({
+        invitationJobCount: 0,
+        invitationFirstSent: false,
+      }),
+    );
+
+    await addedCard.getByLabel("Select Added Avery").check();
+    await page
+      .getByRole("button", { name: "Send invitation", exact: true })
+      .first()
+      .click();
+    await expect(page.getByText(/Queued 1 invitation/)).toBeVisible();
+    await expect(eventDeliveryProgress).toBeVisible();
+
+    dispatchEmailJobs();
+    await refreshWorkspace(page);
+    await expect(addedCard.getByText("Sent", { exact: true })).toBeVisible();
+    const rosterAfterSend = await apiJson(
+      request,
+      "GET",
+      `/events/roster?code=${eventCode}`,
+      organizerSession.access,
+    );
+    expect(rosterAfterSend.response.status()).toBe(200);
+    expect(
+      rosterAfterSend.payload.participants.find(
+        (participant) => participant.id === addedParticipant.id,
+      )?.invitationStatus,
+    ).toBe("sent");
+    const sentAddedState = temporaryAccountState({
+      code: eventCode,
+      email: addedEmail,
+    });
+    expect(sentAddedState).toEqual(
+      expect.objectContaining({
+        invitationJobCount: 1,
+        invitationFirstSent: true,
+      }),
+    );
+
     await temporaryContext.close();
   });
 
@@ -780,7 +857,7 @@ test.describe("Releviz account and scheduling flow", () => {
     expect(eventCode).toMatch(/^[A-Z0-9]+$/);
     const organizerSession = await readSession(page);
 
-    await page.getByRole("button", { name: "Invite person" }).click();
+    await page.getByRole("button", { name: "Add person", exact: true }).click();
     await fillTextbox(page, "Full name", managedName);
     await fillTextbox(page, "Email address", organizerEmail);
     await fillTextbox(page, "Phone (optional)", managedPhone);
@@ -794,7 +871,7 @@ test.describe("Releviz account and scheduling flow", () => {
         "Enter one of your own verified email addresses. No invitation is sent.",
       ),
     ).toBeVisible();
-    await page.getByRole("button", { name: "Add person" }).click();
+    await page.getByRole("button", { name: "Add person", exact: true }).click();
     await expect(
       page.getByText(
         `${managedName} was added. Use Edit schedule to enter their availability.`,
@@ -2086,7 +2163,14 @@ test.describe("Releviz account and scheduling flow", () => {
       expect(revoked.response.status()).toBe(401);
     }
 
-    await loginWithEmailCode(page, email);
+    // Password mode proves the password set through /recover works in the UI.
+    await page
+      .getByRole("button", { name: "Sign in with password instead" })
+      .click();
+    await page.getByLabel("Email").fill(email);
+    await page.getByLabel("Password", { exact: true }).fill(resetPassword);
+    await page.getByRole("button", { name: "Sign In", exact: true }).click();
+    await expectDashboard(page);
     const resetSession = await readSession(page);
     await page.goto("/settings");
     // The change-password fields sit inside a collapsed disclosure.

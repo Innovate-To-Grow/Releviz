@@ -19,23 +19,39 @@ Go to the home page and fill out the event form:
 - **Days** — pick which days of the week are options (defaults to Mon-Fri)
 - **Access** — Invite only (default) or Open link
 
-Create an account or log in before creating an event. New events are active immediately and can
-accept responses as soon as participants join; creating an event by itself does not send email.
+Sign in before creating an event: either with an emailed 6-digit code (which creates your account
+on first use) or with email + password for accounts that set one through Forgot password
+(`/recover`). New events are active immediately and can accept responses as soon as participants
+join; creating an event by itself does not send email.
 
 ### 2. Build the Roster
 
-The Roster tab accepts `.xlsx`, `.csv`, or pasted CSV/TSV. Map the required `name` and `email`
+Adding people and sending invitations are separate steps. **Add person** opens a form with two
+actions: **Add only** puts the person on the roster without sending email (pressing Enter does the
+same), and **Add and send invitation** also emails their secure link right away.
+
+The Roster tab also accepts `.xlsx`, `.csv`, or pasted CSV/TSV. Map the required `name` and `email`
 columns and optional `group`, `weight`, `included`, and `phone` columns, preview and correct rows,
 then commit as:
 
-- **Merge** — add/update people while preserving existing schedules and delivery history. Newly
-  added or restored people receive an invitation automatically.
+- **Merge** — add/update people while preserving existing schedules and delivery history.
 - **Rebuild** — type the event code to destructively replace the roster, schedules, invitations,
-  temporary sessions, and pending deliveries. Every person in the rebuilt roster receives a new
-  invitation.
+  temporary sessions, and pending deliveries.
 
-Adding a person or committing an import atomically creates the roster changes and durable invitation
-jobs. The HTTP request returns as soon as those jobs are committed; the Roster tab shows
+Tick **Send invitations to newly added people** before committing to email everyone the import adds
+(on a rebuild, everyone re-imported); leave it unticked to add them as **Not sent** and invite them
+later. Existing participants are updated without another email either way.
+
+To invite later, check people in the roster table and use **Send invitation** (shown above and below
+the table). It skips anyone whose invitation was already sent or is still queued unless **Resend to
+people already invited** is ticked; a resend keeps any custom message. The **Invitation** badge on
+each row shows **Not sent** (no email yet), **Sent** (emailed, including opened), or **Accepted**
+(joined, saved a draft, or submitted after the email); **Filter by invitation** offers the same
+three states. People who are **Not sent** receive no reminders until they are invited.
+
+Only three actions send invitations: **Add and send invitation**, an import committed with the
+checkbox ticked, and **Send invitation**. Each commits its roster changes and durable invitation
+jobs atomically. The HTTP request returns as soon as those jobs are committed; the Roster tab shows
 provider-handoff progress and allows retrying failed recipients. Closed, finalized, and archived
 events must be reactivated before their roster can change.
 
@@ -43,10 +59,11 @@ The `phone` column (also recognized as `phone number`, `mobile`, `cell`, or `tel
 digits, spaces, and `+ - ( ) .`, with at least 7 digits and at most 32 characters. Phones are shown
 on the roster and editable per row; Releviz never uses them to send anything.
 
-To add a person who has no email of their own, open **Invite person**, enter their name, one of your
+To add a person who has no email of their own, open **Add person**, enter their name, one of your
 own verified email addresses, and an optional phone, tick **No email of their own — use one of mine
-and I'll enter their schedule**, then click **Add person**. No invitation, reminder, or final
-notification is ever sent for that person, and you receive nothing extra; the row shows
+and I'll enter their schedule**, then click **Add person** (the **Add and send invitation** action is
+hidden while the box is ticked). No invitation, reminder, or final notification is ever sent for
+that person, and you receive nothing extra; the row shows
 **Organizer-managed** and **Not sent**, and you enter their availability with **Edit schedule**.
 Several people can share your address. Each is matched by name under that address, so give two
 different people distinct names (for example "John Smith (Team B)"); re-entering an identical name
@@ -54,7 +71,7 @@ returns the existing row. Typing your own address without the checkbox is refuse
 tick it.
 
 Roster import cannot create organizer-managed people: a sheet that repeats your address is flagged
-because two rows would resolve to one account. Add such people one by one with **Invite person**.
+because two rows would resolve to one account. Add such people one by one with **Add person**.
 
 Invite-only links are visible only to the organizer, existing participants, temporary recipients
 using their event-scoped code flow, or full accounts whose verified email matches an invitation.
