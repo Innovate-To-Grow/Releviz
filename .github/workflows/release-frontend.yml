@@ -1,19 +1,29 @@
 name: Releviz Frontend Release
-run-name: >-
-  ${{ github.event_name == 'workflow_run'
-      && format('Frontend release: {0}', github.event.workflow_run.display_title)
-      || format('Frontend release (manual): {0}', github.sha) }}
+run-name: "Frontend release (manual): ${{ github.sha }}"
 
 on:
-  # Every green CI run on main is offered as a frontend release; the scope job
-  # skips it when nothing the static site is built from changed. A release
-  # waits in the "AWS Amplify - Prod" environment for reviewer approval before
-  # the frontend-only AWS role is assumed. Manual dispatch stays available for
-  # redeploys.
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
-    branches: [main]
+  # Called by the production release workflow (release.yml), which decides
+  # from a credential-free scope whether anything the static site is built
+  # from changed and runs every affected surface side by side so the reviewer
+  # approves the whole release once. The release job waits in the
+  # "AWS Amplify - Prod" environment for that approval before the
+  # frontend-only AWS role is assumed. Manual dispatch of this file alone
+  # stays available for redeploys of just the frontend.
+  workflow_call:
+    inputs:
+      deploy-sha:
+        description: The immutable main commit to release
+        required: true
+        type: string
+      trigger-event:
+        description: github.event_name of the calling run (workflow_run or workflow_dispatch)
+        required: true
+        type: string
+      confirmation:
+        description: The DEPLOY confirmation of a manually dispatched calling run
+        required: false
+        type: string
+        default: ""
   workflow_dispatch:
     inputs:
       confirmation:
@@ -28,62 +38,20 @@ permissions:
   deployments: write
   id-token: write
 
-concurrency:
-  group: release-frontend
-  cancel-in-progress: false
-
 env:
   CANDIDATE_BRANCH: candidate
   PRODUCTION_BRANCH: main
 
 jobs:
-  scope:
-    name: Decide whether the frontend changed
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    if: >-
-      ${{
-        github.ref == 'refs/heads/main' && (
-          github.event_name == 'workflow_dispatch' || (
-            github.event_name == 'workflow_run' &&
-            github.event.workflow_run.conclusion == 'success' &&
-            github.event.workflow_run.event == 'push' &&
-            github.event.workflow_run.head_branch == 'main' &&
-            github.event.workflow_run.head_repository.full_name == github.repository
-          )
-        )
-      }}
-    outputs:
-      release: ${{ steps.scope.outputs.release }}
-    steps:
-      - name: Checkout release commit with history
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
-          fetch-depth: 0
-
-      - name: Compare with the last successful frontend release
-        id: scope
-        uses: ./.github/actions/release-scope
-        with:
-          workflow-file: release-frontend.yml
-          release-sha: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
-          trigger-event: ${{ github.event_name }}
-          paths: |
-            src/web
-            package.json
-            package-lock.json
-            scripts/deploy/amplify-static-deploy.sh
-            scripts/deploy/amplify-apex-target.sh
-            scripts/ci/validate_amplify_static_export.py
-            infra/prod/amplify-custom-headers.json
-
   release:
     name: Release frontend to production
-    needs: scope
-    if: ${{ needs.scope.outputs.release == 'true' }}
+    if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # A lone dispatch and an orchestrated release of the frontend never overlap.
+    concurrency:
+      group: release-frontend
+      cancel-in-progress: false
     environment:
       name: AWS Amplify - Prod
       url: https://${{ vars.PROD_DOMAIN }}
@@ -93,11 +61,11 @@ jobs:
     # the fallback image repository. Backend secrets, alarms, and Terraform
     # state never reach this job.
     env:
-      TRIGGER_EVENT: ${{ github.event_name }}
+      TRIGGER_EVENT: ${{ inputs.trigger-event || github.event_name }}
       CONFIRMATION: ${{ inputs.confirmation }}
-      # workflow_run: the CI run's head commit; dispatch: the selected main commit.
-      DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
-      AMPLIFY_ARTIFACT: ${{ github.workspace }}/releviz-amplify-${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}.zip
+      # Called: the release commit release.yml scoped; dispatch: the selected main commit.
+      DEPLOY_SHA: ${{ inputs.deploy-sha || github.sha }}
+      AMPLIFY_ARTIFACT: ${{ github.workspace }}/releviz-amplify-${{ inputs.deploy-sha || github.sha }}.zip
       AMPLIFY_TIMEOUT_SECONDS: "1200"
       AWS_REGION: ${{ vars.AWS_REGION || 'us-west-2' }}
       AWS_ROLE_ARN: ${{ vars.AWS_PROD_FRONTEND_ROLE_ARN }}
@@ -397,8 +365,10 @@ jobs:
               -H "Accept: application/vnd.github+json" \
               -H "X-GitHub-Api-Version: 2026-03-10" \
               "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" >"$run_file"
-            # Artifacts from the retired single release workflow stay valid
-            # rollback points until they expire.
+            # An artifact belongs to the run that produced it: the production
+            # release workflow when this file ran as its frontend surface, this
+            # file when dispatched alone. Artifacts from the retired single
+            # release workflow stay valid rollback points until they expire.
             if jq -e \
               --arg repository "$GITHUB_REPOSITORY" \
               --arg sha "$PREVIOUS_SHA" \
@@ -406,7 +376,8 @@ jobs:
                 .head_sha == $sha
                 and .head_branch == "main"
                 and (
-                  .path == ".github/workflows/release-frontend.yml"
+                  .path == ".github/workflows/release.yml"
+                  or .path == ".github/workflows/release-frontend.yml"
                   or .path == ".github/workflows/deploy-prod.yml"
                 )
                 and (.event == "workflow_dispatch" or .event == "workflow_run")

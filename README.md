@@ -370,29 +370,37 @@ docker run --rm -p 3000:3000 releviz-web:local
 
 ### Production
 
-Production CD is three protected workflows on `main`, one per release surface, so a change only
-releases what it touched:
+Production CD is one protected workflow on `main`, `release.yml` (**Releviz Production Release**),
+that releases three surfaces so a change only releases what it touched:
 
-| Workflow | Releases | Environment (role) | Paths that trigger it |
+| Surface (reusable workflow) | Releases | Environment (role) | Paths that trigger it |
 |---|---|---|---|
-| `release-backend.yml` | SHA-tagged API image, ECS backend/worker rollout, default admin | `AWS ECS - Prod` (`releviz-production-github-deploy`) | `src/api/**` |
-| `release-frontend.yml` | Amplify static site (candidate → production) and the ECS fallback image | `AWS Amplify - Prod` (`releviz-production-frontend-github-deploy`) | `src/web/**`, root `package*.json`, Amplify deploy scripts, export validator, custom headers |
-| `release-infrastructure.yml` | Terraform for everything else in AWS | `AWS ECS - Prod` (`releviz-production-github-deploy`) | `infra/prod/**` |
+| backend (`release-backend.yml`) | SHA-tagged API image, ECS backend/worker rollout, default admin | `AWS ECS - Prod` (`releviz-production-github-deploy`) | `src/api/**` |
+| frontend (`release-frontend.yml`) | Amplify static site (candidate → production) and the ECS fallback image | `AWS Amplify - Prod` (`releviz-production-frontend-github-deploy`) | `src/web/**`, root `package*.json`, Amplify deploy scripts, export validator, custom headers |
+| infrastructure (`release-infrastructure.yml`) | Terraform for everything else in AWS | `AWS ECS - Prod` (`releviz-production-github-deploy`) | `infra/prod/**` |
 
-Every successful `CI` run for a push to `main` offers the commit to all three. Each workflow first
-runs a credential-free `scope` job that compares the commit with that workflow's last successful
-release (or, before its first release, the retired single workflow's last release); when none of
-its paths changed, the run ends there without an approval prompt. Changes to the workflows
-themselves are exercised by a manual dispatch. Otherwise the release job waits in its protected
-GitHub environment until a configured reviewer approves it, and only then receives short-lived
-AWS credentials for that environment's role: backend and infrastructure releases wait in
-`AWS ECS - Prod` and assume the production role, which owns Terraform state, ECS, and the
-application secrets' metadata; frontend releases wait in `AWS Amplify - Prod` and assume the
-frontend-only role, which can deploy the two Amplify release branches, push the fallback image,
-and read the canonical alias, and nothing else. Each role trusts exactly one environment's OIDC
-subject, so a frontend approval can never carry backend permissions. Any workflow can also be
-dispatched manually for a redeploy or rollback, which additionally requires the exact
-confirmation `DEPLOY`. A shared preflight action verifies that the immutable commit passed
+Every successful `CI` run for a push to `main` starts one production release run. Its
+credential-free `scope` job compares the commit with each surface's last successful release
+(`scripts/ci/last-successful-release.sh`: the newest run in which that surface's own job
+succeeded, or a newer lone dispatch of the surface workflow; before a surface's first release,
+the retired single workflow's last release). Surfaces whose paths did not change are left out
+without an approval prompt; when nothing changed, the run ends at the scope job. The affected
+surfaces then run **side by side** as reusable workflows of that one run, so every release job
+reaches its protected GitHub environment at the same moment and the reviewer approves the whole
+release in a single **Review pending deployments** dialog — `AWS ECS - Prod` and
+`AWS Amplify - Prod` are listed together and approved with one click. That is why the surface jobs
+never depend on one another: a job that only reached its environment after another finished would
+ask for a second approval. Only after approval does each job receive short-lived AWS credentials
+for its own environment's role: backend and infrastructure releases wait in `AWS ECS - Prod` and
+assume the production role, which owns Terraform state, ECS, and the application secrets'
+metadata; frontend releases wait in `AWS Amplify - Prod` and assume the frontend-only role, which
+can deploy the two Amplify release branches, push the fallback image, and read the canonical
+alias, and nothing else. Each role trusts exactly one environment's OIDC subject, so approving the
+frontend can never carry backend permissions. Concurrent backend and infrastructure Terraform
+applies serialize on the remote state lock. Changes to the workflows themselves are exercised by
+a manual dispatch: `release.yml` can be dispatched with any subset of the surfaces ticked, and
+each surface workflow can still be dispatched alone for a redeploy or rollback; both require the
+exact confirmation `DEPLOY`. A shared preflight action verifies that the immutable commit passed
 `CI Result`, validates the scope's environment configuration, assumes that scope's role through
 GitHub OIDC, confirms the assumed identity (and, for the frontend, that it cannot reach ECS), and
 (for the Terraform releases) checks the protected remote state.
