@@ -47,18 +47,16 @@ def api_participant(
     )
 
     account_access = getattr(member, "access_level", "full")
-    if participant.submitted or (invitation is not None and invitation.status == "submitted"):
-        invitation_status = "submitted"
-    elif invitation is None or invitation.first_sent_at is None:
+    if invitation is None or invitation.first_sent_at is None:
         invitation_status = "not_sent"
-    elif invitation.opened_at is not None or invitation.status in {
-        "opened",
+    elif invitation.accepted_at is not None or invitation.status in {
         "joined",
         "draft_saved",
+        "submitted",
     }:
-        invitation_status = "opened"
+        invitation_status = "accepted"
     else:
-        invitation_status = "invited"
+        invitation_status = "sent"
 
     data.update(
         {

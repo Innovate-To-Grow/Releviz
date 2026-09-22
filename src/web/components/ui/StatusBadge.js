@@ -11,8 +11,8 @@ const TONES = {
   "not-submitted": "secondary",
   draft: "info",
   // Invitation delivery
-  invited: "info",
-  opened: "primary",
+  sent: "info",
+  accepted: "success",
   "not-sent": "secondary",
   // Generic
   success: "success",

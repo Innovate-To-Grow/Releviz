@@ -26,18 +26,32 @@ join; creating an event by itself does not send email.
 
 ### 2. Build the Roster
 
-The Roster tab accepts `.xlsx`, `.csv`, or pasted CSV/TSV. Map the required `name` and `email`
+Adding people and sending invitations are separate steps. **Add person** opens a form with two
+actions: **Add only** puts the person on the roster without sending email (pressing Enter does the
+same), and **Add and send invitation** also emails their secure link right away.
+
+The Roster tab also accepts `.xlsx`, `.csv`, or pasted CSV/TSV. Map the required `name` and `email`
 columns and optional `group`, `weight`, and `included` columns, preview and correct rows, then commit
 as:
 
-- **Merge** — add/update people while preserving existing schedules and delivery history. Newly
-  added or restored people receive an invitation automatically.
+- **Merge** — add/update people while preserving existing schedules and delivery history.
 - **Rebuild** — type the event code to destructively replace the roster, schedules, invitations,
-  temporary sessions, and pending deliveries. Every person in the rebuilt roster receives a new
-  invitation.
+  temporary sessions, and pending deliveries.
 
-Adding a person or committing an import atomically creates the roster changes and durable invitation
-jobs. The HTTP request returns as soon as those jobs are committed; the Roster tab shows
+Tick **Send invitations to newly added people** before committing to email everyone the import adds
+(on a rebuild, everyone re-imported); leave it unticked to add them as **Not sent** and invite them
+later. Existing participants are updated without another email either way.
+
+To invite later, check people in the roster table and use **Send invitation** (shown above and below
+the table). It skips anyone whose invitation was already sent or is still queued unless **Resend to
+people already invited** is ticked; a resend keeps any custom message. The **Invitation** badge on
+each row shows **Not sent** (no email yet), **Sent** (emailed, including opened), or **Accepted**
+(joined, saved a draft, or submitted after the email); **Filter by invitation** offers the same
+three states. People who are **Not sent** receive no reminders until they are invited.
+
+Only three actions send invitations: **Add and send invitation**, an import committed with the
+checkbox ticked, and **Send invitation**. Each commits its roster changes and durable invitation
+jobs atomically. The HTTP request returns as soon as those jobs are committed; the Roster tab shows
 provider-handoff progress and allows retrying failed recipients. Closed, finalized, and archived
 events must be reactivated before their roster can change.
 
