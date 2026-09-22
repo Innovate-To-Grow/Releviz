@@ -196,7 +196,7 @@ jobs:
               --app-id "$AMPLIFY_APP_ID" \
               --query app.customRules \
               --output json |
-              jq -r 'any(.[]?; .source == "/<*>" and .target == "/404.html" and .status == "404")'
+              jq -r 'any(.[]?; .source == "/<*>" and .target == "/404.html" and (.status == "404-200" or .status == "404"))'
           )"
           echo "live=$live" >>"$GITHUB_OUTPUT"
           echo "::notice::Live Amplify not-found routing for this plan: ${live}."

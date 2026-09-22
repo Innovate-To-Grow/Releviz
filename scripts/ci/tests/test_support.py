@@ -1345,6 +1345,28 @@ class ProductionReleaseWorkflowTests(TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text((repository / relative).read_text(encoding="utf-8"), encoding="utf-8")
 
+    def test_live_not_found_detection_preserves_rewrites_and_checks_legacy_redirects(self):
+        repository = Path(__file__).resolve().parents[3]
+        for surface in ("backend", "frontend"):
+            source = (repository / f".github/workflows/release-{surface}.yml").read_text()
+            query_line = next(line for line in source.splitlines() if "jq -r 'any(.[]?;" in line)
+            query = query_line.split("jq -r '", 1)[1].rsplit("'", 1)[0]
+            for status, target, expected in (
+                ("404-200", "/404.html", "true"),
+                ("404", "/404.html", "true"),
+                ("200", "/404.html", "false"),
+                ("404-200", "/index.html", "false"),
+            ):
+                with self.subTest(surface=surface, status=status, target=target):
+                    result = subprocess.run(
+                        ["jq", "-r", query],
+                        input=json.dumps([{"source": "/<*>", "target": target, "status": status}]),
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                    )
+                    self.assertEqual(result.stdout.strip(), expected)
+
     def test_repository_release_workflows_satisfy_contract(self):
         paths = production_release_paths()
         self.assertEqual(
