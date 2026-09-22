@@ -8,9 +8,9 @@ test.describe("automated accessibility baseline", () => {
   test("public entry pages meet WCAG A/AA checks at 320px", async ({ page }) => {
     for (const [path, heading] of [
       ["/", "Find a time that works for everyone."],
-      // Both entry points render the same passwordless panel.
-      ["/login", "Continue with email"],
-      ["/signup", "Continue with email"],
+      // Both entry points render the same sign-in panel in email-code mode.
+      ["/login", "Welcome to Releviz"],
+      ["/signup", "Welcome to Releviz"],
       ["/recover", "Recover your account"],
       ["/privacy", "Privacy notice"],
       ["/terms", "Terms of service"],

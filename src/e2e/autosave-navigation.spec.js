@@ -8,6 +8,9 @@ const tempAccessSession = {
     status: "active",
     timezone: "UTC",
     responseDeadline: "2099-01-01T00:00:00Z",
+    // The product default: everyone starts Available and the editor
+    // pre-selects the Busy brush, so "Apply to all" below paints zeros.
+    startingAvailability: "available",
     slotCount: 2,
     slotGroups: [
       {
@@ -31,8 +34,8 @@ const tempAccessSession = {
   participant: {
     id: "temporary-participant",
     name: "Temporary Participant",
-    availabilityInperson: [0, 0],
-    availabilityVirtual: [0, 0],
+    availabilityInperson: [1, 1],
+    availabilityVirtual: [1, 1],
     submitted: false,
     version: 1,
   },
@@ -90,7 +93,7 @@ test("Back waits for a held autosave across a document-history boundary", async 
   await expect(page).toHaveURL(/\/temp-access\?code=ABC123$/);
   expect(savedPayload).toEqual(
     expect.objectContaining({
-      availabilityInperson: [1, 1],
+      availabilityInperson: [0, 0],
       submitted: 0,
       expectedVersion: 1,
     }),

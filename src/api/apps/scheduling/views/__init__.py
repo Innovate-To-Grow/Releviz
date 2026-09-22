@@ -29,10 +29,13 @@ from .participants import (
 )
 from .roster import (
     RosterBulkView,
+    RosterGroupsView,
+    RosterGroupView,
     RosterImportCollectionView,
     RosterImportCommitView,
     RosterImportDetailView,
     RosterImportRowsView,
+    RosterInvitationsView,
     RosterParticipantScheduleView,
     RosterParticipantView,
     RosterView,
@@ -72,10 +75,13 @@ __all__ = [
     "EventFinalizationView",
     # Roster
     "RosterBulkView",
+    "RosterGroupView",
+    "RosterGroupsView",
     "RosterImportCollectionView",
     "RosterImportCommitView",
     "RosterImportDetailView",
     "RosterImportRowsView",
+    "RosterInvitationsView",
     "RosterParticipantScheduleView",
     "RosterParticipantView",
     "RosterView",

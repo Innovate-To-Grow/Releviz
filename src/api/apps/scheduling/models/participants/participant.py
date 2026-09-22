@@ -6,6 +6,7 @@ from django.db import models
 from apps.core.models import TimestampedModel
 
 from ..events.event import Event
+from .group import ParticipantGroup
 
 
 class Participant(TimestampedModel):
@@ -16,6 +17,12 @@ class Participant(TimestampedModel):
         related_name="schedule_participations",
     )
     participant_name = models.CharField(max_length=100)
+    # Display-only contact details. ``contact_email`` is set for organizer-managed
+    # people, whose address belongs to the organizer and never becomes an identity;
+    # ``contact_phone`` is free text and is never used for delivery or login.
+    contact_email = models.EmailField(blank=True, default="")
+    contact_phone = models.CharField(max_length=32, blank=True, default="")
+    organizer_managed = models.BooleanField(default=False, db_index=True)
     availability_inperson = models.JSONField(default=list)
     availability_virtual = models.JSONField(default=list)
     submitted = models.BooleanField(default=False)
@@ -23,7 +30,9 @@ class Participant(TimestampedModel):
     first_submitted_at = models.DateTimeField(null=True, blank=True)
     last_submitted_at = models.DateTimeField(null=True, blank=True)
     hidden = models.BooleanField(default=False)
-    group_name = models.CharField(max_length=100, null=True, blank=True)
+    groups = models.ManyToManyField(ParticipantGroup, related_name="participants", blank=True)
+    # Membership in every group the event has now or gains later.
+    all_groups = models.BooleanField(default=False)
     sort_order = models.IntegerField(null=True, blank=True)
     version = models.PositiveBigIntegerField(default=1)
 

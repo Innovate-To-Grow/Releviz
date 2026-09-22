@@ -5,6 +5,7 @@
     "edit",
     "email-auth-link",
     "event",
+    "impersonate-login",
     "login",
     "privacy",
     "recover",

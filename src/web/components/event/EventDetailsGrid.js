@@ -8,6 +8,10 @@ import {
   GroupIcon,
   LockIcon,
 } from "@/components/ui/icons";
+import {
+  availabilityLabel,
+  startingAvailabilityValue,
+} from "@/components/ui/Availability";
 import { DAY_LABELS } from "@/lib/constants";
 import { formatDateTimeInTimezone, formatMode, formatTime } from "@/lib/format";
 
@@ -48,6 +52,16 @@ function DetailItem({ label, value }) {
   );
 }
 
+// `blockedSlots` is the API's `{ [groupKey]: [row, ...] }` map; anything else
+// (missing, malformed, non-array groups) counts as no blocked slots.
+function blockedSlotCount(blockedSlots) {
+  if (!blockedSlots || typeof blockedSlots !== "object") return 0;
+  return Object.values(blockedSlots).reduce(
+    (total, rows) => total + (Array.isArray(rows) ? rows.length : 0),
+    0,
+  );
+}
+
 function OrganizerEventDetails({ event, extraCards }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const detailsId = useId();
@@ -65,6 +79,10 @@ function OrganizerEventDetails({ event, extraCards }) {
   const timeWindow = `${formatTime(event?.startTime)} - ${formatTime(
     event?.endTime,
   )}${event?.crossesMidnight ? " (next day)" : ""}`;
+  const blockedCount = blockedSlotCount(event?.blockedSlots);
+  const scheduleSecondary = `${timeWindow} · ${event?.timezone || "UTC"}${
+    blockedCount > 0 ? ` · ${blockedCount} slots blocked` : ""
+  }`;
   const responseDeadline = event?.responseDeadline
     ? formatDateTimeInTimezone(event.responseDeadline, event?.timezone, {
         timeZoneName: "short",
@@ -105,7 +123,7 @@ function OrganizerEventDetails({ event, extraCards }) {
           icon={ClockIcon}
           label="Schedule"
           primary={dayText || "Days not set"}
-          secondary={`${timeWindow} · ${event?.timezone || "UTC"}`}
+          secondary={scheduleSecondary}
         />
         <SummaryItem
           icon={GroupIcon}
@@ -159,6 +177,10 @@ function OrganizerEventDetails({ event, extraCards }) {
             <DetailItem
               label="Availability interval"
               value={`${event?.slotMinutes || 30} minutes`}
+            />
+            <DetailItem
+              label="Participants start as"
+              value={availabilityLabel(startingAvailabilityValue(event))}
             />
             <DetailItem label="Event code" value={event?.code} />
             <DetailItem label="Status" value={status} />

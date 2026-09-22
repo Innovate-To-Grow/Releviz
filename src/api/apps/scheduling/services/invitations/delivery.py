@@ -12,7 +12,7 @@ from apps.scheduling.models import Event, EventInvitation, Participant
 from apps.scheduling.services.events.lifecycle import response_write_error
 from apps.scheduling.services.fingerprints import email_content_fingerprint, payload_fingerprint
 
-from .addresses import resolve_invited_member
+from .addresses import normalize_phone, resolve_invited_member
 from .errors import EventEmailRequestError
 from .managed import create_or_reuse_managed_participant
 from .messages import event_email_parts
@@ -92,6 +92,7 @@ def upsert_and_send_invitations(
     message: str = "",
     hydrate_result: bool = True,
     request_fingerprint: str | None = None,
+    keep_existing_message: bool = False,
 ) -> dict:
     event = Event.objects.select_for_update().get(pk=event.pk)
     if event.organizer_id != invited_by.pk:
@@ -197,14 +198,13 @@ def upsert_and_send_invitations(
             and existing_invitation.member_id in participant_member_ids
         ):
             member = existing_invitation.member
+        defaults = {"member": member, "invited_by": invited_by}
+        if not keep_existing_message:
+            defaults["custom_message"] = message
         invitation, _ = EventInvitation.objects.update_or_create(
             event=event,
             email=email,
-            defaults={
-                "member": member,
-                "invited_by": invited_by,
-                "custom_message": message,
-            },
+            defaults=defaults,
         )
         job, created = _enqueue_invitation_job(
             invitation,
@@ -249,20 +249,30 @@ def create_or_reuse_managed_participant_and_send(
     name: str,
     email: str,
     idempotency_key,
+    phone: str = "",
+    organizer_managed: bool = False,
 ) -> dict:
     """Create/restore one roster person and atomically queue their invitation.
 
     A participant that is already visible is a no-op for a new idempotency key.
     Replaying the original key still returns the original delivery request.
+    An organizer-managed person never receives email, so their request only
+    records the key.
     """
 
+    # Serialize on the event so a double-submitted key sees the receipt its
+    # twin wrote instead of colliding on one_email_delivery_request_per_key.
+    event = Event.objects.select_for_update().get(pk=event.pk)
     normalized_name = str(name or "").strip()
     normalized_email = str(email or "").strip().lower()
+    normalized_phone = normalize_phone(phone)
     managed_fingerprint = payload_fingerprint(
         {
             "operation": "managed_participant",
             "name": normalized_name,
             "email": normalized_email,
+            "phone": normalized_phone,
+            "organizerManaged": organizer_managed,
         }
     )
     previous = EmailDeliveryRequest.objects.filter(
@@ -281,9 +291,14 @@ def create_or_reuse_managed_participant_and_send(
         organizer=organizer,
         name=normalized_name,
         email=normalized_email,
+        phone=normalized_phone,
+        organizer_managed=organizer_managed,
     )
     previous_exists = previous is not None
-    should_send = result["participantCreated"] or result["participantRestored"] or previous_exists
+    # Organizer-managed people never receive email; their receipt only records the key.
+    should_send = not organizer_managed and (
+        result["participantCreated"] or result["participantRestored"] or previous_exists
+    )
     delivery_result = None
     if should_send:
         delivery_result = upsert_and_send_invitations(
@@ -293,6 +308,8 @@ def create_or_reuse_managed_participant_and_send(
             idempotency_key=idempotency_key,
             request_fingerprint=managed_fingerprint,
         )
+    elif previous_exists:
+        delivery_result = _request_result(previous, event=event, idempotent=True, hydrate=True)
     else:
         request_record = EmailDeliveryRequest.objects.create(
             event=event,
@@ -311,6 +328,144 @@ def create_or_reuse_managed_participant_and_send(
         )
     result["deliveryResult"] = delivery_result
     return result
+
+
+@transaction.atomic
+def send_roster_invitations(
+    *,
+    event: Event,
+    organizer,
+    participant_ids,
+    resend: bool,
+    idempotency_key,
+) -> dict:
+    """Queue invitations for the checked roster people.
+
+    People whose invitation was already sent (or is still in flight) are
+    skipped unless ``resend`` is set. Failed deliveries that never reached the
+    recipient do not count as sent, so a plain send re-queues them.
+    """
+
+    # Imported lazily: the roster views import this package.
+    from apps.scheduling.views.roster.helpers import participant_identity_query
+    from apps.scheduling.views.roster.queries import roster_queryset
+
+    event = Event.objects.select_for_update().get(pk=event.pk)
+    if event.organizer_id != organizer.pk:
+        raise EventEmailRequestError(
+            "Only the organizer can manage invitations.",
+            status_code=403,
+        )
+    write_error = response_write_error(event)
+    if write_error:
+        raise EventEmailRequestError(write_error, status_code=409)
+    maximum = settings.ROSTER_IMPORT_MAX_ROWS
+    if len(participant_ids) > maximum:
+        raise EventEmailRequestError(f"participantIds may contain at most {maximum} entries.")
+
+    fingerprint = payload_fingerprint(
+        {
+            "operation": "roster_invitations",
+            "participantIds": sorted(str(value) for value in participant_ids),
+            "resend": bool(resend),
+        }
+    )
+    matched = roster_queryset(event).filter(participant_identity_query(participant_ids))
+    previous = EmailDeliveryRequest.objects.filter(
+        event=event,
+        operation=EmailDeliveryRequest.Operation.INVITATION,
+        idempotency_key=idempotency_key,
+    ).first()
+    if previous is not None:
+        if previous.request_fingerprint != fingerprint:
+            security_logger.warning(
+                "event_email_idempotency_conflict",
+                extra={
+                    "event_id": str(event.pk),
+                    "operation": EmailDeliveryRequest.Operation.INVITATION,
+                    "requested_by": str(organizer.pk),
+                },
+            )
+            raise EventEmailRequestError(
+                "This idempotency key was already used with different invitation details.",
+                status_code=409,
+            )
+        requested_count = matched.count()
+        queued_count = previous.recipient_count
+        return {
+            "deliveryResult": _request_result(previous, event=event, idempotent=True),
+            "requestedCount": requested_count,
+            "queuedCount": queued_count,
+            "skippedCount": max(requested_count - queued_count, 0),
+        }
+
+    participants = list(matched.order_by("pk"))
+    latest_invitations = {}
+    for invitation in EventInvitation.objects.filter(
+        event=event,
+        member_id__in=[participant.member_id for participant in participants],
+    ).order_by("-created_at"):
+        latest_invitations.setdefault(invitation.member_id, invitation)
+    in_flight_invitation_ids = set(
+        EmailDeliveryJob.objects.filter(
+            invitation_id__in=[invitation.pk for invitation in latest_invitations.values()],
+            message_type=EmailMessageLog.MessageType.INVITATION,
+            status__in=[
+                EmailDeliveryJob.Status.PENDING,
+                EmailDeliveryJob.Status.PROCESSING,
+                EmailDeliveryJob.Status.RETRY,
+            ],
+        ).values_list("invitation_id", flat=True)
+    )
+
+    emails = []
+    for participant in participants:
+        invitation = latest_invitations.get(participant.member_id)
+        if invitation is not None:
+            email = invitation.email
+            already_sent = (
+                invitation.first_sent_at is not None or invitation.pk in in_flight_invitation_ids
+            )
+        else:
+            email = participant.member.get_primary_email().strip().lower()
+            already_sent = False
+        if not email or (already_sent and not resend):
+            continue
+        emails.append(email)
+
+    if emails:
+        delivery_result = upsert_and_send_invitations(
+            event=event,
+            emails=emails,
+            invited_by=organizer,
+            idempotency_key=idempotency_key,
+            keep_existing_message=True,
+            request_fingerprint=fingerprint,
+        )
+    else:
+        request_record = EmailDeliveryRequest.objects.create(
+            event=event,
+            requested_by=organizer,
+            operation=EmailDeliveryRequest.Operation.INVITATION,
+            idempotency_key=idempotency_key,
+            request_fingerprint=fingerprint,
+            recipient_count=0,
+            created_job_count=0,
+        )
+        delivery_result = _request_result(
+            request_record,
+            event=event,
+            idempotent=False,
+            hydrate=True,
+        )
+    requested_count = len(participants)
+    queued_count = delivery_result["request"].recipient_count
+    return {
+        "deliveryResult": delivery_result,
+        "requestedCount": requested_count,
+        "queuedCount": queued_count,
+        "skippedCount": requested_count - queued_count,
+    }
 
 
 @transaction.atomic

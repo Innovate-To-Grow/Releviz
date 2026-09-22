@@ -1,0 +1,90 @@
+name: Release scope
+description: >-
+  Decide whether a release workflow has anything to release: compares the
+  release commit with the workflow's last successful release on main and
+  reports whether any of the workflow's paths changed. Manual dispatch always
+  releases; workflow changes themselves are exercised that way. Runs without cloud credentials so an unaffected workflow finishes
+  in seconds and never asks for approval.
+
+inputs:
+  workflow-file:
+    description: File name of the calling workflow (for example release-backend.yml)
+    required: true
+  paths:
+    description: Newline-separated git pathspecs that this workflow releases
+    required: true
+  release-sha:
+    description: The release commit
+    required: true
+  trigger-event:
+    description: github.event_name of the calling run
+    required: true
+
+outputs:
+  release:
+    description: "true when the workflow should release, otherwise false"
+    value: ${{ steps.scope.outputs.release }}
+  base:
+    description: The last successfully released commit, when one exists
+    value: ${{ steps.scope.outputs.base }}
+
+runs:
+  using: composite
+  steps:
+    - name: Compare the release commit with the last successful release
+      id: scope
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        WORKFLOW_FILE: ${{ inputs.workflow-file }}
+        RELEASE_PATHS: ${{ inputs.paths }}
+        RELEASE_SHA: ${{ inputs.release-sha }}
+        TRIGGER_EVENT: ${{ inputs.trigger-event }}
+      run: |
+        set -euo pipefail
+        if ! [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "::error::The release is not an immutable Git commit SHA."
+          exit 1
+        fi
+        if [ "$TRIGGER_EVENT" = "workflow_dispatch" ]; then
+          echo "release=true" >>"$GITHUB_OUTPUT"
+          echo "base=" >>"$GITHUB_OUTPUT"
+          echo "::notice::Manual dispatch releases ${RELEASE_SHA} unconditionally."
+          exit 0
+        fi
+        last_success() {
+          gh api \
+            -H 'Accept: application/vnd.github+json' \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/$1/runs?branch=main&status=success&per_page=1" \
+            --jq '.workflow_runs[0].head_sha // ""' 2>/dev/null || true
+        }
+        base="$(last_success "$WORKFLOW_FILE")"
+        if [ -z "$base" ]; then
+          # Before the split, one workflow released everything; its last
+          # success is the base until this workflow has released once.
+          base="$(last_success deploy-prod.yml)"
+        fi
+        echo "base=${base}" >>"$GITHUB_OUTPUT"
+        if [ -z "$base" ]; then
+          echo "release=true" >>"$GITHUB_OUTPUT"
+          echo "::notice::No successful release exists yet; releasing ${RELEASE_SHA}."
+          exit 0
+        fi
+        if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+          echo "release=true" >>"$GITHUB_OUTPUT"
+          echo "::notice::The last released commit ${base} is not in this history; releasing ${RELEASE_SHA}."
+          exit 0
+        fi
+        mapfile -t pathspecs < <(printf '%s\n' "$RELEASE_PATHS" | sed '/^[[:space:]]*$/d')
+        changed="$(git diff --name-only "$base" "$RELEASE_SHA" -- "${pathspecs[@]}")"
+        if [ -n "$changed" ]; then
+          echo "release=true" >>"$GITHUB_OUTPUT"
+          {
+            echo "Releasing ${RELEASE_SHA}: changes since ${base}"
+            printf '  %s\n' $changed
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+        else
+          echo "release=false" >>"$GITHUB_OUTPUT"
+          echo "Nothing to release: no changes in this workflow's paths between ${base} and ${RELEASE_SHA}." |
+            tee -a "$GITHUB_STEP_SUMMARY"
+        fi

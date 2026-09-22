@@ -811,6 +811,65 @@ class FinalizationDomainTests(TestCase):
         fallback_jobs = cancel_active_final_meeting(fallback_event)
         self.assertEqual(fallback_jobs, [])
 
+    def test_final_time_cannot_overlap_a_blocked_slot(self):
+        message = "The confirmed meeting overlaps a blocked slot."
+        self.event.blocked_slots = {"date:2026-07-20": [1]}
+        self.event.save(update_fields=["blocked_slots"])
+        with self.assertRaisesMessage(FinalizationError, message):
+            self.normalized()
+        with self.assertRaisesMessage(FinalizationError, message):
+            confirm_final_meeting(
+                event_code=self.event.code,
+                organizer=self.organizer,
+                expected_version=self.event.version,
+                idempotency_key=uuid.uuid4(),
+                starts_at=datetime(2026, 7, 20, 16, tzinfo=UTC),
+                ends_at=datetime(2026, 7, 20, 18, tzinfo=UTC),
+                channel="inperson",
+                location="",
+            )
+        self.assertFalse(FinalMeeting.objects.filter(event=self.event).exists())
+        later_that_day = self.normalized(start_hour=10, end_hour=12)
+        self.assertEqual(later_that_day["slot_indices"], [2, 3, 4, 5])
+        next_day = normalize_final_time(
+            self.event,
+            starts_at=datetime(2026, 7, 21, 16, tzinfo=UTC),
+            ends_at=datetime(2026, 7, 21, 18, tzinfo=UTC),
+            channel="inperson",
+            location="",
+        )
+        self.assertEqual(next_day["slot_indices"], [6, 7, 8, 9])
+
+        weekly = Event.objects.create(
+            code="WEEKBLOCK",
+            name="Weekly blocked",
+            organizer=self.organizer,
+            mode="virtual",
+            timezone="UTC",
+            days=[1],
+            start_minutes=9 * 60,
+            end_minutes=11 * 60,
+            slot_minutes=30,
+            meeting_duration_minutes=60,
+            blocked_slots={"weekday:1": [3]},
+        )
+        open_window = normalize_final_time(
+            weekly,
+            starts_at=datetime(2026, 7, 20, 9, tzinfo=UTC),
+            ends_at=datetime(2026, 7, 20, 10, tzinfo=UTC),
+            channel="virtual",
+            location="",
+        )
+        self.assertEqual(open_window["slot_indices"], [0, 1])
+        with self.assertRaisesMessage(FinalizationError, message):
+            normalize_final_time(
+                weekly,
+                starts_at=datetime(2026, 7, 20, 10, tzinfo=UTC),
+                ends_at=datetime(2026, 7, 20, 11, tzinfo=UTC),
+                channel="virtual",
+                location="",
+            )
+
     @override_settings(FRONTEND_URL="https://app.example.com")
     def test_calendar_content_is_stable_and_timezone_explicit(self):
         normalized = self.normalized()

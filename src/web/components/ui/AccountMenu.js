@@ -15,9 +15,7 @@ import {
 } from "@/components/ui/icons";
 import { flushPendingNavigationWork } from "@/components/schedule/useAutosaveNavigationGuard";
 
-export default function AccountMenu({
-  signedOutLabel = "Continue with email",
-}) {
+export default function AccountMenu({ signedOutLabel = "Sign in" }) {
   const { user, loading, logout } = useAuth();
   const [open, setOpen] = useState(false);
   const [logoutError, setLogoutError] = useState("");
