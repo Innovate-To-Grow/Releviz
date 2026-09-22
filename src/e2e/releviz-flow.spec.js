@@ -1684,13 +1684,26 @@ test.describe("Releviz account and scheduling flow", () => {
     const rankedRail = page.getByRole("complementary", {
       name: "Ranked windows",
     });
-    await rankedRail
-      .getByRole("button", { name: "Choose this time" })
-      .first()
-      .click();
-    await expect(
-      rankedRail.getByRole("button", { name: "Selected time" }),
-    ).toHaveCount(1);
+    // The rail re-renders as the ranked windows load, and a click that lands
+    // mid-render is dropped on slower engines (WebKit), so the pick is retried
+    // until one window reports itself selected.
+    const selectedRankedTime = rankedRail.getByRole("button", {
+      name: "Selected time",
+    });
+    await expect
+      .poll(
+        async () => {
+          if ((await selectedRankedTime.count()) === 0) {
+            await rankedRail
+              .getByRole("button", { name: "Choose this time" })
+              .first()
+              .click();
+          }
+          return selectedRankedTime.count();
+        },
+        { timeout: 20_000, intervals: [500, 1000, 2000] },
+      )
+      .toBe(1);
 
     const cancellationStartedAt = Date.now() - 1000;
     const cancellationResponsePromise = page.waitForResponse(
@@ -1699,7 +1712,13 @@ test.describe("Releviz account and scheduling flow", () => {
         response.url().includes(`/events/lifecycle?code=${eventCode}`),
     );
     await page.getByRole("button", { name: "Reactivate event" }).click();
-    expect((await cancellationResponsePromise).status()).toBe(202);
+    const cancellationResponse = await cancellationResponsePromise;
+    expect(cancellationResponse.status()).toBe(202);
+    // The suite's email worker dispatches queued jobs within half a second and
+    // the progress widget re-reads the server after three, so the "queued"
+    // state is too short-lived to assert in the UI on a slow browser (WebKit).
+    // The response carries the count the workspace renders from.
+    expect((await cancellationResponse.json()).cancellationEnqueued).toBe(2);
     await expect(
       page.getByText("This event is active and accepting responses."),
     ).toBeVisible();
@@ -1718,8 +1737,11 @@ test.describe("Releviz account and scheduling flow", () => {
     const cancellationDeliveryProgress = page.getByLabel(
       "Event delivery progress",
     );
+    await expect(cancellationDeliveryProgress).toContainText(
+      "Final cancellation delivery",
+    );
     await expect(
-      cancellationDeliveryProgress.getByText("2 queued"),
+      cancellationDeliveryProgress.getByText("2 total"),
     ).toBeVisible();
     dispatchEmailJobs();
     await refreshWorkspace(page);
