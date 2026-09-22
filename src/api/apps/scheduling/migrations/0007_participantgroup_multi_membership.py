@@ -56,7 +56,7 @@ def copy_group_names_to_memberships(apps, schema_editor):
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("scheduling", "0003_alter_rosterimportreceipt_batch"),
+        ("scheduling", "0006_event_blocked_slots"),
     ]
 
     operations = [

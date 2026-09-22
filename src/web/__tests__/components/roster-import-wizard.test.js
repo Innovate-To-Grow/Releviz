@@ -905,3 +905,126 @@ test("flags rows bound to blocked accounts and lets them be deselected", async (
     ),
   );
 });
+
+test("maps a phone column, shows it in the review table, and saves phone edits", async () => {
+  const record = {
+    id: "import-8",
+    worksheets: [
+      {
+        name: "Pasted data",
+        rowCount: 2,
+        defaultHeaderRow: 1,
+        headers: ["Full Name", "E-mail", "Team", "Mobile"],
+      },
+    ],
+    selectedWorksheet: "Pasted data",
+    headerRow: 1,
+    headers: ["Full Name", "E-mail", "Team", "Mobile"],
+    columnMapping: {},
+    defaults: { group: "", weight: 1, included: true },
+    summary: { total: 2, selected: 2, valid: 2, invalid: 0, conflicts: 0 },
+  };
+  const rows = [
+    {
+      id: "row-9",
+      rowNumber: 2,
+      name: "Ada",
+      email: "ada@example.com",
+      group: "Faculty",
+      phone: "+1 (555) 010-2000",
+      weight: 1,
+      included: true,
+      selected: true,
+      valid: true,
+      duplicate: "unique",
+      errors: [],
+    },
+    {
+      id: "row-10",
+      rowNumber: 3,
+      name: "Grace",
+      email: "grace@example.com",
+      group: "",
+      phone: "",
+      weight: 1,
+      included: true,
+      selected: true,
+      valid: true,
+      duplicate: "unique",
+      errors: [],
+    },
+  ];
+  createRosterImport.mockResolvedValue({ import: record });
+  configureRosterImport.mockResolvedValue({ import: record });
+  fetchRosterImportRows.mockResolvedValue({
+    import: record,
+    rows,
+    pagination: { page: 1, pageSize: 50, total: 2, pages: 1 },
+  });
+  renderWizard();
+  await userEvent.click(screen.getByRole("tab", { name: "Paste spreadsheet" }));
+  fireEvent.change(screen.getByLabelText("Pasted roster rows"), {
+    target: {
+      value:
+        "Full Name\tE-mail\tTeam\tMobile\nAda\tada@example.com\tFaculty\t+1 (555) 010-2000\nGrace\tgrace@example.com\t\t",
+    },
+  });
+  await userEvent.click(
+    screen.getByRole("button", { name: "Continue to mapping" }),
+  );
+
+  // Phone is optional (no asterisk, "Use default" placeholder) and the
+  // "Mobile" header is suggested for it.
+  const phoneSelect = await screen.findByLabelText("Phone");
+  expect(screen.queryByLabelText("Phone *")).not.toBeInTheDocument();
+  expect(within(phoneSelect).getAllByRole("option")[0]).toHaveTextContent(
+    "Use default",
+  );
+  expect(phoneSelect).toHaveValue("3");
+
+  await userEvent.click(screen.getByRole("button", { name: "Preview rows" }));
+  await waitFor(() =>
+    expect(configureRosterImport).toHaveBeenCalledWith(
+      event.code,
+      "import-8",
+      {
+        worksheet: "Pasted data",
+        headerRow: 1,
+        columnMapping: { name: "0", email: "1", group: "2", phone: "3" },
+        defaults: { group: "", weight: 1, included: true },
+      },
+      "token",
+    ),
+  );
+  await screen.findByDisplayValue("ada@example.com");
+
+  const region = screen.getByRole("region", {
+    name: "Imported rows awaiting review",
+  });
+  expect(
+    within(region).getByRole("columnheader", { name: "Phone" }),
+  ).toBeInTheDocument();
+  expect(screen.getByLabelText("Phone for row 2")).toHaveValue(
+    "+1 (555) 010-2000",
+  );
+  expect(screen.getByLabelText("Phone for row 3")).toHaveValue("");
+
+  const gracePhone = screen.getByLabelText("Phone for row 3");
+  fireEvent.change(gracePhone, { target: { value: "555 010 3000" } });
+  fireEvent.blur(gracePhone);
+  await waitFor(() =>
+    expect(configureRosterImport).toHaveBeenLastCalledWith(
+      event.code,
+      "import-8",
+      { rowUpdates: [{ id: "row-10", phone: "555 010 3000" }] },
+      "token",
+    ),
+  );
+
+  // An unchanged phone is not sent.
+  const adaPhone = screen.getByLabelText("Phone for row 2");
+  const callsBefore = configureRosterImport.mock.calls.length;
+  fireEvent.change(adaPhone, { target: { value: "+1 (555) 010-2000" } });
+  fireEvent.blur(adaPhone);
+  expect(configureRosterImport.mock.calls.length).toBe(callsBefore);
+});

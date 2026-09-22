@@ -8,6 +8,10 @@ import {
   GroupIcon,
   LockIcon,
 } from "@/components/ui/icons";
+import {
+  availabilityLabel,
+  startingAvailabilityValue,
+} from "@/components/ui/Availability";
 import { DAY_LABELS } from "@/lib/constants";
 import { formatDateTimeInTimezone, formatMode, formatTime } from "@/lib/format";
 
@@ -173,6 +177,10 @@ function OrganizerEventDetails({ event, extraCards }) {
             <DetailItem
               label="Availability interval"
               value={`${event?.slotMinutes || 30} minutes`}
+            />
+            <DetailItem
+              label="Participants start as"
+              value={availabilityLabel(startingAvailabilityValue(event))}
             />
             <DetailItem label="Event code" value={event?.code} />
             <DetailItem label="Status" value={status} />

@@ -49,24 +49,29 @@ def api_participant(
         return data
 
     member = participant.member
-    member_email = str(member.email or "").strip().lower()
-    if not member_email:
-        member_email = member.get_primary_email().strip().lower()
-    if invitation is _INVITATION_NOT_PROVIDED:
-        invitation = (
-            participant.event.invitations.filter(member_id=participant.member_id)
-            .order_by("-created_at")
-            .first()
-        )
-        if invitation is None:
-            if member_email:
-                invitation = participant.event.invitations.filter(
-                    email__iexact=member_email,
-                ).first()
+    if participant.organizer_managed:
+        # The shared address belongs to the organizer and never carries an invitation.
+        invitation = None
+        private_email = participant.contact_email
+    else:
+        member_email = str(member.email or "").strip().lower()
+        if not member_email:
+            member_email = member.get_primary_email().strip().lower()
+        if invitation is _INVITATION_NOT_PROVIDED:
+            invitation = (
+                participant.event.invitations.filter(member_id=participant.member_id)
+                .order_by("-created_at")
+                .first()
+            )
+            if invitation is None:
+                if member_email:
+                    invitation = participant.event.invitations.filter(
+                        email__iexact=member_email,
+                    ).first()
 
-    private_email = (
-        str(invitation.email or "").strip().lower() if invitation is not None else member_email
-    )
+        private_email = (
+            str(invitation.email or "").strip().lower() if invitation is not None else member_email
+        )
 
     account_access = getattr(member, "access_level", "full")
     if invitation is None or invitation.first_sent_at is None:
@@ -83,7 +88,9 @@ def api_participant(
     data.update(
         {
             "accountAccess": account_access,
+            "organizerManaged": participant.organizer_managed,
             "email": private_email,
+            "phone": participant.contact_phone,
             "invitationStatus": invitation_status,
             "canOrganizerEditAvailability": account_access == "temporary",
         }

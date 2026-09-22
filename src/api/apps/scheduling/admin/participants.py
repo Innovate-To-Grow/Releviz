@@ -35,7 +35,7 @@ class ParticipantAdmin(ModelAdmin):
         "all_groups",
         "sort_order",
     )
-    list_filter = ("submitted", "hidden", "all_groups")
+    list_filter = ("submitted", "hidden", "all_groups", "organizer_managed")
     search_fields = (
         "participant_name",
         "event__code",

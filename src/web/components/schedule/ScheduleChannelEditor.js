@@ -29,9 +29,9 @@ function schedulesMatch(first = [], second = [], blocked = new Set()) {
   );
 }
 
-function hasAvailability(schedule = [], blocked = new Set()) {
+function isPainted(schedule = [], startingValue, blocked = new Set()) {
   return schedule.some(
-    (value, index) => !blocked.has(index) && Number(value) > 0,
+    (value, index) => !blocked.has(index) && Number(value) !== startingValue,
   );
 }
 
@@ -40,7 +40,8 @@ function hasAvailability(schedule = [], blocked = new Set()) {
  *
  * Mixed events keep independent In-person and Virtual schedules behind an
  * accessible tablist. Copying one channel over another asks for confirmation
- * whenever the target already contains availability.
+ * whenever the target was painted, i.e. no longer matches the starting level
+ * every slot began at (`startingValue`, 0 for a Busy start).
  */
 export default function ScheduleChannelEditor({
   mode,
@@ -49,6 +50,7 @@ export default function ScheduleChannelEditor({
   virtual,
   readOnly,
   showValues = false,
+  startingValue = 0,
   onInpersonPaint,
   onVirtualPaint,
   onCopy,
@@ -81,7 +83,7 @@ export default function ScheduleChannelEditor({
 
   const requestCopy = () => {
     if (schedulesMatch(schedule, targetSchedule, blockedIndices)) return;
-    if (hasAvailability(targetSchedule, blockedIndices)) {
+    if (isPainted(targetSchedule, startingValue, blockedIndices)) {
       setPendingCopy({ source: channel, target: otherChannel });
       return;
     }

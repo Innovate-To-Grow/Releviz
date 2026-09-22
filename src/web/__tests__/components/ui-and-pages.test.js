@@ -29,6 +29,8 @@ import {
   AvailabilitySwatch,
   availabilityKey,
   availabilityLabel,
+  startingAvailabilityValue,
+  startingBrushValue,
 } from "@/components/ui/Availability";
 import { DAY_LABELS, DAYS_PER_WEEK } from "@/lib/constants";
 import { formatHour, formatMode, formatTime } from "@/lib/format";
@@ -1069,6 +1071,39 @@ describe("small UI modules", () => {
     expect(screen.getByText("In-Person · 30 minutes")).toBeInTheDocument();
     expect(screen.getByText("Invite only")).toBeInTheDocument();
   });
+
+  test("EventDetailsGrid organizer details show how participants start", () => {
+    const { rerender } = render(
+      <EventDetailsGrid
+        variant="organizer"
+        event={{
+          code: "ORG1",
+          slotMinutes: 30,
+          status: "active",
+          startingAvailability: "available",
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Show all details" }));
+    expect(
+      screen.getByText("Participants start as").nextElementSibling,
+    ).toHaveTextContent("Available");
+
+    rerender(
+      <EventDetailsGrid
+        variant="organizer"
+        event={{
+          code: "ORG1",
+          slotMinutes: 30,
+          status: "active",
+          startingAvailability: "busy",
+        }}
+      />,
+    );
+    expect(
+      screen.getByText("Participants start as").nextElementSibling,
+    ).toHaveTextContent("Busy");
+  });
 });
 
 describe("role-aware headers", () => {
@@ -1244,6 +1279,19 @@ describe("role-aware headers", () => {
     expect(AVAILABILITY_CHOICES.map((choice) => choice.value)).toEqual([
       0, 0.5, 1,
     ]);
+
+    // Slots start at the organizer's chosen level and the brush pre-selects
+    // the opposite. A payload without the setting comes from an API that
+    // still seeds every schedule Busy, so it reads as a Busy start.
+    expect(startingAvailabilityValue(undefined)).toBe(0);
+    expect(startingAvailabilityValue({})).toBe(0);
+    expect(
+      startingAvailabilityValue({ startingAvailability: "available" }),
+    ).toBe(1);
+    expect(startingAvailabilityValue({ startingAvailability: "busy" })).toBe(0);
+    expect(startingBrushValue(undefined)).toBe(1);
+    expect(startingBrushValue({ startingAvailability: "available" })).toBe(0);
+    expect(startingBrushValue({ startingAvailability: "busy" })).toBe(1);
 
     const { container, rerender } = render(
       <AvailabilitySwatch level="free" virtual />,
@@ -1485,9 +1533,10 @@ describe("role-aware headers", () => {
 
     useAuth.mockReturnValue({ user: null, loading: false, logout: jest.fn() });
     render(<AppHeader pageTitle="My Dashboard" />);
-    expect(
-      screen.getByRole("link", { name: "Continue with email" }),
-    ).toHaveAttribute("href", "/login");
+    expect(screen.getByRole("link", { name: "Sign in" })).toHaveAttribute(
+      "href",
+      "/login",
+    );
   });
 });
 
@@ -1689,16 +1738,12 @@ describe("app pages", () => {
     searchParams = new URLSearchParams("next=//evil.example");
     const firstLogin = render(<LoginPage />);
     await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
-    await userEvent.click(
-      screen.getByRole("button", { name: "Continue with email" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     await userEvent.type(
-      await screen.findByLabelText("Verification code"),
+      await screen.findByLabelText("Verification Code"),
       "123456",
     );
-    await userEvent.click(
-      screen.getByRole("button", { name: "Verify and continue" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/dashboard"));
     expect(verifyEmailAuthCode).toHaveBeenCalledWith({
       email: "ada@example.com",
@@ -1709,9 +1754,7 @@ describe("app pages", () => {
     requestEmailAuthCode.mockRejectedValueOnce(new Error("No code"));
     render(<LoginPage />);
     await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
-    await userEvent.click(
-      screen.getByRole("button", { name: "Continue with email" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     expect(await screen.findByText("No code")).toBeInTheDocument();
   });
 
@@ -1750,32 +1793,24 @@ describe("app pages", () => {
     searchParams = new URLSearchParams("next=/event?code=ABC123");
     const firstLogin = render(<LoginPage />);
     await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
-    await userEvent.click(
-      screen.getByRole("button", { name: "Continue with email" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     await userEvent.type(
-      await screen.findByLabelText("Verification code"),
+      await screen.findByLabelText("Verification Code"),
       "123456",
     );
-    await userEvent.click(
-      screen.getByRole("button", { name: "Verify and continue" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     expect(navigateTo).toHaveBeenCalledWith("/event?code=ABC123");
     firstLogin.unmount();
 
     searchParams = new URLSearchParams();
     render(<LoginPage />);
     await userEvent.type(screen.getByLabelText("Email"), "new@example.com");
-    await userEvent.click(
-      screen.getByRole("button", { name: "Continue with email" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     await userEvent.type(
-      await screen.findByLabelText("Verification code"),
+      await screen.findByLabelText("Verification Code"),
       "654321",
     );
-    await userEvent.click(
-      screen.getByRole("button", { name: "Verify and continue" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     await waitFor(() =>
       expect(navigateTo).toHaveBeenCalledWith(
         "/settings?complete_profile=1&next=%2Fdashboard",
@@ -1947,21 +1982,17 @@ describe("app pages", () => {
     expect(screen.queryByLabelText("First name")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Password")).not.toBeInTheDocument();
     await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
-    await userEvent.click(
-      screen.getByRole("button", { name: "Continue with email" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     expect(requestEmailAuthCode).toHaveBeenCalledWith({
       email: "ada@example.com",
       next: "/dashboard",
       source: "login",
     });
     await userEvent.type(
-      await screen.findByLabelText("Verification code"),
+      await screen.findByLabelText("Verification Code"),
       "123456",
     );
-    await userEvent.click(
-      screen.getByRole("button", { name: "Verify and continue" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/dashboard"));
   });
 
@@ -1977,16 +2008,12 @@ describe("app pages", () => {
     render(<SignupPage />);
 
     await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
-    await userEvent.click(
-      screen.getByRole("button", { name: "Continue with email" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     await userEvent.type(
-      await screen.findByLabelText("Verification code"),
+      await screen.findByLabelText("Verification Code"),
       "123456",
     );
-    await userEvent.click(
-      screen.getByRole("button", { name: "Verify and continue" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
 
     await waitFor(() =>
       expect(navigateTo).toHaveBeenCalledWith("/event?code=ABC123"),

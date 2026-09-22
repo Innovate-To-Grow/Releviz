@@ -35,6 +35,7 @@ CONFIGURATION_FIELDS = (
     "reminders_enabled",
     "reminder_hours_before",
     "access_mode",
+    "starting_availability",
     "meeting_duration_minutes",
     "blocked_slots",
 )
@@ -291,6 +292,13 @@ def parse_event_configuration(data, *, existing=None) -> dict:
     if access_mode not in {"invite_only", "open_link"}:
         raise EventManagementError("accessMode must be 'invite_only' or 'open_link'")
 
+    starting_availability = str(
+        _value(data, "startingAvailability", existing, "starting_availability", "available")
+        or "available"
+    )
+    if starting_availability not in {"available", "busy"}:
+        raise EventManagementError("startingAvailability must be 'available' or 'busy'")
+
     meeting_duration_minutes = _value(
         data,
         "meetingDurationMinutes",
@@ -349,6 +357,7 @@ def parse_event_configuration(data, *, existing=None) -> dict:
         "reminders_enabled": reminders_enabled,
         "reminder_hours_before": reminder_hours_before,
         "access_mode": access_mode,
+        "starting_availability": starting_availability,
         "meeting_duration_minutes": meeting_duration_minutes,
         "blocked_slots": blocked_slots,
     }

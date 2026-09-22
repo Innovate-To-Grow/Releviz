@@ -29,6 +29,7 @@ const FIELD_OPTIONS = [
   ["name", "Name", true],
   ["email", "Email", true],
   ["group", "Group", false],
+  ["phone", "Phone", false],
   ["weight", "Weight", false],
   ["included", "Included", false],
 ];
@@ -61,6 +62,7 @@ function suggestedMapping(headers = [], current = {}) {
     name: ["name", "fullname", "participant", "participantname"],
     email: ["email", "emailaddress", "mail"],
     group: ["group", "team", "department", "organization"],
+    phone: ["phone", "phonenumber", "mobile", "cell", "tel", "telephone"],
     weight: ["weight", "priority"],
     included: ["included", "include", "counted"],
   };
@@ -801,6 +803,7 @@ export default function RosterImportWizard({
                     <th scope="col">Name</th>
                     <th scope="col">Email</th>
                     <th scope="col">Group</th>
+                    <th scope="col">Phone</th>
                     <th scope="col">Weight</th>
                     <th scope="col">Included</th>
                     <th scope="col">Validation</th>
@@ -888,6 +891,31 @@ export default function RosterImportWizard({
                                 "group",
                                 event.target.value,
                                 row.group || "",
+                              )
+                            }
+                          />
+                        </td>
+                        <td>
+                          <input
+                            className="form-control form-control-sm"
+                            aria-label={`Phone for row ${row.rowNumber}`}
+                            type="tel"
+                            maxLength={32}
+                            value={rowDraftValue(row, "phone", row.phone || "")}
+                            disabled={busy}
+                            onChange={(event) =>
+                              updateRowDraft(
+                                row.id,
+                                "phone",
+                                event.target.value,
+                              )
+                            }
+                            onBlur={(event) =>
+                              void saveRowDraft(
+                                row,
+                                "phone",
+                                event.target.value,
+                                row.phone || "",
                               )
                             }
                           />

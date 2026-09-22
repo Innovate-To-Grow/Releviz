@@ -27,6 +27,7 @@ from apps.scheduling.services.availability import default_availability
 from apps.scheduling.services.events.lifecycle import response_write_error
 from apps.scheduling.services.invitations.delivery import upsert_and_send_invitations
 from apps.scheduling.services.invitations.errors import EventEmailRequestError
+from apps.scheduling.services.managed_members import delete_organizer_managed_members
 from apps.scheduling.services.roster_groups import assign_memberships, parse_group_cell
 
 from .batches import require_preview, scrub_batch
@@ -220,6 +221,9 @@ def _rebuild_event_roster(event: Event, now) -> None:
         ).delete()
     if participants:
         Participant.objects.filter(pk__in=[participant.pk for participant in participants]).delete()
+    delete_organizer_managed_members(
+        [participant.member_id for participant in participants if participant.organizer_managed]
+    )
     event.participant_groups.all().delete()
     event.version += 1
 
@@ -272,6 +276,7 @@ def _write_roster(
                 event=event,
                 member=member,
                 participant_name=row.name,
+                contact_phone=row.phone,
                 availability_inperson=default_availability(event),
                 availability_virtual=default_availability(event),
                 all_groups=all_groups,
@@ -285,6 +290,10 @@ def _write_roster(
             restored = participant.hidden
             changed = False
             values = {"participant_name": row.name, "hidden": False}
+            # A sheet without a phone column, or an empty cell, keeps the phone
+            # the organizer already has on file.
+            if row.phone:
+                values["contact_phone"] = row.phone
             for field, value in values.items():
                 if getattr(participant, field) != value:
                     setattr(participant, field, value)
@@ -313,7 +322,7 @@ def _write_roster(
     if changed_participants:
         Participant.objects.bulk_update(
             changed_participants,
-            ["participant_name", "hidden", "version", "updated_at"],
+            ["participant_name", "contact_phone", "hidden", "version", "updated_at"],
         )
 
     UserEvent.objects.bulk_create(

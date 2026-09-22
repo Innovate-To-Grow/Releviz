@@ -61,6 +61,50 @@ describe("ScheduleChannelEditor", () => {
     expect(onCopy).toHaveBeenCalledWith("inperson", "virtual");
   });
 
+  test("treats a target that still matches an Available start as empty", async () => {
+    const onCopy = jest.fn();
+    const { rerender } = render(
+      <ScheduleChannelEditor
+        mode="mixed"
+        slotGroups={[]}
+        inperson={[0, 1]}
+        virtual={[1, 1]}
+        readOnly={false}
+        startingValue={1}
+        onCopy={onCopy}
+      />,
+    );
+
+    // Every slot began Available, so an all-Available Virtual channel is
+    // untouched and gets replaced without a prompt.
+    await userEvent.click(
+      screen.getByRole("button", { name: "Copy In-Person to Virtual" }),
+    );
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(onCopy).toHaveBeenCalledWith("inperson", "virtual");
+
+    // A Virtual channel painted entirely Busy is a real answer and is
+    // protected by the confirmation.
+    onCopy.mockClear();
+    rerender(
+      <ScheduleChannelEditor
+        mode="mixed"
+        slotGroups={[]}
+        inperson={[0, 1]}
+        virtual={[0, 0]}
+        readOnly={false}
+        startingValue={1}
+        onCopy={onCopy}
+      />,
+    );
+    await userEvent.click(screen.getByRole("tab", { name: "In person" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Copy In-Person to Virtual" }),
+    );
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    expect(onCopy).not.toHaveBeenCalled();
+  });
+
   test("confirms before replacing a non-empty target", async () => {
     const onCopy = jest.fn();
     render(

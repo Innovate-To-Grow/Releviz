@@ -4,6 +4,7 @@ from django.db import transaction
 from rest_framework.response import Response
 
 from apps.scheduling.models import Weight
+from apps.scheduling.services.invitations import ManagedParticipantError, normalize_phone
 from apps.scheduling.services.roster_groups import (
     parse_group_cell,
     set_participant_groups,
@@ -93,6 +94,14 @@ class RosterParticipantView(PrivateAPIView):
                 groups_supplied = any(key in request.data for key in GROUP_KEYS)
                 if groups_supplied:
                     all_groups, group_names = _requested_groups(request.data, participant)
+                if "phone" in request.data:
+                    try:
+                        phone = normalize_phone(request.data.get("phone"))
+                    except ManagedParticipantError as exc:
+                        raise RosterImportError(str(exc)) from exc
+                    if participant.contact_phone != phone:
+                        participant.contact_phone = phone
+                        changed = True
 
                 weight = (
                     Weight.objects.select_for_update()
@@ -136,7 +145,14 @@ class RosterParticipantView(PrivateAPIView):
 
                 if changed or weight_changed:
                     participant.version += 1
-                    participant.save(update_fields=["participant_name", "version", "updated_at"])
+                    participant.save(
+                        update_fields=[
+                            "participant_name",
+                            "contact_phone",
+                            "version",
+                            "updated_at",
+                        ]
+                    )
                 # Results never read groups, so only a weight edit dirties them.
                 revision = mark_results_dirty(event) if weight_changed else event.results_revision
                 enriched = roster_queryset(event).get(pk=participant.pk)

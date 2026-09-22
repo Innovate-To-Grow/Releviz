@@ -8,7 +8,12 @@ import ScheduleChannelEditor from "@/components/schedule/ScheduleChannelEditor";
 import useAutosaveNavigationGuard from "@/components/schedule/useAutosaveNavigationGuard";
 import Alert from "@/components/ui/Alert";
 import AppButton from "@/components/ui/AppButton";
-import { AvailabilityChoice } from "@/components/ui/Availability";
+import {
+  AvailabilityChoice,
+  availabilityLabel,
+  startingAvailabilityValue,
+  startingBrushValue,
+} from "@/components/ui/Availability";
 import BrandLogo from "@/components/ui/BrandLogo";
 import FormField from "@/components/ui/FormField";
 import LoadingState from "@/components/ui/LoadingState";
@@ -132,7 +137,16 @@ export default function TempAccessClient() {
   const [requestState, setRequestState] = useState("idle");
   const [requestMessage, setRequestMessage] = useState("");
   const [access, setAccess] = useState(null);
-  const [availabilityValue, setAvailabilityValue] = useState(1);
+  // The brush starts opposite to the event's starting level so people paint
+  // over the times that differ from the default.
+  const startingBrush = startingBrushValue(access?.event);
+  const [availabilityValue, setAvailabilityValue] = useState(startingBrush);
+  // Once the session loads (or the setting changes) the brush follows it.
+  const [brushBaseline, setBrushBaseline] = useState(startingBrush);
+  if (brushBaseline !== startingBrush) {
+    setBrushBaseline(startingBrush);
+    setAvailabilityValue(startingBrush);
+  }
   const [scheduleInperson, setScheduleInperson] = useState([]);
   const [scheduleVirtual, setScheduleVirtual] = useState([]);
   const [submitted, setSubmitted] = useState(false);
@@ -855,6 +869,9 @@ export default function TempAccessClient() {
   const event = access.event;
   const participant = access.participant;
   const mode = event.mode || "inperson";
+  const startingValue = startingAvailabilityValue(event);
+  const startsAvailable = startingValue === 1;
+  const startingLabel = availabilityLabel(startingValue);
   const upgradeHref = event.code ? makeUpgradeHref(event.code) : "";
   const leavingPage = logoutPending || upgradePending;
 
@@ -905,7 +922,11 @@ export default function TempAccessClient() {
         <PageHeader
           eyebrow={`You are responding as ${participant.name}`}
           title={event.name}
-          lede="Choose a status, then click or drag across the times that work for you."
+          lede={
+            startsAvailable
+              ? "Every time starts as Available. Paint Busy over the times that do not work for you."
+              : "Choose a status, then click or drag across the times that work for you."
+          }
           actions={
             upgradeHref ? (
               <Link
@@ -974,9 +995,9 @@ export default function TempAccessClient() {
                         variant="outlined"
                         size="sm"
                         disabled={responseChangesDisabled || leavingPage}
-                        onClick={() => fillAll(0)}
+                        onClick={() => fillAll(startingValue)}
                       >
-                        Mark all Busy
+                        Mark all {startingLabel}
                       </AppButton>
                     </div>
                   </div>
@@ -999,6 +1020,7 @@ export default function TempAccessClient() {
                   slotGroups={event.slotGroups || []}
                   inperson={scheduleInperson}
                   virtual={scheduleVirtual}
+                  startingValue={startingValue}
                   readOnly={
                     responseChangesDisabled ||
                     leavingPage ||

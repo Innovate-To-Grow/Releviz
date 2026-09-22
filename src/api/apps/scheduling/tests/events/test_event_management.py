@@ -302,8 +302,9 @@ class EventManagementApiTests(TestCase):
         self.assertEqual(reset.data["event"]["slotCount"], 3)
         participant.refresh_from_db()
         invitation.refresh_from_db()
-        self.assertEqual(participant.availability_inperson, [0, 0, 0])
-        self.assertEqual(participant.availability_virtual, [0, 0, 0])
+        # The event starts everyone Available, so a reset re-seeds with all ones.
+        self.assertEqual(participant.availability_inperson, [1, 1, 1])
+        self.assertEqual(participant.availability_virtual, [1, 1, 1])
         self.assertFalse(participant.submitted)
         self.assertEqual(participant.version, 2)
         self.assertEqual(invitation.status, EventInvitation.Status.JOINED)
@@ -316,6 +317,171 @@ class EventManagementApiTests(TestCase):
             },
         )
         self.assertEqual(past_deadline.status_code, 400)
+
+    def test_flipping_the_starting_schedule_reseeds_only_untouched_participants(self):
+        self.authenticate()
+        event = self.event(code="STARTFLP")
+        self.assertEqual(event.starting_availability, "available")
+
+        def person(email, name, *, inperson, virtual, submitted, **timestamps):
+            return Participant.objects.create(
+                event=event,
+                member=create_member(email, name, "Person"),
+                participant_name=name,
+                availability_inperson=inperson,
+                availability_virtual=virtual,
+                submitted=submitted,
+                **timestamps,
+            )
+
+        untouched = person(
+            "untouched@example.com",
+            "Untouched",
+            inperson=[1, 1],
+            virtual=[1, 1],
+            submitted=False,
+        )
+        painted = person(
+            "painted@example.com",
+            "Painted",
+            inperson=[1, 0],
+            virtual=[1, 1],
+            submitted=False,
+        )
+        submitted = person(
+            "submitted@example.com",
+            "Submitted",
+            inperson=[1, 1],
+            virtual=[1, 1],
+            submitted=True,
+        )
+        # A saved draft or a withdrawn submission that equals the default is a deliberate
+        # "everything works" answer, not an untouched schedule.
+        drafted = person(
+            "drafted@example.com",
+            "Drafted",
+            inperson=[1, 1],
+            virtual=[1, 1],
+            submitted=False,
+            first_draft_saved_at=timezone.now(),
+        )
+        withdrawn = person(
+            "withdrawn@example.com",
+            "Withdrawn",
+            inperson=[1, 1],
+            virtual=[1, 1],
+            submitted=False,
+            first_submitted_at=timezone.now(),
+            last_submitted_at=timezone.now(),
+        )
+
+        flipped = self.edit(
+            event,
+            {"expectedVersion": event.version, "startingAvailability": "busy"},
+        )
+        self.assertEqual(flipped.status_code, 200, flipped.data)
+        self.assertFalse(flipped.data["idempotent"])
+        self.assertEqual(flipped.data["responsesReset"], 0)
+        self.assertEqual(flipped.data["event"]["startingAvailability"], "busy")
+        self.assertEqual(flipped.data["event"]["resultsRevision"], 1)
+        self.assertEqual(flipped.data["event"]["version"], 2)
+
+        untouched.refresh_from_db()
+        painted.refresh_from_db()
+        submitted.refresh_from_db()
+        self.assertEqual(untouched.availability_inperson, [0, 0])
+        self.assertEqual(untouched.availability_virtual, [0, 0])
+        self.assertEqual(untouched.version, 2)
+        self.assertFalse(untouched.submitted)
+        self.assertEqual(painted.availability_inperson, [1, 0])
+        self.assertEqual(painted.availability_virtual, [1, 1])
+        self.assertEqual(painted.version, 1)
+        self.assertEqual(submitted.availability_inperson, [1, 1])
+        self.assertEqual(submitted.availability_virtual, [1, 1])
+        self.assertEqual(submitted.version, 1)
+        self.assertTrue(submitted.submitted)
+        for participant in (drafted, withdrawn):
+            participant.refresh_from_db()
+            self.assertEqual(participant.availability_inperson, [1, 1])
+            self.assertEqual(participant.availability_virtual, [1, 1])
+            self.assertEqual(participant.version, 1)
+            self.assertFalse(participant.submitted)
+
+        flipped_back = self.edit(
+            event,
+            {"expectedVersion": 2, "startingAvailability": "available"},
+        )
+        self.assertEqual(flipped_back.status_code, 200, flipped_back.data)
+        self.assertEqual(flipped_back.data["event"]["startingAvailability"], "available")
+        untouched.refresh_from_db()
+        painted.refresh_from_db()
+        self.assertEqual(untouched.availability_inperson, [1, 1])
+        self.assertEqual(untouched.availability_virtual, [1, 1])
+        self.assertEqual(untouched.version, 3)
+        self.assertEqual(painted.availability_inperson, [1, 0])
+        self.assertEqual(painted.version, 1)
+
+        invalid = self.edit(
+            event,
+            {"expectedVersion": 3, "startingAvailability": "green"},
+        )
+        self.assertEqual(invalid.status_code, 400)
+        self.assertEqual(
+            invalid.data["error"],
+            "startingAvailability must be 'available' or 'busy'",
+        )
+
+        # A flip combined with a geometry change follows the normal reset path and seeds
+        # everyone, including people who painted or submitted, with the new default.
+        unconfirmed = self.edit(
+            event,
+            {"expectedVersion": 3, "startingAvailability": "busy", "endTime": "10:30"},
+        )
+        self.assertEqual(unconfirmed.status_code, 409)
+        self.assertTrue(unconfirmed.data["requiresResponseReset"])
+        reset = self.edit(
+            event,
+            {
+                "expectedVersion": 3,
+                "startingAvailability": "busy",
+                "endTime": "10:30",
+                "resetResponses": True,
+            },
+        )
+        self.assertEqual(reset.status_code, 200, reset.data)
+        self.assertEqual(reset.data["responsesReset"], 5)
+        self.assertEqual(reset.data["event"]["startingAvailability"], "busy")
+        for participant in (untouched, painted, submitted, drafted, withdrawn):
+            participant.refresh_from_db()
+            self.assertEqual(participant.availability_inperson, [0, 0, 0])
+            self.assertEqual(participant.availability_virtual, [0, 0, 0])
+            self.assertFalse(participant.submitted)
+        self.assertEqual(untouched.version, 4)
+        self.assertEqual(painted.version, 2)
+        self.assertEqual(submitted.version, 2)
+
+        # Flipping an event nobody has joined yet simply records the setting.
+        empty = self.event(code="STARTEMP")
+        flipped_empty = self.edit(
+            empty,
+            {"expectedVersion": empty.version, "startingAvailability": "busy"},
+        )
+        self.assertEqual(flipped_empty.status_code, 200)
+        self.assertEqual(flipped_empty.data["responsesReset"], 0)
+        empty.refresh_from_db()
+        self.assertEqual(empty.starting_availability, "busy")
+
+    def test_duplicate_copies_the_starting_schedule_setting(self):
+        self.authenticate()
+        source = self.event(code="BUSYCOPY", starting_availability="busy")
+        created = self.duplicate(
+            source,
+            {"expectedVersion": source.version, "idempotencyKey": str(uuid.uuid4())},
+        )
+        self.assertEqual(created.status_code, 201)
+        self.assertEqual(created.data["event"]["startingAvailability"], "busy")
+        duplicate = Event.objects.get(code=created.data["event"]["code"])
+        self.assertEqual(duplicate.starting_availability, "busy")
 
     def test_edit_handles_configuration_modes_and_locked_lifecycle_states(self):
         self.authenticate()

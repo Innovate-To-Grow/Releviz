@@ -18,6 +18,7 @@ from apps.scheduling.payloads import api_event
 from apps.scheduling.services.availability import (
     default_availability,
     expected_availability_length,
+    starting_availability_value,
     validate_availability,
 )
 
@@ -31,7 +32,7 @@ class RelevizApiTests(TestCase):
     def authenticate(self, member):
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token_for(member)}")
 
-    def create_event(self):
+    def create_event(self, **overrides):
         self.authenticate(self.organizer)
         res = self.client.post(
             "/events",
@@ -45,6 +46,7 @@ class RelevizApiTests(TestCase):
                 "location": "Room 1",
                 "status": "active",
                 "accessMode": "open_link",
+                **overrides,
             },
             format="json",
         )
@@ -62,6 +64,47 @@ class RelevizApiTests(TestCase):
         res = self.client.get(f"/events?code={code}")
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.data["event"]["organizerUserId"], str(self.organizer.pk))
+
+    def test_participants_start_available_by_default_and_busy_when_the_organizer_asks(self):
+        code = self.create_event()
+        res = self.client.get(f"/events?code={code}")
+        self.assertEqual(res.data["event"]["startingAvailability"], "available")
+
+        self.authenticate(self.participant)
+        joined = self.client.post(f"/events/participants?code={code}", {}, format="json")
+        self.assertEqual(joined.status_code, 201)
+        self.assertEqual(joined.data["participant"]["availabilityInperson"], [1] * 8)
+        self.assertEqual(joined.data["participant"]["availabilityVirtual"], [1] * 8)
+
+        busy_code = self.create_event(startingAvailability="busy")
+        res = self.client.get(f"/events?code={busy_code}")
+        self.assertEqual(res.data["event"]["startingAvailability"], "busy")
+        self.assertEqual(Event.objects.get(code=busy_code).starting_availability, "busy")
+
+        self.authenticate(self.participant)
+        joined = self.client.post(f"/events/participants?code={busy_code}", {}, format="json")
+        self.assertEqual(joined.status_code, 201)
+        self.assertEqual(joined.data["participant"]["availabilityInperson"], [0] * 8)
+        self.assertEqual(joined.data["participant"]["availabilityVirtual"], [0] * 8)
+
+        self.authenticate(self.organizer)
+        for invalid in ["green", "", None, 1]:
+            with self.subTest(startingAvailability=invalid):
+                res = self.client.post(
+                    "/events",
+                    {"name": "Invalid start", "startingAvailability": invalid},
+                    format="json",
+                )
+                if invalid in ("", None):
+                    # Blank values fall back to the product default instead of failing.
+                    self.assertEqual(res.status_code, 201)
+                    self.assertEqual(res.data["event"]["startingAvailability"], "available")
+                else:
+                    self.assertEqual(res.status_code, 400)
+                    self.assertEqual(
+                        res.data["error"],
+                        "startingAvailability must be 'available' or 'busy'",
+                    )
 
     def test_participant_can_join_submit_and_see_dashboard(self):
         code = self.create_event()
@@ -665,7 +708,12 @@ class RelevizApiTests(TestCase):
             invited_by=self.organizer,
         )
         self.assertIn("model-string@example.com", str(invitation))
+        self.assertEqual(starting_availability_value(event), 1)
+        self.assertEqual(default_availability(event), [1] * 8)
+        event.starting_availability = "busy"
+        self.assertEqual(starting_availability_value(event), 0)
         self.assertEqual(default_availability(event), [0] * 8)
+        event.starting_availability = "available"
         self.assertEqual(
             validate_availability({"bad": 1}, event, "x"),
             "Invalid x: must be an array",

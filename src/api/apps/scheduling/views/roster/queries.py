@@ -16,7 +16,7 @@ from django.db.models import (
     Value,
     When,
 )
-from django.db.models.functions import Coalesce
+from django.db.models.functions import Coalesce, NullIf
 
 from apps.scheduling.models import EventInvitation, Participant, Weight
 from apps.scheduling.payloads.delivery import delivery_request_status_payload
@@ -69,6 +69,7 @@ def roster_queryset(event):
     )
     return queryset.annotate(
         roster_email=Coalesce(
+            NullIf("contact_email", Value("")),
             "roster_invitation_email",
             "member__email",
             Value(""),
@@ -139,6 +140,7 @@ def apply_roster_filters(queryset, params):
             Q(participant_name__icontains=search)
             | Q(roster_email__icontains=search)
             | membership_exists(participantgroup__name__icontains=search)
+            | Q(contact_phone__icontains=search)
         )
     group = params.get("group")
     if group is not None and str(group) != "":
@@ -172,11 +174,13 @@ def participant_summary(participant) -> dict:
         "memberId": str(participant.member_id),
         "name": participant.participant_name,
         "email": str(getattr(participant, "roster_email", "") or "").lower(),
+        "phone": participant.contact_phone,
         **participant_memberships(participant),
         "weight": float(getattr(participant, "roster_weight", 1.0)),
         "included": bool(getattr(participant, "roster_included", True)),
         "submitted": participant.submitted,
         "accountAccess": account_access,
+        "organizerManaged": participant.organizer_managed,
         "canOrganizerEditAvailability": account_access == "temporary",
         "invitationStatus": getattr(participant, "roster_invitation_status", "not_sent"),
         "version": participant.version,

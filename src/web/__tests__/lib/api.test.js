@@ -19,6 +19,7 @@ import {
   fetchAuthSession,
   fetchAuthSessions,
   fetchProfile,
+  impersonateLogin,
   loginWithPassword,
   logoutApi,
   requestPasswordResetCode,
@@ -434,6 +435,50 @@ describe("auth API helpers", () => {
         }),
       }),
     );
+  });
+
+  test("impersonateLogin exchanges the admin token for a session", async () => {
+    const authBody = {
+      access: "impersonated",
+      user: { id: "member" },
+      next_step: "account",
+      requires_profile_completion: false,
+      message: "Signed in",
+    };
+    global.fetch.mockResolvedValueOnce(jsonResponse(authBody));
+
+    await expect(impersonateLogin({ token: "abc123" })).resolves.toEqual(
+      authBody,
+    );
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/authn/impersonate-login/",
+      expect.objectContaining({
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: "abc123" }),
+        credentials: "include",
+      }),
+    );
+    expect(readAuthSession()).toEqual(
+      expect.objectContaining({
+        access: "impersonated",
+        user: expect.objectContaining({ id: "member" }),
+        nextStep: "account",
+        requiresProfileCompletion: false,
+      }),
+    );
+  });
+
+  test("impersonateLogin rejects with the backend detail and leaves no session", async () => {
+    global.fetch.mockResolvedValueOnce(
+      jsonResponse({ detail: "Invalid impersonation link." }, { status: 400 }),
+    );
+
+    await expect(impersonateLogin({ token: "stale" })).rejects.toThrow(
+      "Invalid impersonation link.",
+    );
+    expect(readAuthSession()).toBeNull();
   });
 
   test("auth helpers throw extracted errors and update profile sessions", async () => {
@@ -898,6 +943,7 @@ describe("business API helpers", () => {
         timezone: "America/Los_Angeles",
         remindersEnabled: false,
         reminderHoursBefore: 12,
+        startingAvailability: "busy",
       },
       "tok",
     );
@@ -1075,9 +1121,18 @@ describe("business API helpers", () => {
         body: JSON.stringify({
           name: "Minimal",
           accessMode: "invite_only",
+          startingAvailability: "available",
           meetingDurationMinutes: 30,
           status: "active",
         }),
+      }),
+    );
+    // Phone and the organizer-managed flag default to "" / false.
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/events",
+      expect.objectContaining({
+        method: "POST",
+        body: expect.stringContaining('"startingAvailability":"busy"'),
       }),
     );
     expect(global.fetch).toHaveBeenCalledWith(
@@ -1087,6 +1142,8 @@ describe("business API helpers", () => {
         body: JSON.stringify({
           name: "Temporary Person",
           email: "temp@example.com",
+          phone: "",
+          organizerManaged: false,
           idempotencyKey: "managed-key",
           sendInvitation: false,
         }),
@@ -1820,5 +1877,35 @@ describe("business API helpers", () => {
       participant: { id: "participant-1", version: 2 },
       payload: expect.objectContaining({ code: "participant_exists" }),
     });
+  });
+
+  test("managed participant requests carry the phone and organizer-managed flag", async () => {
+    global.fetch.mockResolvedValue(jsonResponse({ ok: true }));
+
+    await createManagedParticipant(
+      "ABC",
+      {
+        name: "Managed Person",
+        email: "organizer@example.com",
+        phone: "+1 (555) 010-0199",
+        organizerManaged: true,
+        idempotencyKey: "managed-key",
+      },
+      "tok",
+    );
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/events/participants/managed?code=ABC",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          name: "Managed Person",
+          email: "organizer@example.com",
+          phone: "+1 (555) 010-0199",
+          organizerManaged: true,
+          idempotencyKey: "managed-key",
+        }),
+      }),
+    );
   });
 });
