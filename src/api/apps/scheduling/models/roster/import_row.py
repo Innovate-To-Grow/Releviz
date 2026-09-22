@@ -23,6 +23,7 @@ class RosterImportRow(TimestampedModel):
     raw_values = models.JSONField(default=list)
     name = models.CharField(max_length=100, blank=True, default="")
     email = models.EmailField(blank=True, default="")
+    phone = models.CharField(max_length=32, blank=True, default="")
     group_name = models.CharField(max_length=100, blank=True, default="")
     weight = models.FloatField(default=1.0)
     included = models.BooleanField(default=True)

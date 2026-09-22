@@ -8,6 +8,7 @@ from django.core.validators import validate_email
 
 from apps.authn.models import ContactEmail
 from apps.scheduling.models import RosterImportBatch, RosterImportRow
+from apps.scheduling.services.invitations.addresses import phone_issue
 from apps.scheduling.services.invitations.errors import (
     INACTIVE_ACCOUNT_MESSAGE,
     SHARED_ACCOUNT_MESSAGE,
@@ -17,6 +18,11 @@ from apps.scheduling.services.invitations.errors import (
 from .errors import RosterImportError
 from .limits import MAX_ROSTER_ROWS
 from .mapping import display_cell, parse_included
+
+_PHONE_ERRORS = {
+    "too_long": "phone is too long (max 32).",
+    "invalid": "phone is invalid.",
+}
 
 
 def _mapped_value(row: RosterImportRow, mapping: dict, field: str):
@@ -51,6 +57,11 @@ def validate_identity_fields(name: str, email: str, group_name: str) -> list[str
     return errors
 
 
+def validate_phone(phone: str) -> list[str]:
+    issue = phone_issue(phone)
+    return [_PHONE_ERRORS[issue]] if issue else []
+
+
 def _normalize_row(row: RosterImportRow, mapping: dict, defaults: dict) -> None:
     errors = []
     raw_name, error = _mapped_value(row, mapping, "name")
@@ -64,6 +75,9 @@ def _normalize_row(row: RosterImportRow, mapping: dict, defaults: dict) -> None:
     if "email" not in mapping:
         errors.append("Map an email column.")
 
+    raw_phone, error = _mapped_value(row, mapping, "phone")
+    if error:
+        errors.append(error)
     raw_group, error = _mapped_value(row, mapping, "group")
     if error:
         errors.append(error)
@@ -76,6 +90,7 @@ def _normalize_row(row: RosterImportRow, mapping: dict, defaults: dict) -> None:
 
     name = display_cell(raw_name)
     email = display_cell(raw_email).lower()
+    phone = display_cell(raw_phone) if "phone" in mapping else ""
     group_name = display_cell(raw_group) if "group" in mapping else str(defaults.get("group", ""))
     weight = defaults.get("weight", 1.0)
     if "weight" in mapping and raw_weight not in {None, ""}:
@@ -95,8 +110,10 @@ def _normalize_row(row: RosterImportRow, mapping: dict, defaults: dict) -> None:
             included = True
 
     errors.extend(validate_identity_fields(name, email, group_name))
+    errors.extend(validate_phone(phone))
     row.name = name[:100]
     row.email = email[:254]
+    row.phone = phone[:32]
     row.group_name = group_name[:100]
     row.weight = weight
     row.included = included
@@ -124,7 +141,14 @@ def apply_duplicate_rules(rows: list[RosterImportRow]) -> None:
         if len(duplicates) < 2:
             continue
         signatures = {
-            (row.name, row.email, row.group_name, float(row.weight), bool(row.included))
+            (
+                row.name,
+                row.email,
+                row.group_name,
+                row.phone,
+                float(row.weight),
+                bool(row.included),
+            )
             for row in duplicates
         }
         if len(signatures) == 1:
@@ -243,6 +267,7 @@ def normalize_import_batch(batch: RosterImportBatch) -> None:
             [
                 "name",
                 "email",
+                "phone",
                 "group_name",
                 "weight",
                 "included",

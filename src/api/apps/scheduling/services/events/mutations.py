@@ -21,6 +21,10 @@ from apps.scheduling.models import (
     UserEvent,
 )
 from apps.scheduling.services.availability import default_availability
+from apps.scheduling.services.managed_members import (
+    delete_organizer_managed_members,
+    organizer_managed_member_ids,
+)
 from apps.scheduling.services.results.snapshots import ensure_result_snapshot
 
 from .codes import generate_event_code
@@ -421,7 +425,9 @@ def delete_event(*, organizer, code, data) -> EventDeleteResult:
     EmailMessageLog.objects.filter(
         Q(event=event) | Q(invitation__event=event) | Q(delivery_job__event=event)
     ).delete()
+    managed_member_ids = organizer_managed_member_ids(event.participants)
     event.delete()
+    delete_organizer_managed_members(managed_member_ids)
     transaction.on_commit(
         lambda: logger.info(
             "event_deleted",

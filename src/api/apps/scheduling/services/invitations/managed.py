@@ -13,6 +13,7 @@ from apps.scheduling.models import Event, EventInvitation, Participant, UserEven
 from apps.scheduling.services.availability import default_availability
 from apps.scheduling.services.events.lifecycle import response_write_error
 
+from .addresses import normalize_phone
 from .errors import (
     INACTIVE_ACCOUNT_MESSAGE,
     UNVERIFIED_FULL_ACCOUNT_MESSAGE,
@@ -22,12 +23,126 @@ from .errors import (
 security_logger = logging.getLogger("releviz.security")
 
 
+def _create_or_reuse_organizer_managed_participant(
+    *,
+    event: Event,
+    organizer,
+    name: str,
+    email: str,
+    phone: str,
+) -> dict:
+    """Create or restore a person whose contact address belongs to the organizer.
+
+    The address stays the organizer's identity: the person is backed by a fresh
+    temporary member with no ``ContactEmail`` and an empty ``Member.email``, so
+    nothing resolves the shared address to them, and no invitation is ever
+    created for them. The reuse key is (event, address, name) under the event lock.
+    """
+
+    if not organizer.contact_emails.filter(email_address__iexact=email, verified=True).exists():
+        raise ManagedParticipantError(
+            "Use one of your own verified email addresses for a person you manage."
+        )
+
+    participant = (
+        Participant.objects.select_related("member")
+        .filter(
+            event=event,
+            organizer_managed=True,
+            contact_email=email,
+            participant_name__iexact=name,
+        )
+        .first()
+    )
+    participant_created = participant is None
+    participant_restored = False
+    member_created = False
+    if participant_created:
+        participant_limit = getattr(settings, "EVENT_MAX_PARTICIPANTS", 1000)
+        if event.participants.count() >= participant_limit:
+            raise ManagedParticipantError(
+                f"An event can have at most {participant_limit} participants.",
+                status_code=409,
+            )
+        Member = get_user_model()
+        member = Member(
+            email="",
+            first_name=name,
+            is_active=True,
+            access_level=Member.AccessLevel.TEMPORARY,
+        )
+        member.set_unusable_password()
+        member.save()
+        member_created = True
+        participant = Participant.objects.create(
+            event=event,
+            member=member,
+            participant_name=name,
+            contact_email=email,
+            contact_phone=phone,
+            organizer_managed=True,
+            availability_inperson=default_availability(event),
+            availability_virtual=default_availability(event),
+        )
+    else:
+        member = participant.member
+        participant_restored = participant.hidden
+        participant_updates = []
+        if participant_restored:
+            participant.hidden = False
+            participant_updates.append("hidden")
+            if participant.participant_name != name:
+                participant.participant_name = name
+                participant_updates.append("participant_name")
+            participant.version += 1
+            participant_updates.append("version")
+        if participant_updates:
+            participant.save(update_fields=[*participant_updates, "updated_at"])
+    UserEvent.objects.get_or_create(member=member, event=event, role="participant")
+
+    security_logger.info(
+        (
+            "managed_participant_created"
+            if participant_created
+            else "managed_participant_restored"
+            if participant_restored
+            else "managed_participant_reused"
+        ),
+        extra={
+            "event_id": str(event.pk),
+            "organizer_id": str(organizer.pk),
+            "member_id": str(member.pk),
+            "member_created": member_created,
+            "invitation_created": False,
+            "account_access": member.access_level,
+            "organizer_managed": True,
+        },
+    )
+    return {
+        "participant": participant,
+        "invitation": None,
+        "participantCreated": participant_created,
+        "participantRestored": participant_restored,
+        "memberCreated": member_created,
+    }
+
+
 @transaction.atomic
-def create_or_reuse_managed_participant(*, event: Event, organizer, name: str, email: str):
+def create_or_reuse_managed_participant(
+    *,
+    event: Event,
+    organizer,
+    name: str,
+    email: str,
+    phone: str = "",
+    organizer_managed: bool = False,
+):
     """Create an event participant without sending an invitation.
 
     Email is the global identity key. Existing members are reused, while a new
-    identity is created as a passwordless, unverified temporary member.
+    identity is created as a passwordless, unverified temporary member. With
+    ``organizer_managed`` the address is one of the organizer's own and never
+    becomes an identity for the person.
     """
 
     event = Event.objects.select_for_update().get(pk=event.pk)
@@ -52,6 +167,23 @@ def create_or_reuse_managed_participant(*, event: Event, organizer, name: str, e
         validate_email(normalized_email)
     except ValidationError as exc:
         raise ManagedParticipantError("Enter a valid email address.") from exc
+    normalized_phone = normalize_phone(phone)
+
+    if organizer_managed:
+        return _create_or_reuse_organizer_managed_participant(
+            event=event,
+            organizer=organizer,
+            name=normalized_name,
+            email=normalized_email,
+            phone=normalized_phone,
+        )
+    if organizer.contact_emails.filter(email_address__iexact=normalized_email).exists():
+        raise ManagedParticipantError(
+            'That is one of your own addresses. Check "No email of their own" to add a person '
+            "you manage.",
+            status_code=409,
+            error_code="organizer_own_email",
+        )
 
     invitation_exists = event.invitations.filter(email__iexact=normalized_email).exists()
     if (
@@ -140,6 +272,7 @@ def create_or_reuse_managed_participant(*, event: Event, organizer, name: str, e
         member=member,
         defaults={
             "participant_name": normalized_name,
+            "contact_phone": normalized_phone,
             "availability_inperson": default_availability(event),
             "availability_virtual": default_availability(event),
         },
@@ -190,6 +323,7 @@ def create_or_reuse_managed_participant(*, event: Event, organizer, name: str, e
             "member_created": member_created,
             "invitation_created": invitation_created,
             "account_access": getattr(member, "access_level", "full"),
+            "organizer_managed": False,
         },
     )
     return {

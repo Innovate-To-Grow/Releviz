@@ -136,6 +136,26 @@ class EmailCodeDeleteAccountTests(APITestCase):
             mode=RosterImportReceipt.Mode.MERGE,
             results_revision=1,
         )
+        # An organizer-managed person exists only through this organizer's event.
+        managed_member = Member.objects.create_user(
+            email="", first_name="Managed", is_active=True, access_level="temporary"
+        )
+        Participant.objects.create(
+            member=managed_member,
+            event=organized_event,
+            participant_name="Managed Person",
+            contact_email="delete-me@example.com",
+            organizer_managed=True,
+        )
+        # A temporary participant with an address of their own is a real identity.
+        temporary_member = Member.objects.create_user(
+            email="temp@example.com", first_name="Temp", is_active=True, access_level="temporary"
+        )
+        Participant.objects.create(
+            member=temporary_member,
+            event=organized_event,
+            participant_name="Temp Person",
+        )
 
         self.client.post("/authn/delete-account/request-code/", {}, format="json")
         verify_response = self.client.post(
@@ -158,6 +178,8 @@ class EmailCodeDeleteAccountTests(APITestCase):
         self.assertFalse(Event.objects.filter(pk=organized_event.pk).exists())
         self.assertFalse(RosterImportBatch.objects.filter(pk=batch.pk).exists())
         self.assertFalse(RosterImportReceipt.objects.filter(pk=receipt.pk).exists())
+        self.assertFalse(Member.objects.filter(pk=managed_member.pk).exists())
+        self.assertTrue(Member.objects.filter(pk=temporary_member.pk).exists())
 
     def test_confirm_delete_account_rejects_other_users_token(self, _mock_code, _mock_send):
         self.client.post("/authn/delete-account/request-code/", {}, format="json")
