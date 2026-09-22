@@ -24,6 +24,7 @@ from apps.scheduling.models import (
     EventResultInvalidation,
     FinalMeeting,
     Participant,
+    ParticipantGroup,
     RosterBulkUpdateReceipt,
     RosterImportBatch,
     RosterImportReceipt,
@@ -33,7 +34,10 @@ from apps.scheduling.models import (
 )
 from apps.scheduling.payloads import roster as roster_payloads
 from apps.scheduling.services import roster_imports
-from apps.scheduling.services.invitations import EventEmailRequestError
+from apps.scheduling.services.invitations import (
+    EventEmailRequestError,
+    mark_invitation_for_member,
+)
 from apps.scheduling.views.roster import helpers as roster_helpers
 from apps.scheduling.views.roster import queries as roster_queries
 
@@ -76,6 +80,12 @@ class RosterImportParserEdgeTests(SimpleTestCase):
             roster_imports.mapping.auto_mapping(["Participant Name", "E-mail", "Team", "Priority"]),
             {"name": 0, "email": 1, "group": 2, "weight": 3},
         )
+        for header in ("Phone", "Phone_Number", "Mobile", "Cell", "Telephone"):
+            with self.subTest(header=header):
+                self.assertEqual(
+                    roster_imports.mapping.auto_mapping(["Name", "Email", header]),
+                    {"name": 0, "email": 1, "phone": 2},
+                )
         metadata = roster_imports.mapping.worksheet_metadata(
             [
                 {"worksheet": "Sheet", "row_number": 3, "raw_values": ["A", "B"]},
@@ -105,9 +115,19 @@ class RosterImportParserEdgeTests(SimpleTestCase):
             ),
             {"group": "Faculty", "weight": 0.4, "included": False},
         )
+        # A default cell is stored in its canonical spelling: the ALL token
+        # first, then the names deduplicated case-insensitively.
+        self.assertEqual(
+            roster_imports.mapping.parse_defaults({"group": " all ; Faculty ; faculty ; "})[
+                "group"
+            ],
+            "ALL; Faculty",
+        )
+        self.assertEqual(roster_imports.mapping.parse_defaults({"group": None})["group"], "")
         for defaults, message in [
             ([], "object"),
-            ({"group": "x" * 101}, "too long"),
+            ({"group": "x" * 101}, "defaults.group is too long (max 100)."),
+            ({"group": "A; " + "x" * 101}, "defaults.group is too long (max 100)."),
             ({"weight": "bad"}, "between 0 and 1"),
             ({"weight": 2}, "between 0 and 1"),
             ({"included": "sometimes"}, "true or false"),
@@ -137,10 +157,42 @@ class RosterImportParserEdgeTests(SimpleTestCase):
         self.assertIn("name is too long (max 100).", errors)
         self.assertIn("email is too long (max 254).", errors)
         self.assertIn("group is too long (max 100).", errors)
+        # The limit applies per name inside a multi-group cell.
+        self.assertEqual(
+            roster_imports.normalization.validate_identity_fields(
+                "Name", "name@example.com", "Short; " + "g" * 101
+            ),
+            ["group is too long (max 100)."],
+        )
+        self.assertEqual(
+            roster_imports.normalization.validate_identity_fields(
+                "Name", "name@example.com", "ALL; Faculty; Students"
+            ),
+            [],
+        )
         self.assertEqual(
             roster_imports.normalization.validate_identity_fields("Name", "not-an-email", ""),
             ["email is invalid."],
         )
+        for phone, expected in [
+            ("", []),
+            ("+1 (555) 010-2000", []),
+            ("555.010.2000", []),
+            ("12345", ["phone is invalid."]),
+            ("555-CALL-NOW", ["phone is invalid."]),
+            ("1" * 33, ["phone is too long (max 32)."]),
+            ("x" * 33, ["phone is too long (max 32)."]),
+        ]:
+            with self.subTest(phone=phone):
+                self.assertEqual(roster_imports.normalization.validate_phone(phone), expected)
+
+        # Cells are stored canonically; one that does not parse is kept as
+        # typed so the organizer sees it next to the reported error.
+        normalize_group_cell = roster_imports.normalization.normalize_group_cell
+        self.assertEqual(normalize_group_cell(None), "")
+        self.assertEqual(normalize_group_cell("   "), "")
+        self.assertEqual(normalize_group_cell(" b ; ; a ; B ; all "), "ALL; b; a")
+        self.assertEqual(normalize_group_cell(" " + "x" * 101 + " "), "x" * 101)
 
     def test_delimited_parser_rejects_malformed_and_bounded_input(self):
         with (
@@ -315,6 +367,34 @@ class RosterImportParserEdgeTests(SimpleTestCase):
         )
         self.assertIn("Map a name column.", missing.validation_errors)
         self.assertIn("Map an email column.", missing.validation_errors)
+        self.assertEqual(missing.group_name, "")
+
+        # Without a mapped group column the default cell applies, canonically.
+        defaulted = RosterImportRow(raw_values=["Name", "default-group@example.com"])
+        roster_imports.normalization._normalize_row(
+            defaulted,
+            {"name": 0, "email": 1},
+            {"group": "faculty; ALL; Faculty", "weight": 1, "included": True},
+        )
+        self.assertEqual(defaulted.group_name, "ALL; faculty")
+        self.assertEqual(defaulted.validation_errors, [])
+        # A mapped cell wins over the default and keeps the first spelling.
+        mapped = RosterImportRow(raw_values=["Name", "mapped-group@example.com", " B ; a; b "])
+        roster_imports.normalization._normalize_row(
+            mapped,
+            {"name": 0, "email": 1, "group": 2},
+            {"group": "Ignored", "weight": 1, "included": True},
+        )
+        self.assertEqual(mapped.group_name, "B; a")
+        # An unparseable cell is kept as typed next to its error.
+        too_long = RosterImportRow(raw_values=["Name", "long-group@example.com", "x" * 101])
+        roster_imports.normalization._normalize_row(
+            too_long,
+            {"name": 0, "email": 1, "group": 2},
+            {"group": "", "weight": 1, "included": True},
+        )
+        self.assertEqual(too_long.group_name, "x" * 101)
+        self.assertEqual(too_long.validation_errors, ["group is too long (max 100)."])
 
         first = RosterImportRow(
             name="A",
@@ -348,6 +428,43 @@ class RosterImportParserEdgeTests(SimpleTestCase):
         )
         self.assertIn("weight cannot contain a formula.", formula_options.validation_errors)
         self.assertIn("included cannot contain a formula.", formula_options.validation_errors)
+        self.assertEqual(formula_options.phone, "")
+
+        formula_phone = RosterImportRow(
+            raw_values=["Name", "name@example.com", {"formula": "PHONE"}]
+        )
+        roster_imports.normalization._normalize_row(
+            formula_phone,
+            {"name": 0, "email": 1, "phone": 2},
+            {"group": "", "weight": 1, "included": True},
+        )
+        self.assertEqual(formula_phone.validation_errors, ["phone cannot contain a formula."])
+        self.assertEqual(formula_phone.phone, "")
+        long_phone = RosterImportRow(raw_values=["Name", "name@example.com", "1" * 33])
+        roster_imports.normalization._normalize_row(
+            long_phone,
+            {"name": 0, "email": 1, "phone": 2},
+            {"group": "", "weight": 1, "included": True},
+        )
+        self.assertEqual(long_phone.validation_errors, ["phone is too long (max 32)."])
+        self.assertEqual(long_phone.phone, "1" * 32)
+
+        same_phone = [
+            RosterImportRow(name="A", email="dup@example.com", phone="555-010-1000", selected=True),
+            RosterImportRow(name="A", email="dup@example.com", phone="555-010-1000", selected=True),
+        ]
+        roster_imports.normalization.apply_duplicate_rules(same_phone)
+        self.assertEqual(same_phone[1].duplicate_status, RosterImportRow.DuplicateStatus.IDENTICAL)
+        self.assertFalse(same_phone[1].selected)
+        other_phone = [
+            RosterImportRow(name="A", email="dup@example.com", phone="555-010-1000", selected=True),
+            RosterImportRow(name="A", email="dup@example.com", phone="555-010-2000", selected=True),
+        ]
+        roster_imports.normalization.apply_duplicate_rules(other_phone)
+        self.assertEqual(
+            [row.duplicate_status for row in other_phone],
+            [RosterImportRow.DuplicateStatus.CONFLICT] * 2,
+        )
 
         tail = RosterImportRow(name="Tail", email="tail@example.com", selected=True)
         second.duplicate_status = RosterImportRow.DuplicateStatus.UNIQUE
@@ -461,6 +578,27 @@ class RosterImportDatabaseEdgeTests(TestCase):
         payload_batch.rows.filter(row_number=1).delete()
         payload = roster_payloads.roster_import_payload(payload_batch)
         self.assertEqual(payload["headers"], ["name", "email"])
+        row_payload = roster_payloads.roster_import_row_payload(
+            RosterImportRow(row_number=2, name="Payload", phone="555-010-2000")
+        )
+        self.assertEqual(row_payload["phone"], "555-010-2000")
+        self.assertEqual(
+            list(row_payload),
+            [
+                "id",
+                "rowNumber",
+                "name",
+                "email",
+                "phone",
+                "group",
+                "weight",
+                "included",
+                "selected",
+                "valid",
+                "duplicate",
+                "errors",
+            ],
+        )
 
     def test_row_update_validation_and_every_editable_field(self):
         batch = self.preview()
@@ -497,6 +635,7 @@ class RosterImportDatabaseEdgeTests(TestCase):
                         "id": str(row.pk),
                         "name": " Grace ",
                         "email": " GRACE-EDGE@EXAMPLE.COM ",
+                        "phone": " +1 (555) 010-2000 ",
                         "groupName": " Faculty ",
                         "weight": "0.3",
                         "included": "false",
@@ -508,9 +647,49 @@ class RosterImportDatabaseEdgeTests(TestCase):
         edited = updated.rows.get(pk=row.pk)
         self.assertEqual(edited.name, "Grace")
         self.assertEqual(edited.email, "grace-edge@example.com")
+        self.assertEqual(edited.phone, "+1 (555) 010-2000")
         self.assertEqual(edited.group_name, "Faculty")
         self.assertEqual(edited.weight, 0.3)
         self.assertFalse(edited.included)
+        self.assertEqual(edited.validation_errors, [])
+        # A bad phone flags the row instead of raising, and edits that leave the
+        # phone out keep it.
+        roster_imports.update_roster_import(
+            batch=batch,
+            data={"rowUpdates": [{"id": str(row.pk), "phone": "555-CALL-NOW"}]},
+        )
+        flagged = batch.rows.get(pk=row.pk)
+        self.assertEqual(flagged.phone, "555-CALL-NOW")
+        self.assertEqual(flagged.validation_errors, ["phone is invalid."])
+        roster_imports.update_roster_import(
+            batch=batch,
+            data={"rowUpdates": [{"id": str(row.pk), "name": "Grace Hopper"}]},
+        )
+        self.assertEqual(batch.rows.get(pk=row.pk).phone, "555-CALL-NOW")
+        batch.refresh_from_db()
+        self.assertEqual(batch.summary["invalid"], 1)
+
+        # Clear the bad phone so only the group cell decides the row's errors below.
+        roster_imports.update_roster_import(
+            batch=batch, data={"rowUpdates": [{"id": str(row.pk), "phone": ""}]}
+        )
+        self.assertEqual(batch.rows.get(pk=row.pk).validation_errors, [])
+
+        # A multi-group cell is stored canonically; ``group`` wins over
+        # ``groupName``; a null cell clears it; an unparseable cell is kept as
+        # typed and flags the row.
+        for item, expected_cell, expected_errors in [
+            ({"group": " all ; Team ; team ", "groupName": "ignored"}, "ALL; Team", []),
+            ({"groupName": None}, "", []),
+            ({"group": "A; " + "x" * 101}, "A; " + "x" * 101, ["group is too long (max 100)."]),
+        ]:
+            with self.subTest(item=item):
+                roster_imports.update_roster_import(
+                    batch=batch, data={"rowUpdates": [{"id": str(row.pk), **item}]}
+                )
+                row.refresh_from_db()
+                self.assertEqual(row.group_name, expected_cell)
+                self.assertEqual(row.validation_errors, expected_errors)
 
         two_rows = self.preview(
             "name,email\nOne,one-update-cap@example.com\nTwo,two-update-cap@example.com"
@@ -568,6 +747,45 @@ class RosterImportDatabaseEdgeTests(TestCase):
         roster_imports.commit._rebuild_event_roster(self.event, timezone.now())
         self.assertEqual(self.event.status, Event.Status.ACTIVE)
         self.assertEqual(self.event.version, 2)
+
+    def test_rebuild_deletes_the_members_backing_organizer_managed_people(self):
+        Member = type(self.organizer)
+        backing = Member(
+            email="",
+            first_name="Managed",
+            is_active=True,
+            access_level=Member.AccessLevel.TEMPORARY,
+        )
+        backing.set_unusable_password()
+        backing.save()
+        Participant.objects.create(
+            event=self.event,
+            member=backing,
+            participant_name="Managed",
+            contact_email=self.organizer.email,
+            contact_phone="555-010-2000",
+            organizer_managed=True,
+            availability_inperson=[0, 0],
+            availability_virtual=[0, 0],
+        )
+        regular = create_member("regular-rebuild-edge@example.com")
+        Participant.objects.create(
+            event=self.event,
+            member=regular,
+            participant_name="Regular",
+            availability_inperson=[0, 0],
+            availability_virtual=[0, 0],
+        )
+
+        batch = self.preview("name,email,phone\nRebuilt,rebuilt-edge@example.com,555-010-3000")
+        rebuilt = self.commit(batch, mode="rebuild", confirmationCode=self.event.code)
+        self.assertEqual(rebuilt.status_code, 201, rebuilt.data)
+        self.assertFalse(Member.objects.filter(pk=backing.pk).exists())
+        self.assertTrue(Member.objects.filter(pk=regular.pk).exists())
+        self.assertEqual(
+            list(self.event.participants.values_list("participant_name", "contact_phone")),
+            [("Rebuilt", "555-010-3000")],
+        )
 
     def test_member_resolution_rejects_unsafe_identities_and_adopts_orphan(self):
         inactive = create_member("inactive-edge@example.com", is_active=False)
@@ -778,11 +996,12 @@ class RosterImportDatabaseEdgeTests(TestCase):
             event=self.event,
             member=member,
             participant_name="Old",
-            group_name="Old group",
             hidden=True,
             availability_inperson=[1, 0],
             availability_virtual=[0, 1],
         )
+        old_group = ParticipantGroup.objects.create(event=self.event, name="Old group")
+        participant.groups.add(old_group)
         invitation = EventInvitation.objects.create(
             event=self.event,
             email=member.email,
@@ -802,6 +1021,11 @@ class RosterImportDatabaseEdgeTests(TestCase):
         invitation.refresh_from_db()
         self.assertEqual(participant.participant_name, "Renamed")
         self.assertFalse(participant.hidden)
+        # A non-blank cell replaces the memberships; the emptied group stays a row.
+        self.assertEqual(list(participant.groups.values_list("name", flat=True)), ["New group"])
+        self.assertFalse(participant.all_groups)
+        self.assertTrue(ParticipantGroup.objects.filter(pk=old_group.pk).exists())
+        self.assertEqual(old_group.participants.count(), 0)
         self.assertEqual(invitation.member, member)
         self.assertEqual(invitation.invited_by, self.organizer)
         weight = Weight.objects.get(participant=participant)
@@ -815,6 +1039,32 @@ class RosterImportDatabaseEdgeTests(TestCase):
         repeated_merge = self.commit(unchanged)
         self.assertEqual(repeated_merge.status_code, 201, repeated_merge.data)
         self.assertEqual(repeated_merge.data["receipt"]["updatedCount"], 1)
+        self.assertEqual(
+            list(participant.groups.values_list("name", flat=True)),
+            ["New group"],
+        )
+
+        # A blank cell on merge leaves the existing memberships alone, while a
+        # membership-only change (no rename) still bumps the version.
+        version_before = Participant.objects.get(pk=participant.pk).version
+        blank_cell = self.preview("name,email,group\nRenamed,existing-roster-edge@example.com,")
+        self.assertEqual(self.commit(blank_cell).status_code, 201)
+        participant.refresh_from_db()
+        self.assertEqual(list(participant.groups.values_list("name", flat=True)), ["New group"])
+        self.assertEqual(participant.version, version_before)
+        regrouped = self.preview(
+            "name,email,group\nRenamed,existing-roster-edge@example.com,ALL; old GROUP"
+        )
+        self.assertEqual(self.commit(regrouped).status_code, 201)
+        participant.refresh_from_db()
+        self.assertEqual(participant.version, version_before + 1)
+        self.assertTrue(participant.all_groups)
+        # The existing spelling is reused for a case variant.
+        self.assertEqual(list(participant.groups.values_list("name", flat=True)), ["Old group"])
+        self.assertEqual(
+            ParticipantGroup.objects.filter(event=self.event, name__iexact="old group").count(),
+            1,
+        )
 
         over_capacity = self.preview("name,email\nExtra,extra-capacity-edge@example.com")
         with patch.object(roster_imports.commit, "MAX_ROSTER_ROWS", 1):
@@ -841,6 +1091,93 @@ class RosterImportDatabaseEdgeTests(TestCase):
             oversized_response = self.commit(oversized_batch)
         self.assertEqual(oversized_response.status_code, 400)
         self.assertIn("at most 1", oversized_response.data["error"])
+
+    def test_commit_group_cells_all_token_case_reuse_and_rebuild_drop_groups(self):
+        faculty = ParticipantGroup.objects.create(event=self.event, name="Faculty")
+        existing_member = create_member("existing-all-edge@example.com")
+        existing = Participant.objects.create(
+            event=self.event,
+            member=existing_member,
+            participant_name="Existing",
+            availability_inperson=[0, 0],
+            availability_virtual=[0, 0],
+        )
+        existing.groups.add(faculty)
+        batch = self.preview(
+            "name,email,group\n"
+            "Existing,existing-all-edge@example.com,ALL\n"
+            "Everyone,everyone-edge@example.com,all\n"
+            "Mixed,mixed-edge@example.com,ALL; faculty; Students\n"
+            "Nobody,nobody-edge@example.com,\n"
+        )
+        committed = self.commit(batch)
+        self.assertEqual(committed.status_code, 201, committed.data)
+        self.assertEqual(committed.data["receipt"]["createdCount"], 3)
+        self.assertEqual(committed.data["receipt"]["updatedCount"], 1)
+
+        # An ALL-only cell on an existing person drops their explicit
+        # memberships and sets the flag; a new person with ALL only carries
+        # the flag without membership rows.
+        existing.refresh_from_db()
+        self.assertTrue(existing.all_groups)
+        self.assertEqual(existing.groups.count(), 0)
+        self.assertEqual(existing.version, 2)
+        everyone = self.event.participants.get(participant_name="Everyone")
+        self.assertTrue(everyone.all_groups)
+        self.assertEqual(everyone.groups.count(), 0)
+        self.assertEqual(everyone.version, 1)
+        mixed = self.event.participants.get(participant_name="Mixed")
+        self.assertTrue(mixed.all_groups)
+        self.assertEqual(
+            list(mixed.groups.values_list("name", flat=True)),
+            ["Faculty", "Students"],
+        )
+        nobody = self.event.participants.get(participant_name="Nobody")
+        self.assertFalse(nobody.all_groups)
+        self.assertEqual(nobody.groups.count(), 0)
+        # "faculty" reused the existing "Faculty" row; only Students was created.
+        self.assertEqual(
+            list(self.event.participant_groups.values_list("name", flat=True)),
+            ["Faculty", "Students"],
+        )
+        self.assertEqual(self.event.participant_groups.get(name="Faculty").pk, faculty.pk)
+
+        roster = self.client.get(f"/events/roster?code={self.event.code}")
+        self.assertEqual(roster.status_code, 200)
+        students = self.event.participant_groups.get(name="Students")
+        # ALL people count in every group; the ungrouped row closes the list.
+        self.assertEqual(
+            roster.data["stats"]["groups"],
+            [
+                {"id": faculty.pk, "name": "Faculty", "count": 3, "weight": 1.0},
+                {"id": students.pk, "name": "Students", "count": 3, "weight": 1.0},
+                {"id": None, "name": "", "count": 1, "weight": 1.0},
+            ],
+        )
+        by_name = {row["name"]: row for row in roster.data["participants"]}
+        self.assertEqual(by_name["Existing"]["group"], "ALL")
+        self.assertEqual(by_name["Existing"]["groups"], [])
+        self.assertTrue(by_name["Existing"]["allGroups"])
+        self.assertEqual(by_name["Mixed"]["group"], "ALL; Faculty; Students")
+        self.assertEqual(
+            by_name["Mixed"]["groups"],
+            [{"id": faculty.pk, "name": "Faculty"}, {"id": students.pk, "name": "Students"}],
+        )
+        self.assertEqual(by_name["Nobody"]["group"], "")
+        self.assertFalse(by_name["Nobody"]["allGroups"])
+
+        # Rebuild replaces the roster and drops every group, empty or not.
+        ParticipantGroup.objects.create(event=self.event, name="Empty")
+        rebuild = self.preview("name,email,group\nFresh,fresh-rebuild-edge@example.com,Alumni")
+        rebuilt = self.commit(rebuild, mode="rebuild", confirmationCode=self.event.code)
+        self.assertEqual(rebuilt.status_code, 201, rebuilt.data)
+        self.assertEqual(
+            list(self.event.participant_groups.values_list("name", flat=True)),
+            ["Alumni"],
+        )
+        self.assertFalse(ParticipantGroup.objects.filter(pk__in=[faculty.pk, students.pk]).exists())
+        fresh = self.event.participants.get()
+        self.assertEqual(list(fresh.groups.values_list("name", flat=True)), ["Alumni"])
 
     def test_commit_rejects_invalid_state_actor_rows_and_integrity_race(self):
         batch = self.preview()
@@ -1087,6 +1424,10 @@ class RosterImportDatabaseEdgeTests(TestCase):
         )
         ada.submitted = True
         ada.save(update_fields=["submitted", "updated_at"])
+        ada_invitation = self.event.invitations.get(member=ada.member)
+        ada_invitation.first_sent_at = timezone.now()
+        ada_invitation.save(update_fields=["first_sent_at", "updated_at"])
+        mark_invitation_for_member(event=self.event, member=ada.member, submitted=True)
         invitation = self.event.invitations.get(member=grace.member)
         invitation.first_sent_at = timezone.now()
         invitation.save(update_fields=["first_sent_at", "updated_at"])
@@ -1113,14 +1454,20 @@ class RosterImportDatabaseEdgeTests(TestCase):
 
         for query, total in [
             ("search=ada-filter", 1),
+            ("search=FACUL", 1),
             ("group=Faculty", 1),
+            ("group=faculty", 1),
+            ("group=Nobody", 0),
             ("group=__ungrouped__", 1),
             ("submitted=yes", 1),
             ("submitted=no", 1),
             ("included=true", 1),
             ("included=false", 1),
+            ("invitationStatus=accepted", 1),
+            ("invitationStatus=sent", 1),
             ("invitationStatus=submitted", 1),
             ("invitationStatus=invited", 1),
+            ("invitationStatus=opened", 1),
             ("accountAccess=temporary", 2),
         ]:
             with self.subTest(query=query):
@@ -1131,6 +1478,20 @@ class RosterImportDatabaseEdgeTests(TestCase):
                     response.data["latestDeliveryRequest"]["delivery"]["pending"],
                     1,
                 )
+        legacy_bulk = self.client.patch(
+            f"/events/roster/bulk?code={self.event.code}",
+            {
+                "filter": {"invitationStatus": "invited"},
+                "updates": {"group": "Sent"},
+                "idempotencyKey": str(uuid.uuid4()),
+            },
+            format="json",
+        )
+        self.assertEqual(legacy_bulk.status_code, 200, legacy_bulk.data)
+        self.assertEqual(legacy_bulk.data["matchedCount"], 1)
+        self.assertEqual(legacy_bulk.data["updatedCount"], 1)
+        grace.refresh_from_db()
+        self.assertEqual(list(grace.groups.values_list("name", flat=True)), ["Sent"])
         for query in [
             "submitted=maybe",
             "included=maybe",
@@ -1172,18 +1533,50 @@ class RosterImportDatabaseEdgeTests(TestCase):
             428,
         )
 
-        for payload in [
-            {"expectedVersion": ada.version, "name": ""},
-            {"expectedVersion": ada.version, "name": "x" * 101},
-            {"expectedVersion": ada.version, "group": "x" * 101},
-            {"expectedVersion": ada.version, "weight": "bad"},
-            {"expectedVersion": ada.version, "weight": 2},
+        for payload, message in [
+            ({"expectedVersion": ada.version, "name": ""}, "name is required."),
+            ({"expectedVersion": ada.version, "name": "x" * 101}, "name is too long (max 100)."),
+            ({"expectedVersion": ada.version, "group": "x" * 101}, "group is too long (max 100)."),
+            (
+                {"expectedVersion": ada.version, "groups": "Faculty"},
+                "groups must be an array of group names.",
+            ),
+            (
+                {"expectedVersion": ada.version, "groups": [1]},
+                "groups must be an array of group names.",
+            ),
+            ({"expectedVersion": ada.version, "groups": [" "]}, "Group name is required."),
+            (
+                {"expectedVersion": ada.version, "groups": ["all"]},
+                "ALL is reserved for every group.",
+            ),
+            (
+                {"expectedVersion": ada.version, "groups": ["a;b"]},
+                "Group names cannot contain ;.",
+            ),
+            (
+                {"expectedVersion": ada.version, "groups": ["x" * 101]},
+                "group is too long (max 100).",
+            ),
+            (
+                {"expectedVersion": ada.version, "allGroups": "maybe"},
+                "allGroups must be true or false.",
+            ),
+            ({"expectedVersion": ada.version, "weight": "bad"}, "weight"),
+            ({"expectedVersion": ada.version, "weight": 2}, "weight"),
         ]:
             with self.subTest(payload=payload):
                 response = self.client.patch(
                     f"/events/roster/{ada.pk}?code={self.event.code}", payload, format="json"
                 )
                 self.assertEqual(response.status_code, 400, response.data)
+                self.assertIn(message, response.data["error"])
+        # None of the rejected payloads touched the groups; "Sent" is the one
+        # the bulk update above created.
+        self.assertEqual(
+            list(self.event.participant_groups.values_list("name", flat=True)),
+            ["Faculty", "Sent"],
+        )
 
         unchanged = self.client.patch(
             f"/events/roster/{ada.pk}?code={self.event.code}",
@@ -1198,6 +1591,52 @@ class RosterImportDatabaseEdgeTests(TestCase):
         )
         self.assertEqual(unchanged.status_code, 200, unchanged.data)
         self.assertEqual(unchanged.data["participant"]["version"], ada.version)
+
+        # ``groups`` overrides the names of a cell and ``allGroups`` its flag;
+        # a membership-only edit bumps the version but never the results.
+        self.event.refresh_from_db()
+        results_revision = self.event.results_revision
+        regrouped = self.client.patch(
+            f"/events/roster/{ada.pk}?code={self.event.code}",
+            {
+                "expectedVersion": ada.version,
+                "groupName": "ALL; Ignored",
+                "groups": ["Students", " students ", "faculty"],
+                "allGroups": "false",
+            },
+            format="json",
+        )
+        self.assertEqual(regrouped.status_code, 200, regrouped.data)
+        self.assertEqual(regrouped.data["participant"]["version"], ada.version + 1)
+        self.assertEqual(regrouped.data["participant"]["group"], "Faculty; Students")
+        self.assertFalse(regrouped.data["participant"]["allGroups"])
+        self.assertEqual(regrouped.data["resultsRevision"], results_revision)
+        faculty = self.event.participant_groups.get(name="Faculty")
+        sent = self.event.participant_groups.get(name="Sent")
+        students = self.event.participant_groups.get(name="Students")
+        # Grace joined "Sent" through the bulk update above, so nobody is
+        # ungrouped any more and that row is gone.
+        self.assertEqual(
+            regrouped.data["groups"],
+            [
+                {"id": faculty.pk, "name": "Faculty", "count": 1, "weight": 1.0},
+                {"id": sent.pk, "name": "Sent", "count": 1, "weight": 1.0},
+                {"id": students.pk, "name": "Students", "count": 1, "weight": 1.0},
+            ],
+        )
+        self.assertFalse(self.event.participant_groups.filter(name__iexact="ignored").exists())
+        # Without a cell, ``groups``/``allGroups`` edit the current state.
+        flagged = self.client.patch(
+            f"/events/roster/{ada.pk}?code={self.event.code}",
+            {"expectedVersion": ada.version + 1, "allGroups": True},
+            format="json",
+        )
+        self.assertEqual(flagged.status_code, 200, flagged.data)
+        self.assertEqual(flagged.data["participant"]["group"], "ALL; Faculty; Students")
+        self.assertEqual(flagged.data["participant"]["version"], ada.version + 2)
+        self.assertEqual(flagged.data["resultsRevision"], results_revision)
+        ada.refresh_from_db()
+        self.assertTrue(ada.all_groups)
 
         direct_member = create_member("direct-weight-edge@example.com")
         direct = Participant.objects.create(
@@ -1251,6 +1690,22 @@ class RosterImportDatabaseEdgeTests(TestCase):
             ({"group": "A", "updates": {"unknown": 1}}, "Unknown"),
             ({"filter": [], "updates": {"group": "X"}}, "filter must be an object"),
             ({"group": "A", "updates": {"group": "x" * 101}}, "too long"),
+            (
+                {"group": "A", "updates": {"addGroups": "X"}},
+                "addGroups must be an array of group names.",
+            ),
+            (
+                {"group": "A", "updates": {"addGroups": ["ALL"]}},
+                "ALL is reserved for every group.",
+            ),
+            (
+                {"group": "A", "updates": {"removeGroups": [1]}},
+                "removeGroups must be an array of group names.",
+            ),
+            (
+                {"group": "A", "updates": {"allGroups": "maybe"}},
+                "allGroups must be true or false.",
+            ),
         ]
         for payload, message in cases:
             with self.subTest(payload=payload):
@@ -1422,6 +1877,69 @@ class RosterImportDatabaseEdgeTests(TestCase):
         )
         self.assertEqual(all_selected.status_code, 200, all_selected.data)
         self.assertEqual(all_selected.data["matchedCount"], 2)
+        self.assertEqual(all_selected.data["updatedCount"], 2)
+        # Every earlier cell left its group behind as a row.
+        self.assertEqual(
+            list(self.event.participant_groups.values_list("name", flat=True)),
+            ["A", "Everyone", "Unified"],
+        )
+
+        # add/remove adjust the current memberships (unknown removals are
+        # ignored, lookups are case-insensitive) and allGroups sets the flag;
+        # a membership-only edit never dirties the results.
+        adjusted = self.client.patch(
+            f"/events/roster/bulk?code={self.event.code}",
+            {
+                "filter": {"all": True},
+                "updates": {
+                    "addGroups": ["Extra", " everyone "],
+                    "removeGroups": ["missing", " EVERYONE "],
+                    "allGroups": "yes",
+                },
+                "idempotencyKey": str(uuid.uuid4()),
+            },
+            format="json",
+        )
+        self.assertEqual(adjusted.status_code, 200, adjusted.data)
+        self.assertEqual(adjusted.data["updatedCount"], 2)
+        self.assertEqual(adjusted.data["resultsRevision"], all_selected.data["resultsRevision"])
+        self.assertFalse(adjusted.data["idempotent"])
+        for participant in Participant.objects.filter(event=self.event):
+            self.assertTrue(participant.all_groups)
+            self.assertEqual(list(participant.groups.values_list("name", flat=True)), ["Extra"])
+        self.assertEqual(
+            list(self.event.participant_groups.values_list("name", flat=True)),
+            ["A", "Everyone", "Extra", "Unified"],
+        )
+        # A cell replaces both the memberships and the flag; an explicit
+        # allGroups wins over the cell's token.
+        replaced = self.client.patch(
+            f"/events/roster/bulk?code={self.event.code}",
+            {
+                "group": "Extra",
+                "updates": {"groupName": "ALL; Unified", "allGroups": False},
+                "idempotencyKey": str(uuid.uuid4()),
+            },
+            format="json",
+        )
+        self.assertEqual(replaced.status_code, 200, replaced.data)
+        self.assertEqual(replaced.data["matchedCount"], 2)
+        self.assertEqual(replaced.data["updatedCount"], 2)
+        for participant in Participant.objects.filter(event=self.event):
+            self.assertFalse(participant.all_groups)
+            self.assertEqual(list(participant.groups.values_list("name", flat=True)), ["Unified"])
+        # Repeating the same memberships changes nobody.
+        repeated = self.client.patch(
+            f"/events/roster/bulk?code={self.event.code}",
+            {
+                "group": "Unified",
+                "updates": {"addGroups": ["unified"], "removeGroups": ["Extra"]},
+                "idempotencyKey": str(uuid.uuid4()),
+            },
+            format="json",
+        )
+        self.assertEqual(repeated.status_code, 200, repeated.data)
+        self.assertEqual(repeated.data["updatedCount"], 0)
 
         self.event.status = Event.Status.ARCHIVED
         self.event.save(update_fields=["status", "updated_at"])
@@ -1458,3 +1976,5 @@ class RosterImportDatabaseEdgeTests(TestCase):
             results_revision=self.event.results_revision,
         )
         self.assertIn("roster bulk", str(bulk_receipt))
+        group = ParticipantGroup.objects.create(event=self.event, name="Faculty")
+        self.assertEqual(str(group), f"Faculty - {self.event.code}")

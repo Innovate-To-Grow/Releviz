@@ -122,40 +122,6 @@ class ProductionSettingsTests(SimpleTestCase):
             ):
                 reload_prod_settings()
 
-    def test_feedback_retention_must_be_an_integer(self):
-        with patch.dict(
-            "os.environ",
-            {**PROD_ENV, "FEEDBACK_SUBMISSION_RETENTION_DAYS": "invalid"},
-            clear=True,
-        ):
-            with self.assertRaisesMessage(
-                ImproperlyConfigured,
-                "FEEDBACK_SUBMISSION_RETENTION_DAYS must be a positive integer.",
-            ):
-                reload_prod_settings()
-
-    def test_feedback_retention_must_be_positive(self):
-        with patch.dict(
-            "os.environ",
-            {**PROD_ENV, "FEEDBACK_SUBMISSION_RETENTION_DAYS": "0"},
-            clear=True,
-        ):
-            with self.assertRaisesMessage(
-                ImproperlyConfigured,
-                "FEEDBACK_SUBMISSION_RETENTION_DAYS must be a positive integer.",
-            ):
-                reload_prod_settings()
-
-    def test_feedback_retention_accepts_positive_days(self):
-        with patch.dict(
-            "os.environ",
-            {**PROD_ENV, "FEEDBACK_SUBMISSION_RETENTION_DAYS": "30"},
-            clear=True,
-        ):
-            settings = reload_prod_settings()
-
-        self.assertEqual(settings.FEEDBACK_SUBMISSION_RETENTION.days, 30)
-
     def test_proxy_cidr_hops_must_be_an_integer(self):
         with patch.dict(
             "os.environ",

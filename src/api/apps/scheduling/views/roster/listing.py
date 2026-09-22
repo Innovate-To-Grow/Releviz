@@ -38,7 +38,7 @@ class RosterView(PrivateAPIView):
         # the page shows: a write that lands in between is picked up by the
         # next poll instead of being masked.
         activity = roster_activity(event)
-        stats = roster_stats(queryset, groups_queryset=roster)
+        stats = roster_stats(event, queryset, groups_queryset=roster)
         offset = (page - 1) * page_size
         participants = list(
             queryset.order_by("sort_order", "created_at")[offset : offset + page_size]

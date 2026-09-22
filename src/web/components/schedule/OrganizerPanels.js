@@ -3,7 +3,10 @@
 import { useEffect, useRef } from "react";
 import Alert from "@/components/ui/Alert";
 import AppButton from "@/components/ui/AppButton";
-import { AvailabilityChoice } from "@/components/ui/Availability";
+import {
+  AvailabilityChoice,
+  startingAvailabilityValue,
+} from "@/components/ui/Availability";
 import FormField from "@/components/ui/FormField";
 import { RefreshIcon, SaveIcon, VerifiedIcon } from "@/components/ui/icons";
 import StatusBadge from "@/components/ui/StatusBadge";
@@ -245,6 +248,7 @@ export function ManagedScheduleDrawer({
             slotGroups={event.slotGroups}
             inperson={inperson}
             virtual={virtual}
+            startingValue={startingAvailabilityValue(event)}
             readOnly={editingLocked}
             onInpersonPaint={onInpersonPaint}
             onVirtualPaint={onVirtualPaint}

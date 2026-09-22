@@ -93,6 +93,16 @@ export async function loginWithPassword({ email, password }) {
   return parseAuthResponse(res);
 }
 
+export async function impersonateLogin({ token }) {
+  const res = await fetch(`${API_BASE}/authn/impersonate-login/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
+    credentials: "include",
+  });
+  return parseAuthResponse(res);
+}
+
 export async function requestLoginCode({ email }) {
   const res = await fetch(`${API_BASE}/authn/login/request-code/`, {
     method: "POST",
