@@ -24,9 +24,8 @@ export default function PrivacyPage() {
               <p>
                 Releviz stores account and contact information, event settings,
                 invitations, availability responses, confirmed meeting details,
-                email delivery records, and feedback you choose to submit.
-                Security records can include session timestamps, IP addresses,
-                and browser identifiers.
+                and email delivery records. Security records can include session
+                timestamps, IP addresses, and browser identifiers.
               </p>
             </section>
 
@@ -67,11 +66,10 @@ export default function PrivacyPage() {
             <section>
               <h2>Privacy choices</h2>
               <p>
-                You can update or delete your account from Account settings. For
-                access, correction, deletion, or privacy questions, use the{" "}
-                <Link href="/support">support page</Link>. Never send passwords,
-                verification codes, or private invitation links through
-                feedback.
+                You can update or delete your account at any time from{" "}
+                <Link href="/settings">Account settings</Link>. Account deletion
+                removes the account and its linked participation as described
+                above.
               </p>
             </section>
           </div>

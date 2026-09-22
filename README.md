@@ -291,8 +291,6 @@ that an application, browser, infrastructure, or security area was skipped.
   fixes this at `1` so only the public ALB's appended requester is trusted)
 - `METRICS_BEARER_TOKEN` (required in production; dedicated credential for the private product
   metrics endpoint)
-- `FEEDBACK_SUBMISSION_RETENTION_DAYS` (default: `730`; scheduled deletion boundary for feedback
-  text)
 - `APP_LOG_LEVEL` (default: `INFO`; structured JSON application log threshold)
 - `SENTRY_DSN` (optional; external error tracking remains disabled when empty)
 - `SENTRY_ENVIRONMENT`
