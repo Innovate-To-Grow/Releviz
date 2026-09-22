@@ -9,6 +9,7 @@ from .limits import MAX_COLUMNS
 _HEADER_ALIASES = {
     "name": {"name", "full name", "participant", "participant name", "attendee"},
     "email": {"email", "email address", "e-mail", "e-mail address"},
+    "phone": {"phone", "phone number", "mobile", "cell", "telephone"},
     "group": {"group", "group name", "department", "cohort", "team"},
     "weight": {"weight", "priority"},
     "included": {"included", "include", "counted", "enabled"},

@@ -31,8 +31,8 @@ actions: **Add only** puts the person on the roster without sending email (press
 same), and **Add and send invitation** also emails their secure link right away.
 
 The Roster tab also accepts `.xlsx`, `.csv`, or pasted CSV/TSV. Map the required `name` and `email`
-columns and optional `group`, `weight`, and `included` columns, preview and correct rows, then commit
-as:
+columns and optional `group`, `weight`, `included`, and `phone` columns, preview and correct rows,
+then commit as:
 
 - **Merge** — add/update people while preserving existing schedules and delivery history.
 - **Rebuild** — type the event code to destructively replace the roster, schedules, invitations,
@@ -55,9 +55,29 @@ jobs atomically. The HTTP request returns as soon as those jobs are committed; t
 provider-handoff progress and allows retrying failed recipients. Closed, finalized, and archived
 events must be reactivated before their roster can change.
 
+The `phone` column (also recognized as `phone number`, `mobile`, `cell`, or `telephone`) accepts
+digits, spaces, and `+ - ( ) .`, with at least 7 digits and at most 32 characters. Phones are shown
+on the roster and editable per row; Releviz never uses them to send anything.
+
+To add a person who has no email of their own, open **Add person**, enter their name, one of your
+own verified email addresses, and an optional phone, tick **No email of their own — use one of mine
+and I'll enter their schedule**, then click **Add person** (the **Add and send invitation** action is
+hidden while the box is ticked). No invitation, reminder, or final notification is ever sent for
+that person, and you receive nothing extra; the row shows
+**Organizer-managed** and **Not sent**, and you enter their availability with **Edit schedule**.
+Several people can share your address. Each is matched by name under that address, so give two
+different people distinct names (for example "John Smith (Team B)"); re-entering an identical name
+returns the existing row. Typing your own address without the checkbox is refused with a hint to
+tick it.
+
+Roster import cannot create organizer-managed people: a sheet that repeats your address is flagged
+because two rows would resolve to one account. Add such people one by one with **Add person**.
+
 Invite-only links are visible only to the organizer, existing participants, temporary recipients
 using their event-scoped code flow, or full accounts whose verified email matches an invitation.
-Open-link events retain code-based joining, subject to the 1,000-person cap.
+Organizer-managed people are the exception: they never sign in or receive links, and only the
+organizer enters their schedule. Open-link events retain code-based joining, subject to the
+1,000-person cap.
 
 ### 3. Participants Fill In Availability
 
@@ -284,7 +304,9 @@ The roster source format, preview/merge/rebuild flow, duplicate rules, and pagin
 are implemented in the scheduling app.
 
 Temporary/full identity rules, the restricted link session, shared versioned editing, upgrade, and
-rollback behavior are enforced by the authn app.
+rollback behavior are enforced by the authn app. Organizer-managed people are the one exception:
+they are backed by an identity-less temporary member with no contact email, the shared address
+stays the organizer's login identity, and phone numbers are display-only (no SMS, no phone login).
 
 Email delivery is configured in Django admin under **Email Delivery**. Authentication messages,
 final notifications, invitations, and reminders use persisted retryable jobs. Roster mutation,

@@ -12,7 +12,7 @@ from apps.scheduling.models import Event, EventInvitation, Participant
 from apps.scheduling.services.events.lifecycle import response_write_error
 from apps.scheduling.services.fingerprints import email_content_fingerprint, payload_fingerprint
 
-from .addresses import resolve_invited_member
+from .addresses import normalize_phone, resolve_invited_member
 from .errors import EventEmailRequestError
 from .managed import create_or_reuse_managed_participant
 from .messages import event_email_parts
@@ -249,20 +249,30 @@ def create_or_reuse_managed_participant_and_send(
     name: str,
     email: str,
     idempotency_key,
+    phone: str = "",
+    organizer_managed: bool = False,
 ) -> dict:
     """Create/restore one roster person and atomically queue their invitation.
 
     A participant that is already visible is a no-op for a new idempotency key.
     Replaying the original key still returns the original delivery request.
+    An organizer-managed person never receives email, so their request only
+    records the key.
     """
 
+    # Serialize on the event so a double-submitted key sees the receipt its
+    # twin wrote instead of colliding on one_email_delivery_request_per_key.
+    event = Event.objects.select_for_update().get(pk=event.pk)
     normalized_name = str(name or "").strip()
     normalized_email = str(email or "").strip().lower()
+    normalized_phone = normalize_phone(phone)
     managed_fingerprint = payload_fingerprint(
         {
             "operation": "managed_participant",
             "name": normalized_name,
             "email": normalized_email,
+            "phone": normalized_phone,
+            "organizerManaged": organizer_managed,
         }
     )
     previous = EmailDeliveryRequest.objects.filter(
@@ -281,9 +291,14 @@ def create_or_reuse_managed_participant_and_send(
         organizer=organizer,
         name=normalized_name,
         email=normalized_email,
+        phone=normalized_phone,
+        organizer_managed=organizer_managed,
     )
     previous_exists = previous is not None
-    should_send = result["participantCreated"] or result["participantRestored"] or previous_exists
+    # Organizer-managed people never receive email; their receipt only records the key.
+    should_send = not organizer_managed and (
+        result["participantCreated"] or result["participantRestored"] or previous_exists
+    )
     delivery_result = None
     if should_send:
         delivery_result = upsert_and_send_invitations(
@@ -293,6 +308,8 @@ def create_or_reuse_managed_participant_and_send(
             idempotency_key=idempotency_key,
             request_fingerprint=managed_fingerprint,
         )
+    elif previous_exists:
+        delivery_result = _request_result(previous, event=event, idempotent=True, hydrate=True)
     else:
         request_record = EmailDeliveryRequest.objects.create(
             event=event,

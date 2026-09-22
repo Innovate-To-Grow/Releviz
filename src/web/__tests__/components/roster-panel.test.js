@@ -1008,6 +1008,8 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
       {
         name: "Newbie",
         email: "newbie@example.com",
+        phone: "",
+        organizerManaged: false,
         idempotencyKey: expect.any(String),
         sendInvitation: true,
       },
@@ -1043,11 +1045,418 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
       {
         name: "Inactive Person",
         email: "inactive@example.com",
+        phone: "",
+        organizerManaged: false,
         idempotencyKey: expect.any(String),
         sendInvitation: false,
       },
       "token",
     );
+  });
+});
+
+describe("RosterPanel organizer-managed people", () => {
+  const managedHelp =
+    "Enter one of your own verified email addresses. No invitation is sent.";
+  const managedLabel =
+    "No email of their own — use one of mine and I'll enter their schedule";
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    fetchRoster.mockResolvedValue(rosterResponse([participant()]));
+  });
+
+  async function openInviteForm() {
+    fireEvent.click(await screen.findByRole("button", { name: "Add person" }));
+    const form = screen.getByRole("form", { name: /add a person/i });
+    const name = within(form).getByLabelText(/Full name/);
+    // Opening moves focus to the name on a timer; wait for it so later focus
+    // assertions are not overtaken.
+    await waitFor(() => expect(name).toHaveFocus());
+    return {
+      form,
+      name,
+      email: within(form).getByLabelText(/Email address/),
+      phone: within(form).getByLabelText("Phone (optional)"),
+      managed: within(form).getByLabelText(managedLabel),
+    };
+  }
+
+  test("adds a person the organizer manages without sending an invitation", async () => {
+    const onDeliveryRequestChange = jest.fn();
+    createManagedParticipant.mockResolvedValue({
+      participant: { id: "managed-1", name: "Managed Person" },
+      created: true,
+      restored: false,
+      memberCreated: true,
+      autoInvitedCount: 0,
+      deliveryRequest: {
+        id: "managed-delivery",
+        operation: "invitation",
+        recipientCount: 0,
+        delivery: {},
+      },
+    });
+    await renderPanel({ onDeliveryRequestChange });
+    const invite = await openInviteForm();
+    expect(invite.phone).toHaveAttribute("type", "tel");
+    expect(invite.phone).toHaveAttribute("maxlength", "32");
+    expect(invite.managed).not.toBeChecked();
+    expect(within(invite.form).queryByText(managedHelp)).toBeNull();
+    expect(
+      within(invite.form).getByRole("button", { name: "Add only" }),
+    ).toHaveAttribute("type", "submit");
+    expect(
+      within(invite.form)
+        .getByRole("button", { name: "Add and send invitation" })
+        .querySelector(".app-btn-icon"),
+    ).not.toBeNull();
+
+    // Sending is meaningless for a person without their own email, so the
+    // form collapses to a single add action.
+    fireEvent.click(invite.managed);
+    expect(invite.managed).toBeChecked();
+    expect(invite.email).toHaveAccessibleDescription(managedHelp);
+    const submit = within(invite.form).getByRole("button", {
+      name: "Add person",
+    });
+    expect(submit).toHaveAttribute("type", "submit");
+    expect(submit.querySelector(".app-btn-icon")).toBeNull();
+    expect(
+      within(invite.form).queryByRole("button", {
+        name: "Add and send invitation",
+      }),
+    ).toBeNull();
+    expect(
+      within(invite.form).queryByRole("button", { name: "Add only" }),
+    ).toBeNull();
+
+    fireEvent.change(invite.name, { target: { value: " Managed Person " } });
+    fireEvent.change(invite.email, {
+      target: { value: "Organizer@Example.com" },
+    });
+    fireEvent.change(invite.phone, { target: { value: " +1 555 010 0199 " } });
+    fireEvent.submit(invite.form);
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Managed Person was added. Use Edit schedule to enter their availability.",
+    );
+    expect(createManagedParticipant).toHaveBeenCalledWith(
+      "ROSTER1",
+      {
+        name: "Managed Person",
+        email: "organizer@example.com",
+        phone: "+1 555 010 0199",
+        organizerManaged: true,
+        idempotencyKey: expect.any(String),
+        sendInvitation: false,
+      },
+      "token",
+    );
+    // No invitation was queued, so there is no delivery progress to show.
+    expect(onDeliveryRequestChange).not.toHaveBeenCalled();
+    expect(screen.queryByRole("form", { name: /add a person/i })).toBeNull();
+
+    // The form comes back clean for the next person.
+    const reopened = await openInviteForm();
+    expect(reopened.phone).toHaveValue("");
+    expect(reopened.managed).not.toBeChecked();
+    expect(
+      within(reopened.form).getByRole("button", {
+        name: "Add and send invitation",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  test("keeps the existing notice when a managed person is already on the roster", async () => {
+    createManagedParticipant
+      .mockResolvedValueOnce({
+        participant: { id: "managed-1", name: "Managed Person" },
+        created: false,
+        restored: false,
+        autoInvitedCount: 0,
+        deliveryRequest: null,
+      })
+      .mockResolvedValueOnce({
+        participant: { id: "managed-1", name: "Managed Person" },
+        created: false,
+        restored: true,
+        autoInvitedCount: 0,
+        deliveryRequest: null,
+      });
+    await renderPanel();
+    let invite = await openInviteForm();
+    fireEvent.click(invite.managed);
+    fireEvent.change(invite.name, { target: { value: "Managed Person" } });
+    fireEvent.change(invite.email, {
+      target: { value: "organizer@example.com" },
+    });
+    fireEvent.submit(invite.form);
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      /^Managed Person is already on this roster\. No new invitation was sent\.$/,
+    );
+
+    // A hidden row that comes back counts as added again.
+    invite = await openInviteForm();
+    fireEvent.click(invite.managed);
+    fireEvent.change(invite.name, { target: { value: "Managed Person" } });
+    fireEvent.change(invite.email, {
+      target: { value: "organizer@example.com" },
+    });
+    fireEvent.submit(invite.form);
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Managed Person was added. Use Edit schedule to enter their availability.",
+    );
+    expect(createManagedParticipant).toHaveBeenCalledTimes(2);
+    expect(createManagedParticipant.mock.calls[1][1]).toEqual(
+      expect.objectContaining({
+        phone: "",
+        organizerManaged: true,
+        sendInvitation: false,
+      }),
+    );
+  });
+
+  test("shows the server's own-address hint and clears it when the checkbox changes", async () => {
+    createManagedParticipant.mockRejectedValue(
+      Object.assign(
+        new Error(
+          'That is one of your own addresses. Check "No email of their own" to add a person you manage.',
+        ),
+        { status: 409, errorCode: "organizer_own_email" },
+      ),
+    );
+    await renderPanel();
+    const invite = await openInviteForm();
+    fireEvent.change(invite.name, { target: { value: "Managed Person" } });
+    fireEvent.change(invite.email, {
+      target: { value: "organizer@example.com" },
+    });
+    fireEvent.submit(invite.form);
+    const error = await within(invite.form).findByRole("alert");
+    expect(error).toHaveClass("roster-invite-form__error");
+    expect(error).toHaveTextContent(
+      'That is one of your own addresses. Check "No email of their own" to add a person you manage.',
+    );
+    expect(createManagedParticipant).toHaveBeenCalledWith(
+      "ROSTER1",
+      expect.objectContaining({ organizerManaged: false }),
+      "token",
+    );
+    // The typed values survive the failure.
+    expect(invite.name).toHaveValue("Managed Person");
+    expect(invite.email).toHaveValue("organizer@example.com");
+
+    fireEvent.click(invite.managed);
+    expect(within(invite.form).queryByRole("alert")).toBeNull();
+    expect(invite.managed).toBeChecked();
+  });
+
+  test("validates the phone before sending and clears the error once it is fixed", async () => {
+    await renderPanel();
+    const invite = await openInviteForm();
+    fireEvent.change(invite.name, { target: { value: "Managed Person" } });
+    fireEvent.change(invite.email, {
+      target: { value: "person@example.com" },
+    });
+
+    fireEvent.change(invite.phone, { target: { value: "call me" } });
+    fireEvent.blur(invite.phone);
+    expect(
+      within(invite.form).getByText("Enter a valid phone number."),
+    ).toBeVisible();
+    fireEvent.change(invite.phone, { target: { value: "12345" } });
+    expect(
+      within(invite.form).queryByText("Enter a valid phone number."),
+    ).toBeNull();
+    fireEvent.submit(invite.form);
+    expect(
+      await within(invite.form).findByText("Enter a valid phone number."),
+    ).toBeVisible();
+    expect(invite.phone).toHaveFocus();
+    expect(invite.phone).toHaveAttribute("aria-invalid", "true");
+    expect(createManagedParticipant).not.toHaveBeenCalled();
+
+    fireEvent.change(invite.phone, { target: { value: "1".repeat(33) } });
+    fireEvent.blur(invite.phone);
+    expect(
+      within(invite.form).getByText("Phone must be 32 characters or fewer."),
+    ).toBeVisible();
+    fireEvent.submit(invite.form);
+    expect(createManagedParticipant).not.toHaveBeenCalled();
+
+    // Name errors still take focus first.
+    fireEvent.change(invite.name, { target: { value: " " } });
+    fireEvent.submit(invite.form);
+    expect(
+      await within(invite.form).findByText("Full name is required."),
+    ).toBeVisible();
+    expect(invite.name).toHaveFocus();
+
+    createManagedParticipant.mockResolvedValue({
+      participant: { id: "new-1", name: "Managed Person" },
+      created: true,
+      autoInvitedCount: 1,
+      deliveryRequest: null,
+    });
+    fireEvent.change(invite.name, { target: { value: "Managed Person" } });
+    fireEvent.change(invite.phone, { target: { value: "+1 (555) 010-0199" } });
+    expect(
+      within(invite.form).queryByText("Phone must be 32 characters or fewer."),
+    ).toBeNull();
+    fireEvent.blur(invite.phone);
+    expect(within(invite.form).queryByRole("alert")).toBeNull();
+    fireEvent.click(
+      within(invite.form).getByRole("button", {
+        name: "Add and send invitation",
+      }),
+    );
+    await waitFor(() =>
+      expect(createManagedParticipant).toHaveBeenCalledWith(
+        "ROSTER1",
+        expect.objectContaining({
+          phone: "+1 (555) 010-0199",
+          organizerManaged: false,
+          sendInvitation: true,
+        }),
+        "token",
+      ),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Managed Person is ready to respond. Their invitation was queued.",
+    );
+  });
+
+  test("resets the phone and checkbox when the form closes", async () => {
+    await renderPanel();
+    let invite = await openInviteForm();
+    fireEvent.change(invite.phone, { target: { value: "+1 555 010 0199" } });
+    fireEvent.click(invite.managed);
+    expect(invite.managed).toBeChecked();
+    fireEvent.click(
+      within(invite.form).getByRole("button", { name: "Cancel" }),
+    );
+    expect(screen.queryByRole("form", { name: /add a person/i })).toBeNull();
+
+    invite = await openInviteForm();
+    expect(invite.phone).toHaveValue("");
+    expect(invite.managed).not.toBeChecked();
+    expect(
+      within(invite.form).getByRole("button", {
+        name: "Add and send invitation",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  test("labels organizer-managed rows and shows the phone between email and account", async () => {
+    fetchRoster.mockResolvedValue(
+      rosterResponse([
+        participant({
+          id: "managed-1",
+          name: "Managed Person",
+          email: "organizer@example.com",
+          phone: "+1 555 010 0199",
+          organizerManaged: true,
+          invitationStatus: "not_sent",
+        }),
+        participant({
+          id: "p-2",
+          name: "Plain Person",
+          organizerManaged: false,
+        }),
+        participant({
+          id: "p-3",
+          name: "Full Person",
+          email: "",
+          phone: "",
+          accountAccess: "full",
+          canOrganizerEditAvailability: false,
+        }),
+      ]),
+    );
+    await renderPanel();
+    const table = await screen.findByRole("region", {
+      name: "Roster participants",
+    });
+    expect(
+      within(table).getByText(
+        "organizer@example.com · +1 555 010 0199 · Organizer-managed",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(table).getByText("temp@example.com · Temporary"),
+    ).toBeInTheDocument();
+    expect(
+      within(table).getByText("No email · Full account"),
+    ).toBeInTheDocument();
+    // The organizer enters a managed person's schedule.
+    const managedRow = within(table)
+      .getByRole("rowheader", { name: /Managed Person/ })
+      .closest("tr");
+    expect(
+      within(managedRow).getByRole("button", { name: "Edit schedule" }),
+    ).toBeEnabled();
+    expect(within(managedRow).getByText("Not sent")).toBeInTheDocument();
+    expect(screen.getByLabelText("Search roster")).toHaveAttribute(
+      "placeholder",
+      "Search name, email or phone",
+    );
+  });
+
+  test("patches a row's phone on blur and skips unchanged values", async () => {
+    patchRosterParticipant.mockResolvedValueOnce({
+      participant: participant({ phone: "+1 555 010 0199", version: 5 }),
+    });
+    await renderPanel();
+    const phone = await screen.findByLabelText("Phone for Temp Person");
+    expect(phone).toHaveAttribute("type", "tel");
+    expect(phone).toHaveAttribute("maxlength", "32");
+    expect(phone).toHaveValue("");
+
+    // Blurring without a change sends nothing.
+    fireEvent.blur(phone);
+    expect(patchRosterParticipant).not.toHaveBeenCalled();
+
+    fireEvent.change(phone, { target: { value: "+1 555 010 0199" } });
+    expect(phone).toHaveValue("+1 555 010 0199");
+    fireEvent.blur(phone);
+    await waitFor(() =>
+      expect(patchRosterParticipant).toHaveBeenCalledWith(
+        "ROSTER1",
+        "p-1",
+        { phone: "+1 555 010 0199", expectedVersion: 4 },
+        "token",
+      ),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Temp Person was updated.",
+    );
+    expect(phone).toHaveValue("+1 555 010 0199");
+    expect(
+      screen.getByText("temp@example.com · +1 555 010 0199 · Temporary"),
+    ).toBeInTheDocument();
+
+    // The next patch carries the version the server returned; an identical
+    // value is not re-sent.
+    fireEvent.change(phone, { target: { value: "+1 555 010 0199" } });
+    fireEvent.blur(phone);
+    expect(patchRosterParticipant).toHaveBeenCalledTimes(1);
+
+    patchRosterParticipant.mockRejectedValueOnce(
+      Object.assign(new Error("Enter a valid phone number."), { status: 400 }),
+    );
+    fireEvent.change(phone, { target: { value: "nope" } });
+    fireEvent.blur(phone);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Enter a valid phone number.",
+    );
+    expect(patchRosterParticipant).toHaveBeenLastCalledWith(
+      "ROSTER1",
+      "p-1",
+      { phone: "nope", expectedVersion: 5 },
+      "token",
+    );
+    // The rejected draft rolls back to the saved phone.
+    await waitFor(() => expect(phone).toHaveValue("+1 555 010 0199"));
   });
 });
 
@@ -1114,6 +1523,8 @@ describe("RosterPanel adds people and sends invitations", () => {
         {
           name: "Newbie",
           email: "newbie@example.com",
+          phone: "",
+          organizerManaged: false,
           idempotencyKey: "roster-key",
           sendInvitation: false,
         },
@@ -1207,6 +1618,8 @@ describe("RosterPanel adds people and sends invitations", () => {
         {
           name: "Newbie",
           email: "newbie@example.com",
+          phone: "",
+          organizerManaged: false,
           idempotencyKey: "roster-key",
           sendInvitation: true,
         },

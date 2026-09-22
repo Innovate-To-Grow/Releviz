@@ -162,6 +162,53 @@ assert EmailMessageLog.objects.filter(event=event, message_type="final_cancellat
   });
 }
 
+function assertOrganizerManagedState(payload) {
+  const script = `
+import json
+import os
+import django
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.e2e")
+django.setup()
+
+from apps.authn.models import ContactEmail, Member
+from apps.mail.models import EmailDeliveryJob, EmailMessageLog
+from apps.scheduling.models import Event, EventInvitation, Participant
+
+data = json.loads(${JSON.stringify(JSON.stringify(payload))})
+event = Event.objects.get(code=data["code"])
+organizer = Member.objects.get(pk=data["organizer_id"])
+
+assert EventInvitation.objects.filter(event=event).count() == 0
+# The email worker webServer is always running, so count by type rather than
+# by status: no invitation is ever queued for an organizer-managed person.
+assert EmailDeliveryJob.objects.filter(
+    event=event,
+    message_type=EmailMessageLog.MessageType.INVITATION,
+).count() == 0
+managed = Participant.objects.filter(event=event, organizer_managed=True)
+assert managed.count() == 1
+participant = managed.get()
+assert participant.contact_email == data["organizer_email"]
+assert participant.contact_phone == data["phone"]
+assert participant.member_id != organizer.pk
+assert participant.member.access_level == "temporary"
+assert participant.member.email == ""
+assert not ContactEmail.objects.filter(member=participant.member).exists()
+# The shared address still belongs to the organizer alone.
+assert ContactEmail.objects.get(email_address=data["organizer_email"]).member_id == organizer.pk
+`;
+  execFileSync(PYTHON_BIN, ["-c", script], {
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      PYTHONPATH: path.join(ROOT, "src/api"),
+      DJANGO_SETTINGS_MODULE: "config.settings.e2e",
+    },
+    stdio: "pipe",
+  });
+}
+
 function assertDeletedAccountState(payload) {
   const script = `
 import json
@@ -325,6 +372,26 @@ function temporaryAccessPathFromEmail(body) {
     throw new Error("No temporary access link found in invitation email");
   const link = new URL(rawLink.replaceAll("&amp;", "&"));
   return `${link.pathname}${link.search}`;
+}
+
+// Clicks "Review attendance" until the preview lands. The Finalize step
+// re-keys when a pick changes, so a click made right after can be dropped by
+// slower engines (seen on WebKit); the preview is read-only, so retrying is
+// safe.
+async function reviewAttendance(page) {
+  const notice = page.getByText(
+    "Attendance review is current for this candidate.",
+  );
+  await expect
+    .poll(
+      async () => {
+        if (await notice.isVisible()) return true;
+        await page.getByRole("button", { name: "Review attendance" }).click();
+        return notice.isVisible();
+      },
+      { timeout: 20_000, intervals: [500, 1000, 2000] },
+    )
+    .toBe(true);
 }
 
 test.describe("Releviz account and scheduling flow", () => {
@@ -790,6 +857,63 @@ test.describe("Releviz account and scheduling flow", () => {
     );
 
     await temporaryContext.close();
+  });
+
+  test("adds a person under the organizer's own email without inviting them", async ({
+    page,
+  }) => {
+    const runId = `${Date.now()}-${Math.round(Math.random() * 100_000)}`;
+    const organizerEmail = `managing-organizer-${runId}@example.com`;
+    const eventName = `Organizer-managed roster ${runId}`;
+    const managedName = "Managed Morgan Junior";
+    const managedPhone = "+1 (555) 010-2030";
+
+    await registerAccount(page, organizerEmail, "Morgan", "Manager");
+    await page.getByRole("link", { name: "Create New Event" }).click();
+    await fillTextbox(page, "Event Name", eventName);
+    await page.getByRole("button", { name: "Create Event" }).click();
+    await page.waitForURL(/\/event\?code=/);
+    const eventCode = new URL(page.url()).searchParams.get("code");
+    expect(eventCode).toMatch(/^[A-Z0-9]+$/);
+    const organizerSession = await readSession(page);
+
+    await page.getByRole("button", { name: "Add person", exact: true }).click();
+    await fillTextbox(page, "Full name", managedName);
+    await fillTextbox(page, "Email address", organizerEmail);
+    await fillTextbox(page, "Phone (optional)", managedPhone);
+    await page
+      .getByRole("checkbox", {
+        name: "No email of their own — use one of mine and I'll enter their schedule",
+      })
+      .check();
+    await expect(
+      page.getByText(
+        "Enter one of your own verified email addresses. No invitation is sent.",
+      ),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Add person", exact: true }).click();
+    await expect(
+      page.getByText(
+        `${managedName} was added. Use Edit schedule to enter their availability.`,
+      ),
+    ).toBeVisible();
+
+    const managedRow = page.locator("tr.roster-table__row", {
+      hasText: managedName,
+    });
+    await expect(managedRow).toContainText("Organizer-managed");
+    await expect(managedRow).toContainText(managedPhone);
+    await expect(managedRow).toContainText("Not sent");
+    await expect(
+      managedRow.getByRole("button", { name: "Edit schedule" }),
+    ).toBeVisible();
+
+    assertOrganizerManagedState({
+      code: eventCode,
+      organizer_id: organizerSession.user.id,
+      organizer_email: organizerEmail,
+      phone: managedPhone,
+    });
   });
 
   test("runs the scaled roster-to-calendar workflow and persists it to Postgres", async ({
@@ -1368,8 +1492,10 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(
       page.getByText("1 reminder emails were queued."),
     ).toBeVisible();
+    // The background email worker may deliver before the panel renders, so
+    // assert the run's size rather than its transient "queued" count.
     const reminderDeliveryProgress = page.getByLabel("Event delivery progress");
-    await expect(reminderDeliveryProgress.getByText("1 queued")).toBeVisible();
+    await expect(reminderDeliveryProgress.getByText("1 total")).toBeVisible();
     dispatchEmailJobs();
     await refreshWorkspace(page);
     await expect(reminderDeliveryProgress.getByText("1 sent")).toBeVisible();
@@ -1569,10 +1695,7 @@ test.describe("Releviz account and scheduling flow", () => {
       .first()
       .click();
     await expect(page.getByRole("heading", { name: "Finalize" })).toBeFocused();
-    await page.getByRole("button", { name: "Review attendance" }).click();
-    await expect(
-      page.getByText("Attendance review is current for this candidate."),
-    ).toBeVisible();
+    await reviewAttendance(page);
     await expect(page.getByText("Available", { exact: true })).toBeVisible();
     // The count tiles are backed by a per-person breakdown: a header row plus
     // one row for each roster entry.
@@ -1608,7 +1731,7 @@ test.describe("Releviz account and scheduling flow", () => {
       "Final confirmation delivery",
     );
     await expect(
-      finalizationDeliveryProgress.getByText("2 queued"),
+      finalizationDeliveryProgress.getByText("2 total"),
     ).toBeVisible();
     dispatchEmailJobs();
     await refreshWorkspace(page);
@@ -1658,13 +1781,23 @@ test.describe("Releviz account and scheduling flow", () => {
     const rankedRail = page.getByRole("complementary", {
       name: "Ranked windows",
     });
-    await rankedRail
-      .getByRole("button", { name: "Choose this time" })
-      .first()
-      .click();
-    await expect(
-      rankedRail.getByRole("button", { name: "Selected time" }),
-    ).toHaveCount(1);
+    // The sticky section nav can intercept the first click while the rail
+    // is still scrolling the option into view (seen on WebKit), so retry the
+    // pick until the rail reflects it; choosing is idempotent.
+    await expect
+      .poll(
+        async () => {
+          await rankedRail
+            .getByRole("button", { name: "Choose this time" })
+            .first()
+            .click();
+          return rankedRail
+            .getByRole("button", { name: "Selected time" })
+            .count();
+        },
+        { timeout: 20_000, intervals: [500, 1000, 2000] },
+      )
+      .toBe(1);
 
     const cancellationStartedAt = Date.now() - 1000;
     const cancellationResponsePromise = page.waitForResponse(
@@ -1693,7 +1826,7 @@ test.describe("Releviz account and scheduling flow", () => {
       "Event delivery progress",
     );
     await expect(
-      cancellationDeliveryProgress.getByText("2 queued"),
+      cancellationDeliveryProgress.getByText("2 total"),
     ).toBeVisible();
     dispatchEmailJobs();
     await refreshWorkspace(page);
@@ -1723,10 +1856,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(page.locator("#organizer-finalize")).toContainText(
       "Ranked #3",
     );
-    await page.getByRole("button", { name: "Review attendance" }).click();
-    await expect(
-      page.getByText("Attendance review is current for this candidate."),
-    ).toBeVisible();
+    await reviewAttendance(page);
     const secondFinalStartedAt = Date.now() - 1000;
     const secondFinalResponsePromise = page.waitForResponse(
       (response) =>
