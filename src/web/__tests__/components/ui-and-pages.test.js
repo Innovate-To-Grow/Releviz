@@ -29,6 +29,8 @@ import {
   AvailabilitySwatch,
   availabilityKey,
   availabilityLabel,
+  startingAvailabilityValue,
+  startingBrushValue,
 } from "@/components/ui/Availability";
 import { DAY_LABELS, DAYS_PER_WEEK } from "@/lib/constants";
 import { formatHour, formatMode, formatTime } from "@/lib/format";
@@ -661,6 +663,39 @@ describe("small UI modules", () => {
       screen.getByText("11:00 PM - 1:00 AM (next day)"),
     ).toBeInTheDocument();
   });
+
+  test("EventDetailsGrid organizer details show how participants start", () => {
+    const { rerender } = render(
+      <EventDetailsGrid
+        variant="organizer"
+        event={{
+          code: "ORG1",
+          slotMinutes: 30,
+          status: "active",
+          startingAvailability: "available",
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Show all details" }));
+    expect(
+      screen.getByText("Participants start as").nextElementSibling,
+    ).toHaveTextContent("Available");
+
+    rerender(
+      <EventDetailsGrid
+        variant="organizer"
+        event={{
+          code: "ORG1",
+          slotMinutes: 30,
+          status: "active",
+          startingAvailability: "busy",
+        }}
+      />,
+    );
+    expect(
+      screen.getByText("Participants start as").nextElementSibling,
+    ).toHaveTextContent("Busy");
+  });
 });
 
 describe("role-aware headers", () => {
@@ -836,6 +871,19 @@ describe("role-aware headers", () => {
     expect(AVAILABILITY_CHOICES.map((choice) => choice.value)).toEqual([
       0, 0.5, 1,
     ]);
+
+    // Slots start at the organizer's chosen level and the brush pre-selects
+    // the opposite. A payload without the setting comes from an API that
+    // still seeds every schedule Busy, so it reads as a Busy start.
+    expect(startingAvailabilityValue(undefined)).toBe(0);
+    expect(startingAvailabilityValue({})).toBe(0);
+    expect(
+      startingAvailabilityValue({ startingAvailability: "available" }),
+    ).toBe(1);
+    expect(startingAvailabilityValue({ startingAvailability: "busy" })).toBe(0);
+    expect(startingBrushValue(undefined)).toBe(1);
+    expect(startingBrushValue({ startingAvailability: "available" })).toBe(0);
+    expect(startingBrushValue({ startingAvailability: "busy" })).toBe(1);
 
     const { container, rerender } = render(
       <AvailabilitySwatch level="free" virtual />,

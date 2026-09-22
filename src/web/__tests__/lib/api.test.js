@@ -939,6 +939,7 @@ describe("business API helpers", () => {
         timezone: "America/Los_Angeles",
         remindersEnabled: false,
         reminderHoursBefore: 12,
+        startingAvailability: "busy",
       },
       "tok",
     );
@@ -1112,9 +1113,17 @@ describe("business API helpers", () => {
         body: JSON.stringify({
           name: "Minimal",
           accessMode: "invite_only",
+          startingAvailability: "available",
           meetingDurationMinutes: 30,
           status: "active",
         }),
+      }),
+    );
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/events",
+      expect.objectContaining({
+        method: "POST",
+        body: expect.stringContaining('"startingAvailability":"busy"'),
       }),
     );
     expect(global.fetch).toHaveBeenCalledWith(

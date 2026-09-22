@@ -18,6 +18,8 @@ Go to the home page and fill out the event form:
 - **Meeting Duration** — 15–480 minutes, aligned to the slot size and contained in one time group
 - **Days** — pick which days of the week are options (defaults to Mon-Fri)
 - **Access** — Invite only (default) or Open link
+- **Participants start as** — Available (default; people mark the times that do not work) or Busy
+  (people mark the times that work)
 
 Sign in before creating an event: either with an emailed 6-digit code (which creates your account
 on first use) or with email + password for accounts that set one through Forgot password
@@ -68,6 +70,15 @@ Each participant:
 3. Clicks, drags, touches, or uses the keyboard on the **schedule grid** to paint 15- or 30-minute
    slots with that availability level
 4. Clicks **Submit Schedule** when done
+
+By default every slot starts **Available** (all green in person, all blue virtual), so a
+participant paints **Busy** over the times that do not work rather than hunting for the times that
+do. The brush pre-selects the opposite of the starting state (Busy for an Available start), and
+**Mark all Available** puts the grid back to its starting state. An organizer who prefers the
+other approach sets **Participants start as** to Busy: slots then start empty, the brush
+pre-selects Available, and **Mark all Busy** is the reset. Changing the setting on an existing
+event re-seeds the schedules of people who have not touched theirs yet; anyone who has already
+painted or submitted keeps their response.
 
 The grid uses color coding plus text cues: hatched red (busy) -> yellow ◐ (if needed) -> green ✓
 (available). Virtual channels use a red -> purple -> blue scale.

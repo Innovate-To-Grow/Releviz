@@ -166,11 +166,18 @@ async function fillTextbox(page, name, value) {
 }
 
 // Event settings use native <select> controls, so the value is chosen by its
-// visible option label.
-async function selectOption(page, name, optionName) {
+// visible option label. Most of them use the label as the value (timezones);
+// pass `expectedValue` for a select whose option values differ from their
+// labels.
+async function selectOption(
+  page,
+  name,
+  optionName,
+  expectedValue = optionName,
+) {
   const select = page.getByRole("combobox", { name });
   await select.selectOption({ label: optionName });
-  await expect(select).toHaveValue(optionName);
+  await expect(select).toHaveValue(expectedValue);
 }
 
 async function expandAdvancedOptions(page) {
@@ -236,6 +243,9 @@ async function apiJson(request, method, url, token, body) {
 // Creates an active weekday event through the API and returns its full
 // definition (slot groups included) so specs can seed responses by slot
 // index. `overrides` replaces any field of the default payload.
+// `startingAvailability` is deliberately left out so these events take the
+// product default (everyone starts Available); a spec that needs the legacy
+// Busy start passes `{ startingAvailability: "busy" }`.
 async function createEvent(request, token, overrides) {
   const created = await apiJson(request, "POST", "/events", token, {
     startTime: "09:00",

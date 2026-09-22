@@ -230,8 +230,11 @@ assert participant.submitted is False
 assert participant.version == 3
 assert len(participant.availability_inperson) == expected_availability_length(event)
 assert len(participant.availability_virtual) == expected_availability_length(event)
-assert not any(participant.availability_inperson)
-assert not any(participant.availability_virtual)
+# The reset re-seeds from the event's starting availability. This event kept
+# the Available default, so every slot is 1 (all zeros under the old Busy start).
+assert event.starting_availability == "available"
+assert all(value == 1 for value in participant.availability_inperson)
+assert all(value == 1 for value in participant.availability_virtual)
 
 assert not Event.objects.filter(code=data["deleted_copy_code"]).exists()
 deletion = EventDeletionRecord.objects.get(code=data["deleted_copy_code"])
@@ -484,6 +487,11 @@ test.describe("Releviz account and scheduling flow", () => {
       temporaryPage.getByText("You are responding as Temporary Taylor"),
     ).toBeVisible();
 
+    // This event keeps the default Available start, so the roster import
+    // seeded Taylor's schedule with ones and the brush pre-selects Busy:
+    // "Apply to all" paints every slot Busy. The flow only asserts the saved
+    // and submitted states and the counted total, never the slot values, so
+    // the click still produces the change that drives autosave.
     await temporaryPage.getByRole("button", { name: "Apply to all" }).click();
     await expect(temporaryPage.getByText("Saving draft…")).toBeVisible();
     await expect(
@@ -504,6 +512,10 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(
       organizerDrawer.getByText("Latest response loaded."),
     ).toBeVisible();
+    // The drawer's brush also pre-selects Busy for an Available-start event,
+    // so choosing Busy is a no-op and the first slot is already Busy after
+    // Taylor's "Apply to all". "Submit on behalf" saves regardless of whether
+    // anything changed, which is all this flow checks.
     await organizerDrawer
       .getByRole("button", { name: "Busy", exact: true })
       .click();
@@ -814,6 +826,19 @@ test.describe("Releviz account and scheduling flow", () => {
     await fillTextbox(page, "Event Name", eventName);
     await fillTextbox(page, "Location / Address", "E2E Room");
     await selectOption(page, "Event timezone", "UTC");
+    // Participants start Available by default. This flow drives the editor
+    // from a Busy start (paint Available, "Mark all Busy", a tap turns a slot
+    // on), so it opts into the legacy start here; the default itself is
+    // covered by starting-availability.spec.js.
+    await expect(page.getByLabel("Participants start as")).toHaveValue(
+      "available",
+    );
+    await selectOption(
+      page,
+      "Participants start as",
+      "Busy (they mark the times that work)",
+      "busy",
+    );
     await page.getByLabel("Meeting Duration").fill("60");
     await expandAdvancedOptions(page);
     await page
@@ -844,6 +869,7 @@ test.describe("Releviz account and scheduling flow", () => {
     expect(eventDefinition.slotMinutes).toBe(30);
     expect(eventDefinition.meetingDurationMinutes).toBe(60);
     expect(eventDefinition.status).toBe("active");
+    expect(eventDefinition.startingAvailability).toBe("busy");
     expect(eventDefinition.slotCount).toBeGreaterThan(0);
     const participantContext = await browser.newContext({
       hasTouch: true,
@@ -1827,6 +1853,11 @@ test.describe("Releviz account and scheduling flow", () => {
       organizerSession.access,
     );
     expect(eventDefinition.response.status()).toBe(200);
+    // Created with the form's defaults, so participants start Available; the
+    // response reset below re-seeds schedules from this setting.
+    expect(eventDefinition.payload.event.startingAvailability).toBe(
+      "available",
+    );
 
     const launchSeedEmail = `lifecycle-seed-${runId}@example.com`;
     const launchSeed = await importRoster(
@@ -1925,9 +1956,17 @@ test.describe("Releviz account and scheduling flow", () => {
     expect(resetSchedule.payload.schedule.availabilityInperson).toHaveLength(
       eventDefinition.payload.event.slotCount + 5,
     );
+    // A reset re-seeds every slot from the event's starting availability:
+    // this event starts Available, so the longer schedule is all ones (it was
+    // all zeros when every event started Busy).
     expect(
       resetSchedule.payload.schedule.availabilityInperson.every(
-        (value) => !value,
+        (value) => value === 1,
+      ),
+    ).toBe(true);
+    expect(
+      resetSchedule.payload.schedule.availabilityVirtual.every(
+        (value) => value === 1,
       ),
     ).toBe(true);
 

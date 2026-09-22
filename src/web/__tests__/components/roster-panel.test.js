@@ -84,11 +84,14 @@ import {
   sendRosterInvitations,
 } from "@/lib/api/roster";
 
+// The drawer flows below paint Available over a Busy start; the Available
+// default (Busy brush) has its own test.
 const event = {
   code: "ROSTER1",
   name: "Roster drawer",
   status: "active",
   mode: "mixed",
+  startingAvailability: "busy",
   slotCount: 3,
   slotGroups: [
     {
@@ -193,6 +196,34 @@ describe("RosterPanel schedule drawer", () => {
 
   afterEach(() => {
     delete window.confirm;
+  });
+
+  test("pre-selects the Busy brush for an event whose participants start Available", async () => {
+    const availableStart = { ...event, startingAvailability: "available" };
+    fetchRosterSchedule.mockResolvedValue(
+      scheduleResponse({
+        schedule: {
+          availabilityInperson: [1, 1, 1],
+          availabilityVirtual: [1, 1, 1],
+          submitted: 0,
+          version: 4,
+        },
+      }),
+    );
+    await renderPanel({ event: availableStart });
+    const dialog = await openEditor();
+    const choices = within(dialog).getByRole("group", {
+      name: "Availability status",
+    });
+    expect(
+      within(choices).getByRole("button", { name: "Busy" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Paint in-person" }),
+    );
+    expect(within(dialog).getByTestId("inperson-values")).toHaveTextContent(
+      "0,1,1",
+    );
   });
 
   test("loads the response, paints, copies channels, and saves a draft", async () => {

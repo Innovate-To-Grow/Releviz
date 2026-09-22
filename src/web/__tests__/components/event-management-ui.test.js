@@ -618,15 +618,24 @@ describe("organizer event management UI", () => {
     const timezoneField = screen.getByLabelText("Event timezone");
     const meetingDurationField = screen.getByLabelText("Meeting Duration");
     const accessField = screen.getByLabelText("Event Access");
+    const startingField = screen.getByLabelText("Participants start as");
     expect(screen.getByRole("button", { name: "In-Person" })).toBeVisible();
     expect(locationField).toBeVisible();
     expect(timezoneField).toBeVisible();
     expect(meetingDurationField).toBeVisible();
     expect(accessField).toBeVisible();
+    expect(startingField).toBeVisible();
+    expect(startingField).toHaveValue("available");
+    expect(
+      screen.getByText(
+        "Participants paint over the times to change. Starting Available means they mark the times that do not work.",
+      ),
+    ).toBeInTheDocument();
     expect(advancedOptions).not.toContainElement(locationField);
     expect(advancedOptions).not.toContainElement(timezoneField);
     expect(advancedOptions).not.toContainElement(meetingDurationField);
     expect(advancedOptions).not.toContainElement(accessField);
+    expect(advancedOptions).not.toContainElement(startingField);
 
     expect(advancedOptions).toContainElement(
       screen.getByLabelText("Slot Duration"),
@@ -688,6 +697,7 @@ describe("organizer event management UI", () => {
         endTime: "17:00",
         slotMinutes: 30,
         accessMode: "open_link",
+        startingAvailability: "available",
         timezone: "America/Los_Angeles",
         meetingDurationMinutes: 60,
         daySelectionType: "specific_dates",
@@ -696,6 +706,81 @@ describe("organizer event management UI", () => {
       }),
     );
     expect(replace).toHaveBeenCalledWith("/event?code=CREATED1");
+  });
+
+  test("create form sends a Busy start when the organizer chooses it", async () => {
+    createEvent.mockResolvedValue({
+      event: { ...baseEvent, code: "CREATED2" },
+    });
+    render(<CreateEvent />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Event Name" }), {
+      target: { value: "Busy start" },
+    });
+    const startingField = screen.getByLabelText("Participants start as");
+    expect(
+      within(startingField).getByRole("option", {
+        name: "Available (they mark the times that do not work)",
+      }),
+    ).toHaveValue("available");
+    await userEvent.selectOptions(
+      startingField,
+      "Busy (they mark the times that work)",
+    );
+    expect(startingField).toHaveValue("busy");
+    fireEvent.submit(startingField.closest("form"));
+
+    await waitFor(() => expect(createEvent).toHaveBeenCalled());
+    expect(createEvent.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        name: "Busy start",
+        startingAvailability: "busy",
+      }),
+    );
+  });
+
+  test("edit form hydrates the starting availability and sends changes to it", async () => {
+    searchParams = new URLSearchParams("code=EVENT123");
+    fetchEvent.mockResolvedValue({
+      event: { ...baseEvent, startingAvailability: "busy" },
+    });
+    updateEvent.mockResolvedValue({
+      event: { ...baseEvent, startingAvailability: "available", version: 4 },
+      responsesReset: 0,
+    });
+
+    render(<CreateEvent operation="edit" />);
+    const startingField = await screen.findByLabelText("Participants start as");
+    expect(startingField).toHaveValue("busy");
+    expect(
+      screen.getByText(
+        "Changing this updates people who have not started their schedule yet.",
+      ),
+    ).toBeInTheDocument();
+    await userEvent.selectOptions(startingField, "available");
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(updateEvent).toHaveBeenCalledTimes(1));
+    expect(updateEvent.mock.calls[0][1]).toEqual(
+      expect.objectContaining({
+        startingAvailability: "available",
+        expectedVersion: baseEvent.version,
+      }),
+    );
+  });
+
+  test("inline edit defaults an event without the setting to an Available start", () => {
+    render(
+      <CreateEvent
+        operation="edit"
+        presentation="inline"
+        initialEvent={baseEvent}
+        onSaved={jest.fn()}
+        onCancel={jest.fn()}
+      />,
+    );
+    expect(screen.getByLabelText("Participants start as")).toHaveValue(
+      "available",
+    );
   });
 
   test("keeps common validation visible without opening advanced options", async () => {

@@ -190,6 +190,9 @@ function CreateEvent({
   const [accessMode, setAccessMode] = useState(
     inlineInitialEvent?.accessMode || "invite_only",
   );
+  const [startingAvailability, setStartingAvailability] = useState(
+    inlineInitialEvent?.startingAvailability || "available",
+  );
   const [eventTimezone, setEventTimezone] = useState(
     () =>
       inlineInitialEvent?.timezone || (editing ? "UTC" : getBrowserTimezone()),
@@ -241,6 +244,7 @@ function CreateEvent({
     setDaySelectionType(event.daySelectionType || "days_of_week");
     setSpecificDates(event.specificDates || []);
     setAccessMode(event.accessMode || "invite_only");
+    setStartingAvailability(event.startingAvailability || "available");
     setEventTimezone(event.timezone || "UTC");
     setResponseDeadline(
       event.responseDeadline
@@ -429,6 +433,7 @@ function CreateEvent({
         mode,
         location: location.trim(),
         accessMode,
+        startingAvailability,
         meetingDurationMinutes,
         daySelectionType,
         responseDeadline: responseDeadline
@@ -926,6 +931,28 @@ function CreateEvent({
             >
               <option value="invite_only">Invite only</option>
               <option value="open_link">Anyone with the event code</option>
+            </select>
+          </FormField>
+
+          <FormField
+            id="starting-availability"
+            label="Participants start as"
+            help={
+              editing
+                ? "Changing this updates people who have not started their schedule yet."
+                : "Participants paint over the times to change. Starting Available means they mark the times that do not work."
+            }
+          >
+            <select
+              className="form-select"
+              aria-label="Participants start as"
+              value={startingAvailability}
+              onChange={(event) => setStartingAvailability(event.target.value)}
+            >
+              <option value="available">
+                Available (they mark the times that do not work)
+              </option>
+              <option value="busy">Busy (they mark the times that work)</option>
             </select>
           </FormField>
         </div>
