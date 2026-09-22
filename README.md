@@ -19,8 +19,10 @@ Go to the home page and fill out the event form:
 - **Days** — pick which days of the week are options (defaults to Mon-Fri)
 - **Access** — Invite only (default) or Open link
 
-Create an account or log in before creating an event. New events are active immediately and can
-accept responses as soon as participants join; creating an event by itself does not send email.
+Sign in before creating an event: either with an emailed 6-digit code (which creates your account
+on first use) or with email + password for accounts that set one through Forgot password
+(`/recover`). New events are active immediately and can accept responses as soon as participants
+join; creating an event by itself does not send email.
 
 ### 2. Build the Roster
 

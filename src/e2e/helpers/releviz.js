@@ -98,12 +98,12 @@ async function latestEmailFor(email, afterMs, predicate = () => true) {
 // addresses are created, so this drives registration and login alike.
 async function continueWithEmail(page, email, startedAt) {
   await page.getByLabel("Email").fill(email);
-  const codeStep = page.getByRole("heading", { name: "Check your email" });
+  const codeStep = page.getByRole("heading", { name: "Verify Your Identity" });
   // Firefox on CI has dropped the first submit right after hydration. Asking
   // again only issues another code, and the newest one is the one read.
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     await page
-      .getByRole("button", { name: "Continue with email" })
+      .getByRole("button", { name: "Continue", exact: true })
       .click({ timeout: 5_000 })
       .catch(() => {});
     const sent = await codeStep
@@ -117,7 +117,7 @@ async function continueWithEmail(page, email, startedAt) {
   await expect(codeStep).toBeVisible();
   const code = await latestVerificationCode(email, startedAt);
   await page.getByLabel("Verification code").fill(code);
-  await page.getByRole("button", { name: "Verify and continue" }).click();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
 }
 
 async function expectDashboard(page) {
