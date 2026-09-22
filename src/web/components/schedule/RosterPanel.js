@@ -43,10 +43,13 @@ import {
   updateParticipant,
 } from "@/lib/api/participants";
 import {
+  createRosterGroup,
+  deleteRosterGroup,
   fetchRoster,
   fetchRosterSchedule,
   patchRosterBulk,
   patchRosterParticipant,
+  renameRosterGroup,
   sendRosterInvitations,
 } from "@/lib/api/roster";
 import { rosterImportStatusMessage } from "@/lib/roster-import-status";
@@ -57,10 +60,10 @@ const DELIVERY_LABELS = {
   accepted: "Accepted",
 };
 
+// The server formats a person's memberships as one cell string ("A; B", or
+// "ALL; A" when they belong to every group), which is what the row edits.
 function groupValue(participant) {
-  return (
-    participant.group ?? participant.groupName ?? participant.group_name ?? ""
-  );
+  return participant.group ?? "";
 }
 
 function accountLabel(participant) {
@@ -195,8 +198,11 @@ const RosterPanel = forwardRef(function RosterPanel(
   const [bulkApplyIncluded, setBulkApplyIncluded] = useState(false);
   const [bulkIncluded, setBulkIncluded] = useState(true);
   const [bulkGroup, setBulkGroup] = useState("");
-  const [bulkApplyGroup, setBulkApplyGroup] = useState(false);
-  const [bulkGroupName, setBulkGroupName] = useState("");
+  const [bulkApplyGroups, setBulkApplyGroups] = useState(false);
+  // add | remove | replace | clear, applied to the target group below.
+  const [bulkGroupAction, setBulkGroupAction] = useState("add");
+  const [bulkGroupTarget, setBulkGroupTarget] = useState("");
+  const [bulkAllGroups, setBulkAllGroups] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [groupBusy, setGroupBusy] = useState("");
   const [editor, setEditor] = useState(null);
@@ -546,8 +552,10 @@ const RosterPanel = forwardRef(function RosterPanel(
     setBulkApplyIncluded(false);
     setBulkIncluded(true);
     setBulkGroup("");
-    setBulkApplyGroup(false);
-    setBulkGroupName("");
+    setBulkApplyGroups(false);
+    setBulkGroupAction("add");
+    setBulkGroupTarget("");
+    setBulkAllGroups(false);
     bulkIdempotencyKey.current = "";
 
     setEditor(null);
@@ -695,14 +703,33 @@ const RosterPanel = forwardRef(function RosterPanel(
       setError("Choose a group for this bulk update.");
       return;
     }
-    if (!bulkApplyGroup && !bulkApplyWeight && !bulkApplyIncluded) {
+    if (!bulkApplyGroups && !bulkApplyWeight && !bulkApplyIncluded) {
       setError(
         "Choose a group, weight, included status, or a combination for this bulk update.",
       );
       return;
     }
+    // The target must be one of the groups on screen: a group renamed or
+    // deleted since it was picked must not be resurrected by this request.
+    if (
+      bulkApplyGroups &&
+      bulkGroupAction !== "clear" &&
+      !namedGroups.some((item) => item.name === bulkGroupTarget)
+    ) {
+      setError("Choose a group for this bulk update.");
+      return;
+    }
     const updates = {};
-    if (bulkApplyGroup) updates.group = bulkGroupName.trim();
+    if (bulkApplyGroups) {
+      // "clear" drops every membership (and the every-group flag on the
+      // server); "Every group" on top of it re-sets the flag afterwards.
+      if (bulkGroupAction === "add") updates.addGroups = [bulkGroupTarget];
+      else if (bulkGroupAction === "remove")
+        updates.removeGroups = [bulkGroupTarget];
+      else if (bulkGroupAction === "replace") updates.group = bulkGroupTarget;
+      else updates.group = "";
+      if (bulkAllGroups) updates.allGroups = true;
+    }
     if (bulkApplyWeight) updates.weight = bulkWeight;
     if (bulkApplyIncluded) updates.included = bulkIncluded;
     if (!bulkIdempotencyKey.current)
@@ -773,17 +800,101 @@ const RosterPanel = forwardRef(function RosterPanel(
       groupFilterValue(name),
     );
 
-  const renameGroup = async (name, nextName) => {
-    const renamed = await applyGroupUpdate(
-      { group: name },
-      { group: nextName },
-      (count) => `Renamed ${name} to ${nextName} for ${peopleCount(count)}.`,
-      groupFilterValue(name),
-    );
-    if (renamed && group === name) setGroup(nextName);
-    return renamed;
+  // Groups are rows of their own: creating, renaming and deleting one goes
+  // through the group endpoints rather than a bulk patch of its members. The
+  // response carries the recounted group stats; anything that changes the
+  // cell strings on the rows (a rename or a delete) also reloads the roster.
+  const applyGroupRequest = async (
+    busyKey,
+    request,
+    { status: describe, fallback, onSuccess },
+  ) => {
+    setError("");
+    setStatus("");
+    setGroupBusy(busyKey);
+    try {
+      const token = await getToken();
+      const data = await request(token);
+      setStatus(describe);
+      if (Array.isArray(data?.groups))
+        setStats((current) => ({ ...current, groups: data.groups }));
+      await onSuccess?.(data);
+      return true;
+    } catch (requestError) {
+      setError(requestError.message || fallback);
+      return false;
+    } finally {
+      setGroupBusy("");
+    }
   };
 
+  const createGroup = ({ name }) =>
+    applyGroupRequest(
+      "create",
+      (token) => createRosterGroup(event.code, { name }, token),
+      {
+        status: `Created ${name}.`,
+        fallback: `Unable to create ${name}.`,
+        onSuccess: async (data) => {
+          if (!Array.isArray(data?.groups)) await loadRoster();
+        },
+      },
+    );
+
+  const renameGroup = (entry, nextName) =>
+    applyGroupRequest(
+      groupFilterValue(entry.name),
+      (token) =>
+        renameRosterGroup(event.code, entry.id, { name: nextName }, token),
+      {
+        status: `Renamed ${entry.name} to ${nextName}.`,
+        fallback: `Unable to rename ${entry.name}.`,
+        onSuccess: async () => {
+          if (bulkGroupTarget === entry.name) setBulkGroupTarget(nextName);
+          // Changing the filter reloads the roster on its own.
+          if (group === entry.name) setGroup(nextName);
+          else await loadRoster();
+        },
+      },
+    );
+
+  const deleteGroup = (entry) =>
+    applyGroupRequest(
+      groupFilterValue(entry.name),
+      (token) => deleteRosterGroup(event.code, entry.id, token),
+      {
+        status: `Deleted ${entry.name}.`,
+        fallback: `Unable to delete ${entry.name}.`,
+        onSuccess: async () => {
+          if (bulkGroupTarget === entry.name) setBulkGroupTarget("");
+          if (group === entry.name) {
+            setGroup("");
+            setPage(1);
+          } else {
+            await loadRoster();
+          }
+        },
+      },
+    );
+
+  const addSelectedToGroup = (name) =>
+    applyGroupUpdate(
+      { participantIds: [...selected] },
+      { addGroups: [name] },
+      (count) => `Added ${peopleCount(count)} to ${name}.`,
+      groupFilterValue(name),
+    );
+
+  const removeSelectedFromGroup = (name) =>
+    applyGroupUpdate(
+      { participantIds: [...selected] },
+      { removeGroups: [name] },
+      (count) => `Removed ${peopleCount(count)} from ${name}.`,
+      groupFilterValue(name),
+    );
+
+  // Only "" is offered now (Ungroup selected): the server clears every
+  // membership and the every-group flag together.
   const moveSelectedToGroup = async (name) => {
     const moved = await applyGroupUpdate(
       { participantIds: [...selected] },
@@ -796,18 +907,6 @@ const RosterPanel = forwardRef(function RosterPanel(
     );
     if (moved) updateSelected(new Set());
     return moved;
-  };
-
-  const createGroup = async ({ name, weight }) => {
-    const created = await applyGroupUpdate(
-      { participantIds: [...selected] },
-      { group: name, weight },
-      (count) =>
-        `Created ${name} with ${peopleCount(count)} at weight ${weight}.`,
-      "create",
-    );
-    if (created) updateSelected(new Set());
-    return created;
   };
 
   const openEditor = async (participant) => {
@@ -1003,6 +1102,10 @@ const RosterPanel = forwardRef(function RosterPanel(
       : bulkScope === "group"
         ? "Changes apply to everyone in the chosen group."
         : "Changes apply to everyone matching the current filters.";
+  const bulkApplyGroupsId = `${controlIds}-bulk-apply-groups`;
+  const bulkGroupActionId = `${controlIds}-bulk-group-action`;
+  const bulkGroupTargetId = `${controlIds}-bulk-group-target`;
+  const bulkAllGroupsId = `${controlIds}-bulk-all-groups`;
   const inviteSubmitLabel = inviteManaged
     ? inviteBusyAction === "add"
       ? "Adding…"
@@ -1010,8 +1113,6 @@ const RosterPanel = forwardRef(function RosterPanel(
     : inviteBusyAction === "add"
       ? "Adding…"
       : "Add only";
-  const bulkApplyGroupId = `${controlIds}-bulk-apply-group`;
-  const bulkGroupNameId = `${controlIds}-bulk-group-name`;
   const groupListId = `${controlIds}-group-names`;
   const bulkApplyWeightId = `${controlIds}-bulk-apply-weight`;
   const bulkWeightId = `${controlIds}-bulk-weight`;
@@ -1401,7 +1502,9 @@ const RosterPanel = forwardRef(function RosterPanel(
             </div>
           )}
 
-          {groupSummaries.length > 0 && (
+          {/* Groups can exist before anyone joins them, so the section shows
+              whenever the roster has people (to create one) or groups. */}
+          {(showRosterTools || groupSummaries.length > 0) && (
             <RosterGroups
               groups={groupSummaries}
               selectedCount={selected.size}
@@ -1414,11 +1517,14 @@ const RosterPanel = forwardRef(function RosterPanel(
               }}
               onSetWeight={setGroupWeight}
               onRename={renameGroup}
+              onDelete={deleteGroup}
+              onAddSelected={addSelectedToGroup}
+              onRemoveSelected={removeSelectedFromGroup}
               onMoveSelected={moveSelectedToGroup}
               onCreate={createGroup}
             />
           )}
-          {/* Existing group names complete the per-person and bulk inputs. */}
+          {/* Existing group names complete the per-person inputs. */}
           <datalist id={groupListId}>
             {namedGroups.map(({ name }) => (
               <option key={name} value={name} />
@@ -1434,7 +1540,7 @@ const RosterPanel = forwardRef(function RosterPanel(
                 <span className="disclosure__summary-copy">
                   <span className="d-block fw-semibold">Bulk actions</span>
                   <small className="text-secondary">
-                    {selected.size} selected · Move to a group, change weight or
+                    {selected.size} selected · Change groups, weight or
                     inclusion
                   </small>
                 </span>
@@ -1484,48 +1590,82 @@ const RosterPanel = forwardRef(function RosterPanel(
                 <div className="row g-3">
                   <div className="col-12 col-md-4">
                     <fieldset className="roster-panel__bulk-setting">
-                      <legend className="fs-6 fw-semibold mb-2">Group</legend>
+                      <legend className="fs-6 fw-semibold mb-2">Groups</legend>
                       <div className="d-flex flex-wrap align-items-center gap-3">
                         <div className="form-check mb-0">
                           <input
-                            id={bulkApplyGroupId}
+                            id={bulkApplyGroupsId}
                             className="form-check-input"
-                            aria-label="Apply bulk group"
+                            aria-label="Apply bulk groups"
                             type="checkbox"
-                            checked={bulkApplyGroup}
+                            checked={bulkApplyGroups}
                             onChange={(event) =>
-                              setBulkApplyGroup(event.target.checked)
+                              setBulkApplyGroups(event.target.checked)
                             }
                           />
                           <label
                             className="form-check-label"
-                            htmlFor={bulkApplyGroupId}
+                            htmlFor={bulkApplyGroupsId}
                           >
-                            Move to group
+                            Change groups
                           </label>
                         </div>
-                        <div className="d-flex align-items-center gap-2">
-                          <label
-                            className="small text-secondary mb-0"
-                            htmlFor={bulkGroupNameId}
-                          >
-                            Name
-                          </label>
-                          <input
-                            id={bulkGroupNameId}
-                            className="form-control form-control-sm"
-                            style={{ width: "9rem" }}
-                            aria-label="Bulk group name"
-                            type="text"
-                            list={groupListId}
-                            maxLength={100}
-                            placeholder="Ungrouped"
-                            value={bulkGroupName}
-                            disabled={!bulkApplyGroup}
+                        <div className="d-flex flex-wrap align-items-center gap-2">
+                          <select
+                            id={bulkGroupActionId}
+                            className="form-select form-select-sm w-auto"
+                            aria-label="Bulk group action"
+                            value={bulkGroupAction}
+                            disabled={!bulkApplyGroups}
                             onChange={(event) =>
-                              setBulkGroupName(event.target.value)
+                              setBulkGroupAction(event.target.value)
+                            }
+                          >
+                            <option value="add">Add to group</option>
+                            <option value="remove">Remove from group</option>
+                            <option value="replace">Replace with group</option>
+                            <option value="clear">
+                              Remove from every group
+                            </option>
+                          </select>
+                          <select
+                            id={bulkGroupTargetId}
+                            className="form-select form-select-sm w-auto"
+                            aria-label="Bulk target group"
+                            value={bulkGroupTarget}
+                            disabled={
+                              !bulkApplyGroups || bulkGroupAction === "clear"
+                            }
+                            onChange={(event) =>
+                              setBulkGroupTarget(event.target.value)
+                            }
+                          >
+                            <option value="">Choose group</option>
+                            {namedGroups.map(({ name }) => (
+                              <option key={name} value={name}>
+                                {name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="form-check mb-0">
+                          <input
+                            id={bulkAllGroupsId}
+                            className="form-check-input"
+                            aria-label="Bulk every group"
+                            type="checkbox"
+                            checked={bulkAllGroups}
+                            disabled={!bulkApplyGroups}
+                            onChange={(event) =>
+                              setBulkAllGroups(event.target.checked)
                             }
                           />
+                          <label
+                            className="form-check-label"
+                            htmlFor={bulkAllGroupsId}
+                          >
+                            Every group
+                          </label>
                         </div>
                       </div>
                     </fieldset>
@@ -1769,6 +1909,8 @@ const RosterPanel = forwardRef(function RosterPanel(
                 <tbody>
                   {participants.map((participant) => {
                     const groupId = `${controlIds}-group-${participant.id}`;
+                    const groupHelpId = `${groupId}-help`;
+                    const allGroupsId = `${controlIds}-all-groups-${participant.id}`;
                     const phoneId = `${controlIds}-phone-${participant.id}`;
                     const weightId = `${controlIds}-weight-${participant.id}`;
                     const includedId = `${controlIds}-included-${participant.id}`;
@@ -1833,13 +1975,14 @@ const RosterPanel = forwardRef(function RosterPanel(
                                 className="form-label small text-secondary mb-1"
                                 htmlFor={groupId}
                               >
-                                Group
+                                Groups
                               </label>
                               <input
                                 id={groupId}
                                 className="form-control form-control-sm"
-                                style={{ width: "7.5rem" }}
-                                aria-label={`Group for ${participant.name}`}
+                                style={{ width: "11rem" }}
+                                aria-label={`Groups for ${participant.name}`}
+                                aria-describedby={groupHelpId}
                                 list={groupListId}
                                 placeholder="Ungrouped"
                                 value={rowDraftValue(
@@ -1864,6 +2007,33 @@ const RosterPanel = forwardRef(function RosterPanel(
                                   )
                                 }
                               />
+                              <small
+                                id={groupHelpId}
+                                className="d-block text-secondary"
+                              >
+                                Separate names with ; or type ALL
+                              </small>
+                            </div>
+                            <div className="form-check mb-1">
+                              <input
+                                id={allGroupsId}
+                                className="form-check-input"
+                                aria-label={`All groups for ${participant.name}`}
+                                type="checkbox"
+                                checked={Boolean(participant.allGroups)}
+                                disabled={rowLocked}
+                                onChange={(event) =>
+                                  void patchRow(participant, {
+                                    allGroups: event.target.checked,
+                                  })
+                                }
+                              />
+                              <label
+                                className="form-check-label small"
+                                htmlFor={allGroupsId}
+                              >
+                                Every group
+                              </label>
                             </div>
                             <div>
                               <label

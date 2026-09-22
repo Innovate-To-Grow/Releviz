@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
 import ScheduleChannelEditor from "@/components/schedule/ScheduleChannelEditor";
 import useAutosaveNavigationGuard from "@/components/schedule/useAutosaveNavigationGuard";
@@ -98,6 +98,21 @@ function scheduleLength(event, participant) {
 
 function normalizedSchedule(values, length) {
   return Array.from({ length }, (_, index) => Number(values?.[index] || 0));
+}
+
+const BLOCKED_SLOTS_NOTE =
+  "Grey striped times are blocked by the organizer and do not apply to this event.";
+
+// Organizer-blocked slots keep their index but never take availability: the
+// grid refuses to paint them, and bulk fills leave them at 0.
+function blockedSlotIndices(slotGroups) {
+  const blocked = new Set();
+  for (const group of slotGroups || []) {
+    for (const slot of group?.slots || []) {
+      if (slot?.blocked) blocked.add(slot.index);
+    }
+  }
+  return blocked;
 }
 
 function makeUpgradeHref(eventCode) {
@@ -390,6 +405,11 @@ export default function TempAccessClient() {
     access.event.status !== "active" ||
     responseDeadlinePassed ||
     Boolean(serverWriteLock);
+  const blockedIndices = useMemo(
+    () => blockedSlotIndices(access?.event?.slotGroups),
+    [access?.event?.slotGroups],
+  );
+  const hasBlockedSlots = blockedIndices.size > 0;
 
   const runAutosave = useCallback(async () => {
     if (autosaveInFlightRef.current) {
@@ -615,13 +635,17 @@ export default function TempAccessClient() {
     if (responseChangesDisabled) return;
     const mode = access?.event?.mode || "inperson";
     const length = scheduleLength(access?.event, access?.participant);
+    const filled = () =>
+      Array.from({ length }, (_, index) =>
+        blockedIndices.has(index) ? 0 : value,
+      );
     if (mode !== "virtual") {
-      const next = Array(length).fill(value);
+      const next = filled();
       scheduleInpersonRef.current = next;
       setScheduleInperson(next);
     }
     if (mode !== "inperson") {
-      const next = Array(length).fill(value);
+      const next = filled();
       scheduleVirtualRef.current = next;
       setScheduleVirtual(next);
     }
@@ -984,6 +1008,12 @@ export default function TempAccessClient() {
                     Times shown in {event.timezone || "UTC"}
                   </p>
                 </div>
+
+                {hasBlockedSlots && (
+                  <Alert variant="info" role="note">
+                    {BLOCKED_SLOTS_NOTE}
+                  </Alert>
+                )}
 
                 <ScheduleChannelEditor
                   mode={mode}

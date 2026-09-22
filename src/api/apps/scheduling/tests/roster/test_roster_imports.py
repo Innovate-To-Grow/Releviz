@@ -19,6 +19,7 @@ from apps.scheduling.models import (
     EventInvitation,
     EventResultSnapshot,
     Participant,
+    ParticipantGroup,
     RosterBulkUpdateReceipt,
     RosterImportBatch,
     RosterImportReceipt,
@@ -970,6 +971,10 @@ class RosterImportApiTests(TestCase):
         )
         self.assertEqual(self.commit(preview.data["import"]["id"]).status_code, 201)
 
+        # Groups are rows: the import created one per distinct name, and the
+        # stats entries carry the row's pk as ``id``.
+        group_a = ParticipantGroup.objects.get(event=self.event, name="A")
+        group_b = ParticipantGroup.objects.get(event=self.event, name="B")
         roster = self.client.get(f"/events/roster?code={self.event.code}&pageSize=2")
         self.assertEqual(roster.status_code, 200)
         self.assertEqual(len(roster.data["participants"]), 2)
@@ -977,11 +982,16 @@ class RosterImportApiTests(TestCase):
         self.assertEqual(
             roster.data["stats"]["groups"],
             [
-                {"name": "A", "count": 2, "weight": 1.0},
-                {"name": "B", "count": 1, "weight": 1.0},
+                {"id": group_a.pk, "name": "A", "count": 2, "weight": 1.0},
+                {"id": group_b.pk, "name": "B", "count": 1, "weight": 1.0},
             ],
         )
         self.assertNotIn("availabilityInperson", roster.data["participants"][0])
+        self.assertEqual(roster.data["participants"][0]["group"], "A")
+        self.assertEqual(
+            roster.data["participants"][0]["groups"], [{"id": group_a.pk, "name": "A"}]
+        )
+        self.assertFalse(roster.data["participants"][0]["allGroups"])
 
         full_participant = Participant.objects.get(event=self.event, member=full_member)
         schedule = self.client.get(
@@ -1006,11 +1016,15 @@ class RosterImportApiTests(TestCase):
         self.assertEqual(patched.data["participant"]["weight"], 0.3)
         self.assertFalse(patched.data["participant"]["included"])
         self.assertEqual(patched.data["participant"]["group"], "C")
+        # The cell created group C; B is emptied but stays as a row.
+        group_c = ParticipantGroup.objects.get(event=self.event, name="C")
+        self.assertEqual(patched.data["participant"]["groups"], [{"id": group_c.pk, "name": "C"}])
         self.assertEqual(
             patched.data["groups"],
             [
-                {"name": "A", "count": 2, "weight": 1.0},
-                {"name": "C", "count": 1, "weight": 0.3},
+                {"id": group_a.pk, "name": "A", "count": 2, "weight": 1.0},
+                {"id": group_b.pk, "name": "B", "count": 0, "weight": None},
+                {"id": group_c.pk, "name": "C", "count": 1, "weight": 0.3},
             ],
         )
         stale = self.client.patch(
@@ -1052,8 +1066,9 @@ class RosterImportApiTests(TestCase):
         self.assertEqual(
             regrouped.data["stats"]["groups"],
             [
-                {"name": "A", "count": 2, "weight": 0.6},
-                {"name": "C", "count": 1, "weight": 0.3},
+                {"id": group_a.pk, "name": "A", "count": 2, "weight": 0.6},
+                {"id": group_b.pk, "name": "B", "count": 0, "weight": None},
+                {"id": group_c.pk, "name": "C", "count": 1, "weight": 0.3},
             ],
         )
         one = Participant.objects.get(event=self.event, participant_name="One")
@@ -1069,7 +1084,8 @@ class RosterImportApiTests(TestCase):
         self.assertEqual(
             mixed.data["stats"]["groups"],
             [
-                {"name": "A", "count": 2, "weight": None},
-                {"name": "C", "count": 1, "weight": 0.3},
+                {"id": group_a.pk, "name": "A", "count": 2, "weight": None},
+                {"id": group_b.pk, "name": "B", "count": 0, "weight": None},
+                {"id": group_c.pk, "name": "C", "count": 1, "weight": 0.3},
             ],
         )

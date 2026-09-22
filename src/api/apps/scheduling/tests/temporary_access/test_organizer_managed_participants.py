@@ -676,7 +676,7 @@ class OrganizerManagedParticipantTests(TestCase):
         self.assertEqual(bulk.data["updatedCount"], 2)
         self.assertEqual(
             sorted(
-                Participant.objects.filter(event=self.event, group_name="Family").values_list(
+                Participant.objects.filter(event=self.event, groups__name="Family").values_list(
                     "participant_name", flat=True
                 )
             ),

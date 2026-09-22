@@ -189,3 +189,47 @@ export async function sendRosterInvitations(
   );
   return jsonOrError(res);
 }
+
+export async function fetchRosterGroups(code, token) {
+  const res = await apiFetch(
+    `${API_BASE}/events/roster/groups?code=${encodeURIComponent(code)}`,
+    {},
+    token,
+  );
+  return jsonOrError(res);
+}
+
+export async function createRosterGroup(code, { name }, token) {
+  const res = await apiFetch(
+    `${API_BASE}/events/roster/groups?code=${encodeURIComponent(code)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    },
+    token,
+  );
+  return jsonOrError(res);
+}
+
+export async function renameRosterGroup(code, groupId, { name }, token) {
+  const res = await apiFetch(
+    `${API_BASE}/events/roster/groups/${encodeURIComponent(groupId)}?code=${encodeURIComponent(code)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    },
+    token,
+  );
+  return jsonOrError(res);
+}
+
+export async function deleteRosterGroup(code, groupId, token) {
+  const res = await apiFetch(
+    `${API_BASE}/events/roster/groups/${encodeURIComponent(groupId)}?code=${encodeURIComponent(code)}`,
+    { method: "DELETE" },
+    token,
+  );
+  return jsonOrError(res);
+}

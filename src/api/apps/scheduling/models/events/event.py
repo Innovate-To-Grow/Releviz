@@ -56,6 +56,11 @@ class Event(TimestampedModel):
     )
     spans_next_day = models.BooleanField(default=False)
     days = models.JSONField(default=default_weekdays)
+    # Organizer-painted blocked slots keyed by slot group (``weekday:1`` /
+    # ``date:YYYY-MM-DD``), each a sorted list of 0-based row positions inside
+    # that group. Blocking never changes slot indices, so participant arrays
+    # survive edits; groups without blocks are omitted.
+    blocked_slots = models.JSONField(default=dict, blank=True)
     mode = models.CharField(max_length=16, choices=MODE_CHOICES, default="inperson")
     location = models.CharField(max_length=500, blank=True, default="")
     organizer = models.ForeignKey(

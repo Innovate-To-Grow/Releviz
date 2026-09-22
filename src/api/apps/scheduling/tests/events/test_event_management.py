@@ -14,6 +14,7 @@ from apps.scheduling.models import (
     EventDeletionRecord,
     EventDuplicationRequest,
     EventInvitation,
+    EventResultSnapshot,
     FinalMeeting,
     Participant,
     RosterImportBatch,
@@ -559,6 +560,131 @@ class EventManagementApiTests(TestCase):
         self.assertEqual(locked.status_code, 400)
         self.assertIn("Reopen", locked.data["error"])
 
+    def test_blocked_slot_edits_refresh_results_without_resetting_responses(self):
+        self.authenticate()
+        event = self.event(code="BLOCKED1", end_minutes=11 * 60)
+        participant = Participant.objects.create(
+            event=event,
+            member=self.other,
+            participant_name="Other Member",
+            availability_inperson=[1, 1, 0, 1],
+            availability_virtual=[0, 1, 1, 0],
+            submitted=True,
+        )
+
+        for payload, message in [
+            (
+                {"blockedSlots": {"weekday:2": [0]}},
+                "blockedSlots must be an object keyed by slot group.",
+            ),
+            (
+                {"blockedSlots": {"weekday:1": [4]}},
+                "blockedSlots references a slot outside the event window.",
+            ),
+            (
+                {"blockedSlots": {"weekday:1": [0, 1, 2, 3]}},
+                "Blocked slots leave no open window for a 30-minute meeting.",
+            ),
+        ]:
+            with self.subTest(payload=payload):
+                rejected = self.edit(event, {"expectedVersion": event.version, **payload})
+                self.assertEqual(rejected.status_code, 400)
+                self.assertEqual(rejected.data["error"], message)
+
+        blocked = self.edit(
+            event,
+            {"expectedVersion": event.version, "blockedSlots": {"weekday:1": [3, 0]}},
+        )
+        self.assertEqual(blocked.status_code, 200)
+        self.assertFalse(blocked.data["idempotent"])
+        self.assertEqual(blocked.data["responsesReset"], 0)
+        self.assertNotIn("requiresResponseReset", blocked.data)
+        self.assertEqual(blocked.data["event"]["version"], 2)
+        self.assertEqual(blocked.data["event"]["resultsRevision"], 2)
+        self.assertEqual(blocked.data["event"]["slotCount"], 4)
+        self.assertEqual(blocked.data["event"]["blockedSlots"], {"weekday:1": [0, 3]})
+        self.assertEqual(
+            [slot["blocked"] for slot in blocked.data["event"]["slotGroups"][0]["slots"]],
+            [True, False, False, True],
+        )
+        snapshot = EventResultSnapshot.objects.get(event=event)
+        self.assertEqual(snapshot.requested_revision, 2)
+        self.assertEqual(snapshot.status, "refreshing")
+        participant.refresh_from_db()
+        self.assertTrue(participant.submitted)
+        self.assertEqual(participant.availability_inperson, [1, 1, 0, 1])
+        self.assertEqual(participant.version, 1)
+
+        # Equivalent non-canonical input is a no-op: nothing bumps.
+        replay = self.edit(event, {"expectedVersion": 2, "blockedSlots": {"weekday:1": [3, 0]}})
+        self.assertEqual(replay.status_code, 200)
+        self.assertTrue(replay.data["idempotent"])
+        self.assertEqual(replay.data["event"]["version"], 2)
+        self.assertEqual(replay.data["event"]["resultsRevision"], 2)
+
+        untouched = self.event(code="BLOCKED0")
+        empty_replay = self.edit(
+            untouched,
+            {"expectedVersion": untouched.version, "blockedSlots": {"weekday:1": []}},
+        )
+        self.assertEqual(empty_replay.status_code, 200)
+        self.assertTrue(empty_replay.data["idempotent"])
+        self.assertEqual(empty_replay.data["event"]["version"], 1)
+        self.assertEqual(empty_replay.data["event"]["blockedSlots"], {})
+
+        # Shrinking the window keeps blocks that still exist and drops the rest;
+        # the geometry change itself still needs the usual reset confirmation.
+        reset_required = self.edit(event, {"expectedVersion": 2, "endTime": "10:30"})
+        self.assertEqual(reset_required.status_code, 409)
+        self.assertTrue(reset_required.data["requiresResponseReset"])
+        shrunk = self.edit(
+            event,
+            {"expectedVersion": 2, "endTime": "10:30", "resetResponses": True},
+        )
+        self.assertEqual(shrunk.status_code, 200)
+        self.assertEqual(shrunk.data["responsesReset"], 1)
+        self.assertEqual(shrunk.data["event"]["slotCount"], 3)
+        self.assertEqual(shrunk.data["event"]["blockedSlots"], {"weekday:1": [0]})
+        event.refresh_from_db()
+        self.assertEqual(event.blocked_slots, {"weekday:1": [0]})
+
+        moved = self.edit(
+            event,
+            {"expectedVersion": event.version, "days": [3], "resetResponses": True},
+        )
+        self.assertEqual(moved.status_code, 200)
+        self.assertEqual(moved.data["event"]["blockedSlots"], {})
+        self.assertEqual(
+            [slot["blocked"] for slot in moved.data["event"]["slotGroups"][0]["slots"]],
+            [False, False, False],
+        )
+
+        dated = self.event(
+            code="BLOCKDATE",
+            days=[],
+            day_selection_type="specific_dates",
+            specific_dates=["2026-08-11", "2026-08-12"],
+            blocked_slots={"date:2026-08-11": [0], "date:2026-08-12": [1]},
+        )
+        fewer_dates = self.edit(
+            dated,
+            {"expectedVersion": dated.version, "specificDates": ["2026-08-12"]},
+        )
+        self.assertEqual(fewer_dates.status_code, 200)
+        self.assertEqual(fewer_dates.data["event"]["blockedSlots"], {"date:2026-08-12": [1]})
+
+        dashboard = self.client.get("/dashboard/events")
+        self.assertEqual(dashboard.status_code, 200)
+        self.assertEqual(
+            {entry["code"]: entry["blockedSlots"] for entry in dashboard.data["organized"]},
+            {
+                "BLOCKED1": {},
+                "BLOCKED0": {},
+                "BLOCKDATE": {"date:2026-08-12": [1]},
+            },
+        )
+        self.assertTrue(all("slotGroups" not in entry for entry in dashboard.data["organized"]))
+
     def test_duplicate_is_idempotent_and_copies_only_configuration(self):
         self.authenticate()
         deadline = timezone.now() + timedelta(days=2)
@@ -574,6 +700,7 @@ class EventManagementApiTests(TestCase):
             response_deadline=deadline,
             reminders_enabled=False,
             reminder_hours_before=8,
+            blocked_slots={"date:2026-09-01": [0]},
         )
         self.participant(source)
         self.invitation(source)
@@ -642,6 +769,8 @@ class EventManagementApiTests(TestCase):
         self.assertEqual(duplicate.mode, source.mode)
         self.assertEqual(duplicate.location, source.location)
         self.assertEqual(duplicate.specific_dates, source.specific_dates)
+        self.assertEqual(duplicate.blocked_slots, {"date:2026-09-01": [0]})
+        self.assertEqual(created.data["event"]["blockedSlots"], {"date:2026-09-01": [0]})
         self.assertEqual(duplicate.response_deadline, deadline)
         self.assertIsNotNone(duplicate.opened_at)
         self.assertFalse(duplicate.participants.exists())

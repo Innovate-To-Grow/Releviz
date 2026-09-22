@@ -24,7 +24,8 @@ class RosterImportRow(TimestampedModel):
     name = models.CharField(max_length=100, blank=True, default="")
     email = models.EmailField(blank=True, default="")
     phone = models.CharField(max_length=32, blank=True, default="")
-    group_name = models.CharField(max_length=100, blank=True, default="")
+    # The normalized cell ("A; B" or "ALL; A"); each name is capped, not the cell.
+    group_name = models.TextField(blank=True, default="")
     weight = models.FloatField(default=1.0)
     included = models.BooleanField(default=True)
     selected = models.BooleanField(default=False)

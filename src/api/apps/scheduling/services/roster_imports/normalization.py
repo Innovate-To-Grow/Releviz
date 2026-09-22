@@ -14,6 +14,7 @@ from apps.scheduling.services.invitations.errors import (
     SHARED_ACCOUNT_MESSAGE,
     UNVERIFIED_FULL_ACCOUNT_MESSAGE,
 )
+from apps.scheduling.services.roster_groups import format_group_cell, parse_group_cell
 
 from .errors import RosterImportError
 from .limits import MAX_ROSTER_ROWS
@@ -37,6 +38,20 @@ def _mapped_value(row: RosterImportRow, mapping: dict, field: str):
     return value, None
 
 
+def normalize_group_cell(value) -> str:
+    """Return a group cell in its canonical ``ALL; A; B`` spelling.
+
+    A cell that does not parse is kept as typed (stripped) so the organizer
+    sees it next to the error ``validate_identity_fields`` reports for it.
+    """
+
+    cell = str(value if value is not None else "").strip()
+    try:
+        return format_group_cell(*parse_group_cell(cell))
+    except RosterImportError:
+        return cell
+
+
 def validate_identity_fields(name: str, email: str, group_name: str) -> list[str]:
     errors = []
     if not name:
@@ -52,8 +67,10 @@ def validate_identity_fields(name: str, email: str, group_name: str) -> list[str
             validate_email(email)
         except ValidationError:
             errors.append("email is invalid.")
-    if len(group_name) > 100:
-        errors.append("group is too long (max 100).")
+    try:
+        parse_group_cell(group_name)
+    except RosterImportError as exc:
+        errors.append(str(exc))
     return errors
 
 
@@ -91,7 +108,8 @@ def _normalize_row(row: RosterImportRow, mapping: dict, defaults: dict) -> None:
     name = display_cell(raw_name)
     email = display_cell(raw_email).lower()
     phone = display_cell(raw_phone) if "phone" in mapping else ""
-    group_name = display_cell(raw_group) if "group" in mapping else str(defaults.get("group", ""))
+    group_cell = display_cell(raw_group) if "group" in mapping else defaults.get("group") or ""
+    group_name = normalize_group_cell(group_cell)
     weight = defaults.get("weight", 1.0)
     if "weight" in mapping and raw_weight not in {None, ""}:
         try:
@@ -114,7 +132,7 @@ def _normalize_row(row: RosterImportRow, mapping: dict, defaults: dict) -> None:
     row.name = name[:100]
     row.email = email[:254]
     row.phone = phone[:32]
-    row.group_name = group_name[:100]
+    row.group_name = group_name
     row.weight = weight
     row.included = included
     row.selected = True

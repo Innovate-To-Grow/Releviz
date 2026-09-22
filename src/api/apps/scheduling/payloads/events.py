@@ -28,6 +28,7 @@ def api_event(event, *, include_slot_groups=True) -> dict:
         "accessMode": getattr(event, "access_mode", "invite_only"),
         "startingAvailability": getattr(event, "starting_availability", "available"),
         "meetingDurationMinutes": getattr(event, "meeting_duration_minutes", event.slot_minutes),
+        "blockedSlots": getattr(event, "blocked_slots", None) or {},
         "resultsRevision": getattr(event, "results_revision", 1),
         "status": event.status,
         "version": event.version,

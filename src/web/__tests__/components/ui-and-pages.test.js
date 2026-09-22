@@ -597,6 +597,302 @@ describe("small UI modules", () => {
     );
   });
 
+  // Mon: 0 blocked (stored 1), 1 open, 2 open · Tue: 3 open, 4 blocked
+  // (stored 0.5), 5 open.
+  const blockedSlotGroups = () => {
+    const slot = (index, localStart, localEnd, blocked = false) => ({
+      index,
+      localStart,
+      localEnd,
+      startDayOffset: 0,
+      endDayOffset: 0,
+      blocked,
+    });
+    return [
+      {
+        key: "weekday:1",
+        label: "Mon",
+        weekday: 1,
+        slots: [
+          slot(0, "09:00", "09:30", true),
+          slot(1, "09:30", "10:00"),
+          slot(2, "10:00", "10:30"),
+        ],
+      },
+      {
+        key: "weekday:2",
+        label: "Tue",
+        weekday: 2,
+        slots: [
+          slot(3, "09:00", "09:30"),
+          slot(4, "09:30", "10:00", true),
+          slot(5, "10:00", "10:30"),
+        ],
+      },
+    ];
+  };
+
+  test("ScheduleGrid renders organizer-blocked slots as inert cells that strokes and keys skip", () => {
+    const painted = jest.fn();
+    document.elementFromPoint = jest.fn();
+    render(
+      <ScheduleGrid
+        schedule={[1, 0, 1, 0, 0.5, 0]}
+        slotGroups={blockedSlotGroups()}
+        readOnly={false}
+        onCellPaint={painted}
+        participantDetails={[{ name: "Ada", schedule: [1, 0, 1, 0, 0.5, 0] }]}
+      />,
+    );
+    const cell = (index) =>
+      document.querySelector(`[data-cell-idx='${index}']`);
+
+    for (const [index, label] of [
+      [0, "Mon, 9:00 AM – 9:30 AM, blocked for this event"],
+      [4, "Tue, 9:30 AM – 10:00 AM, blocked for this event"],
+    ]) {
+      expect(cell(index)).toHaveClass(
+        "schedule-grid-cell",
+        "schedule-grid-cell-blocked",
+      );
+      expect(cell(index)).toHaveAttribute("role", "gridcell");
+      expect(cell(index)).toHaveAttribute("aria-disabled", "true");
+      expect(cell(index)).toHaveAttribute("data-blocked", "true");
+      expect(cell(index)).toHaveAttribute("aria-label", label);
+      expect(cell(index)).toHaveAttribute("title", label);
+      expect(cell(index)).not.toHaveAttribute("tabindex");
+      expect(cell(index)).not.toHaveAttribute("data-availability");
+      expect(cell(index)).not.toHaveAttribute("aria-selected");
+      expect(cell(index).style.backgroundColor).toBe("");
+      expect(cell(index)).toBeEmptyDOMElement();
+    }
+    expect(cell(0)).toHaveAttribute("data-first-row", "true");
+    expect(cell(0)).toHaveAttribute("data-first-column", "true");
+    expect(cell(4)).not.toHaveAttribute("data-first-row");
+    expect(cell(4)).not.toHaveAttribute("data-first-column");
+    // Open cells keep their stored availability and glyph.
+    expect(cell(2)).toHaveAttribute("data-availability", "free");
+    expect(cell(2)).toHaveTextContent("✓");
+    expect(cell(2)).toHaveAttribute("title", expect.stringContaining("Ada"));
+
+    // The roving tab stop skips the blocked first cell.
+    const tabbable = document.querySelectorAll(
+      "[role='gridcell'][tabindex='0']",
+    );
+    expect(tabbable).toHaveLength(1);
+    expect(tabbable[0]).toBe(cell(1));
+
+    // Blocked cells have no pointer or keyboard handlers at all.
+    fireEvent.pointerDown(cell(0), {
+      button: 0,
+      pointerId: 1,
+      pointerType: "mouse",
+    });
+    fireEvent.keyDown(cell(0), { key: "Enter" });
+    fireEvent.keyDown(cell(4), { key: " " });
+    expect(painted).not.toHaveBeenCalled();
+
+    // A stroke crossing a blocked cell never paints it.
+    fireEvent.pointerDown(cell(3), {
+      button: 0,
+      pointerId: 2,
+      pointerType: "mouse",
+    });
+    expect(painted).toHaveBeenCalledTimes(1);
+    expect(painted).toHaveBeenLastCalledWith(
+      3,
+      expect.objectContaining({ phase: "start" }),
+    );
+    document.elementFromPoint.mockReturnValue(cell(4));
+    fireEvent.pointerMove(cell(3), {
+      clientX: 1,
+      clientY: 1,
+      pointerId: 2,
+      pointerType: "mouse",
+    });
+    expect(painted).toHaveBeenCalledTimes(1);
+    // Even a target that reports a blocked index without the marker attribute
+    // (an inner node of a blocked cell, say) is ignored by paintCell.
+    document.elementFromPoint.mockReturnValue({
+      closest: () => ({ dataset: { cellIdx: "0" } }),
+    });
+    fireEvent.pointerMove(cell(3), {
+      clientX: 2,
+      clientY: 2,
+      pointerId: 2,
+      pointerType: "mouse",
+    });
+    expect(painted).toHaveBeenCalledTimes(1);
+    document.elementFromPoint.mockReturnValue(cell(5));
+    fireEvent.pointerMove(cell(3), {
+      clientX: 3,
+      clientY: 3,
+      pointerId: 2,
+      pointerType: "mouse",
+    });
+    expect(painted).toHaveBeenCalledTimes(2);
+    expect(painted).toHaveBeenLastCalledWith(
+      5,
+      expect.objectContaining({ phase: "move" }),
+    );
+    fireEvent.pointerUp(cell(3), { pointerId: 2, pointerType: "mouse" });
+
+    // Arrow keys step over blocked cells and stop when only blocked cells
+    // remain in that direction.
+    cell(3).focus();
+    fireEvent.keyDown(cell(3), { key: "ArrowDown" });
+    expect(cell(5)).toHaveFocus();
+    fireEvent.keyDown(cell(5), { key: "ArrowUp" });
+    expect(cell(3)).toHaveFocus();
+    fireEvent.keyDown(cell(3), { key: "ArrowLeft" });
+    expect(cell(3)).toHaveFocus();
+    fireEvent.keyDown(cell(3), { key: "Home", ctrlKey: true });
+    expect(cell(1)).toHaveFocus();
+  });
+
+  test("ScheduleGrid blockedEditing mode paints every slot as blocked or open", () => {
+    const painted = jest.fn();
+    document.elementFromPoint = jest.fn();
+    render(
+      <ScheduleGrid
+        schedule={[1, 0, 0.5, 0, 1, 0]}
+        slotGroups={blockedSlotGroups()}
+        readOnly={false}
+        onCellPaint={painted}
+        blockedEditing
+      />,
+    );
+    const cell = (index) =>
+      document.querySelector(`[data-cell-idx='${index}']`);
+
+    // `slot.blocked` is ignored: index 0 is an ordinary paintable cell.
+    expect(document.querySelector("[data-blocked='true']")).toBeNull();
+    expect(
+      document.querySelectorAll(".schedule-grid-cell-blocked"),
+    ).toHaveLength(0);
+    expect(document.querySelectorAll("[data-blocked-paint]")).toHaveLength(6);
+    expect(cell(0)).toHaveClass("schedule-grid-cell");
+    expect(cell(0)).toHaveAttribute("tabindex", "0");
+    expect(cell(0)).toHaveAttribute("data-blocked-paint", "true");
+    expect(cell(0)).toHaveAttribute("aria-selected", "true");
+    expect(cell(0)).toHaveAttribute(
+      "aria-label",
+      "Mon, 9:00 AM – 9:30 AM, blocked",
+    );
+    expect(cell(0)).toHaveAttribute("title", "Mon, 9:00 AM – 9:30 AM, blocked");
+    expect(
+      cell(0).querySelector(".schedule-grid-cell__glyph"),
+    ).toHaveTextContent("✕");
+    expect(cell(2)).toHaveAttribute("data-blocked-paint", "true");
+    expect(cell(1)).toHaveAttribute("data-blocked-paint", "false");
+    expect(cell(1)).toHaveAttribute("aria-selected", "false");
+    expect(cell(1)).toHaveAttribute(
+      "aria-label",
+      "Mon, 9:30 AM – 10:00 AM, open",
+    );
+    expect(cell(1)).toHaveAttribute("title", "Mon, 9:30 AM – 10:00 AM, open");
+    expect(
+      cell(1).querySelector(".schedule-grid-cell__glyph"),
+    ).toHaveTextContent("");
+    for (const index of [0, 1, 4]) {
+      expect(cell(index)).not.toHaveAttribute("data-availability");
+      expect(cell(index)).not.toHaveAttribute("aria-disabled");
+      expect(cell(index).style.backgroundColor).toBe("");
+    }
+
+    // Pointer strokes and the keyboard paint exactly as in availability mode.
+    fireEvent.pointerDown(cell(0), {
+      button: 0,
+      pointerId: 3,
+      pointerType: "mouse",
+    });
+    expect(painted).toHaveBeenLastCalledWith(
+      0,
+      expect.objectContaining({ phase: "start", type: "pointerdown" }),
+    );
+    document.elementFromPoint.mockReturnValue(cell(4));
+    fireEvent.pointerMove(cell(0), {
+      clientX: 1,
+      clientY: 1,
+      pointerId: 3,
+      pointerType: "mouse",
+    });
+    expect(painted).toHaveBeenLastCalledWith(
+      4,
+      expect.objectContaining({ phase: "move" }),
+    );
+    fireEvent.pointerUp(cell(0), { pointerId: 3, pointerType: "mouse" });
+    cell(0).focus();
+    fireEvent.keyDown(cell(0), { key: "ArrowDown" });
+    expect(cell(1)).toHaveFocus();
+    fireEvent.keyDown(cell(1), { key: "ArrowRight" });
+    expect(cell(4)).toHaveFocus();
+    fireEvent.keyDown(cell(4), { key: " " });
+    expect(painted).toHaveBeenLastCalledWith(
+      4,
+      expect.objectContaining({ phase: "keyboard", pointerType: "keyboard" }),
+    );
+    expect(painted).toHaveBeenCalledTimes(3);
+  });
+
+  test("ScheduleGrid blockedEditing respects readOnly", () => {
+    const painted = jest.fn();
+    render(
+      <ScheduleGrid
+        schedule={[1]}
+        slotGroups={[blockedSlotGroups()[0]].map((group) => ({
+          ...group,
+          slots: group.slots.slice(0, 1),
+        }))}
+        readOnly
+        onCellPaint={painted}
+        blockedEditing
+      />,
+    );
+    const cell = document.querySelector("[data-cell-idx='0']");
+    expect(cell).toHaveAttribute("aria-readonly", "true");
+    expect(cell).toHaveAttribute("data-blocked-paint", "true");
+    expect(cell).not.toHaveAttribute("tabindex");
+    fireEvent.pointerDown(cell, {
+      button: 0,
+      pointerId: 4,
+      pointerType: "mouse",
+    });
+    fireEvent.keyDown(cell, { key: "Enter" });
+    expect(painted).not.toHaveBeenCalled();
+  });
+
+  test("ScheduleGrid takes an accessible name from ariaLabel without a title", () => {
+    const { unmount } = render(
+      <ScheduleGrid
+        schedule={[0]}
+        slotGroups={[blockedSlotGroups()[0]]}
+        ariaLabel="Blocked times"
+        blockedEditing
+      />,
+    );
+    expect(
+      screen.getByRole("grid", { name: "Blocked times" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("heading")).not.toBeInTheDocument();
+
+    unmount();
+    render(
+      <ScheduleGrid
+        schedule={[0]}
+        slotGroups={[blockedSlotGroups()[0]]}
+        label="Virtual"
+        ariaLabel="Virtual availability"
+      />,
+    );
+    expect(
+      screen.getByRole("grid", { name: "Virtual availability" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { level: 4, name: "Virtual" }),
+    ).toBeInTheDocument();
+  });
+
   test("EventDetailsGrid renders defaults, dates, and extra cards", () => {
     const localeSpy = jest.spyOn(Date.prototype, "toLocaleString");
     render(
@@ -662,6 +958,118 @@ describe("small UI modules", () => {
     expect(
       screen.getByText("11:00 PM - 1:00 AM (next day)"),
     ).toBeInTheDocument();
+  });
+
+  test("EventDetailsGrid organizer variant counts blocked slots in the schedule tile", () => {
+    const event = {
+      mode: "mixed",
+      startTime: "09:00",
+      endTime: "17:00",
+      crossesMidnight: false,
+      days: [1, 2],
+      timezone: "America/New_York",
+      status: "active",
+      accessMode: "open_link",
+      meetingDurationMinutes: 60,
+      slotMinutes: 30,
+      resultsRevision: 4,
+      code: "ABC123",
+      location: "Room 4",
+      responseDeadline: "2026-07-08T12:00:00.000Z",
+      blockedSlots: { "weekday:1": [0, 1], "weekday:2": [5] },
+    };
+    const { rerender } = render(
+      <EventDetailsGrid event={event} variant="organizer" />,
+    );
+    const overview = screen.getByLabelText("Event overview");
+    expect(
+      within(overview).getByText(
+        "9:00 AM - 5:00 PM · America/New_York · 3 slots blocked",
+      ),
+    ).toBeInTheDocument();
+    expect(within(overview).getByText("Mon, Tue")).toBeInTheDocument();
+    expect(
+      within(overview).getByText("Mixed · 60 minutes"),
+    ).toBeInTheDocument();
+    expect(within(overview).getByText("Anyone with code")).toBeInTheDocument();
+    expect(within(overview).getByText("Room 4")).toBeInTheDocument();
+    expect(
+      within(overview).queryByText("Confirmed meeting"),
+    ).not.toBeInTheDocument();
+
+    // Empty, missing and malformed maps all read as no blocked slots.
+    for (const blockedSlots of [
+      {},
+      undefined,
+      "nope",
+      { "weekday:1": "not-a-list" },
+    ]) {
+      rerender(
+        <EventDetailsGrid
+          event={{ ...event, blockedSlots }}
+          variant="organizer"
+        />,
+      );
+      expect(
+        screen.getByText("9:00 AM - 5:00 PM · America/New_York"),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/slots blocked/)).not.toBeInTheDocument();
+    }
+  });
+
+  test("EventDetailsGrid organizer variant toggles details and honours extra cards", async () => {
+    render(
+      <EventDetailsGrid
+        variant="organizer"
+        event={{
+          mode: "virtual",
+          startTime: "09:00",
+          endTime: "10:00",
+          daySelectionType: "specific_dates",
+          specificDates: ["2026-07-08", "2026-07-09"],
+          timezone: "UTC",
+          status: "finalized",
+          code: "XYZ789",
+          finalMeeting: {
+            startsAt: "2026-07-20T09:00:00.000Z",
+            endsAt: "2026-07-20T10:00:00.000Z",
+            channel: "virtual",
+          },
+        }}
+        extraCards={[
+          { label: "Access", value: "Roster" },
+          { label: "Meeting duration", value: "45 minutes" },
+          { label: "Result revision", value: 9 },
+        ]}
+      />,
+    );
+    expect(screen.getByText("2026-07-08, 2026-07-09")).toBeInTheDocument();
+    expect(screen.getByText("9:00 AM - 10:00 AM · UTC")).toBeInTheDocument();
+    expect(screen.getByText("Virtual · 45 minutes")).toBeInTheDocument();
+    expect(screen.getByText("Roster")).toBeInTheDocument();
+    expect(screen.getByText("No deadline")).toBeInTheDocument();
+    expect(screen.getByText("Location not set")).toBeInTheDocument();
+    expect(screen.getByText("Confirmed meeting")).toBeInTheDocument();
+    expect(screen.getByText("Virtual · Location not set")).toBeInTheDocument();
+
+    const toggle = screen.getByRole("button", { name: "Show all details" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Event code")).not.toBeInTheDocument();
+    await userEvent.click(toggle);
+    const details = screen.getByLabelText("Additional event details");
+    expect(within(details).getByText("XYZ789")).toBeInTheDocument();
+    expect(within(details).getByText("Finalized")).toBeInTheDocument();
+    expect(within(details).getByText("9")).toBeInTheDocument();
+    expect(within(details).getByText("30 minutes")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Hide details" }));
+    expect(screen.queryByText("Event code")).not.toBeInTheDocument();
+
+    // Bare events fall back on every tile.
+    render(<EventDetailsGrid variant="organizer" event={{}} />);
+    expect(screen.getByText("Days not set")).toBeInTheDocument();
+    expect(screen.getByText("Not set - Not set · UTC")).toBeInTheDocument();
+    expect(screen.getByText("In-Person · 30 minutes")).toBeInTheDocument();
+    expect(screen.getByText("Invite only")).toBeInTheDocument();
   });
 
   test("EventDetailsGrid organizer details show how participants start", () => {
@@ -897,6 +1305,14 @@ describe("role-aware headers", () => {
     expect(container.firstChild).toHaveTextContent("◐");
     rerender(<AvailabilitySwatch />);
     expect(container.firstChild).toHaveTextContent("");
+    rerender(<AvailabilitySwatch level="blocked" />);
+    expect(container.firstChild).toHaveClass("availability-swatch--blocked");
+    expect(container.firstChild).toHaveTextContent("");
+    rerender(<AvailabilitySwatch level="blocked-paint" />);
+    expect(container.firstChild).toHaveClass(
+      "availability-swatch--blocked-paint",
+    );
+    expect(container.firstChild).toHaveTextContent("✕");
 
     rerender(<AvailabilityLegend channels="both" showValues />);
     const legend = screen.getByRole("list", { name: "Availability legend" });
@@ -907,6 +1323,7 @@ describe("role-aware headers", () => {
     expect(
       legend.querySelectorAll(".availability-swatch--virtual"),
     ).toHaveLength(3);
+    expect(legend).not.toHaveTextContent("Blocked");
     rerender(<AvailabilityLegend virtual className="extra" />);
     expect(screen.getByRole("list")).toHaveClass("extra");
     expect(
@@ -915,6 +1332,31 @@ describe("role-aware headers", () => {
         .querySelectorAll(".availability-swatch--virtual"),
     ).toHaveLength(3);
     expect(screen.queryByText("(0.5)")).not.toBeInTheDocument();
+
+    // `hasBlocked` appends the organizer-blocked item after the three levels.
+    rerender(<AvailabilityLegend hasBlocked />);
+    let items = screen
+      .getByRole("list", { name: "Availability legend" })
+      .querySelectorAll(".availability-legend__item");
+    expect(items).toHaveLength(4);
+    expect(items[3]).toHaveTextContent("Blocked");
+    expect(
+      items[3].querySelector(".availability-swatch--blocked"),
+    ).toBeInTheDocument();
+    // `blockedOnly` lists nothing but that item, even for both channels.
+    rerender(<AvailabilityLegend channels="both" hasBlocked blockedOnly />);
+    items = screen
+      .getByRole("list", { name: "Availability legend" })
+      .querySelectorAll(".availability-legend__item");
+    expect(items).toHaveLength(1);
+    expect(items[0]).toHaveTextContent("Blocked");
+    expect(screen.queryByText("Busy")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Left swatch/)).not.toBeInTheDocument();
+    rerender(<AvailabilityLegend blockedOnly />);
+    expect(
+      screen.getByRole("list", { name: "Availability legend" }),
+    ).toHaveTextContent("Blocked");
+    expect(screen.queryByText("Available")).not.toBeInTheDocument();
 
     const onChange = jest.fn();
     rerender(

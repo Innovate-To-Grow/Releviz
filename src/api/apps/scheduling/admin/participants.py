@@ -6,10 +6,21 @@ from unfold.admin import ModelAdmin
 from apps.scheduling.models import (
     EventInvitation,
     Participant,
+    ParticipantGroup,
     TemporaryEventSession,
     UserEvent,
     Weight,
 )
+
+
+@admin.register(ParticipantGroup)
+class ParticipantGroupAdmin(ModelAdmin):
+    list_display = ("name", "event", "member_count", "created_at")
+    search_fields = ("name", "event__code", "event__name")
+
+    @admin.display(description="Members")
+    def member_count(self, group):
+        return group.participants.count()
 
 
 @admin.register(Participant)
@@ -20,17 +31,41 @@ class ParticipantAdmin(ModelAdmin):
         "member",
         "submitted",
         "hidden",
-        "group_name",
+        "group_names",
+        "all_groups",
         "sort_order",
     )
-    list_filter = ("submitted", "hidden", "group_name", "organizer_managed")
+    list_filter = ("submitted", "hidden", "all_groups", "organizer_managed")
     search_fields = (
         "participant_name",
         "event__code",
         "event__name",
         "member__first_name",
         "member__last_name",
+        "groups__name",
     )
+    filter_horizontal = ("groups",)
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).prefetch_related("groups")
+
+    def get_form(self, request, obj=None, **kwargs):
+        # Remembered for formfield_for_manytomany, which only receives the request.
+        request._participant_admin_obj = obj
+        return super().get_form(request, obj, **kwargs)
+
+    def formfield_for_manytomany(self, db_field, request, **kwargs):
+        if db_field.name == "groups":
+            # Only the participant's own event has groups they can belong to.
+            participant = getattr(request, "_participant_admin_obj", None)
+            kwargs["queryset"] = ParticipantGroup.objects.filter(
+                event_id=participant.event_id if participant is not None else None
+            )
+        return super().formfield_for_manytomany(db_field, request, **kwargs)
+
+    @admin.display(description="Groups")
+    def group_names(self, participant):
+        return "; ".join(group.name for group in participant.groups.all())
 
 
 @admin.register(EventInvitation)

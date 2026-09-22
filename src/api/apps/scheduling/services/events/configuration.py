@@ -37,6 +37,7 @@ CONFIGURATION_FIELDS = (
     "access_mode",
     "starting_availability",
     "meeting_duration_minutes",
+    "blocked_slots",
 )
 GEOMETRY_FIELDS = {
     "start_minutes",
@@ -48,10 +49,16 @@ GEOMETRY_FIELDS = {
     "specific_dates",
     "timezone",
 }
+# Blocked slots change results but leave slot indices alone, so they never
+# force a participant response reset.
 RESULT_FIELDS = GEOMETRY_FIELDS | {
     "mode",
     "meeting_duration_minutes",
+    "blocked_slots",
 }
+
+BLOCKED_SLOTS_SHAPE_ERROR = "blockedSlots must be an object keyed by slot group."
+BLOCKED_SLOTS_RANGE_ERROR = "blockedSlots references a slot outside the event window."
 
 
 def _value(data, key, existing, attribute, default):
@@ -60,6 +67,63 @@ def _value(data, key, existing, attribute, default):
     if existing is not None:
         return getattr(existing, attribute)
     return default
+
+
+def _canonical_blocked_slots(entries) -> dict:
+    """Sort keys and rows and drop empty groups so dict equality is meaningful."""
+
+    return {key: sorted(rows) for key, rows in sorted(entries.items()) if rows}
+
+
+def _parse_blocked_slots(data, existing, slot_groups) -> dict:
+    """Validate a submitted ``blockedSlots`` map or carry the stored one forward.
+
+    Rows are 0-based positions inside their slot group, so blocks survive
+    non-geometry edits untouched; when the geometry shrinks, stored rows that
+    no longer exist are pruned instead of failing the edit.
+    """
+
+    groups_by_key = {group.key: group for group in slot_groups}
+    if "blockedSlots" not in data:
+        stored = existing.blocked_slots if existing is not None else {}
+        kept = {}
+        for key, rows in stored.items():
+            group = groups_by_key.get(key)
+            if group is None:
+                continue
+            kept[key] = [row for row in rows if row < len(group.slots)]
+        return _canonical_blocked_slots(kept)
+
+    raw = data.get("blockedSlots")
+    if not isinstance(raw, dict):
+        raise EventManagementError(BLOCKED_SLOTS_SHAPE_ERROR)
+    blocked = {}
+    for key, rows in raw.items():
+        group = groups_by_key.get(key)
+        if (
+            group is None
+            or not isinstance(rows, list)
+            or any(isinstance(row, bool) or not isinstance(row, int) for row in rows)
+            or len(set(rows)) != len(rows)
+        ):
+            raise EventManagementError(BLOCKED_SLOTS_SHAPE_ERROR)
+        if any(row < 0 or row >= len(group.slots) for row in rows):
+            raise EventManagementError(BLOCKED_SLOTS_RANGE_ERROR)
+        blocked[key] = rows
+    return _canonical_blocked_slots(blocked)
+
+
+def _has_open_window(slot_groups, blocked_slots, required_slots) -> bool:
+    """Return whether some group still holds ``required_slots`` unblocked slots in a row."""
+
+    for group in slot_groups:
+        blocked_rows = set(blocked_slots.get(group.key, ()))
+        run = 0
+        for row in range(len(group.slots)):
+            run = 0 if row in blocked_rows else run + 1
+            if run >= required_slots:
+                return True
+    return False
 
 
 def parse_event_configuration(data, *, existing=None) -> dict:
@@ -270,6 +334,11 @@ def parse_event_configuration(data, *, existing=None) -> dict:
     required_slots = meeting_duration_minutes // slot_minutes
     if not any(len(group.slots) >= required_slots for group in slot_groups):
         raise EventManagementError("meetingDurationMinutes does not fit within any configured day")
+    blocked_slots = _parse_blocked_slots(data, existing, slot_groups)
+    if not _has_open_window(slot_groups, blocked_slots, required_slots):
+        raise EventManagementError(
+            f"Blocked slots leave no open window for a {meeting_duration_minutes}-minute meeting."
+        )
 
     return {
         "name": name,
@@ -290,4 +359,5 @@ def parse_event_configuration(data, *, existing=None) -> dict:
         "access_mode": access_mode,
         "starting_availability": starting_availability,
         "meeting_duration_minutes": meeting_duration_minutes,
+        "blocked_slots": blocked_slots,
     }

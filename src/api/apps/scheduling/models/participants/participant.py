@@ -6,6 +6,7 @@ from django.db import models
 from apps.core.models import TimestampedModel
 
 from ..events.event import Event
+from .group import ParticipantGroup
 
 
 class Participant(TimestampedModel):
@@ -29,7 +30,9 @@ class Participant(TimestampedModel):
     first_submitted_at = models.DateTimeField(null=True, blank=True)
     last_submitted_at = models.DateTimeField(null=True, blank=True)
     hidden = models.BooleanField(default=False)
-    group_name = models.CharField(max_length=100, null=True, blank=True)
+    groups = models.ManyToManyField(ParticipantGroup, related_name="participants", blank=True)
+    # Membership in every group the event has now or gains later.
+    all_groups = models.BooleanField(default=False)
     sort_order = models.IntegerField(null=True, blank=True)
     version = models.PositiveBigIntegerField(default=1)
 

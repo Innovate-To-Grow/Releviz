@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
-from django.test import TransactionTestCase
+from django.test import SimpleTestCase, TransactionTestCase
 from django.utils import timezone
 
 starting_availability_migration = import_module(
@@ -205,3 +205,186 @@ class StartingAvailabilityMigrationTests(TransactionTestCase):
             self.assertEqual(participant.availability_inperson, inperson)
             self.assertEqual(participant.availability_virtual, virtual)
             self.assertEqual(participant.version, 1)
+
+
+class ParticipantGroupMigrationTests(TransactionTestCase):
+    """``Participant.group_name`` becomes rows in ``ParticipantGroup`` plus memberships."""
+
+    migrate_from = ("scheduling", "0006_event_blocked_slots")
+    migrate_to = ("scheduling", "0007_participantgroup_multi_membership")
+
+    def _historical_apps(self, executor, target):
+        # The scheduling graph only reaches authn's first migration through
+        # the swappable dependency, so pin the authn leaf as well; otherwise
+        # the historical Member would carry columns the database dropped.
+        authn_leaf = next(node for node in executor.loader.graph.leaf_nodes() if node[0] == "authn")
+        return executor.loader.project_state([target, authn_leaf]).apps
+
+    def setUp(self):
+        super().setUp()
+        self.executor = MigrationExecutor(connection)
+        self.executor.migrate([self.migrate_from])
+        old_apps = self._historical_apps(self.executor, self.migrate_from)
+        Member = old_apps.get_model("authn", "Member")
+        Event = old_apps.get_model("scheduling", "Event")
+        Participant = old_apps.get_model("scheduling", "Participant")
+        self.assertIn("group_name", {field.name for field in Participant._meta.get_fields()})
+        self.assertNotIn("all_groups", {field.name for field in Participant._meta.get_fields()})
+
+        organizer = Member.objects.create(email="migration-organizer@example.com", password="!")
+        event = Event.objects.create(
+            code="MIGGROUP",
+            name="Group migration",
+            organizer=organizer,
+            days=[1],
+            start_minutes=9 * 60,
+            end_minutes=10 * 60,
+        )
+        self.event_id = event.pk
+        # A second event with the same group name keeps its own row.
+        other_event = Event.objects.create(
+            code="MIGOTHER",
+            name="Other event",
+            organizer=organizer,
+            days=[1],
+            start_minutes=9 * 60,
+            end_minutes=10 * 60,
+        )
+        self.other_event_id = other_event.pk
+        self.participant_ids = {}
+        # The reserved token and the separator are legal in a legacy name;
+        # "ALL" comes before "all" so its spelling names the shared row.
+        for index, (label, group_name, target_event) in enumerate(
+            [
+                ("first", "Team 3", event),
+                ("second", "team 3 ", event),
+                ("blank", "", event),
+                ("null", None, event),
+                ("spaces", "   ", event),
+                ("reserved", "ALL", event),
+                ("reserved_lower", "all", event),
+                ("separator", "Alpha;Beta", event),
+                ("elsewhere", "TEAM 3", other_event),
+            ]
+        ):
+            member = Member.objects.create(
+                email=f"migration-{label}@example.com",
+                password="!",
+                first_name=label.title(),
+            )
+            participant = Participant.objects.create(
+                event=target_event,
+                member=member,
+                participant_name=label.title(),
+                availability_inperson=[0, 0],
+                availability_virtual=[0, 0],
+                group_name=group_name,
+                sort_order=index,
+            )
+            self.participant_ids[label] = participant.pk
+
+        self.executor = MigrationExecutor(connection)
+        self.executor.migrate([self.migrate_to])
+
+    def tearDown(self):
+        executor = MigrationExecutor(connection)
+        executor.migrate(executor.loader.graph.leaf_nodes())
+        super().tearDown()
+
+    def test_group_names_become_shared_group_rows_and_memberships(self):
+        migrated_apps = self._historical_apps(self.executor, self.migrate_to)
+        Participant = migrated_apps.get_model("scheduling", "Participant")
+        ParticipantGroup = migrated_apps.get_model("scheduling", "ParticipantGroup")
+
+        self.assertNotIn("group_name", {field.name for field in Participant._meta.get_fields()})
+        self.assertFalse(Participant._meta.get_field("all_groups").default)
+
+        # Case variants (and trailing whitespace) collapse into one row named
+        # after the first spelling seen; other events get their own row. A
+        # legacy "ALL" is renamed so it is not read as the reserved token, and
+        # a legacy ";" becomes "," so the name is still one token.
+        groups = {
+            group.name: group for group in ParticipantGroup.objects.filter(event_id=self.event_id)
+        }
+        self.assertEqual(sorted(groups), ["ALL (group)", "Alpha,Beta", "Team 3"])
+        group = groups["Team 3"]
+        everyone = groups["ALL (group)"]
+        pair = groups["Alpha,Beta"]
+        other_group = ParticipantGroup.objects.get(event_id=self.other_event_id)
+        self.assertEqual(other_group.name, "TEAM 3")
+        self.assertEqual(ParticipantGroup.objects.count(), 4)
+
+        memberships = {
+            label: sorted(
+                Participant.objects.get(pk=participant_id).groups.values_list("pk", flat=True)
+            )
+            for label, participant_id in self.participant_ids.items()
+        }
+        self.assertEqual(
+            memberships,
+            {
+                "first": [group.pk],
+                "second": [group.pk],
+                "blank": [],
+                "null": [],
+                "spaces": [],
+                "reserved": [everyone.pk],
+                "reserved_lower": [everyone.pk],
+                "separator": [pair.pk],
+                "elsewhere": [other_group.pk],
+            },
+        )
+        self.assertEqual(
+            sorted(group.participants.values_list("participant_name", flat=True)),
+            ["First", "Second"],
+        )
+        self.assertEqual(
+            sorted(everyone.participants.values_list("participant_name", flat=True)),
+            ["Reserved", "Reserved_Lower"],
+        )
+        self.assertEqual(
+            list(pair.participants.values_list("participant_name", flat=True)), ["Separator"]
+        )
+        # A legacy "ALL" was a plain name, never membership of every group.
+        self.assertFalse(Participant.objects.filter(all_groups=True).exists())
+        self.assertEqual(Participant.objects.count(), 9)
+
+    def test_reversing_restores_the_group_name_column_without_memberships(self):
+        executor = MigrationExecutor(connection)
+        executor.migrate([self.migrate_from])
+        old_apps = self._historical_apps(executor, self.migrate_from)
+        Participant = old_apps.get_model("scheduling", "Participant")
+
+        # The data step is a no-op backwards, so the restored column is empty
+        # while every participant row survives.
+        self.assertIn("group_name", {field.name for field in Participant._meta.get_fields()})
+        self.assertEqual(Participant.objects.count(), 9)
+        self.assertEqual(
+            set(Participant.objects.values_list("group_name", flat=True)),
+            {None},
+        )
+        self.assertNotIn(
+            "scheduling_participantgroup",
+            connection.introspection.table_names(),
+        )
+
+
+class LegacyGroupNameTests(SimpleTestCase):
+    """The pure rewrite the data migration applies to each legacy ``group_name``."""
+
+    def test_legacy_names_are_rewritten_into_the_cell_grammar(self):
+        migration = import_module(
+            "apps.scheduling.migrations.0007_participantgroup_multi_membership"
+        )
+        legacy_group_name = migration.legacy_group_name
+
+        self.assertEqual(legacy_group_name(""), "")
+        self.assertEqual(legacy_group_name(None), "")
+        self.assertEqual(legacy_group_name("   "), "")
+        self.assertEqual(legacy_group_name(" Team 3 "), "Team 3")
+        # The separator is replaced before stripping, so the name stays one token.
+        self.assertEqual(legacy_group_name("  x ; y "), "x , y")
+        # Any spelling of the reserved token keeps its case but gains a suffix.
+        self.assertEqual(legacy_group_name("aLL"), "aLL (group)")
+        self.assertEqual(legacy_group_name(" all "), "all (group)")
+        self.assertEqual(legacy_group_name("Allies"), "Allies")

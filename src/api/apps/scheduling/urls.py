@@ -102,6 +102,12 @@ urlpatterns = [
         name="api-roster-imports",
     ),
     path("events/roster/bulk", views.RosterBulkView.as_view(), name="api-roster-bulk"),
+    path("events/roster/groups", views.RosterGroupsView.as_view(), name="api-roster-groups"),
+    path(
+        "events/roster/groups/<int:group_id>",
+        views.RosterGroupView.as_view(),
+        name="api-roster-group",
+    ),
     path(
         "events/roster/invitations",
         views.RosterInvitationsView.as_view(),

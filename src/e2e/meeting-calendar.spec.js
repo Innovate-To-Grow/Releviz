@@ -3,10 +3,12 @@ const { expectAccessible } = require("./helpers/accessibility");
 const {
   apiJson,
   createEvent,
+  fillTextbox,
   openRankedWindows,
   readSession,
   recomputeEventResults,
   registerAccount,
+  selectOption,
 } = require("./helpers/releviz");
 
 // The organizer's meeting-time calendar: weighted shading, week and date
@@ -656,6 +658,242 @@ test.describe("Organizer meeting-time calendar", () => {
     ).toBeEnabled();
     await expect(
       page.locator(".meeting-calendar__block--confirmed"),
+    ).toBeVisible();
+  });
+
+  test("greys out organizer-blocked times, keeps them out of ranked windows, and lets the organizer paint more", async ({
+    page,
+    request,
+  }) => {
+    const runId = `${Date.now()}-${Math.round(Math.random() * 100_000)}`;
+    await registerAccount(
+      page,
+      `calendar-blocked-${runId}@example.com`,
+      "Blocked",
+      "Organizer",
+    );
+    const token = (await readSession(page)).access;
+
+    // Blocks are stored per group as row positions, so Monday 10:00–11:00 is
+    // rows 2 and 3 of "weekday:1". Blocking flags slots without renumbering
+    // them: the index space and slotCount are the same as an open event's.
+    const event = await createEvent(request, token, {
+      name: `Calendar blocked ${runId}`,
+      blockedSlots: { "weekday:1": [2, 3] },
+    });
+    expect(event.blockedSlots).toEqual({ "weekday:1": [2, 3] });
+    expect(event.slotGroups[0].slots[2].blocked).toBe(true);
+    expect(event.slotGroups[0].slots[1].blocked).toBe(false);
+    expect(event.slotCount).toBe(80);
+    const mon10 = slotIndex(event, "weekday:1", "10:00");
+    const tue9 = slotIndex(event, "weekday:2", "09:00");
+    const tue11 = slotIndex(event, "weekday:2", "11:00");
+
+    // Everyone is free inside the blocked window, so if blocks leaked into
+    // the ranking Monday would win; only two of three are free on Tuesday.
+    const people = [
+      { name: "Eve", inperson: [mon10, mon10 + 1, tue11, tue11 + 1] },
+      { name: "Finn", inperson: [mon10, mon10 + 1, tue11, tue11 + 1] },
+      { name: "Gus", inperson: [mon10, mon10 + 1] },
+    ];
+    for (const person of people) {
+      await submitResponse(request, token, event, {
+        ...person,
+        email: `${person.name.toLowerCase()}-${runId}@example.com`,
+      });
+    }
+    recomputeEventResults(event.code);
+    const results = await apiJson(
+      request,
+      "GET",
+      `/events/results?code=${event.code}`,
+      token,
+    );
+    expect(results.response.status()).toBe(200);
+    const snapshot = results.payload.results;
+    expect(snapshot.blockedSlotIndices).toEqual([mon10, mon10 + 1]);
+    for (const recommendation of snapshot.recommendations) {
+      expect(recommendation.slotIndices).not.toContain(mon10);
+      expect(recommendation.slotIndices).not.toContain(mon10 + 1);
+    }
+    expect(snapshot.recommendations[0].label).toBe("Tue 11:00–12:00");
+    expect(snapshot.channels.inperson.weighted[mon10]).toBe(0);
+
+    await page.goto(`/event?code=${event.code}`);
+    await expect(
+      page.getByText(/Results are current at revision/),
+    ).toBeVisible();
+    // The editor only opens itself on an event without blocks.
+    const blockedTimes = page.locator("details.organizer-blocked-times");
+    await expect(blockedTimes).not.toHaveAttribute("open", "");
+    await expect(blockedTimes.locator("summary")).toContainText(
+      "2 slots blocked",
+    );
+
+    // Blocked cells are neutral: no share, no percentage, never startable.
+    // The open cell just before a block cannot start a 60-minute window
+    // either, but it keeps its own share. Blocks apply to every week.
+    const grid = page.getByRole("grid", { name: /^Meeting time calendar, / });
+    await expect(grid).toBeVisible();
+    await gotoWeekWith(page, grid, isoDate(weekStartMs() + 8 * DAY_MS));
+    const monday10 = cellAt(grid, 2, 0);
+    await expect(monday10).toHaveAttribute("data-state", "blocked");
+    await expect(monday10).toHaveAttribute("aria-disabled", "true");
+    await expect(monday10).toHaveAttribute("data-blocked-slot", "true");
+    await expect(monday10.locator(".meeting-calendar__cell-value")).toHaveText(
+      "",
+    );
+    await expect(monday10).toHaveAttribute(
+      "aria-label",
+      /This time is blocked for the event/,
+    );
+    await expect(monday10).not.toHaveAttribute("aria-label", /Weighted/);
+    const monday930 = cellAt(grid, 1, 0);
+    await expect(monday930).toHaveAttribute("data-state", "blocked");
+    await expect(monday930).toHaveAttribute("aria-disabled", "true");
+    await expect(monday930).not.toHaveAttribute("data-blocked-slot");
+    await expect(monday930).toHaveAttribute(
+      "aria-label",
+      /Weighted 0%, unweighted 0% of 3 responses.*would overlap a blocked time/,
+    );
+    await expect(cellAt(grid, 0, 0)).toHaveAttribute("data-state", "startable");
+
+    // Ranked windows skip the blocked slots: the best window is Tuesday even
+    // though everyone was free on Monday, and no rank badge covers a block.
+    // The run before the block still ranks (every other window scores 0, so
+    // the earliest one, Monday 09:00–10:00, is #2) and ends right at it.
+    const tuesday11 = cellAt(grid, 4, 1);
+    await expect(tuesday11).toHaveAttribute("data-state", "startable");
+    await expect(tuesday11).toHaveAttribute(
+      "aria-label",
+      /Weighted 67%, unweighted 67% of 3 responses.*Inside ranked window #1/,
+    );
+    await expect(monday10).not.toHaveAttribute(
+      "aria-label",
+      /Inside ranked window/,
+    );
+    await expect(
+      grid.locator(
+        '[data-blocked-slot="true"][aria-label*="Inside ranked window"]',
+      ),
+    ).toHaveCount(0);
+    await expect(cellAt(grid, 0, 0)).toHaveAttribute(
+      "aria-label",
+      /Inside ranked window #2/,
+    );
+    await expect(monday930).toHaveAttribute(
+      "aria-label",
+      /Inside ranked window #2/,
+    );
+    const rail = page.getByRole("complementary", { name: "Ranked windows" });
+    await openRankedWindows(page);
+    const titles = rail.locator(".result-option__title");
+    await expect(titles.first()).toHaveText("Tue 11:00–12:00");
+    await expect(titles.nth(1)).toHaveText("Mon 09:00–10:00");
+    expect(
+      (await titles.allTextContents()).filter(
+        (title) =>
+          title.startsWith("Mon 10:00") || title.startsWith("Mon 10:30"),
+      ),
+    ).toEqual([]);
+
+    // Painting one more block (Tuesday 09:00) and saving updates the
+    // summary, the API and the calendar in place, with no reload.
+    await blockedTimes.locator("summary").click();
+    await expect(blockedTimes).toHaveAttribute("open", "");
+    await expect(
+      blockedTimes.getByText(
+        "Mark the parts of each day that are not available for this event. Participants see these times greyed out.",
+      ),
+    ).toBeVisible();
+    const brushes = page.getByRole("group", { name: "Mark times as" });
+    await expect(
+      brushes.getByRole("button", { name: "Blocked", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+    const blockedGrid = page.getByRole("grid", { name: "Blocked times" });
+    await expect(blockedGrid).toBeVisible();
+    await expect(
+      blockedGrid.locator(`[data-cell-idx="${mon10}"]`),
+    ).toHaveAttribute("data-blocked-paint", "true");
+    const saveBlocked = page.getByRole("button", {
+      name: "Save blocked times",
+    });
+    await expect(saveBlocked).toBeDisabled();
+    await expectAccessible(page, "organizer blocked times editor");
+    const tuesday9Mark = blockedGrid.locator(`[data-cell-idx="${tue9}"]`);
+    await expect(tuesday9Mark).toHaveAttribute("data-blocked-paint", "false");
+    await tuesday9Mark.click();
+    await expect(tuesday9Mark).toHaveAttribute("data-blocked-paint", "true");
+    await expect(tuesday9Mark).toHaveAttribute("aria-selected", "true");
+    await expect(saveBlocked).toBeEnabled();
+    await saveBlocked.click();
+    await expect(page.getByText("Blocked times saved.")).toBeVisible();
+    await expect(blockedTimes.locator("summary")).toContainText(
+      "3 slots blocked",
+    );
+    // The stored event now matches the marks, so there is nothing to save.
+    await expect(saveBlocked).toBeDisabled();
+    const saved = await apiJson(
+      request,
+      "GET",
+      `/events?code=${event.code}`,
+      token,
+    );
+    expect(saved.response.status()).toBe(200);
+    expect(saved.payload.event.blockedSlots).toEqual({
+      "weekday:1": [2, 3],
+      "weekday:2": [0],
+    });
+    const tuesday9 = cellAt(grid, 0, 1);
+    await expect(tuesday9).toHaveAttribute("data-state", "blocked");
+    await expect(tuesday9).toHaveAttribute("data-blocked-slot", "true");
+    await expect(tuesday9).toHaveAttribute("aria-disabled", "true");
+
+    // A participant's grid (here the managed drawer) shows all three blocks
+    // greyed out and unpaintable, with the legend explaining the stripes.
+    await page
+      .locator("#organizer-roster")
+      .getByRole("button", { name: "Edit schedule" })
+      .first()
+      .click();
+    const drawer = page.getByRole("dialog");
+    await expect(drawer).toBeVisible();
+    await expect(drawer.locator('[data-blocked="true"]')).toHaveCount(3);
+    await expect(
+      drawer.locator('[data-blocked="true"][aria-disabled="true"]'),
+    ).toHaveCount(3);
+    await expect(
+      drawer.locator('[data-blocked="true"][data-availability]'),
+    ).toHaveCount(0);
+    await expect(
+      drawer.getByRole("list", { name: "Availability legend" }),
+    ).toContainText("Blocked");
+    await drawer
+      .getByRole("button", { name: "Close schedule editor" })
+      .click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+
+    // A brand-new event lands on its organizer page with the empty editor
+    // already open, so blocks can be painted before anyone is invited.
+    await page.goto("/dashboard");
+    await page.getByRole("link", { name: "Create New Event" }).click();
+    await fillTextbox(page, "Event Name", `Calendar fresh ${runId}`);
+    await fillTextbox(page, "Location / Address", "Fresh Room");
+    await selectOption(page, "Event timezone", "UTC");
+    await page.getByRole("button", { name: "Create Event" }).click();
+    await page.waitForURL(/\/event\?code=/);
+    const freshBlockedTimes = page.locator(
+      "details.organizer-blocked-times[open]",
+    );
+    await expect(freshBlockedTimes).toBeVisible();
+    await expect(freshBlockedTimes.locator("summary")).toContainText(
+      "0 slots blocked",
+    );
+    await expect(
+      freshBlockedTimes.getByRole("grid", { name: "Blocked times" }),
+    ).toBeVisible();
+    await expect(
+      page.getByText("This event is active and accepting responses."),
     ).toBeVisible();
   });
 });

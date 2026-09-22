@@ -26,6 +26,14 @@ on first use) or with email + password for accounts that set one through Forgot 
 (`/recover`). New events are active immediately and can accept responses as soon as participants
 join; creating an event by itself does not send email.
 
+**Blocked times.** The organizer workspace opens on the **Blocked times** editor right after the
+event is created. Paint the parts of each day that are not available (a lunch break on Mondays, a
+late start on Fridays) and save; the event keeps one start/end/days configuration while every day
+gets its own usable window. Blocked slots stay in the schedule grid but are greyed out and cannot be
+painted, count as 0 in the results, never appear in ranked windows, and cannot be finalized into.
+Blocked times can be changed at any time from the Overview panel without resetting responses;
+after finalization the event must be reactivated first.
+
 ### 2. Build the Roster
 
 Adding people and sending invitations are separate steps. **Add person** opens a form with two
@@ -34,7 +42,9 @@ same), and **Add and send invitation** also emails their secure link right away.
 
 The Roster tab also accepts `.xlsx`, `.csv`, or pasted CSV/TSV. Map the required `name` and `email`
 columns and optional `group`, `weight`, `included`, and `phone` columns, preview and correct rows,
-then commit as:
+then commit as one of the modes below. In the `group` column, blank means unassigned, `ALL` means
+every group (including groups created later), and several names are separated by `;` (for example
+`Faculty; Team 3`).
 
 - **Merge** — add/update people while preserving existing schedules and delivery history.
 - **Rebuild** — type the event code to destructively replace the roster, schedules, invitations,
@@ -101,7 +111,9 @@ event re-seeds the schedules of people who have not touched theirs yet; anyone w
 painted or submitted keeps their response.
 
 The grid uses color coding plus text cues: hatched red (busy) -> yellow ◐ (if needed) -> green ✓
-(available). Virtual channels use a red -> purple -> blue scale.
+(available). Virtual channels use a red -> purple -> blue scale. Grey striped cells are times the
+organizer blocked for the event: they cannot be painted, "Apply to all" skips them, and anything
+marked there before the block was added is ignored.
 
 Depending on the event's visibility setting, participants can see the latest published group
 snapshot. While a newer response is being calculated, the UI labels the result as refreshing and
@@ -116,11 +128,19 @@ Roster, Results, and Finalize. The organizer can:
 - load one person's schedule only when its edit drawer opens;
 - co-edit a temporary participant while the event is active, until that identity upgrades to a
   verified full account;
+- create groups (empty at first) and fill them from the list checkboxes; a person may be in many
+  groups, and the `ALL` flag places them in every group;
 - apply group/filter/selection weight and included changes, then override an individual;
 - view the top ten meeting-duration candidates ranked by weighted availability, unweighted
   availability, fully available count, and configured-time order;
 - finalize one authoritative continuous interval, queue stable-UID iCalendar `REQUEST`/`CANCEL`
   notifications, and download the calendar file.
+
+On the meeting-time calendar the organizer's blocked times are hatched, show no percentage, and
+cannot be picked; an open slot whose meeting window would run into a block keeps its percentage but
+cannot start a meeting either. Blocked times are excluded from the results (their availability is
+reported as 0), never form part of a ranked window, and cannot be finalized into; edit them from
+**Blocked times** on the Overview panel.
 
 For a multi-slot meeting, each person's candidate score is their minimum availability across the
 whole interval. The weighted score is `sum(person_score * weight) / sum(positive weights)` across

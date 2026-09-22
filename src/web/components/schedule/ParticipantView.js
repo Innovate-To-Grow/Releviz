@@ -1,6 +1,13 @@
 "use client";
 
-import { useState, useContext, useEffect, useRef, useCallback } from "react";
+import {
+  useState,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useCallback,
+} from "react";
 import Alert from "@/components/ui/Alert";
 import AppButton from "@/components/ui/AppButton";
 import {
@@ -35,6 +42,21 @@ import useAutosaveNavigationGuard from "@/components/schedule/useAutosaveNavigat
 
 const NOOP = () => {};
 
+const BLOCKED_SLOTS_NOTE =
+  "Grey striped times are blocked by the organizer and do not apply to this event.";
+
+// Organizer-blocked slots keep their index but never take availability: the
+// grid refuses to paint them, and bulk fills leave them at 0.
+function blockedSlotIndices(slotGroups) {
+  const blocked = new Set();
+  for (const group of slotGroups || []) {
+    for (const slot of group?.slots || []) {
+      if (slot?.blocked) blocked.add(slot.index);
+    }
+  }
+  return blocked;
+}
+
 function ParticipantView() {
   const {
     event,
@@ -45,6 +67,11 @@ function ParticipantView() {
   } = useContext(EventContext);
   const { user, loading: authLoading, getToken } = useAuth();
   const mode = event?.mode || "inperson";
+  const blockedIndices = useMemo(
+    () => blockedSlotIndices(event?.slotGroups),
+    [event?.slotGroups],
+  );
+  const hasBlockedSlots = blockedIndices.size > 0;
   // Every slot starts at the organizer's chosen level, so the brush defaults
   // to the opposite: people paint over the times that differ.
   const startingValue = startingAvailabilityValue(event);
@@ -436,13 +463,17 @@ function ParticipantView() {
 
   const fillAllAvailability = (value) => {
     if (responseChangesDisabled) return;
+    const filled = () =>
+      Array.from({ length: numSlots }, (_, index) =>
+        blockedIndices.has(index) ? 0 : value,
+      );
     if (mode !== "virtual") {
-      const next = Array(numSlots).fill(value);
+      const next = filled();
       scheduleInpersonRef.current = next;
       setScheduleInperson(next);
     }
     if (mode !== "inperson") {
-      const next = Array(numSlots).fill(value);
+      const next = filled();
       scheduleVirtualRef.current = next;
       setScheduleVirtual(next);
     }
@@ -653,6 +684,16 @@ function ParticipantView() {
                 <span>Your changes save automatically.</span>
               </p>
             </div>
+
+            {hasBlockedSlots && (
+              <Alert
+                variant="info"
+                role="note"
+                className="participant-blocked-notice"
+              >
+                {BLOCKED_SLOTS_NOTE}
+              </Alert>
+            )}
 
             <ScheduleChannelEditor
               mode={mode}
