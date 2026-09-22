@@ -15,11 +15,16 @@ BOOTSTRAP_TERRAFORM = ROOT / "infra/bootstrap/main.tf"
 TERRAFORM_ENVIRONMENTS = {
     "production": ROOT / "infra/prod/main.tf",
 }
-# The production release is three workflows (backend, frontend, infrastructure)
-# that share two composite actions. Each workflow runs a no-credential scope
-# job, then a release job gated by a protected environment: "AWS ECS - Prod"
-# (backend, infrastructure) or "AWS Amplify - Prod" (frontend), each with its
-# own bootstrap-managed OIDC role.
+# The production release is one orchestrating workflow (release.yml) that runs
+# a no-credential scope job and then calls three surface workflows (backend,
+# frontend, infrastructure) as reusable workflows side by side, so every
+# release job reaches its protected environment in the same review and the
+# reviewer approves the whole release once. Each surface's release job is
+# gated by its own environment: "AWS ECS - Prod" (backend, infrastructure) or
+# "AWS Amplify - Prod" (frontend), each with its own bootstrap-managed OIDC
+# role. A surface workflow can also be dispatched alone. Two composite actions
+# and one script are shared.
+PRODUCTION_RELEASE_ORCHESTRATOR = ROOT / ".github/workflows/release.yml"
 PRODUCTION_RELEASE_WORKFLOWS = {
     "backend": ROOT / ".github/workflows/release-backend.yml",
     "frontend": ROOT / ".github/workflows/release-frontend.yml",
@@ -27,6 +32,7 @@ PRODUCTION_RELEASE_WORKFLOWS = {
 }
 RELEASE_PREFLIGHT_ACTION = ROOT / ".github/actions/release-preflight/action.yml"
 RELEASE_SCOPE_ACTION = ROOT / ".github/actions/release-scope/action.yml"
+LAST_RELEASE_SCRIPT = ROOT / "scripts/ci/last-successful-release.sh"
 # The single 3,000-line release workflow was retired when releases were split;
 # it must not come back beside the split workflows.
 RETIRED_RELEASE_WORKFLOWS = (
@@ -49,10 +55,14 @@ REQUIRED_CSV_ENVIRONMENT = {
 # The release commit: the CI run's head commit for automatic (workflow_run)
 # releases, the selected main commit for manual dispatch. github.sha alone is
 # the default-branch tip at trigger time, which can already be a newer commit.
+# The orchestrator resolves it once and hands it to each surface workflow as
+# the deploy-sha input; a surface dispatched alone releases the selected
+# main commit.
 RELEASE_SHA_EXPRESSION_RE = (
     r"\$\{\{\s*github\.event_name\s*==\s*'workflow_run'\s*&&\s*"
     r"github\.event\.workflow_run\.head_sha\s*\|\|\s*github\.sha\s*\}\}"
 )
+SURFACE_RELEASE_SHA_EXPRESSION_RE = r"\$\{\{\s*inputs\.deploy-sha\s*\|\|\s*github\.sha\s*\}\}"
 
 ENVIRONMENT_NAME_RE = re.compile(r"\{\s*name\s*=\s*\"([A-Z][A-Z0-9_]*)\"", re.MULTILINE)
 
@@ -85,8 +95,10 @@ def production_release_paths(root: Path = ROOT) -> dict[str, Path]:
     paths = {
         scope: root / path.relative_to(ROOT) for scope, path in PRODUCTION_RELEASE_WORKFLOWS.items()
     }
+    paths["orchestrator"] = root / PRODUCTION_RELEASE_ORCHESTRATOR.relative_to(ROOT)
     paths["preflight"] = root / RELEASE_PREFLIGHT_ACTION.relative_to(ROOT)
     paths["scope-action"] = root / RELEASE_SCOPE_ACTION.relative_to(ROOT)
+    paths["last-release"] = root / LAST_RELEASE_SCRIPT.relative_to(ROOT)
     return paths
 
 
@@ -97,8 +109,10 @@ AUTOMATIC_RELEASE_GUARD_RE = (
     r"github\.event\.workflow_run\.head_repository\.full_name\s*==\s*github\.repository"
 )
 
-# Invariants every release workflow must keep.
-COMMON_RELEASE_WORKFLOW_RULES = {
+# Invariants the orchestrating workflow must keep: it alone listens to CI,
+# scopes every surface without credentials, and calls the affected surfaces
+# side by side so their environment gates are reviewed together.
+ORCHESTRATOR_RULES = {
     (
         r"workflow_run:\s*\n\s*workflows:\s*\[CI\]\s*\n\s*types:\s*\[completed\]"
         r"\s*\n\s*branches:\s*\[main\]"
@@ -109,26 +123,86 @@ COMMON_RELEASE_WORKFLOW_RULES = {
         "an automatic-release guard for successful push CI runs on main from this repository"
     ),
     r"actions:\s*read": "GitHub Actions artifact read permission",
+    r"deployments:\s*write": "deployment permission for the surface environments",
+    r"id-token:\s*write": "OIDC permission for the surface workflows",
+    r"cancel-in-progress:\s*false": "non-cancelling release concurrency",
+    r"DEPLOY_SHA:\s*" + RELEASE_SHA_EXPRESSION_RE: "the release commit as the deploy SHA",
+    r"fetch-depth:\s*0": "full history for change scoping",
+    r"if:\s*\$\{\{\s*always\(\)[^}]*\}\}[\s\S]{0,1600}GITHUB_STEP_SUMMARY": (
+        "an always-written release summary"
+    ),
+    **{
+        rf"uses:\s*\./\.github/actions/release-scope\s*\n\s*with:\s*\n\s*surface:\s*{scope}\b": (
+            f"the no-credential {scope} change scope"
+        )
+        for scope in PRODUCTION_RELEASE_WORKFLOWS
+    },
+    **{
+        (
+            rf"\n  {scope}:\s*\n\s*needs:\s*scope\s*\n"
+            rf"\s*if:\s*\$\{{\{{\s*needs\.scope\.outputs\.{scope}\s*==\s*'true'\s*\}}\}}\s*\n"
+            rf"\s*uses:\s*\./\.github/workflows/release-{scope}\.yml\s*\n\s*with:\s*\n"
+            rf"\s*deploy-sha:\s*{RELEASE_SHA_EXPRESSION_RE}\s*\n"
+            r"\s*trigger-event:\s*\$\{\{\s*github\.event_name\s*\}\}\s*\n"
+            r"\s*confirmation:\s*\$\{\{\s*inputs\.confirmation\s*\}\}"
+        ): (
+            f"a {scope} surface job that depends only on the scope job, runs only when the "
+            f"{scope} changed, and calls the {scope} workflow with the release commit"
+        )
+        for scope in PRODUCTION_RELEASE_WORKFLOWS
+    },
+}
+
+# Text the orchestrator may not contain: approvals and credentials belong to
+# the surface workflows' environment-gated jobs, never to the caller.
+FORBIDDEN_ORCHESTRATOR_RULES = {
+    r"environment:": "an environment gate of its own",
+    r"aws |configure-aws-credentials": "cloud credentials",
+    r"\$\{\{\s*secrets\.": "GitHub secrets",
+    (
+        r"needs:[^\n]*\b(backend|frontend|infrastructure)\b[^\n]*\n(\s*if:[^\n]*\n)?"
+        r"\s*uses:\s*\./\.github/workflows/release-"
+    ): "a surface job that waits for another surface (it would ask for a second approval)",
+}
+
+# Invariants every surface workflow must keep: callable from the orchestrator
+# with the release commit, dispatchable alone, and gated on its environment.
+COMMON_RELEASE_WORKFLOW_RULES = {
+    (
+        r"workflow_call:\s*\n\s*inputs:\s*\n\s*deploy-sha:[\s\S]{0,200}required:\s*true"
+        r"[\s\S]{0,200}trigger-event:[\s\S]{0,200}required:\s*true[\s\S]{0,300}confirmation:"
+    ): "the reusable-workflow inputs the orchestrator passes",
+    r"workflow_dispatch:": "manual dispatch",
+    r"description: Type DEPLOY to release": "the DEPLOY confirmation input",
+    r"actions:\s*read": "GitHub Actions artifact read permission",
     r"id-token:\s*write": "OIDC permission",
     r"cancel-in-progress:\s*false": "non-cancelling release concurrency",
-    r"uses:\s*\./\.github/actions/release-scope": "the no-credential change scope job",
-    r"fetch-depth:\s*0": "full history for change scoping",
-    r"needs:\s*scope": "a release job gated on the scope job",
-    r"if:\s*\$\{\{\s*needs\.scope\.outputs\.release\s*==\s*'true'\s*\}\}": (
-        "a release job that only runs when its scope changed"
+    r"if:\s*\$\{\{\s*github\.ref\s*==\s*'refs/heads/main'\s*\}\}": (
+        "a release job restricted to main"
     ),
-    r"TRIGGER_EVENT:\s*\$\{\{\s*github\.event_name\s*\}\}": (
-        "the trigger event for the shared preflight"
+    r"TRIGGER_EVENT:\s*\$\{\{\s*inputs\.trigger-event\s*\|\|\s*github\.event_name\s*\}\}": (
+        "the calling run's trigger event for the shared preflight"
     ),
     r"CONFIRMATION:\s*\$\{\{\s*inputs\.confirmation\s*\}\}": (
         "the manual confirmation for the shared preflight"
     ),
-    r"DEPLOY_SHA:\s*" + RELEASE_SHA_EXPRESSION_RE: "the release commit as the deploy SHA",
+    r"DEPLOY_SHA:\s*" + SURFACE_RELEASE_SHA_EXPRESSION_RE: (
+        "the orchestrator's release commit as the deploy SHA"
+    ),
     r"ref:\s*\$\{\{\s*env\.DEPLOY_SHA\s*\}\}": "checkout of the exact release commit",
     r"uses:\s*\./\.github/actions/release-preflight": "the shared release preflight",
     r"if:\s*\$\{\{\s*always\(\)\s*\}\}[\s\S]{0,900}GITHUB_STEP_SUMMARY": (
         "an always-written release summary"
     ),
+}
+
+# Text no surface workflow may contain: CI listening and change scoping belong
+# to the orchestrator, so a surface can never release outside its review.
+FORBIDDEN_SURFACE_WORKFLOW_RULES = {
+    r"\n\s*workflow_run:": "its own CI trigger",
+    r"release-scope": "its own change scope",
+    r"needs:\s*scope": "a scope job of its own",
+    r"github\.event\.workflow_run": "the CI run payload (the orchestrator resolves the release commit)",
 }
 
 # Backend and infrastructure releases run from the "AWS ECS - Prod" environment
@@ -219,7 +293,7 @@ SCOPED_RELEASE_WORKFLOW_RULES = {
     "backend": {
         **ECS_ENVIRONMENT_RULES,
         **TERRAFORM_STEADY_STATE_RULES,
-        r"TF_VAR_backend_image_tag:\s*" + RELEASE_SHA_EXPRESSION_RE: (
+        r"TF_VAR_backend_image_tag:\s*" + SURFACE_RELEASE_SHA_EXPRESSION_RE: (
             "the release commit as the backend image tag"
         ),
         r"--image-tag-mutability IMMUTABLE": "an immutable ECR repository",
@@ -228,7 +302,7 @@ SCOPED_RELEASE_WORKFLOW_RULES = {
             "an existing-image short circuit"
         ),
         r'docker build --pull --tag "\$image_uri" \./src/api': "the backend image build",
-        r"workflows/release-frontend\.yml/runs\?branch=main&status=success": (
+        r'released="\$\(scripts/ci/last-successful-release\.sh frontend\)"': (
             "the fallback frontend held at the latest successful frontend release"
         ),
         r"TF_VAR_frontend_image_tag:\s*\$\{\{\s*steps\.frontend_tag\.outputs\.sha\s*\}\}": (
@@ -291,7 +365,7 @@ SCOPED_RELEASE_WORKFLOW_RULES = {
     "frontend": {
         **AMPLIFY_ENVIRONMENT_RULES,
         r'AMPLIFY_TIMEOUT_SECONDS:\s*"1200"': "the bounded Amplify deployment-helper timeout",
-        r"AMPLIFY_ARTIFACT:.*releviz-amplify-" + RELEASE_SHA_EXPRESSION_RE + r"\.zip": (
+        r"AMPLIFY_ARTIFACT:.*releviz-amplify-" + SURFACE_RELEASE_SHA_EXPRESSION_RE + r"\.zip": (
             "a SHA-identified Amplify artifact"
         ),
         r"CANDIDATE_BRANCH:\s*candidate": "the Amplify candidate branch",
@@ -339,7 +413,8 @@ SCOPED_RELEASE_WORKFLOW_RULES = {
         r"\.workflow_run\.head_sha\s*==\s*\$sha": "rollback artifact head-SHA binding",
         r"\.head_branch\s*==\s*\"main\"": "rollback artifact main-branch binding",
         (
-            r"\.path == \"\.github/workflows/release-frontend\.yml\"\s*\n\s*"
+            r"\.path == \"\.github/workflows/release\.yml\"\s*\n\s*"
+            r"or \.path == \"\.github/workflows/release-frontend\.yml\"\s*\n\s*"
             r"or \.path == \"\.github/workflows/deploy-prod\.yml\""
         ): "rollback artifact production-workflow binding",
         r"\(\.event == \"workflow_dispatch\" or \.event == \"workflow_run\"\)": (
@@ -385,9 +460,10 @@ SCOPED_RELEASE_WORKFLOW_RULES = {
         r"aws amplify update-app[\s\S]{0,120}--custom-headers": (
             "installation of the reviewed Amplify security headers"
         ),
-        r"workflows/\$\{workflow\}/runs\?branch=main&status=success": (
-            "application images held at their latest successful releases"
-        ),
+        (
+            r'released="\$\(scripts/ci/last-successful-release\.sh "\$surface"\)"[\s\S]{0,1500}'
+            r'resolve backend "\$ECR_BACKEND"[\s\S]{0,200}resolve frontend "\$ECR_FRONTEND"'
+        ): "application images held at their latest successful releases",
         r"TF_VAR_backend_image_tag:\s*\$\{\{\s*steps\.images\.outputs\.backend\s*\}\}": (
             "the resolved backend tag in the plan"
         ),
@@ -527,15 +603,39 @@ RELEASE_PREFLIGHT_RULES = {
 RELEASE_SCOPE_RULES = {
     r"\^\[0-9a-f\]\{40\}\$": "an immutable release SHA requirement",
     r'if \[ "\$TRIGGER_EVENT" = "workflow_dispatch" \]': "unconditional manual releases",
-    r"runs\?branch=main&status=success&per_page=1": (
-        "the last successful release as the diff base"
-    ),
-    r'base="\$\(last_success deploy-prod\.yml\)"': (
-        "the retired single workflow's last release as the initial diff base"
+    r'base="\$\(scripts/ci/last-successful-release\.sh "\$RELEASE_SURFACE"\)"': (
+        "the surface's last successful release as the diff base"
     ),
     r"git cat-file -e": "a rewritten-history fallback",
     r'git diff --name-only "\$base" "\$RELEASE_SHA" --': "a path-scoped change comparison",
     r'echo "release=false"': "a skip when nothing changed",
+}
+
+# The shared answer to "what did this surface last release?": the newest
+# orchestrated run in which the surface's own job succeeded (never the run as
+# a whole), or a newer lone dispatch of the surface workflow, falling back to
+# the retired single workflow before a surface has released once.
+LAST_RELEASE_SCRIPT_RULES = {
+    r"set -euo pipefail": "strict shell settings",
+    r"backend \| frontend \| infrastructure\) ;;": "the three release surfaces",
+    r"workflows/release\.yml/runs\?branch=main&status=completed": (
+        "the orchestrated release history"
+    ),
+    r'select\(\.event == "workflow_run" or \.event == "workflow_dispatch"\)': (
+        "orchestrated runs limited to release events"
+    ),
+    r"actions/runs/\$\{run_id\}/jobs": "the surface job of each orchestrated run",
+    r'startswith\(\\"\$\{surface\} / \\"\)': "the surface's own job by name",
+    r'\[ "\$job_conclusion" = "success" \]': "a successful surface job, not a successful run",
+    r"workflows/\$1/runs\?branch=main&status=success&per_page=1": (
+        "the last successful run of a whole workflow"
+    ),
+    r'workflow_success "release-\$\{surface\}\.yml"': "the surface workflow's own dispatch history",
+    r"sort \| tail -n 1": "the newest of the orchestrated and lone histories",
+    r"workflow_success deploy-prod\.yml": (
+        "the retired single workflow's last release as the initial base"
+    ),
+    r"\^\[0-9a-f\]\{40\}\$": "an immutable release SHA result",
 }
 
 
@@ -553,6 +653,18 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         if (root / retired).exists():
             errors.append(f"retired single release workflow remains: {retired}")
 
+    orchestrator = paths["orchestrator"]
+    if not orchestrator.exists():
+        errors.append("production release workflow is missing")
+    else:
+        source = orchestrator.read_text(encoding="utf-8")
+        for pattern, description in ORCHESTRATOR_RULES.items():
+            if not re.search(pattern, source, re.MULTILINE | re.DOTALL):
+                errors.append(f"production release omits {description}")
+        for pattern, description in FORBIDDEN_ORCHESTRATOR_RULES.items():
+            if re.search(pattern, source, re.MULTILINE | re.DOTALL):
+                errors.append(f"production release retains {description}")
+
     for scope in PRODUCTION_RELEASE_WORKFLOWS:
         path = paths[scope]
         if not path.exists():
@@ -569,14 +681,20 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
         for pattern, description in FORBIDDEN_RELEASE_WORKFLOW_RULES.items():
             if re.search(pattern, source, re.MULTILINE | re.DOTALL):
                 errors.append(f"{label} retains {description}")
+        for pattern, description in FORBIDDEN_SURFACE_WORKFLOW_RULES.items():
+            if re.search(pattern, source, re.MULTILINE | re.DOTALL):
+                errors.append(f"{label} retains {description}")
         for pattern, description in SCOPED_FORBIDDEN_RELEASE_WORKFLOW_RULES[scope].items():
             if re.search(pattern, source, re.MULTILINE | re.DOTALL):
                 errors.append(f"{label} retains {description}")
         scope_pattern = rf"release-preflight\s*\n\s*with:\s*\n\s*scope:\s*{scope}\b"
         if not re.search(scope_pattern, source, re.MULTILINE):
             errors.append(f"{label} omits the {scope} preflight scope")
-        if not re.search(rf"workflow-file:\s*release-{scope}\.yml", source):
-            errors.append(f"{label} omits its own workflow file in the scope comparison")
+        gate_pattern = (
+            rf"\n  release:\s*\n[\s\S]{{0,600}}concurrency:\s*\n\s*group:\s*release-{scope}\b"
+        )
+        if not re.search(gate_pattern, source, re.MULTILINE):
+            errors.append(f"{label} omits its own release-job concurrency group")
         positions = _step_positions(source, RELEASE_STEP_ORDERS[scope])
         if any(position < 0 for position in positions):
             missing = [
@@ -609,6 +727,17 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
                 errors.append(f"release scope omits {description}")
         if re.search(r"aws |configure-aws-credentials", source):
             errors.append("release scope must not use cloud credentials")
+
+    last_release = paths["last-release"]
+    if not last_release.exists():
+        errors.append("last-successful-release script is missing")
+    else:
+        source = last_release.read_text(encoding="utf-8")
+        for pattern, description in LAST_RELEASE_SCRIPT_RULES.items():
+            if not re.search(pattern, source, re.MULTILINE | re.DOTALL):
+                errors.append(f"last-successful-release script omits {description}")
+        if re.search(r"aws |configure-aws-credentials", source):
+            errors.append("last-successful-release script must not use cloud credentials")
 
     return errors
 

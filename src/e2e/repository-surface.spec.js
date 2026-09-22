@@ -7,6 +7,7 @@ const ROOT = path.resolve(__dirname, "../..");
 const RESOURCE_AUDIT_MANIFEST = [
   ".github/dependabot.yml",
   ".github/workflows/ci.yml",
+  ".github/workflows/release.yml",
   ".github/workflows/release-backend.yml",
   ".github/workflows/release-frontend.yml",
   ".github/workflows/release-infrastructure.yml",
@@ -125,6 +126,7 @@ const RESOURCE_AUDIT_MANIFEST = [
   "scripts/quality-gate.sh",
   "scripts/ci/check_bundle_size.py",
   "scripts/ci/check_npm_licenses.py",
+  "scripts/ci/last-successful-release.sh",
   "scripts/ci/plan_django_tests.py",
   "scripts/ci/plan_e2e_tests.py",
   "scripts/ci/summarize_workflow_jobs.py",

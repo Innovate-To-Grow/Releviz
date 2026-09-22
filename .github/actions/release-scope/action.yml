@@ -1,17 +1,18 @@
 name: Release scope
 description: >-
-  Decide whether a release workflow has anything to release: compares the
-  release commit with the workflow's last successful release on main and
-  reports whether any of the workflow's paths changed. Manual dispatch always
-  releases; workflow changes themselves are exercised that way. Runs without cloud credentials so an unaffected workflow finishes
-  in seconds and never asks for approval.
+  Decide whether a release surface has anything to release: compares the
+  release commit with the surface's last successful release on main (see
+  scripts/ci/last-successful-release.sh) and reports whether any of the
+  surface's paths changed. Manual dispatch always releases; workflow changes
+  themselves are exercised that way. Runs without cloud credentials so an
+  unaffected surface is settled in seconds and never asks for approval.
 
 inputs:
-  workflow-file:
-    description: File name of the calling workflow (for example release-backend.yml)
+  surface:
+    description: backend, frontend, or infrastructure
     required: true
   paths:
-    description: Newline-separated git pathspecs that this workflow releases
+    description: Newline-separated git pathspecs that this surface releases
     required: true
   release-sha:
     description: The release commit
@@ -22,7 +23,7 @@ inputs:
 
 outputs:
   release:
-    description: "true when the workflow should release, otherwise false"
+    description: "true when the surface should release, otherwise false"
     value: ${{ steps.scope.outputs.release }}
   base:
     description: The last successfully released commit, when one exists
@@ -36,7 +37,7 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
-        WORKFLOW_FILE: ${{ inputs.workflow-file }}
+        RELEASE_SURFACE: ${{ inputs.surface }}
         RELEASE_PATHS: ${{ inputs.paths }}
         RELEASE_SHA: ${{ inputs.release-sha }}
         TRIGGER_EVENT: ${{ inputs.trigger-event }}
@@ -52,18 +53,7 @@ runs:
           echo "::notice::Manual dispatch releases ${RELEASE_SHA} unconditionally."
           exit 0
         fi
-        last_success() {
-          gh api \
-            -H 'Accept: application/vnd.github+json' \
-            "repos/${GITHUB_REPOSITORY}/actions/workflows/$1/runs?branch=main&status=success&per_page=1" \
-            --jq '.workflow_runs[0].head_sha // ""' 2>/dev/null || true
-        }
-        base="$(last_success "$WORKFLOW_FILE")"
-        if [ -z "$base" ]; then
-          # Before the split, one workflow released everything; its last
-          # success is the base until this workflow has released once.
-          base="$(last_success deploy-prod.yml)"
-        fi
+        base="$(scripts/ci/last-successful-release.sh "$RELEASE_SURFACE")"
         echo "base=${base}" >>"$GITHUB_OUTPUT"
         if [ -z "$base" ]; then
           echo "release=true" >>"$GITHUB_OUTPUT"
@@ -85,6 +75,6 @@ runs:
           } | tee -a "$GITHUB_STEP_SUMMARY"
         else
           echo "release=false" >>"$GITHUB_OUTPUT"
-          echo "Nothing to release: no changes in this workflow's paths between ${base} and ${RELEASE_SHA}." |
+          echo "Nothing to release: no changes in this surface's paths between ${base} and ${RELEASE_SHA}." |
             tee -a "$GITHUB_STEP_SUMMARY"
         fi
