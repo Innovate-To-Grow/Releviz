@@ -9,7 +9,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 from apps.authn.models import ContactEmail
-from apps.scheduling.models import Event, Participant, UserEvent, Weight
+from apps.scheduling.models import Event, Participant, ParticipantGroup, UserEvent, Weight
 
 DEFAULT_EMAIL = "admin-e2e@example.com"
 DEFAULT_PASSWORD = "admin-e2e-password"
@@ -19,6 +19,7 @@ DEFAULT_FIRST_NAME = "Admin"
 DEFAULT_LAST_NAME = "E2E"
 DEFAULT_EVENT_CODE = "E2EADMIN"
 DEFAULT_EVENT_NAME = "E2E Design Review"
+DEFAULT_GROUP_NAME = "Design Review"
 
 
 class Command(BaseCommand):
@@ -238,10 +239,15 @@ class Command(BaseCommand):
                 "availability_inperson": availability,
                 "availability_virtual": list(reversed(availability)),
                 "submitted": True,
-                "group_name": "Design Review",
                 "sort_order": 1,
             },
         )
+        # Group names are unique per event case-insensitively, so look the
+        # group up the same way before creating it; ``add`` is idempotent.
+        group = event.participant_groups.filter(name__iexact=DEFAULT_GROUP_NAME).first()
+        if group is None:
+            group = ParticipantGroup.objects.create(event=event, name=DEFAULT_GROUP_NAME)
+        participant.groups.add(group)
         UserEvent.objects.update_or_create(
             member=member,
             event=event,

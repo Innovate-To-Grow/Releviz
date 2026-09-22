@@ -172,6 +172,53 @@ class RecommendationDomainTests(TestCase):
         self.assertEqual(results["recommendationBasis"]["candidateSlotTotal"], 2)
         self.assertEqual(first.event_id, event.pk)
 
+    def test_windows_never_span_a_blocked_slot_and_still_rank_the_open_runs(self):
+        event = self.event(
+            "BLOCKRUNS",
+            end_minutes=10 * 60 + 30,
+            meeting_duration_minutes=30,
+            day_selection_type="specific_dates",
+            specific_dates=["2026-07-20", "2026-07-21"],
+            # Day one keeps rows 1-2 and row 5 open; day two loses only its last row.
+            blocked_slots={"date:2026-07-20": [0, 3, 4], "date:2026-07-21": [5]},
+        )
+        self.submit(event, [1, 1, 0.5, 1, 1, 1, 1, 1, 1, 1, 0.5, 1])
+
+        results = build_event_results(
+            event,
+            now=datetime(2026, 7, 19, 12, tzinfo=UTC),
+        )
+
+        windows = [recommendation["slotIndices"] for recommendation in results["recommendations"]]
+        # Row 5 on day one is open but too short for a two-slot window on its own.
+        self.assertEqual(windows, [[6, 7], [7, 8], [8, 9], [1, 2], [9, 10]])
+        self.assertTrue(all(index not in {0, 3, 4, 11} for window in windows for index in window))
+        self.assertEqual(
+            [
+                recommendation["weightedAvailability"]
+                for recommendation in results["recommendations"]
+            ],
+            [1.0, 1.0, 1.0, 0.5, 0.5],
+        )
+        self.assertEqual(results["blockedSlotIndices"], [0, 3, 4, 11])
+        self.assertEqual(
+            results["channels"]["inperson"]["unweighted"][:6], [0.0, 1.0, 0.5, 0.0, 0.0, 1.0]
+        )
+
+        fully_blocked = self.event(
+            "ALLBLOCKED",
+            day_selection_type="specific_dates",
+            specific_dates=["2026-07-20"],
+            blocked_slots={"date:2026-07-20": [0, 1]},
+        )
+        self.submit(fully_blocked, [1, 1])
+        blocked_results = build_event_results(
+            fully_blocked,
+            now=datetime(2026, 7, 19, 12, tzinfo=UTC),
+        )
+        self.assertEqual(blocked_results["recommendations"], [])
+        self.assertEqual(blocked_results["recommendationBasis"]["status"], "no_future_slots")
+
     def test_invalid_or_too_long_duration_has_no_candidates(self):
         invalid_event = SimpleNamespace(slot_minutes=30, meeting_duration_minutes=45)
         recommendations, basis = build_ranked_recommendations(

@@ -17,6 +17,7 @@ import FormField from "@/components/ui/FormField";
 import LoadingState from "@/components/ui/LoadingState";
 import Panel from "@/components/ui/Panel";
 import StatusBadge from "@/components/ui/StatusBadge";
+import { startingBrushValue } from "@/components/ui/Availability";
 import {
   CheckIcon,
   ChevronDownIcon,
@@ -42,39 +43,48 @@ import {
   updateParticipant,
 } from "@/lib/api/participants";
 import {
+  createRosterGroup,
+  deleteRosterGroup,
   fetchRoster,
   fetchRosterSchedule,
   patchRosterBulk,
   patchRosterParticipant,
+  renameRosterGroup,
+  sendRosterInvitations,
 } from "@/lib/api/roster";
+import { rosterImportStatusMessage } from "@/lib/roster-import-status";
 
+const DELIVERY_LABELS = {
+  not_sent: "Not sent",
+  sent: "Sent",
+  accepted: "Accepted",
+};
+
+// The server formats a person's memberships as one cell string ("A; B", or
+// "ALL; A" when they belong to every group), which is what the row edits.
 function groupValue(participant) {
-  return (
-    participant.group ?? participant.groupName ?? participant.group_name ?? ""
-  );
+  return participant.group ?? "";
 }
 
 function accountLabel(participant) {
+  if (participant.organizerManaged) return "Organizer-managed";
   return participant.accountAccess === "temporary"
     ? "Temporary"
     : "Full account";
 }
 
 function deliveryLabel(participant) {
-  const value = participant.invitationStatus || "not_sent";
-  return String(value)
-    .replaceAll("_", " ")
-    .replace(/^./, (character) => character.toUpperCase());
+  return (
+    DELIVERY_LABELS[participant.invitationStatus] || DELIVERY_LABELS.not_sent
+  );
 }
 
 function deliveryStatusVariant(participant) {
-  switch (participant.invitationStatus || "not_sent") {
-    case "invited":
-      return "invited";
-    case "opened":
-      return "opened";
-    case "submitted":
-      return "submitted";
+  switch (participant.invitationStatus) {
+    case "sent":
+      return "sent";
+    case "accepted":
+      return "accepted";
     default:
       return "not-sent";
   }
@@ -106,6 +116,18 @@ function emailAddressError(value) {
     return "Email address must be 254 characters or fewer.";
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized))
     return "Enter a valid email address.";
+  return "";
+}
+
+function phoneNumberError(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) return "";
+  if (normalized.length > 32) return "Phone must be 32 characters or fewer.";
+  if (
+    !/^[0-9 +().-]+$/.test(normalized) ||
+    normalized.replace(/\D/g, "").length < 7
+  )
+    return "Enter a valid phone number.";
   return "";
 }
 
@@ -162,25 +184,35 @@ const RosterPanel = forwardRef(function RosterPanel(
   const [showInvite, setShowInvite] = useState(false);
   const [inviteName, setInviteName] = useState("");
   const [inviteEmail, setInviteEmail] = useState("");
+  const [invitePhone, setInvitePhone] = useState("");
+  const [inviteManaged, setInviteManaged] = useState(false);
   const [inviteErrors, setInviteErrors] = useState({});
   const [inviteNotice, setInviteNotice] = useState("");
   const [inviteFormError, setInviteFormError] = useState("");
-  const [inviteBusy, setInviteBusy] = useState(false);
+  const [inviteBusyAction, setInviteBusyAction] = useState("");
+  const [sendingInvitations, setSendingInvitations] = useState(false);
+  const [resendInvitations, setResendInvitations] = useState(false);
   const [bulkScope, setBulkScope] = useState("selected");
   const [bulkApplyWeight, setBulkApplyWeight] = useState(false);
   const [bulkWeight, setBulkWeight] = useState(1);
   const [bulkApplyIncluded, setBulkApplyIncluded] = useState(false);
   const [bulkIncluded, setBulkIncluded] = useState(true);
   const [bulkGroup, setBulkGroup] = useState("");
-  const [bulkApplyGroup, setBulkApplyGroup] = useState(false);
-  const [bulkGroupName, setBulkGroupName] = useState("");
+  const [bulkApplyGroups, setBulkApplyGroups] = useState(false);
+  // add | remove | replace | clear, applied to the target group below.
+  const [bulkGroupAction, setBulkGroupAction] = useState("add");
+  const [bulkGroupTarget, setBulkGroupTarget] = useState("");
+  const [bulkAllGroups, setBulkAllGroups] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [groupBusy, setGroupBusy] = useState("");
   const [editor, setEditor] = useState(null);
   const [editorName, setEditorName] = useState("");
   const [editorInperson, setEditorInperson] = useState([]);
   const [editorVirtual, setEditorVirtual] = useState([]);
-  const [editorValue, setEditorValue] = useState(1);
+  // The drawer brush starts opposite to the event's starting level, matching
+  // what participants see in their own editor.
+  const startingBrush = startingBrushValue(event);
+  const [editorValue, setEditorValue] = useState(startingBrush);
   const [editorSaving, setEditorSaving] = useState(false);
   const [editorError, setEditorError] = useState("");
   const [editorStatus, setEditorStatus] = useState("");
@@ -190,11 +222,15 @@ const RosterPanel = forwardRef(function RosterPanel(
   // until the organizer reloads the latest values.
   const [rowConflicts, setRowConflicts] = useState({});
   const requestNumber = useRef(0);
+  // The whole-roster digest the last listing carried, for the workspace's
+  // live sync to compare against its activity poll. Null until loaded.
+  const activityRef = useRef(null);
   const bulkIdempotencyKey = useRef("");
   const inviteIdempotencyKey = useRef("");
   const inviteRequestInFlight = useRef(false);
   const inviteNameInput = useRef(null);
   const inviteEmailInput = useRef(null);
+  const invitePhoneInput = useRef(null);
   const selectedRef = useRef(selected);
   const participantsRef = useRef(participants);
   const rowConflictsRef = useRef(rowConflicts);
@@ -228,12 +264,18 @@ const RosterPanel = forwardRef(function RosterPanel(
     [group, invitationStatus, search, submitted],
   );
   const inviteAllowed = event.status === "active";
+  const inviteBusy = Boolean(inviteBusyAction);
 
+  // A silent load (the workspace's live sync) swaps the page in place: the
+  // table stays mounted so focus and typing survive, the panel's own error
+  // is left alone, and a failure is reported to the caller instead.
   const loadRoster = useCallback(
-    async (providedToken, { throwOnError = false } = {}) => {
+    async (providedToken, { throwOnError = false, silent = false } = {}) => {
       const currentRequest = ++requestNumber.current;
-      setLoading(true);
-      setError("");
+      if (!silent) {
+        setLoading(true);
+        setError("");
+      }
       try {
         const token =
           providedToken === undefined ? await getToken() : providedToken;
@@ -243,7 +285,17 @@ const RosterPanel = forwardRef(function RosterPanel(
           token,
         );
         if (currentRequest !== requestNumber.current) return;
-        const nextParticipants = data.participants || [];
+        activityRef.current = data.activity || null;
+        // A row this session already holds at a newer version (a patch that
+        // landed while the listing was in flight) keeps its values: a reload
+        // never moves a row backwards.
+        const previous = participantsRef.current;
+        const nextParticipants = (data.participants || []).map((loaded) => {
+          const held = previous.find((candidate) => candidate.id === loaded.id);
+          return held && Number(held.version) > Number(loaded.version)
+            ? held
+            : loaded;
+        });
         participantsRef.current = nextParticipants;
         setParticipants(nextParticipants);
         // A load that holds a conflicted row at the version the 409 carried
@@ -287,7 +339,7 @@ const RosterPanel = forwardRef(function RosterPanel(
         if (recoveredDelivery) onDeliveryRequestChange?.(recoveredDelivery);
         return data;
       } catch (requestError) {
-        if (currentRequest === requestNumber.current) {
+        if (!silent && currentRequest === requestNumber.current) {
           setError(requestError.message || "Unable to load this roster.");
         }
         if (throwOnError) throw requestError;
@@ -310,7 +362,9 @@ const RosterPanel = forwardRef(function RosterPanel(
   useImperativeHandle(
     forwardedRef,
     () => ({
-      refresh: (token) => loadRoster(token, { throwOnError: true }),
+      refresh: (token, { silent = false } = {}) =>
+        loadRoster(token, { throwOnError: true, silent }),
+      activity: () => activityRef.current,
     }),
     [loadRoster],
   );
@@ -328,19 +382,22 @@ const RosterPanel = forwardRef(function RosterPanel(
     setShowInvite(false);
     setInviteName("");
     setInviteEmail("");
+    setInvitePhone("");
+    setInviteManaged(false);
     setInviteErrors({});
     setInviteFormError("");
     inviteIdempotencyKey.current = "";
   };
 
-  const submitInvitation = async (submitEvent) => {
-    submitEvent.preventDefault();
+  const addPerson = async (sendInvitation) => {
     if (inviteRequestInFlight.current) return;
     const normalizedName = inviteName.trim();
     const normalizedEmail = inviteEmail.trim().toLowerCase();
+    const normalizedPhone = invitePhone.trim();
     const nextErrors = {
       name: fullNameError(inviteName),
       email: emailAddressError(inviteEmail),
+      phone: phoneNumberError(invitePhone),
     };
     setInviteErrors(nextErrors);
     setInviteNotice("");
@@ -348,21 +405,20 @@ const RosterPanel = forwardRef(function RosterPanel(
     setError("");
     setStatus("");
 
-    if (nextErrors.name || nextErrors.email) {
+    if (nextErrors.name || nextErrors.email || nextErrors.phone) {
       if (nextErrors.name) inviteNameInput.current?.focus();
-      else inviteEmailInput.current?.focus();
+      else if (nextErrors.email) inviteEmailInput.current?.focus();
+      else invitePhoneInput.current?.focus();
       return;
     }
     if (!inviteAllowed) {
-      setInviteFormError(
-        "Reactivate this event before adding and inviting another person.",
-      );
+      setInviteFormError("Reactivate this event before adding another person.");
       return;
     }
 
     let addedParticipant = null;
     inviteRequestInFlight.current = true;
-    setInviteBusy(true);
+    setInviteBusyAction(sendInvitation ? "send" : "add");
     try {
       const token = await getToken();
       if (!inviteIdempotencyKey.current) {
@@ -373,7 +429,10 @@ const RosterPanel = forwardRef(function RosterPanel(
         {
           name: normalizedName,
           email: normalizedEmail,
+          phone: normalizedPhone,
+          organizerManaged: inviteManaged,
           idempotencyKey: inviteIdempotencyKey.current,
+          sendInvitation,
         },
         token,
       );
@@ -385,6 +444,7 @@ const RosterPanel = forwardRef(function RosterPanel(
       updateSelected((current) => new Set([...current, addedParticipant.id]));
       onResultsInvalidated?.();
       const autoInvitedCount = data.autoInvitedCount || 0;
+      const alreadyOnRoster = data.created === false && !data.restored;
       const nextDeliveryRequest = invitationDeliveryRequest(data);
       if (nextDeliveryRequest && autoInvitedCount > 0) {
         onDeliveryRequestChange?.(nextDeliveryRequest);
@@ -392,14 +452,24 @@ const RosterPanel = forwardRef(function RosterPanel(
 
       setPage(1);
       await loadRoster();
+      const displayName = addedParticipant.name || normalizedName;
+      const alreadyOnRosterNotice = `${displayName} is already on this roster. No new invitation was sent.`;
       setInviteNotice(
-        autoInvitedCount > 0
-          ? `${addedParticipant.name || normalizedName} is ready to respond. Their invitation was queued.`
-          : `${addedParticipant.name || normalizedName} is already on this roster. No new invitation was sent.`,
+        inviteManaged
+          ? data.created || data.restored
+            ? `${displayName} was added. Use Edit schedule to enter their availability.`
+            : alreadyOnRosterNotice
+          : autoInvitedCount > 0
+            ? `${displayName} is ready to respond. Their invitation was queued.`
+            : sendInvitation || alreadyOnRoster
+              ? alreadyOnRosterNotice
+              : `${displayName} was added. No invitation was sent.`,
       );
       setShowInvite(false);
       setInviteName("");
       setInviteEmail("");
+      setInvitePhone("");
+      setInviteManaged(false);
       setInviteErrors({});
       setInviteFormError("");
       inviteIdempotencyKey.current = "";
@@ -417,12 +487,51 @@ const RosterPanel = forwardRef(function RosterPanel(
         );
       } else {
         setInviteFormError(
-          requestError.message || "Unable to add and invite this person.",
+          requestError.message || "Unable to add this person.",
         );
       }
     } finally {
       inviteRequestInFlight.current = false;
-      setInviteBusy(false);
+      setInviteBusyAction("");
+    }
+  };
+
+  const submitAddOnly = (submitEvent) => {
+    submitEvent.preventDefault();
+    void addPerson(false);
+  };
+
+  const sendSelectedInvitations = async () => {
+    if (sendingInvitations || selected.size === 0) return;
+    setError("");
+    setStatus("");
+    setInviteNotice("");
+    setSendingInvitations(true);
+    try {
+      const token = await getToken();
+      const data = await sendRosterInvitations(
+        event.code,
+        {
+          participantIds: [...selected],
+          resend: resendInvitations,
+          idempotencyKey: crypto.randomUUID(),
+        },
+        token,
+      );
+      const queuedCount = data.queuedCount || 0;
+      const skippedCount = data.skippedCount || 0;
+      setStatus(
+        `Queued ${queuedCount} invitation(s). ${skippedCount} already invited were skipped.`,
+      );
+      if (data.deliveryRequest?.recipientCount > 0) {
+        onDeliveryRequestChange?.(data.deliveryRequest);
+      }
+      updateSelected(new Set());
+      await loadRoster();
+    } catch (requestError) {
+      setError(requestError.message || "Unable to send invitations.");
+    } finally {
+      setSendingInvitations(false);
     }
   };
 
@@ -448,32 +557,37 @@ const RosterPanel = forwardRef(function RosterPanel(
     setShowInvite(false);
     setInviteName("");
     setInviteEmail("");
+    setInvitePhone("");
+    setInviteManaged(false);
     setInviteErrors({});
     setInviteNotice("");
     setInviteFormError("");
     inviteIdempotencyKey.current = "";
 
     updateSelected(new Set());
+    setResendInvitations(false);
     setBulkScope("selected");
     setBulkApplyWeight(false);
     setBulkWeight(1);
     setBulkApplyIncluded(false);
     setBulkIncluded(true);
     setBulkGroup("");
-    setBulkApplyGroup(false);
-    setBulkGroupName("");
+    setBulkApplyGroups(false);
+    setBulkGroupAction("add");
+    setBulkGroupTarget("");
+    setBulkAllGroups(false);
     bulkIdempotencyKey.current = "";
 
     setEditor(null);
     setEditorName("");
     setEditorInperson([]);
     setEditorVirtual([]);
-    setEditorValue(1);
+    setEditorValue(startingBrush);
     setEditorError("");
     setEditorStatus("");
     setEditorConflict(null);
     updateRowConflicts({});
-  }, [event.status, updateRowConflicts, updateSelected]);
+  }, [event.status, startingBrush, updateRowConflicts, updateSelected]);
 
   const patchRow = async (participant, updates) => {
     const previous =
@@ -609,14 +723,33 @@ const RosterPanel = forwardRef(function RosterPanel(
       setError("Choose a group for this bulk update.");
       return;
     }
-    if (!bulkApplyGroup && !bulkApplyWeight && !bulkApplyIncluded) {
+    if (!bulkApplyGroups && !bulkApplyWeight && !bulkApplyIncluded) {
       setError(
         "Choose a group, weight, included status, or a combination for this bulk update.",
       );
       return;
     }
+    // The target must be one of the groups on screen: a group renamed or
+    // deleted since it was picked must not be resurrected by this request.
+    if (
+      bulkApplyGroups &&
+      bulkGroupAction !== "clear" &&
+      !namedGroups.some((item) => item.name === bulkGroupTarget)
+    ) {
+      setError("Choose a group for this bulk update.");
+      return;
+    }
     const updates = {};
-    if (bulkApplyGroup) updates.group = bulkGroupName.trim();
+    if (bulkApplyGroups) {
+      // "clear" drops every membership (and the every-group flag on the
+      // server); "Every group" on top of it re-sets the flag afterwards.
+      if (bulkGroupAction === "add") updates.addGroups = [bulkGroupTarget];
+      else if (bulkGroupAction === "remove")
+        updates.removeGroups = [bulkGroupTarget];
+      else if (bulkGroupAction === "replace") updates.group = bulkGroupTarget;
+      else updates.group = "";
+      if (bulkAllGroups) updates.allGroups = true;
+    }
     if (bulkApplyWeight) updates.weight = bulkWeight;
     if (bulkApplyIncluded) updates.included = bulkIncluded;
     if (!bulkIdempotencyKey.current)
@@ -687,17 +820,101 @@ const RosterPanel = forwardRef(function RosterPanel(
       groupFilterValue(name),
     );
 
-  const renameGroup = async (name, nextName) => {
-    const renamed = await applyGroupUpdate(
-      { group: name },
-      { group: nextName },
-      (count) => `Renamed ${name} to ${nextName} for ${peopleCount(count)}.`,
-      groupFilterValue(name),
-    );
-    if (renamed && group === name) setGroup(nextName);
-    return renamed;
+  // Groups are rows of their own: creating, renaming and deleting one goes
+  // through the group endpoints rather than a bulk patch of its members. The
+  // response carries the recounted group stats; anything that changes the
+  // cell strings on the rows (a rename or a delete) also reloads the roster.
+  const applyGroupRequest = async (
+    busyKey,
+    request,
+    { status: describe, fallback, onSuccess },
+  ) => {
+    setError("");
+    setStatus("");
+    setGroupBusy(busyKey);
+    try {
+      const token = await getToken();
+      const data = await request(token);
+      setStatus(describe);
+      if (Array.isArray(data?.groups))
+        setStats((current) => ({ ...current, groups: data.groups }));
+      await onSuccess?.(data);
+      return true;
+    } catch (requestError) {
+      setError(requestError.message || fallback);
+      return false;
+    } finally {
+      setGroupBusy("");
+    }
   };
 
+  const createGroup = ({ name }) =>
+    applyGroupRequest(
+      "create",
+      (token) => createRosterGroup(event.code, { name }, token),
+      {
+        status: `Created ${name}.`,
+        fallback: `Unable to create ${name}.`,
+        onSuccess: async (data) => {
+          if (!Array.isArray(data?.groups)) await loadRoster();
+        },
+      },
+    );
+
+  const renameGroup = (entry, nextName) =>
+    applyGroupRequest(
+      groupFilterValue(entry.name),
+      (token) =>
+        renameRosterGroup(event.code, entry.id, { name: nextName }, token),
+      {
+        status: `Renamed ${entry.name} to ${nextName}.`,
+        fallback: `Unable to rename ${entry.name}.`,
+        onSuccess: async () => {
+          if (bulkGroupTarget === entry.name) setBulkGroupTarget(nextName);
+          // Changing the filter reloads the roster on its own.
+          if (group === entry.name) setGroup(nextName);
+          else await loadRoster();
+        },
+      },
+    );
+
+  const deleteGroup = (entry) =>
+    applyGroupRequest(
+      groupFilterValue(entry.name),
+      (token) => deleteRosterGroup(event.code, entry.id, token),
+      {
+        status: `Deleted ${entry.name}.`,
+        fallback: `Unable to delete ${entry.name}.`,
+        onSuccess: async () => {
+          if (bulkGroupTarget === entry.name) setBulkGroupTarget("");
+          if (group === entry.name) {
+            setGroup("");
+            setPage(1);
+          } else {
+            await loadRoster();
+          }
+        },
+      },
+    );
+
+  const addSelectedToGroup = (name) =>
+    applyGroupUpdate(
+      { participantIds: [...selected] },
+      { addGroups: [name] },
+      (count) => `Added ${peopleCount(count)} to ${name}.`,
+      groupFilterValue(name),
+    );
+
+  const removeSelectedFromGroup = (name) =>
+    applyGroupUpdate(
+      { participantIds: [...selected] },
+      { removeGroups: [name] },
+      (count) => `Removed ${peopleCount(count)} from ${name}.`,
+      groupFilterValue(name),
+    );
+
+  // Only "" is offered now (Ungroup selected): the server clears every
+  // membership and the every-group flag together.
   const moveSelectedToGroup = async (name) => {
     const moved = await applyGroupUpdate(
       { participantIds: [...selected] },
@@ -712,18 +929,6 @@ const RosterPanel = forwardRef(function RosterPanel(
     return moved;
   };
 
-  const createGroup = async ({ name, weight }) => {
-    const created = await applyGroupUpdate(
-      { participantIds: [...selected] },
-      { group: name, weight },
-      (count) =>
-        `Created ${name} with ${peopleCount(count)} at weight ${weight}.`,
-      "create",
-    );
-    if (created) updateSelected(new Set());
-    return created;
-  };
-
   const openEditor = async (participant) => {
     setError("");
     setStatus("");
@@ -735,7 +940,7 @@ const RosterPanel = forwardRef(function RosterPanel(
       setEditorName(loaded.name);
       setEditorInperson(loaded.inpersonArray);
       setEditorVirtual(loaded.virtualArray);
-      setEditorValue(1);
+      setEditorValue(startingBrush);
       setEditorError("");
       setEditorStatus("");
       setEditorConflict(null);
@@ -917,14 +1122,58 @@ const RosterPanel = forwardRef(function RosterPanel(
       : bulkScope === "group"
         ? "Changes apply to everyone in the chosen group."
         : "Changes apply to everyone matching the current filters.";
-  const bulkApplyGroupId = `${controlIds}-bulk-apply-group`;
-  const bulkGroupNameId = `${controlIds}-bulk-group-name`;
+  const bulkApplyGroupsId = `${controlIds}-bulk-apply-groups`;
+  const bulkGroupActionId = `${controlIds}-bulk-group-action`;
+  const bulkGroupTargetId = `${controlIds}-bulk-group-target`;
+  const bulkAllGroupsId = `${controlIds}-bulk-all-groups`;
+  const inviteSubmitLabel = inviteManaged
+    ? inviteBusyAction === "add"
+      ? "Adding…"
+      : "Add person"
+    : inviteBusyAction === "add"
+      ? "Adding…"
+      : "Add only";
   const groupListId = `${controlIds}-group-names`;
   const bulkApplyWeightId = `${controlIds}-bulk-apply-weight`;
   const bulkWeightId = `${controlIds}-bulk-weight`;
   const bulkApplyIncludedId = `${controlIds}-bulk-apply-included`;
   const bulkIncludedId = `${controlIds}-bulk-included`;
   const pageSizeId = `${controlIds}-page-size`;
+
+  const renderSelectionBar = (position) => {
+    if (!rosterMutable || !hasRosterEntries) return null;
+    const resendId = `${controlIds}-resend-${position}`;
+    return (
+      <div
+        className={`roster-panel__selection d-flex flex-wrap align-items-center gap-3 ${
+          position === "top" ? "mb-3" : "mt-3"
+        }`}
+      >
+        <span className="small text-secondary">{selected.size} selected</span>
+        <AppButton
+          variant="outlined"
+          icon={<SendIcon />}
+          busy={sendingInvitations}
+          disabled={sendingInvitations || selected.size === 0}
+          onClick={sendSelectedInvitations}
+        >
+          {sendingInvitations ? "Sending…" : "Send invitation"}
+        </AppButton>
+        <div className="form-check mb-0">
+          <input
+            id={resendId}
+            className="form-check-input"
+            type="checkbox"
+            checked={resendInvitations}
+            onChange={(event) => setResendInvitations(event.target.checked)}
+          />
+          <label className="form-check-label" htmlFor={resendId}>
+            Resend to people already invited
+          </label>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div
@@ -971,7 +1220,7 @@ const RosterPanel = forwardRef(function RosterPanel(
                 aria-expanded={showInvite}
                 aria-controls="roster-invite-form"
               >
-                {showInvite ? "Close invite" : "Invite person"}
+                {showInvite ? "Close add person" : "Add person"}
               </AppButton>
               <AppButton
                 variant="outlined"
@@ -1016,14 +1265,15 @@ const RosterPanel = forwardRef(function RosterPanel(
               className="roster-invite-form border rounded p-3 bg-body-tertiary"
               aria-labelledby="roster-invite-title"
               noValidate
-              onSubmit={submitInvitation}
+              onSubmit={submitAddOnly}
             >
               <h4 id="roster-invite-title" className="h5 mb-1">
-                Invite someone to respond
+                Add a person
               </h4>
               <p className="text-secondary mb-3">
-                Add one person and email them a secure link to fill in their
-                availability.
+                Add one person to the roster. Enter adds them without emailing;
+                use Add and send invitation to email their secure link now, or
+                Send invitation later.
               </p>
 
               <div className="form-row-2">
@@ -1062,6 +1312,11 @@ const RosterPanel = forwardRef(function RosterPanel(
                   id="roster-invite-email"
                   label="Email address"
                   required
+                  help={
+                    inviteManaged
+                      ? "Enter one of your own verified email addresses. No invitation is sent."
+                      : null
+                  }
                   error={inviteErrors.email || null}
                   errorId="roster-invite-email-error"
                 >
@@ -1094,6 +1349,64 @@ const RosterPanel = forwardRef(function RosterPanel(
                 </FormField>
               </div>
 
+              <div className="form-row-2 mt-3">
+                <FormField
+                  id="roster-invite-phone"
+                  label="Phone (optional)"
+                  error={inviteErrors.phone || null}
+                  errorId="roster-invite-phone-error"
+                >
+                  <input
+                    ref={invitePhoneInput}
+                    name="phone"
+                    type="tel"
+                    className="form-control"
+                    inputMode="tel"
+                    autoComplete="tel"
+                    maxLength={32}
+                    value={invitePhone}
+                    disabled={inviteBusy}
+                    onChange={(changeEvent) => {
+                      setInvitePhone(changeEvent.target.value);
+                      setInviteErrors((current) => ({
+                        ...current,
+                        phone: "",
+                      }));
+                      setInviteFormError("");
+                      inviteIdempotencyKey.current = "";
+                    }}
+                    onBlur={() =>
+                      setInviteErrors((current) => ({
+                        ...current,
+                        phone: phoneNumberError(invitePhone),
+                      }))
+                    }
+                  />
+                </FormField>
+              </div>
+
+              <div className="form-check mt-3">
+                <input
+                  id="roster-invite-managed"
+                  className="form-check-input"
+                  type="checkbox"
+                  checked={inviteManaged}
+                  disabled={inviteBusy}
+                  onChange={(changeEvent) => {
+                    setInviteManaged(changeEvent.target.checked);
+                    setInviteFormError("");
+                    inviteIdempotencyKey.current = "";
+                  }}
+                />
+                <label
+                  className="form-check-label"
+                  htmlFor="roster-invite-managed"
+                >
+                  No email of their own — use one of mine and I&apos;ll enter
+                  their schedule
+                </label>
+              </div>
+
               {inviteFormError && (
                 <Alert
                   variant="danger"
@@ -1114,14 +1427,24 @@ const RosterPanel = forwardRef(function RosterPanel(
                 </AppButton>
                 <AppButton
                   type="submit"
-                  icon={<SendIcon />}
-                  busy={inviteBusy}
+                  busy={inviteBusyAction === "add"}
                   disabled={inviteBusy || !inviteAllowed}
                 >
-                  {inviteBusy
-                    ? "Adding and sending…"
-                    : "Add and send invitation"}
+                  {inviteSubmitLabel}
                 </AppButton>
+                {!inviteManaged && (
+                  <AppButton
+                    variant="outlined"
+                    icon={<SendIcon />}
+                    busy={inviteBusyAction === "send"}
+                    disabled={inviteBusy || !inviteAllowed}
+                    onClick={() => void addPerson(true)}
+                  >
+                    {inviteBusyAction === "send"
+                      ? "Adding and sending…"
+                      : "Add and send invitation"}
+                  </AppButton>
+                )}
               </div>
             </form>
           )}
@@ -1143,7 +1466,7 @@ const RosterPanel = forwardRef(function RosterPanel(
                     aria-label="Search roster"
                     value={searchInput}
                     onChange={(event) => setSearchInput(event.target.value)}
-                    placeholder="Search name or email"
+                    placeholder="Search name, email or phone"
                   />
                 </div>
               </div>
@@ -1192,15 +1515,16 @@ const RosterPanel = forwardRef(function RosterPanel(
                 >
                   <option value="">Any invitation</option>
                   <option value="not_sent">Not sent</option>
-                  <option value="invited">Invited</option>
-                  <option value="opened">Opened</option>
-                  <option value="submitted">Submitted</option>
+                  <option value="sent">Sent</option>
+                  <option value="accepted">Accepted</option>
                 </select>
               </div>
             </div>
           )}
 
-          {groupSummaries.length > 0 && (
+          {/* Groups can exist before anyone joins them, so the section shows
+              whenever the roster has people (to create one) or groups. */}
+          {(showRosterTools || groupSummaries.length > 0) && (
             <RosterGroups
               groups={groupSummaries}
               selectedCount={selected.size}
@@ -1213,11 +1537,14 @@ const RosterPanel = forwardRef(function RosterPanel(
               }}
               onSetWeight={setGroupWeight}
               onRename={renameGroup}
+              onDelete={deleteGroup}
+              onAddSelected={addSelectedToGroup}
+              onRemoveSelected={removeSelectedFromGroup}
               onMoveSelected={moveSelectedToGroup}
               onCreate={createGroup}
             />
           )}
-          {/* Existing group names complete the per-person and bulk inputs. */}
+          {/* Existing group names complete the per-person inputs. */}
           <datalist id={groupListId}>
             {namedGroups.map(({ name }) => (
               <option key={name} value={name} />
@@ -1233,7 +1560,7 @@ const RosterPanel = forwardRef(function RosterPanel(
                 <span className="disclosure__summary-copy">
                   <span className="d-block fw-semibold">Bulk actions</span>
                   <small className="text-secondary">
-                    {selected.size} selected · Move to a group, change weight or
+                    {selected.size} selected · Change groups, weight or
                     inclusion
                   </small>
                 </span>
@@ -1283,48 +1610,82 @@ const RosterPanel = forwardRef(function RosterPanel(
                 <div className="row g-3">
                   <div className="col-12 col-md-4">
                     <fieldset className="roster-panel__bulk-setting">
-                      <legend className="fs-6 fw-semibold mb-2">Group</legend>
+                      <legend className="fs-6 fw-semibold mb-2">Groups</legend>
                       <div className="d-flex flex-wrap align-items-center gap-3">
                         <div className="form-check mb-0">
                           <input
-                            id={bulkApplyGroupId}
+                            id={bulkApplyGroupsId}
                             className="form-check-input"
-                            aria-label="Apply bulk group"
+                            aria-label="Apply bulk groups"
                             type="checkbox"
-                            checked={bulkApplyGroup}
+                            checked={bulkApplyGroups}
                             onChange={(event) =>
-                              setBulkApplyGroup(event.target.checked)
+                              setBulkApplyGroups(event.target.checked)
                             }
                           />
                           <label
                             className="form-check-label"
-                            htmlFor={bulkApplyGroupId}
+                            htmlFor={bulkApplyGroupsId}
                           >
-                            Move to group
+                            Change groups
                           </label>
                         </div>
-                        <div className="d-flex align-items-center gap-2">
-                          <label
-                            className="small text-secondary mb-0"
-                            htmlFor={bulkGroupNameId}
-                          >
-                            Name
-                          </label>
-                          <input
-                            id={bulkGroupNameId}
-                            className="form-control form-control-sm"
-                            style={{ width: "9rem" }}
-                            aria-label="Bulk group name"
-                            type="text"
-                            list={groupListId}
-                            maxLength={100}
-                            placeholder="Ungrouped"
-                            value={bulkGroupName}
-                            disabled={!bulkApplyGroup}
+                        <div className="d-flex flex-wrap align-items-center gap-2">
+                          <select
+                            id={bulkGroupActionId}
+                            className="form-select form-select-sm w-auto"
+                            aria-label="Bulk group action"
+                            value={bulkGroupAction}
+                            disabled={!bulkApplyGroups}
                             onChange={(event) =>
-                              setBulkGroupName(event.target.value)
+                              setBulkGroupAction(event.target.value)
+                            }
+                          >
+                            <option value="add">Add to group</option>
+                            <option value="remove">Remove from group</option>
+                            <option value="replace">Replace with group</option>
+                            <option value="clear">
+                              Remove from every group
+                            </option>
+                          </select>
+                          <select
+                            id={bulkGroupTargetId}
+                            className="form-select form-select-sm w-auto"
+                            aria-label="Bulk target group"
+                            value={bulkGroupTarget}
+                            disabled={
+                              !bulkApplyGroups || bulkGroupAction === "clear"
+                            }
+                            onChange={(event) =>
+                              setBulkGroupTarget(event.target.value)
+                            }
+                          >
+                            <option value="">Choose group</option>
+                            {namedGroups.map(({ name }) => (
+                              <option key={name} value={name}>
+                                {name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="form-check mb-0">
+                          <input
+                            id={bulkAllGroupsId}
+                            className="form-check-input"
+                            aria-label="Bulk every group"
+                            type="checkbox"
+                            checked={bulkAllGroups}
+                            disabled={!bulkApplyGroups}
+                            onChange={(event) =>
+                              setBulkAllGroups(event.target.checked)
                             }
                           />
+                          <label
+                            className="form-check-label"
+                            htmlFor={bulkAllGroupsId}
+                          >
+                            Every group
+                          </label>
                         </div>
                       </div>
                     </fieldset>
@@ -1467,15 +1828,12 @@ const RosterPanel = forwardRef(function RosterPanel(
             if (nextDeliveryRequest) {
               onDeliveryRequestChange?.(nextDeliveryRequest);
             }
-            const importedCount = receipt.importedCount || 0;
-            const createdCount = receipt.createdCount || 0;
-            const updatedCount = receipt.updatedCount || 0;
-            const invitedCount =
-              data?.autoInvitedCount ?? receipt.invitedCount ?? createdCount;
             setStatus(
-              createdCount > 0 || invitedCount > 0
-                ? `Imported ${importedCount} people: ${createdCount} added, ${updatedCount} updated. ${invitedCount} invitation${invitedCount === 1 ? "" : "s"} queued.`
-                : `Imported ${importedCount} people: no new participants were added, so no invitations were sent.`,
+              rosterImportStatusMessage({
+                receipt,
+                autoInvitedCount: data?.autoInvitedCount,
+                sendInvitations: data?.sendInvitations,
+              }),
             );
             setShowImport(false);
             setPage(1);
@@ -1487,6 +1845,7 @@ const RosterPanel = forwardRef(function RosterPanel(
       )}
 
       <Panel className="roster-panel__list" aria-label="Roster entries">
+        {renderSelectionBar("top")}
         {loading ? (
           <LoadingState label="Loading roster…" />
         ) : participants.length === 0 ? (
@@ -1513,7 +1872,7 @@ const RosterPanel = forwardRef(function RosterPanel(
                 {hasActiveFilters
                   ? "Try a different search or clear the current filters."
                   : rosterMutable
-                    ? "Invite someone or import a roster to start collecting availability."
+                    ? "Add someone or import a roster to start collecting availability."
                     : "This event does not have any participants."}
               </p>
             </EmptyState>
@@ -1570,6 +1929,9 @@ const RosterPanel = forwardRef(function RosterPanel(
                 <tbody>
                   {participants.map((participant) => {
                     const groupId = `${controlIds}-group-${participant.id}`;
+                    const groupHelpId = `${groupId}-help`;
+                    const allGroupsId = `${controlIds}-all-groups-${participant.id}`;
+                    const phoneId = `${controlIds}-phone-${participant.id}`;
                     const weightId = `${controlIds}-weight-${participant.id}`;
                     const includedId = `${controlIds}-included-${participant.id}`;
                     const rowLocked =
@@ -1603,7 +1965,9 @@ const RosterPanel = forwardRef(function RosterPanel(
                             {participant.name}
                           </strong>
                           <small className="d-block text-secondary">
-                            {participant.email || "No email"} ·{" "}
+                            {participant.email || "No email"}
+                            {participant.phone ? ` · ${participant.phone}` : ""}
+                            {" · "}
                             {accountLabel(participant)}
                           </small>
                           <div className="mt-2">
@@ -1631,13 +1995,14 @@ const RosterPanel = forwardRef(function RosterPanel(
                                 className="form-label small text-secondary mb-1"
                                 htmlFor={groupId}
                               >
-                                Group
+                                Groups
                               </label>
                               <input
                                 id={groupId}
                                 className="form-control form-control-sm"
-                                style={{ width: "7.5rem" }}
-                                aria-label={`Group for ${participant.name}`}
+                                style={{ width: "11rem" }}
+                                aria-label={`Groups for ${participant.name}`}
+                                aria-describedby={groupHelpId}
                                 list={groupListId}
                                 placeholder="Ungrouped"
                                 value={rowDraftValue(
@@ -1659,6 +2024,70 @@ const RosterPanel = forwardRef(function RosterPanel(
                                     "group",
                                     event.target.value,
                                     groupValue(participant),
+                                  )
+                                }
+                              />
+                              <small
+                                id={groupHelpId}
+                                className="d-block text-secondary"
+                              >
+                                Separate names with ; or type ALL
+                              </small>
+                            </div>
+                            <div className="form-check mb-1">
+                              <input
+                                id={allGroupsId}
+                                className="form-check-input"
+                                aria-label={`All groups for ${participant.name}`}
+                                type="checkbox"
+                                checked={Boolean(participant.allGroups)}
+                                disabled={rowLocked}
+                                onChange={(event) =>
+                                  void patchRow(participant, {
+                                    allGroups: event.target.checked,
+                                  })
+                                }
+                              />
+                              <label
+                                className="form-check-label small"
+                                htmlFor={allGroupsId}
+                              >
+                                Every group
+                              </label>
+                            </div>
+                            <div>
+                              <label
+                                className="form-label small text-secondary mb-1"
+                                htmlFor={phoneId}
+                              >
+                                Phone
+                              </label>
+                              <input
+                                id={phoneId}
+                                className="form-control form-control-sm"
+                                style={{ width: "9rem" }}
+                                aria-label={`Phone for ${participant.name}`}
+                                type="tel"
+                                maxLength={32}
+                                value={rowDraftValue(
+                                  participant,
+                                  "phone",
+                                  participant.phone || "",
+                                )}
+                                disabled={rowLocked}
+                                onChange={(event) =>
+                                  updateRowDraft(
+                                    participant.id,
+                                    "phone",
+                                    event.target.value,
+                                  )
+                                }
+                                onBlur={(event) =>
+                                  void saveRowDraft(
+                                    participant,
+                                    "phone",
+                                    event.target.value,
+                                    participant.phone || "",
                                   )
                                 }
                               />
@@ -1742,7 +2171,9 @@ const RosterPanel = forwardRef(function RosterPanel(
                               </StatusBadge>
                             </span>
                             <span className="d-flex flex-column align-items-start gap-1">
-                              <small className="text-secondary">Invite</small>
+                              <small className="text-secondary">
+                                Invitation
+                              </small>
                               <StatusBadge
                                 status={deliveryStatusVariant(participant)}
                               >
@@ -1808,6 +2239,7 @@ const RosterPanel = forwardRef(function RosterPanel(
             </div>
           </div>
         )}
+        {renderSelectionBar("bottom")}
       </Panel>
 
       {status && (

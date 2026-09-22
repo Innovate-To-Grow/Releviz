@@ -20,6 +20,7 @@ class EventAdmin(ModelAdmin):
         "slot_minutes",
         "meeting_duration_minutes",
         "access_mode",
+        "starting_availability",
         "results_revision",
         "response_deadline",
         "created_at",
@@ -31,6 +32,7 @@ class EventAdmin(ModelAdmin):
         "participant_view_permission",
         "day_selection_type",
         "access_mode",
+        "starting_availability",
         "reminders_enabled",
     )
     search_fields = ("code", "name", "organizer__first_name", "organizer__last_name")

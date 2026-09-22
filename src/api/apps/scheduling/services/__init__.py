@@ -4,6 +4,7 @@ The layer is grouped by domain; import from the subpackage that owns the
 behaviour, for example ``from apps.scheduling.services.invitations import
 upsert_and_send_invitations``.
 
+- ``activity`` – the change digest the organizer workspace polls
 - ``availability`` – shape and validation of availability arrays
 - ``events`` – configuration, lifecycle, and write operations for events
 - ``fingerprints`` – stable hashes for idempotent requests
@@ -17,6 +18,7 @@ upsert_and_send_invitations``.
 """
 
 from . import (
+    activity,
     availability,
     events,
     finalization,
@@ -30,6 +32,7 @@ from . import (
 )
 
 __all__ = [
+    "activity",
     "availability",
     "events",
     "finalization",

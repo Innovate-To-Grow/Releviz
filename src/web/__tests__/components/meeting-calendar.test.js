@@ -1266,6 +1266,194 @@ describe("MeetingCalendar", () => {
     expect(tabbableCells().map((c) => c.dataset.cellIdx)).toEqual(["0"]);
   });
 
+  test("greys out organizer-blocked slots without a share and never picks them", async () => {
+    // Monday 10:00–10:30 (index 2) is blocked, so the 09:30 window (indices
+    // 1–2, the ranked #1 window of a snapshot computed before the block) and
+    // the 10:00 window both run into it; only the 09:00 window stays open.
+    const blockedEvent = {
+      ...weeklyEvent,
+      slotGroups: weeklyEvent.slotGroups.map((group) => ({
+        ...group,
+        slots: group.slots.map((slot) => ({
+          ...slot,
+          blocked: slot.index === 2,
+        })),
+      })),
+    };
+    const { onSelect } = renderCalendar({ event: blockedEvent });
+    const preview = () =>
+      document.querySelector(".meeting-calendar__block--preview");
+
+    expect(cell(0)).toHaveAttribute("data-state", "startable");
+    expect(cell(3)).toHaveAttribute("data-state", "tail");
+    [1, 2].forEach((index) => {
+      expect(cell(index)).toHaveAttribute("data-state", "blocked");
+      expect(cell(index)).toHaveAttribute("aria-disabled", "true");
+      expect(cell(index).getAttribute("aria-label")).not.toContain(
+        "Inside ranked window",
+      );
+    });
+    // Only the slot the organizer blocked is neutral: no share, no tone.
+    expect(cell(2)).toHaveAttribute("data-blocked-slot", "true");
+    expect(cell(2)).toHaveClass("meeting-calendar__cell--neutral");
+    expect(cell(2).textContent).toBe("");
+    expect(cell(2).style.backgroundColor).toBe("");
+    expect(cell(2).getAttribute("title").split("\n")).toEqual([
+      expect.stringMatching(/^Mon, Sep 14, /),
+      "This time is blocked for the event.",
+    ]);
+    expect(cell(2).getAttribute("aria-label")).toMatch(
+      /^Mon, Sep 14, .* This time is blocked for the event\.$/,
+    );
+    expect(cell(2).getAttribute("aria-label")).not.toContain("%");
+    // The open 09:30 slot cannot start a meeting (its window runs into the
+    // block) but keeps its real share and tone, like a tail cell, and says
+    // why it is unpickable instead of claiming to be blocked.
+    expect(cell(1)).not.toHaveAttribute("data-blocked-slot");
+    expect(cell(1)).not.toHaveClass("meeting-calendar__cell--neutral");
+    expect(cell(1)).toHaveTextContent("83%");
+    expect(cell(1).style.backgroundColor).toMatch(/^rgb\(/);
+    expect(cell(1).getAttribute("title").split("\n")).toEqual([
+      expect.stringMatching(/^Mon, Sep 14, /),
+      "Weighted 83%, unweighted 80% of 12 responses.",
+      "A 60-minute meeting starting here would overlap a blocked time.",
+    ]);
+    expect(cell(1).getAttribute("aria-label")).toMatch(
+      /^Mon, Sep 14, .* Weighted 83%, unweighted 80% of 12 responses\. A 60-minute meeting starting here would overlap a blocked time\.$/,
+    );
+    expect(cell(1).getAttribute("aria-label")).not.toContain(
+      "This time is blocked",
+    );
+    // The open cells keep theirs too; nothing else carries the slot flag.
+    expect(cell(0)).toHaveTextContent("50%");
+    expect(cell(4)).toHaveTextContent("60%");
+    expect(cell(4).style.backgroundColor).toMatch(/^rgb\(/);
+    expect(document.querySelectorAll("[data-blocked-slot]")).toHaveLength(1);
+
+    // The stale ranked window overlapping the block is not drawn, so the tab
+    // stop falls back to the first startable cell.
+    expect(document.querySelector(".meeting-calendar__block--rank")).toBeNull();
+    expect(tabbableCells().map((c) => c.dataset.cellIdx)).toEqual(["0"]);
+
+    await userEvent.click(cell(1));
+    await userEvent.click(cell(2));
+    fireEvent.keyDown(cell(1), { key: "Enter" });
+    fireEvent.keyDown(cell(2), { key: " " });
+    expect(onSelect).not.toHaveBeenCalled();
+
+    // Neither hovering nor focusing a blocked cell previews a window.
+    fireEvent.pointerOver(cell(1));
+    expect(preview()).toBeNull();
+    act(() => cell(2).focus());
+    expect(preview()).toBeNull();
+    fireEvent.pointerOver(cell(0));
+    expect(preview().style.getPropertyValue("--rv-cal-row")).toBe("0");
+
+    await userEvent.click(cell(0));
+    expect(onSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        slotIndices: [0, 1],
+        startsAt: "2026-09-14T09:00:00.000Z",
+      }),
+    );
+  });
+
+  test("keeps the share and rank text on an open cell inside a ranked window that ends at a block", () => {
+    // Monday 10:00–10:30 (index 2) is blocked; the 09:00 window (indices
+    // 0–1) ends right before it, so it is still ranked and drawn. Its
+    // second cell cannot start a meeting of its own but is not blocked.
+    const blockedEvent = {
+      ...weeklyEvent,
+      slotGroups: weeklyEvent.slotGroups.map((group) => ({
+        ...group,
+        slots: group.slots.map((slot) => ({
+          ...slot,
+          blocked: slot.index === 2,
+        })),
+      })),
+    };
+    const earlyRecommendation = {
+      ...recommendation,
+      slotIndices: [0, 1],
+      localStart: "09:00",
+      localEnd: "10:00",
+      suggestedStartsAt: "2026-09-14T09:00:00Z",
+      suggestedEndsAt: "2026-09-14T10:00:00Z",
+      label: "Mon 09:00–10:00",
+    };
+    renderCalendar({
+      event: blockedEvent,
+      results: { ...results, recommendations: [earlyRecommendation] },
+    });
+
+    const block = document.querySelector(".meeting-calendar__block--rank");
+    expect(block).toHaveAttribute("data-rank", "1");
+    expect(block.style.getPropertyValue("--rv-cal-row")).toBe("0");
+    expect(cell(0)).toHaveAttribute("data-state", "startable");
+    expect(cell(1)).toHaveAttribute("data-state", "blocked");
+    expect(cell(1)).not.toHaveAttribute("data-blocked-slot");
+    expect(cell(1)).toHaveTextContent("83%");
+    expect(cell(1).getAttribute("title").split("\n")).toEqual([
+      expect.stringMatching(/^Mon, Sep 14, /),
+      "Weighted 83%, unweighted 80% of 12 responses.",
+      "A 60-minute meeting starting here would overlap a blocked time.",
+      "Inside ranked window #1.",
+    ]);
+    expect(cell(1).getAttribute("aria-label")).not.toContain(
+      "This time is blocked",
+    );
+    expect(cell(2)).toHaveAttribute("data-blocked-slot", "true");
+    expect(cell(2).getAttribute("aria-label")).not.toContain(
+      "Inside ranked window",
+    );
+  });
+
+  test("describes a blocked slot by its state alone before the first snapshot", () => {
+    const blockedDateEvent = {
+      ...dateEvent,
+      slotGroups: dateEvent.slotGroups.map((group, day) => ({
+        ...group,
+        slots: group.slots.map((slot, row) => ({
+          ...slot,
+          blocked: day === 0 && row === 1,
+        })),
+      })),
+    };
+    renderCalendar({ event: blockedDateEvent, results: null, now: DATE_NOW });
+
+    expect(cell(0)).toHaveAttribute("data-state", "blocked");
+    expect(cell(1)).toHaveAttribute("data-state", "blocked");
+    expect(cell(2)).toHaveAttribute("data-state", "startable");
+    expect(cell(1)).toHaveAttribute("data-blocked-slot", "true");
+    expect(cell(1).textContent).toBe("");
+    expect(cell(1).getAttribute("aria-label")).toMatch(
+      /^Thu, Aug 20, .* This time is blocked for the event\.$/,
+    );
+    expect(cell(1).getAttribute("aria-label")).not.toContain(
+      "No availability snapshot yet.",
+    );
+    // The open slot before it is only unpickable because its window would
+    // run into the block; it is still described like any open cell.
+    expect(cell(0)).not.toHaveAttribute("data-blocked-slot");
+    expect(cell(0).getAttribute("aria-label")).toContain(
+      "No availability snapshot yet. A 60-minute meeting starting here would overlap a blocked time.",
+    );
+    expect(cell(0).getAttribute("aria-label")).not.toContain(
+      "This time is blocked",
+    );
+    expect(cell(2).getAttribute("aria-label")).toContain(
+      "No availability snapshot yet.",
+    );
+    expect(cell(2).getAttribute("title")).toContain(
+      "No availability snapshot yet.\nStarts a 60-minute window",
+    );
+    // The blocked note stays out of the calendar; it is not a paint surface.
+    expect(screen.queryByRole("note")).toBeNull();
+    expect(
+      document.querySelector("[data-blocked-paint], [data-blocked]"),
+    ).toBeNull();
+  });
+
   test("keeps both fall-back fold slots pickable with verbatim instants and distinct labels", async () => {
     // API geometry for Los Angeles 2026-11-01 00:00–03:00 in half-hour
     // slots: 01:00 and 01:30 happen twice (PDT, then PST), so the date has

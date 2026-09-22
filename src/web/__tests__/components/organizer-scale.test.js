@@ -52,10 +52,15 @@ jest.mock("@/components/event/CreateEventClient", () => ({
   ),
 }));
 jest.mock("@/components/schedule/OrganizerPanels", () => ({
-  OrganizerHeader: ({ event, onRefresh, refreshing, controls }) => (
+  OrganizerHeader: ({ event, onRefresh, refreshing, controls, live }) => (
     <header>
       <h2>{event.name}</h2>
       <span data-testid="organizer-header-event-status">{event.status}</span>
+      {live && (
+        <p data-testid="live-sync" data-updated={live.updatedAt ? "yes" : "no"}>
+          {live.error || "Live"}
+        </p>
+      )}
       <div role="group" aria-label="Workspace actions">
         {controls}
         <button onClick={onRefresh} disabled={refreshing}>
@@ -71,10 +76,12 @@ jest.mock("@/lib/api/events", () => ({
   downloadFinalCalendar: jest.fn(),
   fetchDeliveryRequest: jest.fn(),
   fetchEvent: jest.fn(),
+  fetchEventActivity: jest.fn(),
   fetchEventResults: jest.fn(),
   previewFinalMeeting: jest.fn(),
   retryDeliveryRequest: jest.fn(),
   sendReminders: jest.fn(),
+  updateEvent: jest.fn(),
   updateEventLifecycle: jest.fn(),
 }));
 jest.mock("@/lib/api/participants", () => ({
@@ -85,12 +92,17 @@ jest.mock("@/lib/api/roster", () => ({
   cancelRosterImport: jest.fn(),
   commitRosterImport: jest.fn(),
   configureRosterImport: jest.fn(),
+  createRosterGroup: jest.fn(),
   createRosterImport: jest.fn(),
+  deleteRosterGroup: jest.fn(),
   fetchRoster: jest.fn(),
+  fetchRosterGroups: jest.fn(),
   fetchRosterImportRows: jest.fn(),
   fetchRosterSchedule: jest.fn(),
   patchRosterBulk: jest.fn(),
   patchRosterParticipant: jest.fn(),
+  renameRosterGroup: jest.fn(),
+  sendRosterInvitations: jest.fn(),
 }));
 
 import { useAuth } from "@/components/auth/AuthContext";
@@ -100,6 +112,7 @@ import {
   confirmFinalMeeting,
   fetchDeliveryRequest,
   fetchEvent,
+  fetchEventActivity,
   fetchEventResults,
   previewFinalMeeting,
   sendReminders,
@@ -132,6 +145,7 @@ const event = {
   mode: "mixed",
   timezone: "UTC",
   location: "Room 1",
+  blockedSlots: {},
   slotGroups: [
     {
       key: "2026-08-20",
@@ -150,6 +164,32 @@ const event = {
     },
   ],
 };
+
+// The digest that matches the default roster, results, and event mocks, so
+// a live-sync pass finds nothing to reload unless a test moves a section.
+const rosterActivity = {
+  total: 1,
+  submitted: 0,
+  changedAt: "2026-08-20T07:00:00Z",
+};
+const baseActivity = {
+  event: { version: 2, status: "active", resultsRevision: 3 },
+  results: {
+    status: "fresh",
+    requestedRevision: 3,
+    computedRevision: 3,
+    generatedAt: "2026-08-20T08:00:00Z",
+  },
+  roster: rosterActivity,
+};
+
+function activityWith({ event: eventPart, results, roster } = {}) {
+  return {
+    event: { ...baseActivity.event, ...eventPart },
+    results: { ...baseActivity.results, ...results },
+    roster: { ...baseActivity.roster, ...roster },
+  };
+}
 
 const rosterImportRecord = {
   id: "import-1",
@@ -311,11 +351,19 @@ function mockCalendarWindowFlow() {
   });
 }
 
+// The Overview's blocked-times editor also renders `data-cell-idx` cells, so
+// calendar cells are looked up inside the results section.
+function calendarCell(index) {
+  return document
+    .getElementById("organizer-results")
+    .querySelector(`[data-cell-idx="${index}"]`);
+}
+
 async function openInvitePersonForm() {
   await screen.findByText("Ada Faculty");
   const rosterSection = document.getElementById("organizer-roster");
   await userEvent.click(
-    within(rosterSection).getByRole("button", { name: "Invite person" }),
+    within(rosterSection).getByRole("button", { name: "Add person" }),
   );
   return {
     section: rosterSection,
@@ -323,6 +371,7 @@ async function openInvitePersonForm() {
     email: within(rosterSection).getByRole("textbox", {
       name: "Email address",
     }),
+    addOnly: within(rosterSection).getByRole("button", { name: "Add only" }),
     submit: within(rosterSection).getByRole("button", {
       name: "Add and send invitation",
     }),
@@ -384,7 +433,9 @@ describe("scaled organizer workspace", () => {
         excluded: 0,
         groups: [{ name: "Faculty", count: 1 }],
       },
+      activity: rosterActivity,
     });
+    fetchEventActivity.mockResolvedValue(baseActivity);
     patchRosterParticipant.mockResolvedValue({
       participant: { id: "roster-1", included: false, version: 2 },
       resultsRevision: 4,
@@ -558,6 +609,18 @@ describe("scaled organizer workspace", () => {
     expect(
       within(overviewSection).queryByRole("link", { name: "Edit event" }),
     ).not.toBeInTheDocument();
+    // The blocked-times editor lives in the Overview, open while the event
+    // has no blocks, with its own grid name beside the meeting calendar.
+    expect(
+      within(overviewSection)
+        .getByRole("grid", { name: "Blocked times" })
+        .closest("details"),
+    ).toHaveAttribute("open");
+    expect(
+      within(overviewSection).getByRole("button", {
+        name: "Save blocked times",
+      }),
+    ).toBeInTheDocument();
     expect(
       within(overviewSection).getByRole("button", {
         name: "Show all details",
@@ -770,6 +833,8 @@ describe("scaled organizer workspace", () => {
     renderView();
     const invite = await openInvitePersonForm();
     const form = invite.submit.closest("form");
+    expect(invite.addOnly).toHaveAttribute("type", "submit");
+    expect(invite.submit).toHaveAttribute("type", "button");
 
     fireEvent.submit(form);
     expect(
@@ -785,6 +850,60 @@ describe("scaled organizer workspace", () => {
       await screen.findByText("Enter a valid email address."),
     ).toBeInTheDocument();
     expect(createManagedParticipant).not.toHaveBeenCalled();
+    await userEvent.click(invite.submit);
+    expect(
+      screen.getByText("Enter a valid email address."),
+    ).toBeInTheDocument();
+    expect(createManagedParticipant).not.toHaveBeenCalled();
+  });
+
+  test("adds a person without emailing them when the form is submitted", async () => {
+    createManagedParticipant.mockResolvedValueOnce({
+      participant: {
+        id: "manual-1",
+        memberId: "manual-1",
+        name: "Manual Person",
+        email: "manual@example.com",
+        accountAccess: "temporary",
+        canOrganizerEditAvailability: true,
+        invitationStatus: "not_sent",
+        version: 1,
+      },
+      created: true,
+      memberCreated: true,
+      idempotent: false,
+      autoInvitedCount: 0,
+      deliveryRequest: null,
+    });
+    renderView();
+    const invite = await openInvitePersonForm();
+    await userEvent.type(invite.name, "Manual Person");
+    await userEvent.type(invite.email, "manual@example.com");
+    await userEvent.click(invite.addOnly);
+
+    await waitFor(() =>
+      expect(createManagedParticipant).toHaveBeenCalledWith(
+        event.code,
+        {
+          name: "Manual Person",
+          email: "manual@example.com",
+          phone: "",
+          organizerManaged: false,
+          idempotencyKey: "request-key",
+          sendInvitation: false,
+        },
+        "token",
+      ),
+    );
+    expect(await within(invite.section).findByRole("status")).toHaveTextContent(
+      /^Manual Person was added\. No invitation was sent\.$/,
+    );
+    expect(
+      screen.queryByLabelText("Event delivery progress"),
+    ).not.toBeInTheDocument();
+    expect(
+      within(invite.section).queryByRole("heading", { name: "Add a person" }),
+    ).not.toBeInTheDocument();
   });
 
   test("adds an active invitee and queues its invitation atomically", async () => {
@@ -800,7 +919,10 @@ describe("scaled organizer workspace", () => {
         {
           name: "Manual Person",
           email: "manual@example.com",
+          phone: "",
+          organizerManaged: false,
           idempotencyKey: "request-key",
+          sendInvitation: true,
         },
         "token",
       ),
@@ -809,23 +931,23 @@ describe("scaled organizer workspace", () => {
       /^Manual Person is ready to respond\. Their invitation was queued\.$/,
     );
     expect(
-      within(invite.section).queryByRole("heading", {
-        name: "Invite someone to respond",
-      }),
+      within(invite.section).queryByRole("heading", { name: "Add a person" }),
     ).not.toBeInTheDocument();
     expect(
       await screen.findByLabelText("Event delivery progress"),
     ).toHaveTextContent("1 queued");
 
     await userEvent.click(
-      within(invite.section).getByRole("button", { name: "Invite person" }),
+      within(invite.section).getByRole("button", { name: "Add person" }),
     );
     expect(
       within(invite.section).queryByRole("status"),
     ).not.toBeInTheDocument();
 
+    // The Add only button is the form's submit action, so pressing Enter
+    // runs the same validation without emailing anyone.
     const reopenedForm = within(invite.section)
-      .getByRole("button", { name: "Add and send invitation" })
+      .getByRole("button", { name: "Add only" })
       .closest("form");
     fireEvent.submit(reopenedForm);
 
@@ -863,9 +985,7 @@ describe("scaled organizer workspace", () => {
       /^Manual Person is already on this roster\. No new invitation was sent\.$/,
     );
     expect(
-      within(invite.section).queryByRole("heading", {
-        name: "Invite someone to respond",
-      }),
+      within(invite.section).queryByRole("heading", { name: "Add a person" }),
     ).not.toBeInTheDocument();
   });
 
@@ -932,6 +1052,161 @@ describe("scaled organizer workspace", () => {
     await waitFor(() =>
       expect(createManagedParticipant).toHaveBeenCalledTimes(1),
     );
+  });
+
+  test("adds a person the organizer manages under one of their own addresses", async () => {
+    createManagedParticipant.mockResolvedValueOnce({
+      participant: {
+        id: "managed-1",
+        memberId: "managed-1",
+        name: "Managed Person",
+        email: "organizer@example.com",
+        phone: "+1 555 010 0199",
+        accountAccess: "temporary",
+        organizerManaged: true,
+        canOrganizerEditAvailability: true,
+        invitationStatus: "not_sent",
+        version: 1,
+      },
+      created: true,
+      restored: false,
+      memberCreated: true,
+      autoInvitedCount: 0,
+      deliveryRequest: {
+        id: "managed-delivery",
+        operation: "invitation",
+        recipientCount: 0,
+        delivery: { total: 0, pending: 0, sent: 0 },
+      },
+    });
+    renderView();
+    const invite = await openInvitePersonForm();
+    const managed = within(invite.section).getByRole("checkbox", {
+      name: "No email of their own — use one of mine and I'll enter their schedule",
+    });
+    const phone = within(invite.section).getByLabelText("Phone (optional)");
+    expect(managed).not.toBeChecked();
+    expect(invite.submit.querySelector(".app-btn-icon")).not.toBeNull();
+    expect(
+      within(invite.section).queryByText(
+        "Enter one of your own verified email addresses. No invitation is sent.",
+      ),
+    ).not.toBeInTheDocument();
+
+    await userEvent.click(managed);
+    expect(managed).toBeChecked();
+    expect(invite.email).toHaveAccessibleDescription(
+      "Enter one of your own verified email addresses. No invitation is sent.",
+    );
+    const submit = within(invite.section).getByRole("button", {
+      name: "Add person",
+    });
+    expect(submit.querySelector(".app-btn-icon")).toBeNull();
+    expect(
+      within(invite.section).queryByRole("button", {
+        name: "Add and send invitation",
+      }),
+    ).not.toBeInTheDocument();
+
+    await userEvent.type(invite.name, "Managed Person");
+    await userEvent.type(invite.email, "organizer@example.com");
+    await userEvent.type(phone, "+1 555 010 0199");
+    fetchRoster.mockResolvedValueOnce({
+      participants: [
+        {
+          id: "managed-1",
+          memberId: "managed-1",
+          name: "Managed Person",
+          email: "organizer@example.com",
+          phone: "+1 555 010 0199",
+          group: "",
+          weight: 1,
+          included: true,
+          submitted: false,
+          accountAccess: "temporary",
+          organizerManaged: true,
+          canOrganizerEditAvailability: true,
+          invitationStatus: "not_sent",
+          version: 1,
+        },
+      ],
+      pagination: { page: 1, pageSize: 50, total: 1, pages: 1 },
+      stats: { total: 1, submitted: 0, notSubmitted: 1, groups: [] },
+    });
+    await userEvent.click(submit);
+
+    await waitFor(() =>
+      expect(createManagedParticipant).toHaveBeenCalledWith(
+        event.code,
+        {
+          name: "Managed Person",
+          email: "organizer@example.com",
+          phone: "+1 555 010 0199",
+          organizerManaged: true,
+          idempotencyKey: "request-key",
+          sendInvitation: false,
+        },
+        "token",
+      ),
+    );
+    expect(await within(invite.section).findByRole("status")).toHaveTextContent(
+      /^Managed Person was added\. Use Edit schedule to enter their availability\.$/,
+    );
+    expect(
+      screen.queryByLabelText("Event delivery progress"),
+    ).not.toBeInTheDocument();
+    const row = (
+      await within(invite.section).findByRole("rowheader", {
+        name: /Managed Person/,
+      })
+    ).closest("tr");
+    expect(row).toHaveTextContent(
+      "organizer@example.com · +1 555 010 0199 · Organizer-managed",
+    );
+    expect(within(row).getByText("Not sent")).toBeInTheDocument();
+    expect(
+      within(row).getByRole("button", { name: "Edit schedule" }),
+    ).toBeEnabled();
+    expect(within(row).getByLabelText("Phone for Managed Person")).toHaveValue(
+      "+1 555 010 0199",
+    );
+  });
+
+  test("shows the server hint when the organizer's own address is typed without the checkbox", async () => {
+    createManagedParticipant.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          'That is one of your own addresses. Check "No email of their own" to add a person you manage.',
+        ),
+        { status: 409, errorCode: "organizer_own_email" },
+      ),
+    );
+    renderView();
+    const invite = await openInvitePersonForm();
+    await userEvent.type(invite.name, "Managed Person");
+    await userEvent.type(invite.email, "organizer@example.com");
+    await userEvent.click(invite.submit);
+
+    const error = await within(invite.section).findByRole("alert");
+    expect(error).toHaveClass("roster-invite-form__error");
+    expect(error).toHaveTextContent(
+      'That is one of your own addresses. Check "No email of their own" to add a person you manage.',
+    );
+    expect(createManagedParticipant).toHaveBeenCalledWith(
+      event.code,
+      expect.objectContaining({ organizerManaged: false, phone: "" }),
+      "token",
+    );
+    // Ticking the box clears the hint and the spent idempotency key.
+    await userEvent.click(
+      within(invite.section).getByRole("checkbox", {
+        name: "No email of their own — use one of mine and I'll enter their schedule",
+      }),
+    );
+    expect(within(invite.section).queryByRole("alert")).not.toBeInTheDocument();
+    expect(
+      within(invite.section).getByRole("button", { name: "Add person" }),
+    ).toBeEnabled();
   });
 
   test("keeps invite values and reuses the idempotency key after a failed request", async () => {
@@ -1006,10 +1281,13 @@ describe("scaled organizer workspace", () => {
       "This roster is read-only while responses are closed",
     );
     expect(
-      screen.queryByRole("button", { name: "Invite person" }),
+      screen.queryByRole("button", { name: "Add person" }),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Import roster" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Send invitation" }),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByLabelText("Bulk roster actions"),
@@ -1018,7 +1296,9 @@ describe("scaled organizer workspace", () => {
     expect(screen.getByLabelText("Filter by group")).toBeEnabled();
     expect(screen.getByLabelText("Select all on page")).toBeDisabled();
     expect(screen.getByLabelText("Select Ada Faculty")).toBeDisabled();
-    expect(screen.getByLabelText("Group for Ada Faculty")).toBeDisabled();
+    expect(screen.getByLabelText("Groups for Ada Faculty")).toBeDisabled();
+    expect(screen.getByLabelText("All groups for Ada Faculty")).toBeDisabled();
+    expect(screen.getByLabelText("Phone for Ada Faculty")).toBeDisabled();
     expect(screen.getByLabelText("Weight for Ada Faculty")).toBeDisabled();
     expect(screen.getByLabelText("Include Ada Faculty")).toBeDisabled();
     expect(
@@ -1040,18 +1320,21 @@ describe("scaled organizer workspace", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Invite someone or import a roster to start collecting availability.",
+        "Add someone or import a roster to start collecting availability.",
       ),
     ).toBeInTheDocument();
-    expect(
-      screen.getAllByRole("button", { name: "Invite person" }),
-    ).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Add person" })).toHaveLength(
+      1,
+    );
     expect(
       screen.getAllByRole("button", { name: "Import roster" }),
     ).toHaveLength(1);
     expect(screen.queryByLabelText("Search roster")).not.toBeInTheDocument();
     expect(
       screen.queryByLabelText("Bulk roster actions"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Send invitation" }),
     ).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Rows per page")).not.toBeInTheDocument();
   });
@@ -1372,12 +1655,54 @@ describe("scaled organizer workspace", () => {
     );
   });
 
+  test("patches a row's phone on blur with the row version and skips unchanged values", async () => {
+    patchRosterParticipant.mockResolvedValueOnce({
+      participant: {
+        id: "roster-1",
+        phone: "+1 (555) 010-0199",
+        included: true,
+        version: 2,
+      },
+      resultsRevision: 4,
+    });
+    renderView();
+    const phone = await screen.findByLabelText("Phone for Ada Faculty");
+    expect(phone).toHaveValue("");
+    expect(screen.getByLabelText("Search roster")).toHaveAttribute(
+      "placeholder",
+      "Search name, email or phone",
+    );
+
+    fireEvent.blur(phone);
+    expect(patchRosterParticipant).not.toHaveBeenCalled();
+
+    fireEvent.change(phone, { target: { value: "+1 (555) 010-0199" } });
+    fireEvent.blur(phone);
+    await waitFor(() =>
+      expect(patchRosterParticipant).toHaveBeenCalledWith(
+        event.code,
+        "roster-1",
+        { phone: "+1 (555) 010-0199", expectedVersion: 1 },
+        "token",
+      ),
+    );
+    const row = screen
+      .getByRole("rowheader", { name: /Ada Faculty/ })
+      .closest("tr");
+    await waitFor(() =>
+      expect(row).toHaveTextContent(
+        "ada@example.com · +1 (555) 010-0199 · Temporary",
+      ),
+    );
+    expect(phone).toHaveValue("+1 (555) 010-0199");
+  });
+
   test("rolls an inline roster draft back when the server rejects it", async () => {
     patchRosterParticipant.mockRejectedValueOnce(
       Object.assign(new Error("Group is not allowed"), { status: 400 }),
     );
     renderView();
-    const group = await screen.findByLabelText("Group for Ada Faculty");
+    const group = await screen.findByLabelText("Groups for Ada Faculty");
     fireEvent.change(group, { target: { value: "Invalid group" } });
     expect(group).toHaveValue("Invalid group");
     fireEvent.blur(group);
@@ -1405,7 +1730,7 @@ describe("scaled organizer workspace", () => {
         resultsRevision: 5,
       });
     renderView();
-    const group = await screen.findByLabelText("Group for Ada Faculty");
+    const group = await screen.findByLabelText("Groups for Ada Faculty");
     fireEvent.change(group, { target: { value: "Research" } });
     fireEvent.blur(group);
     await waitFor(() =>
@@ -1460,6 +1785,16 @@ describe("scaled organizer workspace", () => {
       expect.objectContaining({ columnMapping: { name: "0", email: "1" } }),
       "token",
     );
+    // Invitations are opt-in: the box is unchecked until the organizer
+    // ticks it, and the commit label follows.
+    const sendBox = screen.getByLabelText(
+      "Send invitations to newly added people",
+    );
+    expect(sendBox).not.toBeChecked();
+    expect(
+      screen.getByRole("button", { name: "Merge roster" }),
+    ).toBeInTheDocument();
+    await userEvent.click(sendBox);
     await userEvent.click(
       screen.getByRole("button", {
         name: "Merge roster and invite new people",
@@ -1470,7 +1805,7 @@ describe("scaled organizer workspace", () => {
       expect(commitRosterImport).toHaveBeenCalledWith(
         event.code,
         "import-1",
-        { mode: "merge", idempotencyKey: "request-key" },
+        { mode: "merge", idempotencyKey: "request-key", sendInvitations: true },
         "token",
       ),
     );
@@ -1480,6 +1815,13 @@ describe("scaled organizer workspace", () => {
     expect(
       await screen.findByLabelText("Event delivery progress"),
     ).toHaveTextContent("1 queued");
+    expect(
+      (
+        await screen.findByText(
+          "Imported 1 people: 1 added, 0 updated. 1 invitation queued.",
+        )
+      ).closest("[role]"),
+    ).toHaveAttribute("role", "status");
   });
 
   test("requires the exact event code before a destructive roster rebuild", async () => {
@@ -1507,10 +1849,10 @@ describe("scaled organizer workspace", () => {
     );
 
     const rebuildButton = screen.getByRole("button", {
-      name: "Rebuild roster and send invitations",
+      name: "Rebuild roster",
     });
     expect(screen.getByRole("note")).toHaveTextContent(
-      "sends a new invitation to every imported participant",
+      "Rebuilding clears schedules, invitations, and pending delivery. With invitations enabled below it sends a new invitation to every imported participant; otherwise everyone starts as Not sent and gets no reminders until you send invitations.",
     );
     expect(rebuildButton).toBeDisabled();
     await userEvent.type(
@@ -1533,11 +1875,20 @@ describe("scaled organizer workspace", () => {
           mode: "rebuild",
           confirmationCode: event.code,
           idempotencyKey: "request-key",
+          sendInvitations: false,
         },
         "token",
       ),
     );
     expect(setEvent).toHaveBeenCalledWith(rebuiltEvent);
+    expect(
+      await screen.findByText(
+        "Imported 1 people: 1 added, 0 updated. No invitations were sent.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByLabelText("Event delivery progress"),
+    ).not.toBeInTheDocument();
   });
 
   test("shows snapshot freshness and finalizes a chosen continuous recommendation", async () => {
@@ -1794,7 +2145,7 @@ describe("scaled organizer workspace", () => {
       expect(finalizeSection()).toHaveTextContent("No time selected yet");
       expect(screen.queryByText("Custom window")).not.toBeInTheDocument();
 
-      const cell = document.querySelector('[data-cell-idx="1"]');
+      const cell = calendarCell(1);
       expect(cell).toHaveAttribute("data-state", "startable");
       expect(cell).not.toHaveAttribute("aria-disabled");
       await userEvent.click(cell);
@@ -1808,13 +2159,8 @@ describe("scaled organizer workspace", () => {
       );
       expect(screen.getByRole("heading", { name: "Finalize" })).toHaveFocus();
       expect(cell).toHaveAttribute("aria-selected", "true");
-      expect(document.querySelector('[data-cell-idx="2"]')).toHaveAttribute(
-        "aria-selected",
-        "true",
-      );
-      expect(document.querySelector('[data-cell-idx="0"]')).not.toHaveAttribute(
-        "aria-selected",
-      );
+      expect(calendarCell(2)).toHaveAttribute("aria-selected", "true");
+      expect(calendarCell(0)).not.toHaveAttribute("aria-selected");
 
       await userEvent.click(
         screen.getByRole("button", { name: "Review attendance" }),
@@ -1881,7 +2227,7 @@ describe("scaled organizer workspace", () => {
       const headerStatus = () =>
         screen.getByTestId("organizer-header-event-status");
 
-      await userEvent.click(document.querySelector('[data-cell-idx="1"]'));
+      await userEvent.click(calendarCell(1));
       expect(finalizeSection()).toHaveTextContent("Custom window");
       await userEvent.click(
         screen.getByRole("button", { name: "Review attendance" }),
@@ -1919,9 +2265,7 @@ describe("scaled organizer workspace", () => {
       );
       expect(screen.queryByText("Custom window")).not.toBeInTheDocument();
       expect(screen.queryByText(/Ranked #/)).not.toBeInTheDocument();
-      expect(document.querySelector('[data-cell-idx="1"]')).not.toHaveAttribute(
-        "aria-selected",
-      );
+      expect(calendarCell(1)).not.toHaveAttribute("aria-selected");
       expect(
         screen.getAllByText("This event is active and accepting responses."),
       ).toHaveLength(1);
@@ -2022,6 +2366,367 @@ describe("scaled organizer workspace", () => {
     expect(document.getElementById("organizer-finalize")).toHaveTextContent(
       "Legacy result",
     );
+  });
+
+  describe("live sync", () => {
+    const LIVE_INTERVAL = 5000;
+
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      delete document.visibilityState;
+      jest.useRealTimers();
+    });
+
+    async function renderLiveWorkspace(
+      setEvent = jest.fn(),
+      currentEvent = event,
+    ) {
+      const view = renderView(setEvent, currentEvent);
+      await screen.findByText("Ada Faculty");
+      await screen.findByText(/Results are current at revision 3/);
+      fetchEvent.mockClear();
+      fetchRoster.mockClear();
+      fetchEventResults.mockClear();
+      fetchEventActivity.mockClear();
+      return view;
+    }
+
+    async function tick(ms = LIVE_INTERVAL) {
+      await act(async () => {
+        jest.advanceTimersByTime(ms);
+      });
+    }
+
+    function setTabVisibility(state) {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => state,
+      });
+    }
+
+    test("loads a new response into every section without Refresh and keeps the pick", async () => {
+      const { setEvent } = await renderLiveWorkspace();
+      await userEvent.click(
+        screen.getByRole("button", { name: "Choose this time" }),
+      );
+      const finalize = document.getElementById("organizer-finalize");
+      expect(finalize).toHaveTextContent("Thursday 9:00 AM");
+      expect(screen.getByTestId("live-sync")).toHaveTextContent("Live");
+      expect(screen.getByTestId("live-sync")).toHaveAttribute(
+        "data-updated",
+        "no",
+      );
+
+      // Ada submits: the digest moves for the event revision, the roster,
+      // and the (now recomputing) results.
+      const moved = {
+        ...rosterActivity,
+        submitted: 1,
+        changedAt: "2026-08-20T09:00:00Z",
+      };
+      fetchEventActivity.mockResolvedValue(
+        activityWith({
+          event: { resultsRevision: 4 },
+          results: { status: "refreshing", requestedRevision: 4 },
+          roster: moved,
+        }),
+      );
+      fetchRoster.mockResolvedValue({
+        participants: [
+          {
+            id: "roster-1",
+            memberId: "member-1",
+            name: "Ada Faculty",
+            email: "ada@example.com",
+            group: "Faculty",
+            weight: 0.8,
+            included: true,
+            submitted: true,
+            accountAccess: "temporary",
+            canOrganizerEditAvailability: true,
+            invitationStatus: "submitted",
+            version: 2,
+          },
+        ],
+        pagination: { page: 1, pageSize: 50, total: 1, pages: 1 },
+        stats: {
+          total: 1,
+          submitted: 1,
+          notSubmitted: 0,
+          included: 1,
+          excluded: 0,
+          groups: [{ name: "Faculty", count: 1 }],
+        },
+        activity: moved,
+      });
+      fetchEventResults.mockResolvedValue({
+        status: "refreshing",
+        requestedRevision: 4,
+        computedRevision: 3,
+        generatedAt: "2026-08-20T08:00:00Z",
+        results: {
+          recommendations: [
+            {
+              rank: 1,
+              label: "Thursday 9:00 AM",
+              channel: "inperson",
+              suggestedStartsAt: "2026-08-20T09:00:00Z",
+              suggestedEndsAt: "2026-08-20T10:00:00Z",
+              weightedAvailability: 0.95,
+              unweightedAvailability: 0.9,
+              fullyAvailableParticipantTotal: 701,
+            },
+          ],
+        },
+      });
+
+      await tick();
+      await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(1));
+      expect(fetchEventActivity).toHaveBeenCalledWith(event.code, "token");
+      expect(fetchRoster).toHaveBeenCalledWith(
+        event.code,
+        expect.objectContaining({ page: 1, pageSize: 50 }),
+        "token",
+      );
+      expect(
+        await screen.findByText(/Results are updating for revision 4/),
+      ).toBeInTheDocument();
+      expect(screen.getByLabelText("Roster summary")).toHaveTextContent(
+        "1 submitted",
+      );
+      // Only the revision moved, so the event is patched rather than re-read.
+      expect(fetchEvent).not.toHaveBeenCalled();
+      expect(setEvent).toHaveBeenCalledWith({ ...event, resultsRevision: 4 });
+      // The organizer's pick and the silent nature of the pass both hold.
+      expect(finalize).toHaveTextContent("Thursday 9:00 AM");
+      expect(screen.queryByText("Workspace updated.")).not.toBeInTheDocument();
+      expect(screen.queryByText("Loading roster…")).not.toBeInTheDocument();
+      await waitFor(() =>
+        expect(screen.getByTestId("live-sync")).toHaveAttribute(
+          "data-updated",
+          "yes",
+        ),
+      );
+      expect(screen.getByTestId("live-sync")).toHaveTextContent("Live");
+    });
+
+    test("leaves every section alone while the digest matches what is shown", async () => {
+      const { setEvent } = await renderLiveWorkspace();
+      await tick();
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(1));
+      await tick();
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(2));
+      expect(fetchEvent).not.toHaveBeenCalled();
+      expect(fetchRoster).not.toHaveBeenCalled();
+      expect(fetchEventResults).not.toHaveBeenCalled();
+      expect(setEvent).not.toHaveBeenCalled();
+      expect(screen.getByTestId("live-sync")).toHaveAttribute(
+        "data-updated",
+        "no",
+      );
+
+      // A digest without a revision does not touch the event either.
+      fetchEventActivity.mockResolvedValue({
+        ...baseActivity,
+        event: { version: 2, status: "active" },
+      });
+      await tick();
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(3));
+      expect(setEvent).not.toHaveBeenCalled();
+    });
+
+    test("re-reads the event when it changed in another session and tolerates an event-less reply", async () => {
+      const { setEvent } = await renderLiveWorkspace();
+      fetchEventActivity.mockResolvedValue(
+        activityWith({ event: { version: 3 } }),
+      );
+      fetchEvent.mockResolvedValueOnce({ event: { ...event, version: 3 } });
+      await tick();
+      await waitFor(() =>
+        expect(setEvent).toHaveBeenCalledWith(
+          expect.objectContaining({ code: event.code, version: 3 }),
+        ),
+      );
+      expect(fetchEvent).toHaveBeenCalledWith(event.code, "token");
+      expect(fetchRoster).not.toHaveBeenCalled();
+      expect(fetchEventResults).not.toHaveBeenCalled();
+
+      setEvent.mockClear();
+      fetchEvent.mockResolvedValueOnce({});
+      await tick();
+      await waitFor(() => expect(fetchEvent).toHaveBeenCalledTimes(2));
+      expect(setEvent).not.toHaveBeenCalled();
+    });
+
+    test("skips a hidden tab and catches up the moment it is shown again", async () => {
+      await renderLiveWorkspace();
+      setTabVisibility("hidden");
+      await tick();
+      await tick();
+      expect(fetchEventActivity).not.toHaveBeenCalled();
+      // Going hidden (again) is not a trigger.
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(fetchEventActivity).not.toHaveBeenCalled();
+
+      setTabVisibility("visible");
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(fetchEventActivity).toHaveBeenCalledTimes(1);
+      // The interval then continues from the catch-up pass.
+      await tick(LIVE_INTERVAL - 1);
+      expect(fetchEventActivity).toHaveBeenCalledTimes(1);
+      await tick(1);
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(2));
+    });
+
+    test("reports a failed pass in the header and recovers on the next one", async () => {
+      await renderLiveWorkspace();
+      fetchEventActivity.mockRejectedValueOnce(new Error("offline"));
+      await tick();
+      await waitFor(() =>
+        expect(screen.getByTestId("live-sync")).toHaveTextContent(
+          "New responses could not be loaded automatically (offline).",
+        ),
+      );
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+      // A section that fails to re-read is reported the same way.
+      fetchEventActivity.mockResolvedValueOnce(
+        activityWith({ roster: { submitted: 1 } }),
+      );
+      fetchRoster.mockRejectedValueOnce(new Error(""));
+      await tick();
+      await waitFor(() =>
+        expect(screen.getByTestId("live-sync")).toHaveTextContent(
+          "New responses could not be loaded automatically.",
+        ),
+      );
+      // The roster keeps what it showed; nothing was replaced by an error.
+      expect(screen.getByText("Ada Faculty")).toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+      // The next clean pass clears the notice even though nothing changed.
+      await tick();
+      await waitFor(() =>
+        expect(screen.getByTestId("live-sync")).toHaveTextContent("Live"),
+      );
+      expect(screen.getByTestId("live-sync")).toHaveAttribute(
+        "data-updated",
+        "no",
+      );
+    });
+
+    test("waits for a manual refresh and never overlaps its own passes", async () => {
+      await renderLiveWorkspace();
+      let releaseEvent;
+      fetchEvent.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseEvent = resolve;
+          }),
+      );
+      await act(async () => {
+        await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+      });
+      await waitFor(() => expect(releaseEvent).toBeDefined());
+      await tick();
+      expect(fetchEventActivity).not.toHaveBeenCalled();
+      await act(async () => {
+        releaseEvent({ event: { ...event, version: 2 } });
+      });
+      expect(await screen.findByText("Workspace updated.")).toBeInTheDocument();
+      fetchRoster.mockClear();
+
+      // A pass still waiting on the digest is not doubled by a catch-up.
+      let releaseActivity;
+      fetchEventActivity.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseActivity = resolve;
+          }),
+      );
+      await tick();
+      await waitFor(() => expect(releaseActivity).toBeDefined());
+      setTabVisibility("visible");
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(fetchEventActivity).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        releaseActivity(baseActivity);
+      });
+      expect(fetchRoster).not.toHaveBeenCalled();
+    });
+
+    test("waits for a section's first load before comparing it", async () => {
+      let releaseRoster;
+      fetchRoster.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseRoster = resolve;
+          }),
+      );
+      // Results never land in this test: the panel keeps polling its own
+      // initial refreshing state, and there is nothing on screen to compare.
+      fetchEventResults.mockImplementation(() => new Promise(() => {}));
+      renderView();
+      await waitFor(() => expect(releaseRoster).toBeDefined());
+      fetchEventActivity.mockResolvedValue(
+        activityWith({
+          results: { computedRevision: 9 },
+          roster: { submitted: 1 },
+        }),
+      );
+      await tick();
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(1));
+      // Neither section has anything on screen to compare, so the pass
+      // changes nothing and the roster is not re-read on top of its pending
+      // first load.
+      expect(fetchRoster).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId("live-sync")).toHaveAttribute(
+        "data-updated",
+        "no",
+      );
+
+      await act(async () => {
+        releaseRoster({
+          participants: [],
+          pagination: { page: 1, pageSize: 50, total: 0, pages: 0 },
+          stats: { total: 0, submitted: 0, notSubmitted: 0, groups: [] },
+          activity: rosterActivity,
+        });
+      });
+      // Once the roster is on screen, the next pass compares and reloads it.
+      fetchRoster.mockResolvedValue({
+        participants: [],
+        pagination: { page: 1, pageSize: 50, total: 0, pages: 0 },
+        stats: { total: 1, submitted: 1, notSubmitted: 0, groups: [] },
+        activity: { ...rosterActivity, submitted: 1 },
+      });
+      await tick();
+      await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(2));
+      await waitFor(() =>
+        expect(screen.getByTestId("live-sync")).toHaveAttribute(
+          "data-updated",
+          "yes",
+        ),
+      );
+    });
+
+    test("does not poll while responses are closed", async () => {
+      renderView(jest.fn(), { ...event, status: "closed" });
+      await screen.findByText("Ada Faculty");
+      fetchEventActivity.mockClear();
+      expect(screen.queryByTestId("live-sync")).not.toBeInTheDocument();
+      await tick(LIVE_INTERVAL * 2);
+      expect(fetchEventActivity).not.toHaveBeenCalled();
+    });
   });
 
   test("shows the previous snapshot while a newer result revision is refreshing", async () => {

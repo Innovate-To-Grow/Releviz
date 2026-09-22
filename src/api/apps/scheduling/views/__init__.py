@@ -7,6 +7,7 @@ and the ``operations`` delivery endpoints.
 
 from .events import (
     DashboardEventsView,
+    EventActivityView,
     EventDuplicateView,
     EventLifecycleView,
     EventResultsView,
@@ -29,10 +30,13 @@ from .participants import (
 )
 from .roster import (
     RosterBulkView,
+    RosterGroupsView,
+    RosterGroupView,
     RosterImportCollectionView,
     RosterImportCommitView,
     RosterImportDetailView,
     RosterImportRowsView,
+    RosterInvitationsView,
     RosterParticipantScheduleView,
     RosterParticipantView,
     RosterView,
@@ -52,6 +56,7 @@ __all__ = [
     "health_ready",
     # Events
     "DashboardEventsView",
+    "EventActivityView",
     "EventDuplicateView",
     "EventLifecycleView",
     "EventResultsView",
@@ -72,10 +77,13 @@ __all__ = [
     "EventFinalizationView",
     # Roster
     "RosterBulkView",
+    "RosterGroupView",
+    "RosterGroupsView",
     "RosterImportCollectionView",
     "RosterImportCommitView",
     "RosterImportDetailView",
     "RosterImportRowsView",
+    "RosterInvitationsView",
     "RosterParticipantScheduleView",
     "RosterParticipantView",
     "RosterView",

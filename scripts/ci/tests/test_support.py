@@ -242,6 +242,222 @@ class AmplifyApexTargetTests(TestCase):
                 self.assertIn("missing unique apex DNS record", result.stderr)
 
 
+class LastSuccessfulReleaseTests(TestCase):
+    """The shared release history answers per surface job, not per run."""
+
+    script = Path(__file__).resolve().parents[3] / "scripts" / "ci" / "last-successful-release.sh"
+    repository = "Innovate-To-Grow/Releviz"
+    # A fake gh: every request is answered from a canned JSON file keyed by
+    # its URL, and --jq is applied with the real jq. Like gh, it takes no
+    # other jq options.
+    FAKE_GH = """#!/usr/bin/env bash
+set -euo pipefail
+filter=""
+url=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    api) shift ;;
+    -H) shift 2 ;;
+    --jq) filter="$2"; shift 2 ;;
+    --*) echo "unsupported gh option: $1" >&2; exit 1 ;;
+    *) url="$1"; shift ;;
+  esac
+done
+file="${FAKE_GH_DIR}/$(printf '%s' "$url" | sha256sum | cut -c1-16).json"
+if [ ! -f "$file" ]; then
+  echo "unexpected request: $url" >&2
+  exit 1
+fi
+jq -r "$filter" "$file"
+"""
+
+    @staticmethod
+    def route(url: str) -> str:
+        import hashlib
+
+        return hashlib.sha256(url.encode("utf-8")).hexdigest()[:16] + ".json"
+
+    def run_script(self, surface: str, responses: dict[str, object]) -> subprocess.CompletedProcess:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            gh = root / "bin" / "gh"
+            gh.parent.mkdir()
+            gh.write_text(self.FAKE_GH, encoding="utf-8")
+            gh.chmod(0o755)
+            for url, body in responses.items():
+                (root / self.route(url)).write_text(json.dumps(body), encoding="utf-8")
+            return subprocess.run(
+                ["bash", str(self.script), surface],
+                env={
+                    **os.environ,
+                    "PATH": f"{gh.parent}:{os.environ['PATH']}",
+                    "FAKE_GH_DIR": str(root),
+                    "GITHUB_REPOSITORY": self.repository,
+                },
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+    def orchestrated_runs(self, *runs):
+        return {
+            f"repos/{self.repository}/actions/workflows/release.yml/runs"
+            "?branch=main&status=completed&per_page=50": {
+                "workflow_runs": [
+                    {"id": run_id, "created_at": created_at, "head_sha": sha, "event": event}
+                    for run_id, created_at, sha, event, _jobs in runs
+                ]
+            },
+            **{
+                f"repos/{self.repository}/actions/runs/{run_id}/jobs?per_page=100": {
+                    "jobs": [{"name": name, "conclusion": conclusion} for name, conclusion in jobs]
+                }
+                for run_id, _created_at, _sha, _event, jobs in runs
+            },
+        }
+
+    def workflow_runs(self, workflow: str, *runs):
+        return {
+            f"repos/{self.repository}/actions/workflows/{workflow}/runs"
+            "?branch=main&status=success&per_page=1": {
+                "workflow_runs": [
+                    {"created_at": created_at, "head_sha": sha} for created_at, sha in runs
+                ]
+            }
+        }
+
+    def test_rejects_unknown_surfaces(self):
+        result = self.run_script("database", {})
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("usage:", result.stderr)
+
+    def test_answers_from_the_surface_job_not_the_run(self):
+        newest, older = "a" * 40, "b" * 40
+        responses = {
+            **self.orchestrated_runs(
+                # The newest run released the frontend but the backend failed
+                # and the infrastructure was skipped.
+                (
+                    2,
+                    "2026-09-22T10:00:00Z",
+                    newest,
+                    "workflow_run",
+                    [
+                        ("Decide which surfaces changed", "success"),
+                        ("backend / Release backend to production", "failure"),
+                        ("frontend / Release frontend to production", "success"),
+                        ("Summarize the production release", "failure"),
+                    ],
+                ),
+                (
+                    1,
+                    "2026-09-21T10:00:00Z",
+                    older,
+                    "workflow_run",
+                    [
+                        ("backend / Release backend to production", "success"),
+                        ("infrastructure / Release infrastructure to production", "success"),
+                    ],
+                ),
+            ),
+            **self.workflow_runs("release-backend.yml"),
+            **self.workflow_runs("release-frontend.yml"),
+            **self.workflow_runs("release-infrastructure.yml"),
+        }
+        for surface, expected in (
+            ("backend", older),
+            ("frontend", newest),
+            ("infrastructure", older),
+        ):
+            with self.subTest(surface=surface):
+                result = self.run_script(surface, responses)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), expected)
+
+    def test_ignores_orchestrated_runs_from_other_events(self):
+        pushed, released = "c" * 40, "d" * 40
+        responses = {
+            **self.orchestrated_runs(
+                (
+                    3,
+                    "2026-09-22T10:00:00Z",
+                    pushed,
+                    "push",
+                    [("backend / Release backend to production", "success")],
+                ),
+                (
+                    2,
+                    "2026-09-21T10:00:00Z",
+                    released,
+                    "workflow_dispatch",
+                    [("backend / Release backend to production", "success")],
+                ),
+            ),
+            **self.workflow_runs("release-backend.yml"),
+        }
+        result = self.run_script("backend", responses)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), released)
+
+    def test_a_newer_lone_dispatch_of_the_surface_wins(self):
+        orchestrated, rollback = "e" * 40, "f" * 40
+        responses = {
+            **self.orchestrated_runs(
+                (
+                    1,
+                    "2026-09-21T10:00:00Z",
+                    orchestrated,
+                    "workflow_run",
+                    [("frontend / Release frontend to production", "success")],
+                ),
+            ),
+            **self.workflow_runs("release-frontend.yml", ("2026-09-21T12:00:00Z", rollback)),
+        }
+        result = self.run_script("frontend", responses)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), rollback)
+
+        # An older lone dispatch loses to the orchestrated release.
+        responses.update(
+            self.workflow_runs("release-frontend.yml", ("2026-09-20T12:00:00Z", rollback))
+        )
+        result = self.run_script("frontend", responses)
+        self.assertEqual(result.stdout.strip(), orchestrated)
+
+    def test_falls_back_to_the_retired_single_workflow_then_to_nothing(self):
+        legacy = "1" * 40
+        responses = {
+            **self.orchestrated_runs(),
+            **self.workflow_runs("release-infrastructure.yml"),
+            **self.workflow_runs("deploy-prod.yml", ("2026-09-01T00:00:00Z", legacy)),
+        }
+        result = self.run_script("infrastructure", responses)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), legacy)
+
+        responses.update(self.workflow_runs("deploy-prod.yml"))
+        result = self.run_script("infrastructure", responses)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
+
+    def test_a_malformed_commit_is_never_reported(self):
+        responses = {
+            **self.orchestrated_runs(
+                (
+                    1,
+                    "2026-09-21T10:00:00Z",
+                    "not-a-sha",
+                    "workflow_run",
+                    [("backend / Release backend to production", "success")],
+                ),
+            ),
+            **self.workflow_runs("release-backend.yml"),
+        }
+        result = self.run_script("backend", responses)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
+
+
 class DeploymentContractTests(TestCase):
     def test_production_amplify_headers_ignore_only_formatting_drift(self):
         source = """
@@ -1110,14 +1326,16 @@ fi
 
 
 class ProductionReleaseWorkflowTests(TestCase):
-    """The split production releases keep their reviewed safety invariants."""
+    """The orchestrated production release keeps its reviewed safety invariants."""
 
     RELEASE_FILES = (
+        ".github/workflows/release.yml",
         ".github/workflows/release-backend.yml",
         ".github/workflows/release-frontend.yml",
         ".github/workflows/release-infrastructure.yml",
         ".github/actions/release-preflight/action.yml",
         ".github/actions/release-scope/action.yml",
+        "scripts/ci/last-successful-release.sh",
     )
 
     def copy_release_files(self, root: Path) -> None:
@@ -1130,7 +1348,16 @@ class ProductionReleaseWorkflowTests(TestCase):
     def test_repository_release_workflows_satisfy_contract(self):
         paths = production_release_paths()
         self.assertEqual(
-            sorted(paths), ["backend", "frontend", "infrastructure", "preflight", "scope-action"]
+            sorted(paths),
+            [
+                "backend",
+                "frontend",
+                "infrastructure",
+                "last-release",
+                "orchestrator",
+                "preflight",
+                "scope-action",
+            ],
         )
         for path in paths.values():
             self.assertTrue(path.exists(), path)
@@ -1140,11 +1367,13 @@ class ProductionReleaseWorkflowTests(TestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             errors = production_cd_errors(root)
+            self.assertIn("production release workflow is missing", errors)
             self.assertIn("backend release workflow is missing", errors)
             self.assertIn("frontend release workflow is missing", errors)
             self.assertIn("infrastructure release workflow is missing", errors)
             self.assertIn("release preflight action is missing", errors)
             self.assertIn("release scope action is missing", errors)
+            self.assertIn("last-successful-release script is missing", errors)
 
     def test_retired_single_release_workflow_is_rejected(self):
         with TemporaryDirectory() as directory:
@@ -1161,35 +1390,124 @@ class ProductionReleaseWorkflowTests(TestCase):
 
     def test_release_invariants_are_detected_when_removed(self):
         self.maxDiff = None
+        orchestrator = ".github/workflows/release.yml"
         backend = ".github/workflows/release-backend.yml"
         frontend = ".github/workflows/release-frontend.yml"
         infrastructure = ".github/workflows/release-infrastructure.yml"
         preflight = ".github/actions/release-preflight/action.yml"
         scope = ".github/actions/release-scope/action.yml"
+        last_release = "scripts/ci/last-successful-release.sh"
         release_sha = (
             "${{ github.event_name == 'workflow_run' && "
             "github.event.workflow_run.head_sha || github.sha }}"
         )
+        surface_sha = "${{ inputs.deploy-sha || github.sha }}"
         mutations = (
-            # Every workflow: triggers, gates, and credentials.
+            # The orchestrator: the only CI listener, credential-free scoping,
+            # and surfaces released side by side under one review.
             (
-                backend,
+                orchestrator,
                 "    branches: [main]\n  workflow_dispatch:",
                 "    branches: [develop]\n  workflow_dispatch:",
-                "backend release omits automatic release requests from CI runs on main",
+                "production release omits automatic release requests from CI runs on main",
             ),
             (
-                frontend,
+                orchestrator,
                 "github.event.workflow_run.event == 'push' &&",
                 "github.event.workflow_run.event == 'pull_request' &&",
-                "frontend release omits an automatic-release guard for successful push CI "
+                "production release omits an automatic-release guard for successful push CI "
                 "runs on main from this repository",
             ),
             (
+                orchestrator,
+                f"      DEPLOY_SHA: {release_sha}",
+                "      DEPLOY_SHA: ${{ github.sha }}",
+                "production release omits the release commit as the deploy SHA",
+            ),
+            (
+                orchestrator,
+                "          surface: frontend",
+                "          surface: backend",
+                "production release omits the no-credential frontend change scope",
+            ),
+            (
+                orchestrator,
+                "    if: ${{ needs.scope.outputs.infrastructure == 'true' }}",
+                "    if: ${{ always() }}",
+                "production release omits a infrastructure surface job that depends only on the "
+                "scope job, runs only when the infrastructure changed, and calls the "
+                "infrastructure workflow with the release commit",
+            ),
+            (
+                orchestrator,
+                f"      deploy-sha: {release_sha}\n"
+                "      trigger-event: ${{ github.event_name }}\n"
+                "      confirmation: ${{ inputs.confirmation }}\n\n  frontend:",
+                "      deploy-sha: ${{ github.sha }}\n"
+                "      trigger-event: ${{ github.event_name }}\n"
+                "      confirmation: ${{ inputs.confirmation }}\n\n  frontend:",
+                "production release omits a backend surface job that depends only on the scope "
+                "job, runs only when the backend changed, and calls the backend workflow with "
+                "the release commit",
+            ),
+            # A surface that waits for another surface would only reach its
+            # environment after the first finished and ask the reviewer again.
+            (
+                orchestrator,
+                "  frontend:\n    needs: scope\n",
+                "  frontend:\n    needs: [scope, backend]\n",
+                "production release retains a surface job that waits for another surface (it "
+                "would ask for a second approval)",
+            ),
+            (
+                orchestrator,
+                "    uses: ./.github/workflows/release-backend.yml\n",
+                "    environment:\n      name: AWS ECS - Prod\n"
+                "    uses: ./.github/workflows/release-backend.yml\n",
+                "production release retains an environment gate of its own",
+            ),
+            (
+                orchestrator,
+                "      - name: Checkout release commit with history\n",
+                "      - run: aws sts get-caller-identity\n"
+                "      - name: Checkout release commit with history\n",
+                "production release retains cloud credentials",
+            ),
+            (
+                orchestrator,
+                "cancel-in-progress: false",
+                "cancel-in-progress: true",
+                "production release omits non-cancelling release concurrency",
+            ),
+            # Every surface workflow: callable with the release commit, gated,
+            # and never listening to CI on its own.
+            (
+                backend,
+                "        description: github.event_name of the calling run "
+                "(workflow_run or workflow_dispatch)\n        required: true",
+                "        description: github.event_name of the calling run "
+                "(workflow_run or workflow_dispatch)\n        required: false",
+                "backend release omits the reusable-workflow inputs the orchestrator passes",
+            ),
+            (
+                frontend,
+                "  workflow_dispatch:\n    inputs:\n      confirmation:\n"
+                "        description: Type DEPLOY",
+                "  workflow_run:\n    workflows: [CI]\n  workflow_dispatch:\n    inputs:\n"
+                "      confirmation:\n        description: Type DEPLOY",
+                "frontend release retains its own CI trigger",
+            ),
+            (
                 infrastructure,
-                "if: ${{ needs.scope.outputs.release == 'true' }}",
-                "if: ${{ always() }}",
-                "infrastructure release omits a release job that only runs when its scope changed",
+                "    if: ${{ github.ref == 'refs/heads/main' }}",
+                "    if: ${{ always() }}",
+                "infrastructure release omits a release job restricted to main",
+            ),
+            (
+                infrastructure,
+                "    if: ${{ github.ref == 'refs/heads/main' }}",
+                "    needs: scope\n    if: ${{ github.ref == 'refs/heads/main' }}",
+                "infrastructure release retains a scope job of its own",
             ),
             (
                 backend,
@@ -1199,9 +1517,15 @@ class ProductionReleaseWorkflowTests(TestCase):
             ),
             (
                 frontend,
-                f"DEPLOY_SHA: {release_sha}",
+                f"DEPLOY_SHA: {surface_sha}",
                 "DEPLOY_SHA: ${{ github.sha }}",
-                "frontend release omits the release commit as the deploy SHA",
+                "frontend release omits the orchestrator's release commit as the deploy SHA",
+            ),
+            (
+                frontend,
+                "TRIGGER_EVENT: ${{ inputs.trigger-event || github.event_name }}",
+                "TRIGGER_EVENT: ${{ github.event_name }}",
+                "frontend release omits the calling run's trigger event for the shared preflight",
             ),
             (
                 infrastructure,
@@ -1217,23 +1541,30 @@ class ProductionReleaseWorkflowTests(TestCase):
                 "backend release omits the backend preflight scope",
             ),
             (
-                frontend,
-                "workflow-file: release-frontend.yml",
-                "workflow-file: release-backend.yml",
-                "frontend release omits its own workflow file in the scope comparison",
-            ),
-            (
                 infrastructure,
                 "cancel-in-progress: false",
                 "cancel-in-progress: true",
                 "infrastructure release omits non-cancelling release concurrency",
             ),
+            (
+                infrastructure,
+                "      group: release-infrastructure",
+                "      group: release-backend",
+                "infrastructure release omits its own release-job concurrency group",
+            ),
             # Backend: immutable images, guarded plan, workers, default admin.
             (
                 backend,
-                f"TF_VAR_backend_image_tag: {release_sha}",
+                f"TF_VAR_backend_image_tag: {surface_sha}",
                 "TF_VAR_backend_image_tag: latest",
                 "backend release omits the release commit as the backend image tag",
+            ),
+            (
+                backend,
+                'released="$(scripts/ci/last-successful-release.sh frontend)"',
+                'released="$DEPLOY_SHA"',
+                "backend release omits the fallback frontend held at the latest successful "
+                "frontend release",
             ),
             (
                 backend,
@@ -1505,15 +1836,44 @@ class ProductionReleaseWorkflowTests(TestCase):
             ),
             (
                 scope,
-                "runs?branch=main&status=success&per_page=1",
-                "runs?branch=main&per_page=1",
-                "release scope omits the last successful release as the diff base",
+                'base="$(scripts/ci/last-successful-release.sh "$RELEASE_SURFACE")"',
+                'base="$DEPLOY_SHA"',
+                "release scope omits the surface's last successful release as the diff base",
             ),
             (
                 scope,
                 'echo "release=false"',
                 'echo "release=true"',
                 "release scope omits a skip when nothing changed",
+            ),
+            # The shared release history: a surface's own job must have
+            # succeeded; a successful run in which it was skipped or a failed
+            # run in which it succeeded are not the same thing.
+            (
+                last_release,
+                '[ "$job_conclusion" = "success" ]',
+                '[ -n "$job_conclusion" ]',
+                "last-successful-release script omits a successful surface job, not a "
+                "successful run",
+            ),
+            (
+                last_release,
+                "runs?branch=main&status=completed",
+                "runs?branch=main&status=success",
+                "last-successful-release script omits the orchestrated release history",
+            ),
+            (
+                last_release,
+                'workflow_success "release-${surface}.yml"',
+                "true",
+                "last-successful-release script omits the surface workflow's own dispatch history",
+            ),
+            (
+                last_release,
+                "workflow_success deploy-prod.yml",
+                "true",
+                "last-successful-release script omits the retired single workflow's last "
+                "release as the initial base",
             ),
         )
         with TemporaryDirectory() as directory:

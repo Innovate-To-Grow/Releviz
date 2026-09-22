@@ -40,7 +40,21 @@ class ConfirmViewPerAppAccessTests(TestCase):
     def test_non_app_staff_gets_403_on_confirmation_views(self):
         for url_name in (CONFIRM_URL, "admin:core_awscredentialconfig_confirm_action"):
             with self.subTest(url_name=url_name):
-                self.assertEqual(self.client.get(reverse(url_name)).status_code, 403)
+                response = self.client.get(reverse(url_name))
+                self.assertEqual(response.status_code, 403)
+                # The branded 403 page shows the reason the view raised, not
+                # Django's bare "403 Forbidden".
+                self.assertTemplateUsed(response, "403.html")
+                self.assertContains(
+                    response,
+                    "You do not have permission to view AWS Credentials.",
+                    status_code=403,
+                )
+                self.assertNotContains(
+                    response,
+                    "You do not have permission to perform this action.",
+                    status_code=403,
+                )
 
     def test_app_staff_is_not_forbidden(self):
         self.outsider.admin_apps = ["core"]

@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/icons";
 import CreateEventClient from "@/components/event/CreateEventClient";
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
+import BlockedSlotsEditor from "@/components/schedule/BlockedSlotsEditor";
 import MeetingCalendar from "@/components/schedule/MeetingCalendar";
 import {
   selectionFromRecommendation,
@@ -84,6 +85,15 @@ function formatInTimezone(value, timezone) {
     // An unknown zone name: fall back to the browser's own zone.
     return date.toLocaleString();
   }
+}
+
+// Rows across every group of the stored `blockedSlots` map ({ key: [rows] }).
+function countBlockedSlots(blockedSlots) {
+  if (!blockedSlots || typeof blockedSlots !== "object") return 0;
+  return Object.values(blockedSlots).reduce(
+    (total, rows) => total + (Array.isArray(rows) ? rows.length : 0),
+    0,
+  );
 }
 
 function ChannelBadge({ channel, className = "" }) {
@@ -399,6 +409,12 @@ export function OverviewPanel({ event, onEventSaved }) {
   const [editing, setEditing] = useState(false);
   const [editingEvent, setEditingEvent] = useState(null);
   const [saveStatus, setSaveStatus] = useState("");
+  const blockedCount = countBlockedSlots(event.blockedSlots);
+  // Open on the page the organizer lands on right after creating the event
+  // (no blocks yet); decided once, so saving blocks does not collapse it.
+  const [blockedTimesOpen, setBlockedTimesOpen] = useState(
+    () => blockedCount === 0,
+  );
   const panelRef = useRef(null);
   const editorHeadingRef = useRef(null);
   const editLocked =
@@ -529,6 +545,43 @@ export function OverviewPanel({ event, onEventSaved }) {
           />
         </div>
       )}
+      <details
+        className="disclosure organizer-blocked-times mt-3"
+        aria-labelledby="organizer-blocked-times-heading"
+        open={blockedTimesOpen}
+        onToggle={(toggleEvent) =>
+          setBlockedTimesOpen(toggleEvent.currentTarget.open)
+        }
+      >
+        <summary className="organizer-blocked-times__summary">
+          <span className="disclosure__summary-copy">
+            <h4
+              id="organizer-blocked-times-heading"
+              className="h6 fw-semibold mb-0"
+            >
+              Blocked times
+            </h4>
+            <small className="text-secondary d-block">
+              {blockedCount} slots blocked
+            </small>
+          </span>
+          <span className="disclosure__chevron" aria-hidden="true">
+            <ChevronDownIcon />
+          </span>
+        </summary>
+        <div className="disclosure__content d-flex flex-column gap-3">
+          <p className="text-secondary mb-0">
+            Mark the parts of each day that are not available for this event.
+            Participants see these times greyed out.
+          </p>
+          <BlockedSlotsEditor
+            event={event}
+            onEventSaved={onEventSaved}
+            locked={editLocked}
+            lockReason={editLockReason}
+          />
+        </div>
+      </details>
     </Panel>
   );
 }
@@ -760,24 +813,37 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
   const [now, setNow] = useState(() => Date.now());
   const sectionRef = useRef(null);
   const calendarRef = useRef(null);
+  // The freshness of the snapshot on screen, for the workspace's live sync to
+  // compare against its activity poll. Null until the first successful load.
+  const shownRef = useRef(null);
 
+  // A silent load (the workspace's live sync) swaps the snapshot in place:
+  // no loading hint, and a failure is reported to the caller, not the panel.
   const load = useCallback(
-    async (providedToken, { throwOnError = false } = {}) => {
-      setLoading(true);
+    async (providedToken, { throwOnError = false, silent = false } = {}) => {
+      if (!silent) setLoading(true);
       try {
         const token =
           providedToken === undefined ? await getToken() : providedToken;
         const data = await fetchEventResults(event.code, token);
-        setSnapshot(resultEnvelope(data));
+        const envelope = resultEnvelope(data);
+        shownRef.current = {
+          status: envelope.status,
+          requestedRevision: envelope.requestedRevision ?? null,
+          computedRevision: envelope.computedRevision ?? null,
+          generatedAt: envelope.generatedAt ?? null,
+        };
+        setSnapshot(envelope);
         setNow(Date.now());
         setError("");
         return data;
       } catch (requestError) {
-        setError(requestError.message || "Unable to load results.");
+        if (!silent)
+          setError(requestError.message || "Unable to load results.");
         if (throwOnError) throw requestError;
         return null;
       } finally {
-        setLoading(false);
+        if (!silent) setLoading(false);
       }
     },
     [event.code, getToken],
@@ -786,7 +852,9 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
   useImperativeHandle(
     forwardedRef,
     () => ({
-      refresh: (token) => load(token, { throwOnError: true }),
+      refresh: (token, { silent = false } = {}) =>
+        load(token, { throwOnError: true, silent }),
+      activity: () => shownRef.current,
     }),
     [load],
   );
@@ -829,6 +897,11 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
 
   const results = snapshot.results || null;
   const recommendations = (results?.recommendations || []).slice(0, 10);
+  // Snapshots computed before blocking shipped lack the key; the calendar
+  // greys cells from `event.slotGroups` either way, so this is only a note.
+  const blockedSlotIndices = Array.isArray(results?.blockedSlotIndices)
+    ? results.blockedSlotIndices
+    : [];
   const meetingMinutes = event.meetingDurationMinutes || event.slotMinutes;
   const mixed = event.mode === "mixed";
   const activeChannel = mixed ? channel : defaultChannel(event);
@@ -900,6 +973,12 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
               : ""}
             .
           </Alert>
+        )}
+        {blockedSlotIndices.length > 0 && (
+          <p className="text-secondary small mb-0">
+            {blockedSlotIndices.length} blocked slots are excluded from these
+            results.
+          </p>
         )}
 
         <div className="meeting-results">

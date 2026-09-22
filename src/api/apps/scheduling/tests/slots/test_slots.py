@@ -14,6 +14,7 @@ from apps.scheduling.services.slots import (
     EventSlotGroup,
     SlotConfigurationError,
     api_slot_groups,
+    blocked_slot_indices,
     build_event_slot_groups,
     event_slot_count,
     event_window_duration_minutes,
@@ -34,12 +35,85 @@ def event(**changes):
         "timezone": "UTC",
         "mode": "inperson",
         "location": "",
+        "blocked_slots": {},
     }
     values.update(changes)
     return SimpleNamespace(**values)
 
 
 class SlotDomainEdgeTests(SimpleTestCase):
+    def test_blocked_rows_flag_slots_per_group_without_changing_indices(self):
+        weekly = event(days=[3, 1], blocked_slots={"weekday:3": [1], "weekday:5": [0]})
+        groups = build_event_slot_groups(weekly)
+        self.assertEqual([group.key for group in groups], ["weekday:1", "weekday:3"])
+        self.assertEqual(
+            [(slot.index, slot.blocked) for group in groups for slot in group.slots],
+            [(0, False), (1, False), (2, False), (3, True)],
+        )
+        self.assertEqual(event_slot_count(weekly), 4)
+        self.assertEqual(blocked_slot_indices(weekly), frozenset({3}))
+        api_slots = api_slot_groups(weekly)[1]["slots"]
+        self.assertEqual([slot["blocked"] for slot in api_slots], [False, True])
+
+        # Fall-back dates repeat 01:00 and 01:30 with a different fold; the row
+        # position tells the two apart where a minute-of-day never could.
+        fall_back = event(
+            start_minutes=0,
+            end_minutes=3 * 60,
+            timezone="America/Los_Angeles",
+            day_selection_type="specific_dates",
+            specific_dates=["2026-11-01"],
+            blocked_slots={"date:2026-11-01": [4, 2]},
+        )
+        fall_slots = build_event_slot_groups(fall_back)[0].slots
+        self.assertEqual(len(fall_slots), 8)
+        blocked_fall = [slot for slot in fall_slots if slot.blocked]
+        self.assertEqual(
+            [(slot.index, slot.local_start, slot.fold) for slot in blocked_fall],
+            [(2, "01:00", 0), (4, "01:00", 1)],
+        )
+        self.assertEqual(
+            [slot.as_api()["blocked"] for slot in fall_slots[2:5]], [True, False, True]
+        )
+        self.assertEqual(blocked_slot_indices(fall_back), frozenset({2, 4}))
+
+        spring_forward = event(
+            start_minutes=60,
+            end_minutes=4 * 60,
+            timezone="America/Los_Angeles",
+            day_selection_type="specific_dates",
+            specific_dates=["2026-03-08"],
+            blocked_slots={"date:2026-03-08": [1]},
+        )
+        spring_slots = build_event_slot_groups(spring_forward)[0].slots
+        self.assertEqual(
+            [(slot.local_start, slot.local_end, slot.blocked) for slot in spring_slots],
+            [
+                ("01:00", "01:30", False),
+                ("01:30", "03:00", True),
+                ("03:00", "03:30", False),
+                ("03:30", "04:00", False),
+            ],
+        )
+
+        for candidate in (weekly, fall_back, spring_forward):
+            with self.subTest(candidate=candidate):
+                materialized = sum(len(group.slots) for group in build_event_slot_groups(candidate))
+                self.assertEqual(event_slot_count(candidate), materialized)
+                indices = [
+                    slot.index
+                    for group in build_event_slot_groups(candidate)
+                    for slot in group.slots
+                ]
+                self.assertEqual(indices, list(range(materialized)))
+
+    def test_blocked_slot_indices_tolerates_doubles_without_the_field(self):
+        bare = event()
+        del bare.blocked_slots
+        self.assertEqual(blocked_slot_indices(bare), frozenset())
+        self.assertFalse(any(slot.blocked for slot in build_event_slot_groups(bare)[0].slots))
+        self.assertEqual(blocked_slot_indices(event(blocked_slots=None)), frozenset())
+
     def test_fast_slot_count_matches_materialized_weekly_date_and_dst_geometry(self):
         candidates = [
             event(days=[3, 1, 3]),

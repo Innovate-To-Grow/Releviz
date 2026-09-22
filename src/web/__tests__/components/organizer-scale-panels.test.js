@@ -40,6 +40,7 @@ jest.mock("@/components/event/CreateEventClient", () => ({
   ),
 }));
 
+jest.mock("@/components/auth/AuthContext", () => ({ useAuth: jest.fn() }));
 jest.mock("@/lib/api/events", () => ({
   confirmFinalMeeting: jest.fn(),
   downloadFinalCalendar: jest.fn(),
@@ -48,9 +49,13 @@ jest.mock("@/lib/api/events", () => ({
   previewFinalMeeting: jest.fn(),
   retryDeliveryRequest: jest.fn(),
   sendReminders: jest.fn(),
+  updateEvent: jest.fn(),
   updateEventLifecycle: jest.fn(),
 }));
+jest.mock("@/lib/navigation", () => ({ reloadPage: jest.fn() }));
 
+import { useAuth } from "@/components/auth/AuthContext";
+import BlockedSlotsEditor from "@/components/schedule/BlockedSlotsEditor";
 import {
   DeliveryRequestProgress,
   EventControls,
@@ -59,6 +64,7 @@ import {
   ResultsSnapshotPanel,
 } from "@/components/schedule/OrganizerScalePanels";
 import {
+  LiveSyncStatus,
   ManagedScheduleDrawer,
   OrganizerHeader,
 } from "@/components/schedule/OrganizerPanels";
@@ -70,8 +76,10 @@ import {
   previewFinalMeeting,
   retryDeliveryRequest,
   sendReminders,
+  updateEvent,
   updateEventLifecycle,
 } from "@/lib/api/events";
+import { reloadPage } from "@/lib/navigation";
 import {
   formatWeekLabel,
   localDateOf,
@@ -158,6 +166,7 @@ function renderDrawer(overrides = {}) {
 beforeEach(() => {
   jest.resetAllMocks();
   getToken.mockResolvedValue("token");
+  useAuth.mockReturnValue({ getToken });
   Object.defineProperty(globalThis, "crypto", {
     configurable: true,
     value: { randomUUID: jest.fn().mockReturnValue("request-key") },
@@ -299,6 +308,69 @@ test("organizer header keeps lifecycle controls beside the workspace refresh act
   expect(
     within(actions).getByRole("button", { name: "Refreshing…" }),
   ).toHaveAttribute("aria-busy", "true");
+});
+
+test("organizer header states whether new responses are loading on their own", () => {
+  const { rerender } = render(
+    <OrganizerHeader event={baseEvent} onRefresh={jest.fn()} />,
+  );
+  // Not syncing (the event is not active): no live line at all.
+  expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  expect(screen.queryByText("Live")).not.toBeInTheDocument();
+
+  rerender(
+    <OrganizerHeader
+      event={baseEvent}
+      onRefresh={jest.fn()}
+      live={{ error: "", updatedAt: null }}
+    />,
+  );
+  expect(screen.getByText("Live")).toBeInTheDocument();
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "New responses load automatically.",
+  );
+  expect(screen.queryByText(/^Updated /)).not.toBeInTheDocument();
+
+  // The last time the workspace changed because of a sync sits outside the
+  // announced status text, as a machine-readable time.
+  const updatedAt = Date.parse("2026-08-20T08:05:00Z");
+  rerender(
+    <OrganizerHeader
+      event={baseEvent}
+      onRefresh={jest.fn()}
+      live={{ error: "", updatedAt }}
+    />,
+  );
+  const stamp = screen.getByText(/^Updated /);
+  expect(stamp.tagName).toBe("TIME");
+  expect(stamp).toHaveAttribute("dateTime", "2026-08-20T08:05:00.000Z");
+  expect(stamp).toHaveTextContent(
+    `Updated ${new Date(updatedAt).toLocaleTimeString([], {
+      hour: "numeric",
+      minute: "2-digit",
+    })}`,
+  );
+  expect(screen.getByRole("status")).not.toHaveTextContent("Updated");
+
+  rerender(
+    <OrganizerHeader
+      event={baseEvent}
+      onRefresh={jest.fn()}
+      live={{
+        error: "New responses could not be loaded automatically (offline).",
+        updatedAt,
+      }}
+    />,
+  );
+  expect(screen.getByText("Live updates paused")).toBeInTheDocument();
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "New responses could not be loaded automatically (offline). Use Refresh to load new responses.",
+  );
+  expect(screen.getByText(/^Updated /)).toBeInTheDocument();
+
+  expect(
+    render(<LiveSyncStatus live={null} />).container,
+  ).toBeEmptyDOMElement();
 });
 
 test("managed schedule drawer is a labelled modal dialog that traps focus and closes on Escape", async () => {
@@ -1497,6 +1569,100 @@ test("results refresh through the workspace handle and show a finalized event's 
   expect(fetchEventResults).toHaveBeenCalledTimes(2);
 });
 
+test("results hand the workspace their freshness and reload silently for it", async () => {
+  fetchEventResults.mockResolvedValue({
+    status: "fresh",
+    requestedRevision: 7,
+    computedRevision: 7,
+    generatedAt: "2026-08-19T12:00:00Z",
+    results: { recommendations: [] },
+  });
+  const panel = createRef();
+  render(
+    <ResultsSnapshotPanel
+      ref={panel}
+      event={baseEvent}
+      setEvent={jest.fn()}
+      getToken={getToken}
+      onChoose={jest.fn()}
+      onSelect={jest.fn()}
+    />,
+  );
+  // Nothing to compare against before the first load lands.
+  expect(panel.current.activity()).toBeNull();
+  await screen.findByText(/Results are current at revision 7/);
+  expect(panel.current.activity()).toEqual({
+    status: "fresh",
+    requestedRevision: 7,
+    computedRevision: 7,
+    generatedAt: "2026-08-19T12:00:00Z",
+  });
+  // Named once in the collapsed summary and once in the empty state.
+  expect(screen.getAllByText("No recommendation yet")).toHaveLength(2);
+
+  // A silent reload never flips the empty state into "calculating" while it
+  // is in flight; it just swaps the snapshot in when it lands.
+  let release;
+  fetchEventResults.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  );
+  let silent;
+  act(() => {
+    silent = panel.current.refresh("token", { silent: true });
+  });
+  expect(screen.getAllByText("No recommendation yet")).toHaveLength(2);
+  expect(
+    screen.queryByText("Calculating the best options"),
+  ).not.toBeInTheDocument();
+  await act(async () => {
+    release({
+      status: "refreshing",
+      requestedRevision: 8,
+      computedRevision: 7,
+      generatedAt: "2026-08-19T12:00:00Z",
+      results: { recommendations: [] },
+    });
+    await silent;
+  });
+  expect(
+    screen.getByText(/Results are updating for revision 8/),
+  ).toBeInTheDocument();
+  expect(panel.current.activity()).toEqual({
+    status: "refreshing",
+    requestedRevision: 8,
+    computedRevision: 7,
+    generatedAt: "2026-08-19T12:00:00Z",
+  });
+
+  // A silent failure is reported to the caller, not shown in the panel, and
+  // the snapshot on screen is kept.
+  fetchEventResults.mockRejectedValueOnce(new Error("offline"));
+  await act(async () => {
+    await expect(
+      panel.current.refresh("token", { silent: true }),
+    ).rejects.toThrow("offline");
+  });
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(
+    screen.getByText(/Results are updating for revision 8/),
+  ).toBeInTheDocument();
+
+  // A legacy envelope without freshness fields reports nulls for them.
+  fetchEventResults.mockResolvedValueOnce({ results: { recommendations: [] } });
+  await act(async () => {
+    await panel.current.refresh("token", { silent: true });
+  });
+  expect(panel.current.activity()).toEqual({
+    status: "fresh",
+    requestedRevision: null,
+    computedRevision: null,
+    generatedAt: null,
+  });
+});
+
 test("the ranked list is collapsed by default and summarizes the best window", async () => {
   fetchEventResults.mockResolvedValue({
     status: "fresh",
@@ -1597,4 +1763,686 @@ test("the ranked list explains an empty or still-computing snapshot", async () =
       screen.getByRole("complementary", { name: "Ranked windows" }),
     ).toHaveTextContent("No recommendation yet"),
   );
+});
+
+// The API shape of `weeklyEvent` with `slotCount` and per-slot `blocked`
+// flags derived from a `blockedSlots` map ({ groupKey: [rows] }).
+function blockedWeeklyEvent(blockedSlots = {}, overrides = {}) {
+  return {
+    ...weeklyEvent,
+    slotCount: 8,
+    blockedSlots,
+    slotGroups: weeklyEvent.slotGroups.map((group) => ({
+      ...group,
+      slots: group.slots.map((slot, row) => ({
+        ...slot,
+        blocked: (blockedSlots[group.key] || []).includes(row),
+      })),
+    })),
+    ...overrides,
+  };
+}
+
+// Stores saved events like the workspace does, so a save or a conflict
+// reload re-renders the overview with the newer event.
+function StatefulOverview({ initialEvent, onEventSaved }) {
+  const [event, setEvent] = useState(initialEvent);
+  const handleSaved = async (result) => {
+    onEventSaved?.(result);
+    if (result?.event) setEvent(result.event);
+  };
+  return <OverviewPanel event={event} onEventSaved={handleSaved} />;
+}
+
+// The disclosure is found by its class (not its heading text) and toggled
+// through its summary; the editor grid carries the same accessible name
+// without rendering a second heading.
+const blockedTimesDetails = () =>
+  document.querySelector("details.organizer-blocked-times");
+const blockedTimesSummary = () =>
+  blockedTimesDetails().querySelector("summary");
+const editorGrid = () => screen.getByRole("grid", { name: "Blocked times" });
+const editorCell = (index) =>
+  editorGrid().querySelector(`[data-cell-idx="${index}"]`);
+const paintCell = (index) =>
+  fireEvent.pointerDown(editorCell(index), {
+    button: 0,
+    pointerId: 1,
+    pointerType: "mouse",
+  });
+const saveButton = () =>
+  screen.getByRole("button", { name: "Save blocked times" });
+const DISCARDED_MESSAGE =
+  "Unsaved blocked-time marks were discarded because the event changed.";
+
+test("overview opens the blocked-times editor by default until the event has blocks", () => {
+  const { unmount } = render(
+    <OverviewPanel event={weeklyEvent} onEventSaved={jest.fn()} />,
+  );
+
+  const details = blockedTimesDetails();
+  expect(details).toHaveAttribute("open");
+  expect(details).toHaveAttribute(
+    "aria-labelledby",
+    "organizer-blocked-times-heading",
+  );
+  expect(
+    within(details.querySelector("summary")).getByRole("heading", {
+      level: 4,
+      name: "Blocked times",
+    }),
+  ).toHaveAttribute("id", "organizer-blocked-times-heading");
+  expect(details).toHaveTextContent("0 slots blocked");
+  expect(
+    screen.getByText(
+      "Mark the parts of each day that are not available for this event. Participants see these times greyed out.",
+    ),
+  ).toBeInTheDocument();
+  expect(editorGrid()).toBeInTheDocument();
+  // The grid is named without a second visible "Blocked times" heading.
+  expect(
+    screen.getAllByRole("heading", { level: 4, name: "Blocked times" }),
+  ).toHaveLength(1);
+  expect(
+    screen.getByRole("group", { name: "Mark times as" }),
+  ).toBeInTheDocument();
+  // The brushes carry a visible label and a swatch each, like every other
+  // "Mark times as" toolbar.
+  expect(screen.getByText("Mark times as")).toHaveClass(
+    "schedule-toolbar__label",
+  );
+  expect(
+    screen
+      .getByRole("button", { name: "Blocked" })
+      .querySelector(".availability-swatch--blocked-paint"),
+  ).toHaveTextContent("✕");
+  expect(
+    screen
+      .getByRole("button", { name: "Open" })
+      .querySelector(".availability-swatch--open"),
+  ).toBeEmptyDOMElement();
+  expect(screen.getByRole("button", { name: "Blocked" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  expect(screen.getByRole("button", { name: "Open" })).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+  // Nothing to save yet: the marks match the stored (empty) blocks.
+  expect(saveButton()).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Clear all" })).toBeEnabled();
+  expect(screen.getByText("0 slots marked")).not.toHaveAttribute("role");
+  unmount();
+
+  // The API always emits `blockedSlots: {}` for a fresh event (truthy, but
+  // empty), which must also open the disclosure.
+  const { unmount: unmountEmpty } = render(
+    <OverviewPanel event={blockedWeeklyEvent({})} onEventSaved={jest.fn()} />,
+  );
+  expect(blockedTimesDetails()).toHaveAttribute("open");
+  expect(blockedTimesDetails()).toHaveTextContent("0 slots blocked");
+  expect(saveButton()).toBeDisabled();
+  unmountEmpty();
+
+  render(
+    <OverviewPanel
+      event={blockedWeeklyEvent({ "weekday:1": [1], "weekday:3": [2] })}
+      onEventSaved={jest.fn()}
+    />,
+  );
+  expect(blockedTimesDetails()).not.toHaveAttribute("open");
+  expect(blockedTimesDetails()).toHaveTextContent("2 slots blocked");
+  // The stored blocks hydrate the marks (slot 1 on Mon, slot 6 on Wed).
+  expect(editorCell(1)).toHaveAttribute("data-blocked-paint", "true");
+  expect(editorCell(6)).toHaveAttribute("data-blocked-paint", "true");
+  expect(editorCell(0)).toHaveAttribute("data-blocked-paint", "false");
+  expect(screen.getByText("2 slots marked")).toBeInTheDocument();
+});
+
+test("overview counts blocked rows defensively and keeps the disclosure controlled", async () => {
+  const { unmount } = render(
+    <OverviewPanel
+      event={{ ...weeklyEvent, blockedSlots: "not-a-map" }}
+      onEventSaved={jest.fn()}
+    />,
+  );
+  expect(blockedTimesDetails()).toHaveTextContent("0 slots blocked");
+  expect(blockedTimesDetails()).toHaveAttribute("open");
+
+  // Toggling the summary updates the controlled state.
+  await userEvent.click(blockedTimesSummary());
+  expect(blockedTimesDetails()).not.toHaveAttribute("open");
+  await userEvent.click(blockedTimesSummary());
+  expect(blockedTimesDetails()).toHaveAttribute("open");
+  unmount();
+
+  render(
+    <OverviewPanel
+      event={{
+        ...weeklyEvent,
+        blockedSlots: { "weekday:1": "rows?", "weekday:3": [0, 3] },
+      }}
+      onEventSaved={jest.fn()}
+    />,
+  );
+  expect(blockedTimesDetails()).toHaveTextContent("2 slots blocked");
+  expect(blockedTimesDetails()).not.toHaveAttribute("open");
+});
+
+test("blocked times editor paints, saves the marked rows, and re-hydrates from the saved event", async () => {
+  const onEventSaved = jest.fn();
+  const savedEvent = blockedWeeklyEvent(
+    { "weekday:1": [0] },
+    { version: weeklyEvent.version + 1 },
+  );
+  let resolveSave;
+  updateEvent.mockReturnValue(
+    new Promise((resolve) => {
+      resolveSave = resolve;
+    }),
+  );
+  // `weeklyEvent` omits `slotCount`: the marks fall back to the highest
+  // slot index.
+  render(
+    <StatefulOverview initialEvent={weeklyEvent} onEventSaved={onEventSaved} />,
+  );
+
+  paintCell(0);
+  expect(editorCell(0)).toHaveAttribute("data-blocked-paint", "true");
+  expect(editorCell(0)).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByText("1 slots marked")).toBeInTheDocument();
+  expect(saveButton()).toBeEnabled();
+
+  await userEvent.click(saveButton());
+
+  const savingButton = await screen.findByRole("button", { name: "Saving…" });
+  expect(savingButton).toBeDisabled();
+  expect(savingButton).toHaveAttribute("aria-busy", "true");
+  expect(editorGrid()).toHaveAttribute("aria-readonly", "true");
+  expect(screen.getByRole("button", { name: "Clear all" })).toBeDisabled();
+  expect(updateEvent).toHaveBeenCalledWith(
+    "SCALE1",
+    { blockedSlots: { "weekday:1": [0] }, expectedVersion: 4 },
+    "token",
+  );
+
+  await act(async () => {
+    resolveSave({ event: savedEvent, responsesReset: 0 });
+  });
+
+  expect(onEventSaved).toHaveBeenCalledWith({
+    event: savedEvent,
+    responsesReset: 0,
+  });
+  expect(await screen.findByRole("status")).toHaveTextContent(
+    "Blocked times saved.",
+  );
+  // The stored event now carries the block, so there is nothing to save,
+  // and the disclosure stays open because it was decided once on mount.
+  expect(editorCell(0)).toHaveAttribute("data-blocked-paint", "true");
+  expect(saveButton()).toBeDisabled();
+  expect(editorGrid()).not.toHaveAttribute("aria-readonly");
+  expect(blockedTimesDetails()).toHaveTextContent("1 slots blocked");
+  expect(blockedTimesDetails()).toHaveAttribute("open");
+
+  // Painting again clears the status.
+  paintCell(3);
+  expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  expect(screen.getByText("2 slots marked")).toBeInTheDocument();
+  expect(saveButton()).toBeEnabled();
+});
+
+test("blocked times editor unmarks with the Open brush and clears every mark", async () => {
+  updateEvent.mockResolvedValue({ event: weeklyEvent });
+  render(
+    <OverviewPanel
+      event={blockedWeeklyEvent({ "weekday:1": [1], "weekday:3": [2] })}
+      onEventSaved={jest.fn()}
+    />,
+  );
+  expect(saveButton()).toBeDisabled();
+
+  await userEvent.click(screen.getByRole("button", { name: "Open" }));
+  expect(screen.getByRole("button", { name: "Open" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  expect(screen.getByRole("button", { name: "Blocked" })).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+  paintCell(1);
+  expect(editorCell(1)).toHaveAttribute("data-blocked-paint", "false");
+  expect(screen.getByText("1 slots marked")).toBeInTheDocument();
+  expect(saveButton()).toBeEnabled();
+  // Painting an already open slot with the Open brush changes nothing.
+  paintCell(1);
+  expect(screen.getByText("1 slots marked")).toBeInTheDocument();
+
+  // Restoring the stored block leaves nothing to save again.
+  await userEvent.click(screen.getByRole("button", { name: "Blocked" }));
+  paintCell(1);
+  expect(editorCell(1)).toHaveAttribute("data-blocked-paint", "true");
+  expect(saveButton()).toBeDisabled();
+
+  await userEvent.click(screen.getByRole("button", { name: "Clear all" }));
+  expect(screen.getByText("0 slots marked")).toBeInTheDocument();
+  expect(
+    editorGrid().querySelectorAll('[data-blocked-paint="true"]'),
+  ).toHaveLength(0);
+  expect(saveButton()).toBeEnabled();
+
+  await userEvent.click(saveButton());
+  await waitFor(() =>
+    expect(updateEvent).toHaveBeenCalledWith(
+      "SCALE1",
+      { blockedSlots: {}, expectedVersion: 4 },
+      "token",
+    ),
+  );
+  expect(await screen.findByRole("status")).toHaveTextContent(
+    "Blocked times saved.",
+  );
+});
+
+test("blocked times editor recovers from a conflict by loading the newer event", async () => {
+  const onEventSaved = jest.fn();
+  const newerEvent = blockedWeeklyEvent(
+    { "weekday:3": [3] },
+    { version: weeklyEvent.version + 5 },
+  );
+  updateEvent.mockRejectedValueOnce(
+    Object.assign(new Error("Version mismatch"), {
+      status: 409,
+      event: newerEvent,
+    }),
+  );
+  render(
+    <StatefulOverview initialEvent={weeklyEvent} onEventSaved={onEventSaved} />,
+  );
+
+  paintCell(0);
+  await userEvent.click(saveButton());
+
+  const alert = await screen.findByRole("alert");
+  expect(alert).toHaveTextContent(
+    "The event changed in another session. Reload and try again.",
+  );
+  expect(onEventSaved).not.toHaveBeenCalled();
+  await userEvent.click(
+    within(alert).getByRole("button", { name: "Reload latest event" }),
+  );
+
+  expect(onEventSaved).toHaveBeenCalledWith({ event: newerEvent });
+  expect(reloadPage).not.toHaveBeenCalled();
+  await waitFor(() =>
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
+  );
+  // The unsaved mark gave way to the newer event's blocks.
+  expect(editorCell(0)).toHaveAttribute("data-blocked-paint", "false");
+  expect(editorCell(7)).toHaveAttribute("data-blocked-paint", "true");
+  expect(screen.getByText("1 slots marked")).toBeInTheDocument();
+  expect(blockedTimesDetails()).toHaveTextContent("1 slots blocked");
+  expect(saveButton()).toBeDisabled();
+});
+
+test("blocked times editor keeps unsaved marks across an inline event edit", async () => {
+  const onEventSaved = jest.fn();
+  updateEvent.mockImplementation(async (_code, payload) => ({
+    event: blockedWeeklyEvent(payload.blockedSlots, {
+      name: "Updated scale event",
+      version: payload.expectedVersion + 1,
+    }),
+    responsesReset: 0,
+  }));
+  render(
+    <StatefulOverview
+      initialEvent={blockedWeeklyEvent()}
+      onEventSaved={onEventSaved}
+    />,
+  );
+
+  paintCell(0);
+  paintCell(5);
+  expect(screen.getByText("2 slots marked")).toBeInTheDocument();
+
+  // Renaming through the inline editor bumps `version` but leaves the index
+  // space and the stored blocks alone, so the paint survives.
+  await userEvent.click(screen.getByRole("button", { name: "Edit event" }));
+  await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+  expect(await screen.findByText("Event changes saved.")).toBeInTheDocument();
+  expect(onEventSaved).toHaveBeenCalledWith(
+    expect.objectContaining({
+      event: expect.objectContaining({ version: 5 }),
+    }),
+  );
+  expect(editorCell(0)).toHaveAttribute("data-blocked-paint", "true");
+  expect(editorCell(5)).toHaveAttribute("data-blocked-paint", "true");
+  expect(screen.getByText("2 slots marked")).toBeInTheDocument();
+  expect(saveButton()).toBeEnabled();
+  expect(screen.queryByText(DISCARDED_MESSAGE)).not.toBeInTheDocument();
+
+  // ...and the fresh version flows into the save, which then stores exactly
+  // what was painted: nothing is discarded.
+  await userEvent.click(saveButton());
+  await waitFor(() =>
+    expect(updateEvent).toHaveBeenCalledWith(
+      "SCALE1",
+      {
+        blockedSlots: { "weekday:1": [0], "weekday:3": [1] },
+        expectedVersion: 5,
+      },
+      "token",
+    ),
+  );
+  expect(await screen.findByText("Blocked times saved.")).toBeInTheDocument();
+  expect(screen.queryByText(DISCARDED_MESSAGE)).not.toBeInTheDocument();
+  expect(editorCell(0)).toHaveAttribute("data-blocked-paint", "true");
+  expect(editorCell(5)).toHaveAttribute("data-blocked-paint", "true");
+  expect(saveButton()).toBeDisabled();
+  expect(blockedTimesDetails()).toHaveTextContent("2 slots blocked");
+});
+
+test("blocked times editor announces unsaved marks it discards for a changed event", () => {
+  const stored = blockedWeeklyEvent({ "weekday:1": [1] });
+  // The same days renamed Tue/Thu: the slot count is unchanged, so rows
+  // would silently move onto other days.
+  const renamedDays = {
+    ...blockedWeeklyEvent({}, { version: 10 }),
+    slotGroups: weeklyEvent.slotGroups.map((group, groupIndex) => ({
+      ...group,
+      key: `weekday:${[2, 4][groupIndex]}`,
+      label: ["Tue", "Thu"][groupIndex],
+      weekday: [2, 4][groupIndex],
+    })),
+  };
+  const { rerender } = render(
+    <OverviewPanel event={stored} onEventSaved={jest.fn()} />,
+  );
+  paintCell(0);
+  expect(screen.getByText("2 slots marked")).toBeInTheDocument();
+
+  // A workspace refresh that returns the same schedule and blocks (a fresh
+  // object with a newer version) leaves the paint alone.
+  rerender(
+    <OverviewPanel
+      event={{
+        ...stored,
+        version: stored.version + 1,
+        slotGroups: stored.slotGroups.map((group) => ({ ...group })),
+      }}
+      onEventSaved={jest.fn()}
+    />,
+  );
+  expect(editorCell(0)).toHaveAttribute("data-blocked-paint", "true");
+  expect(screen.getByText("2 slots marked")).toBeInTheDocument();
+  expect(screen.queryByRole("status")).not.toBeInTheDocument();
+
+  // Another session changed the blocks: they replace the paint, with a note.
+  rerender(
+    <OverviewPanel
+      event={blockedWeeklyEvent({ "weekday:3": [2] }, { version: 9 })}
+      onEventSaved={jest.fn()}
+    />,
+  );
+  expect(editorCell(0)).toHaveAttribute("data-blocked-paint", "false");
+  expect(editorCell(1)).toHaveAttribute("data-blocked-paint", "false");
+  expect(editorCell(6)).toHaveAttribute("data-blocked-paint", "true");
+  expect(screen.getByRole("status")).toHaveTextContent(DISCARDED_MESSAGE);
+  expect(screen.getByRole("status")).toHaveClass("alert-warning");
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(screen.getByText("1 slots marked")).toBeInTheDocument();
+  expect(saveButton()).toBeDisabled();
+
+  // Painting again clears the note.
+  paintCell(3);
+  expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  expect(screen.getByText("2 slots marked")).toBeInTheDocument();
+
+  // A schedule edit that changes the index space resets the marks too.
+  rerender(<OverviewPanel event={renamedDays} onEventSaved={jest.fn()} />);
+  expect(editorCell(3)).toHaveAttribute("data-blocked-paint", "false");
+  expect(editorCell(6)).toHaveAttribute("data-blocked-paint", "false");
+  expect(screen.getByRole("status")).toHaveTextContent(DISCARDED_MESSAGE);
+  expect(screen.getByText("0 slots marked")).toBeInTheDocument();
+
+  // With nothing unsaved, a change of blocks re-hydrates quietly.
+  rerender(
+    <OverviewPanel
+      event={{
+        ...renamedDays,
+        version: 11,
+        blockedSlots: { "weekday:2": [0] },
+        slotGroups: renamedDays.slotGroups.map((group) => ({
+          ...group,
+          slots: group.slots.map((slot) => ({
+            ...slot,
+            blocked: group.key === "weekday:2" && slot.index === 0,
+          })),
+        })),
+      }}
+      onEventSaved={jest.fn()}
+    />,
+  );
+  expect(editorCell(0)).toHaveAttribute("data-blocked-paint", "true");
+  expect(screen.getByText("1 slots marked")).toBeInTheDocument();
+  expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  expect(saveButton()).toBeDisabled();
+});
+
+test("blocked times editor reloads the page for a conflict without the newer event", async () => {
+  const onEventSaved = jest.fn();
+  updateEvent.mockRejectedValueOnce(
+    Object.assign(new Error("Version mismatch"), { status: 409 }),
+  );
+  render(<OverviewPanel event={weeklyEvent} onEventSaved={onEventSaved} />);
+
+  paintCell(2);
+  await userEvent.click(saveButton());
+
+  const alert = await screen.findByRole("alert");
+  await userEvent.click(
+    within(alert).getByRole("button", { name: "Reload latest event" }),
+  );
+  expect(reloadPage).toHaveBeenCalledTimes(1);
+  expect(onEventSaved).not.toHaveBeenCalled();
+  // Whatever was painted stays until the page reloads.
+  expect(editorCell(2)).toHaveAttribute("data-blocked-paint", "true");
+});
+
+test("blocked times editor surfaces other failures without a reload action", async () => {
+  updateEvent
+    .mockRejectedValueOnce(
+      Object.assign(new Error("Blocked slots leave no open window."), {
+        status: 400,
+      }),
+    )
+    .mockRejectedValueOnce(
+      Object.assign(new Error("Responses would be reset."), {
+        status: 409,
+        requiresResponseReset: true,
+        event: weeklyEvent,
+      }),
+    )
+    .mockRejectedValueOnce(Object.assign(new Error(""), { status: 500 }));
+  render(<OverviewPanel event={weeklyEvent} onEventSaved={jest.fn()} />);
+
+  paintCell(4);
+  await userEvent.click(saveButton());
+  let alert = await screen.findByRole("alert");
+  expect(alert).toHaveTextContent("Blocked slots leave no open window.");
+  expect(
+    within(alert).queryByRole("button", { name: "Reload latest event" }),
+  ).not.toBeInTheDocument();
+  // Painting again clears the failure.
+  paintCell(5);
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+  // A 409 demanding a reset cannot come from blocks; it is shown as is.
+  await userEvent.click(saveButton());
+  alert = await screen.findByRole("alert");
+  expect(alert).toHaveTextContent("Responses would be reset.");
+  expect(
+    within(alert).queryByRole("button", { name: "Reload latest event" }),
+  ).not.toBeInTheDocument();
+
+  // Clearing every mark also clears the failure; with no stored blocks there
+  // is nothing to save until a mark returns.
+  await userEvent.click(screen.getByRole("button", { name: "Clear all" }));
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(saveButton()).toBeDisabled();
+  paintCell(6);
+  await userEvent.click(saveButton());
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Failed to save blocked times.",
+  );
+});
+
+test.each([
+  [
+    "a finalized event",
+    { status: "finalized" },
+    "Reactivate this finalized event before editing it.",
+  ],
+  [
+    "an event with a confirmed meeting",
+    { finalMeeting: { id: "final-1" } },
+    "Reactivate the event before editing a confirmed meeting.",
+  ],
+])("blocked times editor is read-only for %s", (_label, overrides, reason) => {
+  render(
+    <OverviewPanel
+      event={blockedWeeklyEvent({ "weekday:1": [1] }, overrides)}
+      onEventSaved={jest.fn()}
+    />,
+  );
+
+  expect(saveButton()).toBeDisabled();
+  expect(saveButton()).toHaveAttribute("title", reason);
+  const clearAll = screen.getByRole("button", { name: "Clear all" });
+  expect(clearAll).toBeDisabled();
+  expect(clearAll).toHaveAttribute("title", reason);
+  expect(screen.getByRole("button", { name: "Blocked" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Open" })).toBeDisabled();
+  expect(editorGrid()).toHaveAttribute("aria-readonly", "true");
+  expect(editorCell(0)).not.toHaveAttribute("tabindex");
+  paintCell(0);
+  expect(editorCell(0)).toHaveAttribute("data-blocked-paint", "false");
+  expect(screen.getByText("1 slots marked")).toBeInTheDocument();
+});
+
+test("blocked times editor handles events without slot groups or slots", async () => {
+  updateEvent.mockResolvedValue({ event: weeklyEvent });
+  const { unmount } = render(
+    <OverviewPanel event={baseEvent} onEventSaved={jest.fn()} />,
+  );
+  const details = blockedTimesDetails();
+  expect(details).toHaveAttribute("open");
+  expect(
+    within(details).getByText("No schedule slots are configured."),
+  ).toBeInTheDocument();
+  expect(screen.getByText("0 slots marked")).toBeInTheDocument();
+  expect(saveButton()).toBeDisabled();
+  unmount();
+
+  // A group without slots contributes nothing to the marks.
+  render(
+    <OverviewPanel
+      event={{
+        ...weeklyEvent,
+        slotGroups: [
+          { key: "weekday:1", label: "Mon" },
+          ...weeklyEvent.slotGroups.slice(1),
+        ],
+      }}
+      onEventSaved={jest.fn()}
+    />,
+  );
+  expect(editorGrid().querySelectorAll("[data-cell-idx]")).toHaveLength(4);
+  expect(screen.getByText("0 slots marked")).toBeInTheDocument();
+
+  // ...and is skipped when serializing the marked rows.
+  paintCell(4);
+  await userEvent.click(saveButton());
+  await waitFor(() =>
+    expect(updateEvent).toHaveBeenCalledWith(
+      "SCALE1",
+      { blockedSlots: { "weekday:3": [0] }, expectedVersion: 4 },
+      "token",
+    ),
+  );
+});
+
+test("blocked times editor stands alone without a lock or a save listener", async () => {
+  updateEvent.mockResolvedValue({ event: weeklyEvent });
+  render(<BlockedSlotsEditor event={weeklyEvent} />);
+
+  // Unlocked by default: no lock title, and the grid takes paint.
+  expect(saveButton()).not.toHaveAttribute("title");
+  expect(screen.getByRole("button", { name: "Clear all" })).not.toHaveAttribute(
+    "title",
+  );
+  expect(editorGrid()).not.toHaveAttribute("aria-readonly");
+  paintCell(0);
+  expect(editorCell(0)).toHaveAttribute("data-blocked-paint", "true");
+
+  await userEvent.click(saveButton());
+  await waitFor(() =>
+    expect(updateEvent).toHaveBeenCalledWith(
+      "SCALE1",
+      { blockedSlots: { "weekday:1": [0] }, expectedVersion: 4 },
+      "token",
+    ),
+  );
+  expect(await screen.findByRole("status")).toHaveTextContent(
+    "Blocked times saved.",
+  );
+});
+
+test("results note blocked slots only when the snapshot lists them", async () => {
+  fetchEventResults
+    .mockResolvedValueOnce({
+      status: "fresh",
+      requestedRevision: 7,
+      computedRevision: 7,
+      results: { recommendations: [], blockedSlotIndices: [3, 4] },
+    })
+    .mockResolvedValueOnce({
+      status: "fresh",
+      requestedRevision: 8,
+      computedRevision: 8,
+      results: { recommendations: [] },
+    })
+    .mockResolvedValueOnce({
+      status: "fresh",
+      requestedRevision: 9,
+      computedRevision: 9,
+      results: { recommendations: [], blockedSlotIndices: "3,4" },
+    });
+  const panelProps = {
+    event: weeklyEvent,
+    getToken,
+    onChoose: jest.fn(),
+    onSelect: jest.fn(),
+  };
+  const { rerender } = render(
+    <ResultsSnapshotPanel {...panelProps} invalidationKey={0} />,
+  );
+  expect(
+    await screen.findByText("2 blocked slots are excluded from these results."),
+  ).toBeInTheDocument();
+
+  // A snapshot computed before blocking shipped simply has no note.
+  rerender(<ResultsSnapshotPanel {...panelProps} invalidationKey={1} />);
+  await screen.findByText(/Results are current at revision 8/);
+  expect(
+    screen.queryByText(/blocked slots are excluded/),
+  ).not.toBeInTheDocument();
+
+  rerender(<ResultsSnapshotPanel {...panelProps} invalidationKey={2} />);
+  await screen.findByText(/Results are current at revision 9/);
+  expect(
+    screen.queryByText(/blocked slots are excluded/),
+  ).not.toBeInTheDocument();
 });

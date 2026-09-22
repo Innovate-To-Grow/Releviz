@@ -18,30 +18,78 @@ Go to the home page and fill out the event form:
 - **Meeting Duration** — 15–480 minutes, aligned to the slot size and contained in one time group
 - **Days** — pick which days of the week are options (defaults to Mon-Fri)
 - **Access** — Invite only (default) or Open link
+- **Participants start as** — Available (default; people mark the times that do not work) or Busy
+  (people mark the times that work)
 
-Create an account or log in before creating an event. New events are active immediately and can
-accept responses as soon as participants join; creating an event by itself does not send email.
+Sign in before creating an event: either with an emailed 6-digit code (which creates your account
+on first use) or with email + password for accounts that set one through Forgot password
+(`/recover`). New events are active immediately and can accept responses as soon as participants
+join; creating an event by itself does not send email.
+
+**Blocked times.** The organizer workspace opens on the **Blocked times** editor right after the
+event is created. Paint the parts of each day that are not available (a lunch break on Mondays, a
+late start on Fridays) and save; the event keeps one start/end/days configuration while every day
+gets its own usable window. Blocked slots stay in the schedule grid but are greyed out and cannot be
+painted, count as 0 in the results, never appear in ranked windows, and cannot be finalized into.
+Blocked times can be changed at any time from the Overview panel without resetting responses;
+after finalization the event must be reactivated first.
 
 ### 2. Build the Roster
 
-The Roster tab accepts `.xlsx`, `.csv`, or pasted CSV/TSV. Map the required `name` and `email`
-columns and optional `group`, `weight`, and `included` columns, preview and correct rows, then commit
-as:
+Adding people and sending invitations are separate steps. **Add person** opens a form with two
+actions: **Add only** puts the person on the roster without sending email (pressing Enter does the
+same), and **Add and send invitation** also emails their secure link right away.
 
-- **Merge** — add/update people while preserving existing schedules and delivery history. Newly
-  added or restored people receive an invitation automatically.
+The Roster tab also accepts `.xlsx`, `.csv`, or pasted CSV/TSV. Map the required `name` and `email`
+columns and optional `group`, `weight`, `included`, and `phone` columns, preview and correct rows,
+then commit as one of the modes below. In the `group` column, blank means unassigned, `ALL` means
+every group (including groups created later), and several names are separated by `;` (for example
+`Faculty; Team 3`).
+
+- **Merge** — add/update people while preserving existing schedules and delivery history.
 - **Rebuild** — type the event code to destructively replace the roster, schedules, invitations,
-  temporary sessions, and pending deliveries. Every person in the rebuilt roster receives a new
-  invitation.
+  temporary sessions, and pending deliveries.
 
-Adding a person or committing an import atomically creates the roster changes and durable invitation
-jobs. The HTTP request returns as soon as those jobs are committed; the Roster tab shows
+Tick **Send invitations to newly added people** before committing to email everyone the import adds
+(on a rebuild, everyone re-imported); leave it unticked to add them as **Not sent** and invite them
+later. Existing participants are updated without another email either way.
+
+To invite later, check people in the roster table and use **Send invitation** (shown above and below
+the table). It skips anyone whose invitation was already sent or is still queued unless **Resend to
+people already invited** is ticked; a resend keeps any custom message. The **Invitation** badge on
+each row shows **Not sent** (no email yet), **Sent** (emailed, including opened), or **Accepted**
+(joined, saved a draft, or submitted after the email); **Filter by invitation** offers the same
+three states. People who are **Not sent** receive no reminders until they are invited.
+
+Only three actions send invitations: **Add and send invitation**, an import committed with the
+checkbox ticked, and **Send invitation**. Each commits its roster changes and durable invitation
+jobs atomically. The HTTP request returns as soon as those jobs are committed; the Roster tab shows
 provider-handoff progress and allows retrying failed recipients. Closed, finalized, and archived
 events must be reactivated before their roster can change.
 
+The `phone` column (also recognized as `phone number`, `mobile`, `cell`, or `telephone`) accepts
+digits, spaces, and `+ - ( ) .`, with at least 7 digits and at most 32 characters. Phones are shown
+on the roster and editable per row; Releviz never uses them to send anything.
+
+To add a person who has no email of their own, open **Add person**, enter their name, one of your
+own verified email addresses, and an optional phone, tick **No email of their own — use one of mine
+and I'll enter their schedule**, then click **Add person** (the **Add and send invitation** action is
+hidden while the box is ticked). No invitation, reminder, or final notification is ever sent for
+that person, and you receive nothing extra; the row shows
+**Organizer-managed** and **Not sent**, and you enter their availability with **Edit schedule**.
+Several people can share your address. Each is matched by name under that address, so give two
+different people distinct names (for example "John Smith (Team B)"); re-entering an identical name
+returns the existing row. Typing your own address without the checkbox is refused with a hint to
+tick it.
+
+Roster import cannot create organizer-managed people: a sheet that repeats your address is flagged
+because two rows would resolve to one account. Add such people one by one with **Add person**.
+
 Invite-only links are visible only to the organizer, existing participants, temporary recipients
 using their event-scoped code flow, or full accounts whose verified email matches an invitation.
-Open-link events retain code-based joining, subject to the 1,000-person cap.
+Organizer-managed people are the exception: they never sign in or receive links, and only the
+organizer enters their schedule. Open-link events retain code-based joining, subject to the
+1,000-person cap.
 
 ### 3. Participants Fill In Availability
 
@@ -53,8 +101,19 @@ Each participant:
    slots with that availability level
 4. Clicks **Submit Schedule** when done
 
+By default every slot starts **Available** (all green in person, all blue virtual), so a
+participant paints **Busy** over the times that do not work rather than hunting for the times that
+do. The brush pre-selects the opposite of the starting state (Busy for an Available start), and
+**Mark all Available** puts the grid back to its starting state. An organizer who prefers the
+other approach sets **Participants start as** to Busy: slots then start empty, the brush
+pre-selects Available, and **Mark all Busy** is the reset. Changing the setting on an existing
+event re-seeds the schedules of people who have not touched theirs yet; anyone who has already
+painted or submitted keeps their response.
+
 The grid uses color coding plus text cues: hatched red (busy) -> yellow ◐ (if needed) -> green ✓
-(available). Virtual channels use a red -> purple -> blue scale.
+(available). Virtual channels use a red -> purple -> blue scale. Grey striped cells are times the
+organizer blocked for the event: they cannot be painted, "Apply to all" skips them, and anything
+marked there before the block was added is ignored.
 
 Depending on the event's visibility setting, participants can see the latest published group
 snapshot. While a newer response is being calculated, the UI labels the result as refreshing and
@@ -69,11 +128,26 @@ Roster, Results, and Finalize. The organizer can:
 - load one person's schedule only when its edit drawer opens;
 - co-edit a temporary participant while the event is active, until that identity upgrades to a
   verified full account;
+- create groups (empty at first) and fill them from the list checkboxes; a person may be in many
+  groups, and the `ALL` flag places them in every group;
 - apply group/filter/selection weight and included changes, then override an individual;
 - view the top ten meeting-duration candidates ranked by weighted availability, unweighted
   availability, fully available count, and configured-time order;
 - finalize one authoritative continuous interval, queue stable-UID iCalendar `REQUEST`/`CANCEL`
   notifications, and download the calendar file.
+
+On the meeting-time calendar the organizer's blocked times are hatched, show no percentage, and
+cannot be picked; an open slot whose meeting window would run into a block keeps its percentage but
+cannot start a meeting either. Blocked times are excluded from the results (their availability is
+reported as 0), never form part of a ranked window, and cannot be finalized into; edit them from
+**Blocked times** on the Overview panel.
+
+While the event is active, the workspace keeps itself current: every 5 seconds (only while the tab
+is visible) it reads a small activity digest (`GET /events/activity`) and silently re-reads just the
+sections that changed, so new responses, invitation opens, and edits made in another session appear
+without pressing Refresh and without disturbing a pick, a row draft, or an open drawer. The header
+shows a "Live" badge with the time of the last such update, or "Live updates paused" with the
+reason if a pass fails. Refresh remains the manual, everything-at-once re-read.
 
 For a multi-slot meeting, each person's candidate score is their minimum availability across the
 whole interval. The weighted score is `sum(person_score * weight) / sum(positive weights)` across
@@ -224,8 +298,6 @@ that an application, browser, infrastructure, or security area was skipped.
   fixes this at `1` so only the public ALB's appended requester is trusted)
 - `METRICS_BEARER_TOKEN` (required in production; dedicated credential for the private product
   metrics endpoint)
-- `FEEDBACK_SUBMISSION_RETENTION_DAYS` (default: `730`; scheduled deletion boundary for feedback
-  text)
 - `APP_LOG_LEVEL` (default: `INFO`; structured JSON application log threshold)
 - `SENTRY_DSN` (optional; external error tracking remains disabled when empty)
 - `SENTRY_ENVIRONMENT`
@@ -268,7 +340,9 @@ The roster source format, preview/merge/rebuild flow, duplicate rules, and pagin
 are implemented in the scheduling app.
 
 Temporary/full identity rules, the restricted link session, shared versioned editing, upgrade, and
-rollback behavior are enforced by the authn app.
+rollback behavior are enforced by the authn app. Organizer-managed people are the one exception:
+they are backed by an identity-less temporary member with no contact email, the shared address
+stays the organizer's login identity, and phone numbers are display-only (no SMS, no phone login).
 
 Email delivery is configured in Django admin under **Email Delivery**. Authentication messages,
 final notifications, invitations, and reminders use persisted retryable jobs. Roster mutation,
@@ -296,29 +370,37 @@ docker run --rm -p 3000:3000 releviz-web:local
 
 ### Production
 
-Production CD is three protected workflows on `main`, one per release surface, so a change only
-releases what it touched:
+Production CD is one protected workflow on `main`, `release.yml` (**Releviz Production Release**),
+that releases three surfaces so a change only releases what it touched:
 
-| Workflow | Releases | Environment (role) | Paths that trigger it |
+| Surface (reusable workflow) | Releases | Environment (role) | Paths that trigger it |
 |---|---|---|---|
-| `release-backend.yml` | SHA-tagged API image, ECS backend/worker rollout, default admin | `AWS ECS - Prod` (`releviz-production-github-deploy`) | `src/api/**` |
-| `release-frontend.yml` | Amplify static site (candidate → production) and the ECS fallback image | `AWS Amplify - Prod` (`releviz-production-frontend-github-deploy`) | `src/web/**`, root `package*.json`, Amplify deploy scripts, export validator, custom headers |
-| `release-infrastructure.yml` | Terraform for everything else in AWS | `AWS ECS - Prod` (`releviz-production-github-deploy`) | `infra/prod/**` |
+| backend (`release-backend.yml`) | SHA-tagged API image, ECS backend/worker rollout, default admin | `AWS ECS - Prod` (`releviz-production-github-deploy`) | `src/api/**` |
+| frontend (`release-frontend.yml`) | Amplify static site (candidate → production) and the ECS fallback image | `AWS Amplify - Prod` (`releviz-production-frontend-github-deploy`) | `src/web/**`, root `package*.json`, Amplify deploy scripts, export validator, custom headers |
+| infrastructure (`release-infrastructure.yml`) | Terraform for everything else in AWS | `AWS ECS - Prod` (`releviz-production-github-deploy`) | `infra/prod/**` |
 
-Every successful `CI` run for a push to `main` offers the commit to all three. Each workflow first
-runs a credential-free `scope` job that compares the commit with that workflow's last successful
-release (or, before its first release, the retired single workflow's last release); when none of
-its paths changed, the run ends there without an approval prompt. Changes to the workflows
-themselves are exercised by a manual dispatch. Otherwise the release job waits in its protected
-GitHub environment until a configured reviewer approves it, and only then receives short-lived
-AWS credentials for that environment's role: backend and infrastructure releases wait in
-`AWS ECS - Prod` and assume the production role, which owns Terraform state, ECS, and the
-application secrets' metadata; frontend releases wait in `AWS Amplify - Prod` and assume the
-frontend-only role, which can deploy the two Amplify release branches, push the fallback image,
-and read the canonical alias, and nothing else. Each role trusts exactly one environment's OIDC
-subject, so a frontend approval can never carry backend permissions. Any workflow can also be
-dispatched manually for a redeploy or rollback, which additionally requires the exact
-confirmation `DEPLOY`. A shared preflight action verifies that the immutable commit passed
+Every successful `CI` run for a push to `main` starts one production release run. Its
+credential-free `scope` job compares the commit with each surface's last successful release
+(`scripts/ci/last-successful-release.sh`: the newest run in which that surface's own job
+succeeded, or a newer lone dispatch of the surface workflow; before a surface's first release,
+the retired single workflow's last release). Surfaces whose paths did not change are left out
+without an approval prompt; when nothing changed, the run ends at the scope job. The affected
+surfaces then run **side by side** as reusable workflows of that one run, so every release job
+reaches its protected GitHub environment at the same moment and the reviewer approves the whole
+release in a single **Review pending deployments** dialog — `AWS ECS - Prod` and
+`AWS Amplify - Prod` are listed together and approved with one click. That is why the surface jobs
+never depend on one another: a job that only reached its environment after another finished would
+ask for a second approval. Only after approval does each job receive short-lived AWS credentials
+for its own environment's role: backend and infrastructure releases wait in `AWS ECS - Prod` and
+assume the production role, which owns Terraform state, ECS, and the application secrets'
+metadata; frontend releases wait in `AWS Amplify - Prod` and assume the frontend-only role, which
+can deploy the two Amplify release branches, push the fallback image, and read the canonical
+alias, and nothing else. Each role trusts exactly one environment's OIDC subject, so approving the
+frontend can never carry backend permissions. Concurrent backend and infrastructure Terraform
+applies serialize on the remote state lock. Changes to the workflows themselves are exercised by
+a manual dispatch: `release.yml` can be dispatched with any subset of the surfaces ticked, and
+each surface workflow can still be dispatched alone for a redeploy or rollback; both require the
+exact confirmation `DEPLOY`. A shared preflight action verifies that the immutable commit passed
 `CI Result`, validates the scope's environment configuration, assumes that scope's role through
 GitHub OIDC, confirms the assumed identity (and, for the frontend, that it cannot reach ECS), and
 (for the Terraform releases) checks the protected remote state.

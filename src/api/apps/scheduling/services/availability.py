@@ -7,8 +7,13 @@ def expected_availability_length(event) -> int:
     return event_slot_count(event)
 
 
+def starting_availability_value(event) -> int:
+    """The slot value every participant starts with: 1 (available) or 0 (busy)."""
+    return 1 if event.starting_availability == "available" else 0
+
+
 def default_availability(event) -> list[int]:
-    return [0] * expected_availability_length(event)
+    return [starting_availability_value(event)] * expected_availability_length(event)
 
 
 def validate_availability(availability, event, label: str):

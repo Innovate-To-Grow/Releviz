@@ -7,6 +7,7 @@ const ROOT = path.resolve(__dirname, "../..");
 const RESOURCE_AUDIT_MANIFEST = [
   ".github/dependabot.yml",
   ".github/workflows/ci.yml",
+  ".github/workflows/release.yml",
   ".github/workflows/release-backend.yml",
   ".github/workflows/release-frontend.yml",
   ".github/workflows/release-infrastructure.yml",
@@ -44,6 +45,7 @@ const RESOURCE_AUDIT_MANIFEST = [
   "src/api/apps/core/static/admin/js/material-web-text-field.js",
   "src/api/apps/core/static/images/i2glogo.png",
   "src/api/apps/core/static/images/releviz-mark.png",
+  "src/api/apps/core/templates/403.html",
   "src/api/apps/core/templates/404.html",
   "src/api/apps/core/templates/admin/actions.html",
   "src/api/apps/core/templates/admin/base_site.html",
@@ -124,6 +126,7 @@ const RESOURCE_AUDIT_MANIFEST = [
   "scripts/quality-gate.sh",
   "scripts/ci/check_bundle_size.py",
   "scripts/ci/check_npm_licenses.py",
+  "scripts/ci/last-successful-release.sh",
   "scripts/ci/plan_django_tests.py",
   "scripts/ci/plan_e2e_tests.py",
   "scripts/ci/summarize_workflow_jobs.py",

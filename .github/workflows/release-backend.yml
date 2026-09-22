@@ -1,18 +1,28 @@
 name: Releviz Backend Release
-run-name: >-
-  ${{ github.event_name == 'workflow_run'
-      && format('Backend release: {0}', github.event.workflow_run.display_title)
-      || format('Backend release (manual): {0}', github.sha) }}
+run-name: "Backend release (manual): ${{ github.sha }}"
 
 on:
-  # Every green CI run on main is offered as a backend release; the scope job
-  # skips it when nothing under src/api changed. A release waits in the
-  # "AWS ECS - Prod" environment for reviewer approval before AWS credentials are
-  # issued. Manual dispatch stays available for redeploys and rollbacks.
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
-    branches: [main]
+  # Called by the production release workflow (release.yml), which decides
+  # from a credential-free scope whether src/api changed and runs every
+  # affected surface side by side so the reviewer approves the whole release
+  # once. The release job waits in the "AWS ECS - Prod" environment for that
+  # approval before AWS credentials are issued. Manual dispatch of this file
+  # alone stays available for redeploys and rollbacks of just the backend.
+  workflow_call:
+    inputs:
+      deploy-sha:
+        description: The immutable main commit to release
+        required: true
+        type: string
+      trigger-event:
+        description: github.event_name of the calling run (workflow_run or workflow_dispatch)
+        required: true
+        type: string
+      confirmation:
+        description: The DEPLOY confirmation of a manually dispatched calling run
+        required: false
+        type: string
+        default: ""
   workflow_dispatch:
     inputs:
       confirmation:
@@ -27,61 +37,25 @@ permissions:
   deployments: write
   id-token: write
 
-concurrency:
-  group: release-backend
-  cancel-in-progress: false
-
 jobs:
-  scope:
-    name: Decide whether the backend changed
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    if: >-
-      ${{
-        github.ref == 'refs/heads/main' && (
-          github.event_name == 'workflow_dispatch' || (
-            github.event_name == 'workflow_run' &&
-            github.event.workflow_run.conclusion == 'success' &&
-            github.event.workflow_run.event == 'push' &&
-            github.event.workflow_run.head_branch == 'main' &&
-            github.event.workflow_run.head_repository.full_name == github.repository
-          )
-        )
-      }}
-    outputs:
-      release: ${{ steps.scope.outputs.release }}
-    steps:
-      - name: Checkout release commit with history
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
-          fetch-depth: 0
-
-      - name: Compare with the last successful backend release
-        id: scope
-        uses: ./.github/actions/release-scope
-        with:
-          workflow-file: release-backend.yml
-          release-sha: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
-          trigger-event: ${{ github.event_name }}
-          paths: |
-            src/api
-
   release:
     name: Release backend to production
-    needs: scope
-    if: ${{ needs.scope.outputs.release == 'true' }}
+    if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # A lone dispatch and an orchestrated release of the backend never overlap.
+    concurrency:
+      group: release-backend
+      cancel-in-progress: false
     environment:
       name: AWS ECS - Prod
       url: https://${{ vars.PROD_API_DOMAIN || 'api.releviz.com' }}
 
     env:
-      TRIGGER_EVENT: ${{ github.event_name }}
+      TRIGGER_EVENT: ${{ inputs.trigger-event || github.event_name }}
       CONFIRMATION: ${{ inputs.confirmation }}
-      # workflow_run: the CI run's head commit; dispatch: the selected main commit.
-      DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      # Called: the release commit release.yml scoped; dispatch: the selected main commit.
+      DEPLOY_SHA: ${{ inputs.deploy-sha || github.sha }}
       AWS_REGION: ${{ vars.AWS_REGION || 'us-west-2' }}
       AWS_ROLE_ARN: ${{ vars.AWS_PROD_ROLE_ARN }}
       TF_STATE_BUCKET: ${{ vars.PROD_TF_STATE_BUCKET }}
@@ -99,7 +73,7 @@ jobs:
       AMPLIFY_APP_ID: ${{ vars.PROD_AMPLIFY_APP_ID }}
       ALARM_ACTION_ARNS: ${{ vars.PROD_ALARM_ACTION_ARNS_JSON }}
       TF_VAR_aws_region: ${{ vars.AWS_REGION || 'us-west-2' }}
-      TF_VAR_backend_image_tag: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      TF_VAR_backend_image_tag: ${{ inputs.deploy-sha || github.sha }}
       TF_VAR_ecr_backend_repository: ${{ vars.ECR_PROD_BACKEND || 'releviz-prod-backend' }}
       TF_VAR_ecr_frontend_repository: ${{ vars.ECR_PROD_FRONTEND || 'releviz-prod-frontend' }}
       TF_VAR_custom_domain: ${{ vars.PROD_DOMAIN }}
@@ -179,13 +153,10 @@ jobs:
         run: |
           set -euo pipefail
           # The fallback frontend follows the latest successful frontend release
-          # whose image is in ECR; otherwise it stays on its deployed image.
-          released="$(
-            gh api \
-              -H 'Accept: application/vnd.github+json' \
-              "repos/${GITHUB_REPOSITORY}/actions/workflows/release-frontend.yml/runs?branch=main&status=success&per_page=1" \
-              --jq '.workflow_runs[0].head_sha // ""' 2>/dev/null || true
-          )"
+          # whose image is in ECR; otherwise it stays on its deployed image. A
+          # frontend released in this same run is still in flight, so its image
+          # is picked up by the next backend release.
+          released="$(scripts/ci/last-successful-release.sh frontend)"
           tag=""
           if [[ "$released" =~ ^[0-9a-f]{40}$ ]] &&
             aws ecr describe-images --repository-name "$ECR_FRONTEND" \

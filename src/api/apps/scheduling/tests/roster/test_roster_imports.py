@@ -19,6 +19,7 @@ from apps.scheduling.models import (
     EventInvitation,
     EventResultSnapshot,
     Participant,
+    ParticipantGroup,
     RosterBulkUpdateReceipt,
     RosterImportBatch,
     RosterImportReceipt,
@@ -55,7 +56,16 @@ class RosterImportApiTests(TestCase):
             format="json",
         )
 
-    def commit(self, import_id, *, mode="merge", key=None, confirmation=None, event=None):
+    def commit(
+        self,
+        import_id,
+        *,
+        mode="merge",
+        key=None,
+        confirmation=None,
+        event=None,
+        send_invitations=None,
+    ):
         event = event or self.event
         payload = {
             "mode": mode,
@@ -63,6 +73,8 @@ class RosterImportApiTests(TestCase):
         }
         if confirmation is not None:
             payload["confirmationCode"] = confirmation
+        if send_invitations is not None:
+            payload["sendInvitations"] = send_invitations
         return self.client.post(
             f"/events/roster-imports/{import_id}/commit?code={event.code}",
             payload,
@@ -107,6 +119,146 @@ class RosterImportApiTests(TestCase):
         self.assertEqual(rows.data["rows"][1]["duplicate"], "identical")
         self.assertFalse(rows.data["rows"][1]["selected"])
         self.assertEqual(rows.data["rows"][2]["duplicate"], "conflict")
+        # A sheet without a phone column still echoes the key on every row.
+        self.assertEqual([row["phone"] for row in rows.data["rows"]], ["", "", "", ""])
+
+    def test_phone_column_is_auto_mapped_and_validated(self):
+        response = self.paste(
+            "name,email,Mobile\n"
+            "Valid,valid@example.com,+1 (555) 010-2000\n"
+            "Blank,blank@example.com,\n"
+            "Short,short@example.com,12345\n"
+            "Letters,letters@example.com,555-CALL-NOW\n"
+            f"Long,long@example.com,{'1' * 33}\n"
+            "Formula,formula@example.com,=CONCAT(5)\n"
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        import_payload = response.data["import"]
+        self.assertEqual(import_payload["columnMapping"], {"name": 0, "email": 1, "phone": 2})
+        self.assertEqual(
+            import_payload["summary"],
+            {"total": 6, "selected": 6, "valid": 2, "invalid": 4, "conflicts": 0},
+        )
+
+        rows = self.client.get(
+            f"/events/roster-imports/{import_payload['id']}/rows?code={self.event.code}"
+        )
+        self.assertEqual(rows.status_code, 200)
+        by_email = {row["email"]: row for row in rows.data["rows"]}
+        self.assertEqual(by_email["valid@example.com"]["phone"], "+1 (555) 010-2000")
+        self.assertEqual(by_email["valid@example.com"]["errors"], [])
+        self.assertEqual(by_email["blank@example.com"]["phone"], "")
+        self.assertTrue(by_email["blank@example.com"]["valid"])
+        self.assertEqual(by_email["short@example.com"]["errors"], ["phone is invalid."])
+        self.assertEqual(by_email["letters@example.com"]["errors"], ["phone is invalid."])
+        self.assertEqual(
+            by_email["long@example.com"]["errors"],
+            ["phone is too long (max 32)."],
+        )
+        self.assertEqual(by_email["long@example.com"]["phone"], "1" * 32)
+        self.assertEqual(
+            by_email["formula@example.com"]["errors"],
+            ["phone cannot contain a formula."],
+        )
+        self.assertEqual(by_email["formula@example.com"]["phone"], "")
+
+        aliased = self.paste("name,email,phone number\nAda,ada@example.com,555-010-2000\n")
+        self.assertEqual(aliased.status_code, 201, aliased.data)
+        self.assertEqual(
+            aliased.data["import"]["columnMapping"],
+            {"name": 0, "email": 1, "phone": 2},
+        )
+
+    def test_explicit_phone_mapping_and_row_phone_edits(self):
+        response = self.paste("Person,Address,Contact\nAda,ada@example.com,12\n")
+        self.assertEqual(response.status_code, 201, response.data)
+        import_id = response.data["import"]["id"]
+        self.assertNotIn("phone", response.data["import"]["columnMapping"])
+
+        clashed = self.client.put(
+            f"/events/roster-imports/{import_id}?code={self.event.code}",
+            {"columnMapping": {"name": "Person", "email": "Address", "phone": "Address"}},
+            format="json",
+        )
+        self.assertEqual(clashed.status_code, 400)
+        self.assertEqual(clashed.data["error"], "Each mapped field must use a different column.")
+
+        mapped = self.client.put(
+            f"/events/roster-imports/{import_id}?code={self.event.code}",
+            {"columnMapping": {"name": "Person", "email": "Address", "phone": "Contact"}},
+            format="json",
+        )
+        self.assertEqual(mapped.status_code, 200, mapped.data)
+        self.assertEqual(
+            mapped.data["import"]["columnMapping"],
+            {"name": 0, "email": 1, "phone": 2},
+        )
+        self.assertEqual(mapped.data["import"]["summary"]["invalid"], 1)
+        rows = self.client.get(f"/events/roster-imports/{import_id}/rows?code={self.event.code}")
+        row = rows.data["rows"][0]
+        self.assertEqual(row["phone"], "12")
+        self.assertEqual(row["errors"], ["phone is invalid."])
+
+        def update_row(**fields):
+            updated = self.client.put(
+                f"/events/roster-imports/{import_id}?code={self.event.code}",
+                {"rowUpdates": [{"id": row["id"], **fields}]},
+                format="json",
+            )
+            self.assertEqual(updated.status_code, 200, updated.data)
+            rows = self.client.get(
+                f"/events/roster-imports/{import_id}/rows?code={self.event.code}"
+            )
+            return updated.data["import"]["summary"], rows.data["rows"][0]
+
+        summary, fixed = update_row(phone=" 555.010.2000 ")
+        self.assertEqual(summary["valid"], 1)
+        self.assertEqual(fixed["phone"], "555.010.2000")
+        self.assertEqual(fixed["errors"], [])
+
+        summary, untouched = update_row(group="Team")
+        self.assertEqual(summary["valid"], 1)
+        self.assertEqual(untouched["phone"], "555.010.2000")
+
+        summary, too_long = update_row(name="", phone="1" * 33)
+        self.assertEqual(summary["invalid"], 1)
+        self.assertEqual(too_long["phone"], "1" * 32)
+        self.assertEqual(
+            too_long["errors"],
+            ["name is required.", "phone is too long (max 32)."],
+        )
+
+        summary, cleared = update_row(name="Ada", phone=None)
+        self.assertEqual(summary["valid"], 1)
+        self.assertEqual(cleared["phone"], "")
+        self.assertEqual(cleared["errors"], [])
+
+    def test_duplicate_rows_compare_phones(self):
+        response = self.paste(
+            "name,email,phone\n"
+            "Alice,alice@example.com,555-010-1000\n"
+            "Alice,alice@example.com,555-010-2000\n"
+            "Bob,bob@example.com,555-010-3000\n"
+            "Bob,bob@example.com,555-010-3000\n"
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(
+            response.data["import"]["summary"],
+            {"total": 4, "selected": 3, "valid": 1, "invalid": 2, "conflicts": 2},
+        )
+        rows = self.client.get(
+            f"/events/roster-imports/{response.data['import']['id']}/rows?code={self.event.code}"
+        )
+        statuses = [(row["duplicate"], row["selected"], row["errors"]) for row in rows.data["rows"]]
+        self.assertEqual(
+            statuses,
+            [
+                ("conflict", True, ["Conflicting duplicate email."]),
+                ("conflict", True, ["Conflicting duplicate email."]),
+                ("unique", True, []),
+                ("identical", False, []),
+            ],
+        )
 
     def test_column_mapping_formula_rejection_and_manual_row_correction(self):
         response = self.paste(
@@ -355,6 +507,11 @@ class RosterImportApiTests(TestCase):
         self.assertEqual(temporary.member.access_level, "temporary")
         self.assertFalse(temporary.member.has_usable_password())
         self.assertEqual(known.participant_name, "Known Person")
+        # Imported people start from the event's starting schedule (Available by default).
+        for participant in (temporary, known):
+            self.assertEqual(participant.availability_inperson, [1, 1])
+            self.assertEqual(participant.availability_virtual, [1, 1])
+            self.assertFalse(participant.submitted)
         self.assertTrue(
             ContactEmail.objects.filter(
                 member=temporary.member,
@@ -393,6 +550,198 @@ class RosterImportApiTests(TestCase):
             confirmation=self.event.code,
         )
         self.assertEqual(conflict.status_code, 409)
+
+    def test_import_seeds_people_busy_when_the_event_starts_busy(self):
+        busy_event = Event.objects.create(
+            code="ROSTBUSY",
+            name="Busy-start event",
+            organizer=self.organizer,
+            days=[1],
+            start_minutes=9 * 60,
+            end_minutes=10 * 60,
+            starting_availability="busy",
+        )
+        UserEvent.objects.create(member=self.organizer, event=busy_event, role="organizer")
+        preview = self.paste("name,email\nBusy Person,busy@example.com\n", event=busy_event)
+        committed = self.commit(preview.data["import"]["id"], event=busy_event)
+        self.assertEqual(committed.status_code, 201, committed.data)
+        participant = Participant.objects.get(event=busy_event, member__email="busy@example.com")
+        self.assertEqual(participant.availability_inperson, [0, 0])
+        self.assertEqual(participant.availability_virtual, [0, 0])
+
+    def test_merge_stores_phones_and_keeps_them_when_the_sheet_has_none(self):
+        first = self.paste(
+            "name,email,phone\nPerson,person@example.com,555-010-1000\nOther,other@example.com,\n"
+        )
+        self.assertEqual(self.commit(first.data["import"]["id"]).status_code, 201)
+        person = Participant.objects.get(event=self.event, member__email="person@example.com")
+        other = Participant.objects.get(event=self.event, member__email="other@example.com")
+        self.assertEqual(person.contact_phone, "555-010-1000")
+        self.assertEqual(other.contact_phone, "")
+        self.assertFalse(person.organizer_managed)
+        self.assertEqual(person.version, 1)
+
+        without_column = self.paste(
+            "name,email\nPerson,person@example.com\nOther,other@example.com\n"
+        )
+        kept = self.commit(without_column.data["import"]["id"])
+        self.assertEqual(kept.status_code, 201, kept.data)
+        self.assertEqual(kept.data["receipt"]["updatedCount"], 2)
+        person.refresh_from_db()
+        self.assertEqual(person.contact_phone, "555-010-1000")
+        self.assertEqual(person.version, 1)
+
+        empty_and_new = self.paste(
+            "name,email,phone\nPerson,person@example.com,\nOther,other@example.com,555-010-2000\n"
+        )
+        self.assertEqual(self.commit(empty_and_new.data["import"]["id"]).status_code, 201)
+        person.refresh_from_db()
+        other.refresh_from_db()
+        self.assertEqual(person.contact_phone, "555-010-1000")
+        self.assertEqual(person.version, 1)
+        self.assertEqual(other.contact_phone, "555-010-2000")
+        self.assertEqual(other.version, 2)
+
+        replaced = self.paste("name,email,phone\nPerson,person@example.com,555-010-9000\n")
+        self.assertEqual(self.commit(replaced.data["import"]["id"]).status_code, 201)
+        person.refresh_from_db()
+        self.assertEqual(person.contact_phone, "555-010-9000")
+        self.assertEqual(person.version, 2)
+
+        rebuilt = self.paste("name,email,phone\nRebuilt,rebuilt@example.com,555-010-4000\n")
+        response = self.commit(
+            rebuilt.data["import"]["id"],
+            mode="rebuild",
+            confirmation=self.event.code,
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(
+            list(self.event.participants.values_list("participant_name", "contact_phone")),
+            [("Rebuilt", "555-010-4000")],
+        )
+
+    def test_rows_repeating_the_organizer_address_are_flagged(self):
+        preview = self.paste(
+            "name,email,phone\n"
+            "Owner Twin,owner@example.com,555-010-1000\n"
+            "Owner Other,owner@example.com,555-010-2000\n"
+        )
+        self.assertEqual(preview.status_code, 201, preview.data)
+        import_id = preview.data["import"]["id"]
+        rows = self.client.get(f"/events/roster-imports/{import_id}/rows?code={self.event.code}")
+        expected_errors = [
+            "Conflicting duplicate email.",
+            "Another selected row already uses this person's account.",
+        ]
+        for row in rows.data["rows"]:
+            self.assertEqual(row["duplicate"], "conflict")
+            self.assertEqual(row["errors"], expected_errors)
+        blocked = self.commit(import_id)
+        self.assertEqual(blocked.status_code, 409)
+        self.assertEqual(blocked.data["invalidRowCount"], 2)
+
+        deselected = self.client.put(
+            f"/events/roster-imports/{import_id}?code={self.event.code}",
+            {"rowUpdates": [{"id": rows.data["rows"][1]["id"], "selected": False}]},
+            format="json",
+        )
+        self.assertEqual(deselected.status_code, 200, deselected.data)
+        self.assertEqual(deselected.data["import"]["summary"]["valid"], 1)
+        committed = self.commit(import_id)
+        self.assertEqual(committed.status_code, 201, committed.data)
+        # The import binds the organizer's own row to the organizer; it never
+        # mints an organizer-managed person.
+        participant = Participant.objects.get(event=self.event)
+        self.assertEqual(participant.member, self.organizer)
+        self.assertEqual(participant.contact_phone, "555-010-1000")
+        self.assertFalse(participant.organizer_managed)
+        self.assertFalse(Participant.objects.filter(organizer_managed=True).exists())
+
+    def test_commit_without_invitations_adds_people_and_replays_only_with_the_same_flag(self):
+        full_member = create_member("verified@example.com", "Verified", "Member")
+        preview = self.paste(
+            "name,email\nTemporary Person,temp@example.com\nKnown Person,verified@example.com\n"
+        )
+        import_id = preview.data["import"]["id"]
+        key = uuid.uuid4()
+
+        for value in ["false", 0]:
+            with self.subTest(value=value):
+                invalid = self.commit(import_id, key=key, send_invitations=value)
+                self.assertEqual(invalid.status_code, 400, invalid.data)
+                self.assertEqual(invalid.data["error"], "sendInvitations must be a boolean.")
+        self.assertEqual(self.event.participants.count(), 0)
+
+        committed = self.commit(import_id, key=key, send_invitations=False)
+        self.assertEqual(committed.status_code, 201, committed.data)
+        self.assertFalse(committed.data["idempotent"])
+        self.assertEqual(committed.data["autoInvitedCount"], 0)
+        self.assertIsNone(committed.data["deliveryRequest"])
+        self.assertEqual(committed.data["receipt"]["createdCount"], 2)
+        self.assertEqual(committed.data["receipt"]["updatedCount"], 0)
+        self.assertEqual(self.event.participants.count(), 2)
+        self.assertTrue(Participant.objects.filter(event=self.event, member=full_member).exists())
+        self.assertEqual(
+            EventInvitation.objects.filter(event=self.event, first_sent_at__isnull=True).count(),
+            2,
+        )
+        self.assertFalse(EmailDeliveryJob.objects.exists())
+        self.assertFalse(EmailDeliveryRequest.objects.exists())
+        self.assertEqual(RosterImportBatch.objects.get(pk=import_id).rows.count(), 0)
+        roster = self.client.get(f"/events/roster?code={self.event.code}")
+        self.assertEqual(roster.status_code, 200, roster.data)
+        self.assertEqual(
+            {item["invitationStatus"] for item in roster.data["participants"]},
+            {"not_sent"},
+        )
+        self.assertIsNone(roster.data["latestDeliveryRequest"])
+
+        replay = self.commit(import_id, key=key, send_invitations=False)
+        self.assertEqual(replay.status_code, 200, replay.data)
+        self.assertTrue(replay.data["idempotent"])
+        self.assertEqual(replay.data["autoInvitedCount"], 0)
+        self.assertIsNone(replay.data["deliveryRequest"])
+        self.assertEqual(replay.data["receipt"]["id"], committed.data["receipt"]["id"])
+        self.assertEqual(RosterImportReceipt.objects.count(), 1)
+        self.assertFalse(EmailDeliveryJob.objects.exists())
+
+        for send_invitations in [True, None]:
+            with self.subTest(send_invitations=send_invitations):
+                conflict = self.commit(import_id, key=key, send_invitations=send_invitations)
+                self.assertEqual(conflict.status_code, 409, conflict.data)
+                self.assertEqual(
+                    conflict.data["error"],
+                    "This idempotency key was already used for a different import.",
+                )
+        self.assertEqual(RosterImportReceipt.objects.count(), 1)
+        self.assertFalse(EmailDeliveryJob.objects.exists())
+
+        rebuild = self.paste("name,email\nRebuilt Person,rebuilt@example.com")
+        rebuilt = self.commit(
+            rebuild.data["import"]["id"],
+            mode="rebuild",
+            confirmation=self.event.code,
+            send_invitations=False,
+        )
+        self.assertEqual(rebuilt.status_code, 201, rebuilt.data)
+        self.assertEqual(rebuilt.data["autoInvitedCount"], 0)
+        self.assertIsNone(rebuilt.data["deliveryRequest"])
+        self.assertEqual(
+            list(self.event.participants.values_list("participant_name", flat=True)),
+            ["Rebuilt Person"],
+        )
+        rebuilt_invitation = EventInvitation.objects.get(event=self.event)
+        self.assertEqual(rebuilt_invitation.email, "rebuilt@example.com")
+        self.assertIsNone(rebuilt_invitation.first_sent_at)
+        self.assertFalse(EmailDeliveryJob.objects.exists())
+        reminders = self.client.post(
+            f"/events/reminders?code={self.event.code}",
+            {"idempotencyKey": str(uuid.uuid4())},
+            format="json",
+        )
+        self.assertEqual(reminders.status_code, 202, reminders.data)
+        self.assertEqual(reminders.data["recipientCount"], 0)
+        self.assertFalse(EmailDeliveryJob.objects.exists())
 
     def test_import_invitation_enqueue_failure_rolls_back_the_full_commit(self):
         email = "import-rollback@example.com"
@@ -622,6 +971,10 @@ class RosterImportApiTests(TestCase):
         )
         self.assertEqual(self.commit(preview.data["import"]["id"]).status_code, 201)
 
+        # Groups are rows: the import created one per distinct name, and the
+        # stats entries carry the row's pk as ``id``.
+        group_a = ParticipantGroup.objects.get(event=self.event, name="A")
+        group_b = ParticipantGroup.objects.get(event=self.event, name="B")
         roster = self.client.get(f"/events/roster?code={self.event.code}&pageSize=2")
         self.assertEqual(roster.status_code, 200)
         self.assertEqual(len(roster.data["participants"]), 2)
@@ -629,11 +982,16 @@ class RosterImportApiTests(TestCase):
         self.assertEqual(
             roster.data["stats"]["groups"],
             [
-                {"name": "A", "count": 2, "weight": 1.0},
-                {"name": "B", "count": 1, "weight": 1.0},
+                {"id": group_a.pk, "name": "A", "count": 2, "weight": 1.0},
+                {"id": group_b.pk, "name": "B", "count": 1, "weight": 1.0},
             ],
         )
         self.assertNotIn("availabilityInperson", roster.data["participants"][0])
+        self.assertEqual(roster.data["participants"][0]["group"], "A")
+        self.assertEqual(
+            roster.data["participants"][0]["groups"], [{"id": group_a.pk, "name": "A"}]
+        )
+        self.assertFalse(roster.data["participants"][0]["allGroups"])
 
         full_participant = Participant.objects.get(event=self.event, member=full_member)
         schedule = self.client.get(
@@ -658,11 +1016,15 @@ class RosterImportApiTests(TestCase):
         self.assertEqual(patched.data["participant"]["weight"], 0.3)
         self.assertFalse(patched.data["participant"]["included"])
         self.assertEqual(patched.data["participant"]["group"], "C")
+        # The cell created group C; B is emptied but stays as a row.
+        group_c = ParticipantGroup.objects.get(event=self.event, name="C")
+        self.assertEqual(patched.data["participant"]["groups"], [{"id": group_c.pk, "name": "C"}])
         self.assertEqual(
             patched.data["groups"],
             [
-                {"name": "A", "count": 2, "weight": 1.0},
-                {"name": "C", "count": 1, "weight": 0.3},
+                {"id": group_a.pk, "name": "A", "count": 2, "weight": 1.0},
+                {"id": group_b.pk, "name": "B", "count": 0, "weight": None},
+                {"id": group_c.pk, "name": "C", "count": 1, "weight": 0.3},
             ],
         )
         stale = self.client.patch(
@@ -704,8 +1066,9 @@ class RosterImportApiTests(TestCase):
         self.assertEqual(
             regrouped.data["stats"]["groups"],
             [
-                {"name": "A", "count": 2, "weight": 0.6},
-                {"name": "C", "count": 1, "weight": 0.3},
+                {"id": group_a.pk, "name": "A", "count": 2, "weight": 0.6},
+                {"id": group_b.pk, "name": "B", "count": 0, "weight": None},
+                {"id": group_c.pk, "name": "C", "count": 1, "weight": 0.3},
             ],
         )
         one = Participant.objects.get(event=self.event, participant_name="One")
@@ -721,7 +1084,8 @@ class RosterImportApiTests(TestCase):
         self.assertEqual(
             mixed.data["stats"]["groups"],
             [
-                {"name": "A", "count": 2, "weight": None},
-                {"name": "C", "count": 1, "weight": 0.3},
+                {"id": group_a.pk, "name": "A", "count": 2, "weight": None},
+                {"id": group_b.pk, "name": "B", "count": 0, "weight": None},
+                {"id": group_c.pk, "name": "C", "count": 1, "weight": 0.3},
             ],
         )

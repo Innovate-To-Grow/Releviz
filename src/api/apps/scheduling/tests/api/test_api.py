@@ -6,11 +6,19 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from apps.authn.tests.helpers import create_member, token_for
-from apps.scheduling.models import Event, EventInvitation, Participant, UserEvent, Weight
+from apps.scheduling.models import (
+    Event,
+    EventInvitation,
+    Participant,
+    ParticipantGroup,
+    UserEvent,
+    Weight,
+)
 from apps.scheduling.payloads import api_event
 from apps.scheduling.services.availability import (
     default_availability,
     expected_availability_length,
+    starting_availability_value,
     validate_availability,
 )
 
@@ -24,7 +32,7 @@ class RelevizApiTests(TestCase):
     def authenticate(self, member):
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token_for(member)}")
 
-    def create_event(self):
+    def create_event(self, **overrides):
         self.authenticate(self.organizer)
         res = self.client.post(
             "/events",
@@ -38,6 +46,7 @@ class RelevizApiTests(TestCase):
                 "location": "Room 1",
                 "status": "active",
                 "accessMode": "open_link",
+                **overrides,
             },
             format="json",
         )
@@ -55,6 +64,47 @@ class RelevizApiTests(TestCase):
         res = self.client.get(f"/events?code={code}")
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.data["event"]["organizerUserId"], str(self.organizer.pk))
+
+    def test_participants_start_available_by_default_and_busy_when_the_organizer_asks(self):
+        code = self.create_event()
+        res = self.client.get(f"/events?code={code}")
+        self.assertEqual(res.data["event"]["startingAvailability"], "available")
+
+        self.authenticate(self.participant)
+        joined = self.client.post(f"/events/participants?code={code}", {}, format="json")
+        self.assertEqual(joined.status_code, 201)
+        self.assertEqual(joined.data["participant"]["availabilityInperson"], [1] * 8)
+        self.assertEqual(joined.data["participant"]["availabilityVirtual"], [1] * 8)
+
+        busy_code = self.create_event(startingAvailability="busy")
+        res = self.client.get(f"/events?code={busy_code}")
+        self.assertEqual(res.data["event"]["startingAvailability"], "busy")
+        self.assertEqual(Event.objects.get(code=busy_code).starting_availability, "busy")
+
+        self.authenticate(self.participant)
+        joined = self.client.post(f"/events/participants?code={busy_code}", {}, format="json")
+        self.assertEqual(joined.status_code, 201)
+        self.assertEqual(joined.data["participant"]["availabilityInperson"], [0] * 8)
+        self.assertEqual(joined.data["participant"]["availabilityVirtual"], [0] * 8)
+
+        self.authenticate(self.organizer)
+        for invalid in ["green", "", None, 1]:
+            with self.subTest(startingAvailability=invalid):
+                res = self.client.post(
+                    "/events",
+                    {"name": "Invalid start", "startingAvailability": invalid},
+                    format="json",
+                )
+                if invalid in ("", None):
+                    # Blank values fall back to the product default instead of failing.
+                    self.assertEqual(res.status_code, 201)
+                    self.assertEqual(res.data["event"]["startingAvailability"], "available")
+                else:
+                    self.assertEqual(res.status_code, 400)
+                    self.assertEqual(
+                        res.data["error"],
+                        "startingAvailability must be 'available' or 'busy'",
+                    )
 
     def test_participant_can_join_submit_and_see_dashboard(self):
         code = self.create_event()
@@ -343,6 +393,98 @@ class RelevizApiTests(TestCase):
             list(range(8)),
         )
 
+    def test_event_create_validates_and_canonicalizes_blocked_slots(self):
+        self.authenticate(self.organizer)
+        shape_error = "blockedSlots must be an object keyed by slot group."
+        range_error = "blockedSlots references a slot outside the event window."
+        base = {
+            "name": "Blocked",
+            "startTime": "09:00",
+            "endTime": "10:00",
+            "slotMinutes": 30,
+            "days": [1, 2],
+            "accessMode": "open_link",
+        }
+        invalid_payloads = [
+            ({**base, "blockedSlots": [[0]]}, shape_error),
+            ({**base, "blockedSlots": {"weekday:5": [0]}}, shape_error),
+            ({**base, "blockedSlots": {"weekday:1": 0}}, shape_error),
+            ({**base, "blockedSlots": {"weekday:1": ["0"]}}, shape_error),
+            ({**base, "blockedSlots": {"weekday:1": [True]}}, shape_error),
+            ({**base, "blockedSlots": {"weekday:1": [1, 1]}}, shape_error),
+            ({**base, "blockedSlots": {"weekday:1": [-1]}}, range_error),
+            ({**base, "blockedSlots": {"weekday:1": [2]}}, range_error),
+            (
+                {
+                    **base,
+                    "days": [1],
+                    "meetingDurationMinutes": 60,
+                    "blockedSlots": {"weekday:1": [1]},
+                },
+                "Blocked slots leave no open window for a 60-minute meeting.",
+            ),
+            (
+                {
+                    **base,
+                    "meetingDurationMinutes": 60,
+                    "blockedSlots": {"weekday:1": [0], "weekday:2": [1]},
+                },
+                "Blocked slots leave no open window for a 60-minute meeting.",
+            ),
+        ]
+        for payload, message in invalid_payloads:
+            with self.subTest(payload=payload):
+                response = self.client.post("/events", payload, format="json")
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.data["error"], message)
+
+        # A default create stores nothing blocked, and an empty map is the same.
+        untouched = self.client.post("/events", base, format="json")
+        self.assertEqual(untouched.status_code, 201)
+        self.assertEqual(untouched.data["event"]["blockedSlots"], {})
+        emptied = self.client.post("/events", {**base, "blockedSlots": {}}, format="json")
+        self.assertEqual(emptied.status_code, 201)
+        self.assertEqual(emptied.data["event"]["blockedSlots"], {})
+
+        created = self.client.post(
+            "/events",
+            {**base, "blockedSlots": {"weekday:2": [1, 0], "weekday:1": []}},
+            format="json",
+        )
+        self.assertEqual(created.status_code, 201)
+        self.assertEqual(created.data["event"]["blockedSlots"], {"weekday:2": [0, 1]})
+        self.assertEqual(created.data["event"]["slotCount"], 4)
+        self.assertEqual(
+            [
+                (slot["index"], slot["blocked"])
+                for group in created.data["event"]["slotGroups"]
+                for slot in group["slots"]
+            ],
+            [(0, False), (1, False), (2, True), (3, True)],
+        )
+        event = Event.objects.get(code=created.data["event"]["code"])
+        self.assertEqual(event.blocked_slots, {"weekday:2": [0, 1]})
+        self.assertEqual(
+            api_event(event, include_slot_groups=False)["blockedSlots"], event.blocked_slots
+        )
+
+        # Participants may still submit marks on blocked slots; results ignore them.
+        self.assertIsNone(validate_availability([1, 0.5, 1, 1], event, "x"))
+        self.authenticate(self.participant)
+        joined = self.client.post(f"/events/participants?code={event.code}", {}, format="json")
+        self.assertEqual(joined.status_code, 201)
+        saved = self.client.put(
+            f"/events/participants/update?code={event.code}&participantId={self.participant.pk}",
+            {
+                "availabilityInperson": [0, 0, 1, 0.5],
+                "submitted": 1,
+                "expectedVersion": joined.data["participant"]["version"],
+            },
+            format="json",
+        )
+        self.assertEqual(saved.status_code, 200)
+        self.assertEqual(saved.data["participant"]["availabilityInperson"], [0, 0, 1, 0.5])
+
     def test_event_code_generation_failure(self):
         self.authenticate(self.organizer)
         with patch(
@@ -423,12 +565,51 @@ class RelevizApiTests(TestCase):
         self.assertEqual(response.status_code, 404)
 
         self.authenticate(self.organizer)
+        participant = Participant.objects.get(event__code=code, member=self.participant)
+        version = participant.version
+        results_revision = Event.objects.get(code=code).results_revision
         response = self.client.put(base, {"groupName": "A", "sortOrder": 3}, format="json")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["participant"]["group_name"], "A")
+        group_a = ParticipantGroup.objects.get(event__code=code, name="A")
+        self.assertEqual(response.data["participant"]["groups"], [{"id": group_a.pk, "name": "A"}])
+        self.assertFalse(response.data["participant"]["allGroups"])
+        self.assertEqual(response.data["participant"]["sort_order"], 3)
+        # A membership change bumps the version like a rename does.
+        self.assertEqual(response.data["participant"]["version"], version + 1)
+        # Repeating the same cell changes nothing.
+        repeated = self.client.put(base, {"groupName": "A"}, format="json")
+        self.assertEqual(repeated.status_code, 200)
+        self.assertEqual(repeated.data["participant"]["version"], version + 1)
+        # A multi-group cell with the ALL token.
+        response = self.client.put(base, {"groupName": "all; B; a"}, format="json")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["participant"]["group_name"], "ALL; A; B")
+        self.assertTrue(response.data["participant"]["allGroups"])
+        self.assertEqual(
+            [group["name"] for group in response.data["participant"]["groups"]], ["A", "B"]
+        )
+        self.assertEqual(response.data["participant"]["version"], version + 2)
+        # Invalid cells are rejected before any write.
+        response = self.client.put(base, {"groupName": "x" * 101}, format="json")
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["error"], "group is too long (max 100).")
         response = self.client.put(base, {"groupName": "", "sortOrder": None}, format="json")
         self.assertEqual(response.status_code, 200)
         self.assertIsNone(response.data["participant"]["group_name"])
+        self.assertEqual(response.data["participant"]["groups"], [])
+        self.assertFalse(response.data["participant"]["allGroups"])
+        self.assertIsNone(response.data["participant"]["sort_order"])
+        # The emptied groups remain as rows on the event.
+        self.assertEqual(
+            list(ParticipantGroup.objects.filter(event__code=code).values_list("name", flat=True)),
+            ["A", "B"],
+        )
+        participant.refresh_from_db()
+        self.assertEqual(participant.version, version + 3)
+        self.assertFalse(participant.all_groups)
+        # Roster metadata never dirties the results.
+        self.assertEqual(Event.objects.get(code=code).results_revision, results_revision)
 
         other = create_member("other@example.com")
         self.authenticate(self.participant)
@@ -527,7 +708,12 @@ class RelevizApiTests(TestCase):
             invited_by=self.organizer,
         )
         self.assertIn("model-string@example.com", str(invitation))
+        self.assertEqual(starting_availability_value(event), 1)
+        self.assertEqual(default_availability(event), [1] * 8)
+        event.starting_availability = "busy"
+        self.assertEqual(starting_availability_value(event), 0)
         self.assertEqual(default_availability(event), [0] * 8)
+        event.starting_availability = "available"
         self.assertEqual(
             validate_availability({"bad": 1}, event, "x"),
             "Invalid x: must be an array",

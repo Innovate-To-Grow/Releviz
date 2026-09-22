@@ -2,7 +2,6 @@ import Link from "next/link";
 import { BrandHomeLink } from "@/components/ui/BrandLogo";
 
 const footerLinks = [
-  { href: "/support", label: "Support" },
   { href: "/privacy", label: "Privacy" },
   { href: "/terms", label: "Terms" },
 ];

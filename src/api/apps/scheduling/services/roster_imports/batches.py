@@ -21,9 +21,11 @@ from .normalization import (
     active_rows,
     apply_account_rules,
     apply_duplicate_rules,
+    normalize_group_cell,
     normalize_import_batch,
     rows_summary,
     validate_identity_fields,
+    validate_phone,
 )
 from .parsing import parse_roster_source
 
@@ -164,17 +166,22 @@ def _apply_row_updates(batch: RosterImportBatch, updates) -> None:
         row = rows[str(item["id"])]
         name = row.name
         email = row.email
+        phone = row.phone
         group_name = row.group_name
         if "name" in item:
             name = str(item.get("name") or "").strip()
         if "email" in item:
             email = str(item.get("email") or "").strip().lower()
+        if "phone" in item:
+            phone = str(item.get("phone") or "").strip()
         if "group" in item or "groupName" in item:
-            group_name = str(item.get("group", item.get("groupName")) or "").strip()
+            group_name = normalize_group_cell(item.get("group", item.get("groupName")) or "")
         identity_errors = validate_identity_fields(name, email, group_name)
+        identity_errors.extend(validate_phone(phone))
         row.name = name[:100]
         row.email = email[:254]
-        row.group_name = group_name[:100]
+        row.phone = phone[:32]
+        row.group_name = group_name
         if "weight" in item:
             try:
                 weight = float(item.get("weight"))
@@ -201,6 +208,7 @@ def _apply_row_updates(batch: RosterImportBatch, updates) -> None:
         [
             "name",
             "email",
+            "phone",
             "group_name",
             "weight",
             "included",
