@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/icons";
 import CreateEventClient from "@/components/event/CreateEventClient";
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
+import BlockedSlotsEditor from "@/components/schedule/BlockedSlotsEditor";
 import MeetingCalendar from "@/components/schedule/MeetingCalendar";
 import {
   selectionFromRecommendation,
@@ -84,6 +85,15 @@ function formatInTimezone(value, timezone) {
     // An unknown zone name: fall back to the browser's own zone.
     return date.toLocaleString();
   }
+}
+
+// Rows across every group of the stored `blockedSlots` map ({ key: [rows] }).
+function countBlockedSlots(blockedSlots) {
+  if (!blockedSlots || typeof blockedSlots !== "object") return 0;
+  return Object.values(blockedSlots).reduce(
+    (total, rows) => total + (Array.isArray(rows) ? rows.length : 0),
+    0,
+  );
 }
 
 function ChannelBadge({ channel, className = "" }) {
@@ -215,16 +225,28 @@ export function DeliveryRequestProgress({
   );
 }
 
+// What each lifecycle state means for responses, shown beside the controls
+// from first paint rather than only as a toast after a change.
+const LIFECYCLE_SUMMARIES = {
+  active: "This event is active and accepting responses.",
+  closed: "Responses are now closed.",
+  finalized:
+    "The meeting is finalized. Reactivate the event to collect new responses.",
+  archived: "This event is archived.",
+};
+
 export function EventControls({
   event,
   setEvent,
   getToken,
   setDeliveryRequest,
+  onReactivated,
 }) {
   const [changing, setChanging] = useState(false);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
   const reminderKey = useRef("");
+  const lifecycleSummary = LIFECYCLE_SUMMARIES[event.status] || "";
 
   const changeLifecycle = async (nextStatus) => {
     setChanging(true);
@@ -248,6 +270,7 @@ export function EventControls({
         token,
       );
       setEvent(data.event);
+      if (nextStatus === "active") onReactivated?.();
       if (data.cancellationDeliveryRequestId) {
         setDeliveryRequest({
           id: data.cancellationDeliveryRequestId,
@@ -259,15 +282,6 @@ export function EventControls({
           },
         });
       }
-      setStatus(
-        nextStatus === "active"
-          ? "This event is active and accepting responses."
-          : nextStatus === "closed"
-            ? "Responses are now closed."
-            : nextStatus === "archived"
-              ? "Event archived."
-              : `Event is now ${nextStatus}.`,
-      );
     } catch (requestError) {
       setError(requestError.message || "Unable to change the event status.");
     } finally {
@@ -367,20 +381,26 @@ export function EventControls({
         </AppButton>
       )}
 
-      {(status || error) && (
-        <div className="organizer-event-controls__feedback w-100 d-flex flex-column gap-2">
-          {status && (
-            <Alert variant="success" role="status" className="py-2">
-              {status}
-            </Alert>
-          )}
-          {error && (
-            <Alert variant="danger" role="alert" className="py-2">
-              {error}
-            </Alert>
-          )}
-        </div>
-      )}
+      <div className="organizer-event-controls__feedback w-100 d-flex flex-column gap-2">
+        {lifecycleSummary && (
+          <p
+            className="organizer-event-controls__lifecycle small text-secondary mb-0"
+            role="status"
+          >
+            {lifecycleSummary}
+          </p>
+        )}
+        {status && (
+          <Alert variant="success" role="status" className="py-2">
+            {status}
+          </Alert>
+        )}
+        {error && (
+          <Alert variant="danger" role="alert" className="py-2">
+            {error}
+          </Alert>
+        )}
+      </div>
     </section>
   );
 }
@@ -389,6 +409,12 @@ export function OverviewPanel({ event, onEventSaved }) {
   const [editing, setEditing] = useState(false);
   const [editingEvent, setEditingEvent] = useState(null);
   const [saveStatus, setSaveStatus] = useState("");
+  const blockedCount = countBlockedSlots(event.blockedSlots);
+  // Open on the page the organizer lands on right after creating the event
+  // (no blocks yet); decided once, so saving blocks does not collapse it.
+  const [blockedTimesOpen, setBlockedTimesOpen] = useState(
+    () => blockedCount === 0,
+  );
   const panelRef = useRef(null);
   const editorHeadingRef = useRef(null);
   const editLocked =
@@ -519,6 +545,43 @@ export function OverviewPanel({ event, onEventSaved }) {
           />
         </div>
       )}
+      <details
+        className="disclosure organizer-blocked-times mt-3"
+        aria-labelledby="organizer-blocked-times-heading"
+        open={blockedTimesOpen}
+        onToggle={(toggleEvent) =>
+          setBlockedTimesOpen(toggleEvent.currentTarget.open)
+        }
+      >
+        <summary className="organizer-blocked-times__summary">
+          <span className="disclosure__summary-copy">
+            <h4
+              id="organizer-blocked-times-heading"
+              className="h6 fw-semibold mb-0"
+            >
+              Blocked times
+            </h4>
+            <small className="text-secondary d-block">
+              {blockedCount} slots blocked
+            </small>
+          </span>
+          <span className="disclosure__chevron" aria-hidden="true">
+            <ChevronDownIcon />
+          </span>
+        </summary>
+        <div className="disclosure__content d-flex flex-column gap-3">
+          <p className="text-secondary mb-0">
+            Mark the parts of each day that are not available for this event.
+            Participants see these times greyed out.
+          </p>
+          <BlockedSlotsEditor
+            event={event}
+            onEventSaved={onEventSaved}
+            locked={editLocked}
+            lockReason={editLockReason}
+          />
+        </div>
+      </details>
     </Panel>
   );
 }
@@ -750,24 +813,37 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
   const [now, setNow] = useState(() => Date.now());
   const sectionRef = useRef(null);
   const calendarRef = useRef(null);
+  // The freshness of the snapshot on screen, for the workspace's live sync to
+  // compare against its activity poll. Null until the first successful load.
+  const shownRef = useRef(null);
 
+  // A silent load (the workspace's live sync) swaps the snapshot in place:
+  // no loading hint, and a failure is reported to the caller, not the panel.
   const load = useCallback(
-    async (providedToken, { throwOnError = false } = {}) => {
-      setLoading(true);
+    async (providedToken, { throwOnError = false, silent = false } = {}) => {
+      if (!silent) setLoading(true);
       try {
         const token =
           providedToken === undefined ? await getToken() : providedToken;
         const data = await fetchEventResults(event.code, token);
-        setSnapshot(resultEnvelope(data));
+        const envelope = resultEnvelope(data);
+        shownRef.current = {
+          status: envelope.status,
+          requestedRevision: envelope.requestedRevision ?? null,
+          computedRevision: envelope.computedRevision ?? null,
+          generatedAt: envelope.generatedAt ?? null,
+        };
+        setSnapshot(envelope);
         setNow(Date.now());
         setError("");
         return data;
       } catch (requestError) {
-        setError(requestError.message || "Unable to load results.");
+        if (!silent)
+          setError(requestError.message || "Unable to load results.");
         if (throwOnError) throw requestError;
         return null;
       } finally {
-        setLoading(false);
+        if (!silent) setLoading(false);
       }
     },
     [event.code, getToken],
@@ -776,7 +852,9 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
   useImperativeHandle(
     forwardedRef,
     () => ({
-      refresh: (token) => load(token, { throwOnError: true }),
+      refresh: (token, { silent = false } = {}) =>
+        load(token, { throwOnError: true, silent }),
+      activity: () => shownRef.current,
     }),
     [load],
   );
@@ -819,6 +897,11 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
 
   const results = snapshot.results || null;
   const recommendations = (results?.recommendations || []).slice(0, 10);
+  // Snapshots computed before blocking shipped lack the key; the calendar
+  // greys cells from `event.slotGroups` either way, so this is only a note.
+  const blockedSlotIndices = Array.isArray(results?.blockedSlotIndices)
+    ? results.blockedSlotIndices
+    : [];
   const meetingMinutes = event.meetingDurationMinutes || event.slotMinutes;
   const mixed = event.mode === "mixed";
   const activeChannel = mixed ? channel : defaultChannel(event);
@@ -890,6 +973,12 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
               : ""}
             .
           </Alert>
+        )}
+        {blockedSlotIndices.length > 0 && (
+          <p className="text-secondary small mb-0">
+            {blockedSlotIndices.length} blocked slots are excluded from these
+            results.
+          </p>
         )}
 
         <div className="meeting-results">
@@ -1019,6 +1108,73 @@ function SelectionMetrics({ metrics }) {
       {percentOf(metrics.unweighted)}% unweighted across this window (lowest
       slot). Exact attendance counts appear after Review attendance.
     </p>
+  );
+}
+
+const ATTENDANCE_STATUS_LABELS = {
+  available: "Fully available",
+  partial: "Partly available",
+  unavailable: "Not available",
+};
+
+const EXCLUSION_REASON_LABELS = {
+  organizerExcluded: "Excluded by organizer",
+  hidden: "Hidden from results",
+  invalidResponse: "Invalid response",
+};
+
+// Per-person breakdown behind the attendance count tiles: counted responses
+// first, then people who never answered, then anyone left out of results.
+function AttendanceReviewTable({ review }) {
+  const rows = [
+    ...(review.participants || []).map((participant) => ({
+      key: `counted:${participant.participantId}`,
+      name: participant.name,
+      response: "Submitted",
+      availability: `${ATTENDANCE_STATUS_LABELS[participant.status]} · ${Math.round(participant.minimumAvailability * 100)}%`,
+    })),
+    ...(review.unansweredParticipants || []).map((participant) => ({
+      key: `unanswered:${participant.participantId}`,
+      name: participant.name,
+      response: "Not submitted",
+      availability: "—",
+    })),
+    ...(review.excludedParticipants || []).map((participant) => ({
+      key: `excluded:${participant.participantId}`,
+      name: participant.name,
+      response: "Not included",
+      availability:
+        EXCLUSION_REASON_LABELS[participant.reason] || participant.reason,
+    })),
+  ];
+  if (rows.length === 0) return null;
+  return (
+    <div
+      className="table-responsive attendance-table mt-3"
+      role="region"
+      aria-label="Attendance by person"
+      tabIndex={0}
+    >
+      <table className="table table-sm align-middle attendance-table__table">
+        <caption className="visually-hidden">Attendance by person</caption>
+        <thead>
+          <tr>
+            <th scope="col">Person</th>
+            <th scope="col">Response</th>
+            <th scope="col">Availability</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.key}>
+              <th scope="row">{row.name}</th>
+              <td>{row.response}</td>
+              <td>{row.availability}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -1271,26 +1427,29 @@ function FinalizeScalePanelContent({
       )}
 
       {review && (
-        <div
-          role="group"
-          className="metric-tiles attendance-review mt-3"
-          aria-label="Attendance review"
-        >
-          {[
-            ["Available", review.availableParticipantTotal],
-            ["Partial", review.partialParticipantTotal],
-            ["Unavailable", review.unavailableParticipantTotal],
-            ["Unanswered", review.unansweredParticipantTotal],
-            ["Excluded", review.excludedParticipantTotal],
-          ].map(([label, value]) => (
-            <div key={label} className="metric-tile attendance-review__item">
-              <span className="metric-tile__label">{label}</span>
-              <strong className="metric-tile__value attendance-review__value">
-                {value || 0}
-              </strong>
-            </div>
-          ))}
-        </div>
+        <>
+          <div
+            role="group"
+            className="metric-tiles attendance-review mt-3"
+            aria-label="Attendance review"
+          >
+            {[
+              ["Available", review.availableParticipantTotal],
+              ["Partial", review.partialParticipantTotal],
+              ["Unavailable", review.unavailableParticipantTotal],
+              ["Unanswered", review.unansweredParticipantTotal],
+              ["Excluded", review.excludedParticipantTotal],
+            ].map(([label, value]) => (
+              <div key={label} className="metric-tile attendance-review__item">
+                <span className="metric-tile__label">{label}</span>
+                <strong className="metric-tile__value attendance-review__value">
+                  {value || 0}
+                </strong>
+              </div>
+            ))}
+          </div>
+          <AttendanceReviewTable review={review} />
+        </>
       )}
       {(status || error) && (
         <div className="d-flex flex-column gap-2 mt-3">

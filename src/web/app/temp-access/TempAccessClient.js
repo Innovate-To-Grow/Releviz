@@ -2,13 +2,18 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
 import ScheduleChannelEditor from "@/components/schedule/ScheduleChannelEditor";
 import useAutosaveNavigationGuard from "@/components/schedule/useAutosaveNavigationGuard";
 import Alert from "@/components/ui/Alert";
 import AppButton from "@/components/ui/AppButton";
-import { AvailabilityChoice } from "@/components/ui/Availability";
+import {
+  AvailabilityChoice,
+  availabilityLabel,
+  startingAvailabilityValue,
+  startingBrushValue,
+} from "@/components/ui/Availability";
 import BrandLogo from "@/components/ui/BrandLogo";
 import FormField from "@/components/ui/FormField";
 import LoadingState from "@/components/ui/LoadingState";
@@ -95,6 +100,21 @@ function normalizedSchedule(values, length) {
   return Array.from({ length }, (_, index) => Number(values?.[index] || 0));
 }
 
+const BLOCKED_SLOTS_NOTE =
+  "Grey striped times are blocked by the organizer and do not apply to this event.";
+
+// Organizer-blocked slots keep their index but never take availability: the
+// grid refuses to paint them, and bulk fills leave them at 0.
+function blockedSlotIndices(slotGroups) {
+  const blocked = new Set();
+  for (const group of slotGroups || []) {
+    for (const slot of group?.slots || []) {
+      if (slot?.blocked) blocked.add(slot.index);
+    }
+  }
+  return blocked;
+}
+
 function makeUpgradeHref(eventCode) {
   const next = `/event?code=${encodeURIComponent(eventCode)}`;
   const params = new URLSearchParams({
@@ -117,7 +137,16 @@ export default function TempAccessClient() {
   const [requestState, setRequestState] = useState("idle");
   const [requestMessage, setRequestMessage] = useState("");
   const [access, setAccess] = useState(null);
-  const [availabilityValue, setAvailabilityValue] = useState(1);
+  // The brush starts opposite to the event's starting level so people paint
+  // over the times that differ from the default.
+  const startingBrush = startingBrushValue(access?.event);
+  const [availabilityValue, setAvailabilityValue] = useState(startingBrush);
+  // Once the session loads (or the setting changes) the brush follows it.
+  const [brushBaseline, setBrushBaseline] = useState(startingBrush);
+  if (brushBaseline !== startingBrush) {
+    setBrushBaseline(startingBrush);
+    setAvailabilityValue(startingBrush);
+  }
   const [scheduleInperson, setScheduleInperson] = useState([]);
   const [scheduleVirtual, setScheduleVirtual] = useState([]);
   const [submitted, setSubmitted] = useState(false);
@@ -376,6 +405,11 @@ export default function TempAccessClient() {
     access.event.status !== "active" ||
     responseDeadlinePassed ||
     Boolean(serverWriteLock);
+  const blockedIndices = useMemo(
+    () => blockedSlotIndices(access?.event?.slotGroups),
+    [access?.event?.slotGroups],
+  );
+  const hasBlockedSlots = blockedIndices.size > 0;
 
   const runAutosave = useCallback(async () => {
     if (autosaveInFlightRef.current) {
@@ -601,13 +635,17 @@ export default function TempAccessClient() {
     if (responseChangesDisabled) return;
     const mode = access?.event?.mode || "inperson";
     const length = scheduleLength(access?.event, access?.participant);
+    const filled = () =>
+      Array.from({ length }, (_, index) =>
+        blockedIndices.has(index) ? 0 : value,
+      );
     if (mode !== "virtual") {
-      const next = Array(length).fill(value);
+      const next = filled();
       scheduleInpersonRef.current = next;
       setScheduleInperson(next);
     }
     if (mode !== "inperson") {
-      const next = Array(length).fill(value);
+      const next = filled();
       scheduleVirtualRef.current = next;
       setScheduleVirtual(next);
     }
@@ -831,6 +869,9 @@ export default function TempAccessClient() {
   const event = access.event;
   const participant = access.participant;
   const mode = event.mode || "inperson";
+  const startingValue = startingAvailabilityValue(event);
+  const startsAvailable = startingValue === 1;
+  const startingLabel = availabilityLabel(startingValue);
   const upgradeHref = event.code ? makeUpgradeHref(event.code) : "";
   const leavingPage = logoutPending || upgradePending;
 
@@ -881,7 +922,11 @@ export default function TempAccessClient() {
         <PageHeader
           eyebrow={`You are responding as ${participant.name}`}
           title={event.name}
-          lede="Choose a status, then click or drag across the times that work for you."
+          lede={
+            startsAvailable
+              ? "Every time starts as Available. Paint Busy over the times that do not work for you."
+              : "Choose a status, then click or drag across the times that work for you."
+          }
           actions={
             upgradeHref ? (
               <Link
@@ -950,9 +995,9 @@ export default function TempAccessClient() {
                         variant="outlined"
                         size="sm"
                         disabled={responseChangesDisabled || leavingPage}
-                        onClick={() => fillAll(0)}
+                        onClick={() => fillAll(startingValue)}
                       >
-                        Mark all Busy
+                        Mark all {startingLabel}
                       </AppButton>
                     </div>
                   </div>
@@ -964,11 +1009,18 @@ export default function TempAccessClient() {
                   </p>
                 </div>
 
+                {hasBlockedSlots && (
+                  <Alert variant="info" role="note">
+                    {BLOCKED_SLOTS_NOTE}
+                  </Alert>
+                )}
+
                 <ScheduleChannelEditor
                   mode={mode}
                   slotGroups={event.slotGroups || []}
                   inperson={scheduleInperson}
                   virtual={scheduleVirtual}
+                  startingValue={startingValue}
                   readOnly={
                     responseChangesDisabled ||
                     leavingPage ||

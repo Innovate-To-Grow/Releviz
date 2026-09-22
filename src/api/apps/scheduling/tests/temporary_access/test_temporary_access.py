@@ -11,7 +11,7 @@ from rest_framework.test import APIClient
 from apps.authn.models import ContactEmail, EmailAuthChallenge
 from apps.authn.tests.helpers import create_member, token_for
 from apps.mail.models import EmailDeliveryJob, EmailDeliveryRequest
-from apps.mail.services import dispatch_email_job
+from apps.mail.services import dispatch_due_email_jobs, dispatch_email_job
 from apps.scheduling.models import (
     Event,
     EventInvitation,
@@ -40,10 +40,20 @@ class TemporaryParticipantAccessTests(TestCase):
             participant_view_permission="realtime",
         )
 
-    def create_managed(self, *, name="Managed Person", email="managed@example.com"):
+    def create_managed(
+        self,
+        *,
+        name="Managed Person",
+        email="managed@example.com",
+        key=None,
+        send_invitation=None,
+    ):
+        payload = {"name": name, "email": email, "idempotencyKey": str(key or uuid.uuid4())}
+        if send_invitation is not None:
+            payload["sendInvitation"] = send_invitation
         return self.organizer_client.post(
             f"/events/participants/managed?code={self.event.code}",
-            {"name": name, "email": email, "idempotencyKey": str(uuid.uuid4())},
+            payload,
             format="json",
         )
 
@@ -111,6 +121,9 @@ class TemporaryParticipantAccessTests(TestCase):
         self.assertTrue(member.is_active)
         self.assertFalse(member.has_usable_password())
         self.assertFalse(ContactEmail.objects.get(member=member).verified)
+        # Organizer-added people start from the event's starting schedule (Available).
+        self.assertEqual(created.data["participant"]["availabilityInperson"], [1, 1])
+        self.assertEqual(created.data["participant"]["availabilityVirtual"], [1, 1])
         invitation = EventInvitation.objects.get(event=self.event, member=member)
         self.assertIsNone(invitation.first_sent_at)
         self.assertEqual(EmailDeliveryJob.objects.count(), 1)
@@ -140,6 +153,7 @@ class TemporaryParticipantAccessTests(TestCase):
             days=[2],
             start_minutes=9 * 60,
             end_minutes=10 * 60,
+            starting_availability="busy",
         )
         reused = self.organizer_client.post(
             f"/events/participants/managed?code={other_event.code}",
@@ -152,6 +166,9 @@ class TemporaryParticipantAccessTests(TestCase):
         )
         self.assertEqual(reused.status_code, 201)
         self.assertEqual(reused.data["participant"]["id"], participant_id)
+        # A busy-start event seeds the same person with an all-busy schedule instead.
+        self.assertEqual(reused.data["participant"]["availabilityInperson"], [0, 0])
+        self.assertEqual(reused.data["participant"]["availabilityVirtual"], [0, 0])
         self.assertEqual(
             ContactEmail.objects.filter(email_address="managed@example.com").count(),
             1,
@@ -177,6 +194,107 @@ class TemporaryParticipantAccessTests(TestCase):
         self.assertEqual(denied.status_code, 403)
         self.assertEqual(denied.data["errorCode"], "organizer_edit_full_account")
         self.assertEqual(denied.data["participant"]["accountAccess"], "full")
+
+    def test_managed_add_only_creates_the_person_without_queueing_an_invitation(self):
+        key = uuid.uuid4()
+        created = self.create_managed(key=key, send_invitation=False)
+        self.assertEqual(created.status_code, 201, created.data)
+        participant_id = created.data["participant"]["id"]
+        self.assertTrue(created.data["created"])
+        self.assertFalse(created.data["restored"])
+        self.assertTrue(created.data["memberCreated"])
+        self.assertFalse(created.data["idempotent"])
+        self.assertIsNone(created.data["deliveryRequest"])
+        self.assertEqual(created.data["autoInvitedCount"], 0)
+        self.assertEqual(created.data["participant"]["accountAccess"], "temporary")
+        self.assertEqual(created.data["participant"]["email"], "managed@example.com")
+        self.assertEqual(created.data["participant"]["invitationStatus"], "not_sent")
+        self.assertTrue(created.data["participant"]["canOrganizerEditAvailability"])
+
+        member = get_user_model().objects.get(pk=participant_id)
+        self.assertEqual(member.access_level, member.AccessLevel.TEMPORARY)
+        self.assertFalse(ContactEmail.objects.get(member=member).verified)
+        invitation = EventInvitation.objects.get(event=self.event, member=member)
+        self.assertIsNone(invitation.first_sent_at)
+        self.assertIsNone(invitation.last_sent_at)
+        self.assertEqual(invitation.status, EventInvitation.Status.INVITED)
+        self.assertFalse(EmailDeliveryJob.objects.exists())
+        self.assertFalse(EmailDeliveryRequest.objects.exists())
+        self.event.refresh_from_db()
+        self.assertEqual(self.event.results_revision, 2)
+
+        roster = self.organizer_client.get(f"/events/roster?code={self.event.code}")
+        self.assertEqual(roster.status_code, 200, roster.data)
+        self.assertEqual(roster.data["participants"][0]["memberId"], participant_id)
+        self.assertEqual(roster.data["participants"][0]["invitationStatus"], "not_sent")
+        self.assertIsNone(roster.data["latestDeliveryRequest"])
+        listed = self.organizer_client.get(f"/events/participants?code={self.event.code}")
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual(listed.data["participants"][0]["invitationStatus"], "not_sent")
+
+        self.assertEqual(dispatch_due_email_jobs(limit=10)["sent"], 0)
+        self.assertEqual(len(mail.outbox), 0)
+
+        replay = self.create_managed(key=key, send_invitation=False)
+        self.assertEqual(replay.status_code, 200, replay.data)
+        self.assertFalse(replay.data["created"])
+        self.assertFalse(replay.data["restored"])
+        self.assertFalse(replay.data["idempotent"])
+        self.assertIsNone(replay.data["deliveryRequest"])
+        self.assertEqual(replay.data["autoInvitedCount"], 0)
+        self.assertEqual(replay.data["participant"]["id"], participant_id)
+        self.assertEqual(Participant.objects.filter(event=self.event).count(), 1)
+        self.assertFalse(EmailDeliveryJob.objects.exists())
+        self.event.refresh_from_db()
+        self.assertEqual(self.event.results_revision, 2)
+
+        for value in ["false", 0, 1]:
+            with self.subTest(value=value):
+                invalid = self.create_managed(email="flag@example.com", send_invitation=value)
+                self.assertEqual(invalid.status_code, 400, invalid.data)
+                self.assertEqual(invalid.data["error"], "sendInvitation must be a boolean")
+        self.assertFalse(Participant.objects.filter(member__email="flag@example.com").exists())
+
+        full = self.create_managed(
+            name="Organizer label",
+            email="full@example.com",
+            send_invitation=False,
+        )
+        self.assertEqual(full.status_code, 201, full.data)
+        self.assertEqual(full.data["participant"]["id"], str(self.full_member.pk))
+        self.assertFalse(full.data["memberCreated"])
+        self.assertEqual(full.data["participant"]["accountAccess"], "full")
+        self.assertFalse(full.data["participant"]["canOrganizerEditAvailability"])
+        self.assertEqual(full.data["participant"]["invitationStatus"], "not_sent")
+        self.assertIsNone(full.data["deliveryRequest"])
+        self.assertEqual(full.data["autoInvitedCount"], 0)
+        self.assertIsNone(
+            EventInvitation.objects.get(event=self.event, member=self.full_member).first_sent_at
+        )
+        self.assertFalse(EmailDeliveryJob.objects.exists())
+        self.assertFalse(EmailDeliveryRequest.objects.exists())
+
+        sent = self.create_managed(name="Invited Person", email="invited@example.com")
+        self.assertEqual(sent.status_code, 201, sent.data)
+        self.assertEqual(sent.data["autoInvitedCount"], 1)
+        self.assertEqual(sent.data["participant"]["invitationStatus"], "not_sent")
+        self.assertEqual(EmailDeliveryJob.objects.count(), 1)
+        self.assertEqual(dispatch_due_email_jobs(limit=10)["sent"], 1)
+        self.assertEqual([message.to for message in mail.outbox], [["invited@example.com"]])
+        statuses = {
+            item["email"]: item["invitationStatus"]
+            for item in self.organizer_client.get(f"/events/roster?code={self.event.code}").data[
+                "participants"
+            ]
+        }
+        self.assertEqual(
+            statuses,
+            {
+                "managed@example.com": "not_sent",
+                "full@example.com": "not_sent",
+                "invited@example.com": "sent",
+            },
+        )
 
     def test_temporary_and_full_members_receive_the_correct_manual_links_and_resends(self):
         self.event.response_deadline = timezone.now() + timedelta(days=1)

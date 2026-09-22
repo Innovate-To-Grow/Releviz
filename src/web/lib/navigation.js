@@ -8,9 +8,12 @@ export function safeNextPath(value, fallback = "/dashboard") {
   try {
     const baseUrl = "https://releviz.invalid";
     const resolved = new URL(value, baseUrl);
-    return resolved.origin === baseUrl
-      ? `${resolved.pathname}${resolved.search}${resolved.hash}`
-      : fallback;
+    // Dot segments can normalise to a scheme-relative path ("/..//evil.com"
+    // becomes "//evil.com"), which location.assign would send off-origin.
+    if (resolved.origin !== baseUrl || resolved.pathname.startsWith("//")) {
+      return fallback;
+    }
+    return `${resolved.pathname}${resolved.search}${resolved.hash}`;
   } catch {
     return fallback;
   }

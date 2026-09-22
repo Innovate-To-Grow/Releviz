@@ -40,6 +40,10 @@ class Event(TimestampedModel):
         ("invite_only", "Invite only"),
         ("open_link", "Open link"),
     ]
+    STARTING_AVAILABILITY_CHOICES = [
+        ("available", "Available"),
+        ("busy", "Busy"),
+    ]
 
     event_id = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
     code = models.CharField(max_length=16, unique=True)
@@ -52,6 +56,11 @@ class Event(TimestampedModel):
     )
     spans_next_day = models.BooleanField(default=False)
     days = models.JSONField(default=default_weekdays)
+    # Organizer-painted blocked slots keyed by slot group (``weekday:1`` /
+    # ``date:YYYY-MM-DD``), each a sorted list of 0-based row positions inside
+    # that group. Blocking never changes slot indices, so participant arrays
+    # survive edits; groups without blocks are omitted.
+    blocked_slots = models.JSONField(default=dict, blank=True)
     mode = models.CharField(max_length=16, choices=MODE_CHOICES, default="inperson")
     location = models.CharField(max_length=500, blank=True, default="")
     organizer = models.ForeignKey(
@@ -82,6 +91,11 @@ class Event(TimestampedModel):
         max_length=16,
         choices=ACCESS_MODE_CHOICES,
         default="invite_only",
+    )
+    starting_availability = models.CharField(
+        max_length=16,
+        choices=STARTING_AVAILABILITY_CHOICES,
+        default="available",
     )
     meeting_duration_minutes = models.PositiveSmallIntegerField(default=30)
     results_revision = models.PositiveBigIntegerField(default=1)
@@ -129,6 +143,10 @@ class Event(TimestampedModel):
             models.CheckConstraint(
                 condition=models.Q(access_mode__in=["invite_only", "open_link"]),
                 name="event_access_mode_is_valid",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(starting_availability__in=["available", "busy"]),
+                name="event_starting_availability_is_valid",
             ),
             models.CheckConstraint(
                 condition=models.Q(

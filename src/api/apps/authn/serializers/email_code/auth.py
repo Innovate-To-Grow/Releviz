@@ -205,12 +205,20 @@ class UnifiedEmailAuthRequestSerializer(BaseEmailSerializer):
             return generic_response
 
         member = pending_member or self._create_pending_member(email)
+        # A brand-new address arriving from the sign-in form is a registration, not a
+        # login: the emailed CTA label and description are keyed by link_source, so the
+        # "login" source must not leak "Sign In to Your Account" into the "Verify your
+        # email" message. Subscribe and event registration keep their own CTAs.
+        if source == "login":
+            link_flow, link_source = "register", "register"
+        else:
+            link_flow, link_source = "auth", source
         issue_email_challenge(
             member=member,
             purpose=PURPOSE.REGISTER,
             target_email=email,
-            link_flow="auth",
-            link_source=source,
+            link_flow=link_flow,
+            link_source=link_source,
             link_event=event,
             link_next=next_path,
         )

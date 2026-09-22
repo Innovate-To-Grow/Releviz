@@ -35,6 +35,20 @@ function cellGlyph(level) {
  * - Enter/Space paints the focused cell; arrow keys, Home/End and Ctrl+Home/End
  *   move a roving tab stop between cells;
  * - `readOnly` grids expose values without tab stops.
+ *
+ * `label` renders a visible title and names the grid; `ariaLabel` names it
+ * without a title, for hosts that already show a heading.
+ *
+ * Organizer-blocked slots (`slot.blocked`) keep their grid position and index
+ * but render as inert grey-striped cells: no availability colour or glyph
+ * (whatever value is stored at that index), no tab stop, no pointer or
+ * keyboard handlers, and strokes and arrow keys pass over them.
+ *
+ * `blockedEditing` turns the grid into the organizer's blocked-times editor:
+ * `slot.blocked` is ignored because `schedule` IS the block map being edited
+ * (any value > 0 marks the slot blocked), every slot is paintable exactly like
+ * availability mode, and cells expose `data-blocked-paint` plus a ✕ glyph
+ * instead of `data-availability` and an inline colour.
  */
 function ScheduleGrid({
   schedule = [],
@@ -43,9 +57,11 @@ function ScheduleGrid({
   showValues,
   onCellPaint,
   label,
+  ariaLabel,
   virtual = false,
   participantDetails,
   compact = false,
+  blockedEditing = false,
 }) {
   const strokeRef = useRef({
     active: false,
@@ -60,9 +76,19 @@ function ScheduleGrid({
     (largest, group) => Math.max(largest, group?.slots?.length || 0),
     0,
   );
+  const isBlocked = (slot) => !blockedEditing && slot?.blocked === true;
+  // Blocked cells are inert, so they take no part in the roving tab stop or
+  // arrow-key movement and strokes never paint them.
   const cellPositions = groups.flatMap((group, column) =>
     (group?.slots || []).flatMap((slot, row) =>
-      slot ? [{ index: slot.index, row, column }] : [],
+      slot && !isBlocked(slot) ? [{ index: slot.index, row, column }] : [],
+    ),
+  );
+  const blockedIndices = new Set(
+    groups.flatMap((group) =>
+      (group?.slots || []).flatMap((slot) =>
+        isBlocked(slot) ? [slot.index] : [],
+      ),
     ),
   );
   const positionByIndex = new Map(
@@ -94,7 +120,7 @@ function ScheduleGrid({
   }, [finishStroke]);
 
   const paintCell = (index, event, phase) => {
-    if (readOnly || !onCellPaint) return;
+    if (readOnly || !onCellPaint || blockedIndices.has(index)) return;
     if (strokeRef.current.visited.has(index) && phase !== "keyboard") return;
     if (phase !== "keyboard") strokeRef.current.visited.add(index);
     onCellPaint(index, {
@@ -129,6 +155,7 @@ function ScheduleGrid({
     event.preventDefault();
     const element = document.elementFromPoint?.(event.clientX, event.clientY);
     const cell = element?.closest?.("[data-cell-idx]");
+    if (cell?.dataset?.blocked === "true") return;
     const targetIndex = cell?.dataset?.cellIdx;
     if (targetIndex !== undefined) {
       paintCell(Number(targetIndex), event, "move");
@@ -209,7 +236,7 @@ function ScheduleGrid({
           <div
             className="schedule-grid"
             role="grid"
-            aria-label={label || "Availability"}
+            aria-label={ariaLabel || label || "Availability"}
             aria-colcount={groups.length + 1}
             aria-rowcount={maxRows + 1}
             aria-readonly={readOnly ? "true" : undefined}
@@ -283,6 +310,86 @@ function ScheduleGrid({
                       }
 
                       const index = slot.index;
+                      if (isBlocked(slot)) {
+                        const blockedLabel = `${group.label}, ${slotLabel(slot)}, blocked for this event`;
+                        return (
+                          <div
+                            className="schedule-grid-cell schedule-grid-cell-blocked"
+                            key={index}
+                            role="gridcell"
+                            aria-colindex={column + 2}
+                            aria-label={blockedLabel}
+                            aria-disabled="true"
+                            data-cell-idx={index}
+                            data-blocked="true"
+                            data-first-row={row === 0 ? "true" : undefined}
+                            data-first-column={
+                              column === 0 ? "true" : undefined
+                            }
+                            title={blockedLabel}
+                          />
+                        );
+                      }
+
+                      // Shared by availability and blocked-times cells: the
+                      // roving tab stop, pointer strokes and keyboard painting.
+                      const interaction = {
+                        ref: (node) => {
+                          if (node) cellRefs.current.set(index, node);
+                          else cellRefs.current.delete(index);
+                        },
+                        tabIndex: readOnly
+                          ? undefined
+                          : index === rovingCellIndex
+                            ? 0
+                            : -1,
+                        onPointerDown: (event) => startStroke(index, event),
+                        onPointerMove: continueStroke,
+                        onPointerUp: finishStroke,
+                        onPointerCancel: finishStroke,
+                        onLostPointerCapture: finishStroke,
+                        onFocus: () => setActiveCellIndex(index),
+                        onKeyDown: (event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            paintCell(index, event, "keyboard");
+                            return;
+                          }
+                          moveKeyboardFocus(index, event);
+                        },
+                      };
+
+                      if (blockedEditing) {
+                        const marked = Number(schedule[index]) > 0;
+                        const markLabel = `${group.label}, ${slotLabel(slot)}, ${marked ? "blocked" : "open"}`;
+                        return (
+                          <div
+                            className="schedule-grid-cell"
+                            key={index}
+                            role="gridcell"
+                            {...interaction}
+                            aria-colindex={column + 2}
+                            aria-label={markLabel}
+                            aria-readonly={readOnly ? "true" : undefined}
+                            aria-selected={marked}
+                            data-cell-idx={index}
+                            data-blocked-paint={marked ? "true" : "false"}
+                            data-first-row={row === 0 ? "true" : undefined}
+                            data-first-column={
+                              column === 0 ? "true" : undefined
+                            }
+                            title={markLabel}
+                          >
+                            <span
+                              className="schedule-grid-cell__glyph"
+                              aria-hidden="true"
+                            >
+                              {marked ? "✕" : ""}
+                            </span>
+                          </div>
+                        );
+                      }
+
                       const value = Number(schedule[index] || 0);
                       const level = availabilityKey(value);
                       const details = participantDetails
@@ -308,17 +415,7 @@ function ScheduleGrid({
                           className="schedule-grid-cell"
                           key={index}
                           role="gridcell"
-                          ref={(node) => {
-                            if (node) cellRefs.current.set(index, node);
-                            else cellRefs.current.delete(index);
-                          }}
-                          tabIndex={
-                            readOnly
-                              ? undefined
-                              : index === rovingCellIndex
-                                ? 0
-                                : -1
-                          }
+                          {...interaction}
                           aria-colindex={column + 2}
                           aria-label={`${group.label}, ${slotLabel(slot)}, availability ${value}`}
                           aria-readonly={readOnly ? "true" : undefined}
@@ -328,20 +425,6 @@ function ScheduleGrid({
                           data-first-row={row === 0 ? "true" : undefined}
                           data-first-column={column === 0 ? "true" : undefined}
                           title={title}
-                          onPointerDown={(event) => startStroke(index, event)}
-                          onPointerMove={continueStroke}
-                          onPointerUp={finishStroke}
-                          onPointerCancel={finishStroke}
-                          onLostPointerCapture={finishStroke}
-                          onFocus={() => setActiveCellIndex(index)}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter" || event.key === " ") {
-                              event.preventDefault();
-                              paintCell(index, event, "keyboard");
-                              return;
-                            }
-                            moveKeyboardFocus(index, event);
-                          }}
                           style={{
                             backgroundColor: virtual
                               ? lerpVirtualColor(value)

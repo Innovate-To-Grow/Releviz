@@ -21,6 +21,10 @@ from apps.scheduling.models import (
     UserEvent,
 )
 from apps.scheduling.services.availability import default_availability
+from apps.scheduling.services.managed_members import (
+    delete_organizer_managed_members,
+    organizer_managed_member_ids,
+)
 from apps.scheduling.services.results.snapshots import ensure_result_snapshot
 
 from .codes import generate_event_code
@@ -115,6 +119,37 @@ def _changed_configuration_fields(event, configuration) -> list[str]:
     ]
 
 
+def _reseed_untouched_participants(event, previous_default) -> int:
+    """Move participants who never painted from the old starting schedule to the new one.
+
+    Only participants who never saved a draft or submitted, and whose arrays still equal
+    the previous default, are touched. A saved response that merely equals the default is
+    a deliberate answer (all busy means "nothing works"), so it keeps its schedule.
+    """
+    replacement = default_availability(event)
+    current_time = timezone.now()
+    untouched = [
+        participant
+        for participant in event.participants.select_for_update().filter(
+            submitted=False,
+            first_draft_saved_at__isnull=True,
+            first_submitted_at__isnull=True,
+        )
+        if participant.availability_inperson == previous_default
+        and participant.availability_virtual == previous_default
+    ]
+    for participant in untouched:
+        participant.availability_inperson = list(replacement)
+        participant.availability_virtual = list(replacement)
+        participant.version += 1
+        participant.updated_at = current_time
+    Participant.objects.bulk_update(
+        untouched,
+        ["availability_inperson", "availability_virtual", "version", "updated_at"],
+    )
+    return len(untouched)
+
+
 @transaction.atomic
 def update_event(*, organizer, code, data) -> EventUpdateResult:
     event = Event.objects.select_for_update().filter(code=code).first()
@@ -172,6 +207,13 @@ def update_event(*, organizer, code, data) -> EventUpdateResult:
                 "participantCount": len(participants),
             },
         )
+    # A geometry change already re-seeds everyone below, so only a standalone flip of the
+    # starting schedule needs the old default captured before the event is updated.
+    previous_default = (
+        default_availability(event)
+        if "starting_availability" in changed_fields and not geometry_changed
+        else None
+    )
 
     for field in changed_fields:
         setattr(event, field, configuration[field])
@@ -212,6 +254,8 @@ def update_event(*, organizer, code, data) -> EventUpdateResult:
             updated_at=current_time,
         )
         responses_reset = len(participants)
+    elif previous_default is not None:
+        _reseed_untouched_participants(event, previous_default)
 
     return EventUpdateResult(
         event=event,
@@ -381,7 +425,9 @@ def delete_event(*, organizer, code, data) -> EventDeleteResult:
     EmailMessageLog.objects.filter(
         Q(event=event) | Q(invitation__event=event) | Q(delivery_job__event=event)
     ).delete()
+    managed_member_ids = organizer_managed_member_ids(event.participants)
     event.delete()
+    delete_organizer_managed_members(managed_member_ids)
     transaction.on_commit(
         lambda: logger.info(
             "event_deleted",

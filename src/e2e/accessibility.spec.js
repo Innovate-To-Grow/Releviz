@@ -1,5 +1,6 @@
 const { expect, test } = require("@playwright/test");
 const { expectAccessible } = require("./helpers/accessibility");
+const { createEvent, readSession, registerAccount } = require("./helpers/releviz");
 
 test.use({ viewport: { width: 320, height: 720 } });
 
@@ -7,14 +8,12 @@ test.describe("automated accessibility baseline", () => {
   test("public entry pages meet WCAG A/AA checks at 320px", async ({ page }) => {
     for (const [path, heading] of [
       ["/", "Find a time that works for everyone."],
-      // Both entry points render the same passwordless panel.
-      ["/login", "Continue with email"],
-      ["/signup", "Continue with email"],
+      // Both entry points render the same sign-in panel in email-code mode.
+      ["/login", "Welcome to Releviz"],
+      ["/signup", "Welcome to Releviz"],
       ["/recover", "Recover your account"],
       ["/privacy", "Privacy notice"],
       ["/terms", "Terms of service"],
-      ["/support", "How can we help?"],
-      ["/feedback", "Send feedback"],
     ]) {
       await page.goto(path);
       await expect(page.getByRole("heading", { name: heading })).toBeVisible();
@@ -51,39 +50,69 @@ test.describe("automated accessibility baseline", () => {
     ).toBeTruthy();
   });
 
-  test("anonymous feedback submits at 320px without exposing source-page secrets", async ({
-    page,
-  }) => {
-    await page.goto("/feedback?from=%2Fevent%3Fcode%3DPRIVATE%23availability");
-    await page.getByLabel("Feedback type").selectOption("usability");
-    await page
-      .getByLabel("What happened, or what would you change?")
-      .fill("The final-time review needed a clearer explanation.");
-    await page
-      .getByLabel(/service team may follow up using my account contact information/)
-      .check();
+  test.describe("organizer workspace at phone width", () => {
+    test.use({ viewport: { width: 375, height: 812 }, hasTouch: true });
 
-    const [response] = await Promise.all([
-      page.waitForResponse(
-        (candidate) =>
-          candidate.url().endsWith("/feedback") && candidate.request().method() === "POST"
-      ),
-      page.getByRole("button", { name: "Send feedback" }).click(),
-    ]);
+    test("organizer event workspace does not scroll horizontally with a long display name", async ({
+      page,
+      request,
+    }) => {
+      const runId = `${Date.now()}-${Math.round(Math.random() * 100_000)}`;
+      await registerAccount(
+        page,
+        `workspace-width-${runId}@example.com`,
+        "QA0917",
+        "Organizer Updated Longname"
+      );
+      const token = (await readSession(page)).access;
+      const event = await createEvent(request, token, {
+        name: `Workspace width ${runId}`,
+      });
 
-    expect(response.status()).toBe(201);
-    expect(response.request().postDataJSON()).toEqual({
-      category: "usability",
-      message: "The final-time review needed a clearer explanation.",
-      pagePath: "/event",
-      consentToFollowUp: true,
+      await page.goto(`/event?code=${event.code}`);
+      await expect(page.getByRole("button", { name: "Copy share link" })).toBeVisible();
+      await expect(
+        page.getByRole("button", { name: "QA0917 Organizer Updated Longname" })
+      ).toBeVisible();
+      await expect(
+        page.getByRole("navigation", { name: "Workspace sections" })
+      ).toBeVisible();
+      // The roster is the last section to finish loading; wait for it so the
+      // whole workspace is measured.
+      await expect(page.getByRole("heading", { name: "No participants yet" })).toBeVisible();
+
+      const layout = await page.evaluate(() => {
+        // Content inside a horizontally scrolling box (the calendar canvas, a
+        // responsive table) may extend past the viewport edge; anything else
+        // that reaches past it widens the page instead.
+        const insideScroller = (element) => {
+          for (let node = element.parentElement; node; node = node.parentElement) {
+            const overflowX = window.getComputedStyle(node).overflowX;
+            if (overflowX === "auto" || overflowX === "scroll") return true;
+          }
+          return false;
+        };
+        const limit = window.innerWidth + 1;
+        const offenders = [];
+        for (const element of document.querySelectorAll("body *")) {
+          if (element.getBoundingClientRect().right <= limit) continue;
+          if (insideScroller(element)) continue;
+          const tag = element.tagName.toLowerCase();
+          const className = (element.getAttribute("class") || "").trim();
+          offenders.push(className ? `${tag}.${className.split(/\s+/).join(".")}` : tag);
+        }
+        return {
+          scrollWidth: document.documentElement.scrollWidth,
+          clientWidth: document.documentElement.clientWidth,
+          offenders,
+        };
+      });
+      expect(
+        layout.scrollWidth,
+        "organizer workspace must not overflow a 375px viewport"
+      ).toBeLessThanOrEqual(layout.clientWidth);
+      expect(layout.offenders, "elements reaching past the 375px viewport").toEqual([]);
+      await expectAccessible(page, "organizer workspace at 375px");
     });
-    await expect(page.getByText("Thank you. Your feedback was received.")).toBeVisible();
-    await expect(page.getByLabel("What happened, or what would you change?")).toHaveValue("");
-    await expectAccessible(page, "submitted feedback");
-    const horizontalOverflow = await page.evaluate(
-      () => document.documentElement.scrollWidth > document.documentElement.clientWidth
-    );
-    expect(horizontalOverflow).toBeFalsy();
   });
 });

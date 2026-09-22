@@ -1,13 +1,25 @@
 import io
+import uuid
+from datetime import timedelta
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase
+from django.utils import timezone
 
 from apps.authn.models import ContactEmail
-from apps.scheduling.models import Event, Participant, UserEvent, Weight
+from apps.core.management.commands.seed_admin_e2e import Command as SeedAdminE2ECommand
+from apps.scheduling.models import (
+    Event,
+    Participant,
+    ParticipantGroup,
+    RosterImportBatch,
+    RosterImportReceipt,
+    UserEvent,
+    Weight,
+)
 
 
 class SeedAdminE2ECommandTests(TestCase):
@@ -81,7 +93,13 @@ class SeedAdminE2ECommandTests(TestCase):
         self.assertEqual(participant.participant_name, "Nonstaff E2E")
         self.assertTrue(participant.submitted)
         self.assertEqual(len(participant.availability_inperson), 80)
-        self.assertEqual(participant.group_name, "Design Review")
+        self.assertEqual(list(participant.groups.values_list("name", flat=True)), ["Design Review"])
+        self.assertFalse(participant.all_groups)
+        # The second run rebuilt the event with exactly one group row again.
+        self.assertEqual(
+            list(ParticipantGroup.objects.filter(event=event).values_list("name", flat=True)),
+            ["Design Review"],
+        )
         weight = Weight.objects.get(event=event, participant=participant)
         self.assertEqual(weight.weight, 0.75)
         self.assertTrue(weight.included)
@@ -97,6 +115,36 @@ class SeedAdminE2ECommandTests(TestCase):
         self.assertIn("Seeded admin E2E data", out.getvalue())
         self.assertEqual(Event.objects.filter(code="E2EADMIN").count(), 1)
         self.assertEqual(Participant.objects.filter(event=event).count(), 1)
+
+    def test_sample_participant_upsert_reuses_the_existing_group_row(self):
+        organizer = get_user_model().objects.create_user(
+            password="safe-test-password",
+            is_active=True,
+        )
+        member = get_user_model().objects.create_user(
+            password="safe-test-password",
+            is_active=True,
+        )
+        event = Event.objects.create(
+            code="E2EGROUP",
+            name="Group reuse",
+            organizer=organizer,
+            days=[1, 2, 3, 4, 5],
+            start_minutes=9 * 60,
+            end_minutes=17 * 60,
+        )
+        # A case variant of the seeded name is the same group per event.
+        existing = ParticipantGroup.objects.create(event=event, name="design review")
+        command = SeedAdminE2ECommand()
+
+        participant = command._upsert_sample_participant(event, member)
+        again = command._upsert_sample_participant(event, member)
+
+        self.assertEqual(again.pk, participant.pk)
+        self.assertEqual(list(participant.groups.values_list("pk", flat=True)), [existing.pk])
+        self.assertEqual(ParticipantGroup.objects.filter(event=event).count(), 1)
+        self.assertFalse(participant.all_groups)
+        self.assertEqual(Weight.objects.get(event=event, participant=participant).weight, 0.75)
 
     def test_reseed_replaces_mutated_event_and_stale_identity_links(self):
         first_options = {
@@ -131,3 +179,48 @@ class SeedAdminE2ECommandTests(TestCase):
             set(UserEvent.objects.filter(event=new_event).values_list("member_id", "role")),
             {(second_admin.pk, "organizer"), (second_member.pk, "participant")},
         )
+
+    def test_reseed_replaces_event_with_committed_roster_imports(self):
+        organizer = get_user_model().objects.create_user(
+            password="safe-test-password",
+            is_active=True,
+        )
+        stale_event = Event.objects.create(
+            code="E2EADMIN",
+            name="Stale seed",
+            organizer=organizer,
+            days=[1],
+            start_minutes=9 * 60,
+            end_minutes=10 * 60,
+        )
+        batch = RosterImportBatch.objects.create(
+            event=stale_event,
+            created_by=organizer,
+            source_type=RosterImportBatch.SourceType.CSV,
+            status=RosterImportBatch.Status.COMMITTED,
+            expires_at=timezone.now() + timedelta(hours=1),
+        )
+        receipt = RosterImportReceipt.objects.create(
+            event=stale_event,
+            batch=batch,
+            committed_by=organizer,
+            idempotency_key=uuid.uuid4(),
+            request_fingerprint="f" * 64,
+            mode=RosterImportReceipt.Mode.MERGE,
+            results_revision=1,
+        )
+
+        call_command(
+            "seed_admin_e2e",
+            "--yes",
+            email="roster-admin-e2e@example.com",
+            password="safe-test-password",
+            nonstaff_email="roster-member-e2e@example.com",
+            action_email="roster-action-e2e@example.com",
+        )
+
+        new_event = Event.objects.get(code="E2EADMIN")
+        self.assertNotEqual(new_event.pk, stale_event.pk)
+        self.assertFalse(Event.objects.filter(pk=stale_event.pk).exists())
+        self.assertFalse(RosterImportBatch.objects.filter(pk=batch.pk).exists())
+        self.assertFalse(RosterImportReceipt.objects.filter(pk=receipt.pk).exists())
