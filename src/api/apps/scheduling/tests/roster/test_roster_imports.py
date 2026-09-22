@@ -506,6 +506,11 @@ class RosterImportApiTests(TestCase):
         self.assertEqual(temporary.member.access_level, "temporary")
         self.assertFalse(temporary.member.has_usable_password())
         self.assertEqual(known.participant_name, "Known Person")
+        # Imported people start from the event's starting schedule (Available by default).
+        for participant in (temporary, known):
+            self.assertEqual(participant.availability_inperson, [1, 1])
+            self.assertEqual(participant.availability_virtual, [1, 1])
+            self.assertFalse(participant.submitted)
         self.assertTrue(
             ContactEmail.objects.filter(
                 member=temporary.member,
@@ -544,6 +549,24 @@ class RosterImportApiTests(TestCase):
             confirmation=self.event.code,
         )
         self.assertEqual(conflict.status_code, 409)
+
+    def test_import_seeds_people_busy_when_the_event_starts_busy(self):
+        busy_event = Event.objects.create(
+            code="ROSTBUSY",
+            name="Busy-start event",
+            organizer=self.organizer,
+            days=[1],
+            start_minutes=9 * 60,
+            end_minutes=10 * 60,
+            starting_availability="busy",
+        )
+        UserEvent.objects.create(member=self.organizer, event=busy_event, role="organizer")
+        preview = self.paste("name,email\nBusy Person,busy@example.com\n", event=busy_event)
+        committed = self.commit(preview.data["import"]["id"], event=busy_event)
+        self.assertEqual(committed.status_code, 201, committed.data)
+        participant = Participant.objects.get(event=busy_event, member__email="busy@example.com")
+        self.assertEqual(participant.availability_inperson, [0, 0])
+        self.assertEqual(participant.availability_virtual, [0, 0])
 
     def test_merge_stores_phones_and_keeps_them_when_the_sheet_has_none(self):
         first = self.paste(

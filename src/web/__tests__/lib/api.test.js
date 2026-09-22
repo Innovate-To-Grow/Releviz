@@ -939,6 +939,7 @@ describe("business API helpers", () => {
         timezone: "America/Los_Angeles",
         remindersEnabled: false,
         reminderHoursBefore: 12,
+        startingAvailability: "busy",
       },
       "tok",
     );
@@ -1112,12 +1113,20 @@ describe("business API helpers", () => {
         body: JSON.stringify({
           name: "Minimal",
           accessMode: "invite_only",
+          startingAvailability: "available",
           meetingDurationMinutes: 30,
           status: "active",
         }),
       }),
     );
     // Phone and the organizer-managed flag default to "" / false.
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/events",
+      expect.objectContaining({
+        method: "POST",
+        body: expect.stringContaining('"startingAvailability":"busy"'),
+      }),
+    );
     expect(global.fetch).toHaveBeenCalledWith(
       "/events/participants/managed?code=ABC%20123",
       expect.objectContaining({

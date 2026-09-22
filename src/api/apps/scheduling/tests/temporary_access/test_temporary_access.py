@@ -121,6 +121,9 @@ class TemporaryParticipantAccessTests(TestCase):
         self.assertTrue(member.is_active)
         self.assertFalse(member.has_usable_password())
         self.assertFalse(ContactEmail.objects.get(member=member).verified)
+        # Organizer-added people start from the event's starting schedule (Available).
+        self.assertEqual(created.data["participant"]["availabilityInperson"], [1, 1])
+        self.assertEqual(created.data["participant"]["availabilityVirtual"], [1, 1])
         invitation = EventInvitation.objects.get(event=self.event, member=member)
         self.assertIsNone(invitation.first_sent_at)
         self.assertEqual(EmailDeliveryJob.objects.count(), 1)
@@ -150,6 +153,7 @@ class TemporaryParticipantAccessTests(TestCase):
             days=[2],
             start_minutes=9 * 60,
             end_minutes=10 * 60,
+            starting_availability="busy",
         )
         reused = self.organizer_client.post(
             f"/events/participants/managed?code={other_event.code}",
@@ -162,6 +166,9 @@ class TemporaryParticipantAccessTests(TestCase):
         )
         self.assertEqual(reused.status_code, 201)
         self.assertEqual(reused.data["participant"]["id"], participant_id)
+        # A busy-start event seeds the same person with an all-busy schedule instead.
+        self.assertEqual(reused.data["participant"]["availabilityInperson"], [0, 0])
+        self.assertEqual(reused.data["participant"]["availabilityVirtual"], [0, 0])
         self.assertEqual(
             ContactEmail.objects.filter(email_address="managed@example.com").count(),
             1,

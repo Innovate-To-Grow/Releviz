@@ -21,6 +21,24 @@ export function availabilityLabel(value) {
   return AVAILABILITY_CHOICES.find((choice) => choice.key === key)?.label;
 }
 
+/**
+ * The level every slot starts at for an event: 1 when the organizer kept the
+ * Available start, otherwise 0 (Busy). A payload without the setting comes
+ * from an API release that still seeded every schedule Busy, so it reads as
+ * a Busy start.
+ */
+export function startingAvailabilityValue(event) {
+  return event?.startingAvailability === "available" ? 1 : 0;
+}
+
+/**
+ * The brush an editor pre-selects: the opposite of the starting level, so
+ * people paint over the times that differ from the default.
+ */
+export function startingBrushValue(event) {
+  return startingAvailabilityValue(event) === 1 ? 0 : 1;
+}
+
 /** Colored swatch with the same non-color cue used inside grid cells. */
 export function AvailabilitySwatch({ level = "busy", virtual = false }) {
   const glyph = level === "free" ? "✓" : level === "partial" ? "◐" : "";

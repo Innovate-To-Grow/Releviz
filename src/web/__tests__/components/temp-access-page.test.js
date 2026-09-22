@@ -8,6 +8,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
@@ -82,11 +83,14 @@ import {
 } from "@/lib/api/tempAccess";
 import { navigateTo } from "@/lib/navigation";
 
+// Most of these flows exercise the legacy Busy start (paint Available over
+// empty slots); the Available default has its own tests below.
 const event = {
   code: "ABC123",
   name: "Design review",
   mode: "inperson",
   status: "active",
+  startingAvailability: "busy",
   responseDeadline: "2099-01-01T00:00:00Z",
   slotCount: 2,
   slotGroups: [
@@ -768,6 +772,85 @@ describe("temporary event access page", () => {
         screen.getByText("Draft saved. Submit when you are ready."),
       ).toBeInTheDocument(),
     );
+  });
+
+  test("an Available start pre-selects Busy, explains the flow, and offers Mark all Available", async () => {
+    const availableStart = { ...event, startingAvailability: "available" };
+    fetchTempAccessSession.mockResolvedValue(
+      session({
+        event: availableStart,
+        participant: participant({
+          availabilityInperson: [1, 1],
+          availabilityVirtual: [1, 1],
+        }),
+      }),
+    );
+    render(<TempAccessClient />);
+    expect(
+      await screen.findByRole("heading", { name: "Your schedule" }),
+    ).toBeInTheDocument();
+
+    const choices = screen.getByRole("group", { name: "Availability status" });
+    expect(
+      within(choices).getByRole("button", { name: "Busy" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      within(choices).getByRole("button", { name: "Available" }),
+    ).toHaveAttribute("aria-pressed", "false");
+    expect(
+      screen.getByText(
+        "Every time starts as Available. Paint Busy over the times that do not work for you.",
+      ),
+    ).toBeInTheDocument();
+    // The legacy instruction would contradict the pre-selected Busy brush.
+    expect(
+      screen.queryByText(
+        "Choose a status, then click or drag across the times that work for you.",
+      ),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Mark all Busy" }),
+    ).not.toBeInTheDocument();
+
+    // The pre-selected Busy brush paints 0 over the Available default.
+    await userEvent.click(
+      screen.getByRole("button", { name: "Paint in-person" }),
+    );
+    expect(screen.getByTestId("schedule-editor")).toHaveTextContent("0,1");
+    await waitFor(() =>
+      expect(updateTempAccessParticipant).toHaveBeenLastCalledWith(
+        "ABC123",
+        expect.objectContaining({ availabilityInperson: [0, 1] }),
+      ),
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Mark all Available" }),
+    );
+    expect(screen.getByTestId("schedule-editor")).toHaveTextContent("1,1");
+    await waitFor(() =>
+      expect(updateTempAccessParticipant).toHaveBeenLastCalledWith(
+        "ABC123",
+        expect.objectContaining({ availabilityInperson: [1, 1] }),
+      ),
+    );
+  });
+
+  test("a Busy start keeps the Available brush and hides the Available-start hint", async () => {
+    render(<TempAccessClient />);
+    expect(
+      await screen.findByRole("heading", { name: "Your schedule" }),
+    ).toBeInTheDocument();
+    const choices = screen.getByRole("group", { name: "Availability status" });
+    expect(
+      within(choices).getByRole("button", { name: "Available" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.getByRole("button", { name: "Mark all Busy" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Every time starts as Available/),
+    ).not.toBeInTheDocument();
   });
 
   test("reports a submit conflict and a generic submit failure", async () => {

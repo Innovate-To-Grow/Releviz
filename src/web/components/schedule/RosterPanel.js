@@ -17,6 +17,7 @@ import FormField from "@/components/ui/FormField";
 import LoadingState from "@/components/ui/LoadingState";
 import Panel from "@/components/ui/Panel";
 import StatusBadge from "@/components/ui/StatusBadge";
+import { startingBrushValue } from "@/components/ui/Availability";
 import {
   CheckIcon,
   ChevronDownIcon,
@@ -202,7 +203,10 @@ const RosterPanel = forwardRef(function RosterPanel(
   const [editorName, setEditorName] = useState("");
   const [editorInperson, setEditorInperson] = useState([]);
   const [editorVirtual, setEditorVirtual] = useState([]);
-  const [editorValue, setEditorValue] = useState(1);
+  // The drawer brush starts opposite to the event's starting level, matching
+  // what participants see in their own editor.
+  const startingBrush = startingBrushValue(event);
+  const [editorValue, setEditorValue] = useState(startingBrush);
   const [editorSaving, setEditorSaving] = useState(false);
   const [editorError, setEditorError] = useState("");
   const [editorStatus, setEditorStatus] = useState("");
@@ -550,12 +554,12 @@ const RosterPanel = forwardRef(function RosterPanel(
     setEditorName("");
     setEditorInperson([]);
     setEditorVirtual([]);
-    setEditorValue(1);
+    setEditorValue(startingBrush);
     setEditorError("");
     setEditorStatus("");
     setEditorConflict(null);
     updateRowConflicts({});
-  }, [event.status, updateRowConflicts, updateSelected]);
+  }, [event.status, startingBrush, updateRowConflicts, updateSelected]);
 
   const patchRow = async (participant, updates) => {
     const previous =
@@ -817,7 +821,7 @@ const RosterPanel = forwardRef(function RosterPanel(
       setEditorName(loaded.name);
       setEditorInperson(loaded.inpersonArray);
       setEditorVirtual(loaded.virtualArray);
-      setEditorValue(1);
+      setEditorValue(startingBrush);
       setEditorError("");
       setEditorStatus("");
       setEditorConflict(null);
