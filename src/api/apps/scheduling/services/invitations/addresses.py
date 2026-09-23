@@ -1,4 +1,4 @@
-"""Email address parsing and member resolution for invitations."""
+"""Email address parsing, member resolution, and contact phone checks."""
 
 import re
 
@@ -6,6 +6,40 @@ from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 
 from apps.authn.models import ContactEmail
+
+from .errors import ManagedParticipantError
+
+PHONE_MAX_LENGTH = 32
+PHONE_MIN_DIGITS = 7
+_PHONE_PATTERN = re.compile(r"[0-9 +().\-]+")
+
+
+def phone_issue(value: str) -> str:
+    """Classify an already-stripped phone: "" (fine), "too_long", or "invalid".
+
+    Phones are display-only free text: digits, spaces, and ``+ - ( ) .`` with at
+    least seven digits. They are never dialled, so there is no E.164 handling.
+    """
+
+    if not value:
+        return ""
+    if len(value) > PHONE_MAX_LENGTH:
+        return "too_long"
+    if not _PHONE_PATTERN.fullmatch(value):
+        return "invalid"
+    if sum(character.isdigit() for character in value) < PHONE_MIN_DIGITS:
+        return "invalid"
+    return ""
+
+
+def normalize_phone(value) -> str:
+    phone = str(value or "").strip()
+    issue = phone_issue(phone)
+    if issue == "too_long":
+        raise ManagedParticipantError(f"Phone is too long (max {PHONE_MAX_LENGTH}).")
+    if issue:
+        raise ManagedParticipantError("Enter a valid phone number.")
+    return phone
 
 
 def split_invitation_emails(value) -> tuple[list[str], list[str]]:

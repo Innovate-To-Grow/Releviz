@@ -93,6 +93,20 @@ const weeklyEvent = {
   ],
 };
 
+/** `weeklyEvent` with the API's per-slot `blocked` flag set on the given rows. */
+function blockedWeeklyEvent(blockedRows) {
+  return {
+    ...weeklyEvent,
+    slotGroups: weeklyEvent.slotGroups.map((group) => ({
+      ...group,
+      slots: group.slots.map((candidate, row) => ({
+        ...candidate,
+        blocked: (blockedRows[group.key] || []).includes(row),
+      })),
+    })),
+  };
+}
+
 /** API shape for one specific date in UTC: four half-hour slots 09:00–11:00. */
 function apiDateGroup(date, firstIndex) {
   const times = ["09:00", "09:30", "10:00", "10:30", "11:00"];
@@ -278,6 +292,7 @@ describe("normalizeSlotGroups", () => {
       endsAt: null,
       startOffset: null,
       endOffset: null,
+      blocked: false,
     });
     expect(groups[2].slots[1]).toMatchObject({
       index: 9,
@@ -325,6 +340,7 @@ describe("normalizeSlotGroups", () => {
       endsAt: "2026-08-20T10:00:00+00:00",
       startOffset: "+00:00",
       endOffset: "+00:00",
+      blocked: false,
     });
     expect(groupKind(normalizeSlotGroups(dateEvent))).toBe("date");
 
@@ -358,6 +374,7 @@ describe("normalizeSlotGroups", () => {
       endsAt: "2026-08-20T09:30:00Z",
       startOffset: null,
       endOffset: null,
+      blocked: false,
     });
     expect(group.slots[1]).toMatchObject({
       localStart: "09:30",
@@ -387,6 +404,54 @@ describe("normalizeSlotGroups", () => {
       startDayOffset: 0,
       endDayOffset: 1,
     });
+  });
+
+  test("carries the organizer's blocked flag on every slot", () => {
+    const [monday, wednesday] = normalizeSlotGroups(
+      blockedWeeklyEvent({ "weekday:1": [1, 2] }),
+    );
+
+    expect(monday.slots.map((candidate) => candidate.blocked)).toEqual([
+      false,
+      true,
+      true,
+      false,
+    ]);
+    expect(wednesday.slots.every((candidate) => !candidate.blocked)).toBe(true);
+
+    // Truthy API values are coerced, and the flag survives the legacy
+    // instant-only fixture too.
+    const [coerced] = normalizeSlotGroups({
+      slotGroups: [
+        {
+          key: "weekday:1",
+          slots: [
+            { ...slot(0, "09:00", "09:30"), blocked: 1 },
+            { ...slot(1, "09:30", "10:00"), blocked: null },
+          ],
+        },
+      ],
+    });
+    expect(coerced.slots.map((candidate) => candidate.blocked)).toEqual([
+      true,
+      false,
+    ]);
+    const [legacy] = normalizeSlotGroups({
+      ...legacyEvent,
+      slotGroups: [
+        {
+          ...legacyEvent.slotGroups[0],
+          slots: legacyEvent.slotGroups[0].slots.map((candidate, position) => ({
+            ...candidate,
+            blocked: position === 1,
+          })),
+        },
+      ],
+    });
+    expect(legacy.slots.map((candidate) => candidate.blocked)).toEqual([
+      false,
+      true,
+    ]);
   });
 
   test("returns nothing for missing groups and drops unusable ones", () => {
@@ -878,6 +943,90 @@ describe("windowAt and cellState", () => {
       ),
     ).toEqual(["startable", "startable", "startable", "startable"]);
   });
+
+  test("refuses every window that touches an organizer-blocked slot", () => {
+    // Monday 10:00–10:30 (row 2) is blocked: the 09:30 window starts open but
+    // runs into the block, and the 10:00 window starts on it.
+    const [blockedMonday] = weeklyColumns(
+      "2026-09-13",
+      utcResolver,
+      blockedWeeklyEvent({ "weekday:1": [2] }),
+    );
+    expect(blockedMonday.slots.map((candidate) => candidate.blocked)).toEqual([
+      false,
+      false,
+      true,
+      false,
+    ]);
+    expect(windowAt(blockedMonday, 0, k)).toEqual({
+      slotIndices: [0, 1],
+      startsAt: "2026-09-14T09:00:00.000Z",
+      endsAt: "2026-09-14T10:00:00.000Z",
+      error: null,
+    });
+    expect(windowAt(blockedMonday, 1, k)).toEqual({
+      slotIndices: null,
+      startsAt: null,
+      endsAt: null,
+      error: "blocked",
+    });
+    expect(windowAt(blockedMonday, 2, k).error).toBe("blocked");
+    expect(windowAt(blockedMonday, 3, k).error).toBe("tail");
+    expect(
+      [0, 1, 2, 3].map((row) =>
+        cellState({ column: blockedMonday, row, k, now: before }),
+      ),
+    ).toEqual(["startable", "blocked", "blocked", "tail"]);
+
+    // A block on the last row wins over "tail", and a block anywhere in the
+    // window wins over "past".
+    const [tailBlocked] = weeklyColumns(
+      "2026-09-13",
+      utcResolver,
+      blockedWeeklyEvent({ "weekday:1": [3] }),
+    );
+    expect(windowAt(tailBlocked, 3, k).error).toBe("blocked");
+    expect(windowAt(tailBlocked, 2, k).error).toBe("blocked");
+    expect(
+      [0, 1, 2, 3].map((row) =>
+        cellState({
+          column: tailBlocked,
+          row,
+          k,
+          now: Date.parse("2026-09-14T12:00:00Z"),
+        }),
+      ),
+    ).toEqual(["past", "past", "blocked", "blocked"]);
+    expect(windowAt(tailBlocked, -1, k).error).toBe("tail");
+
+    // ...and over a daylight-saving gap inside the same window (Los Angeles
+    // has no 02:00 on 2026-03-08; the 01:00 slot is blocked).
+    const gapEvent = laSundayEvent([
+      "00:00",
+      "01:00",
+      "02:00",
+      "03:00",
+      "04:00",
+    ]);
+    gapEvent.slotGroups[0].slots[1].blocked = true;
+    const [gapColumn] = weeklyColumns("2026-03-08", laResolver, gapEvent);
+    expect(
+      [0, 1, 2, 3].map((row) =>
+        cellState({
+          column: gapColumn,
+          row,
+          k: 2,
+          now: Date.parse("2026-03-01T00:00:00Z"),
+        }),
+      ),
+    ).toEqual(["blocked", "blocked", "dst", "tail"]);
+
+    // An unusable duration is still reported first.
+    expect(windowAt(blockedMonday, 2, 0).error).toBe("invalid-duration");
+    expect(
+      cellState({ column: blockedMonday, row: 2, k: 0, now: before }),
+    ).toBe("invalid-duration");
+  });
 });
 
 // --- metrics ----------------------------------------------------------------
@@ -1367,7 +1516,7 @@ describe("selectionFromWindow", () => {
     });
   });
 
-  test("returns null for tail rows and daylight-saving gaps", () => {
+  test("returns null for tail rows, blocked windows and daylight-saving gaps", () => {
     expect(
       selectionFromWindow({
         column: thursday,
@@ -1378,6 +1527,41 @@ describe("selectionFromWindow", () => {
         event: dateEvent,
       }),
     ).toBeNull();
+
+    // Monday 09:30 is blocked: the ranked 09:00 window runs into it, while
+    // the 10:00 window after it is still a plain calendar pick.
+    const [blockedMonday] = weeklyColumns(
+      "2026-09-06",
+      utcResolver,
+      blockedWeeklyEvent({ "weekday:1": [1] }),
+    );
+    expect(
+      selectionFromWindow({
+        column: blockedMonday,
+        row: 0,
+        k,
+        channel: "inperson",
+        results: perSlotResults,
+        event: weeklyEvent,
+        recommendations: [staleWeeklyRecommendation],
+      }),
+    ).toBeNull();
+    expect(
+      selectionFromWindow({
+        column: blockedMonday,
+        row: 2,
+        k,
+        channel: "inperson",
+        results: perSlotResults,
+        event: weeklyEvent,
+        recommendations: [staleWeeklyRecommendation],
+      }),
+    ).toMatchObject({
+      slotIndices: [2, 3],
+      startsAt: "2026-09-07T10:00:00.000Z",
+      recommendation: null,
+      source: "calendar",
+    });
 
     const [gapColumn] = weeklyColumns(
       "2026-03-08",

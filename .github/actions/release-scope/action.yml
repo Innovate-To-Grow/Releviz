@@ -1,0 +1,80 @@
+name: Release scope
+description: >-
+  Decide whether a release surface has anything to release: compares the
+  release commit with the surface's last successful release on main (see
+  scripts/ci/last-successful-release.sh) and reports whether any of the
+  surface's paths changed. Manual dispatch always releases; workflow changes
+  themselves are exercised that way. Runs without cloud credentials so an
+  unaffected surface is settled in seconds and never asks for approval.
+
+inputs:
+  surface:
+    description: backend, frontend, or infrastructure
+    required: true
+  paths:
+    description: Newline-separated git pathspecs that this surface releases
+    required: true
+  release-sha:
+    description: The release commit
+    required: true
+  trigger-event:
+    description: github.event_name of the calling run
+    required: true
+
+outputs:
+  release:
+    description: "true when the surface should release, otherwise false"
+    value: ${{ steps.scope.outputs.release }}
+  base:
+    description: The last successfully released commit, when one exists
+    value: ${{ steps.scope.outputs.base }}
+
+runs:
+  using: composite
+  steps:
+    - name: Compare the release commit with the last successful release
+      id: scope
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        RELEASE_SURFACE: ${{ inputs.surface }}
+        RELEASE_PATHS: ${{ inputs.paths }}
+        RELEASE_SHA: ${{ inputs.release-sha }}
+        TRIGGER_EVENT: ${{ inputs.trigger-event }}
+      run: |
+        set -euo pipefail
+        if ! [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "::error::The release is not an immutable Git commit SHA."
+          exit 1
+        fi
+        if [ "$TRIGGER_EVENT" = "workflow_dispatch" ]; then
+          echo "release=true" >>"$GITHUB_OUTPUT"
+          echo "base=" >>"$GITHUB_OUTPUT"
+          echo "::notice::Manual dispatch releases ${RELEASE_SHA} unconditionally."
+          exit 0
+        fi
+        base="$(scripts/ci/last-successful-release.sh "$RELEASE_SURFACE")"
+        echo "base=${base}" >>"$GITHUB_OUTPUT"
+        if [ -z "$base" ]; then
+          echo "release=true" >>"$GITHUB_OUTPUT"
+          echo "::notice::No successful release exists yet; releasing ${RELEASE_SHA}."
+          exit 0
+        fi
+        if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+          echo "release=true" >>"$GITHUB_OUTPUT"
+          echo "::notice::The last released commit ${base} is not in this history; releasing ${RELEASE_SHA}."
+          exit 0
+        fi
+        mapfile -t pathspecs < <(printf '%s\n' "$RELEASE_PATHS" | sed '/^[[:space:]]*$/d')
+        changed="$(git diff --name-only "$base" "$RELEASE_SHA" -- "${pathspecs[@]}")"
+        if [ -n "$changed" ]; then
+          echo "release=true" >>"$GITHUB_OUTPUT"
+          {
+            echo "Releasing ${RELEASE_SHA}: changes since ${base}"
+            printf '  %s\n' $changed
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+        else
+          echo "release=false" >>"$GITHUB_OUTPUT"
+          echo "Nothing to release: no changes in this surface's paths between ${base} and ${RELEASE_SHA}." |
+            tee -a "$GITHUB_STEP_SUMMARY"
+        fi

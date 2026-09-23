@@ -36,8 +36,6 @@ SAFE_LOG_FIELDS = (
     "recipient_count",
     "deleted_version",
     "exception_type",
-    "feedback_id",
-    "category",
 )
 
 

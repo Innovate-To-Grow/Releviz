@@ -194,6 +194,24 @@ describe("organizer event management UI", () => {
     expect(
       within(archivedCard).getByRole("link", { name: "Edit" }),
     ).toHaveAttribute("aria-disabled", "true");
+    expect(
+      screen.getByRole("heading", { name: "My Events (1)" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Archived (1)" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("region", { name: /Archived \(1\)/ }),
+    ).toContainElement(archivedCard);
+    expect(
+      screen.getByRole("region", { name: /My Events \(1\)/ }),
+    ).not.toContainElement(archivedCard);
+    expect(
+      within(archivedCard).getByRole("button", { name: "Duplicate" }),
+    ).toBeInTheDocument();
+    expect(
+      within(archivedCard).getByRole("button", { name: "Delete" }),
+    ).toBeInTheDocument();
 
     const duplicateCard = screen
       .getByRole("link", { name: duplicate.name })
@@ -206,7 +224,18 @@ describe("organizer event management UI", () => {
       name: "Delete event permanently",
     });
     expect(deleteButton).toBeDisabled();
+    await userEvent.type(confirmation, "WRONG");
+    expect(
+      screen.getByText("Type the event code exactly to confirm deletion"),
+    ).toBeVisible();
+    expect(confirmation).toHaveAttribute("aria-invalid", "true");
+    expect(deleteButton).toBeDisabled();
+    await userEvent.clear(confirmation);
     await userEvent.type(confirmation, duplicate.code);
+    expect(
+      screen.queryByText("Type the event code exactly to confirm deletion"),
+    ).not.toBeInTheDocument();
+    expect(confirmation).not.toHaveAttribute("aria-invalid");
     expect(deleteButton).not.toBeDisabled();
     await userEvent.click(deleteButton);
     await waitFor(() =>
@@ -228,6 +257,49 @@ describe("organizer event management UI", () => {
     expect(
       screen.queryByRole("link", { name: duplicate.name }),
     ).not.toBeInTheDocument();
+  });
+
+  test("dashboard shows the archived panel when every organized event is archived", async () => {
+    const archivedEvent = { ...baseEvent, status: "archived" };
+    fetchDashboardEvents.mockResolvedValue({
+      organized: [archivedEvent],
+      participating: [],
+    });
+
+    render(<DashboardPage />);
+    await screen.findByRole("heading", { name: "My Dashboard" });
+    const myEvents = screen.getByRole("region", { name: "My Events (0)" });
+    expect(
+      within(myEvents).getByRole("heading", { name: "No active events." }),
+    ).toBeInTheDocument();
+    expect(
+      within(myEvents).getByText("Your archived events are listed below."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("No events organized yet."),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "Create your first event" }),
+    ).not.toBeInTheDocument();
+
+    const archived = screen.getByRole("region", { name: "Archived (1)" });
+    expect(
+      within(archived).getByText(
+        "Archived events are read-only. Duplicate one to start again, or delete it permanently.",
+      ),
+    ).toBeInTheDocument();
+    const archivedCard = within(archived)
+      .getByRole("link", { name: archivedEvent.name })
+      .closest("article");
+    expect(
+      within(archivedCard).queryByRole("button", { name: "Archive" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(archivedCard).getByRole("button", { name: "Duplicate" }),
+    ).toBeInTheDocument();
+    expect(
+      within(archivedCard).getByRole("button", { name: "Delete" }),
+    ).toBeInTheDocument();
   });
 
   test("dashboard retries duplicate requests with the same key and handles navigation", async () => {
@@ -446,11 +518,13 @@ describe("organizer event management UI", () => {
     expect(replace).not.toHaveBeenCalled();
     first.unmount();
 
+    // The source event carries stored blocks, so the payload assertion below
+    // proves the form drops them rather than merely lacking them.
     render(
       <CreateEvent
         operation="edit"
         presentation="inline"
-        initialEvent={baseEvent}
+        initialEvent={{ ...baseEvent, blockedSlots: { "weekday:1": [0] } }}
         onSaved={onSaved}
         onCancel={onCancel}
       />,
@@ -464,6 +538,9 @@ describe("organizer event management UI", () => {
         "token",
       ),
     );
+    // Blocked times have their own editor: the form never sends them, so the
+    // server keeps (or prunes) the stored blocks.
+    expect(updateEvent.mock.calls[0][1]).not.toHaveProperty("blockedSlots");
     expect(onSaved).toHaveBeenCalledWith(result);
     expect(replace).not.toHaveBeenCalled();
   });
@@ -546,15 +623,24 @@ describe("organizer event management UI", () => {
     const timezoneField = screen.getByLabelText("Event timezone");
     const meetingDurationField = screen.getByLabelText("Meeting Duration");
     const accessField = screen.getByLabelText("Event Access");
+    const startingField = screen.getByLabelText("Participants start as");
     expect(screen.getByRole("button", { name: "In-Person" })).toBeVisible();
     expect(locationField).toBeVisible();
     expect(timezoneField).toBeVisible();
     expect(meetingDurationField).toBeVisible();
     expect(accessField).toBeVisible();
+    expect(startingField).toBeVisible();
+    expect(startingField).toHaveValue("available");
+    expect(
+      screen.getByText(
+        "Participants paint over the times to change. Starting Available means they mark the times that do not work.",
+      ),
+    ).toBeInTheDocument();
     expect(advancedOptions).not.toContainElement(locationField);
     expect(advancedOptions).not.toContainElement(timezoneField);
     expect(advancedOptions).not.toContainElement(meetingDurationField);
     expect(advancedOptions).not.toContainElement(accessField);
+    expect(advancedOptions).not.toContainElement(startingField);
 
     expect(advancedOptions).toContainElement(
       screen.getByLabelText("Slot Duration"),
@@ -616,6 +702,7 @@ describe("organizer event management UI", () => {
         endTime: "17:00",
         slotMinutes: 30,
         accessMode: "open_link",
+        startingAvailability: "available",
         timezone: "America/Los_Angeles",
         meetingDurationMinutes: 60,
         daySelectionType: "specific_dates",
@@ -623,7 +710,83 @@ describe("organizer event management UI", () => {
         status: "active",
       }),
     );
+    expect(createEvent.mock.calls[0][0]).not.toHaveProperty("blockedSlots");
     expect(replace).toHaveBeenCalledWith("/event?code=CREATED1");
+  });
+
+  test("create form sends a Busy start when the organizer chooses it", async () => {
+    createEvent.mockResolvedValue({
+      event: { ...baseEvent, code: "CREATED2" },
+    });
+    render(<CreateEvent />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Event Name" }), {
+      target: { value: "Busy start" },
+    });
+    const startingField = screen.getByLabelText("Participants start as");
+    expect(
+      within(startingField).getByRole("option", {
+        name: "Available (they mark the times that do not work)",
+      }),
+    ).toHaveValue("available");
+    await userEvent.selectOptions(
+      startingField,
+      "Busy (they mark the times that work)",
+    );
+    expect(startingField).toHaveValue("busy");
+    fireEvent.submit(startingField.closest("form"));
+
+    await waitFor(() => expect(createEvent).toHaveBeenCalled());
+    expect(createEvent.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        name: "Busy start",
+        startingAvailability: "busy",
+      }),
+    );
+  });
+
+  test("edit form hydrates the starting availability and sends changes to it", async () => {
+    searchParams = new URLSearchParams("code=EVENT123");
+    fetchEvent.mockResolvedValue({
+      event: { ...baseEvent, startingAvailability: "busy" },
+    });
+    updateEvent.mockResolvedValue({
+      event: { ...baseEvent, startingAvailability: "available", version: 4 },
+      responsesReset: 0,
+    });
+
+    render(<CreateEvent operation="edit" />);
+    const startingField = await screen.findByLabelText("Participants start as");
+    expect(startingField).toHaveValue("busy");
+    expect(
+      screen.getByText(
+        "Changing this updates people who have not started their schedule yet.",
+      ),
+    ).toBeInTheDocument();
+    await userEvent.selectOptions(startingField, "available");
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(updateEvent).toHaveBeenCalledTimes(1));
+    expect(updateEvent.mock.calls[0][1]).toEqual(
+      expect.objectContaining({
+        startingAvailability: "available",
+        expectedVersion: baseEvent.version,
+      }),
+    );
+  });
+
+  test("inline edit defaults an event without the setting to an Available start", () => {
+    render(
+      <CreateEvent
+        operation="edit"
+        presentation="inline"
+        initialEvent={baseEvent}
+        onSaved={jest.fn()}
+        onCancel={jest.fn()}
+      />,
+    );
+    expect(screen.getByLabelText("Participants start as")).toHaveValue(
+      "available",
+    );
   });
 
   test("keeps common validation visible without opening advanced options", async () => {

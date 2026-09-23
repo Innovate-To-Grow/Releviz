@@ -21,9 +21,32 @@ export function availabilityLabel(value) {
   return AVAILABILITY_CHOICES.find((choice) => choice.key === key)?.label;
 }
 
+// Non-color cue per swatch level. "blocked" is the grey striped organizer
+// block seen by participants; "blocked-paint" is the red cell painted in the
+// organizer's blocked-times editor.
+const SWATCH_GLYPHS = { free: "✓", partial: "◐", "blocked-paint": "✕" };
+
+/**
+ * The level every slot starts at for an event: 1 when the organizer kept the
+ * Available start, otherwise 0 (Busy). A payload without the setting comes
+ * from an API release that still seeded every schedule Busy, so it reads as
+ * a Busy start.
+ */
+export function startingAvailabilityValue(event) {
+  return event?.startingAvailability === "available" ? 1 : 0;
+}
+
+/**
+ * The brush an editor pre-selects: the opposite of the starting level, so
+ * people paint over the times that differ from the default.
+ */
+export function startingBrushValue(event) {
+  return startingAvailabilityValue(event) === 1 ? 0 : 1;
+}
+
 /** Colored swatch with the same non-color cue used inside grid cells. */
 export function AvailabilitySwatch({ level = "busy", virtual = false }) {
-  const glyph = level === "free" ? "✓" : level === "partial" ? "◐" : "";
+  const glyph = SWATCH_GLYPHS[level] || "";
   return (
     <span
       className={`availability-swatch availability-swatch--${level}${virtual ? " availability-swatch--virtual" : ""}`}
@@ -36,18 +59,24 @@ export function AvailabilitySwatch({ level = "busy", virtual = false }) {
 
 /**
  * Legend explaining the grid colors and glyphs. Pass `virtual` to show the
- * virtual-channel palette, or `channels="both"` to show both.
+ * virtual-channel palette, or `channels="both"` to show both. `hasBlocked`
+ * appends the organizer-blocked item; `blockedOnly` lists nothing but that
+ * item (for grids that hide the availability legend yet contain blocks).
  */
 export function AvailabilityLegend({
   virtual = false,
   channels = "single",
   className = "",
   showValues = false,
+  hasBlocked = false,
+  blockedOnly = false,
 }) {
-  const items = AVAILABILITY_CHOICES.map((choice) => ({
-    ...choice,
-    detail: showValues ? `${choice.value}` : null,
-  }));
+  const items = blockedOnly
+    ? []
+    : AVAILABILITY_CHOICES.map((choice) => ({
+        ...choice,
+        detail: showValues ? `${choice.value}` : null,
+      }));
   return (
     <ul
       className={`availability-legend ${className}`.trim()}
@@ -69,7 +98,13 @@ export function AvailabilityLegend({
           )}
         </li>
       ))}
-      {channels === "both" && (
+      {(hasBlocked || blockedOnly) && (
+        <li className="availability-legend__item">
+          <AvailabilitySwatch level="blocked" />
+          <span>Blocked</span>
+        </li>
+      )}
+      {channels === "both" && !blockedOnly && (
         <li className="availability-legend__item text-secondary">
           Left swatch: in person · right swatch: virtual
         </li>

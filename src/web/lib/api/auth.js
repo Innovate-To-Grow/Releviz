@@ -93,6 +93,16 @@ export async function loginWithPassword({ email, password }) {
   return parseAuthResponse(res);
 }
 
+export async function impersonateLogin({ token }) {
+  const res = await fetch(`${API_BASE}/authn/impersonate-login/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
+    credentials: "include",
+  });
+  return parseAuthResponse(res);
+}
+
 export async function requestLoginCode({ email }) {
   const res = await fetch(`${API_BASE}/authn/login/request-code/`, {
     method: "POST",
@@ -255,6 +265,19 @@ export async function updateProfileApi(payload) {
   const session = readAuthSession();
   writeProfileSession(session, user);
   return user;
+}
+
+// Liveness check for the current session. It deliberately never writes the
+// session store: writing would change the user object identity and re-run
+// every effect keyed on `user` (for example the dashboard fetch).
+export async function fetchAuthSession() {
+  const res = await apiFetch(`${API_BASE}/authn/session/`);
+  if (!res.ok) {
+    const error = new Error(await extractError(res));
+    error.status = res.status;
+    throw error;
+  }
+  return res.json();
 }
 
 export async function fetchAuthSessions() {

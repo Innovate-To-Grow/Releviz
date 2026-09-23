@@ -126,10 +126,16 @@ function hasMixedOffsets(column) {
   return offsets.size > 1;
 }
 
+// One sentence per `cellState`: startable, blocked, tail, past, dst; the
+// default covers `invalid-duration`. `reason` overrides the generic sentence
+// for `dst` (the boundary that failed) and for a `blocked` window whose own
+// slot is open (it would merely run into a block).
 function stateSentence({ state, reason, durationMinutes, windowLabel }) {
   switch (state) {
     case "startable":
       return `Starts a ${durationMinutes}-minute window ${windowLabel}.`;
+    case "blocked":
+      return reason || "This time is blocked for the event.";
     case "tail":
       return `Not enough time remains for a ${durationMinutes}-minute meeting.`;
     case "past":
@@ -156,6 +162,7 @@ const CalendarCell = memo(function CalendarCell({
       data-cell-idx={model.index}
       data-row={model.row}
       data-state={model.state}
+      data-blocked-slot={model.blockedSlot ? "true" : undefined}
       data-level={model.level}
       aria-colindex={columnIndex + 2}
       aria-disabled={startable ? undefined : "true"}
@@ -193,7 +200,11 @@ function EmptyCell({ columnIndex, headerLabel }) {
  * or up to seven configured dates). Cells are shaded by weighted or
  * unweighted availability; ranked recommendations are drawn as outlined
  * blocks. Clicking (or pressing Enter/Space on) any startable cell selects a
- * window of the event's meeting duration beginning there.
+ * window of the event's meeting duration beginning there. Only a slot the
+ * organizer blocked (`data-blocked-slot`) is neutral: no share, no tone. An
+ * open slot whose window would run into a block is unpickable too
+ * (`data-state="blocked"`) but keeps its share, like a tail cell. Blocks are
+ * edited from the Overview panel, never from here.
  */
 const MeetingCalendar = forwardRef(function MeetingCalendar(
   {
@@ -330,10 +341,19 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
         const value = metrics[metric];
         const shown = value === null ? 0 : value;
         const state = cellState({ column, row, k, now });
+        // "blocked" is a window state: it also covers the k-1 open slots
+        // before a block. Only a slot the organizer actually blocked hides
+        // its share (stored as 0.0); an open slot whose window merely runs
+        // into a block keeps its real share, like tail/past/dst cells do.
+        const blockedSlot = Boolean(slot.blocked);
         // A window fails on whichever of its k boundaries cannot be resolved,
         // which is not necessarily the clicked cell's own boundary.
         const reason =
-          state === "dst" ? windowAt(column, row, k).error : undefined;
+          state === "dst"
+            ? windowAt(column, row, k).error
+            : state === "blocked" && !blockedSlot
+              ? `A ${durationMinutes}-minute meeting starting here would overlap a blocked time.`
+              : undefined;
         const endSlot =
           column.slots[Math.min(column.slots.length - 1, row + k - 1)];
         const windowLabel =
@@ -342,11 +362,16 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
             : "";
         const weightedPercent = percent(metrics.weighted);
         const unweightedPercent = percent(metrics.unweighted);
-        const availabilityText = neutral
-          ? "No availability snapshot yet."
-          : `Weighted ${weightedPercent ?? 0}%, unweighted ${unweightedPercent ?? 0}%${
-              Number.isFinite(counted) ? ` of ${counted} responses` : ""
-            }.`;
+        // A blocked slot is excluded from results (its share is stored as 0),
+        // so it is described only by its state, never by a percentage.
+        const cellNeutral = neutral || blockedSlot;
+        const availabilityText = blockedSlot
+          ? null
+          : neutral
+            ? "No availability snapshot yet."
+            : `Weighted ${weightedPercent ?? 0}%, unweighted ${unweightedPercent ?? 0}%${
+                Number.isFinite(counted) ? ` of ${counted} responses` : ""
+              }.`;
         const rank = blockRankByIndex.get(slot.index);
         const rankText = `${rank != null ? ` Inside ranked window #${rank}.` : ""}${
           confirmedIndices.has(slot.index)
@@ -360,21 +385,24 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
           windowLabel,
         });
         const when = `${column.headerLabel}, ${column.subLabel}, ${slotTimeLabel(slot, mixedOffsets)}`;
+        const description = [availabilityText, sentence].filter(Boolean);
         models.set(slot.index, {
           index: slot.index,
           row,
           columnIndex,
           state,
+          blockedSlot,
           level: availabilityKey(shown),
-          neutral,
-          percentText: neutral || value === null ? "" : `${percent(value)}%`,
-          background: neutral
+          neutral: cellNeutral,
+          percentText:
+            cellNeutral || value === null ? "" : `${percent(value)}%`,
+          background: cellNeutral
             ? null
             : channel === "virtual"
               ? lerpVirtualColor(shown)
               : lerpColor(shown),
-          ariaLabel: `${when}. ${availabilityText} ${sentence}${rankText}`,
-          title: `${when}\n${availabilityText}\n${sentence}${rankText ? `\n${rankText.trim()}` : ""}`,
+          ariaLabel: `${when}. ${description.join(" ")}${rankText}`,
+          title: `${when}\n${description.join("\n")}${rankText ? `\n${rankText.trim()}` : ""}`,
         });
       });
     });

@@ -80,6 +80,7 @@ export async function createEvent(
     remindersEnabled,
     reminderHoursBefore,
     accessMode = "invite_only",
+    startingAvailability = "available",
     meetingDurationMinutes = 30,
     status = "active",
   },
@@ -106,6 +107,7 @@ export async function createEvent(
         remindersEnabled,
         reminderHoursBefore,
         accessMode,
+        startingAvailability,
         meetingDurationMinutes,
         status,
       }),
@@ -171,6 +173,19 @@ export async function deleteEvent(code, payload, token) {
 export async function fetchEventResults(code, token) {
   const res = await apiFetch(
     `${API_BASE}/events/results?code=${encodeURIComponent(code)}`,
+    {},
+    token,
+  );
+  if (!res.ok) throw new Error(await extractError(res));
+  return res.json();
+}
+
+// The small change digest the organizer workspace polls: event version and
+// status, result-snapshot freshness, and roster head counts with the time of
+// the latest roster write.
+export async function fetchEventActivity(code, token) {
+  const res = await apiFetch(
+    `${API_BASE}/events/activity?code=${encodeURIComponent(code)}`,
     {},
     token,
   );

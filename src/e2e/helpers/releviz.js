@@ -14,6 +14,7 @@ const EMAIL_FILE_PATH = process.env.EMAIL_FILE_PATH || "/tmp/releviz-e2e-mail";
 const ADMIN_EMAIL = process.env.DJANGO_SUPERUSER_EMAIL || "admin@releviz.local";
 const ADMIN_PASSWORD = process.env.DJANGO_SUPERUSER_PASSWORD;
 const PYTHON_BIN = process.env.PYTHON_BIN || "python3";
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 if (!ADMIN_PASSWORD) {
   throw new Error(
@@ -97,12 +98,12 @@ async function latestEmailFor(email, afterMs, predicate = () => true) {
 // addresses are created, so this drives registration and login alike.
 async function continueWithEmail(page, email, startedAt) {
   await page.getByLabel("Email").fill(email);
-  const codeStep = page.getByRole("heading", { name: "Check your email" });
+  const codeStep = page.getByRole("heading", { name: "Verify Your Identity" });
   // Firefox on CI has dropped the first submit right after hydration. Asking
   // again only issues another code, and the newest one is the one read.
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     await page
-      .getByRole("button", { name: "Continue with email" })
+      .getByRole("button", { name: "Continue", exact: true })
       .click({ timeout: 5_000 })
       .catch(() => {});
     const sent = await codeStep
@@ -116,7 +117,7 @@ async function continueWithEmail(page, email, startedAt) {
   await expect(codeStep).toBeVisible();
   const code = await latestVerificationCode(email, startedAt);
   await page.getByLabel("Verification code").fill(code);
-  await page.getByRole("button", { name: "Verify and continue" }).click();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
 }
 
 async function expectDashboard(page) {
@@ -165,11 +166,18 @@ async function fillTextbox(page, name, value) {
 }
 
 // Event settings use native <select> controls, so the value is chosen by its
-// visible option label.
-async function selectOption(page, name, optionName) {
+// visible option label. Most of them use the label as the value (timezones);
+// pass `expectedValue` for a select whose option values differ from their
+// labels.
+async function selectOption(
+  page,
+  name,
+  optionName,
+  expectedValue = optionName,
+) {
   const select = page.getByRole("combobox", { name });
   await select.selectOption({ label: optionName });
-  await expect(select).toHaveValue(optionName);
+  await expect(select).toHaveValue(expectedValue);
 }
 
 async function expandAdvancedOptions(page) {
@@ -230,6 +238,43 @@ async function apiJson(request, method, url, token, body) {
     payload = text;
   }
   return { response, payload };
+}
+
+// Creates an active weekday event through the API and returns its full
+// definition (slot groups included) so specs can seed responses by slot
+// index. `overrides` replaces any field of the default payload.
+// `startingAvailability` is deliberately left out so these events take the
+// product default (everyone starts Available); a spec that needs the legacy
+// Busy start passes `{ startingAvailability: "busy" }`.
+async function createEvent(request, token, overrides) {
+  const created = await apiJson(request, "POST", "/events", token, {
+    startTime: "09:00",
+    endTime: "17:00",
+    slotMinutes: 30,
+    days: [1, 2, 3, 4, 5],
+    mode: "inperson",
+    location: "Calendar Room",
+    participantViewPermission: "realtime",
+    daySelectionType: "days_of_week",
+    specificDates: [],
+    responseDeadline: new Date(Date.now() + 5 * DAY_MS).toISOString(),
+    timezone: "UTC",
+    remindersEnabled: false,
+    reminderHoursBefore: 24,
+    accessMode: "invite_only",
+    meetingDurationMinutes: 60,
+    status: "active",
+    ...overrides,
+  });
+  expect(created.response.status()).toBe(201);
+  const definition = await apiJson(
+    request,
+    "GET",
+    `/events?code=${created.payload.event.code}`,
+    token,
+  );
+  expect(definition.response.status()).toBe(200);
+  return definition.payload.event;
 }
 
 function runBackendCommand(command, ...args) {
@@ -297,6 +342,7 @@ module.exports = {
   apiJson,
   codeFromEmailBody,
   continueWithEmail,
+  createEvent,
   datetimeLocalHoursFromNow,
   decodeQuotedPrintable,
   dispatchEmailJobs,

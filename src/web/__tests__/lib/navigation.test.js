@@ -37,6 +37,8 @@ describe("browser navigation helpers", () => {
   test("keeps internal next paths and rejects external or missing paths", () => {
     expect(safeNextPath("/event?code=EVENT123")).toBe("/event?code=EVENT123");
     expect(safeNextPath("//evil.example")).toBe("/dashboard");
+    expect(safeNextPath("/..//evil.example")).toBe("/dashboard");
+    expect(safeNextPath("/event/..//evil.example?code=X")).toBe("/dashboard");
     expect(safeNextPath("/\\evil.example")).toBe("/dashboard");
     expect(safeNextPath("https://evil.example")).toBe("/dashboard");
     expect(safeNextPath(null, "/")).toBe("/");
