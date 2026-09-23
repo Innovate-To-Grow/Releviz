@@ -27,6 +27,8 @@ from apps.scheduling.services.availability import default_availability
 from apps.scheduling.services.events.lifecycle import response_write_error
 from apps.scheduling.services.invitations.delivery import upsert_and_send_invitations
 from apps.scheduling.services.invitations.errors import EventEmailRequestError
+from apps.scheduling.services.managed_members import delete_organizer_managed_members
+from apps.scheduling.services.roster_groups import assign_memberships, parse_group_cell
 
 from .batches import require_preview, scrub_batch
 from .errors import RosterImportError
@@ -219,6 +221,10 @@ def _rebuild_event_roster(event: Event, now) -> None:
         ).delete()
     if participants:
         Participant.objects.filter(pk__in=[participant.pk for participant in participants]).delete()
+    delete_organizer_managed_members(
+        [participant.member_id for participant in participants if participant.organizer_managed]
+    )
+    event.participant_groups.all().delete()
     event.version += 1
 
 
@@ -258,29 +264,36 @@ def _write_roster(
     changed_participants = []
     invitation_emails = []
     participant_by_email = {}
+    # (participant, (all_groups, names)) for every row whose cell sets memberships.
+    # A blank cell leaves an existing person's groups alone on merge.
+    assignments = []
     for sort_order, row in enumerate(rows, 1):
         member = members[row.email]
         participant = existing.get(member.pk)
+        all_groups, group_names = parse_group_cell(row.group_name)
         if participant is None:
             participant = Participant(
                 event=event,
                 member=member,
                 participant_name=row.name,
+                contact_phone=row.phone,
                 availability_inperson=default_availability(event),
                 availability_virtual=default_availability(event),
-                group_name=row.group_name or None,
+                all_groups=all_groups,
                 sort_order=sort_order,
             )
             new_participants.append(participant)
             invitation_emails.append(row.email)
+            if group_names:
+                assignments.append((participant, (all_groups, group_names)))
         else:
             restored = participant.hidden
             changed = False
-            values = {
-                "participant_name": row.name,
-                "group_name": row.group_name or None,
-                "hidden": False,
-            }
+            values = {"participant_name": row.name, "hidden": False}
+            # A sheet without a phone column, or an empty cell, keeps the phone
+            # the organizer already has on file.
+            if row.phone:
+                values["contact_phone"] = row.phone
             for field, value in values.items():
                 if getattr(participant, field) != value:
                     setattr(participant, field, value)
@@ -290,14 +303,26 @@ def _write_roster(
                 changed_participants.append(participant)
             if restored:
                 invitation_emails.append(row.email)
+            if all_groups or group_names:
+                assignments.append((participant, (all_groups, group_names)))
         participant_by_email[row.email] = participant
 
     if new_participants:
         Participant.objects.bulk_create(new_participants)
+    if assignments:
+        # Membership edits on people already on the roster bump their version
+        # like any other identity change; new rows carry their version already.
+        bumped = {participant.pk for participant in changed_participants}
+        existing_by_pk = {participant.pk: participant for participant in existing.values()}
+        for participant_id in assign_memberships(event=event, assignments=assignments):
+            participant = existing_by_pk.get(participant_id)
+            if participant is not None and participant.pk not in bumped:
+                participant.version += 1
+                changed_participants.append(participant)
     if changed_participants:
         Participant.objects.bulk_update(
             changed_participants,
-            ["participant_name", "group_name", "hidden", "version", "updated_at"],
+            ["participant_name", "contact_phone", "hidden", "version", "updated_at"],
         )
 
     UserEvent.objects.bulk_create(
@@ -389,7 +414,12 @@ def commit_roster_import(*, event: Event, batch_id, organizer, data):
         idempotency_key = uuid.UUID(str(data.get("idempotencyKey") or ""))
     except (TypeError, ValueError, AttributeError) as exc:
         raise RosterImportError("idempotencyKey must be a UUID.") from exc
-    fingerprint = _fingerprint({"batchId": str(batch_id), "mode": mode})
+    send_invitations = data.get("sendInvitations", True)
+    if not isinstance(send_invitations, bool):
+        raise RosterImportError("sendInvitations must be a boolean.")
+    fingerprint = _fingerprint(
+        {"batchId": str(batch_id), "mode": mode, "sendInvitations": send_invitations}
+    )
 
     try:
         with transaction.atomic():
@@ -500,6 +530,8 @@ def commit_roster_import(*, event: Event, batch_id, organizer, data):
                 },
             )
             delivery_request = None
+            if not send_invitations:
+                invitation_emails = []
             if invitation_emails:
                 delivery_result = upsert_and_send_invitations(
                     event=event,

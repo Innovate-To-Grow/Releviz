@@ -1,11 +1,21 @@
 "use client";
 
-import { useState, useContext, useEffect, useRef, useCallback } from "react";
+import {
+  useState,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useCallback,
+} from "react";
 import Alert from "@/components/ui/Alert";
 import AppButton from "@/components/ui/AppButton";
 import {
   AVAILABILITY_CHOICES,
   AvailabilityChoice,
+  availabilityLabel,
+  startingAvailabilityValue,
+  startingBrushValue,
 } from "@/components/ui/Availability";
 import LoadingState from "@/components/ui/LoadingState";
 import PageHeader from "@/components/ui/PageHeader";
@@ -21,6 +31,7 @@ import {
 import EventContext from "@/components/event/EventContext";
 import ScheduleChannelEditor from "@/components/schedule/ScheduleChannelEditor";
 import { useAuth } from "@/components/auth/AuthContext";
+import { fetchEvent } from "@/lib/api/events";
 import {
   fetchCurrentParticipant,
   joinEvent,
@@ -31,21 +42,54 @@ import useAutosaveNavigationGuard from "@/components/schedule/useAutosaveNavigat
 
 const NOOP = () => {};
 
+const BLOCKED_SLOTS_NOTE =
+  "Grey striped times are blocked by the organizer and do not apply to this event.";
+
+// Organizer-blocked slots keep their index but never take availability: the
+// grid refuses to paint them, and bulk fills leave them at 0.
+function blockedSlotIndices(slotGroups) {
+  const blocked = new Set();
+  for (const group of slotGroups || []) {
+    for (const slot of group?.slots || []) {
+      if (slot?.blocked) blocked.add(slot.index);
+    }
+  }
+  return blocked;
+}
+
 function ParticipantView() {
   const {
     event,
+    setEvent = NOOP,
     numSlots,
     respondIntent = false,
     consumeRespondIntent = NOOP,
   } = useContext(EventContext);
   const { user, loading: authLoading, getToken } = useAuth();
   const mode = event?.mode || "inperson";
+  const blockedIndices = useMemo(
+    () => blockedSlotIndices(event?.slotGroups),
+    [event?.slotGroups],
+  );
+  const hasBlockedSlots = blockedIndices.size > 0;
+  // Every slot starts at the organizer's chosen level, so the brush defaults
+  // to the opposite: people paint over the times that differ.
+  const startingValue = startingAvailabilityValue(event);
+  const startingBrush = startingBrushValue(event);
+  const startsAvailable = startingValue === 1;
+  const startingLabel = availabilityLabel(startingValue);
 
   const [participantName, setParticipantName] = useState("");
   const [joined, setJoined] = useState(false);
   const [scheduleInperson, setScheduleInperson] = useState([]);
   const [scheduleVirtual, setScheduleVirtual] = useState([]);
-  const [availabilityValue, setAvailabilityValue] = useState(1);
+  const [availabilityValue, setAvailabilityValue] = useState(startingBrush);
+  // A changed starting level (after the event refreshes) flips the brush too.
+  const [brushBaseline, setBrushBaseline] = useState(startingBrush);
+  if (brushBaseline !== startingBrush) {
+    setBrushBaseline(startingBrush);
+    setAvailabilityValue(startingBrush);
+  }
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [participantRefreshKey, setParticipantRefreshKey] = useState(0);
@@ -419,13 +463,17 @@ function ParticipantView() {
 
   const fillAllAvailability = (value) => {
     if (responseChangesDisabled) return;
+    const filled = () =>
+      Array.from({ length: numSlots }, (_, index) =>
+        blockedIndices.has(index) ? 0 : value,
+      );
     if (mode !== "virtual") {
-      const next = Array(numSlots).fill(value);
+      const next = filled();
       scheduleInpersonRef.current = next;
       setScheduleInperson(next);
     }
     if (mode !== "inperson") {
-      const next = Array(numSlots).fill(value);
+      const next = filled();
       scheduleVirtualRef.current = next;
       setScheduleVirtual(next);
     }
@@ -469,6 +517,16 @@ function ParticipantView() {
     try {
       const saved = await flushPendingDraft();
       if (!saved) return;
+      // The organizer may have changed the event since this page loaded (for
+      // example the starting schedule, which drives the brush and copy), so
+      // reload it alongside the response; a failed event read is not fatal.
+      try {
+        const token = await getToken();
+        const { event: latest } = await fetchEvent(event.code, token);
+        setEvent(latest);
+      } catch {
+        // The response refresh below still runs against the current event.
+      }
       setParticipantRefreshKey((key) => key + 1);
     } finally {
       setIsRefreshing(false);
@@ -491,7 +549,11 @@ function ParticipantView() {
             headingLevel={2}
             eyebrow="Your invitation"
             title="Join Event"
-            lede="Join, mark the times that work for you, then submit your response."
+            lede={
+              startsAvailable
+                ? "Join, mark the times that do not work for you, then submit your response."
+                : "Join, mark the times that work for you, then submit your response."
+            }
             className="mb-0"
           />
 
@@ -552,7 +614,11 @@ function ParticipantView() {
             )}
           </>
         }
-        lede="Choose a status, then click or drag across the times below."
+        lede={
+          startsAvailable
+            ? "Every time starts as Available. Paint Busy over the times that do not work for you."
+            : "Choose a status, then click or drag across the times below."
+        }
         actions={
           <AppButton
             onClick={handleRefresh}
@@ -599,12 +665,12 @@ function ParticipantView() {
                   Apply {activeChoiceLabel} to all
                 </AppButton>
                 <AppButton
-                  onClick={() => fillAllAvailability(0)}
+                  onClick={() => fillAllAvailability(startingValue)}
                   variant="outlined"
                   size="sm"
                   disabled={responseChangesDisabled}
                 >
-                  Mark all Busy
+                  Mark all {startingLabel}
                 </AppButton>
               </div>
               <p className="w-100 mb-0 small text-secondary d-flex flex-wrap align-items-center gap-2">
@@ -619,11 +685,22 @@ function ParticipantView() {
               </p>
             </div>
 
+            {hasBlockedSlots && (
+              <Alert
+                variant="info"
+                role="note"
+                className="participant-blocked-notice"
+              >
+                {BLOCKED_SLOTS_NOTE}
+              </Alert>
+            )}
+
             <ScheduleChannelEditor
               mode={mode}
               slotGroups={event.slotGroups}
               inperson={scheduleInperson}
               virtual={scheduleVirtual}
+              startingValue={startingValue}
               readOnly={responseChangesDisabled}
               onInpersonPaint={handleInpersonPaint}
               onVirtualPaint={handleVirtualPaint}

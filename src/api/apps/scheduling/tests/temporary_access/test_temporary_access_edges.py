@@ -243,7 +243,7 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
         response = self.organizer_client().get(f"/events/participants?code={self.event.code}")
         self.assertEqual(response.status_code, 200)
         by_id = {item["id"]: item for item in response.data["participants"]}
-        self.assertEqual(by_id[str(self.participant.pk)]["invitationStatus"], "invited")
+        self.assertEqual(by_id[str(self.participant.pk)]["invitationStatus"], "sent")
         self.assertEqual(by_id[str(self.participant.pk)]["email"], "edge-temp@example.com")
         self.assertEqual(by_id[str(full_participant.pk)]["accountAccess"], "full")
         self.assertFalse(response.data["scheduleDataIncluded"])
@@ -298,6 +298,48 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
             )
         self.assertEqual(throttled.status_code, 429)
         create.assert_not_called()
+
+        with (
+            patch(
+                "apps.scheduling.views.participants.managed.consume_request_rate_limit",
+                return_value=quota_denied,
+            ) as consume,
+            patch(
+                "apps.scheduling.views.participants.managed.create_or_reuse_managed_participant_and_send"
+            ) as create_and_send,
+        ):
+            add_only = client.post(
+                f"/events/participants/managed?code={self.event.code}",
+                {
+                    "name": "New person",
+                    "email": "new-person@example.com",
+                    "idempotencyKey": str(uuid.uuid4()),
+                    "sendInvitation": False,
+                },
+                format="json",
+            )
+        self.assertEqual(add_only.status_code, 201, add_only.data)
+        self.assertIsNone(add_only.data["deliveryRequest"])
+        self.assertEqual(add_only.data["autoInvitedCount"], 0)
+        consume.assert_not_called()
+        create_and_send.assert_not_called()
+        self.assertTrue(
+            self.event.participants.filter(member__email="new-person@example.com").exists()
+        )
+
+        invalid_add_only = client.post(
+            f"/events/participants/managed?code={self.event.code}",
+            {
+                "name": "   ",
+                "email": "nameless@example.com",
+                "idempotencyKey": str(uuid.uuid4()),
+                "sendInvitation": False,
+            },
+            format="json",
+        )
+        self.assertEqual(invalid_add_only.status_code, 400)
+        self.assertEqual(invalid_add_only.data["error"], "Name is required.")
+        self.assertFalse(self.event.invitations.filter(email="nameless@example.com").exists())
 
     def test_managed_participant_creation_rolls_back_when_result_dirty_marking_fails(self):
         client = self.organizer_client()

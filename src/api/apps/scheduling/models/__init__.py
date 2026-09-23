@@ -6,7 +6,7 @@ Aggregates every model so callers can keep importing from
 
 from .events import Event, EventDeletionRecord, EventDuplicationRequest, default_weekdays
 from .finalization import FinalizationRequest, FinalMeeting
-from .participants import EventInvitation, Participant, UserEvent, Weight
+from .participants import EventInvitation, Participant, ParticipantGroup, UserEvent, Weight
 from .results import EventResultInvalidation, EventResultSnapshot, ScheduleEditRecord
 from .roster import (
     RosterBulkUpdateReceipt,
@@ -28,6 +28,7 @@ __all__ = [
     # Participants
     "EventInvitation",
     "Participant",
+    "ParticipantGroup",
     "UserEvent",
     "Weight",
     # Results

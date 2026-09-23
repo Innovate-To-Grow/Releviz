@@ -16,10 +16,10 @@ from scripts.ci.validate_deployment_contract import (
     production_amplify_custom_headers_errors,
     production_amplify_custom_headers_policy_errors,
     production_cd_errors,
-    production_cd_path,
     production_default_admin_task_errors,
     production_ecs_task_definition_errors,
     production_proxy_configuration_errors,
+    production_release_paths,
     production_worker_entrypoint_errors,
     production_worker_errors,
     required_runtime_environment,
@@ -141,6 +141,7 @@ class AmplifyStaticExportTests(TestCase):
                 "Amplify static export has unlisted root route HTML: ['unlisted']",
                 errors,
             )
+            self.assertIn("Amplify static export is missing 404.html", errors)
             self.assertIn("Amplify static export has no _next/static JavaScript asset", errors)
 
 
@@ -239,6 +240,222 @@ class AmplifyApexTargetTests(TestCase):
                 )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("missing unique apex DNS record", result.stderr)
+
+
+class LastSuccessfulReleaseTests(TestCase):
+    """The shared release history answers per surface job, not per run."""
+
+    script = Path(__file__).resolve().parents[3] / "scripts" / "ci" / "last-successful-release.sh"
+    repository = "Innovate-To-Grow/Releviz"
+    # A fake gh: every request is answered from a canned JSON file keyed by
+    # its URL, and --jq is applied with the real jq. Like gh, it takes no
+    # other jq options.
+    FAKE_GH = """#!/usr/bin/env bash
+set -euo pipefail
+filter=""
+url=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    api) shift ;;
+    -H) shift 2 ;;
+    --jq) filter="$2"; shift 2 ;;
+    --*) echo "unsupported gh option: $1" >&2; exit 1 ;;
+    *) url="$1"; shift ;;
+  esac
+done
+file="${FAKE_GH_DIR}/$(printf '%s' "$url" | sha256sum | cut -c1-16).json"
+if [ ! -f "$file" ]; then
+  echo "unexpected request: $url" >&2
+  exit 1
+fi
+jq -r "$filter" "$file"
+"""
+
+    @staticmethod
+    def route(url: str) -> str:
+        import hashlib
+
+        return hashlib.sha256(url.encode("utf-8")).hexdigest()[:16] + ".json"
+
+    def run_script(self, surface: str, responses: dict[str, object]) -> subprocess.CompletedProcess:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            gh = root / "bin" / "gh"
+            gh.parent.mkdir()
+            gh.write_text(self.FAKE_GH, encoding="utf-8")
+            gh.chmod(0o755)
+            for url, body in responses.items():
+                (root / self.route(url)).write_text(json.dumps(body), encoding="utf-8")
+            return subprocess.run(
+                ["bash", str(self.script), surface],
+                env={
+                    **os.environ,
+                    "PATH": f"{gh.parent}:{os.environ['PATH']}",
+                    "FAKE_GH_DIR": str(root),
+                    "GITHUB_REPOSITORY": self.repository,
+                },
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+    def orchestrated_runs(self, *runs):
+        return {
+            f"repos/{self.repository}/actions/workflows/release.yml/runs"
+            "?branch=main&status=completed&per_page=50": {
+                "workflow_runs": [
+                    {"id": run_id, "created_at": created_at, "head_sha": sha, "event": event}
+                    for run_id, created_at, sha, event, _jobs in runs
+                ]
+            },
+            **{
+                f"repos/{self.repository}/actions/runs/{run_id}/jobs?per_page=100": {
+                    "jobs": [{"name": name, "conclusion": conclusion} for name, conclusion in jobs]
+                }
+                for run_id, _created_at, _sha, _event, jobs in runs
+            },
+        }
+
+    def workflow_runs(self, workflow: str, *runs):
+        return {
+            f"repos/{self.repository}/actions/workflows/{workflow}/runs"
+            "?branch=main&status=success&per_page=1": {
+                "workflow_runs": [
+                    {"created_at": created_at, "head_sha": sha} for created_at, sha in runs
+                ]
+            }
+        }
+
+    def test_rejects_unknown_surfaces(self):
+        result = self.run_script("database", {})
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("usage:", result.stderr)
+
+    def test_answers_from_the_surface_job_not_the_run(self):
+        newest, older = "a" * 40, "b" * 40
+        responses = {
+            **self.orchestrated_runs(
+                # The newest run released the frontend but the backend failed
+                # and the infrastructure was skipped.
+                (
+                    2,
+                    "2026-09-22T10:00:00Z",
+                    newest,
+                    "workflow_run",
+                    [
+                        ("Decide which surfaces changed", "success"),
+                        ("backend / Release backend to production", "failure"),
+                        ("frontend / Release frontend to production", "success"),
+                        ("Summarize the production release", "failure"),
+                    ],
+                ),
+                (
+                    1,
+                    "2026-09-21T10:00:00Z",
+                    older,
+                    "workflow_run",
+                    [
+                        ("backend / Release backend to production", "success"),
+                        ("infrastructure / Release infrastructure to production", "success"),
+                    ],
+                ),
+            ),
+            **self.workflow_runs("release-backend.yml"),
+            **self.workflow_runs("release-frontend.yml"),
+            **self.workflow_runs("release-infrastructure.yml"),
+        }
+        for surface, expected in (
+            ("backend", older),
+            ("frontend", newest),
+            ("infrastructure", older),
+        ):
+            with self.subTest(surface=surface):
+                result = self.run_script(surface, responses)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), expected)
+
+    def test_ignores_orchestrated_runs_from_other_events(self):
+        pushed, released = "c" * 40, "d" * 40
+        responses = {
+            **self.orchestrated_runs(
+                (
+                    3,
+                    "2026-09-22T10:00:00Z",
+                    pushed,
+                    "push",
+                    [("backend / Release backend to production", "success")],
+                ),
+                (
+                    2,
+                    "2026-09-21T10:00:00Z",
+                    released,
+                    "workflow_dispatch",
+                    [("backend / Release backend to production", "success")],
+                ),
+            ),
+            **self.workflow_runs("release-backend.yml"),
+        }
+        result = self.run_script("backend", responses)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), released)
+
+    def test_a_newer_lone_dispatch_of_the_surface_wins(self):
+        orchestrated, rollback = "e" * 40, "f" * 40
+        responses = {
+            **self.orchestrated_runs(
+                (
+                    1,
+                    "2026-09-21T10:00:00Z",
+                    orchestrated,
+                    "workflow_run",
+                    [("frontend / Release frontend to production", "success")],
+                ),
+            ),
+            **self.workflow_runs("release-frontend.yml", ("2026-09-21T12:00:00Z", rollback)),
+        }
+        result = self.run_script("frontend", responses)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), rollback)
+
+        # An older lone dispatch loses to the orchestrated release.
+        responses.update(
+            self.workflow_runs("release-frontend.yml", ("2026-09-20T12:00:00Z", rollback))
+        )
+        result = self.run_script("frontend", responses)
+        self.assertEqual(result.stdout.strip(), orchestrated)
+
+    def test_falls_back_to_the_retired_single_workflow_then_to_nothing(self):
+        legacy = "1" * 40
+        responses = {
+            **self.orchestrated_runs(),
+            **self.workflow_runs("release-infrastructure.yml"),
+            **self.workflow_runs("deploy-prod.yml", ("2026-09-01T00:00:00Z", legacy)),
+        }
+        result = self.run_script("infrastructure", responses)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), legacy)
+
+        responses.update(self.workflow_runs("deploy-prod.yml"))
+        result = self.run_script("infrastructure", responses)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
+
+    def test_a_malformed_commit_is_never_reported(self):
+        responses = {
+            **self.orchestrated_runs(
+                (
+                    1,
+                    "2026-09-21T10:00:00Z",
+                    "not-a-sha",
+                    "workflow_run",
+                    [("backend / Release backend to production", "success")],
+                ),
+            ),
+            **self.workflow_runs("release-backend.yml"),
+        }
+        result = self.run_script("backend", responses)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
 
 
 class DeploymentContractTests(TestCase):
@@ -707,1636 +924,6 @@ secrets = [
             {"DB_PASSWORD", "DJANGO_SECRET_KEY", "METRICS_BEARER_TOKEN"},
         )
 
-    def test_production_cd_requires_protected_amplify_release(self):
-        self.maxDiff = None
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            workflows = root / ".github/workflows"
-            workflows.mkdir(parents=True)
-            workflow = workflows / "deploy-prod.yml"
-            workflow.write_text(
-                """
-on:
-  workflow_dispatch:
-permissions:
-  actions: read
-  id-token: write
-timeout-minutes: 160
-PRODUCTION_JOB_TIMEOUT_SECONDS: "9600"
-AMPLIFY_TIMEOUT_SECONDS: "1200"
-TF_VAR_default_admin_email: ${{ vars.PROD_DEFAULT_ADMIN_EMAIL || 'admin@releviz.com' }}
-TF_VAR_default_admin_password_secret_arn: ${{ vars.PROD_DEFAULT_ADMIN_PASSWORD_SECRET_ARN }}
-steps:
-  - name: Record production job time budget
-    id: job_budget
-    run: echo "started_at=$(date +%s)" >>"$GITHUB_OUTPUT"
-  - uses: hashicorp/setup-terraform@v4
-    with:
-      terraform_wrapper: false
-  - run: |
-      if [ "$CONFIRMATION" != "DEPLOY" ]; then exit 1; fi
-      git rev-parse HEAD
-      echo "CI Result"
-      echo "TF_VAR_backend_image_tag: $DEPLOY_SHA"
-  - name: Validate production configuration
-    run: |
-      if [ "$DEFAULT_ADMIN_EMAIL" != "admin@releviz.com" ]; then exit 1; fi
-      if ! jq -en \
-        --arg django "$DJANGO_SECRET_KEY_ARN" \
-        --arg field "$FIELD_ENCRYPTION_KEY_ARN" \
-        --arg metrics "$METRICS_BEARER_TOKEN_ARN" \
-        --arg admin "$DEFAULT_ADMIN_PASSWORD_SECRET_ARN" '
-          [$django, $field, $metrics, $admin] as $secrets
-          | ($secrets | length) == ($secrets | unique | length)
-        '; then exit 1; fi
-  - name: Verify deployment identity and managed dependencies
-    run: |
-      default_admin_secret_name="$(
-        aws secretsmanager describe-secret \
-          --secret-id "$DEFAULT_ADMIN_PASSWORD_SECRET_ARN" \
-          --query Name \
-          --output text
-      )"
-      if [ "$default_admin_secret_name" != "releviz/prod/default-admin-password" ]; then
-        exit 1
-      fi
-  - run: |
-      aws ecs describe-task-definition
-      echo "TF_VAR_frontend_image_tag: ${{ github.sha }}"
-      echo "Build and push immutable ECS fallback frontend image"
-      echo "NEXT_PUBLIC_API_BASE_URL=https://${API_DOMAIN}"
-      npm ci --workspace=releviz-web
-      npm --workspace=releviz-web run build:amplify
-      python3 scripts/ci/validate_amplify_static_export.py --out src/web/out
-      echo "${{ env.AMPLIFY_ARTIFACT }}.sha256"
-      echo "retention-days: 90"
-      echo release.json
-      test "$release_sha" = "$DEPLOY_SHA"
-      echo "Plan production infrastructure with current DNS state"
-      echo 'TF_VAR_frontend_image_tag: ${{ steps.rollback_frontend.outputs.sha }}'
-      echo production-base.tfplan
-      echo "Verify base ECS services use Terraform-selected task definitions"
-      for role in backend result_worker email_worker frontend; do
-        echo "$role"
-      done
-      terraform -chdir=infra/prod output -raw "${role}_task_definition_arn"
-      echo '.services[0].taskDefinition == $expected'
-"""
-                '      echo \'[.services[0].deployments[] | select(.status == "PRIMARY") | '
-                ".taskDefinition] == [$expected]'"
-                """
-      echo 'all(.tasks[]; .lastStatus == "RUNNING" and .taskDefinitionArn == $expected)'
-      terraform -chdir=infra/prod state list
-      echo "Detect API-subdomain transition state"
-      echo "Install reviewed Amplify security headers"
-      aws amplify update-app --custom-headers "$custom_headers"
-      echo "TF_VAR_amplify_app_id: ${{ vars.PROD_AMPLIFY_APP_ID }}"
-      aws amplify get-domain-association
-      terraform -chdir=infra/prod state pull
-      echo '.status // "ready"'
-      terraform -chdir=infra/prod untaint 'aws_amplify_domain_association.frontend[0]'
-      echo "Recovered the verified Amplify domain association from tainted Terraform state"
-"""
-                "      terraform -chdir=infra/prod import "
-                "'aws_amplify_domain_association.frontend[0]' \"${app_id}/${domain_name}\""
-                """
-      echo "Recovered the existing Amplify domain association into Terraform state"
-      echo "Capture pre-release canonical Route53 alias"
-      echo "bash scripts/deploy/amplify-apex-target.sh"
-      echo "Guard live Amplify configuration before candidate smoke"
-      terraform -chdir=infra/prod show -json production-base.tfplan
-      echo 'address == "aws_amplify_app.frontend"'
-      echo 'address == "aws_amplify_branch.production"'
-      echo 'address == "aws_amplify_domain_association.frontend[0]"'
-      echo "DOMAIN_PREEXISTING then CANONICAL_ROUTES_TO_ALB"
-      echo "Move the canonical alias to the documented ECS fallback"
-      aws route53 list-resource-record-sets
-      echo AliasTarget
-      echo routes_to_alb
-      echo '${alias_target#dualstack.}'
-      echo "neither the managed ALB fallback nor Amplify's exact reported apex target"
-      echo "TF_VAR_enable_amplify_domain: ${{ steps.domain_state.outputs.preexisting }}"
-      echo amplify_default_domain
-      echo "Run pre-Amplify backend smoke tests"
-  - name: Ensure production default administrator through one-off ECS task
-    run: |
-      started_by="admin-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-      echo "started_by=${started_by}" >>"$GITHUB_OUTPUT"
-      terraform -chdir=infra/prod output -raw default_admin_task_definition_arn
-      task_definition_state="$(aws ecs describe-task-definition)"
-      jq -e \
-        --arg password_secret "${TF_VAR_default_admin_password_secret_arn}:password::" '
-          .taskDefinition.family == "releviz-prod-default-admin-task"
-          and .taskDefinition.containerDefinitions[0].command
-            == ["python", "manage.py", "ensure_default_admin", "--yes", "--create-only"]
-          and (
-            .taskDefinition.containerDefinitions[0].environment[]
-            | select(.name == "DJANGO_SKIP_STARTUP_TASKS" and .value == "1")
-          )
-          and (
-            .taskDefinition.containerDefinitions[0].environment[]
-            | select(.name == "DJANGO_CREATE_DEFAULT_ADMIN" and .value == "0")
-          )
-          and (
-            .taskDefinition.containerDefinitions[0].secrets[]
-            | select(
-                .name == "DJANGO_SUPERUSER_PASSWORD"
-                and .valueFrom == $password_secret
-              )
-          )
-        ' <<<"$task_definition_state"
-      aws ecs describe-services
-      echo 'networkConfiguration.awsvpcConfiguration'
-      echo 'assignPublicIp == "DISABLED"'
-      backend_task_state="$(
-        aws ecs describe-task-definition \
-          --task-definition "$backend_task_definition"
-      )"
-      jq -e '
-        all(
-          .taskDefinition.containerDefinitions[].secrets[]?;
-          .name != "DJANGO_SUPERUSER_PASSWORD"
-        )
-        and all(
-          .taskDefinition.containerDefinitions[].environment[]?;
-          .name != "DJANGO_SUPERUSER_EMAIL"
-        )
-      ' <<<"$backend_task_state"
-      default_admin_image="immutable-backend-image"
-      backend_image="immutable-backend-image"
-      if [ "$default_admin_image" != "$backend_image" ]; then exit 1; fi
-      aws ecs list-tasks \
-        --cluster "$CLUSTER_NAME" \
-        --started-by "$started_by"
-      aws ecs run-task \
-        --cluster "$CLUSTER_NAME" \
-        --launch-type FARGATE \
-        --task-definition "$expected_task_definition" \
-        --network-configuration "$network_configuration" \
-        --count 1 \
-        --started-by "$started_by" \
-        --tags \
-          key=Project,value=releviz \
-          key=Environment,value=prod \
-          key=Purpose,value=default-admin-bootstrap \
-        --output json
-      timeout --signal=TERM 900s \
-        aws ecs wait tasks-stopped \
-          --cluster "$CLUSTER_NAME" \
-          --tasks "$task_arn"
-      stopped_state="$(
-        aws ecs describe-tasks \
-          --cluster "$CLUSTER_NAME" \
-          --tasks "$task_arn"
-      )"
-      jq -e '
-        .tasks[0].taskDefinitionArn == $expected
-        and .tasks[0].lastStatus == "STOPPED"
-        and .tasks[0].containers[0].exitCode == 0
-      ' <<<"$stopped_state"
-  - name: Clean up an interrupted default-administrator task
-    if: ${{ always() && steps.default_admin.outputs.started_by != '' }}
-    run: |
-      aws ecs list-tasks \
-        --cluster "$CLUSTER_NAME" \
-        --started-by "$DEFAULT_ADMIN_STARTED_BY"
-      aws ecs stop-task \
-        --cluster "$CLUSTER_NAME" \
-        --task "$task_arn"
-      timeout --signal=TERM 180s \
-        aws ecs wait tasks-stopped \
-          --cluster "$CLUSTER_NAME" \
-          --tasks "$task_arn"
-  - run: |
-      echo "Fail closed when an Amplify release job is active"
-      for branch in "$CANDIDATE_BRANCH" "$PRODUCTION_BRANCH"; do
-        echo '"CREATED" "PENDING" "PROVISIONING" "RUNNING" "CANCELLING"'
-      done
-      echo "Capture current Amplify production rollback point"
-      echo "Resolve retained Amplify rollback artifact"
-      artifact_name="releviz-amplify-${PREVIOUS_SHA}"
-      gh api --method GET --paginate --slurp \
-        "repos/${GITHUB_REPOSITORY}/actions/artifacts"
-      echo '.name == $artifact_name'
-      echo '.expired == false'
-      echo '.workflow_run.head_sha == $sha'
-      echo '.workflow_run.head_branch == "main"'
-      echo '.path == ".github/workflows/deploy-prod.yml"'
-      echo '.event == "workflow_dispatch"'
-      echo '.status == "completed"'
-      echo '.head_repository.full_name == $GITHUB_REPOSITORY'
-      echo "artifact_id=$artifact_id"
-      echo "run_id=$run_id"
-      echo "Download retained Amplify rollback artifact"
-      echo "uses: actions/download-artifact@v8"
-      echo "artifact-ids: $artifact_id"
-      echo "github-token: ${{ github.token }}"
-      echo "repository: ${{ github.repository }}"
-      echo "run-id: $run_id"
-      echo "digest-mismatch: error"
-      echo "path: ${{ runner.temp }}/amplify-rollback"
-      echo "Verify retained Amplify rollback artifact"
-      echo 'if [ "${#retained_entries[@]}" -ne 2 ]; then exit 1; fi'
-      echo '[[ "$checksum_line" =~ ^([0-9a-f]{64})[[:space:]]{2}(.+)$ ]]'
-      echo '[ "${BASH_REMATCH[2]}" = "$expected_archive" ]'
-      sha256sum --check --strict --status checksum.sha256
-      unzip -tq "$ROLLBACK_ARCHIVE"
-      zipinfo -1 "$ROLLBACK_ARCHIVE"
-      echo "Reject unsafe path"
-      if [ "$(grep -cx 'release.json' "$zip_entries")" -ne 1 ]; then exit 1; fi
-      unzip -p "$ROLLBACK_ARCHIVE" release.json |
-        jq -e --arg sha "$PREVIOUS_SHA" '.sha == $sha'
-      echo "Deploy candidate Amplify branch"
-      scripts/deploy/amplify-static-deploy.sh
-      echo "Smoke candidate Amplify frontend and direct API boundary"
-      candidate_security_headers="${RUNNER_TEMP}/candidate-security.headers"
-      curl --dump-header "$candidate_security_headers" "${candidate_url}/"
-      echo "strict-transport-security: max-age=31536000; includeSubDomains"
-      echo "x-content-type-options: nosniff"
-      echo "x-frame-options: DENY"
-      echo "referrer-policy: no-referrer"
-      echo "^content-security-policy:"
-      echo "connect-src 'self' https://${API_DOMAIN}"
-      jq -r '.static_routes[]' src/web/amplify-routes.json
-      jq -r '.legacy_redirects | keys[]' src/web/amplify-routes.json
-      echo 'event/?code=AMPLIFYSMOKE'
-      find src/web/out/_next/static
-      echo "Access-Control-Request-Method: PUT"
-      echo "access-control-allow-origin"
-      echo '${api_url}/admin/login/'
-      echo '<form'
-      echo csrfmiddlewaretoken
-      echo '${api_url}/static/admin/css/base.css'
-      echo 'if [ "$admin_post_status" != "200" ] && [ "$admin_post_status" != "400" ]; then'
-      echo 'PUT /authn/profile'
-      echo 'DELETE /authn/sessions'
-      echo "Revalidate Amplify production rollback point"
-      echo "Require a safe live-branch mutation budget"
-      echo 'JOB_STARTED_AT: ${{ steps.job_budget.outputs.started_at }}'
-      now="$(date +%s)"
-      elapsed=$((now - JOB_STARTED_AT))
-      remaining=$((PRODUCTION_JOB_TIMEOUT_SECONDS - elapsed))
-      rollback_reserve=$((90 * 60))
-      if [ "$remaining" -lt "$rollback_reserve" ]; then
-        exit 1
-      fi
-      echo "Deploy production Amplify branch"
-      echo "Smoke production Amplify branch before domain cutover"
-      phase_deadline=$((SECONDS + 600))
-      bounded_curl() {
-        local remaining=$((phase_deadline - SECONDS))
-        if [ "$remaining" -le 0 ]; then return 124; fi
-        timeout --signal=TERM "${remaining}s" curl "$@"
-      }
-      jq -r '.static_routes[]' src/web/amplify-routes.json
-      find src/web/out/_next/static
-      if ((SECONDS >= phase_deadline)); then exit 1; fi
-      canonical_preflight_headers="${RUNNER_TEMP}/canonical-api-preflight.headers"
-      canonical_preflight_status="$(
-        curl \
-          --request OPTIONS \
-          --header "Origin: https://${PROD_DOMAIN}" \
-          --header "Access-Control-Request-Method: PUT" \
-          --header "Access-Control-Request-Headers: authorization,content-type" \
-          --dump-header "$canonical_preflight_headers" \
-          --write-out "%{http_code}" \
-          "https://${API_DOMAIN}/authn/profile/"
-      )"
-      if [ "$canonical_preflight_status" != "200" ] ||
-        ! grep -Fqi "access-control-allow-origin: https://${PROD_DOMAIN}" \
-          "$canonical_preflight_headers" ||
-        ! grep -qiE 'access-control-allow-credentials: true' \
-          "$canonical_preflight_headers"; then
-        exit 1
-      fi
-      echo "Verify preserved canonical alias immediately before cutover"
-      echo "refusing cutover"
-      echo "Plan reviewed Amplify domain association"
-      echo 'TF_VAR_enable_amplify_domain: "true"'
-      echo 'TF_VAR_frontend_image_tag: ${{ steps.rollback_frontend.outputs.sha }}'
-      terraform -chdir=infra/prod show -json production-domain.tfplan
-      echo '.change.actions | index("delete")) == null'
-      echo "Require a safe first-cutover time budget"
-      echo "if: ${{ steps.apex_alias.outputs.routes_to_alb == 'true' }}"
-      echo 'JOB_STARTED_AT: ${{ steps.job_budget.outputs.started_at }}'
-      now="$(date +%s)"
-      elapsed=$((now - JOB_STARTED_AT))
-      remaining=$((PRODUCTION_JOB_TIMEOUT_SECONDS - elapsed))
-      compensation_reserve=$((70 * 60))
-      if [ "$remaining" -lt "$compensation_reserve" ]; then
-        exit 1
-      fi
-      echo "Apply exact Amplify domain association plan"
-      echo "Reconcile Amplify domain association for a migration retry"
-      aws amplify update-domain-association
-      echo "Wait for Amplify custom domain availability"
-      echo "Verify Amplify canonical DNS cutover"
-      echo "bash scripts/deploy/amplify-apex-target.sh"
-      echo expected_amplify_target
-      echo "The canonical alias did not match Amplify's exact apex DNS target"
-      aws elbv2 describe-target-health
-      echo "Run canonical production smoke tests"
-      phase_deadline=$((SECONDS + 600))
-      bounded_curl() {
-        local remaining=$((phase_deadline - SECONDS))
-        if [ "$remaining" -le 0 ]; then return 124; fi
-        timeout --signal=TERM "${remaining}s" curl "$@"
-      }
-      if ((SECONDS >= phase_deadline)); then exit 1; fi
-      canonical_security_headers="${RUNNER_TEMP}/canonical-security.headers"
-      curl --dump-header "$canonical_security_headers" "https://${PROD_DOMAIN}/"
-      echo "strict-transport-security: max-age=31536000; includeSubDomains"
-      echo "x-content-type-options: nosniff"
-      echo "x-frame-options: DENY"
-      echo "referrer-policy: no-referrer"
-      echo "^content-security-policy:"
-      echo "connect-src 'self' https://${API_DOMAIN}"
-      canonical_preflight_headers="${RUNNER_TEMP}/canonical-api-preflight.headers"
-      canonical_preflight_status="$(
-        curl \
-          --request OPTIONS \
-          --header "Origin: https://${PROD_DOMAIN}" \
-          --header "Access-Control-Request-Method: PUT" \
-          --header "Access-Control-Request-Headers: authorization,content-type" \
-          --dump-header "$canonical_preflight_headers" \
-          --write-out "%{http_code}" \
-          "https://${API_DOMAIN}/authn/profile/"
-      )"
-      if [ "$canonical_preflight_status" != "200" ] ||
-        ! grep -Fqi "access-control-allow-origin: https://${PROD_DOMAIN}" \
-          "$canonical_preflight_headers" ||
-        ! grep -qiE 'access-control-allow-credentials: true' \
-          "$canonical_preflight_headers"; then
-        exit 1
-      fi
-      echo "Plan final production topology"
-      echo 'TF_VAR_frontend_image_tag: ${{ github.sha }}'
-      echo 'TF_VAR_enable_legacy_api_compatibility: "false"'
-      echo production-final.tfplan
-      account_id="$(aws sts get-caller-identity --query Account --output text)"
-      expected_frontend_image="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_FRONTEND}:${DEPLOY_SHA}"
-      unexpected_changes="$(
-        echo '--arg frontend_image "$expected_frontend_image"'
-        echo 'def backend_proxy_source:'
-        echo 'def reviewed_backend_rule:'
-        echo 'def prune_unknown:'
-        echo 'def normalized_task:'
-        echo '.ipc_mode = (.ipc_mode // "")'
-        echo '.pid_mode = (.pid_mode // "")'
-        echo '.task_role_arn = (.task_role_arn // "")'
-        echo 'def named_entries_are_unique:'
-        echo 'def normalized_backend_container:'
-        echo '.environment |= (map(.) | sort_by(.name))'
-        echo '.secrets |= sort_by(.name)'
-        echo 'def normalized_frontend_container:'
-        echo '.environment |= (map(.) | sort_by(.name))'
-        echo '$before_container.environment | named_entries_are_unique'
-        echo '$after_container.environment | named_entries_are_unique'
-        echo '$before_container.secrets | named_entries_are_unique'
-        echo '$after_container.secrets | named_entries_are_unique'
-        echo '$before_containers[0].environment | named_entries_are_unique'
-        echo '$after_containers[0].environment | named_entries_are_unique'
-        echo 'def backend_final_values_are_safe:'
-        echo 'def frontend_final_values_are_safe:'
-        echo '.resource_changes[]?'
-        echo 'select(.change.actions != ["no-op"])'
-        echo 'del(.custom_rule)'
-        echo '. == "/api"'
-        echo '. == "/authn"'
-        echo '. == "/admin"'
-        echo '. == "/static"'
-        echo 'startswith("/api/")'
-        echo '.target | startswith($legacy_origin_url + "/")'
-        echo '.status == "200"'
-        echo '.change.after_unknown | prune_unknown'
-        echo 'del(.ecs_target[0].task_definition_arn)'
-        echo 'del(.task_definition)'
-        echo 'del(.health_check[0].path)'
-        echo '.change.before.health_check[0].path != "/api/health"'
-        echo '.change.after.health_check[0].path != "/health"'
-        echo 'ENABLE_LEGACY_API_PREFIX == "0"'
-        echo 'BACKEND_URL == $api_url'
-        echo '$container.image == $frontend_image'
-        echo '$actions != ["update"]'
-        echo '($actions | sort) != ["create", "delete"]'
-        echo '$actions != ["delete"]'
-        echo '"aws_amplify_app.frontend"'
-        echo '"aws_cloudwatch_event_target.event_reminders"'
-        echo '"aws_ecs_service.backend"'
-        echo '"aws_ecs_service.result_worker"'
-        echo '"aws_ecs_service.email_worker"'
-        echo '"aws_ecs_service.frontend"'
-        echo '"aws_lb_target_group.backend"'
-        echo '"aws_ecs_task_definition.backend"'
-        echo '"aws_ecs_task_definition.result_worker"'
-        echo '"aws_ecs_task_definition.email_worker"'
-        echo '"aws_ecs_task_definition.frontend"'
-        echo '"aws_acm_certificate.origin[0]"'
-        echo '"aws_acm_certificate_validation.origin[0]"'
-        echo '"aws_lb_listener_certificate.origin[0]"'
-        echo '"aws_lb_listener_rule.backend[0]"'
-        echo '"aws_route53_record.origin[0]"'
-        echo '"aws_route53_record.origin_cert_validation["'
-        echo 'else true end'
-      )"
-      if [ "$unexpected_changes" != "[]" ]; then
-        task_definition_diagnostics="$(
-          echo 'before_environment_order:'
-          echo 'before_optional_task_strings:'
-          echo 'remaining_after_unknown:'
-        )"
-        exit 1
-      fi
-      echo "Apply exact final production topology plan"
-      terraform -chdir=infra/prod apply -input=false production-final.tfplan
-      echo "Verify final API-only backend topology"
-      account_id="$(aws sts get-caller-identity --query Account --output text)"
-      expected_backend_image="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_BACKEND}:${DEPLOY_SHA}"
-      expected_frontend_image="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_FRONTEND}:${DEPLOY_SHA}"
-      backend_task_definition="$(
-        aws ecs describe-services \
-          --services "${{ steps.terraform.outputs.backend_service }}" \
-          --query "services[0].taskDefinition"
-      )"
-      expected_backend_task_definition="$(
-        terraform -chdir=infra/prod output -raw backend_task_definition_arn
-      )"
-      if [ "$backend_task_definition" != "$expected_backend_task_definition" ]; then
-        exit 1
-      fi
-      backend_image="$(
-        aws ecs describe-task-definition \
-          --task-definition "$backend_task_definition" \
-          --query "taskDefinition.containerDefinitions[0].image"
-      )"
-      if [ "$backend_image" != "$expected_backend_image" ]; then exit 1; fi
-      for role in result_worker email_worker; do
-        echo "$role"
-      done
-      echo '["python","manage.py","recompute_event_results","--watch","--poll-interval=1"]'
-      echo '["python","manage.py","dispatch_email_jobs","--watch","--limit=1000","--concurrency=10","--rate-limit=10","--poll-interval=1"]'
-      echo '.taskDefinition.containerDefinitions[0].stopTimeout == 120'
-      echo '.taskDefinition.containerDefinitions[0].healthCheck.retries == 3'
-      echo 'DJANGO_MIGRATE_ON_START and .value == "1"'
-      frontend_task_definition="$(
-        aws ecs describe-services \
-          --services "${{ steps.terraform.outputs.frontend_service }}" \
-          --query "services[0].taskDefinition"
-      )"
-      expected_frontend_task_definition="$(
-        terraform -chdir=infra/prod output -raw frontend_task_definition_arn
-      )"
-      if [ "$frontend_task_definition" != "$expected_frontend_task_definition" ]; then
-        exit 1
-      fi
-      frontend_image="$(
-        aws ecs describe-task-definition \
-          --task-definition "$frontend_task_definition" \
-          --query "taskDefinition.containerDefinitions[0].image"
-      )"
-      if [ "$frontend_image" != "$expected_frontend_image" ]; then exit 1; fi
-      event_targets="$(
-        aws events list-targets-by-rule \
-          --output json
-      )"
-      if ! jq -e \
-        --arg expected "$expected_backend_task_definition" \
-        '(.Targets | length) == 1
-          and .Targets[0].EcsParameters.TaskDefinitionArn == $expected' \
-          <<<"$event_targets" >/dev/null; then
-        exit 1
-      fi
-      final_preflight_headers="${RUNNER_TEMP}/final-api-preflight.headers"
-      final_preflight_status="$(
-        curl \
-          --request OPTIONS \
-          --header "Origin: https://${PROD_DOMAIN}" \
-          --header "Access-Control-Request-Method: PUT" \
-          --header "Access-Control-Request-Headers: authorization,content-type" \
-          --dump-header "$final_preflight_headers" \
-          --write-out "%{http_code}" \
-          "https://${API_DOMAIN}/authn/profile/"
-      )"
-      if [ "$final_preflight_status" != "200" ] ||
-        ! grep -Fqi "access-control-allow-origin: https://${PROD_DOMAIN}" \
-          "$final_preflight_headers" ||
-        ! grep -qiE 'access-control-allow-credentials: true' \
-          "$final_preflight_headers"; then
-        exit 1
-      fi
-      echo 'https://${API_DOMAIN}/api/health'
-      legacy_urls=(
-        "https://${PROD_DOMAIN}/api/health"
-        "https://${PROD_DOMAIN}/admin/"
-        "https://${PROD_DOMAIN}/authn/public-key/"
-        "https://${PROD_DOMAIN}/static/admin/css/base.css"
-        "https://${API_DOMAIN}/api/health"
-      )
-      stable_retired_cycles=0
-      for attempt in $(seq 1 30); do
-        all_retired=true
-        for legacy_url in "${legacy_urls[@]}"; do
-          echo "Cache-Control: no-cache"
-          echo "Pragma: no-cache"
-          probe_result="$(
-            curl \
-              --location \
-              --max-redirs 5 \
-              --write-out $'%{http_code}\\t%{url_effective}' \
-              "${legacy_url}?retired_check=${DEPLOY_SHA}-${attempt}"
-          )"
-          status="${probe_result%%$'\\t'*}"
-          effective_url="${probe_result#*$'\\t'}"
-          if [[ "$legacy_url" == "https://${PROD_DOMAIN}/"* ]]; then
-            expected_origin="https://${PROD_DOMAIN}/"
-          elif [[ "$legacy_url" == "https://${API_DOMAIN}/"* ]]; then
-            expected_origin="https://${API_DOMAIN}/"
-          else
-            expected_origin=""
-          fi
-          if [ "$status" != "404" ] ||
-            [ -z "$expected_origin" ] ||
-            [[ "$effective_url" != "${expected_origin}"* ]]; then
-            all_retired=false
-          fi
-        done
-        if [ "$all_retired" = "true" ]; then
-          stable_retired_cycles=$((stable_retired_cycles + 1))
-          if [ "$stable_retired_cycles" -ge 3 ]; then break; fi
-        else
-          stable_retired_cycles=0
-        fi
-      done
-      if [ "$stable_retired_cycles" -lt 3 ]; then exit 1; fi
-      echo "Restore pre-release canonical Route53 alias after failed first cutover"
-      echo "steps.canonical_smoke.outcome != 'success'"
-      association_terminal=false
-      for attempt in $(seq 1 120); do
-        aws amplify get-domain-association
-        echo '.domainAssociation.domainStatus'
-        echo '.domainAssociation.updateStatus'
-        domain_status="AVAILABLE"
-        update_status="NONE"
-        if { [ "$domain_status" = "AVAILABLE" ] &&
-          [[ "$update_status" =~ ^(NONE|UPDATE_COMPLETE)$ ]]; } ||
-          [ "$update_status" = "UPDATE_FAILED" ] ||
-          { [ "$domain_status" = "FAILED" ] && [ "$update_status" = "NONE" ]; }; then
-          association_terminal=true
-          break
-        elif grep -q 'NotFoundException' "$association_error"; then
-          association_terminal=true
-          break
-        fi
-      done
-      if [ "$association_terminal" != "true" ]; then exit 1; fi
-      restore_canonical_alias() {
-        aws route53 change-resource-record-sets
-      }
-      stable_alias_checks=0
-      for attempt in $(seq 1 12); do
-        if [ "$actual_alias" = "$expected_alias" ]; then
-          stable_alias_checks=$((stable_alias_checks + 1))
-          if [ "$stable_alias_checks" -ge 6 ]; then break; fi
-        elif is_recognized_amplify_alias "$actual_alias"; then
-          restore_canonical_alias
-          stable_alias_checks=0
-        else
-          exit 1
-        fi
-      done
-      if [ "$stable_alias_checks" -lt 6 ]; then exit 1; fi
-      aws route53 change-resource-record-sets
-      echo 'Action: "UPSERT"'
-      aws route53 wait resource-record-sets-changed
-      echo AMPLIFY_ALIAS_FILE
-      echo "bash scripts/deploy/amplify-apex-target.sh"
-      echo "refusing to overwrite it"
-      echo "Roll back production Amplify branch after failed release"
-      echo "steps.apex_alias.outputs.routes_to_alb != 'true'"
-      echo "steps.production_deploy.outputs.terminal_confirmed == 'true'"
-      echo 'API_COMPATIBILITY: ${{ steps.api_transition.outputs.compatibility }}'
-      scripts/deploy/amplify-static-deploy.sh \
-        "$AMPLIFY_APP_ID" "$PRODUCTION_BRANCH" "$ROLLBACK_ARCHIVE"
-      production_url="https://${PRODUCTION_BRANCH}.${AMPLIFY_DEFAULT_DOMAIN}"
-      phase_deadline=$((SECONDS + 300))
-      bounded_curl() {
-        local remaining=$((phase_deadline - SECONDS))
-        if [ "$remaining" -le 0 ]; then return 124; fi
-        timeout --signal=TERM "${remaining}s" curl "$@"
-      }
-      if ((SECONDS >= phase_deadline)); then exit 1; fi
-      for base_url in "$production_url" "https://${PROD_DOMAIN}"; do
-        curl "${base_url}/"
-        curl "${base_url}/release.json" | jq -er .sha
-        test "$release_sha" = "$PREVIOUS_SHA"
-      done
-      for path in /health/live /health /admin/ /static/admin/css/base.css; do
-        curl "https://${API_DOMAIN}${path}"
-      done
-      if [ "$API_COMPATIBILITY" = "true" ]; then
-        for base_url in "$production_url" "https://${PROD_DOMAIN}"; do
-          for path in /api/health/live /api/health /admin/; do
-            curl "${base_url}${path}"
-          done
-        done
-      else
-        for base_url in "$production_url" "https://${PROD_DOMAIN}"; do
-          for path in /api/health /admin/; do
-            status="$(curl "${base_url}${path}")"
-            if [ "$status" != "404" ]; then exit 1; fi
-          done
-        done
-      fi
-      echo "Summarize immutable production release"
-""",
-                encoding="utf-8",
-            )
-            self.assertEqual(production_cd_errors(root), [])
-            protected_source = workflow.read_text(encoding="utf-8")
-
-            default_admin_guards = (
-                (
-                    "terraform -chdir=infra/prod output -raw default_admin_task_definition_arn",
-                    "echo unreviewed-default-admin-task",
-                    "production CD omits the Terraform-selected default-admin task definition",
-                ),
-                (
-                    '--network-configuration "$network_configuration"',
-                    '--network-configuration "awsvpcConfiguration={assignPublicIp=ENABLED}"',
-                    "production CD omits exactly one private Fargate default-admin task",
-                ),
-                (
-                    "timeout --signal=TERM 900s",
-                    "timeout --signal=TERM 0s",
-                    "production CD omits a bounded stopped-state wait for the default-admin task",
-                ),
-                (
-                    ".tasks[0].containers[0].exitCode == 0",
-                    ".tasks[0].containers[0].exitCode != 0",
-                    (
-                        "production CD omits stopped-task dataflow and successful container "
-                        "exit verification"
-                    ),
-                ),
-                (
-                    "[$django, $field, $metrics, $admin]",
-                    "[$django, $field, $metrics]",
-                    "production CD omits a four-way production application-secret uniqueness guard",
-                ),
-                (
-                    '"releviz/prod/default-admin-password"',
-                    '"releviz/prod/other-secret"',
-                    "production CD omits an exact default-admin Secrets Manager name guard",
-                ),
-                (
-                    "${TF_VAR_default_admin_password_secret_arn}:password::",
-                    "${TF_VAR_default_admin_password_secret_arn}:wrong::",
-                    "production CD omits the default-admin JSON password-key selector",
-                ),
-                (
-                    'echo "started_by=${started_by}" >>"$GITHUB_OUTPUT"',
-                    'echo "started_by=${started_by}"',
-                    "production CD omits a persisted unique default-admin started-by token",
-                ),
-                (
-                    '--started-by "$started_by"',
-                    '--started-by "not-the-recorded-token"',
-                    "production CD omits started-by discovery for interrupted default-admin tasks",
-                ),
-                (
-                    "key=Purpose,value=default-admin-bootstrap",
-                    "key=Purpose,value=unreviewed",
-                    "production CD omits the three required default-admin task tags",
-                ),
-                (
-                    "--count 1",
-                    "--count 1\n        --overrides '{}'",
-                    "production CD must not override roles or commands on the default-admin task",
-                ),
-                (
-                    'if [ "$default_admin_image" != "$backend_image" ]; then exit 1; fi',
-                    'if [ "$default_admin_image" = "$backend_image" ]; then exit 1; fi',
-                    "production CD omits runtime equality of the default-admin and backend images",
-                ),
-                (
-                    '<<<"$backend_task_state"',
-                    '<<<"$task_definition_state"',
-                    (
-                        "production CD omits runtime isolation of administrator inputs from "
-                        "the deployed backend task"
-                    ),
-                ),
-                (
-                    "steps.default_admin.outputs.started_by != ''",
-                    "steps.default_admin.outputs.started_by == ''",
-                    "production CD omits an always-run started-by cleanup guard",
-                ),
-                (
-                    '--started-by "$DEFAULT_ADMIN_STARTED_BY"',
-                    '--started-by "unreviewed"',
-                    "production CD omits compensating discovery of interrupted default-admin tasks",
-                ),
-                (
-                    "aws ecs stop-task",
-                    "aws ecs describe-tasks",
-                    "production CD omits compensating stop of interrupted default-admin tasks",
-                ),
-                (
-                    "timeout --signal=TERM 180s",
-                    "timeout --signal=TERM 0s",
-                    (
-                        "production CD omits bounded verification of compensating "
-                        "default-admin cleanup"
-                    ),
-                ),
-            )
-            for needle, replacement, expected_error in default_admin_guards:
-                with self.subTest(expected_error=expected_error):
-                    self.assertIn(needle, protected_source)
-                    workflow.write_text(
-                        protected_source.replace(needle, replacement, 1),
-                        encoding="utf-8",
-                    )
-                    self.assertIn(expected_error, production_cd_errors(root))
-
-            workflow.write_text(
-                protected_source.replace(
-                    "- name: Record production job time budget",
-                    "- name: Record production job time budget too late",
-                    1,
-                ),
-                encoding="utf-8",
-            )
-            self.assertIn(
-                "production CD does not record the job epoch in its first step",
-                production_cd_errors(root),
-            )
-
-            workflow.write_text(
-                protected_source.replace(
-                    "timeout-minutes: 160",
-                    "timeout-minutes: 120",
-                    1,
-                ),
-                encoding="utf-8",
-            )
-            self.assertIn(
-                "production CD omits the reviewed 160-minute production job limit",
-                production_cd_errors(root),
-            )
-
-            workflow.write_text(
-                protected_source.replace(
-                    'PRODUCTION_JOB_TIMEOUT_SECONDS: "9600"',
-                    'PRODUCTION_JOB_TIMEOUT_SECONDS: "7200"',
-                    1,
-                ),
-                encoding="utf-8",
-            )
-            self.assertIn(
-                "production CD omits the production job timeout in seconds",
-                production_cd_errors(root),
-            )
-
-            workflow.write_text(
-                protected_source.replace(
-                    'AMPLIFY_TIMEOUT_SECONDS: "1200"',
-                    'AMPLIFY_TIMEOUT_SECONDS: "1800"',
-                    1,
-                ),
-                encoding="utf-8",
-            )
-            self.assertIn(
-                "production CD omits the bounded Amplify deployment-helper timeout",
-                production_cd_errors(root),
-            )
-
-            workflow.write_text(
-                protected_source.replace(
-                    "rollback_reserve=$((90 * 60))",
-                    "rollback_reserve=$((30 * 60))",
-                    1,
-                ),
-                encoding="utf-8",
-            )
-            self.assertIn(
-                "production CD omits the 5,400-second live-branch rollback reserve",
-                production_cd_errors(root),
-            )
-
-            workflow.write_text(
-                protected_source.replace(
-                    "steps.apex_alias.outputs.routes_to_alb == 'true'",
-                    "steps.apex_alias.outputs.routes_to_alb != 'true'",
-                    1,
-                ),
-                encoding="utf-8",
-            )
-            self.assertIn(
-                "production CD omits ALB-only first-cutover budget enforcement",
-                production_cd_errors(root),
-            )
-
-            workflow.write_text(
-                protected_source.replace(
-                    "compensation_reserve=$((70 * 60))",
-                    "compensation_reserve=$((30 * 60))",
-                    1,
-                ),
-                encoding="utf-8",
-            )
-            self.assertIn(
-                "production CD omits the 4,200-second DNS-compensation reserve",
-                production_cd_errors(root),
-            )
-
-            workflow.write_text(
-                protected_source.replace(
-                    "Plan reviewed Amplify domain association",
-                    "__DOMAIN_PLAN_MARKER__",
-                    1,
-                )
-                .replace(
-                    "Require a safe first-cutover time budget",
-                    "Plan reviewed Amplify domain association",
-                    1,
-                )
-                .replace(
-                    "__DOMAIN_PLAN_MARKER__",
-                    "Require a safe first-cutover time budget",
-                    1,
-                ),
-                encoding="utf-8",
-            )
-            self.assertIn(
-                "production CD must place the first-cutover budget guard after "
-                "the domain plan and before its apply",
-                production_cd_errors(root),
-            )
-
-            workflow.write_text(
-                protected_source.replace(
-                    '      echo "Apply exact Amplify domain association plan"',
-                    "      - name: Unreviewed step between cutover guard and apply\n"
-                    '      echo "Apply exact Amplify domain association plan"',
-                    1,
-                ),
-                encoding="utf-8",
-            )
-            self.assertIn(
-                "production CD must place the first-cutover budget guard "
-                "immediately before the domain apply",
-                production_cd_errors(root),
-            )
-
-            workflow.write_text(
-                protected_source.replace(
-                    "phase_deadline=$((SECONDS + 600))",
-                    "phase_deadline=$((SECONDS + 900))",
-                    1,
-                ),
-                encoding="utf-8",
-            )
-            self.assertIn(
-                "production CD omits a 600-second hard deadline in production branch smoke",
-                production_cd_errors(root),
-            )
-
-            canonical_smoke_position = protected_source.index(
-                "Run canonical production smoke tests"
-            )
-            canonical_deadline_source = protected_source[
-                :canonical_smoke_position
-            ] + protected_source[canonical_smoke_position:].replace(
-                "phase_deadline=$((SECONDS + 600))",
-                "phase_deadline=$((SECONDS + 900))",
-                1,
-            )
-            workflow.write_text(canonical_deadline_source, encoding="utf-8")
-            self.assertIn(
-                "production CD omits a 600-second hard deadline in canonical production smoke",
-                production_cd_errors(root),
-            )
-
-            workflow.write_text(
-                protected_source.replace(
-                    "phase_deadline=$((SECONDS + 300))",
-                    "phase_deadline=$((SECONDS + 600))",
-                    1,
-                ),
-                encoding="utf-8",
-            )
-            self.assertIn(
-                "production CD omits a 300-second hard deadline in rollback smoke",
-                production_cd_errors(root),
-            )
-
-            workflow.write_text(
-                protected_source.replace(
-                    "echo '$container.image == $frontend_image'",
-                    "echo 'endswith($frontend_image)'",
-                    1,
-                ),
-                encoding="utf-8",
-            )
-            self.assertIn(
-                "production CD omits exact frontend image equality in the final task",
-                production_cd_errors(root),
-            )
-
-            workflow.write_text(
-                protected_source.replace(
-                    'if [ "$backend_image" != "$expected_backend_image" ]; then',
-                    'if [ "$backend_image" != "$DEPLOY_SHA" ]; then',
-                    1,
-                ),
-                encoding="utf-8",
-            )
-            self.assertIn(
-                "production CD omits exact backend runtime image equality",
-                production_cd_errors(root),
-            )
-
-            workflow.write_text(
-                protected_source.replace(
-                    "(.Targets | length) == 1",
-                    "(.Targets | length) >= 1",
-                    1,
-                ),
-                encoding="utf-8",
-            )
-            self.assertIn(
-                "production CD omits exactly one EventBridge reminder target",
-                production_cd_errors(root),
-            )
-
-            workflow.write_text(
-                protected_source.replace(
-                    ".Targets[0].EcsParameters.TaskDefinitionArn == $expected",
-                    ".Targets[0].EcsParameters.TaskDefinitionArn != $expected",
-                    1,
-                ),
-                encoding="utf-8",
-            )
-            self.assertIn(
-                "production CD omits exact reminder-target backend task-definition ARN equality",
-                production_cd_errors(root),
-            )
-
-            workflow.write_text(
-                protected_source.replace(
-                    '--header "Origin: https://${PROD_DOMAIN}"',
-                    '--header "Origin: https://wrong.example"',
-                    1,
-                ),
-                encoding="utf-8",
-            )
-            self.assertIn(
-                "production CD omits the canonical frontend origin in "
-                "production branch pre-cutover CORS preflight",
-                production_cd_errors(root),
-            )
-
-            canonical_cors_source = protected_source[:canonical_smoke_position] + protected_source[
-                canonical_smoke_position:
-            ].replace(
-                '--header "Access-Control-Request-Method: PUT"',
-                '--header "Access-Control-Request-Method: GET"',
-                1,
-            )
-            workflow.write_text(canonical_cors_source, encoding="utf-8")
-            self.assertIn(
-                "production CD omits the protected PUT request method in "
-                "canonical post-cutover CORS preflight",
-                production_cd_errors(root),
-            )
-
-            final_marker_position = protected_source.index("Verify final API-only backend topology")
-            final_cors_source = protected_source[:final_marker_position] + protected_source[
-                final_marker_position:
-            ].replace(
-                "access-control-allow-credentials: true",
-                "access-control-allow-credentials: false",
-                1,
-            )
-            workflow.write_text(final_cors_source, encoding="utf-8")
-            self.assertIn(
-                "production CD omits credentialed CORS enforcement in "
-                "final API topology CORS preflight",
-                production_cd_errors(root),
-            )
-
-            compensated = protected_source.replace(
-                "aws route53 change-resource-record-sets",
-                "echo missing-route53-compensation",
-            )
-            workflow.write_text(compensated, encoding="utf-8")
-            self.assertIn(
-                "production CD omits an atomic Route53 alias restoration",
-                production_cd_errors(root),
-            )
-
-            workflow.write_text(
-                protected_source.replace('"CANCELLING"', '"CANCELLED"'),
-                encoding="utf-8",
-            )
-            self.assertIn(
-                "production CD omits all non-terminal Amplify job-state guards",
-                production_cd_errors(root),
-            )
-
-            workflow.write_text(
-                protected_source.replace(
-                    "terraform -chdir=infra/prod import",
-                    "echo missing-orphan-import",
-                ),
-                encoding="utf-8",
-            )
-            self.assertIn(
-                "production CD omits orphan Amplify domain-association recovery",
-                production_cd_errors(root),
-            )
-
-            workflow.write_text(
-                protected_source.replace(
-                    "Guard live Amplify configuration before candidate smoke",
-                    "missing-live-configuration-guard",
-                ),
-                encoding="utf-8",
-            )
-            self.assertIn(
-                "production CD omits a pre-candidate guard for live Amplify configuration",
-                production_cd_errors(root),
-            )
-
-            workflow.write_text(
-                protected_source.replace(
-                    "terraform -chdir=infra/prod untaint",
-                    "echo missing-safe-untaint",
-                ),
-                encoding="utf-8",
-            )
-            self.assertIn(
-                "production CD omits verified tainted-domain recovery during detection",
-                production_cd_errors(root),
-            )
-
-            marker = "Wait for Amplify custom domain availability"
-            next_marker = "Verify Amplify canonical DNS cutover"
-            workflow.write_text(
-                protected_source.replace(marker, "__WAIT_MARKER__", 1)
-                .replace(next_marker, marker, 1)
-                .replace("__WAIT_MARKER__", next_marker, 1),
-                encoding="utf-8",
-            )
-            self.assertIn(
-                (
-                    "production CD must resolve and verify rollback artifacts before candidate, "
-                    "production, and custom-domain stages"
-                ),
-                production_cd_errors(root),
-            )
-
-            required_api_topology_contract = (
-                (
-                    'echo "Plan production infrastructure with current DNS state"\n'
-                    "      echo 'TF_VAR_frontend_image_tag: "
-                    "${{ steps.rollback_frontend.outputs.sha }}'",
-                    'echo "Plan production infrastructure with current DNS state"\n'
-                    "      echo 'TF_VAR_frontend_image_tag: ${{ github.sha }}'",
-                    "production CD omits the deployed ECS frontend SHA in the base Terraform plan",
-                ),
-                (
-                    'echo "Plan reviewed Amplify domain association"\n'
-                    "      echo 'TF_VAR_enable_amplify_domain: \"true\"'\n"
-                    "      echo 'TF_VAR_frontend_image_tag: "
-                    "${{ steps.rollback_frontend.outputs.sha }}'",
-                    'echo "Plan reviewed Amplify domain association"\n'
-                    "      echo 'TF_VAR_enable_amplify_domain: \"true\"'\n"
-                    "      echo 'TF_VAR_frontend_image_tag: ${{ github.sha }}'",
-                    (
-                        "production CD omits the deployed ECS frontend SHA in the domain "
-                        "Terraform plan"
-                    ),
-                ),
-                (
-                    "echo 'TF_VAR_frontend_image_tag: ${{ github.sha }}'\n"
-                    "      echo 'TF_VAR_enable_legacy_api_compatibility: \"false\"'\n"
-                    "      echo production-final.tfplan",
-                    "echo 'TF_VAR_frontend_image_tag: "
-                    "${{ steps.rollback_frontend.outputs.sha }}'\n"
-                    "      echo 'TF_VAR_enable_legacy_api_compatibility: \"false\"'\n"
-                    "      echo production-final.tfplan",
-                    "production CD omits the current frontend SHA in the final Terraform plan",
-                ),
-                (
-                    "echo \"steps.canonical_smoke.outcome != 'success'\"",
-                    "echo \"steps.canonical_smoke.outcome == 'success'\"",
-                    (
-                        "production CD omits a canonical-smoke failure guard on first-cutover "
-                        "DNS compensation"
-                    ),
-                ),
-                (
-                    "      echo '<form'\n",
-                    "",
-                    "production CD omits the Django admin login form in candidate smoke",
-                ),
-                (
-                    "      echo '${api_url}/static/admin/css/base.css'\n",
-                    "",
-                    "production CD omits the direct Django admin static asset in candidate smoke",
-                ),
-                (
-                    '        curl "https://${API_DOMAIN}${path}"',
-                    '        curl "${base_url}${path}"',
-                    "production CD omits the API subdomain boundary in rollback smoke",
-                ),
-                (
-                    "for path in /api/health /admin/; do",
-                    "for path in /api/health; do",
-                    "production CD omits retired frontend backend-route checks in rollback smoke",
-                ),
-            )
-            for needle, replacement, expected_error in required_api_topology_contract:
-                with self.subTest(expected_error=expected_error):
-                    self.assertIn(needle, protected_source)
-                    workflow.write_text(
-                        protected_source.replace(needle, replacement, 1),
-                        encoding="utf-8",
-                    )
-                    self.assertIn(expected_error, production_cd_errors(root))
-
-            retired_redirect_contract = (
-                (
-                    "--location",
-                    "--no-location",
-                    "production CD omits bounded redirect following for retired routes",
-                ),
-                (
-                    "--max-redirs 5",
-                    "--max-redirs 50",
-                    "production CD omits a five-redirect ceiling for retired routes",
-                ),
-                (
-                    "%{http_code}\\t%{url_effective}",
-                    "%{http_code}",
-                    "production CD omits terminal retired-route status and effective URL capture",
-                ),
-                (
-                    'expected_origin="https://${PROD_DOMAIN}/"',
-                    'expected_origin="http://${PROD_DOMAIN}/"',
-                    "production CD omits the canonical frontend same-origin boundary",
-                ),
-                (
-                    'expected_origin="https://${API_DOMAIN}/"',
-                    'expected_origin="http://${API_DOMAIN}/"',
-                    "production CD omits the canonical API same-origin boundary",
-                ),
-                (
-                    '[ -z "$expected_origin" ]',
-                    '[ -n "$expected_origin" ]',
-                    "production CD omits fail-closed unknown retired-route origin handling",
-                ),
-                (
-                    '[[ "$effective_url" != "${expected_origin}"* ]]',
-                    '[[ "$effective_url" == "${expected_origin}"* ]]',
-                    "production CD omits same-origin terminal redirect enforcement",
-                ),
-            )
-            for needle, replacement, expected_error in retired_redirect_contract:
-                with self.subTest(expected_error=expected_error):
-                    self.assertIn(needle, protected_source)
-                    workflow.write_text(
-                        protected_source.replace(needle, replacement, 1),
-                        encoding="utf-8",
-                    )
-                    self.assertIn(expected_error, production_cd_errors(root))
-
-            reviewed_response_headers = (
-                (
-                    "strict-transport-security: max-age=31536000; includeSubDomains",
-                    "missing-strict-transport-security",
-                    "Strict-Transport-Security",
-                ),
-                (
-                    "x-content-type-options: nosniff",
-                    "missing-x-content-type-options",
-                    "X-Content-Type-Options",
-                ),
-                (
-                    "x-frame-options: DENY",
-                    "missing-x-frame-options",
-                    "X-Frame-Options",
-                ),
-                (
-                    "referrer-policy: no-referrer",
-                    "missing-referrer-policy",
-                    "Referrer-Policy",
-                ),
-                (
-                    "^content-security-policy:",
-                    "missing-content-security-policy",
-                    "Content-Security-Policy",
-                ),
-            )
-            for needle, replacement, header in reviewed_response_headers:
-                with self.subTest(response_header=header):
-                    self.assertEqual(protected_source.count(needle), 2)
-                    workflow.write_text(
-                        protected_source.replace(needle, replacement),
-                        encoding="utf-8",
-                    )
-                    errors = production_cd_errors(root)
-                    self.assertIn(
-                        (
-                            f"production CD omits the {header} check on actual candidate "
-                            "Amplify responses"
-                        ),
-                        errors,
-                    )
-                    self.assertIn(
-                        (
-                            f"production CD omits the {header} check on actual canonical "
-                            "Amplify responses"
-                        ),
-                        errors,
-                    )
-
-            workflow.write_text(
-                protected_source.replace(
-                    'curl --dump-header "$candidate_security_headers" "${candidate_url}/"',
-                    'curl "${candidate_url}/"',
-                    1,
-                ),
-                encoding="utf-8",
-            )
-            self.assertIn(
-                "production CD omits actual candidate Amplify response-header capture",
-                production_cd_errors(root),
-            )
-
-            workflow.write_text(
-                protected_source.replace(
-                    '"aws_lb_target_group.backend"',
-                    '"aws_lb_target_group.unreviewed"',
-                    1,
-                ),
-                encoding="utf-8",
-            )
-            self.assertIn(
-                (
-                    "production CD final plan does not use the exact reviewed "
-                    "unexpected_changes address allowlist"
-                ),
-                production_cd_errors(root),
-            )
-
-            workflow.write_text(
-                protected_source.replace(
-                    '      unexpected_changes="$(',
-                    '      unchecked_changes="$(',
-                    1,
-                ),
-                encoding="utf-8",
-            )
-            self.assertIn(
-                "production CD omits an unexpected_changes result",
-                production_cd_errors(root),
-            )
-
-            workflow.write_text(
-                protected_source.replace(
-                    "        else\n          stable_retired_cycles=0",
-                    "        else\n          stable_retired_cycles=1",
-                    1,
-                ),
-                encoding="utf-8",
-            )
-            self.assertIn(
-                "production CD does not reset retired-route stability after a non-404 cycle",
-                production_cd_errors(root),
-            )
-
-            workflow.write_text(
-                protected_source.replace(
-                    "          restore_canonical_alias\n          stable_alias_checks=0",
-                    "          restore_canonical_alias\n          stable_alias_checks=1",
-                    1,
-                ),
-                encoding="utf-8",
-            )
-            self.assertIn(
-                "production CD does not reset DNS compensation stability after an alias rewrite",
-                production_cd_errors(root),
-            )
-
-            workflow.write_text(
-                protected_source.replace(
-                    "        aws amplify get-domain-association",
-                    "        echo missing-domain-association-poll",
-                    1,
-                ),
-                encoding="utf-8",
-            )
-            self.assertIn(
-                "production CD omits Amplify association polling before DNS compensation",
-                production_cd_errors(root),
-            )
-
-            for marker in (
-                "Plan final production topology",
-                "Apply exact final production topology plan",
-                "Verify final API-only backend topology",
-            ):
-                with self.subTest(unconditional_final_step=marker):
-                    workflow.write_text(
-                        protected_source.replace(
-                            f'echo "{marker}"\n',
-                            f'echo "{marker}"\n'
-                            "      if: ${{ steps.api_transition.outputs.compatibility "
-                            "== 'true' }}\n",
-                            1,
-                        ),
-                        encoding="utf-8",
-                    )
-                    self.assertIn(
-                        f"production CD conditionally skips {marker}",
-                        production_cd_errors(root),
-                    )
-
-            workflow.write_text(
-                protected_source.replace(
-                    'echo \'if [ "$admin_post_status" != "200" ] && '
-                    '[ "$admin_post_status" != "400" ]; then\'',
-                    'if [ "$admin_post_status" != "400" ]; then',
-                    1,
-                ),
-                encoding="utf-8",
-            )
-            self.assertIn(
-                "production CD retains an exclusive custom 400 Django admin contract",
-                production_cd_errors(root),
-            )
-
-            workflow.write_text(
-                protected_source.replace(
-                    "      echo '<form'\n",
-                    "      echo '<form'\n"
-                    '      echo "Please enter valid staff account credentials."\n',
-                    1,
-                ),
-                encoding="utf-8",
-            )
-            self.assertIn(
-                "production CD retains a custom Django admin error-message contract",
-                production_cd_errors(root),
-            )
-
-            required_rollback_contract = (
-                (
-                    "  actions: read\n",
-                    "",
-                    "production CD omits GitHub Actions artifact read permission",
-                ),
-                (
-                    'echo "retention-days: 90"',
-                    'echo "retention-days: 7"',
-                    "production CD omits a 90-day rollback artifact retention window",
-                ),
-                (
-                    'artifact_name="releviz-amplify-${PREVIOUS_SHA}"',
-                    'artifact_name="untrusted-${PREVIOUS_SHA}"',
-                    "production CD omits an exact previous-SHA rollback artifact name",
-                ),
-                (
-                    "--paginate --slurp",
-                    "--paginate",
-                    "production CD omits complete paginated rollback artifact discovery",
-                ),
-                (
-                    ".name == $artifact_name",
-                    ".name != $artifact_name",
-                    "production CD omits exact rollback artifact-name matching",
-                ),
-                (
-                    ".expired == false",
-                    ".expired == true",
-                    "production CD omits an unexpired rollback-artifact requirement",
-                ),
-                (
-                    ".workflow_run.head_sha == $sha",
-                    ".workflow_run.head_sha != $sha",
-                    "production CD omits rollback artifact head-SHA binding",
-                ),
-                (
-                    '.workflow_run.head_branch == "main"',
-                    '.workflow_run.head_branch == "feature"',
-                    "production CD omits rollback artifact main-branch binding",
-                ),
-                (
-                    '.path == ".github/workflows/deploy-prod.yml"',
-                    '.path == ".github/workflows/other.yml"',
-                    "production CD omits rollback artifact production-workflow binding",
-                ),
-                (
-                    '.event == "workflow_dispatch"',
-                    '.event == "push"',
-                    "production CD omits rollback artifact workflow-dispatch binding",
-                ),
-                (
-                    '.status == "completed"',
-                    '.status == "in_progress"',
-                    "production CD omits a completed trusted rollback workflow run",
-                ),
-                (
-                    ".head_repository.full_name == $GITHUB_REPOSITORY",
-                    ".head_repository.full_name == $UNTRUSTED_REPOSITORY",
-                    "production CD omits rollback artifact source-repository binding",
-                ),
-                (
-                    "uses: actions/download-artifact@v8",
-                    "uses: actions/download-artifact@v7",
-                    "production CD omits the reviewed cross-run artifact downloader",
-                ),
-                (
-                    "artifact-ids: $artifact_id",
-                    "name: $artifact_name",
-                    "production CD omits rollback download by immutable artifact ID",
-                ),
-                (
-                    "github-token: ${{ github.token }}",
-                    "token: ${{ github.token }}",
-                    "production CD omits authenticated cross-run artifact download",
-                ),
-                (
-                    "repository: ${{ github.repository }}",
-                    "source: ${{ github.repository }}",
-                    "production CD omits an exact rollback artifact repository",
-                ),
-                (
-                    "run-id: $run_id",
-                    "run-name: $run_id",
-                    "production CD omits an exact rollback artifact workflow run",
-                ),
-                (
-                    "digest-mismatch: error",
-                    "digest-mismatch: warn",
-                    "production CD omits fail-closed GitHub artifact digest validation",
-                ),
-                (
-                    "path: ${{ runner.temp }}/amplify-rollback",
-                    "path: ./rollback",
-                    "production CD omits an isolated rollback artifact download directory",
-                ),
-                (
-                    'if [ "${#retained_entries[@]}" -ne 2 ]; then exit 1; fi',
-                    'if [ "${#retained_entries[@]}" -eq 0 ]; then exit 1; fi',
-                    "production CD omits an exact two-file retained artifact payload",
-                ),
-                (
-                    '[[ "$checksum_line" =~ ^([0-9a-f]{64})[[:space:]]{2}(.+)$ ]]',
-                    '[[ -n "$checksum_line" ]]',
-                    "production CD omits a strict rollback checksum digest format",
-                ),
-                (
-                    '[ "${BASH_REMATCH[2]}" = "$expected_archive" ]',
-                    'echo "skip checksum filename verification"',
-                    "production CD omits an exact rollback checksum filename",
-                ),
-                (
-                    "sha256sum --check --strict --status checksum.sha256",
-                    "sha256sum checksum.sha256",
-                    "production CD omits strict inner rollback ZIP checksum verification",
-                ),
-                (
-                    'unzip -tq "$ROLLBACK_ARCHIVE"',
-                    'echo "skip ZIP integrity verification"',
-                    "production CD omits inner rollback ZIP integrity verification",
-                ),
-                (
-                    'zipinfo -1 "$ROLLBACK_ARCHIVE"',
-                    'echo "skip ZIP entry verification"',
-                    "production CD omits inner rollback ZIP entry validation",
-                ),
-                (
-                    'echo "Reject unsafe path"',
-                    'echo "Allow unsafe entries"',
-                    "production CD omits unsafe inner rollback ZIP path rejection",
-                ),
-                (
-                    "grep -cx 'release.json'",
-                    "grep -c 'release.json'",
-                    "production CD omits exactly one root rollback release manifest",
-                ),
-                (
-                    'unzip -p "$ROLLBACK_ARCHIVE" release.json |',
-                    'echo "{\\"sha\\": \\"unverified\\"}" |',
-                    "production CD omits inner rollback release-SHA verification",
-                ),
-                (
-                    'for base_url in "$production_url" "https://${PROD_DOMAIN}"; do',
-                    'for base_url in "$production_url"; do',
-                    (
-                        "production CD omits rollback release identity checks on both default "
-                        "and production domains"
-                    ),
-                ),
-            )
-            for needle, replacement, expected_error in required_rollback_contract:
-                with self.subTest(expected_error=expected_error):
-                    workflow.write_text(
-                        protected_source.replace(needle, replacement),
-                        encoding="utf-8",
-                    )
-                    self.assertIn(expected_error, production_cd_errors(root))
-
-            before_rollback_helper, separator, after_rollback_helper = protected_source.rpartition(
-                "scripts/deploy/amplify-static-deploy.sh"
-            )
-            self.assertTrue(separator)
-            workflow.write_text(
-                before_rollback_helper
-                + "echo missing-manual-rollback-helper"
-                + after_rollback_helper,
-                encoding="utf-8",
-            )
-            self.assertIn(
-                "production CD omits manual redeployment of the verified rollback artifact",
-                production_cd_errors(root),
-            )
-
-            workflow.write_text(
-                protected_source.replace(
-                    'echo "Roll back production Amplify branch after failed release"',
-                    "aws amplify start-job --job-type RETRY\n"
-                    '      echo "Roll back production Amplify branch after failed release"',
-                ),
-                encoding="utf-8",
-            )
-            self.assertIn(
-                "production CD retains unsupported Amplify StartJob retry rollback",
-                production_cd_errors(root),
-            )
-
-            workflow.write_text("name: Deploy\n", encoding="utf-8")
-            self.assertIn("production CD omits manual dispatch", production_cd_errors(root))
-
-    def test_production_cd_rejects_legacy_dns_and_requires_api_aware_frontend_docker(
-        self,
-    ):
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            workflows = root / ".github/workflows"
-            workflows.mkdir(parents=True)
-            (workflows / "deploy-prod.yml").write_text(
-                """
-TF_VAR_manage_dns: "false"
-run: docker build --tag demo ./src/web
-TF_VAR_restrict_origin_to_cloudfront: "true"
-TF_VAR_trust_cloudfront_proxy_chain: "true"
-echo "Plan CloudFront-only origin hardening"
-echo "Plan trusted CloudFront proxy chain"
-echo "Restore pre-release origin safety state after failure"
-terraform -chdir=infra/prod plan -out=production-restore-origin.tfplan
-""",
-                encoding="utf-8",
-            )
-            errors = production_cd_errors(root)
-            self.assertIn("production CD retains legacy DNS-disable cutover flow", errors)
-            self.assertIn(
-                "production CD omits an API-aware ECS frontend fallback build",
-                errors,
-            )
-            self.assertIn(
-                "production CD omits the API subdomain baked into the ECS frontend fallback",
-                errors,
-            )
-            self.assertIn(
-                "production CD retains retired CloudFront origin-hardening input",
-                errors,
-            )
-            self.assertIn(
-                "production CD retains retired CloudFront proxy-chain input",
-                errors,
-            )
-            self.assertIn(
-                "production CD retains retired CloudFront-only origin hardening",
-                errors,
-            )
-            self.assertIn(
-                "production CD retains retired CloudFront proxy-chain rollout",
-                errors,
-            )
-            self.assertIn(
-                "production CD retains retired CloudFront origin-safety restoration",
-                errors,
-            )
-            self.assertIn(
-                "production CD retains retired CloudFront origin-safety restore state",
-                errors,
-            )
-
     def test_amplify_deploy_script_contract(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -2738,56 +1325,627 @@ fi
             )
 
 
-class ProductionCdResolutionTests(TestCase):
-    """A parked production CD stays under contract without becoming dispatchable."""
+class ProductionReleaseWorkflowTests(TestCase):
+    """The orchestrated production release keeps its reviewed safety invariants."""
 
-    def workflows(self, root: Path) -> Path:
-        workflows = root / ".github/workflows"
-        workflows.mkdir(parents=True)
-        return workflows
+    RELEASE_FILES = (
+        ".github/workflows/release.yml",
+        ".github/workflows/release-backend.yml",
+        ".github/workflows/release-frontend.yml",
+        ".github/workflows/release-infrastructure.yml",
+        ".github/actions/release-preflight/action.yml",
+        ".github/actions/release-scope/action.yml",
+        "scripts/ci/last-successful-release.sh",
+    )
 
-    def test_missing_production_cd_is_reported(self):
+    def copy_release_files(self, root: Path) -> None:
+        repository = Path(__file__).resolve().parents[3]
+        for relative in self.RELEASE_FILES:
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text((repository / relative).read_text(encoding="utf-8"), encoding="utf-8")
+
+    def test_live_not_found_detection_preserves_rewrites_and_checks_legacy_redirects(self):
+        repository = Path(__file__).resolve().parents[3]
+        for surface in ("backend", "frontend"):
+            source = (repository / f".github/workflows/release-{surface}.yml").read_text()
+            query_line = next(line for line in source.splitlines() if "jq -r 'any(.[]?;" in line)
+            query = query_line.split("jq -r '", 1)[1].rsplit("'", 1)[0]
+            for status, target, expected in (
+                ("404-200", "/404.html", "true"),
+                ("404", "/404.html", "true"),
+                ("200", "/404.html", "false"),
+                ("404-200", "/index.html", "false"),
+            ):
+                with self.subTest(surface=surface, status=status, target=target):
+                    result = subprocess.run(
+                        ["jq", "-r", query],
+                        input=json.dumps([{"source": "/<*>", "target": target, "status": status}]),
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                    )
+                    self.assertEqual(result.stdout.strip(), expected)
+
+    def test_repository_release_workflows_satisfy_contract(self):
+        paths = production_release_paths()
+        self.assertEqual(
+            sorted(paths),
+            [
+                "backend",
+                "frontend",
+                "infrastructure",
+                "last-release",
+                "orchestrator",
+                "preflight",
+                "scope-action",
+            ],
+        )
+        for path in paths.values():
+            self.assertTrue(path.exists(), path)
+        self.assertEqual(production_cd_errors(), [])
+
+    def test_missing_release_files_are_reported(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            self.workflows(root)
-            self.assertIsNone(production_cd_path(root))
-            self.assertEqual(
-                production_cd_errors(root),
-                ["production CD workflow is missing"],
-            )
-
-    def test_parked_production_cd_is_validated(self):
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            parked = self.workflows(root) / "deploy-prod.yml.disabled"
-            parked.write_text("on:\n  workflow_dispatch:\n", encoding="utf-8")
-
-            self.assertEqual(production_cd_path(root), parked)
             errors = production_cd_errors(root)
-            self.assertNotIn("production CD workflow is missing", errors)
-            # A parked definition is still held to the release invariants.
-            self.assertIn(
-                "production CD omits the reviewed 160-minute production job limit",
-                errors,
-            )
+            self.assertIn("production release workflow is missing", errors)
+            self.assertIn("backend release workflow is missing", errors)
+            self.assertIn("frontend release workflow is missing", errors)
+            self.assertIn("infrastructure release workflow is missing", errors)
+            self.assertIn("release preflight action is missing", errors)
+            self.assertIn("release scope action is missing", errors)
+            self.assertIn("last-successful-release script is missing", errors)
 
-    def test_active_production_cd_wins_over_parked(self):
+    def test_retired_single_release_workflow_is_rejected(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            workflows = self.workflows(root)
-            active = workflows / "deploy-prod.yml"
-            active.write_text("on:\n  workflow_dispatch:\n", encoding="utf-8")
-            (workflows / "deploy-prod.yml.disabled").write_text(
-                "on:\n  workflow_dispatch:\n",
+            self.copy_release_files(root)
+            self.assertEqual(production_cd_errors(root), [])
+            (root / ".github/workflows/deploy-prod.yml").write_text(
+                "on:\n  workflow_dispatch:\n", encoding="utf-8"
+            )
+            self.assertIn(
+                "retired single release workflow remains: .github/workflows/deploy-prod.yml",
+                production_cd_errors(root),
+            )
+
+    def test_release_invariants_are_detected_when_removed(self):
+        self.maxDiff = None
+        orchestrator = ".github/workflows/release.yml"
+        backend = ".github/workflows/release-backend.yml"
+        frontend = ".github/workflows/release-frontend.yml"
+        infrastructure = ".github/workflows/release-infrastructure.yml"
+        preflight = ".github/actions/release-preflight/action.yml"
+        scope = ".github/actions/release-scope/action.yml"
+        last_release = "scripts/ci/last-successful-release.sh"
+        release_sha = (
+            "${{ github.event_name == 'workflow_run' && "
+            "github.event.workflow_run.head_sha || github.sha }}"
+        )
+        surface_sha = "${{ inputs.deploy-sha || github.sha }}"
+        mutations = (
+            # The orchestrator: the only CI listener, credential-free scoping,
+            # and surfaces released side by side under one review.
+            (
+                orchestrator,
+                "    branches: [main]\n  workflow_dispatch:",
+                "    branches: [develop]\n  workflow_dispatch:",
+                "production release omits automatic release requests from CI runs on main",
+            ),
+            (
+                orchestrator,
+                "github.event.workflow_run.event == 'push' &&",
+                "github.event.workflow_run.event == 'pull_request' &&",
+                "production release omits an automatic-release guard for successful push CI "
+                "runs on main from this repository",
+            ),
+            (
+                orchestrator,
+                f"      DEPLOY_SHA: {release_sha}",
+                "      DEPLOY_SHA: ${{ github.sha }}",
+                "production release omits the release commit as the deploy SHA",
+            ),
+            (
+                orchestrator,
+                "          surface: frontend",
+                "          surface: backend",
+                "production release omits the no-credential frontend change scope",
+            ),
+            (
+                orchestrator,
+                "    if: ${{ needs.scope.outputs.infrastructure == 'true' }}",
+                "    if: ${{ always() }}",
+                "production release omits a infrastructure surface job that depends only on the "
+                "scope job, runs only when the infrastructure changed, and calls the "
+                "infrastructure workflow with the release commit",
+            ),
+            (
+                orchestrator,
+                f"      deploy-sha: {release_sha}\n"
+                "      trigger-event: ${{ github.event_name }}\n"
+                "      confirmation: ${{ inputs.confirmation }}\n\n  frontend:",
+                "      deploy-sha: ${{ github.sha }}\n"
+                "      trigger-event: ${{ github.event_name }}\n"
+                "      confirmation: ${{ inputs.confirmation }}\n\n  frontend:",
+                "production release omits a backend surface job that depends only on the scope "
+                "job, runs only when the backend changed, and calls the backend workflow with "
+                "the release commit",
+            ),
+            # A surface that waits for another surface would only reach its
+            # environment after the first finished and ask the reviewer again.
+            (
+                orchestrator,
+                "  frontend:\n    needs: scope\n",
+                "  frontend:\n    needs: [scope, backend]\n",
+                "production release retains a surface job that waits for another surface (it "
+                "would ask for a second approval)",
+            ),
+            (
+                orchestrator,
+                "    uses: ./.github/workflows/release-backend.yml\n",
+                "    environment:\n      name: AWS ECS - Prod\n"
+                "    uses: ./.github/workflows/release-backend.yml\n",
+                "production release retains an environment gate of its own",
+            ),
+            (
+                orchestrator,
+                "      - name: Checkout release commit with history\n",
+                "      - run: aws sts get-caller-identity\n"
+                "      - name: Checkout release commit with history\n",
+                "production release retains cloud credentials",
+            ),
+            (
+                orchestrator,
+                "cancel-in-progress: false",
+                "cancel-in-progress: true",
+                "production release omits non-cancelling release concurrency",
+            ),
+            # Every surface workflow: callable with the release commit, gated,
+            # and never listening to CI on its own.
+            (
+                backend,
+                "        description: github.event_name of the calling run "
+                "(workflow_run or workflow_dispatch)\n        required: true",
+                "        description: github.event_name of the calling run "
+                "(workflow_run or workflow_dispatch)\n        required: false",
+                "backend release omits the reusable-workflow inputs the orchestrator passes",
+            ),
+            (
+                frontend,
+                "  workflow_dispatch:\n    inputs:\n      confirmation:\n"
+                "        description: Type DEPLOY",
+                "  workflow_run:\n    workflows: [CI]\n  workflow_dispatch:\n    inputs:\n"
+                "      confirmation:\n        description: Type DEPLOY",
+                "frontend release retains its own CI trigger",
+            ),
+            (
+                infrastructure,
+                "    if: ${{ github.ref == 'refs/heads/main' }}",
+                "    if: ${{ always() }}",
+                "infrastructure release omits a release job restricted to main",
+            ),
+            (
+                infrastructure,
+                "    if: ${{ github.ref == 'refs/heads/main' }}",
+                "    needs: scope\n    if: ${{ github.ref == 'refs/heads/main' }}",
+                "infrastructure release retains a scope job of its own",
+            ),
+            (
+                backend,
+                "    environment:\n      name: AWS ECS - Prod",
+                "    environment:\n      name: Staging",
+                "backend release omits the AWS ECS - Prod environment gate",
+            ),
+            (
+                frontend,
+                f"DEPLOY_SHA: {surface_sha}",
+                "DEPLOY_SHA: ${{ github.sha }}",
+                "frontend release omits the orchestrator's release commit as the deploy SHA",
+            ),
+            (
+                frontend,
+                "TRIGGER_EVENT: ${{ inputs.trigger-event || github.event_name }}",
+                "TRIGGER_EVENT: ${{ github.event_name }}",
+                "frontend release omits the calling run's trigger event for the shared preflight",
+            ),
+            (
+                infrastructure,
+                "AWS_ROLE_ARN: ${{ vars.AWS_PROD_ROLE_ARN }}",
+                "AWS_ROLE_ARN: ${{ secrets.AWS_PROD_ROLE_ARN }}",
+                "infrastructure release retains GitHub secrets (production secrets live in "
+                "AWS Secrets Manager)",
+            ),
+            (
+                backend,
+                "        with:\n          scope: backend",
+                "        with:\n          scope: infrastructure",
+                "backend release omits the backend preflight scope",
+            ),
+            (
+                infrastructure,
+                "cancel-in-progress: false",
+                "cancel-in-progress: true",
+                "infrastructure release omits non-cancelling release concurrency",
+            ),
+            (
+                infrastructure,
+                "      group: release-infrastructure",
+                "      group: release-backend",
+                "infrastructure release omits its own release-job concurrency group",
+            ),
+            # Backend: immutable images, guarded plan, workers, default admin.
+            (
+                backend,
+                f"TF_VAR_backend_image_tag: {surface_sha}",
+                "TF_VAR_backend_image_tag: latest",
+                "backend release omits the release commit as the backend image tag",
+            ),
+            (
+                backend,
+                'released="$(scripts/ci/last-successful-release.sh frontend)"',
+                'released="$DEPLOY_SHA"',
+                "backend release omits the fallback frontend held at the latest successful "
+                "frontend release",
+            ),
+            (
+                backend,
+                "--image-tag-mutability IMMUTABLE",
+                "--image-tag-mutability MUTABLE",
+                "backend release omits an immutable ECR repository",
+            ),
+            (
+                backend,
+                "-lock-timeout=15m",
+                "-lock=false",
+                "backend release omits a bounded wait for the remote state lock",
+            ),
+            (
+                backend,
+                'or .change.actions == ["delete"]',
+                "or false",
+                "backend release omits a no-destroy plan guard",
+            ),
+            (
+                backend,
+                "apply -input=false -auto-approve backend-release.tfplan",
+                "apply -input=false -auto-approve",
+                "backend release omits an exact saved-plan apply",
+            ),
+            (
+                backend,
+                '"dispatch_email_jobs","--watch","--limit=1000","--concurrency=10",'
+                '"--rate-limit=10","--poll-interval=1"',
+                '"dispatch_email_jobs","--watch"',
+                "backend release omits the exact email-worker command",
+            ),
+            (
+                backend,
+                '["python", "manage.py", "ensure_default_admin", "--yes", "--create-only"]',
+                '["python", "manage.py", "ensure_default_admin", "--yes"]',
+                "backend release omits a create-only default-admin command",
+            ),
+            (
+                backend,
+                "timeout --signal=TERM 900s",
+                "timeout --signal=TERM 0s",
+                "backend release omits a bounded default-admin wait",
+            ),
+            (
+                backend,
+                "Clean up an interrupted default-administrator task",
+                "Tidy up",
+                "backend release omits compensating cleanup of interrupted default-admin tasks",
+            ),
+            (
+                backend,
+                'if [ "$status" != "404" ]; then',
+                'if [ "$status" != "200" ]; then',
+                "backend release omits retired routes returning 404",
+            ),
+            # Frontend: rollback point, smoke, ordering, rollback.
+            (
+                frontend,
+                "retention-days: 90",
+                "retention-days: 1",
+                "frontend release omits 90-day rollback artifact retention",
+            ),
+            (
+                frontend,
+                "| select(.expired == false)",
+                "| select(true)",
+                "frontend release omits an unexpired rollback-artifact requirement",
+            ),
+            (
+                frontend,
+                '(.event == "workflow_dispatch" or .event == "workflow_run")',
+                '(.event == "workflow_dispatch" or .event == "push")',
+                "frontend release omits rollback artifact release-event binding",
+            ),
+            (
+                frontend,
+                "sha256sum --check --strict",
+                "sha256sum",
+                "frontend release omits rollback artifact checksum verification",
+            ),
+            (
+                frontend,
+                "steps.verify_previous_amplify_artifact.outcome == 'success' &&",
+                "true &&",
+                "frontend release omits a rollback gated on a verified artifact and a "
+                "terminal production job",
+            ),
+            (
+                frontend,
+                "csrfmiddlewaretoken",
+                "csrf",
+                "frontend release omits a CSRF-protected admin POST smoke",
+            ),
+            (
+                frontend,
+                'AMPLIFY_TIMEOUT_SECONDS: "1200"',
+                'AMPLIFY_TIMEOUT_SECONDS: "60"',
+                "frontend release omits the bounded Amplify deployment-helper timeout",
+            ),
+            # Infrastructure: guarded plan and held images.
+            (
+                infrastructure,
+                "TF_VAR_frontend_image_tag: ${{ steps.images.outputs.frontend }}",
+                f"TF_VAR_frontend_image_tag: {release_sha}",
+                "infrastructure release omits the resolved fallback frontend tag in the plan",
+            ),
+            (
+                infrastructure,
+                'or (.address | startswith("aws_amplify_domain_association."))',
+                "or false",
+                "infrastructure release omits an untouched Amplify domain",
+            ),
+            (
+                infrastructure,
+                "del(.custom_rule)",
+                "del(.tags)",
+                "infrastructure release omits Amplify app changes limited to redirect rules",
+            ),
+            # Shared preflight and scope actions.
+            (
+                preflight,
+                '[ "$TRIGGER_EVENT" = "workflow_dispatch" ] && [ "$CONFIRMATION" != "DEPLOY" ]',
+                '[ "$CONFIRMATION" = "DEPLOY" ]',
+                "release preflight omits the DEPLOY confirmation for manual releases",
+            ),
+            (
+                preflight,
+                "role-duration-seconds: 3600",
+                "role-duration-seconds: 43200",
+                "release preflight omits short-lived release credentials",
+            ),
+            (
+                preflight,
+                "aws-actions/configure-aws-credentials@v6.2.2",
+                "aws-actions/configure-aws-credentials@v1",
+                "release preflight omits OIDC credential exchange",
+            ),
+            (
+                preflight,
+                "use_lockfile=true",
+                "use_lockfile=false",
+                "release preflight omits native Terraform state locking",
+            ),
+            # Environment separation: the frontend releases from
+            # "AWS Amplify - Prod" under the frontend-only role; backend and
+            # infrastructure keep "AWS ECS - Prod" and the production role.
+            (
+                frontend,
+                "    environment:\n      name: AWS Amplify - Prod",
+                "    environment:\n      name: Staging",
+                "frontend release omits the AWS Amplify - Prod environment gate",
+            ),
+            (
+                frontend,
+                "    environment:\n      name: AWS Amplify - Prod",
+                "    environment:\n      name: AWS ECS - Prod",
+                "frontend release retains the backend environment",
+            ),
+            (
+                frontend,
+                "AWS_ROLE_ARN: ${{ vars.AWS_PROD_FRONTEND_ROLE_ARN }}",
+                "AWS_ROLE_ARN: ${{ vars.AWS_PROD_ROLE_ARN }}",
+                "frontend release omits the frontend-only OIDC role from the "
+                "AWS Amplify - Prod environment",
+            ),
+            (
+                frontend,
+                "AWS_ROLE_ARN: ${{ vars.AWS_PROD_FRONTEND_ROLE_ARN }}",
+                "AWS_ROLE_ARN: ${{ vars.AWS_PROD_ROLE_ARN }}",
+                "frontend release retains the production role variable AWS_PROD_ROLE_ARN",
+            ),
+            (
+                frontend,
+                "      AMPLIFY_APP_ID: ${{ vars.PROD_AMPLIFY_APP_ID }}",
+                "      AMPLIFY_APP_ID: ${{ vars.PROD_AMPLIFY_APP_ID }}\n"
+                "      TF_STATE_BUCKET: ${{ vars.PROD_TF_STATE_BUCKET }}",
+                "frontend release retains the Terraform state bucket",
+            ),
+            (
+                frontend,
+                "      AMPLIFY_APP_ID: ${{ vars.PROD_AMPLIFY_APP_ID }}",
+                "      AMPLIFY_APP_ID: ${{ vars.PROD_AMPLIFY_APP_ID }}\n"
+                "      DEFAULT_ADMIN_PASSWORD_SECRET_ARN: "
+                "${{ vars.PROD_DEFAULT_ADMIN_PASSWORD_SECRET_ARN }}",
+                "frontend release retains default-admin bootstrap inputs",
+            ),
+            (
+                backend,
+                "AWS_ROLE_ARN: ${{ vars.AWS_PROD_ROLE_ARN }}",
+                "AWS_ROLE_ARN: ${{ vars.AWS_PROD_FRONTEND_ROLE_ARN }}",
+                "backend release omits the production OIDC role from the AWS ECS - Prod environment",
+            ),
+            (
+                infrastructure,
+                "AWS_ROLE_ARN: ${{ vars.AWS_PROD_ROLE_ARN }}",
+                "AWS_ROLE_ARN: ${{ vars.AWS_PROD_FRONTEND_ROLE_ARN }}",
+                "infrastructure release retains the frontend-only role variable",
+            ),
+            (
+                preflight,
+                'environment_name="AWS Amplify - Prod"',
+                'environment_name="Staging"',
+                "release preflight omits the AWS Amplify - Prod configuration contract for "
+                "frontend releases",
+            ),
+            (
+                preflight,
+                'environment_name="AWS ECS - Prod"',
+                'environment_name="Production"',
+                "release preflight omits the AWS ECS - Prod configuration contract for backend "
+                "and infrastructure releases",
+            ),
+            (
+                preflight,
+                'expected_role_name="releviz-production-frontend-github-deploy"',
+                'expected_role_name="releviz-production-github-deploy"',
+                "release preflight omits the reviewed frontend-only role name",
+            ),
+            (
+                preflight,
+                ":assumed-role/${expected_role_name}/",
+                ":assumed-role/",
+                "release preflight omits assumed-identity verification per scope",
+            ),
+            (
+                preflight,
+                "aws ecs list-clusters --max-items 1 >/dev/null 2>&1; then",
+                "false; then",
+                "release preflight omits a frontend least-privilege probe",
+            ),
+            # Amplify not-found routing: released by infrastructure, held by
+            # the backend plan, and smoked by every release that can see it.
+            (
+                backend,
+                "TF_VAR_enable_amplify_not_found_rule: ${{ steps.not_found_rule.outputs.live }}",
+                'TF_VAR_enable_amplify_not_found_rule: "true"',
+                "backend release omits the live Amplify not-found state in the backend plan",
+            ),
+            (
+                backend,
+                "- name: Detect live Amplify not-found routing",
+                "- name: Skip live Amplify not-found routing",
+                "backend release omits live Amplify not-found routing detection",
+            ),
+            (
+                frontend,
+                "NOT_FOUND_RULE_LIVE: ${{ steps.not_found_rule.outputs.live }}",
+                'NOT_FOUND_RULE_LIVE: "false"',
+                "frontend release omits smoke tests keyed to the live Amplify not-found state",
+            ),
+            (
+                frontend,
+                "${candidate_url}/releviz-smoke-missing-${DEPLOY_SHA}/",
+                "${candidate_url}/",
+                "frontend release omits candidate unknown-path 404 smoke",
+            ),
+            (
+                frontend,
+                "https://${PROD_DOMAIN}/releviz-smoke-missing-${DEPLOY_SHA}/?missing_check=",
+                "https://${PROD_DOMAIN}/?missing_check=",
+                "frontend release omits canonical unknown-path 404 smoke",
+            ),
+            (
+                infrastructure,
+                'grep -Fq "Page not found"',
+                'grep -Fq "Not Found"',
+                "infrastructure release omits the exported Next 404 document in unknown-path smoke",
+            ),
+            (
+                scope,
+                'base="$(scripts/ci/last-successful-release.sh "$RELEASE_SURFACE")"',
+                'base="$DEPLOY_SHA"',
+                "release scope omits the surface's last successful release as the diff base",
+            ),
+            (
+                scope,
+                'echo "release=false"',
+                'echo "release=true"',
+                "release scope omits a skip when nothing changed",
+            ),
+            # The shared release history: a surface's own job must have
+            # succeeded; a successful run in which it was skipped or a failed
+            # run in which it succeeded are not the same thing.
+            (
+                last_release,
+                '[ "$job_conclusion" = "success" ]',
+                '[ -n "$job_conclusion" ]',
+                "last-successful-release script omits a successful surface job, not a "
+                "successful run",
+            ),
+            (
+                last_release,
+                "runs?branch=main&status=completed",
+                "runs?branch=main&status=success",
+                "last-successful-release script omits the orchestrated release history",
+            ),
+            (
+                last_release,
+                'workflow_success "release-${surface}.yml"',
+                "true",
+                "last-successful-release script omits the surface workflow's own dispatch history",
+            ),
+            (
+                last_release,
+                "workflow_success deploy-prod.yml",
+                "true",
+                "last-successful-release script omits the retired single workflow's last "
+                "release as the initial base",
+            ),
+        )
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_release_files(root)
+            originals = {
+                relative: (root / relative).read_text(encoding="utf-8")
+                for relative in self.RELEASE_FILES
+            }
+            self.assertEqual(production_cd_errors(root), [])
+            for relative, needle, replacement, expected_error in mutations:
+                with self.subTest(expected_error=expected_error):
+                    self.assertIn(needle, originals[relative], relative)
+                    (root / relative).write_text(
+                        originals[relative].replace(needle, replacement),
+                        encoding="utf-8",
+                    )
+                    self.assertIn(expected_error, production_cd_errors(root))
+                    (root / relative).write_text(originals[relative], encoding="utf-8")
+
+    def test_release_step_order_is_enforced(self):
+        frontend = ".github/workflows/release-frontend.yml"
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_release_files(root)
+            source = (root / frontend).read_text(encoding="utf-8")
+            candidate = "      - name: Deploy candidate Amplify branch"
+            production = "      - name: Deploy production Amplify branch"
+            swapped = (
+                source.replace(candidate, "@@candidate@@", 1)
+                .replace(production, candidate, 1)
+                .replace("@@candidate@@", production, 1)
+            )
+            (root / frontend).write_text(swapped, encoding="utf-8")
+            self.assertIn(
+                "frontend release runs its release steps out of the reviewed order",
+                production_cd_errors(root),
+            )
+
+    def test_release_scope_action_stays_credential_free(self):
+        scope = ".github/actions/release-scope/action.yml"
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_release_files(root)
+            source = (root / scope).read_text(encoding="utf-8")
+            (root / scope).write_text(
+                source + "\n    - run: aws sts get-caller-identity\n      shell: bash\n",
                 encoding="utf-8",
             )
-
-            self.assertEqual(production_cd_path(root), active)
-
-    def test_repository_parks_production_cd_under_contract(self):
-        self.assertEqual(
-            production_cd_path().name,
-            "deploy-prod.yml.disabled",
-            "production CD is expected to stay parked until CD is enabled",
-        )
-        self.assertEqual(production_cd_errors(), [])
+            self.assertIn(
+                "release scope must not use cloud credentials",
+                production_cd_errors(root),
+            )

@@ -339,6 +339,12 @@ variable "enable_legacy_api_compatibility" {
   description = "Temporarily preserve the old /api routes and Amplify/ALB proxy during API-subdomain cutover"
 }
 
+variable "enable_amplify_not_found_rule" {
+  type        = bool
+  default     = true
+  description = "Serve the exported Next 404 document for unknown Amplify paths; the release workflow passes the live Amplify state to the base and domain plans and true to the final topology plan"
+}
+
 variable "enable_amplify_domain" {
   type        = bool
   default     = false

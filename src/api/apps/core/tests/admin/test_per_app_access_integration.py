@@ -29,6 +29,20 @@ class PerAppAdminAccessIntegrationTest(TestCase):
         self.assertEqual(self.client.get(CORE_URL).status_code, 403)
         self.assertEqual(self.client.get(AUTHN_URL).status_code, 403)
 
+    def test_forbidden_model_renders_branded_403_with_generic_reason(self):
+        # Django's own admin gate raises a bare PermissionDenied, so the page
+        # falls back to a generic sentence instead of an empty paragraph.
+        user = make_admin(apps=[], email="empty-admin@example.com")
+        self.client.force_login(user)
+        response = self.client.get(CORE_URL)
+        self.assertEqual(response.status_code, 403)
+        self.assertTemplateUsed(response, "403.html")
+        self.assertContains(response, "Permission denied", status_code=403)
+        self.assertContains(
+            response, "You do not have permission to perform this action.", status_code=403
+        )
+        self.assertContains(response, 'href="/admin/"', status_code=403)
+
     def test_superuser_sees_everything(self):
         user = make_superuser(email="master@example.com")
         self.client.force_login(user)

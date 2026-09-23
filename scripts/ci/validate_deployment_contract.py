@@ -15,11 +15,30 @@ BOOTSTRAP_TERRAFORM = ROOT / "infra/bootstrap/main.tf"
 TERRAFORM_ENVIRONMENTS = {
     "production": ROOT / "infra/prod/main.tf",
 }
-PRODUCTION_DEPLOY_WORKFLOW = ROOT / ".github/workflows/deploy-prod.yml"
-# Production CD can be parked with a .disabled suffix, which GitHub ignores.
-# The release safety invariants still apply to a parked definition so that it
-# cannot drift out of contract while it is switched off.
-PRODUCTION_DEPLOY_WORKFLOW_PARKED = ROOT / ".github/workflows/deploy-prod.yml.disabled"
+# The production release is one orchestrating workflow (release.yml) that runs
+# a no-credential scope job and then calls three surface workflows (backend,
+# frontend, infrastructure) as reusable workflows side by side, so every
+# release job reaches its protected environment in the same review and the
+# reviewer approves the whole release once. Each surface's release job is
+# gated by its own environment: "AWS ECS - Prod" (backend, infrastructure) or
+# "AWS Amplify - Prod" (frontend), each with its own bootstrap-managed OIDC
+# role. A surface workflow can also be dispatched alone. Two composite actions
+# and one script are shared.
+PRODUCTION_RELEASE_ORCHESTRATOR = ROOT / ".github/workflows/release.yml"
+PRODUCTION_RELEASE_WORKFLOWS = {
+    "backend": ROOT / ".github/workflows/release-backend.yml",
+    "frontend": ROOT / ".github/workflows/release-frontend.yml",
+    "infrastructure": ROOT / ".github/workflows/release-infrastructure.yml",
+}
+RELEASE_PREFLIGHT_ACTION = ROOT / ".github/actions/release-preflight/action.yml"
+RELEASE_SCOPE_ACTION = ROOT / ".github/actions/release-scope/action.yml"
+LAST_RELEASE_SCRIPT = ROOT / "scripts/ci/last-successful-release.sh"
+# The single 3,000-line release workflow was retired when releases were split;
+# it must not come back beside the split workflows.
+RETIRED_RELEASE_WORKFLOWS = (
+    ".github/workflows/deploy-prod.yml",
+    ".github/workflows/deploy-prod.yml.disabled",
+)
 PRODUCTION_AMPLIFY_CUSTOM_HEADERS = ROOT / "infra/prod/amplify-custom-headers.json"
 AMPLIFY_DEPLOY_SCRIPT = ROOT / "scripts/deploy/amplify-static-deploy.sh"
 BACKEND_ENTRYPOINT = ROOT / "src/api/docker-entrypoint.sh"
@@ -33,6 +52,18 @@ REQUIRED_CSV_ENVIRONMENT = {
     "CORS_ALLOWED_ORIGINS",
     "CSRF_TRUSTED_ORIGINS",
 }
+# The release commit: the CI run's head commit for automatic (workflow_run)
+# releases, the selected main commit for manual dispatch. github.sha alone is
+# the default-branch tip at trigger time, which can already be a newer commit.
+# The orchestrator resolves it once and hands it to each surface workflow as
+# the deploy-sha input; a surface dispatched alone releases the selected
+# main commit.
+RELEASE_SHA_EXPRESSION_RE = (
+    r"\$\{\{\s*github\.event_name\s*==\s*'workflow_run'\s*&&\s*"
+    r"github\.event\.workflow_run\.head_sha\s*\|\|\s*github\.sha\s*\}\}"
+)
+SURFACE_RELEASE_SHA_EXPRESSION_RE = r"\$\{\{\s*inputs\.deploy-sha\s*\|\|\s*github\.sha\s*\}\}"
+
 ENVIRONMENT_NAME_RE = re.compile(r"\{\s*name\s*=\s*\"([A-Z][A-Z0-9_]*)\"", re.MULTILINE)
 
 
@@ -58,1347 +89,656 @@ def terraform_environment_names(source: str) -> set[str]:
     return set(ENVIRONMENT_NAME_RE.findall(source))
 
 
-def production_cd_path(root: Path = ROOT) -> Path | None:
-    """Return the active production CD definition, or the parked one."""
+def production_release_paths(root: Path = ROOT) -> dict[str, Path]:
+    """Return the release workflow and shared action files for a checkout."""
 
-    for workflow in (PRODUCTION_DEPLOY_WORKFLOW, PRODUCTION_DEPLOY_WORKFLOW_PARKED):
-        candidate = root / workflow.relative_to(ROOT)
-        if candidate.exists():
-            return candidate
-    return None
+    paths = {
+        scope: root / path.relative_to(ROOT) for scope, path in PRODUCTION_RELEASE_WORKFLOWS.items()
+    }
+    paths["orchestrator"] = root / PRODUCTION_RELEASE_ORCHESTRATOR.relative_to(ROOT)
+    paths["preflight"] = root / RELEASE_PREFLIGHT_ACTION.relative_to(ROOT)
+    paths["scope-action"] = root / RELEASE_SCOPE_ACTION.relative_to(ROOT)
+    paths["last-release"] = root / LAST_RELEASE_SCRIPT.relative_to(ROOT)
+    return paths
+
+
+AUTOMATIC_RELEASE_GUARD_RE = (
+    r"github\.event\.workflow_run\.conclusion\s*==\s*'success'\s*&&\s*"
+    r"github\.event\.workflow_run\.event\s*==\s*'push'\s*&&\s*"
+    r"github\.event\.workflow_run\.head_branch\s*==\s*'main'\s*&&\s*"
+    r"github\.event\.workflow_run\.head_repository\.full_name\s*==\s*github\.repository"
+)
+
+# Invariants the orchestrating workflow must keep: it alone listens to CI,
+# scopes every surface without credentials, and calls the affected surfaces
+# side by side so their environment gates are reviewed together.
+ORCHESTRATOR_RULES = {
+    (
+        r"workflow_run:\s*\n\s*workflows:\s*\[CI\]\s*\n\s*types:\s*\[completed\]"
+        r"\s*\n\s*branches:\s*\[main\]"
+    ): "automatic release requests from CI runs on main",
+    r"workflow_dispatch:": "manual dispatch",
+    r"description: Type DEPLOY to release": "the DEPLOY confirmation input",
+    AUTOMATIC_RELEASE_GUARD_RE: (
+        "an automatic-release guard for successful push CI runs on main from this repository"
+    ),
+    r"actions:\s*read": "GitHub Actions artifact read permission",
+    r"deployments:\s*write": "deployment permission for the surface environments",
+    r"id-token:\s*write": "OIDC permission for the surface workflows",
+    r"cancel-in-progress:\s*false": "non-cancelling release concurrency",
+    r"DEPLOY_SHA:\s*" + RELEASE_SHA_EXPRESSION_RE: "the release commit as the deploy SHA",
+    r"fetch-depth:\s*0": "full history for change scoping",
+    r"if:\s*\$\{\{\s*always\(\)[^}]*\}\}[\s\S]{0,1600}GITHUB_STEP_SUMMARY": (
+        "an always-written release summary"
+    ),
+    **{
+        rf"uses:\s*\./\.github/actions/release-scope\s*\n\s*with:\s*\n\s*surface:\s*{scope}\b": (
+            f"the no-credential {scope} change scope"
+        )
+        for scope in PRODUCTION_RELEASE_WORKFLOWS
+    },
+    **{
+        (
+            rf"\n  {scope}:\s*\n\s*needs:\s*scope\s*\n"
+            rf"\s*if:\s*\$\{{\{{\s*needs\.scope\.outputs\.{scope}\s*==\s*'true'\s*\}}\}}\s*\n"
+            rf"\s*uses:\s*\./\.github/workflows/release-{scope}\.yml\s*\n\s*with:\s*\n"
+            rf"\s*deploy-sha:\s*{RELEASE_SHA_EXPRESSION_RE}\s*\n"
+            r"\s*trigger-event:\s*\$\{\{\s*github\.event_name\s*\}\}\s*\n"
+            r"\s*confirmation:\s*\$\{\{\s*inputs\.confirmation\s*\}\}"
+        ): (
+            f"a {scope} surface job that depends only on the scope job, runs only when the "
+            f"{scope} changed, and calls the {scope} workflow with the release commit"
+        )
+        for scope in PRODUCTION_RELEASE_WORKFLOWS
+    },
+}
+
+# Text the orchestrator may not contain: approvals and credentials belong to
+# the surface workflows' environment-gated jobs, never to the caller.
+FORBIDDEN_ORCHESTRATOR_RULES = {
+    r"environment:": "an environment gate of its own",
+    r"aws |configure-aws-credentials": "cloud credentials",
+    r"\$\{\{\s*secrets\.": "GitHub secrets",
+    (
+        r"needs:[^\n]*\b(backend|frontend|infrastructure)\b[^\n]*\n(\s*if:[^\n]*\n)?"
+        r"\s*uses:\s*\./\.github/workflows/release-"
+    ): "a surface job that waits for another surface (it would ask for a second approval)",
+}
+
+# Invariants every surface workflow must keep: callable from the orchestrator
+# with the release commit, dispatchable alone, and gated on its environment.
+COMMON_RELEASE_WORKFLOW_RULES = {
+    (
+        r"workflow_call:\s*\n\s*inputs:\s*\n\s*deploy-sha:[\s\S]{0,200}required:\s*true"
+        r"[\s\S]{0,200}trigger-event:[\s\S]{0,200}required:\s*true[\s\S]{0,300}confirmation:"
+    ): "the reusable-workflow inputs the orchestrator passes",
+    r"workflow_dispatch:": "manual dispatch",
+    r"description: Type DEPLOY to release": "the DEPLOY confirmation input",
+    r"actions:\s*read": "GitHub Actions artifact read permission",
+    r"id-token:\s*write": "OIDC permission",
+    r"cancel-in-progress:\s*false": "non-cancelling release concurrency",
+    r"if:\s*\$\{\{\s*github\.ref\s*==\s*'refs/heads/main'\s*\}\}": (
+        "a release job restricted to main"
+    ),
+    r"TRIGGER_EVENT:\s*\$\{\{\s*inputs\.trigger-event\s*\|\|\s*github\.event_name\s*\}\}": (
+        "the calling run's trigger event for the shared preflight"
+    ),
+    r"CONFIRMATION:\s*\$\{\{\s*inputs\.confirmation\s*\}\}": (
+        "the manual confirmation for the shared preflight"
+    ),
+    r"DEPLOY_SHA:\s*" + SURFACE_RELEASE_SHA_EXPRESSION_RE: (
+        "the orchestrator's release commit as the deploy SHA"
+    ),
+    r"ref:\s*\$\{\{\s*env\.DEPLOY_SHA\s*\}\}": "checkout of the exact release commit",
+    r"uses:\s*\./\.github/actions/release-preflight": "the shared release preflight",
+    r"if:\s*\$\{\{\s*always\(\)\s*\}\}[\s\S]{0,900}GITHUB_STEP_SUMMARY": (
+        "an always-written release summary"
+    ),
+}
+
+# Text no surface workflow may contain: CI listening and change scoping belong
+# to the orchestrator, so a surface can never release outside its review.
+FORBIDDEN_SURFACE_WORKFLOW_RULES = {
+    r"\n\s*workflow_run:": "its own CI trigger",
+    r"release-scope": "its own change scope",
+    r"needs:\s*scope": "a scope job of its own",
+    r"github\.event\.workflow_run": "the CI run payload (the orchestrator resolves the release commit)",
+}
+
+# Backend and infrastructure releases run from the "AWS ECS - Prod" environment
+# under the production role, which owns Terraform state, ECS, and the
+# application secrets' metadata.
+ECS_ENVIRONMENT_RULES = {
+    r"environment:\s*\n\s*name:\s*AWS ECS - Prod": "the AWS ECS - Prod environment gate",
+    r"AWS_ROLE_ARN:\s*\$\{\{\s*vars\.AWS_PROD_ROLE_ARN\s*\}\}": (
+        "the production OIDC role from the AWS ECS - Prod environment"
+    ),
+    (
+        r"TF_VAR_default_admin_email:\s*\$\{\{\s*"
+        r"vars\.PROD_DEFAULT_ADMIN_EMAIL\s*\|\|\s*'admin@releviz\.com'\s*\}\}|"
+        r"DEFAULT_ADMIN_EMAIL:\s*\$\{\{\s*"
+        r"vars\.PROD_DEFAULT_ADMIN_EMAIL\s*\|\|\s*'admin@releviz\.com'\s*\}\}"
+    ): "the reviewed production default-admin email input",
+}
+
+# The frontend release runs from the "AWS Amplify - Prod" environment under the
+# frontend-only role; it carries no backend configuration at all.
+AMPLIFY_ENVIRONMENT_RULES = {
+    r"environment:\s*\n\s*name:\s*AWS Amplify - Prod": "the AWS Amplify - Prod environment gate",
+    r"AWS_ROLE_ARN:\s*\$\{\{\s*vars\.AWS_PROD_FRONTEND_ROLE_ARN\s*\}\}": (
+        "the frontend-only OIDC role from the AWS Amplify - Prod environment"
+    ),
+}
+
+# Text a release workflow may not contain because it belongs to the other
+# environment.
+SCOPED_FORBIDDEN_RELEASE_WORKFLOW_RULES = {
+    "backend": {
+        r"AWS Amplify - Prod": "the frontend environment",
+        r"AWS_PROD_FRONTEND_ROLE_ARN": "the frontend-only role variable",
+    },
+    "infrastructure": {
+        r"AWS Amplify - Prod": "the frontend environment",
+        r"AWS_PROD_FRONTEND_ROLE_ARN": "the frontend-only role variable",
+    },
+    "frontend": {
+        r"AWS ECS - Prod": "the backend environment",
+        r"AWS_PROD_ROLE_ARN": "the production role variable AWS_PROD_ROLE_ARN",
+        r"PROD_TF_STATE_BUCKET": "the Terraform state bucket",
+        r"PROD_DJANGO_SECRET_KEY_ARN|PROD_DJANGO_FIELD_ENCRYPTION_KEY_ARN": (
+            "application secret ARNs"
+        ),
+        r"PROD_METRICS_BEARER_TOKEN_ARN|PROD_SENTRY_DSN_SECRET_ARN": "monitoring secret ARNs",
+        r"PROD_DEFAULT_ADMIN_EMAIL|PROD_DEFAULT_ADMIN_PASSWORD_SECRET_ARN": (
+            "default-admin bootstrap inputs"
+        ),
+        r"PROD_ALARM_ACTION_ARNS_JSON": "alarm actions",
+        r"TF_VAR_": "Terraform inputs",
+    },
+}
+
+# Text no release workflow may contain.
+FORBIDDEN_RELEASE_WORKFLOW_RULES = {
+    r"\$\{\{\s*secrets\.": "GitHub secrets (production secrets live in AWS Secrets Manager)",
+    r"TF_VAR_manage_dns": "legacy DNS-disable cutover flow",
+    r"restrict_origin_to_cloudfront|trust_cloudfront_proxy_chain": (
+        "retired CloudFront origin inputs"
+    ),
+    r"start-job\s+--job-type\s+RETRY": "unsupported Amplify StartJob retry rollback",
+    r"aws-access-key-id|aws-secret-access-key": "static AWS keys",
+}
+
+TERRAFORM_STEADY_STATE_RULES = {
+    r'TF_VAR_enable_amplify_domain:\s*"true"': "the completed Amplify domain association",
+    r'TF_VAR_enable_legacy_api_compatibility:\s*"false"': "the completed API-subdomain topology",
+    r"-lock-timeout=15m": "a bounded wait for the remote state lock",
+    r"apply -input=false -auto-approve [a-z]+-release\.tfplan": "an exact saved-plan apply",
+    r"show -json [a-z]+-release\.tfplan": "a machine-readable plan review",
+    r'\.change\.actions == \["delete"\]': "a no-destroy plan guard",
+    r"aws ecs wait services-stable": "ECS service stabilization",
+    r"for role in backend result_worker email_worker frontend": (
+        "verification of the backend, both durable workers, and the fallback frontend"
+    ),
+    r'"\$\{role\}_task_definition_arn"': "Terraform-selected ECS task definitions",
+    r"\.services\[0\]\.taskDefinition\s*==\s*\$expected": ("ECS service task-definition identity"),
+    r"EcsParameters\.TaskDefinitionArn\s*==\s*\$expected": (
+        "the reminder schedule pinned to the released backend task definition"
+    ),
+    r"describe-target-health": "ALB target health verification",
+    r"for path in /health/live /health /admin/": "API health smoke",
+    r"Access-Control-Request-Method: PUT": "a credentialed CORS preflight smoke",
+}
+
+SCOPED_RELEASE_WORKFLOW_RULES = {
+    "backend": {
+        **ECS_ENVIRONMENT_RULES,
+        **TERRAFORM_STEADY_STATE_RULES,
+        r"TF_VAR_backend_image_tag:\s*" + SURFACE_RELEASE_SHA_EXPRESSION_RE: (
+            "the release commit as the backend image tag"
+        ),
+        r"--image-tag-mutability IMMUTABLE": "an immutable ECR repository",
+        r"scanOnPush=true": "ECR image scanning",
+        r"describe-images[\s\S]{0,120}imageTag=\$\{DEPLOY_SHA\}": (
+            "an existing-image short circuit"
+        ),
+        r'docker build --pull --tag "\$image_uri" \./src/api': "the backend image build",
+        r'released="\$\(scripts/ci/last-successful-release\.sh frontend\)"': (
+            "the fallback frontend held at the latest successful frontend release"
+        ),
+        r"TF_VAR_frontend_image_tag:\s*\$\{\{\s*steps\.frontend_tag\.outputs\.sha\s*\}\}": (
+            "the resolved fallback frontend tag in the plan"
+        ),
+        r"Detect live Amplify not-found routing": "live Amplify not-found routing detection",
+        (
+            r"Plan the backend release[\s\S]{0,400}"
+            r"TF_VAR_enable_amplify_not_found_rule:\s*\$\{\{\s*"
+            r"steps\.not_found_rule\.outputs\.live\s*\}\}"
+            r"[\s\S]{0,400}backend-release\.tfplan"
+        ): "the live Amplify not-found state in the backend plan",
+        r"-out=backend-release\.tfplan": "a saved backend plan",
+        (
+            r"aws_\(ecs_task_definition\|ecs_service\|appautoscaling_\(target\|policy\)"
+            r"\|cloudwatch_\(metric_alarm\|log_group\|log_metric_filter\|event_rule\|event_target\)\)"
+        ): "a runtime-only backend plan guard",
+        r"Release those changes through the infrastructure workflow first": (
+            "a redirect of non-runtime changes to the infrastructure release"
+        ),
+        (
+            r'"recompute_event_results","--watch","--poll-interval=1"'
+        ): "the exact result-worker command",
+        (
+            r'"dispatch_email_jobs","--watch","--limit=1000","--concurrency=10",'
+            r'"--rate-limit=10","--poll-interval=1"'
+        ): "the exact email-worker command",
+        r"stopTimeout == 120": "graceful worker shutdown",
+        r"healthCheck\.retries == 3": "worker container health checks",
+        r'"DJANGO_MIGRATE_ON_START" and \.value == "1"': "worker-owned locked migrations",
+        r"Ensure production default administrator through one-off ECS task": (
+            "the dedicated default-admin one-off task"
+        ),
+        r'\["python", "manage\.py", "ensure_default_admin", "--yes", "--create-only"\]': (
+            "a create-only default-admin command"
+        ),
+        r'\(\.taskDefinition\.taskRoleArn // ""\) == ""': "a default-admin task without a task role",
+        r'"DJANGO_SUPERUSER_PASSWORD"\s*\n\s*and \.valueFrom == \$password_secret': (
+            "the default-admin JSON password-key selector"
+        ),
+        r"\$\{TF_VAR_default_admin_password_secret_arn\}:password::": (
+            "the default-admin password secret field"
+        ),
+        r"\.name != \"DJANGO_SUPERUSER_PASSWORD\"": (
+            "a backend service without administrator bootstrap inputs"
+        ),
+        r'--started-by "\$started_by"': "a unique default-admin started-by token",
+        r"key=Purpose,value=default-admin-bootstrap": "tagged default-admin tasks",
+        r"timeout --signal=TERM 900s": "a bounded default-admin wait",
+        r'\.stopCode == "EssentialContainerExited"': "stopped-task verification",
+        r"\.exitCode == 0": "successful container exit verification",
+        r"Clean up an interrupted default-administrator task": (
+            "compensating cleanup of interrupted default-admin tasks"
+        ),
+        r"aws ecs stop-task": "a compensating stop of interrupted default-admin tasks",
+        r"timeout --signal=TERM 180s": "bounded verification of compensating cleanup",
+        r"for path in /api/health /api/health/live": "retired legacy route verification",
+        r'\[ "\$status" != "404" \]': "retired routes returning 404",
+    },
+    "frontend": {
+        **AMPLIFY_ENVIRONMENT_RULES,
+        r'AMPLIFY_TIMEOUT_SECONDS:\s*"1200"': "the bounded Amplify deployment-helper timeout",
+        r"AMPLIFY_ARTIFACT:.*releviz-amplify-" + SURFACE_RELEASE_SHA_EXPRESSION_RE + r"\.zip": (
+            "a SHA-identified Amplify artifact"
+        ),
+        r"CANDIDATE_BRANCH:\s*candidate": "the Amplify candidate branch",
+        r"PRODUCTION_BRANCH:\s*main": "the Amplify production branch",
+        r"aws amplify update-app[\s\S]{0,120}--custom-headers": (
+            "installation of the reviewed Amplify security headers"
+        ),
+        r'grep -Fq "https://\$\{API_DOMAIN\}" <<<"\$live_headers"': (
+            "verification of the retained API connect-src policy"
+        ),
+        r"get-domain-association": "the live Amplify domain check",
+        r'\.domainAssociation\.domainStatus == "AVAILABLE"': "an available Amplify domain",
+        r"amplify-apex-target\.sh": "the Amplify apex target helper",
+        r"list-resource-record-sets": "the canonical alias check",
+        r"Detect live Amplify not-found routing": "live Amplify not-found routing detection",
+        r"NOT_FOUND_RULE_LIVE:\s*\$\{\{\s*steps\.not_found_rule\.outputs\.live\s*\}\}": (
+            "smoke tests keyed to the live Amplify not-found state"
+        ),
+        r"\$\{candidate_url\}/releviz-smoke-missing-\$\{DEPLOY_SHA\}/": (
+            "candidate unknown-path 404 smoke"
+        ),
+        r"https://\$\{PROD_DOMAIN\}/releviz-smoke-missing-\$\{DEPLOY_SHA\}/\?missing_check=": (
+            "canonical unknown-path 404 smoke"
+        ),
+        r'grep -Fq "Page not found"': "the exported Next 404 document in unknown-path smoke",
+        r"Fail closed when an Amplify release job is active": "an active-job fail-closed gate",
+        r'--build-arg "NEXT_PUBLIC_API_BASE_URL=https://\$\{API_DOMAIN\}"': (
+            "the API subdomain baked into the ECS frontend fallback"
+        ),
+        r"\./src/web\s*\n\s*docker push": "an API-aware ECS frontend fallback build",
+        r"run build:amplify": "the Amplify static build",
+        r"validate_amplify_static_export\.py": "static export validation",
+        r"jq -n --arg sha \"\$DEPLOY_SHA\" '\{sha: \$sha\}' >src/web/out/release\.json": (
+            "a release identity in the artifact"
+        ),
+        r"unzip -tq \"\$AMPLIFY_ARTIFACT\"": "artifact integrity verification",
+        r"sha256sum \"\$artifact_name\"": "an artifact checksum",
+        r"retention-days:\s*90": "90-day rollback artifact retention",
+        r"if-no-files-found:\s*error": "a required rollback artifact upload",
+        r"Capture current Amplify production rollback point": "a captured rollback point",
+        r"gh api[\s\S]{0,100}--method\s+GET": "an explicit read-only artifact API request",
+        r"--paginate[\s\S]{0,100}--slurp": "complete paginated rollback artifact discovery",
+        r"\.name\s*==\s*\$name": "exact rollback artifact-name matching",
+        r"\.expired\s*==\s*false": "an unexpired rollback-artifact requirement",
+        r"\.workflow_run\.head_sha\s*==\s*\$sha": "rollback artifact head-SHA binding",
+        r"\.head_branch\s*==\s*\"main\"": "rollback artifact main-branch binding",
+        (
+            r"\.path == \"\.github/workflows/release\.yml\"\s*\n\s*"
+            r"or \.path == \"\.github/workflows/release-frontend\.yml\"\s*\n\s*"
+            r"or \.path == \"\.github/workflows/deploy-prod\.yml\""
+        ): "rollback artifact production-workflow binding",
+        r"\(\.event == \"workflow_dispatch\" or \.event == \"workflow_run\"\)": (
+            "rollback artifact release-event binding"
+        ),
+        r"\.status\s*==\s*\"completed\"": "a completed trusted rollback workflow run",
+        r"\.head_repository\.full_name == \$repository": "rollback artifact repository binding",
+        r"digest-mismatch:\s*error": "rollback artifact digest verification",
+        r"sha256sum --check --strict": "rollback artifact checksum verification",
+        r"\(\^/\|\(\^\|/\)\\\.\\\.\(/\|\$\)\|\\\\\)": "rollback ZIP path-safety verification",
+        r"grep -cx 'release\.json'": "a single rollback release identity",
+        r"Deploy candidate Amplify branch": "a candidate deployment",
+        r"Smoke candidate Amplify frontend and direct API boundary": "candidate smoke tests",
+        r"strict-transport-security: max-age=31536000; includeSubDomains": "HSTS verification",
+        r"connect-src 'self' https://\$\{API_DOMAIN\}": "CSP connect-src verification",
+        r"jq -r '\.static_routes\[\]' src/web/amplify-routes\.json": "static route smoke",
+        r"jq -r '\.legacy_redirects \| keys\[\]' src/web/amplify-routes\.json": (
+            "legacy redirect smoke"
+        ),
+        r"/event/\?code=AMPLIFYSMOKE": "query-preserving redirect smoke",
+        r"_next/static -type f -name '\*\.js'": "deployed JavaScript smoke",
+        r"Access-Control-Request-Method: PUT": "a credentialed CORS preflight smoke",
+        r"/authn/refresh/": "a protected refresh smoke",
+        r'"DELETE /authn/sessions/"': "a protected session smoke",
+        r"/admin/login/": "a Django admin smoke",
+        r"csrfmiddlewaretoken": "a CSRF-protected admin POST smoke",
+        r"Revalidate Amplify production rollback point": "a re-validated rollback point",
+        r"Deploy production Amplify branch": "a production deployment",
+        r"Smoke the production Amplify branch": "production branch smoke tests",
+        r"id: canonical_smoke": "canonical production smoke tests",
+        r"Roll back production Amplify branch after failed release": "an Amplify rollback",
+        (
+            r"always\(\) &&\s*\n\s*\(failure\(\) \|\| cancelled\(\)\) &&\s*\n\s*"
+            r"steps\.canonical_smoke\.outcome != 'success' &&\s*\n\s*"
+            r"steps\.previous_amplify_production\.outcome == 'success' &&\s*\n\s*"
+            r"steps\.verify_previous_amplify_artifact\.outcome == 'success' &&\s*\n\s*"
+            r"steps\.production_deploy\.outputs\.terminal_confirmed == 'true'"
+        ): "a rollback gated on a verified artifact and a terminal production job",
+    },
+    "infrastructure": {
+        **ECS_ENVIRONMENT_RULES,
+        **TERRAFORM_STEADY_STATE_RULES,
+        r"aws amplify update-app[\s\S]{0,120}--custom-headers": (
+            "installation of the reviewed Amplify security headers"
+        ),
+        (
+            r'released="\$\(scripts/ci/last-successful-release\.sh "\$surface"\)"[\s\S]{0,1500}'
+            r'resolve backend "\$ECR_BACKEND"[\s\S]{0,200}resolve frontend "\$ECR_FRONTEND"'
+        ): "application images held at their latest successful releases",
+        r"TF_VAR_backend_image_tag:\s*\$\{\{\s*steps\.images\.outputs\.backend\s*\}\}": (
+            "the resolved backend tag in the plan"
+        ),
+        r"TF_VAR_frontend_image_tag:\s*\$\{\{\s*steps\.images\.outputs\.frontend\s*\}\}": (
+            "the resolved fallback frontend tag in the plan"
+        ),
+        r"-out=infrastructure-release\.tfplan": "a saved infrastructure plan",
+        r'startswith\("aws_amplify_branch\."\)': "untouched Amplify branches",
+        r'startswith\("aws_amplify_domain_association\."\)': "an untouched Amplify domain",
+        r"del\(\.custom_rule\)": "Amplify app changes limited to redirect rules",
+        r"requires an administrator-run, reviewed apply": (
+            "a redirect of destructive changes to an administrator"
+        ),
+        r"## Infrastructure plan": "a plan summary for the reviewer",
+        r"jq -r '\.static_routes\[\]' src/web/amplify-routes\.json": "static route smoke",
+        r"https://\$\{PROD_DOMAIN\}/releviz-smoke-missing-\$\{DEPLOY_SHA\}/\?missing_check=": (
+            "canonical unknown-path 404 smoke"
+        ),
+        r'grep -Fq "Page not found"': "the exported Next 404 document in unknown-path smoke",
+    },
+}
+
+# The frontend release must keep its steps in this order.
+FRONTEND_RELEASE_ORDER = (
+    "Install reviewed Amplify security headers",
+    "Require the live Amplify domain to serve the production branch",
+    "Detect live Amplify not-found routing",
+    "Fail closed when an Amplify release job is active",
+    "Build Amplify static artifact",
+    "Retain immutable Amplify artifact for rollback",
+    "Capture current Amplify production rollback point",
+    "Resolve retained Amplify rollback artifact",
+    "Download retained Amplify rollback artifact",
+    "Verify retained Amplify rollback artifact",
+    "Deploy candidate Amplify branch",
+    "Smoke candidate Amplify frontend and direct API boundary",
+    "Revalidate Amplify production rollback point",
+    "Deploy production Amplify branch",
+    "Smoke the production Amplify branch",
+    "Run canonical production smoke tests",
+    "Roll back production Amplify branch after failed release",
+)
+
+# The backend release must keep its steps in this order.
+BACKEND_RELEASE_ORDER = (
+    "Release preflight",
+    "Build and push immutable backend image",
+    "Resolve the ECS fallback frontend image for this plan",
+    "Detect live Amplify not-found routing",
+    "Plan the backend release",
+    "Guard the backend release plan",
+    "Apply the exact backend release plan",
+    "Wait for backend, workers, and fallback frontend ECS services",
+    "Verify ECS services use Terraform-selected task definitions",
+    "Verify the backend release identity and worker contract",
+    "Verify backend ALB target health",
+    "Run backend smoke tests",
+    "Ensure production default administrator through one-off ECS task",
+    "Clean up an interrupted default-administrator task",
+)
+
+INFRASTRUCTURE_RELEASE_ORDER = (
+    "Release preflight",
+    "Install reviewed Amplify security headers",
+    "Resolve the application images for this plan",
+    "Plan the infrastructure release",
+    "Guard the infrastructure release plan",
+    "Apply the exact infrastructure release plan",
+    "Wait for ECS services to stabilize on the applied release",
+    "Verify ECS services use Terraform-selected task definitions",
+    "Verify ALB target health",
+    "Run production smoke tests",
+)
+
+RELEASE_STEP_ORDERS = {
+    "backend": BACKEND_RELEASE_ORDER,
+    "frontend": FRONTEND_RELEASE_ORDER,
+    "infrastructure": INFRASTRUCTURE_RELEASE_ORDER,
+}
+
+RELEASE_PREFLIGHT_RULES = {
+    (
+        r"\[\s*\"\$TRIGGER_EVENT\"\s*=\s*\"workflow_dispatch\"\s*\]\s*&&\s*"
+        r"\[\s*\"\$CONFIRMATION\"\s*!=\s*\"DEPLOY\"\s*\]"
+    ): "the DEPLOY confirmation for manual releases",
+    r"\^\[0-9a-f\]\{40\}\$": "an immutable release SHA requirement",
+    r"git rev-parse HEAD": "exact checked-out release verification",
+    r"CI Result": "successful CI enforcement",
+    r'environment_name="AWS ECS - Prod"': (
+        "the AWS ECS - Prod configuration contract for backend and infrastructure releases"
+    ),
+    r'environment_name="AWS Amplify - Prod"': (
+        "the AWS Amplify - Prod configuration contract for frontend releases"
+    ),
+    r"Missing required \$\{environment_name\} environment variable": (
+        "required configuration checks"
+    ),
+    r'expected_role_name="releviz-production-github-deploy"': "the reviewed production role name",
+    r'expected_role_name="releviz-production-frontend-github-deploy"': (
+        "the reviewed frontend-only role name"
+    ),
+    r"role/\$\{expected_role_name\}\$": "an exact role ARN contract per scope",
+    r":assumed-role/\$\{expected_role_name\}/": "assumed-identity verification per scope",
+    r"aws ecs list-clusters --max-items 1 >/dev/null 2>&1; then": (
+        "a frontend least-privilege probe"
+    ),
+    r'DEFAULT_ADMIN_EMAIL"\s*!=\s*"admin@releviz\.com"': (
+        "an exact production default-admin identity guard"
+    ),
+    r"secret:releviz/prod/default-admin-password-\[A-Za-z0-9\]\{6\}\$": (
+        "an exact default-admin secret ARN guard"
+    ),
+    r"\[\$django, \$field, \$metrics, \$admin\]": (
+        "a four-way production application-secret uniqueness guard"
+    ),
+    r'API_DOMAIN"\s*!=\s*"api\.releviz\.com"': "the reviewed API hostname guard",
+    r"aws-actions/configure-aws-credentials@v6\.2\.2": "OIDC credential exchange",
+    r"role-to-assume:\s*\$\{\{\s*env\.AWS_ROLE_ARN\s*\}\}": "the environment-scoped production role",
+    r"role-duration-seconds:\s*3600": "short-lived release credentials",
+    r"aws sts get-caller-identity": "deployment identity verification",
+    r"secretsmanager describe-secret": "default-admin password secret metadata verification",
+    r'"releviz/prod/default-admin-password"': "an exact default-admin Secrets Manager name guard",
+    r"kms describe-key --key-id alias/aws/rds": "managed RDS encryption verification",
+    r"aws amplify get-app": "Amplify app verification",
+    r"get-bucket-versioning": "versioned Terraform state",
+    r"get-bucket-encryption": "encrypted Terraform state",
+    r"get-public-access-block": "private Terraform state",
+    r"terraform_version:\s*1\.15\.8": "the pinned Terraform release",
+    r"terraform_wrapper:\s*false": "raw Terraform output and exit semantics",
+    r"key=prod/terraform\.tfstate": "the production state key",
+    r"use_lockfile=true": "native Terraform state locking",
+    r"aws_amplify_domain_association\.frontend\\\[0\\\]": "the completed Amplify domain in state",
+    r"aws_route53_record\.api": "the API subdomain record in state",
+    r"aws_lb_listener_rule\.backend\\\[0\\\]": "no legacy API compatibility rule in state",
+}
+
+RELEASE_SCOPE_RULES = {
+    r"\^\[0-9a-f\]\{40\}\$": "an immutable release SHA requirement",
+    r'if \[ "\$TRIGGER_EVENT" = "workflow_dispatch" \]': "unconditional manual releases",
+    r'base="\$\(scripts/ci/last-successful-release\.sh "\$RELEASE_SURFACE"\)"': (
+        "the surface's last successful release as the diff base"
+    ),
+    r"git cat-file -e": "a rewritten-history fallback",
+    r'git diff --name-only "\$base" "\$RELEASE_SHA" --': "a path-scoped change comparison",
+    r'echo "release=false"': "a skip when nothing changed",
+}
+
+# The shared answer to "what did this surface last release?": the newest
+# orchestrated run in which the surface's own job succeeded (never the run as
+# a whole), or a newer lone dispatch of the surface workflow, falling back to
+# the retired single workflow before a surface has released once.
+LAST_RELEASE_SCRIPT_RULES = {
+    r"set -euo pipefail": "strict shell settings",
+    r"backend \| frontend \| infrastructure\) ;;": "the three release surfaces",
+    r"workflows/release\.yml/runs\?branch=main&status=completed": (
+        "the orchestrated release history"
+    ),
+    r'select\(\.event == "workflow_run" or \.event == "workflow_dispatch"\)': (
+        "orchestrated runs limited to release events"
+    ),
+    r"actions/runs/\$\{run_id\}/jobs": "the surface job of each orchestrated run",
+    r'startswith\(\\"\$\{surface\} / \\"\)': "the surface's own job by name",
+    r'\[ "\$job_conclusion" = "success" \]': "a successful surface job, not a successful run",
+    r"workflows/\$1/runs\?branch=main&status=success&per_page=1": (
+        "the last successful run of a whole workflow"
+    ),
+    r'workflow_success "release-\$\{surface\}\.yml"': "the surface workflow's own dispatch history",
+    r"sort \| tail -n 1": "the newest of the orchestrated and lone histories",
+    r"workflow_success deploy-prod\.yml": (
+        "the retired single workflow's last release as the initial base"
+    ),
+    r"\^\[0-9a-f\]\{40\}\$": "an immutable release SHA result",
+}
+
+
+def _step_positions(source: str, names: tuple[str, ...]) -> list[int]:
+    return [source.find(f"- name: {name}") for name in names]
 
 
 def production_cd_errors(root: Path = ROOT) -> list[str]:
-    """Ensure production CD is explicit, protected, immutable, and health-gated."""
+    """Ensure the split production releases stay explicit, gated, and health-checked."""
 
     errors: list[str] = []
-    active_path = production_cd_path(root)
-    if active_path is None:
-        errors.append("production CD workflow is missing")
-        return errors
+    paths = production_release_paths(root)
 
-    source = active_path.read_text(encoding="utf-8")
-    required_patterns = {
-        r"workflow_dispatch:": "manual dispatch",
-        r"timeout-minutes:\s*160": "the reviewed 160-minute production job limit",
-        r'PRODUCTION_JOB_TIMEOUT_SECONDS:\s*"9600"': ("the production job timeout in seconds"),
-        r'AMPLIFY_TIMEOUT_SECONDS:\s*"1200"': ("the bounded Amplify deployment-helper timeout"),
-        r"Record production job time budget": "production job start-time capture",
-        r"actions:\s*read": "GitHub Actions artifact read permission",
-        r"id-token:\s*write": "OIDC permission",
-        r"terraform_wrapper:\s*false": "raw Terraform output and exit semantics",
-        r"CONFIRMATION.*DEPLOY|CONFIRMATION\"\s*!=\s*\"DEPLOY\"": "explicit confirmation",
-        r"git rev-parse HEAD": "exact checked-out release verification",
-        r"CI Result": "successful CI enforcement",
-        r"backend_image_tag.*DEPLOY_SHA": "immutable backend release tag",
-        (
-            r"TF_VAR_default_admin_email:\s*\$\{\{\s*"
-            r"vars\.PROD_DEFAULT_ADMIN_EMAIL\s*\|\|\s*'admin@releviz\.com'\s*\}\}"
-        ): "the reviewed production default-admin email input",
-        (
-            r"TF_VAR_default_admin_password_secret_arn:\s*\$\{\{\s*"
-            r"vars\.PROD_DEFAULT_ADMIN_PASSWORD_SECRET_ARN\s*\}\}"
-        ): "the production default-admin password secret ARN input",
-        (
-            r'DEFAULT_ADMIN_EMAIL"\s*!=\s*"admin@releviz\.com"'
-        ): "an exact production default-admin identity guard",
-        (
-            r'DEFAULT_ADMIN_PASSWORD_SECRET_ARN"[\s\S]{0,1200}'
-            r"secretsmanager describe-secret"
-        ): "default-admin password secret metadata verification",
-        r"describe-task-definition": "deployed ECS frontend rollback discovery",
-        r"frontend_image_tag.*github\.sha": "immutable ECS fallback frontend release tag",
-        (
-            r"Plan production infrastructure with current DNS state"
-            r"[\s\S]{0,500}TF_VAR_frontend_image_tag:\s*\$\{\{\s*"
-            r"steps\.rollback_frontend\.outputs\.sha\s*\}\}"
-            r"[\s\S]{0,500}production-base\.tfplan"
-        ): "the deployed ECS frontend SHA in the base Terraform plan",
-        r"Verify base ECS services use Terraform-selected task definitions": (
-            "post-wait base ECS release identity verification"
-        ),
-        r"for\s+role\s+in\s+backend\s+result_worker\s+email_worker\s+frontend": (
-            "base release verification for both durable workers"
-        ),
-        (
-            r"terraform\s+-chdir=infra/prod\s+output\s+-raw\s+"
-            r'"\$\{role\}_task_definition_arn"'
-        ): "Terraform-selected base ECS task definitions",
-        (
-            r"\.services\[0\]\.taskDefinition\s*==\s*\$expected"
-            r"[\s\S]{0,350}\.taskDefinition[\s\S]{0,80}==\s*\[\$expected\]"
-        ): "base ECS service and primary-deployment task-definition identity",
-        (
-            r"all\([\s\S]{0,150}\.tasks\[\][\s\S]{0,150}"
-            r'\.lastStatus\s*==\s*"RUNNING"[\s\S]{0,100}'
-            r"\.taskDefinitionArn\s*==\s*\$expected"
-        ): "base ECS running-task release identity",
-        r"Build and push immutable ECS fallback frontend image": (
-            "an API-aware ECS frontend fallback build"
-        ),
-        r"NEXT_PUBLIC_API_BASE_URL=https://\$\{API_DOMAIN\}": (
-            "the API subdomain baked into the ECS frontend fallback"
-        ),
-        r"Detect API-subdomain transition state": ("one-time legacy API compatibility detection"),
-        r"Install reviewed Amplify security headers": ("the reviewed cross-origin frontend policy"),
-        r"amplify update-app[\s\S]{0,160}--custom-headers": (
-            "an explicit Amplify custom-header update"
-        ),
-        r"npm ci --workspace=releviz-web": "locked frontend dependency install",
-        r"run build:amplify": "Amplify static frontend build",
-        r"validate_amplify_static_export\.py": ("Amplify static route and asset validation"),
-        r"src/web/out": "static export artifact",
-        r"AMPLIFY_ARTIFACT.*\.sha256": "a retained static-artifact checksum",
-        r"retention-days:\s*90": "a 90-day rollback artifact retention window",
-        r"release\.json": "immutable frontend release identity",
-        r"release_sha.*DEPLOY_SHA": "deployed frontend SHA verification",
-        r"amplify-static-deploy\.sh": "manual Amplify deployment helper",
-        r"Capture current Amplify production rollback point": ("a live Amplify rollback point"),
-        r"Resolve retained Amplify rollback artifact": ("a retained rollback-artifact resolver"),
-        r"releviz-amplify-(?:\$\{?)?PREVIOUS_SHA": ("an exact previous-SHA rollback artifact name"),
-        r"actions/artifacts": "a repository artifact metadata lookup",
-        r"gh api[\s\S]{0,100}--method\s+GET": ("an explicit read-only artifact API request"),
-        r"--paginate[\s\S]{0,100}--slurp": ("complete paginated rollback artifact discovery"),
-        r"\.name\s*==\s*\$(?:name|artifact_name)": ("exact rollback artifact-name matching"),
-        (
-            r"\.expired\s*==\s*false|"
-            r"select\(\s*\.expired\s*\|\s*not\s*\)|"
-            r"select\(\s*\(\.expired\s*//\s*true\)\s*==\s*false\s*\)"
-        ): "an unexpired rollback-artifact requirement",
-        (
-            r"\.workflow_run\.head_sha\s*==\s*\$(?:sha|previous_sha)|"
-            r"\$(?:sha|previous_sha)\s*==\s*\.workflow_run\.head_sha"
-        ): "rollback artifact head-SHA binding",
-        (
-            r"(?:\.workflow_run\.)?\.?head_branch\s*==\s*\"main\"|"
-            r"head_branch[\s\S]{0,100}\bmain\b"
-        ): "rollback artifact main-branch binding",
-        r"\.github/workflows/deploy-prod\.yml": ("rollback artifact production-workflow binding"),
-        (
-            r"\.event\s*==\s*\"workflow_dispatch\"|"
-            r"workflow_dispatch[\s\S]{0,100}\.event"
-        ): "rollback artifact workflow-dispatch binding",
-        r"\.status\s*==\s*\"completed\"": ("a completed trusted rollback workflow run"),
-        (
-            r"\.head_repository\.full_name[\s\S]{0,120}GITHUB_REPOSITORY|"
-            r"GITHUB_REPOSITORY[\s\S]{0,120}\.head_repository\.full_name|"
-            r'--arg\s+repository\s+"\$GITHUB_REPOSITORY"'
-            r"[\s\S]{0,500}\.head_repository\.full_name\s*==\s*\$repository"
-        ): "rollback artifact source-repository binding",
-        r"artifact_id": "an immutable rollback artifact ID",
-        r"run_id": "the rollback artifact's workflow-run ID",
-        r"Download retained Amplify rollback artifact": ("a retained rollback-artifact download"),
-        r"uses:\s*actions/download-artifact@v8": ("the reviewed cross-run artifact downloader"),
-        r"artifact-ids:": "rollback download by immutable artifact ID",
-        r"github-token:": "authenticated cross-run artifact download",
-        r"repository:": "an exact rollback artifact repository",
-        r"run-id:": "an exact rollback artifact workflow run",
-        r"digest-mismatch:\s*error": "fail-closed GitHub artifact digest validation",
-        r"(?:RUNNER_TEMP|runner\.temp)[\s\S]{0,100}amplify-rollback": (
-            "an isolated rollback artifact download directory"
-        ),
-        r"Verify retained Amplify rollback artifact": (
-            "strict retained rollback-artifact verification"
-        ),
-        r"retained_entries[\s\S]{0,300}-ne\s+2": ("an exact two-file retained artifact payload"),
-        r"\[0-9a-f\]\{64\}": "a strict rollback checksum digest format",
-        (
-            r"BASH_REMATCH\[[0-9]+\][\s\S]{0,150}expected_archive|"
-            r"checksum_(?:name|filename)[\s\S]{0,150}expected_archive"
-        ): "an exact rollback checksum filename",
-        r"sha256sum[^\n]*(?:--check|-c)[^\n]*--strict[^\n]*--status": (
-            "strict inner rollback ZIP checksum verification"
-        ),
-        r"unzip\s+-tq": "inner rollback ZIP integrity verification",
-        r"(?:zipinfo\s+-1|unzip\s+-Z1)": "inner rollback ZIP entry validation",
-        r"unsafe (?:path|ZIP entry)": "unsafe inner rollback ZIP path rejection",
-        r"grep\s+-cx\s+['\"]release\.json['\"][^\n]*-ne\s+1": (
-            "exactly one root rollback release manifest"
-        ),
-        (
-            r"unzip\s+-p[^\n]*release\.json[\s\S]{0,300}PREVIOUS_SHA|"
-            r"PREVIOUS_SHA[\s\S]{0,300}unzip\s+-p[^\n]*release\.json"
-        ): "inner rollback release-SHA verification",
-        r"Roll back production Amplify branch after failed release": (
-            "automatic rollback after any failed live release stage"
-        ),
-        (
-            r"steps\.production_deploy\.outputs\.terminal_confirmed\s*==\s*'true'"
-        ): "a confirmed-terminal current job before Amplify rollback",
-        (
-            r"Roll back production Amplify branch after failed release"
-            r"[\s\S]{0,1800}scripts/deploy/amplify-static-deploy\.sh"
-        ): "manual redeployment of the verified rollback artifact",
-        (
-            r'for\s+base_url\s+in\s+"\$production_url"\s+'
-            r'"https://\$\{PROD_DOMAIN\}"[\s\S]{0,1200}'
-            r'"\$\{base_url\}/release\.json"[\s\S]{0,500}'
-            r'"\$PREVIOUS_SHA"'
-        ): "rollback release identity checks on both default and production domains",
-        r"Smoke candidate Amplify frontend and direct API boundary": (
-            "candidate frontend and direct API boundary smoke tests"
-        ),
-        r"\.static_routes\[\]": "all exported candidate routes in smoke tests",
-        r"\.legacy_redirects \| keys\[\]": ("legacy Amplify redirects in candidate smoke tests"),
-        r"event/\?code=AMPLIFYSMOKE": ("query-preserving trailing-slash route verification"),
-        r"src/web/out/_next/static": "a deployed static-asset smoke test",
-        r"PUT /authn/profile": "a direct protected PUT smoke test",
-        r"DELETE /authn/sessions": "a direct protected DELETE smoke test",
-        r"Access-Control-Request-Method:\s*PUT": ("a direct credentialed API CORS preflight"),
-        r"access-control-allow-origin": "an exact API CORS origin check",
-        r"amplify_default_domain": "Amplify default-domain verification",
-        r"terraform .* state list": "existing domain cutover state detection",
-        r"TF_VAR_amplify_app_id.*PROD_AMPLIFY_APP_ID": ("an explicitly provisioned Amplify app ID"),
-        (
-            r"amplify get-domain-association[\s\S]{0,700}"
-            r"terraform -chdir=infra/prod import[\s\S]{0,300}"
-            r"aws_amplify_domain_association\.frontend\[0\]"
-        ): "orphan Amplify domain-association recovery",
-        r"\$\{app_id\}/\$\{domain_name\}": (
-            "the documented Amplify domain-association import identity"
-        ),
-        r"Recovered the existing Amplify domain association into Terraform state": (
-            "explicit orphan-recovery evidence"
-        ),
-        r"terraform -chdir=infra/prod state pull": ("exact Terraform instance-state inspection"),
-        r'\.status // "ready"': "tainted Amplify domain-state detection",
-        r"Recovered the verified Amplify domain association from tainted Terraform state": (
-            "verified tainted-domain state recovery"
-        ),
-        r"Capture pre-release canonical Route53 alias": (
-            "an exact pre-cutover canonical alias capture"
-        ),
-        r"Guard live Amplify configuration before candidate smoke": (
-            "a pre-candidate guard for live Amplify configuration"
-        ),
-        r"terraform -chdir=infra/prod show -json production-base\.tfplan": (
-            "machine-readable review of the exact base plan"
-        ),
-        (
-            r'address == "aws_amplify_app\.frontend"[\s\S]{0,250}'
-            r'address == "aws_amplify_branch\.production"[\s\S]{0,250}'
-            r'address == "aws_amplify_domain_association\.frontend\[0\]"'
-        ): "live app, production-branch, and domain configuration detection",
-        (
-            r"DOMAIN_PREEXISTING[\s\S]{0,300}CANONICAL_ROUTES_TO_ALB|"
-            r"CANONICAL_ROUTES_TO_ALB[\s\S]{0,300}DOMAIN_PREEXISTING"
-        ): ("live-only Amplify configuration gating"),
-        r"Move the canonical alias to the documented ECS fallback": (
-            "fail-closed guidance for live Amplify configuration changes"
-        ),
-        r"list-resource-record-sets": "authoritative Route53 alias inspection",
-        r"AliasTarget": "Route53 alias-target validation",
-        r"routes_to_alb": "migration-fallback DNS state detection",
-        r"\$\{alias_target#dualstack\.\}": "dualstack ALB alias normalization",
-        r"neither the managed ALB fallback nor Amplify's exact reported apex target": (
-            "fail-closed pre-release canonical target validation"
-        ),
-        r"Verify preserved canonical alias immediately before cutover": (
-            "a pre-cutover DNS race guard"
-        ),
-        r"refusing cutover": "a fail-closed pre-cutover DNS race guard",
-        r"Require a safe live-branch mutation budget": (
-            "a reserved live-branch rollback window before production mutation"
-        ),
-        r"TF_VAR_enable_amplify_domain.*domain_state\.outputs\.preexisting": (
-            "non-destructive initial domain state"
-        ),
-        r'TF_VAR_enable_amplify_domain:\s*"true"': "reviewed Amplify domain association",
-        (
-            r"Plan reviewed Amplify domain association"
-            r"[\s\S]{0,500}TF_VAR_frontend_image_tag:\s*\$\{\{\s*"
-            r"steps\.rollback_frontend\.outputs\.sha\s*\}\}"
-            r"[\s\S]{0,500}production-domain\.tfplan"
-        ): "the deployed ECS frontend SHA in the domain Terraform plan",
-        r"terraform -chdir=infra/prod show -json production-domain\.tfplan": (
-            "machine-readable Amplify domain plan review"
-        ),
-        r'\.change\.actions \| index\("delete"\)\) == null': (
-            "a no-destroy Amplify domain plan gate"
-        ),
-        r"Wait for Amplify custom domain availability": "custom-domain readiness gate",
-        r"Require a safe first-cutover time budget": (
-            "a reserved DNS-compensation window before first cutover"
-        ),
-        r"Apply exact Amplify domain association plan": (
-            "application of the exact reviewed domain-association plan"
-        ),
-        r"Reconcile Amplify domain association for a migration retry": (
-            "an existing-association migration retry"
-        ),
-        r"amplify update-domain-association": (
-            "managed Route53 reconciliation on a migration retry"
-        ),
-        r"Verify Amplify canonical DNS cutover": ("authoritative Amplify DNS cutover verification"),
-        r"expected_amplify_target": "the service-reported exact Amplify DNS target",
-        r"canonical alias did not match Amplify's exact apex DNS target": (
-            "fail-closed canonical target verification"
-        ),
-        r"Fail closed when an Amplify release job is active": ("a stale Amplify job preflight"),
-        (
-            r'for branch in "\$CANDIDATE_BRANCH" "\$PRODUCTION_BRANCH"'
-        ): "candidate and production branch job preflights",
-        (
-            r'"CREATED"[\s\S]*"PENDING"[\s\S]*"PROVISIONING"'
-            r'[\s\S]*"RUNNING"[\s\S]*"CANCELLING"'
-        ): "all non-terminal Amplify job-state guards",
-        r"describe-target-health": "backend ALB target-health verification",
-        r"Ensure production default administrator through one-off ECS task": (
-            "a one-off default-administrator bootstrap task"
-        ),
-        (
-            r"terraform\s+-chdir=infra/prod\s+output\s+-raw\s+"
-            r"default_admin_task_definition_arn"
-        ): "the Terraform-selected default-admin task definition",
-        (
-            r"describe-task-definition[\s\S]{0,1800}"
-            r'family\s*==\s*"releviz-prod-default-admin-task"'
-            r"[\s\S]{0,1200}ensure_default_admin"
-            r'[\s\S]{0,200}"--create-only"'
-        ): "the reviewed create-only default-admin task command",
-        (
-            r"DJANGO_SKIP_STARTUP_TASKS[\s\S]{0,100}"
-            r'\.value\s*==\s*"1"'
-        ): "startup-task suppression in the default-admin task",
-        (
-            r"DJANGO_CREATE_DEFAULT_ADMIN[\s\S]{0,100}"
-            r'\.value\s*==\s*"0"'
-        ): "container-start default-admin bootstrap suppression",
-        (
-            r"DJANGO_SUPERUSER_PASSWORD[\s\S]{0,160}"
-            r"\.valueFrom\s*==\s*\$password_secret"
-        ): "Secrets Manager-only default-admin password injection",
-        (
-            r'\.name\s*!=\s*"DJANGO_SUPERUSER_PASSWORD"'
-            r'[\s\S]{0,400}\.name\s*!=\s*"DJANGO_SUPERUSER_EMAIL"'
-        ): "runtime isolation of administrator inputs from the backend service",
-        (
-            r"describe-services[\s\S]{0,2200}"
-            r"networkConfiguration\.awsvpcConfiguration"
-            r'[\s\S]{0,500}assignPublicIp\s*==\s*"DISABLED"'
-        ): "the backend service's private network for the default-admin task",
-        (
-            r"aws\s+ecs\s+run-task[\s\S]{0,500}"
-            r"--launch-type\s+FARGATE[\s\S]{0,500}"
-            r'--task-definition\s+"\$expected_task_definition"'
-            r'[\s\S]{0,500}--network-configuration\s+"\$network_configuration"'
-            r"[\s\S]{0,300}--count\s+1"
-        ): "exactly one private Fargate default-admin task",
-        (
-            r"aws\s+ecs\s+wait\s+tasks-stopped[\s\S]{0,200}"
-            r'--tasks\s+"\$task_arn"'
-        ): "a stopped-state wait for the default-admin task",
-        (
-            r"\.tasks\[0\]\.taskDefinitionArn\s*==\s*\$expected"
-            r"[\s\S]{0,500}\.exitCode\s*==\s*0"
-        ): "task-definition and successful-exit verification for the default admin",
-        r"Run canonical production smoke tests": "post-cutover smoke tests",
-        (
-            r"Plan final production topology"
-            r"[\s\S]{0,700}TF_VAR_frontend_image_tag:\s*\$\{\{\s*github\.sha\s*\}\}"
-        ): "the current frontend SHA in the final Terraform plan",
-        (
-            r"Plan final production topology"
-            r"[\s\S]{0,700}TF_VAR_enable_legacy_api_compatibility:\s*\"false\""
-        ): "retired API compatibility in the final Terraform plan",
-        (
-            r"Plan final production topology[\s\S]{0,700}production-final\.tfplan"
-        ): "the exact final production topology plan",
-        (
-            r"Apply exact final production topology plan"
-            r"[\s\S]{0,500}terraform\s+-chdir=infra/prod\s+apply"
-            r"[\s\S]{0,300}production-final\.tfplan"
-        ): "application of the exact final production topology plan",
-        r"Verify final API-only backend topology": (
-            "a final direct API and retired frontend-proxy verification"
-        ),
-        r"https://\$\{API_DOMAIN\}/api/health": ("verification that the old API prefix is retired"),
-        r"Restore pre-release canonical Route53 alias after failed first cutover": (
-            "automatic first-cutover DNS compensation"
-        ),
-        (
-            r"Restore pre-release canonical Route53 alias after failed first cutover"
-            r"[\s\S]{0,700}steps\.canonical_smoke\.outcome\s*!=\s*'success'"
-        ): "a canonical-smoke failure guard on first-cutover DNS compensation",
-        r"route53 change-resource-record-sets": "an atomic Route53 alias restoration",
-        r'Action:\s*"UPSERT"': "a non-destructive canonical alias UPSERT",
-        r"route53 wait resource-record-sets-changed": ("authoritative DNS change propagation"),
-        r"AMPLIFY_ALIAS_FILE": "a captured post-cutover alias race guard",
-        r"amplify-apex-target\.sh": (
-            "service-reported Amplify apex-target extraction during compensation"
-        ),
-        r"refusing to overwrite it": "fail-closed DNS compensation on manual drift",
-        (
-            r"apex_alias\.outputs\.routes_to_alb != 'true'[\s\S]{0,300}"
-            r"Roll back production Amplify branch|"
-            r"Roll back production Amplify branch[\s\S]{0,300}"
-            r"apex_alias\.outputs\.routes_to_alb != 'true'"
-        ): "later-release-only Amplify branch rollback",
-    }
-    for pattern, description in required_patterns.items():
-        if not re.search(pattern, source, re.MULTILINE | re.DOTALL):
-            errors.append(f"production CD omits {description}")
+    for retired in RETIRED_RELEASE_WORKFLOWS:
+        if (root / retired).exists():
+            errors.append(f"retired single release workflow remains: {retired}")
 
-    def named_step(name: str) -> str:
-        match = re.search(
-            rf"(?m)^(?P<indent>[ \t]*)-\s+name:\s*{re.escape(name)}\s*$",
-            source,
-        )
-        if match is None:
-            return ""
-        indent = match.group("indent")
-        next_step = re.search(
-            rf"(?m)^{re.escape(indent)}-\s+(?:name|uses|run):",
-            source[match.end() :],
-        )
-        end = match.end() + next_step.start() if next_step is not None else len(source)
-        return source[match.start() : end]
-
-    configuration_step = named_step("Validate production configuration")
-    configuration_guards = {
-        (
-            r'--arg\s+django\s+"\$DJANGO_SECRET_KEY_ARN"'
-            r'[\s\S]{0,300}--arg\s+field\s+"\$FIELD_ENCRYPTION_KEY_ARN"'
-            r'[\s\S]{0,300}--arg\s+metrics\s+"\$METRICS_BEARER_TOKEN_ARN"'
-            r'[\s\S]{0,300}--arg\s+admin\s+"\$DEFAULT_ADMIN_PASSWORD_SECRET_ARN"'
-            r"[\s\S]{0,500}\[\$django,\s*\$field,\s*\$metrics,\s*\$admin\]"
-            r"[\s\S]{0,300}unique"
-        ): "a four-way production application-secret uniqueness guard",
-    }
-    for pattern, description in configuration_guards.items():
-        if not re.search(pattern, configuration_step, re.MULTILINE | re.DOTALL):
-            errors.append(f"production CD omits {description}")
-
-    dependency_step = named_step("Verify deployment identity and managed dependencies")
-    dependency_guards = {
-        (
-            r'default_admin_secret_name="\$\([\s\S]{0,500}'
-            r"aws\s+secretsmanager\s+describe-secret"
-            r'[\s\S]{0,250}--secret-id\s+"\$DEFAULT_ADMIN_PASSWORD_SECRET_ARN"'
-            r"[\s\S]{0,200}--query\s+Name[\s\S]{0,100}\)\""
-            r'[\s\S]{0,300}default_admin_secret_name"\s*!=\s*'
-            r'"releviz/prod/default-admin-password"'
-        ): "an exact default-admin Secrets Manager name guard",
-    }
-    for pattern, description in dependency_guards.items():
-        if not re.search(pattern, dependency_step, re.MULTILINE | re.DOTALL):
-            errors.append(f"production CD omits {description}")
-
-    admin_step = named_step("Ensure production default administrator through one-off ECS task")
-    admin_step_guards = {
-        (
-            r"--arg\s+password_secret\s+"
-            r'"\$\{TF_VAR_default_admin_password_secret_arn\}:password::"'
-            r"[\s\S]{0,2200}DJANGO_SUPERUSER_PASSWORD"
-            r"[\s\S]{0,200}\.valueFrom\s*==\s*\$password_secret"
-        ): "the default-admin JSON password-key selector",
-        (
-            r'started_by="admin-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}"'
-            r'[\s\S]{0,500}echo\s+"started_by=\$\{started_by\}"'
-            r'\s*>>"\$GITHUB_OUTPUT"'
-            r'[\s\S]{0,9000}--started-by\s+"\$started_by"'
-        ): "a persisted unique default-admin started-by token",
-        (
-            r"aws\s+ecs\s+list-tasks\s+\\?\s*"
-            r'--cluster\s+"\$CLUSTER_NAME"\s+\\?\s*'
-            r'--started-by\s+"\$started_by"'
-        ): "started-by discovery for interrupted default-admin tasks",
-        (
-            r"--tags[\s\S]{0,250}key=Project,value=releviz"
-            r"[\s\S]{0,150}key=Environment,value=prod"
-            r"[\s\S]{0,150}key=Purpose,value=default-admin-bootstrap"
-        ): "the three required default-admin task tags",
-        (
-            r'if\s+\[\s*"\$default_admin_image"\s*!=\s*'
-            r'"\$backend_image"\s*\]\s*;\s*then'
-        ): "runtime equality of the default-admin and backend images",
-        (
-            r'backend_task_state="\$\([\s\S]{0,500}'
-            r"aws\s+ecs\s+describe-task-definition"
-            r'[\s\S]{0,250}--task-definition\s+"\$backend_task_definition"'
-            r"[\s\S]{0,150}\)\""
-            r'[\s\S]{0,1200}\.name\s*!=\s*"DJANGO_SUPERUSER_PASSWORD"'
-            r'[\s\S]{0,500}\.name\s*!=\s*"DJANGO_SUPERUSER_EMAIL"'
-            r'[\s\S]{0,700}<<<"\$backend_task_state"'
-        ): "runtime isolation of administrator inputs from the deployed backend task",
-        (
-            r"timeout\s+--signal=TERM\s+900s"
-            r"[\s\S]{0,100}aws\s+ecs\s+wait\s+tasks-stopped"
-            r'[\s\S]{0,200}--cluster\s+"\$CLUSTER_NAME"'
-            r'[\s\S]{0,100}--tasks\s+"\$task_arn"'
-        ): "a bounded stopped-state wait for the default-admin task",
-        (
-            r'stopped_state="\$\([\s\S]{0,400}'
-            r"aws\s+ecs\s+describe-tasks"
-            r'[\s\S]{0,200}--cluster\s+"\$CLUSTER_NAME"'
-            r'[\s\S]{0,150}--tasks\s+"\$task_arn"'
-            r"[\s\S]{0,100}\)\""
-            r"[\s\S]{0,900}\.lastStatus\s*==\s*\"STOPPED\""
-            r"[\s\S]{0,500}\.exitCode\s*==\s*0"
-            r'[\s\S]{0,200}<<<"\$stopped_state"'
-        ): "stopped-task dataflow and successful container exit verification",
-    }
-    for pattern, description in admin_step_guards.items():
-        if not re.search(pattern, admin_step, re.MULTILINE | re.DOTALL):
-            errors.append(f"production CD omits {description}")
-    run_task = re.search(
-        r"aws\s+ecs\s+run-task[\s\S]{0,1800}--output\s+json",
-        admin_step,
-        re.MULTILINE | re.DOTALL,
-    )
-    if run_task is None:
-        errors.append("production CD omits the reviewed default-admin RunTask call")
-    elif re.search(r"(?m)^\s*--overrides(?:\s|$)", run_task.group(0)):
-        errors.append("production CD must not override roles or commands on the default-admin task")
-
-    cleanup_step = named_step("Clean up an interrupted default-administrator task")
-    cleanup_step_guards = {
-        (
-            r"if:\s*\$\{\{\s*always\(\)"
-            r"[\s\S]{0,250}steps\.default_admin\.outputs\.started_by\s*!=\s*''"
-        ): "an always-run started-by cleanup guard",
-        (
-            r"aws\s+ecs\s+list-tasks\s+\\?\s*"
-            r'--cluster\s+"\$CLUSTER_NAME"\s+\\?\s*'
-            r'--started-by\s+"\$DEFAULT_ADMIN_STARTED_BY"'
-        ): "compensating discovery of interrupted default-admin tasks",
-        (
-            r"aws\s+ecs\s+stop-task"
-            r'[\s\S]{0,200}--cluster\s+"\$CLUSTER_NAME"'
-            r'[\s\S]{0,150}--task\s+"\$task_arn"'
-        ): "compensating stop of interrupted default-admin tasks",
-        (
-            r"timeout\s+--signal=TERM\s+180s"
-            r"[\s\S]{0,100}aws\s+ecs\s+wait\s+tasks-stopped"
-            r'[\s\S]{0,200}--cluster\s+"\$CLUSTER_NAME"'
-            r'[\s\S]{0,100}--tasks\s+"\$task_arn"'
-        ): "bounded verification of compensating default-admin cleanup",
-    }
-    for pattern, description in cleanup_step_guards.items():
-        if not re.search(pattern, cleanup_step, re.MULTILINE | re.DOTALL):
-            errors.append(f"production CD omits {description}")
-
-    def marker_section(start_marker: str, end_marker: str) -> str:
-        start = source.find(start_marker)
-        end = source.find(end_marker, start + len(start_marker))
-        if start < 0 or end < 0:
-            return ""
-        return source[start:end]
-
-    steps_match = re.search(r"(?m)^(?P<indent>[ \t]*)steps:\s*$", source)
-    first_step = ""
-    if steps_match is not None:
-        step_indent = f"{steps_match.group('indent')}  "
-        steps_source = source[steps_match.end() :]
-        first_step_match = re.search(
-            rf"(?m)^{re.escape(step_indent)}-\s+(?:name|uses|run):[^\n]*",
-            steps_source,
-        )
-        if first_step_match is not None:
-            next_step_match = re.search(
-                rf"(?m)^{re.escape(step_indent)}-\s+(?:name|uses|run):[^\n]*",
-                steps_source[first_step_match.end() :],
-            )
-            first_step_end = (
-                first_step_match.end() + next_step_match.start()
-                if next_step_match is not None
-                else len(steps_source)
-            )
-            first_step = steps_source[first_step_match.start() : first_step_end]
-    if not re.search(
-        r"(?m)^-\s+name:\s*Record production job time budget\s*$",
-        first_step.lstrip(),
-    ):
-        errors.append("production CD does not record the job epoch in its first step")
-    first_step_budget_patterns = {
-        r"(?m)^\s*id:\s*job_budget\s*$": "a stable production job-budget step ID",
-        r"started_at=\$\(date \+%s\)": "the production job start epoch",
-        r"GITHUB_OUTPUT": "persisted production job start-time evidence",
-    }
-    for pattern, description in first_step_budget_patterns.items():
-        if not re.search(pattern, first_step):
-            errors.append(f"production CD omits {description} from its first step")
-
-    domain_plan_to_apply = marker_section(
-        "Plan reviewed Amplify domain association",
-        "Apply exact Amplify domain association plan",
-    )
-    cutover_budget_start = domain_plan_to_apply.find("Require a safe first-cutover time budget")
-    cutover_budget = (
-        domain_plan_to_apply[cutover_budget_start:] if cutover_budget_start >= 0 else ""
-    )
-    cutover_budget_patterns = {
-        (
-            r"if:\s*\$\{\{\s*steps\.apex_alias\.outputs\.routes_to_alb"
-            r"\s*==\s*'true'\s*\}\}"
-        ): "ALB-only first-cutover budget enforcement",
-        (
-            r"JOB_STARTED_AT:\s*\$\{\{\s*"
-            r"steps\.job_budget\.outputs\.started_at\s*\}\}"
-        ): "the recorded production job start epoch in the first-cutover guard",
-        r'now="\$\(date \+%s\)"': "current epoch calculation in the first-cutover guard",
-        r"elapsed=\$\(\(now\s*-\s*JOB_STARTED_AT\)\)": (
-            "elapsed job-time calculation in the first-cutover guard"
-        ),
-        (r"remaining=\$\(\(PRODUCTION_JOB_TIMEOUT_SECONDS\s*-\s*elapsed\)\)"): (
-            "remaining job-time calculation from the reviewed timeout before first cutover"
-        ),
-        r"compensation_reserve=\$\(\(70\s*\*\s*60\)\)": (
-            "the 4,200-second DNS-compensation reserve"
-        ),
-        (
-            r'if\s+\[\s*"\$remaining"\s*-lt\s*'
-            r'"\$compensation_reserve"\s*\]\s*;\s*then'
-        ): "fail-closed first-cutover time-budget comparison",
-        r"(?m)^\s*exit\s+1\s*$": "first-cutover refusal when time is insufficient",
-    }
-    for pattern, description in cutover_budget_patterns.items():
-        if not re.search(pattern, cutover_budget, re.MULTILINE | re.DOTALL):
-            errors.append(f"production CD omits {description}")
-    domain_plan_position = source.find("Plan reviewed Amplify domain association")
-    cutover_budget_position = source.find("Require a safe first-cutover time budget")
-    domain_apply_position = source.find("Apply exact Amplify domain association plan")
-    if not (0 <= domain_plan_position < cutover_budget_position < domain_apply_position):
-        errors.append(
-            "production CD must place the first-cutover budget guard after the "
-            "domain plan and before its apply"
-        )
+    orchestrator = paths["orchestrator"]
+    if not orchestrator.exists():
+        errors.append("production release workflow is missing")
     else:
-        domain_apply_line_start = source.rfind("\n", 0, domain_apply_position) + 1
-        if re.search(
-            r"(?m)^[ \t]+-\s+(?:name|uses|run):",
-            source[
-                cutover_budget_position
-                + len("Require a safe first-cutover time budget") : domain_apply_line_start
-            ],
-        ):
-            errors.append(
-                "production CD must place the first-cutover budget guard immediately "
-                "before the domain apply"
-            )
+        source = orchestrator.read_text(encoding="utf-8")
+        for pattern, description in ORCHESTRATOR_RULES.items():
+            if not re.search(pattern, source, re.MULTILINE | re.DOTALL):
+                errors.append(f"production release omits {description}")
+        for pattern, description in FORBIDDEN_ORCHESTRATOR_RULES.items():
+            if re.search(pattern, source, re.MULTILINE | re.DOTALL):
+                errors.append(f"production release retains {description}")
 
-    live_branch_budget = marker_section(
-        "Require a safe live-branch mutation budget",
-        "Deploy production Amplify branch",
-    )
-    live_branch_budget_patterns = {
-        (
-            r"JOB_STARTED_AT:\s*\$\{\{\s*"
-            r"steps\.job_budget\.outputs\.started_at\s*\}\}"
-        ): "the recorded production job start epoch in the live-branch guard",
-        r'now="\$\(date \+%s\)"': "current epoch calculation in the live-branch guard",
-        r"elapsed=\$\(\(now\s*-\s*JOB_STARTED_AT\)\)": (
-            "elapsed job-time calculation in the live-branch guard"
-        ),
-        (r"remaining=\$\(\(PRODUCTION_JOB_TIMEOUT_SECONDS\s*-\s*elapsed\)\)"): (
-            "remaining job-time calculation from the reviewed timeout before live-branch mutation"
-        ),
-        r"rollback_reserve=\$\(\(90\s*\*\s*60\)\)": (
-            "the 5,400-second live-branch rollback reserve"
-        ),
-        (
-            r'if\s+\[\s*"\$remaining"\s*-lt\s*'
-            r'"\$rollback_reserve"\s*\]\s*;\s*then'
-        ): "fail-closed live-branch time-budget comparison",
-        r"(?m)^\s*exit\s+1\s*$": "live-branch refusal when time is insufficient",
-    }
-    for pattern, description in live_branch_budget_patterns.items():
-        if not re.search(pattern, live_branch_budget, re.MULTILINE | re.DOTALL):
-            errors.append(f"production CD omits {description}")
-
-    candidate_smoke = marker_section(
-        "Smoke candidate Amplify frontend and direct API boundary",
-        "Revalidate Amplify production rollback point",
-    )
-    candidate_admin_patterns = {
-        r"\$\{api_url\}/admin/login/": "the direct Django admin login page",
-        r"csrfmiddlewaretoken": "a Django admin CSRF form token",
-        r"<form": "the Django admin login form",
-        r"\$\{api_url\}/static/admin/css/base\.css": ("the direct Django admin static asset"),
-    }
-    for pattern, description in candidate_admin_patterns.items():
-        if not re.search(pattern, candidate_smoke, re.MULTILINE | re.DOTALL):
-            errors.append(f"production CD omits {description} in candidate smoke")
-    if re.search(
-        r'if\s+\[\s*"\$admin_post_status"\s*!=\s*"400"\s*\]\s*;\s*then',
-        candidate_smoke,
-    ):
-        errors.append("production CD retains an exclusive custom 400 Django admin contract")
-    if "Please enter valid staff account credentials." in candidate_smoke:
-        errors.append("production CD retains a custom Django admin error-message contract")
-
-    production_branch_smoke = marker_section(
-        "Smoke production Amplify branch before domain cutover",
-        "Verify preserved canonical alias immediately before cutover",
-    )
-    canonical_smoke = marker_section(
-        "Run canonical production smoke tests",
-        "Plan final production topology",
-    )
-    bounded_smokes = (
-        ("production branch", production_branch_smoke, 600),
-        ("canonical production", canonical_smoke, 600),
-    )
-    for scope, section, deadline_seconds in bounded_smokes:
-        deadline_patterns = {
-            rf"phase_deadline=\$\(\(SECONDS\s*\+\s*{deadline_seconds}\)\)": (
-                f"a {deadline_seconds}-second hard deadline"
-            ),
-            r"bounded_curl\(\)": "the deadline-aware curl wrapper",
-            r"remaining=\$\(\(phase_deadline\s*-\s*SECONDS\)\)": (
-                "per-request remaining-time calculation"
-            ),
-            r'if\s+\[\s*"\$remaining"\s*-le\s*0\s*\]\s*;\s*then': (
-                "fail-closed exhausted-deadline handling"
-            ),
-            (
-                r'timeout\s+--signal=TERM\s+"\$\{remaining\}s"\s+curl\s+"\$@"'
-            ): "an operating-system-enforced curl deadline",
-            r"if\s+\(\(SECONDS\s*>=\s*phase_deadline\)\)\s*;\s*then": (
-                "deadline enforcement inside convergence polling"
-            ),
-        }
-        for pattern, description in deadline_patterns.items():
-            if not re.search(pattern, section, re.MULTILINE | re.DOTALL):
-                errors.append(f"production CD omits {description} in {scope} smoke")
-
-    response_header_smokes = (
-        (
-            "candidate Amplify",
-            candidate_smoke,
-            (
-                r'--dump-header\s+"\$candidate_security_headers"'
-                r'[\s\S]{0,200}"\$\{candidate_url\}/"'
-            ),
-        ),
-        (
-            "canonical Amplify",
-            canonical_smoke,
-            (
-                r'--dump-header\s+"\$canonical_security_headers"'
-                r'[\s\S]{0,200}"https://\$\{PROD_DOMAIN\}/"'
-            ),
-        ),
-    )
-    reviewed_response_headers = {
-        "Strict-Transport-Security": (
-            r"strict-transport-security:\s*max-age=31536000;\s*includeSubDomains",
-        ),
-        "X-Content-Type-Options": (r"x-content-type-options:\s*nosniff",),
-        "X-Frame-Options": (r"x-frame-options:\s*DENY",),
-        "Referrer-Policy": (r"referrer-policy:\s*no-referrer",),
-        "Content-Security-Policy": (
-            r"\^content-security-policy:",
-            r"connect-src\s+'self'\s+https://\$\{API_DOMAIN\}",
-        ),
-    }
-    for scope, section, capture_pattern in response_header_smokes:
-        if not re.search(capture_pattern, section, re.MULTILINE | re.DOTALL):
-            errors.append(f"production CD omits actual {scope} response-header capture")
-        for header, patterns in reviewed_response_headers.items():
-            if not all(
-                re.search(pattern, section, re.MULTILINE | re.IGNORECASE) for pattern in patterns
-            ):
-                errors.append(f"production CD omits the {header} check on actual {scope} responses")
-
-    rollback_smoke = marker_section(
-        "Roll back production Amplify branch after failed release",
-        "Summarize immutable production release",
-    )
-    rollback_patterns = {
-        (
-            r"API_COMPATIBILITY:\s*\$\{\{\s*"
-            r"steps\.api_transition\.outputs\.compatibility\s*\}\}"
-        ): "the captured API compatibility state in rollback smoke",
-        (
-            r'for\s+base_url\s+in\s+"\$production_url"\s+'
-            r'"https://\$\{PROD_DOMAIN\}"'
-        ): "both Amplify frontend domains in rollback smoke",
-        r'"\$\{base_url\}/"': "frontend root availability in rollback smoke",
-        r'"\$\{base_url\}/release\.json"': ("frontend release identity in rollback smoke"),
-        (
-            r"for\s+path\s+in\s+/health/live\s+/health\s+/admin/\s+"
-            r"/static/admin/css/base\.css"
-        ): "direct API health, admin, and admin-static checks in rollback smoke",
-        r'"https://\$\{API_DOMAIN\}\$\{path\}"': ("the API subdomain boundary in rollback smoke"),
-        (
-            r'if\s+\[\s*"\$API_COMPATIBILITY"\s*=\s*"true"\s*\]\s*;\s*then'
-        ): "the transitional compatibility branch in rollback smoke",
-        r"for\s+path\s+in\s+/api/health/live\s+/api/health\s+/admin/": (
-            "transitional frontend compatibility checks in rollback smoke"
-        ),
-        r"for\s+path\s+in\s+/api/health\s+/admin/": (
-            "retired frontend backend-route checks in rollback smoke"
-        ),
-        r'status"\s*!=\s*"404"': (
-            "404 enforcement for retired frontend backend routes in rollback smoke"
-        ),
-    }
-    for pattern, description in rollback_patterns.items():
-        if not re.search(pattern, rollback_smoke, re.MULTILINE | re.DOTALL):
-            errors.append(f"production CD omits {description}")
-    rollback_deadline_patterns = {
-        r"phase_deadline=\$\(\(SECONDS\s*\+\s*300\)\)": (
-            "a 300-second hard deadline in rollback smoke"
-        ),
-        r"bounded_curl\(\)": "the deadline-aware rollback curl wrapper",
-        r"remaining=\$\(\(phase_deadline\s*-\s*SECONDS\)\)": (
-            "per-request remaining-time calculation in rollback smoke"
-        ),
-        r'if\s+\[\s*"\$remaining"\s*-le\s*0\s*\]\s*;\s*then': (
-            "fail-closed exhausted-deadline handling in rollback smoke"
-        ),
-        r'timeout\s+--signal=TERM\s+"\$\{remaining\}s"\s+curl\s+"\$@"': (
-            "an operating-system-enforced rollback curl deadline"
-        ),
-        r"if\s+\(\(SECONDS\s*>=\s*phase_deadline\)\)\s*;\s*then": (
-            "deadline enforcement inside rollback convergence polling"
-        ),
-    }
-    for pattern, description in rollback_deadline_patterns.items():
-        if not re.search(pattern, rollback_smoke, re.MULTILINE | re.DOTALL):
-            errors.append(f"production CD omits {description}")
-    if re.search(
-        r"for\s+path\s+in\s+/\s+/api/health/live\s+/api/health\s+/admin/",
-        rollback_smoke,
-    ):
-        errors.append("production CD mixes backend routes into the rollback frontend smoke loop")
-
-    final_plan = marker_section(
-        "Plan final production topology",
-        "Apply exact final production topology plan",
-    )
-    final_plan_patterns = {
-        r"unexpected_changes=": "an unexpected_changes result",
-        r"\.resource_changes\[\]\?": "all final-plan resource changes",
-        r'select\(\.change\.actions\s*!=\s*\["no-op"\]\)': (
-            "no-op filtering in the final-plan allowlist"
-        ),
-        r"def\s+backend_proxy_source:": "the exact retired backend proxy-rule scope",
-        r"def\s+reviewed_backend_rule:": ("validation of the retired backend proxy-rule shape"),
-        r"def\s+prune_unknown:": "fail-closed unknown-value normalization",
-        r"del\(\.custom_rule\)": "a custom-rule-only Amplify app update",
-        r'\.\s*==\s*"/api"': "retired Amplify API-rule rejection",
-        r'\.\s*==\s*"/authn"': "retired Amplify auth-rule rejection",
-        r'\.\s*==\s*"/admin"': "retired Amplify admin-rule rejection",
-        r'\.\s*==\s*"/static"': "retired Amplify static-rule rejection",
-        r"starts_with|startswith": "retired Amplify proxy-rule prefix rejection",
-        r'\.target\s*\|\s*startswith\(\$legacy_origin_url\s*\+\s*"/"\)': (
-            "the exact retired backend proxy target"
-        ),
-        r'\.status\s*==\s*"200"': "the exact retired backend proxy status",
-        r"\.change\.after_unknown[\s\S]{0,150}prune_unknown": (
-            "unknown-value rejection in the final-plan allowlist"
-        ),
-        r"del\(\.ecs_target\[0\]\.task_definition_arn\)": (
-            "a task-definition-only reminder target update"
-        ),
-        r"del\(\.task_definition\)": "task-definition-only ECS service updates",
-        r"del\(\.health_check\[0\]\.path\)": ("health-path-only backend target-group update"),
-        r'\.change\.before\.health_check\[0\]\.path\s*!=\s*"/api/health"': (
-            "the exact retired target-group health path"
-        ),
-        r'\.change\.after\.health_check\[0\]\.path\s*!=\s*"/health"': (
-            "the exact final target-group health path"
-        ),
-        r"def\s+normalized_task:": "normalized task-definition comparison",
-        r"\.ipc_mode\s*=\s*\(\.ipc_mode\s*//\s*\"\"\)": (
-            "provider-canonical empty ECS IPC mode comparison"
-        ),
-        r"\.pid_mode\s*=\s*\(\.pid_mode\s*//\s*\"\"\)": (
-            "provider-canonical empty ECS PID mode comparison"
-        ),
-        r"\.task_role_arn\s*=\s*\(\.task_role_arn\s*//\s*\"\"\)": (
-            "provider-canonical empty ECS task-role comparison"
-        ),
-        r"def\s+named_entries_are_unique:": (
-            "duplicate-name rejection before order-independent task comparison"
-        ),
-        r"def\s+normalized_backend_container:": ("normalized backend container comparison"),
-        r"def\s+normalized_frontend_container:": ("normalized frontend container comparison"),
-        (
-            r"def\s+normalized_backend_container:[\s\S]{0,900}"
-            r"\.environment\s*\|=[\s\S]{0,600}sort_by\(\.name\)"
-        ): "order-independent backend environment comparison",
-        (
-            r"def\s+normalized_backend_container:[\s\S]{0,1200}"
-            r"\.secrets\s*\|=\s*sort_by\(\.name\)"
-        ): "order-independent backend secret comparison",
-        (
-            r"def\s+normalized_frontend_container:[\s\S]{0,700}"
-            r"\.environment\s*\|=[\s\S]{0,500}sort_by\(\.name\)"
-        ): "order-independent frontend environment comparison",
-        (
-            r"\$before_container\.environment\s*\|\s*named_entries_are_unique"
-        ): "unique backend environment names before normalization",
-        (
-            r"\$after_container\.environment\s*\|\s*named_entries_are_unique"
-        ): "unique backend environment names after normalization",
-        (
-            r"\$before_container\.secrets\s*\|\s*named_entries_are_unique"
-        ): "unique backend secret names before normalization",
-        (
-            r"\$after_container\.secrets\s*\|\s*named_entries_are_unique"
-        ): "unique backend secret names after normalization",
-        (
-            r"\$before_containers\[0\]\.environment\s*\|\s*"
-            r"named_entries_are_unique"
-        ): "unique frontend environment names before normalization",
-        (
-            r"\$after_containers\[0\]\.environment\s*\|\s*"
-            r"named_entries_are_unique"
-        ): "unique frontend environment names after normalization",
-        r"def\s+backend_final_values_are_safe:": ("backend final-value safety validation"),
-        r"def\s+frontend_final_values_are_safe:": ("frontend final-value safety validation"),
-        r'ENABLE_LEGACY_API_PREFIX\s*==\s*"0"': (
-            "disabled legacy API prefix in the final backend task"
-        ),
-        r"BACKEND_URL\s*==\s*\$api_url": ("the API subdomain in final task definitions"),
-        r"aws\s+sts\s+get-caller-identity\s+--query\s+Account": (
-            "the AWS account ID used to construct the reviewed frontend image"
-        ),
-        (
-            r'expected_frontend_image="\$\{account_id\}\.dkr\.ecr\.'
-            r"\$\{AWS_REGION\}\.amazonaws\.com/\$\{ECR_FRONTEND\}:"
-            r'\$\{DEPLOY_SHA\}"'
-        ): "the exact immutable frontend ECR image URI",
-        r'--arg\s+frontend_image\s+"\$expected_frontend_image"': (
-            "the exact frontend ECR image passed to final-plan review"
-        ),
-        r"\$container\.image\s*==\s*\$frontend_image": (
-            "exact frontend image equality in the final task"
-        ),
-        r'\$actions\s*!=\s*\["update"\]': "update-only mutable final resources",
-        r'\(\$actions\s*\|\s*sort\)\s*!=\s*\["create",\s*"delete"\]': (
-            "create-delete-only task-definition replacement"
-        ),
-        r'\$actions\s*!=\s*\["delete"\]': ("delete-only transitional resource removal"),
-        r"else\s+true\s+end": "fail-closed rejection of unreviewed final changes",
-        r'if\s+\[\s*"\$unexpected_changes"\s*!=\s*"\[\]"\s*\]\s*;\s*then': (
-            "fail-closed enforcement of unexpected final changes"
-        ),
-        r"task_definition_diagnostics=": ("sanitized task-definition comparison diagnostics"),
-        r"before_environment_order:": ("task-definition environment-order diagnostics"),
-        r"before_optional_task_strings:": ("task-definition optional-string diagnostics"),
-        r"remaining_after_unknown:": ("task-definition unknown-value diagnostics"),
-    }
-    for pattern, description in final_plan_patterns.items():
-        if not re.search(pattern, final_plan, re.MULTILINE | re.DOTALL):
-            errors.append(f"production CD omits {description}")
-    if re.search(r"endswith\(\$frontend_image", final_plan):
-        errors.append(
-            "production CD retains suffix-only frontend image validation in the final plan"
+    for scope in PRODUCTION_RELEASE_WORKFLOWS:
+        path = paths[scope]
+        if not path.exists():
+            errors.append(f"{scope} release workflow is missing")
+            continue
+        source = path.read_text(encoding="utf-8")
+        label = f"{scope} release"
+        for pattern, description in COMMON_RELEASE_WORKFLOW_RULES.items():
+            if not re.search(pattern, source, re.MULTILINE | re.DOTALL):
+                errors.append(f"{label} omits {description}")
+        for pattern, description in SCOPED_RELEASE_WORKFLOW_RULES[scope].items():
+            if not re.search(pattern, source, re.MULTILINE | re.DOTALL):
+                errors.append(f"{label} omits {description}")
+        for pattern, description in FORBIDDEN_RELEASE_WORKFLOW_RULES.items():
+            if re.search(pattern, source, re.MULTILINE | re.DOTALL):
+                errors.append(f"{label} retains {description}")
+        for pattern, description in FORBIDDEN_SURFACE_WORKFLOW_RULES.items():
+            if re.search(pattern, source, re.MULTILINE | re.DOTALL):
+                errors.append(f"{label} retains {description}")
+        for pattern, description in SCOPED_FORBIDDEN_RELEASE_WORKFLOW_RULES[scope].items():
+            if re.search(pattern, source, re.MULTILINE | re.DOTALL):
+                errors.append(f"{label} retains {description}")
+        scope_pattern = rf"release-preflight\s*\n\s*with:\s*\n\s*scope:\s*{scope}\b"
+        if not re.search(scope_pattern, source, re.MULTILINE):
+            errors.append(f"{label} omits the {scope} preflight scope")
+        gate_pattern = (
+            rf"\n  release:\s*\n[\s\S]{{0,600}}concurrency:\s*\n\s*group:\s*release-{scope}\b"
         )
+        if not re.search(gate_pattern, source, re.MULTILINE):
+            errors.append(f"{label} omits its own release-job concurrency group")
+        positions = _step_positions(source, RELEASE_STEP_ORDERS[scope])
+        if any(position < 0 for position in positions):
+            missing = [
+                name
+                for name, position in zip(RELEASE_STEP_ORDERS[scope], positions, strict=True)
+                if position < 0
+            ]
+            errors.append(f"{label} omits ordered steps: {', '.join(missing)}")
+        elif positions != sorted(positions):
+            errors.append(f"{label} runs its release steps out of the reviewed order")
 
-    expected_final_plan_addresses = {
-        "aws_amplify_app.frontend",
-        "aws_cloudwatch_event_target.event_reminders",
-        "aws_ecs_service.backend",
-        "aws_ecs_service.result_worker",
-        "aws_ecs_service.email_worker",
-        "aws_ecs_service.frontend",
-        "aws_lb_target_group.backend",
-        "aws_ecs_task_definition.backend",
-        "aws_ecs_task_definition.result_worker",
-        "aws_ecs_task_definition.email_worker",
-        "aws_ecs_task_definition.frontend",
-        "aws_acm_certificate.origin[0]",
-        "aws_acm_certificate_validation.origin[0]",
-        "aws_lb_listener_certificate.origin[0]",
-        "aws_lb_listener_rule.backend[0]",
-        "aws_route53_record.origin[0]",
-        "aws_route53_record.origin_cert_validation[",
-    }
-    actual_final_plan_addresses = set(re.findall(r'"(aws_[a-z0-9_.\[\]]+)"', final_plan))
-    if actual_final_plan_addresses != expected_final_plan_addresses:
-        errors.append(
-            "production CD final plan does not use the exact reviewed "
-            "unexpected_changes address allowlist"
-        )
+    preflight = paths["preflight"]
+    if not preflight.exists():
+        errors.append("release preflight action is missing")
+    else:
+        source = preflight.read_text(encoding="utf-8")
+        for pattern, description in RELEASE_PREFLIGHT_RULES.items():
+            if not re.search(pattern, source, re.MULTILINE | re.DOTALL):
+                errors.append(f"release preflight omits {description}")
+        if re.search(r"\$\{\{\s*secrets\.", source):
+            errors.append("release preflight retains GitHub secrets")
 
-    final_verification = marker_section(
-        "Verify final API-only backend topology",
-        "Restore pre-release canonical Route53 alias after failed first cutover",
-    )
-    final_runtime_patterns = {
-        r"aws\s+sts\s+get-caller-identity\s+--query\s+Account": (
-            "the AWS account ID used for final runtime identity checks"
-        ),
-        (
-            r'expected_backend_image="\$\{account_id\}\.dkr\.ecr\.'
-            r"\$\{AWS_REGION\}\.amazonaws\.com/\$\{ECR_BACKEND\}:"
-            r'\$\{DEPLOY_SHA\}"'
-        ): "the exact immutable backend ECR image URI in final verification",
-        (
-            r'expected_frontend_image="\$\{account_id\}\.dkr\.ecr\.'
-            r"\$\{AWS_REGION\}\.amazonaws\.com/\$\{ECR_FRONTEND\}:"
-            r'\$\{DEPLOY_SHA\}"'
-        ): "the exact immutable frontend ECR image URI in final verification",
-        (
-            r'backend_task_definition="\$\([\s\S]{0,700}'
-            r'--services\s+"\$\{\{\s*steps\.terraform\.outputs\.backend_service'
-            r'\s*\}\}"[\s\S]{0,300}'
-            r'--query\s+"services\[0\]\.taskDefinition"'
-        ): "the backend service task-definition discovery",
-        (
-            r'expected_backend_task_definition="\$\([\s\S]{0,300}'
-            r"terraform\s+-chdir=infra/prod\s+output\s+-raw\s+"
-            r"backend_task_definition_arn"
-        ): "the Terraform-selected backend task definition",
-        (
-            r'if\s+\[\s*"\$backend_task_definition"\s*!=\s*'
-            r'"\$expected_backend_task_definition"\s*\]\s*;\s*then'
-        ): "exact backend service task-definition equality",
-        (
-            r'backend_image="\$\([\s\S]{0,300}'
-            r'--task-definition\s+"\$backend_task_definition"'
-            r"[\s\S]{0,300}--query\s+"
-            r'"taskDefinition\.containerDefinitions\[0\]\.image"'
-        ): "the deployed backend image discovery",
-        (
-            r'if\s+\[\s*"\$backend_image"\s*!=\s*'
-            r'"\$expected_backend_image"\s*\]\s*;\s*then'
-        ): "exact backend runtime image equality",
-        r"for\s+role\s+in\s+result_worker\s+email_worker": (
-            "final runtime verification for both durable workers"
-        ),
-        r'recompute_event_results","--watch","--poll-interval=1': (
-            "the final result-worker command contract"
-        ),
-        (
-            r'dispatch_email_jobs","--watch","--limit=1000",'
-            r'"--concurrency=10","--rate-limit=10","--poll-interval=1'
-        ): "the final email-worker command contract",
-        r"\.taskDefinition\.containerDefinitions\[0\]\.stopTimeout\s*==\s*120": (
-            "worker graceful-stop verification"
-        ),
-        r"\.taskDefinition\.containerDefinitions\[0\]\.healthCheck\.retries\s*==\s*3": (
-            "worker health-check verification"
-        ),
-        r'DJANGO_MIGRATE_ON_START[\s\S]{0,100}\.value\s*==\s*"1"': (
-            "worker locked-migration startup verification"
-        ),
-        (
-            r'frontend_task_definition="\$\([\s\S]{0,700}'
-            r'--services\s+"\$\{\{\s*steps\.terraform\.outputs\.frontend_service'
-            r'\s*\}\}"[\s\S]{0,300}'
-            r'--query\s+"services\[0\]\.taskDefinition"'
-        ): "the frontend service task-definition discovery",
-        (
-            r'expected_frontend_task_definition="\$\([\s\S]{0,300}'
-            r"terraform\s+-chdir=infra/prod\s+output\s+-raw\s+"
-            r"frontend_task_definition_arn"
-        ): "the Terraform-selected frontend task definition",
-        (
-            r'if\s+\[\s*"\$frontend_task_definition"\s*!=\s*'
-            r'"\$expected_frontend_task_definition"\s*\]\s*;\s*then'
-        ): "exact frontend service task-definition equality",
-        (
-            r'frontend_image="\$\([\s\S]{0,300}'
-            r'--task-definition\s+"\$frontend_task_definition"'
-            r"[\s\S]{0,300}--query\s+"
-            r'"taskDefinition\.containerDefinitions\[0\]\.image"'
-        ): "the deployed frontend image discovery",
-        (
-            r'if\s+\[\s*"\$frontend_image"\s*!=\s*'
-            r'"\$expected_frontend_image"\s*\]\s*;\s*then'
-        ): "exact frontend runtime image equality",
-        (
-            r'event_targets="\$\([\s\S]{0,300}'
-            r"aws\s+events\s+list-targets-by-rule[\s\S]{0,300}"
-            r"--output\s+json"
-        ): "complete reminder target-set discovery",
-        (
-            r"if\s+!\s+jq\s+-e[\s\S]{0,200}"
-            r'--arg\s+expected\s+"\$expected_backend_task_definition"'
-        ): "the expected backend task definition in reminder-target validation",
-        r"\(\.Targets\s*\|\s*length\)\s*==\s*1": ("exactly one EventBridge reminder target"),
-        (
-            r"\.Targets\[0\]\.EcsParameters\.TaskDefinitionArn"
-            r"\s*==\s*\$expected"
-        ): "exact reminder-target backend task-definition ARN equality",
-        r'<<<"\$event_targets"\s*>\s*/dev/null': (
-            "the complete reminder target set in fail-closed validation"
-        ),
-    }
-    for pattern, description in final_runtime_patterns.items():
-        if not re.search(pattern, final_verification, re.MULTILINE | re.DOTALL):
-            errors.append(f"production CD omits {description}")
+    scope_action = paths["scope-action"]
+    if not scope_action.exists():
+        errors.append("release scope action is missing")
+    else:
+        source = scope_action.read_text(encoding="utf-8")
+        for pattern, description in RELEASE_SCOPE_RULES.items():
+            if not re.search(pattern, source, re.MULTILINE | re.DOTALL):
+                errors.append(f"release scope omits {description}")
+        if re.search(r"aws |configure-aws-credentials", source):
+            errors.append("release scope must not use cloud credentials")
 
-    preflight_smokes = (
-        ("production branch pre-cutover", production_branch_smoke, "canonical"),
-        ("canonical post-cutover", canonical_smoke, "canonical"),
-        ("final API topology", final_verification, "final"),
-    )
-    for scope, section, prefix in preflight_smokes:
-        preflight_patterns = {
-            rf'{prefix}_preflight_headers="\$\{{RUNNER_TEMP\}}/': (
-                "an isolated response-header capture"
-            ),
-            rf'{prefix}_preflight_status="\$\(': "the HTTP preflight status capture",
-            r"--request\s+OPTIONS": "an OPTIONS request",
-            r'--header\s+"Origin:\s*https://\$\{PROD_DOMAIN\}"': ("the canonical frontend origin"),
-            r'--header\s+"Access-Control-Request-Method:\s*PUT"': (
-                "the protected PUT request method"
-            ),
-            (
-                r'--header\s+"Access-Control-Request-Headers:\s*'
-                r'authorization,content-type"'
-            ): "the credentialed request headers",
-            rf'--dump-header\s+"\${prefix}_preflight_headers"': (
-                "actual preflight response-header capture"
-            ),
-            r'--write-out\s+"%\{http_code\}"': "the preflight HTTP status",
-            r'"https://\$\{API_DOMAIN\}/authn/profile/"': ("the direct API protected endpoint"),
-            (
-                rf'if\s+\[\s*"\${prefix}_preflight_status"\s*!=\s*'
-                r'"200"\s*\]\s*\|\|'
-            ): "fail-closed HTTP 200 enforcement",
-            r"access-control-allow-origin:\s*https://\$\{PROD_DOMAIN\}": (
-                "exact canonical Access-Control-Allow-Origin enforcement"
-            ),
-            r"access-control-allow-credentials:[^\n]*true": ("credentialed CORS enforcement"),
-        }
-        for pattern, description in preflight_patterns.items():
-            if not re.search(pattern, section, re.MULTILINE | re.IGNORECASE):
-                errors.append(f"production CD omits {description} in {scope} CORS preflight")
+    last_release = paths["last-release"]
+    if not last_release.exists():
+        errors.append("last-successful-release script is missing")
+    else:
+        source = last_release.read_text(encoding="utf-8")
+        for pattern, description in LAST_RELEASE_SCRIPT_RULES.items():
+            if not re.search(pattern, source, re.MULTILINE | re.DOTALL):
+                errors.append(f"last-successful-release script omits {description}")
+        if re.search(r"aws |configure-aws-credentials", source):
+            errors.append("last-successful-release script must not use cloud credentials")
 
-    retirement_start = final_verification.find("legacy_urls=(")
-    retirement_verification = final_verification[retirement_start:] if retirement_start >= 0 else ""
-    stable_retirement_patterns = {
-        r"legacy_urls=\(": "the complete retired-route URL set",
-        r"for\s+attempt\s+in\s+\$\(seq\s+1\s+30\)": ("a bounded retired-route convergence window"),
-        r'for\s+legacy_url\s+in\s+"\$\{legacy_urls\[@\]\}"': (
-            "every retired route in each stability cycle"
-        ),
-        r"https://\$\{PROD_DOMAIN\}/api/health": "the retired frontend API route",
-        r"https://\$\{PROD_DOMAIN\}/admin/": "the retired frontend admin route",
-        r"https://\$\{PROD_DOMAIN\}/authn/public-key/": ("the retired frontend auth route"),
-        r"https://\$\{PROD_DOMAIN\}/static/admin/css/base\.css": (
-            "the retired frontend backend-static route"
-        ),
-        r"https://\$\{API_DOMAIN\}/api/health": "the retired API prefix",
-        r"stable_retired_cycles=0": "retired-route stability tracking",
-        r"all_retired=true": "an all-routes-retired cycle guard",
-        r"--location": "bounded redirect following for retired routes",
-        r"--max-redirs\s+5\s": "a five-redirect ceiling for retired routes",
-        r"%\{http_code\}\\t%\{url_effective\}": (
-            "terminal retired-route status and effective URL capture"
-        ),
-        r'expected_origin="https://\$\{PROD_DOMAIN\}/"': (
-            "the canonical frontend same-origin boundary"
-        ),
-        r'expected_origin="https://\$\{API_DOMAIN\}/"': ("the canonical API same-origin boundary"),
-        r'\[\s+-z\s+"\$expected_origin"\s+\]': (
-            "fail-closed unknown retired-route origin handling"
-        ),
-        r'\[\[\s+"\$effective_url"\s+!=\s+"\$\{expected_origin\}"\*\s+\]\]': (
-            "same-origin terminal redirect enforcement"
-        ),
-        r'status"\s*!=\s*"404"': "404-only retired-route acceptance",
-        r"all_retired=false": "failed-cycle retirement tracking",
-        r"stable_retired_cycles=\$\(\(stable_retired_cycles \+ 1\)\)": (
-            "consecutive retired-route cycle counting"
-        ),
-        r'stable_retired_cycles"\s*-ge\s*3': ("three-cycle retired-route stability threshold"),
-        r'stable_retired_cycles"\s*-lt\s*3': ("fail-closed retired-route stability enforcement"),
-        r"Cache-Control:\s*no-cache": "cache bypass on retired-route checks",
-        r"Pragma:\s*no-cache": "legacy cache bypass on retired-route checks",
-        r"retired_check=\$\{DEPLOY_SHA\}-\$\{attempt\}": ("per-cycle retired-route cache busting"),
-    }
-    for pattern, description in stable_retirement_patterns.items():
-        if not re.search(pattern, retirement_verification, re.MULTILINE | re.DOTALL):
-            errors.append(f"production CD omits {description}")
-    if retirement_verification.count("stable_retired_cycles=0") < 2:
-        errors.append("production CD does not reset retired-route stability after a non-404 cycle")
-    retired_status_position = retirement_verification.find('if [ "$status" != "404" ]')
-    retired_increment_position = retirement_verification.find(
-        "stable_retired_cycles=$((stable_retired_cycles + 1))"
-    )
-    retired_reset_position = retirement_verification.rfind("stable_retired_cycles=0")
-    if not (0 <= retired_status_position < retired_increment_position < retired_reset_position):
-        errors.append(
-            "production CD does not require a complete 404 cycle before "
-            "advancing retired-route stability"
-        )
-
-    compensation = marker_section(
-        "Restore pre-release canonical Route53 alias after failed first cutover",
-        "Roll back production Amplify branch after failed release",
-    )
-    compensation_patterns = {
-        r"association_terminal=false": "Amplify association terminal-state tracking",
-        r"aws\s+amplify\s+get-domain-association": (
-            "Amplify association polling before DNS compensation"
-        ),
-        r"\.domainAssociation\.domainStatus": "Amplify domain-status inspection",
-        r"\.domainAssociation\.updateStatus": "Amplify update-status inspection",
-        r"AVAILABLE": "successful Amplify association terminal status",
-        r"UPDATE_COMPLETE": "completed Amplify association update status",
-        r"UPDATE_FAILED": "failed Amplify association update status",
-        r"FAILED": "failed Amplify domain terminal status",
-        r"NotFoundException": "removed Amplify association terminal status",
-        r"association_terminal=true": "confirmed Amplify association termination",
-        (
-            r'domain_status"\s*=\s*"AVAILABLE"[\s\S]{0,250}'
-            r'update_status"\s*=~\s*\^\(NONE\|UPDATE_COMPLETE\)\$'
-        ): "the successful Amplify association terminal-state pair",
-        r'update_status"\s*=\s*"UPDATE_FAILED"': ("the failed Amplify update terminal state"),
-        (
-            r'domain_status"\s*=\s*"FAILED"[\s\S]{0,150}'
-            r'update_status"\s*=\s*"NONE"'
-        ): "the failed Amplify domain terminal-state pair",
-        r"NotFoundException[\s\S]{0,150}association_terminal=true": (
-            "the absent Amplify association terminal state"
-        ),
-        r'association_terminal"\s*!=\s*"true"': (
-            "fail-closed Amplify association terminal-state enforcement"
-        ),
-        r"stable_alias_checks=0": "DNS compensation stability tracking",
-        r"stable_alias_checks=\$\(\(stable_alias_checks \+ 1\)\)": (
-            "consecutive DNS compensation stability counting"
-        ),
-        r'stable_alias_checks"\s*-ge\s*6': ("six-check DNS compensation stability threshold"),
-        r'stable_alias_checks"\s*-lt\s*6': ("fail-closed DNS compensation stability enforcement"),
-        r"restore_canonical_alias": "repeatable authoritative alias restoration",
-        (
-            r'actual_alias"\s*=\s*"\$expected_alias"[\s\S]{0,250}'
-            r"stable_alias_checks=\$\(\(stable_alias_checks \+ 1\)\)"
-        ): "stable alias counting only after an exact restored-alias match",
-        (
-            r"elif\s+is_recognized_amplify_alias[\s\S]{0,350}"
-            r"restore_canonical_alias[\s\S]{0,150}stable_alias_checks=0"
-        ): "stability reset after an Amplify alias rewrite",
-    }
-    for pattern, description in compensation_patterns.items():
-        if not re.search(pattern, compensation, re.MULTILINE | re.DOTALL):
-            errors.append(f"production CD omits {description}")
-    if compensation.count("stable_alias_checks=0") < 2:
-        errors.append(
-            "production CD does not reset DNS compensation stability after an alias rewrite"
-        )
-    terminal_position = compensation.find("association_terminal=false")
-    restore_position = compensation.find("restore_canonical_alias")
-    if terminal_position < 0 or restore_position < 0 or terminal_position > restore_position:
-        errors.append("production CD restores DNS before Amplify association activity is terminal")
-
-    final_steps = (
-        (
-            "Plan final production topology",
-            "Apply exact final production topology plan",
-        ),
-        (
-            "Apply exact final production topology plan",
-            "Verify final API-only backend topology",
-        ),
-        (
-            "Verify final API-only backend topology",
-            "Restore pre-release canonical Route53 alias after failed first cutover",
-        ),
-    )
-    for marker, next_marker in final_steps:
-        section = marker_section(marker, next_marker)
-        if re.search(r"(?m)^[ \t]*if\s*:", section):
-            errors.append(f"production CD conditionally skips {marker}")
-
-    if source.count("jq -r '.static_routes[]'") < 2:
-        errors.append(
-            "production CD omits all exported routes from candidate or production branch smokes"
-        )
-    if source.count("find src/web/out/_next/static") < 2:
-        errors.append(
-            "production CD omits a deployed static asset from candidate or production branch smokes"
-        )
-    if source.count("terraform -chdir=infra/prod untaint") < 1:
-        errors.append("production CD omits verified tainted-domain recovery during detection")
-    if source.count('.change.actions | index("delete")) == null') < 1:
-        errors.append("production CD omits a no-destroy gate for domain cutover")
-    if source.count("amplify-apex-target.sh") < 3:
-        errors.append(
-            "production CD must use the shared Amplify apex-target parser during "
-            "preflight, cutover, and failure compensation"
-        )
-
-    forbidden_patterns = {
-        r"TF_VAR_manage_dns": "legacy DNS-disable cutover flow",
-        r"amplify [^\n]*(?:--repository|access-token)": (
-            "a Git repository or access-token connection"
-        ),
-        r"amplify delete-domain-association": (
-            "a destructive automated Amplify domain disassociation"
-        ),
-        r"amplify\s+start-job|--job-type\s+RETRY": ("unsupported Amplify StartJob retry rollback"),
-        r"origin_restricted_to_cloudfront": (
-            "retired CloudFront origin-restriction state detection"
-        ),
-        r"trust_cloudfront_proxy_chain": ("retired CloudFront proxy-chain state detection"),
-        r"TF_VAR_restrict_origin_to_cloudfront": ("retired CloudFront origin-hardening input"),
-        r"TF_VAR_trust_cloudfront_proxy_chain": ("retired CloudFront proxy-chain input"),
-        r"An ALB canonical alias requires public ingress and one-hop proxy trust": (
-            "retired CloudFront fallback state coupling"
-        ),
-        r"Allow legacy Route53 alias caches to expire": ("retired CloudFront hardening delay"),
-        r"Plan CloudFront-only origin hardening": ("retired CloudFront-only origin hardening"),
-        r"Verify production through the CloudFront-only origin": (
-            "retired CloudFront-only origin verification"
-        ),
-        r"Plan trusted CloudFront proxy chain": ("retired CloudFront proxy-chain rollout"),
-        r"Wait for trusted-proxy backend rollout": ("retired trusted-proxy backend rollout"),
-        r"Verify trusted-proxy backend target health": (
-            "retired trusted-proxy backend verification"
-        ),
-        r"Verify production through the trusted CloudFront proxy chain": (
-            "retired trusted CloudFront proxy verification"
-        ),
-        r"Restore pre-release origin safety state after failure": (
-            "retired CloudFront origin-safety restoration"
-        ),
-        r"production-restore-origin\.tfplan|steps\.restore_origin_safety": (
-            "retired CloudFront origin-safety restore state"
-        ),
-        r"terraform [^\n]* state rm": "destructive automated Terraform state removal",
-        r"terraform [^\n]* -replace": "an automated forced resource replacement",
-        r"terraform [^\n]* taint": "automated resource tainting",
-    }
-    for pattern, description in forbidden_patterns.items():
-        if re.search(pattern, source, re.MULTILINE | re.IGNORECASE):
-            errors.append(f"production CD retains {description}")
-
-    ordered_markers = (
-        "Capture pre-release canonical Route53 alias",
-        "Guard live Amplify configuration before candidate smoke",
-        "Run pre-Amplify backend smoke tests",
-        "Ensure production default administrator through one-off ECS task",
-        "Fail closed when an Amplify release job is active",
-        "Capture current Amplify production rollback point",
-        "Resolve retained Amplify rollback artifact",
-        "Download retained Amplify rollback artifact",
-        "Verify retained Amplify rollback artifact",
-        "Deploy candidate Amplify branch",
-        "Smoke candidate Amplify frontend and direct API boundary",
-        "Require a safe live-branch mutation budget",
-        "Deploy production Amplify branch",
-        "Smoke production Amplify branch before domain cutover",
-        "Verify preserved canonical alias immediately before cutover",
-        "Plan reviewed Amplify domain association",
-        "Require a safe first-cutover time budget",
-        "Apply exact Amplify domain association plan",
-        "Reconcile Amplify domain association for a migration retry",
-        "Wait for Amplify custom domain availability",
-        "Verify Amplify canonical DNS cutover",
-        "Run canonical production smoke tests",
-        "Plan final production topology",
-        "Apply exact final production topology plan",
-        "Verify final API-only backend topology",
-        "Restore pre-release canonical Route53 alias after failed first cutover",
-        "Roll back production Amplify branch after failed release",
-    )
-    positions = [source.find(marker) for marker in ordered_markers]
-    if any(position < 0 for position in positions) or positions != sorted(positions):
-        errors.append(
-            "production CD must resolve and verify rollback artifacts before "
-            "candidate, production, and custom-domain stages"
-        )
     return errors
 
 

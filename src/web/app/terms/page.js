@@ -62,11 +62,10 @@ export default function TermsPage() {
             <section>
               <h2>Accounts and data</h2>
               <p>
-                You may stop using Releviz or delete your account from Account
-                settings. Data handling is described in the{" "}
-                <Link href="/privacy">privacy notice</Link>. Questions about
-                these terms can be submitted through{" "}
-                <Link href="/support">support</Link>.
+                You may stop using Releviz at any time or delete your account
+                from <Link href="/settings">Account settings</Link>. Data
+                handling is described in the{" "}
+                <Link href="/privacy">privacy notice</Link>.
               </p>
             </section>
           </div>

@@ -8,7 +8,11 @@ from zoneinfo import ZoneInfo
 
 from django.utils import timezone
 
-from apps.scheduling.services.slots import build_event_slot_groups, valid_localizations
+from apps.scheduling.services.slots import (
+    blocked_slot_indices,
+    build_event_slot_groups,
+    valid_localizations,
+)
 
 MAX_RECOMMENDATIONS = 10
 
@@ -79,6 +83,27 @@ def _window_label(group, slots) -> str:
     return f"{group.label} {first_slot.local_start}{start_suffix}–{last_slot.local_end}{end_suffix}"
 
 
+def _open_runs(group, blocked: frozenset[int]) -> list[tuple]:
+    """Split a group's slots into the contiguous runs left between blocked slots.
+
+    A blocked slot breaks a run exactly like the group boundary does, so no
+    candidate window can ever span one.
+    """
+
+    runs = []
+    current = []
+    for slot in group.slots:
+        if slot.index in blocked:
+            if current:
+                runs.append(tuple(current))
+            current = []
+            continue
+        current.append(slot)
+    if current:
+        runs.append(tuple(current))
+    return runs
+
+
 def _sliding_window_minima(values: list[float], slots, window_size: int) -> list[float]:
     """Return one minimum per contiguous window in linear time."""
 
@@ -131,7 +156,12 @@ def build_ranked_recommendations(
         return [], basis
 
     current_time = now or timezone.now()
-    groups = build_event_slot_groups(event)
+    blocked = blocked_slot_indices(event)
+    open_runs = [
+        (group, run)
+        for group in build_event_slot_groups(event)
+        for run in _open_runs(group, blocked)
+    ]
     channel_positions = {
         channel: position for position, channel in enumerate(channel_results.keys())
     }
@@ -140,12 +170,12 @@ def build_ranked_recommendations(
     candidates = []
 
     for channel in channel_results:
-        for group in groups:
-            if len(group.slots) < window_size:
+        for group, run in open_runs:
+            if len(run) < window_size:
                 continue
             windows = [
-                group.slots[position : position + window_size]
-                for position in range(len(group.slots) - window_size + 1)
+                run[position : position + window_size]
+                for position in range(len(run) - window_size + 1)
             ]
             suggestions = [
                 _window_suggestion(event, group, slots, current_time) for slots in windows
@@ -164,7 +194,7 @@ def build_ranked_recommendations(
             for entry in counted:
                 minima = _sliding_window_minima(
                     entry["availability"][channel],
-                    group.slots,
+                    run,
                     window_size,
                 )
                 weight = entry["weight"]

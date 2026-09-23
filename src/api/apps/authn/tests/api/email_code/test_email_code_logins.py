@@ -253,6 +253,60 @@ class EmailCodeAuthLoginTests(APITestCase):
 
         self.assertEqual(response.status_code, 202)
         self.assertEqual(mock_send.call_args.kwargs["link_event"], "demo-day")
+        self.assertEqual(mock_send.call_args.kwargs["link_flow"], "auth")
+        self.assertEqual(mock_send.call_args.kwargs["link_source"], "event_registration")
+
+    def test_unified_email_auth_new_email_from_login_form_emails_register_link(
+        self, _mock_code, mock_send
+    ):
+        request_response = self.client.post(
+            "/authn/email-auth/request-code/",
+            {"email": "fresh-signup@example.com", "next": "/dashboard"},
+            format="json",
+        )
+
+        self.assertEqual(request_response.status_code, 202)
+        mock_send.assert_called_once()
+        self.assertEqual(mock_send.call_args.kwargs["purpose"], "register")
+        self.assertEqual(mock_send.call_args.kwargs["link_flow"], "register")
+        self.assertEqual(mock_send.call_args.kwargs["link_source"], "register")
+        self.assertEqual(mock_send.call_args.kwargs["link_next"], "/dashboard")
+        contact = ContactEmail.objects.get(email_address="fresh-signup@example.com")
+        pending = contact.member
+        challenge = EmailAuthChallenge.objects.get(
+            member=pending,
+            purpose=EmailAuthChallenge.Purpose.REGISTER,
+        )
+        self.assertEqual(challenge.status, EmailAuthChallenge.Status.PENDING)
+
+        verify_response = self.client.post(
+            "/authn/register/verify-code/",
+            {"email": "fresh-signup@example.com", "code": "654321"},
+            format="json",
+        )
+
+        pending.refresh_from_db()
+        contact.refresh_from_db()
+        challenge.refresh_from_db()
+        self.assertEqual(verify_response.status_code, 200)
+        self.assertIn("access", verify_response.data)
+        self.assertTrue(pending.is_active)
+        self.assertTrue(contact.verified)
+        self.assertEqual(challenge.status, EmailAuthChallenge.Status.CONSUMED)
+
+    def test_unified_email_auth_explicit_login_source_for_new_email_remaps_to_register(
+        self, _mock_code, mock_send
+    ):
+        response = self.client.post(
+            "/authn/email-auth/request-code/",
+            {"email": "fresh-signup@example.com", "source": "login"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(mock_send.call_args.kwargs["purpose"], "register")
+        self.assertEqual(mock_send.call_args.kwargs["link_flow"], "register")
+        self.assertEqual(mock_send.call_args.kwargs["link_source"], "register")
 
     def test_unified_email_auth_uses_login_flow_for_verified_contact_email(
         self, _mock_code, _mock_send

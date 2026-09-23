@@ -29,6 +29,7 @@ class EventSlot:
     start_offset: str | None = None
     end_offset: str | None = None
     fold: int | None = None
+    blocked: bool = False
 
     def as_api(self) -> dict:
         data = {
@@ -37,6 +38,7 @@ class EventSlot:
             "localEnd": self.local_end,
             "startDayOffset": self.start_day_offset,
             "endDayOffset": self.end_day_offset,
+            "blocked": self.blocked,
         }
         if self.starts_at is not None:
             data.update(
@@ -144,6 +146,17 @@ def _resolve_boundary(value: datetime, zone: ZoneInfo, *, is_start: bool) -> dat
     return candidates[0] if is_start else candidates[-1]
 
 
+def _blocked_rows(event, group_key: str) -> set[int]:
+    """Return the blocked row positions stored for one slot group.
+
+    Lightweight doubles may lack the attribute entirely, so the read is
+    defensive rather than a plain attribute lookup.
+    """
+
+    blocked = getattr(event, "blocked_slots", None) or {}
+    return set(blocked.get(group_key, []))
+
+
 def _weekly_groups(event) -> list[EventSlotGroup]:
     selected_days = sorted(set(event.days or []))
     if not selected_days or any(
@@ -157,6 +170,8 @@ def _weekly_groups(event) -> list[EventSlotGroup]:
     groups = []
     index = 0
     for weekday in selected_days:
+        group_key = f"weekday:{weekday}"
+        blocked_rows = _blocked_rows(event, group_key)
         slots = []
         for row in range(slots_per_group):
             start_total = event.start_minutes + row * event.slot_minutes
@@ -168,12 +183,13 @@ def _weekly_groups(event) -> list[EventSlotGroup]:
                     local_end=format_time_value(end_total),
                     start_day_offset=start_total // MINUTES_PER_DAY,
                     end_day_offset=end_total // MINUTES_PER_DAY,
+                    blocked=row in blocked_rows,
                 )
             )
             index += 1
         groups.append(
             EventSlotGroup(
-                key=f"weekday:{weekday}",
+                key=group_key,
                 label=WEEKDAY_LABELS[weekday],
                 weekday=weekday,
                 slots=tuple(slots),
@@ -220,6 +236,8 @@ def _specific_date_groups(event) -> list[EventSlotGroup]:
                 f"{event.slot_minutes}-minute slots."
             )
 
+        group_key = f"date:{raw_date}"
+        blocked_rows = _blocked_rows(event, group_key)
         slots = []
         current = starts_at
         while current < ends_at:
@@ -238,6 +256,7 @@ def _specific_date_groups(event) -> list[EventSlotGroup]:
                     start_offset=_offset_text(start_local),
                     end_offset=_offset_text(end_local),
                     fold=start_local.fold,
+                    blocked=len(slots) in blocked_rows,
                 )
             )
             index += 1
@@ -245,7 +264,7 @@ def _specific_date_groups(event) -> list[EventSlotGroup]:
 
         groups.append(
             EventSlotGroup(
-                key=f"date:{raw_date}",
+                key=group_key,
                 label=raw_date,
                 date_value=raw_date,
                 slots=tuple(slots),
@@ -332,6 +351,17 @@ def event_slot_count(event) -> int:
             f"An event may contain at most {MAX_EVENT_SLOTS} availability slots."
         )
     return slot_count
+
+
+def blocked_slot_indices(event) -> frozenset[int]:
+    """Return the absolute index of every organizer-blocked slot."""
+
+    return frozenset(
+        slot.index
+        for group in build_event_slot_groups(event)
+        for slot in group.slots
+        if slot.blocked
+    )
 
 
 def api_slot_groups(event) -> list[dict]:

@@ -9,10 +9,10 @@ import { CheckIcon, GroupIcon } from "@/components/ui/icons";
 
 export const UNGROUPED = "__ungrouped__";
 
-// Roster stats list groups as [{ name, count, weight }]; older payloads send
-// bare names or a { name: count } map. Ungrouped people carry an empty name
-// and sort last. `weight` is the value everyone in the group shares, or null
-// when members differ.
+// Roster stats list groups as [{ id, name, count, weight }]; older payloads
+// send bare names or a { name: count } map. Ungrouped people carry an empty
+// name and a null id and sort last. `weight` is the value everyone in the
+// group shares, or null when members differ (or the group is empty).
 export function summarizeGroups(rawGroups) {
   const entries = Array.isArray(rawGroups)
     ? rawGroups.map((item) =>
@@ -25,6 +25,7 @@ export function summarizeGroups(rawGroups) {
   return entries
     .filter((item) => item && typeof item === "object")
     .map((item) => ({
+      id: item.id ?? null,
       name: String(item.name ?? ""),
       count: Number.isFinite(Number(item.count)) ? Number(item.count) : null,
       weight: typeof item.weight === "number" ? item.weight : null,
@@ -49,24 +50,29 @@ function peopleLabel(count) {
   return `${count} ${count === 1 ? "person" : "people"}`;
 }
 
+// Weight drafts come straight from a number input, so they are always strings.
 function normalizeWeight(value) {
-  if (value === "" || value === null || value === undefined) return null;
+  if (value === "") return null;
   const number = Number(value);
-  if (!Number.isFinite(number) || number < 0 || number > 1) return null;
-  return number;
+  return Number.isFinite(number) && number >= 0 && number <= 1 ? number : null;
 }
 
+// Mirrors the server's group-name rules so a bad name never leaves the page.
 function groupNameError(value) {
   const name = String(value || "").trim();
   if (!name) return "Enter a group name.";
   if (name.length > 100) return "Group names must be 100 characters or fewer.";
+  if (name.includes(";")) return "Group names cannot contain ;.";
+  if (name.toUpperCase() === "ALL") return "ALL is reserved for every group.";
   return "";
 }
 
 /**
  * Organizer grouping controls: every group with its head count and shared
- * weight, inline weight and rename edits, and a way to move the people
- * selected in the roster table into a group (or a brand-new one).
+ * weight, inline weight and rename edits, group creation and deletion, and a
+ * way to add the people selected in the roster table to a group (or remove
+ * them from one). People can belong to several groups at once, so a person
+ * counts in every group they are a member of.
  */
 export default function RosterGroups({
   groups,
@@ -77,27 +83,37 @@ export default function RosterGroups({
   onShowGroup,
   onSetWeight,
   onRename,
+  onDelete,
+  onAddSelected,
+  onRemoveSelected,
   onMoveSelected,
   onCreate,
 }) {
   const ids = useId();
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
-  const [newWeight, setNewWeight] = useState("1");
   const [createError, setCreateError] = useState("");
   const [renaming, setRenaming] = useState(null);
   const [renameValue, setRenameValue] = useState("");
   const [renameError, setRenameError] = useState("");
   const [weightDrafts, setWeightDrafts] = useState({});
+  // Which button's request is in flight, so only that button shows a spinner
+  // while `busyGroup` (owned by the parent) disables the rest.
+  const [pendingAction, setPendingAction] = useState("");
 
   const namedGroups = groups.filter((group) => group.name !== "");
   const busy = Boolean(busyGroup);
   const hasSelection = selectedCount > 0;
-  const selectionHint = hasSelection
-    ? `${selectedCount} selected in the list`
-    : "Select people in the list first";
   const newGroupNameId = `${ids}-new-group-name`;
-  const newGroupWeightId = `${ids}-new-group-weight`;
+
+  const runAction = async (key, action) => {
+    setPendingAction(key);
+    try {
+      return await action();
+    } finally {
+      setPendingAction("");
+    }
+  };
 
   const openCreate = () => {
     setCreating(true);
@@ -108,7 +124,6 @@ export default function RosterGroups({
   const closeCreate = () => {
     setCreating(false);
     setNewName("");
-    setNewWeight("1");
     setCreateError("");
   };
 
@@ -119,17 +134,10 @@ export default function RosterGroups({
       setCreateError(nameError);
       return;
     }
-    if (!hasSelection) {
-      setCreateError("Select the people to put in this group first.");
-      return;
-    }
-    const weight = normalizeWeight(newWeight);
-    if (weight === null) {
-      setCreateError("Weight must be between 0 and 1.");
-      return;
-    }
     setCreateError("");
-    const created = await onCreate({ name: newName.trim(), weight });
+    const created = await runAction("create", () =>
+      onCreate({ name: newName.trim() }),
+    );
     if (created) closeCreate();
   };
 
@@ -159,12 +167,26 @@ export default function RosterGroups({
       return;
     }
     const nextName = renameValue.trim();
+    // Only an identical spelling is a no-op; case-only renames are real.
     if (nextName === group.name) {
       setRenaming(null);
       return;
     }
-    const renamed = await onRename(group.name, nextName);
+    const renamed = await runAction(
+      `${groupFilterValue(group.name)}:rename`,
+      () => onRename(group, nextName),
+    );
     if (renamed) setRenaming(null);
+  };
+
+  const confirmDelete = async (group) => {
+    const confirmed = window.confirm(
+      `Delete group ${group.name}? People stay on the roster.`,
+    );
+    if (!confirmed) return;
+    await runAction(`${groupFilterValue(group.name)}:delete`, () =>
+      onDelete(group),
+    );
   };
 
   return (
@@ -175,8 +197,9 @@ export default function RosterGroups({
             Groups
           </h4>
           <p className="roster-groups__description">
-            A group&apos;s weight applies to everyone in it: 1 counts a person
-            in full, 0.5 as half a vote, 0 as an observer.
+            People can belong to several groups. Setting a group&apos;s weight
+            applies it to everyone currently in that group, including people who
+            are also in other groups.
           </p>
         </div>
         {!readOnly && (
@@ -202,44 +225,24 @@ export default function RosterGroups({
           noValidate
           onSubmit={submitCreate}
         >
-          <h5 id={`${ids}-new-group-title`} className="h6 mb-1">
-            New group from the selected people
+          <h5 id={`${ids}-new-group-title`} className="h6 mb-3">
+            Create a group
           </h5>
-          <p className="small text-secondary mb-3">{selectionHint}.</p>
-          <div className="form-row-2">
-            <FormField id={newGroupNameId} label="Group name" required>
-              <input
-                id={newGroupNameId}
-                type="text"
-                className="form-control"
-                aria-label="New group name"
-                maxLength={100}
-                value={newName}
-                disabled={busy}
-                onChange={(changeEvent) => {
-                  setNewName(changeEvent.target.value);
-                  setCreateError("");
-                }}
-              />
-            </FormField>
-            <FormField id={newGroupWeightId} label="Weight">
-              <input
-                id={newGroupWeightId}
-                type="number"
-                className="form-control"
-                aria-label="New group weight"
-                min="0"
-                max="1"
-                step="0.05"
-                value={newWeight}
-                disabled={busy}
-                onChange={(changeEvent) => {
-                  setNewWeight(changeEvent.target.value);
-                  setCreateError("");
-                }}
-              />
-            </FormField>
-          </div>
+          <FormField id={newGroupNameId} label="Group name" required>
+            <input
+              id={newGroupNameId}
+              type="text"
+              className="form-control"
+              aria-label="New group name"
+              maxLength={100}
+              value={newName}
+              disabled={busy}
+              onChange={(changeEvent) => {
+                setNewName(changeEvent.target.value);
+                setCreateError("");
+              }}
+            />
+          </FormField>
           {createError && (
             <Alert variant="danger" role="alert" className="mt-3">
               {createError}
@@ -252,7 +255,7 @@ export default function RosterGroups({
             <AppButton
               type="submit"
               icon={<CheckIcon />}
-              busy={busyGroup === "create"}
+              busy={pendingAction === "create"}
               disabled={busy}
             >
               Create group
@@ -283,11 +286,15 @@ export default function RosterGroups({
               </thead>
               <tbody>
                 {groups.map((group) => {
+                  const named = group.name !== "";
                   const label = groupLabel(group.name);
                   const filterValue = groupFilterValue(group.name);
                   const showing = activeGroup === filterValue;
-                  const rowBusy = busyGroup === filterValue;
                   const draft = weightDrafts[group.name];
+                  const empty = group.count === 0;
+                  // A shared weight is null when members differ; an empty
+                  // group has nothing to share and nothing to edit.
+                  const mixed = group.weight === null && group.count > 0;
                   const weightInputId = `${ids}-weight-${filterValue}`;
                   return (
                     <tr key={filterValue} data-roster-group={filterValue}>
@@ -318,7 +325,7 @@ export default function RosterGroups({
                             <AppButton
                               size="sm"
                               icon={<CheckIcon />}
-                              busy={rowBusy}
+                              busy={pendingAction === `${filterValue}:rename`}
                               disabled={busy}
                               onClick={() => void submitRename(group)}
                             >
@@ -343,11 +350,7 @@ export default function RosterGroups({
                           </div>
                         ) : (
                           <span className="d-inline-flex flex-wrap align-items-center gap-2">
-                            <span
-                              className={
-                                group.name === "" ? "text-secondary" : ""
-                              }
-                            >
+                            <span className={named ? "" : "text-secondary"}>
                               {label}
                             </span>
                             {showing && (
@@ -368,16 +371,16 @@ export default function RosterGroups({
                             type="number"
                             className="form-control form-control-sm roster-groups__weight"
                             aria-label={
-                              group.name === ""
-                                ? "Weight for ungrouped people"
-                                : `Weight for group ${group.name}`
+                              named
+                                ? `Weight for group ${group.name}`
+                                : "Weight for ungrouped people"
                             }
                             min="0"
                             max="1"
                             step="0.05"
-                            placeholder={group.weight === null ? "Mixed" : ""}
+                            placeholder={mixed ? "Mixed" : ""}
                             value={draft ?? group.weight ?? ""}
-                            disabled={readOnly || busy}
+                            disabled={readOnly || busy || empty}
                             onChange={(changeEvent) =>
                               setWeightDrafts((current) => ({
                                 ...current,
@@ -392,7 +395,7 @@ export default function RosterGroups({
                               }
                             }}
                           />
-                          {group.weight === null && draft === undefined && (
+                          {mixed && draft === undefined && (
                             <StatusBadge status="neutral" dot={false}>
                               Mixed
                             </StatusBadge>
@@ -401,32 +404,70 @@ export default function RosterGroups({
                       </td>
                       <td className="roster-groups__actions-cell">
                         <div className="roster-groups__actions">
-                          {!readOnly && (
+                          {!readOnly && !named && (
                             <AppButton
                               size="sm"
                               variant="outlined"
                               disabled={busy || !hasSelection}
-                              title={hasSelection ? undefined : selectionHint}
-                              busy={rowBusy && hasSelection}
-                              onClick={() => void onMoveSelected(group.name)}
+                              busy={pendingAction === `${filterValue}:move`}
+                              onClick={() =>
+                                void runAction(`${filterValue}:move`, () =>
+                                  onMoveSelected(""),
+                                )
+                              }
                             >
-                              {group.name === ""
-                                ? "Ungroup selected"
-                                : "Move selected here"}
+                              Ungroup selected
                             </AppButton>
                           )}
-                          {!readOnly &&
-                            group.name !== "" &&
-                            renaming !== group.name && (
+                          {!readOnly && named && (
+                            <>
                               <AppButton
                                 size="sm"
-                                variant="text"
-                                disabled={busy}
-                                onClick={() => startRename(group)}
+                                variant="outlined"
+                                disabled={busy || !hasSelection}
+                                busy={pendingAction === `${filterValue}:add`}
+                                onClick={() =>
+                                  void runAction(`${filterValue}:add`, () =>
+                                    onAddSelected(group.name),
+                                  )
+                                }
                               >
-                                Rename
+                                Add selected
                               </AppButton>
-                            )}
+                              <AppButton
+                                size="sm"
+                                variant="outlined"
+                                disabled={busy || !hasSelection}
+                                busy={pendingAction === `${filterValue}:remove`}
+                                onClick={() =>
+                                  void runAction(`${filterValue}:remove`, () =>
+                                    onRemoveSelected(group.name),
+                                  )
+                                }
+                              >
+                                Remove selected
+                              </AppButton>
+                              {renaming !== group.name && (
+                                <AppButton
+                                  size="sm"
+                                  variant="text"
+                                  disabled={busy}
+                                  onClick={() => startRename(group)}
+                                >
+                                  Rename
+                                </AppButton>
+                              )}
+                              <AppButton
+                                size="sm"
+                                variant="danger"
+                                disabled={busy}
+                                busy={pendingAction === `${filterValue}:delete`}
+                                onClick={() => void confirmDelete(group)}
+                              >
+                                Delete group
+                              </AppButton>
+                            </>
+                          )}
                           <AppButton
                             size="sm"
                             variant="text"
@@ -450,8 +491,8 @@ export default function RosterGroups({
 
       {namedGroups.length === 0 && (
         <p className="roster-groups__empty small text-secondary mb-0">
-          No groups yet. Select people in the list and create a group, or type a
-          group name on a person&apos;s row.
+          No groups yet. Create a group, then select people in the list and add
+          them to it.
         </p>
       )}
     </section>
