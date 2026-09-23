@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 
@@ -175,9 +175,7 @@ describe("Modal", () => {
     expect(dialog.tagName).toBe("FORM");
     expect(dialog).toHaveClass("app-modal--lg", "extra");
     expect(dialog).not.toHaveAttribute("aria-describedby");
-    await act(async () => {
-      userEvent.click(screen.getByRole("button", { name: "Save" }));
-    });
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(onSubmit).toHaveBeenCalledTimes(1);
   });
 });

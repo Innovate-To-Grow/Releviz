@@ -19,11 +19,11 @@ import RosterGroups, {
   summarizeGroups,
 } from "@/components/schedule/RosterGroups";
 
-// user-event v13 clicks synchronously; awaiting inside act() lets the
-// handler's promise (and the state it settles) flush before assertions run.
+// Await the full user interaction and the async handler updates before
+// checking the resulting group state.
 const click = (element) =>
   act(async () => {
-    userEvent.click(element);
+    await userEvent.click(element);
   });
 const pressEnter = (element) =>
   act(async () => {
