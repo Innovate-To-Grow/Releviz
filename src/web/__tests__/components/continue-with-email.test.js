@@ -47,12 +47,12 @@ const submitForm = (control) => fireEvent.submit(control.closest("form"));
 
 async function sendCode(email = "ada@example.com") {
   await userEvent.type(screen.getByLabelText("Email"), email);
-  userEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await userEvent.click(screen.getByRole("button", { name: "Continue" }));
   return screen.findByLabelText("Verification Code");
 }
 
-function switchToPassword() {
-  userEvent.click(
+async function switchToPassword() {
+  await userEvent.click(
     screen.getByRole("button", { name: "Sign in with password instead" }),
   );
   return screen.getByLabelText("Password");
@@ -170,7 +170,7 @@ describe("ContinueWithEmailPage", () => {
       await userEvent.type(codeInput, "56");
       expect(submit).toBeEnabled();
 
-      userEvent.click(submit);
+      await userEvent.click(submit);
       await waitFor(() =>
         expect(verifyEmailAuthCode).toHaveBeenCalledWith({
           email: "ada@example.com",
@@ -211,7 +211,7 @@ describe("ContinueWithEmailPage", () => {
       render(<ContinueWithEmailPage next={EVENT_NEXT} />);
 
       await userEvent.type(await sendCode("new@example.com"), "654321");
-      userEvent.click(screen.getByRole("button", { name: "Continue" }));
+      await userEvent.click(screen.getByRole("button", { name: "Continue" }));
 
       await waitFor(() =>
         expect(navigateTo).toHaveBeenCalledWith(
@@ -227,13 +227,13 @@ describe("ContinueWithEmailPage", () => {
       render(<ContinueWithEmailPage />);
 
       await userEvent.type(await sendCode(), "123456");
-      userEvent.click(screen.getByRole("button", { name: "Continue" }));
+      await userEvent.click(screen.getByRole("button", { name: "Continue" }));
       expect(await screen.findByRole("alert")).toHaveTextContent(
         "Code expired",
       );
       expect(screen.queryByRole("status")).not.toBeInTheDocument();
 
-      userEvent.click(screen.getByRole("button", { name: "Continue" }));
+      await userEvent.click(screen.getByRole("button", { name: "Continue" }));
       await waitFor(() =>
         expect(screen.getByRole("alert")).toHaveTextContent(
           "Unable to verify the code.",
@@ -249,7 +249,9 @@ describe("ContinueWithEmailPage", () => {
       render(<ContinueWithEmailPage next={EVENT_NEXT} />);
 
       await sendCode();
-      userEvent.click(screen.getByRole("button", { name: "Resend code" }));
+      await userEvent.click(
+        screen.getByRole("button", { name: "Resend code" }),
+      );
 
       await waitFor(() =>
         expect(screen.getByRole("status")).toHaveTextContent(
@@ -276,7 +278,9 @@ describe("ContinueWithEmailPage", () => {
       render(<ContinueWithEmailPage />);
 
       await sendCode();
-      userEvent.click(screen.getByRole("button", { name: "Resend code" }));
+      await userEvent.click(
+        screen.getByRole("button", { name: "Resend code" }),
+      );
 
       expect(await screen.findByRole("alert")).toHaveTextContent(
         "Too many verification attempts. Please try again later.",
@@ -290,7 +294,7 @@ describe("ContinueWithEmailPage", () => {
       render(<ContinueWithEmailPage />);
 
       await userEvent.type(await sendCode(), "123");
-      userEvent.click(screen.getByRole("button", { name: "Back" }));
+      await userEvent.click(screen.getByRole("button", { name: "Back" }));
 
       expect(screen.getByLabelText("Email")).toHaveValue("ada@example.com");
       expect(
@@ -301,7 +305,7 @@ describe("ContinueWithEmailPage", () => {
       ).not.toBeInTheDocument();
       expect(screen.queryByRole("status")).not.toBeInTheDocument();
 
-      userEvent.click(screen.getByRole("button", { name: "Continue" }));
+      await userEvent.click(screen.getByRole("button", { name: "Continue" }));
       expect(await screen.findByLabelText("Verification Code")).toHaveValue("");
     });
 
@@ -312,13 +316,13 @@ describe("ContinueWithEmailPage", () => {
       render(<ContinueWithEmailPage />);
 
       await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
-      userEvent.click(screen.getByRole("button", { name: "Continue" }));
+      await userEvent.click(screen.getByRole("button", { name: "Continue" }));
       expect(await screen.findByRole("alert")).toHaveTextContent(
         "Email unavailable",
       );
       expect(screen.getByLabelText("Email")).toBeInTheDocument();
 
-      userEvent.click(screen.getByRole("button", { name: "Continue" }));
+      await userEvent.click(screen.getByRole("button", { name: "Continue" }));
       await waitFor(() =>
         expect(screen.getByRole("alert")).toHaveTextContent(
           "Unable to send a verification code.",
@@ -338,10 +342,10 @@ describe("ContinueWithEmailPage", () => {
       render(<ContinueWithEmailPage />);
 
       await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
-      userEvent.click(screen.getByRole("button", { name: "Continue" }));
+      await userEvent.click(screen.getByRole("button", { name: "Continue" }));
       await screen.findByRole("alert");
 
-      switchToPassword();
+      await switchToPassword();
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
       expect(
         screen.getByRole("heading", { name: "Welcome to Releviz" }),
@@ -371,7 +375,7 @@ describe("ContinueWithEmailPage", () => {
       ).not.toBeInTheDocument();
 
       await userEvent.type(screen.getByLabelText("Password"), "secret");
-      userEvent.click(
+      await userEvent.click(
         screen.getByRole("button", {
           name: "Sign in with a verification code",
         }),
@@ -384,24 +388,24 @@ describe("ContinueWithEmailPage", () => {
         ),
       ).toBeInTheDocument();
 
-      switchToPassword();
+      await switchToPassword();
       expect(screen.getByLabelText("Password")).toHaveValue("");
     });
 
-    test("keeps the account status banner across a mode switch and focuses the new step", () => {
+    test("keeps the account status banner across a mode switch and focuses the new step", async () => {
       render(<ContinueWithEmailPage initialStatus="All devices signed out." />);
       expect(screen.getByRole("status")).toHaveTextContent(
         "All devices signed out.",
       );
       expect(screen.getByLabelText("Email")).toHaveFocus();
 
-      switchToPassword();
+      await switchToPassword();
       expect(screen.getByRole("status")).toHaveTextContent(
         "All devices signed out.",
       );
       expect(screen.getByLabelText("Email")).toHaveFocus();
 
-      userEvent.click(
+      await userEvent.click(
         screen.getByRole("button", {
           name: "Sign in with a verification code",
         }),
@@ -416,7 +420,7 @@ describe("ContinueWithEmailPage", () => {
       render(<ContinueWithEmailPage />);
       await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
 
-      switchToPassword();
+      await switchToPassword();
       expect(screen.getByLabelText("Password")).toHaveFocus();
     });
 
@@ -431,7 +435,7 @@ describe("ContinueWithEmailPage", () => {
       render(<ContinueWithEmailPage />);
 
       await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
-      userEvent.click(screen.getByRole("button", { name: "Continue" }));
+      await userEvent.click(screen.getByRole("button", { name: "Continue" }));
       expect(
         await screen.findByRole("button", { name: "Sending code..." }),
       ).toBeDisabled();
@@ -458,7 +462,9 @@ describe("ContinueWithEmailPage", () => {
       render(<ContinueWithEmailPage />);
 
       await sendCode();
-      userEvent.click(screen.getByRole("button", { name: "Resend code" }));
+      await userEvent.click(
+        screen.getByRole("button", { name: "Resend code" }),
+      );
       await waitFor(() =>
         expect(screen.getByRole("button", { name: "Back" })).toBeDisabled(),
       );
@@ -470,18 +476,18 @@ describe("ContinueWithEmailPage", () => {
       await screen.findByText("A new code is on its way.");
       expect(screen.getByRole("button", { name: "Back" })).toBeEnabled();
 
-      userEvent.click(screen.getByRole("button", { name: "Back" }));
+      await userEvent.click(screen.getByRole("button", { name: "Back" }));
       const emailField = screen.getByLabelText("Email");
       expect(emailField).toHaveFocus();
       await userEvent.clear(emailField);
       await userEvent.type(emailField, "bob@example.com");
-      userEvent.click(screen.getByRole("button", { name: "Continue" }));
+      await userEvent.click(screen.getByRole("button", { name: "Continue" }));
       await userEvent.type(
         await screen.findByLabelText("Verification Code"),
         "654321",
       );
       expect(screen.getByText("bob@example.com").tagName).toBe("STRONG");
-      userEvent.click(screen.getByRole("button", { name: "Continue" }));
+      await userEvent.click(screen.getByRole("button", { name: "Continue" }));
       await waitFor(() =>
         expect(verifyEmailAuthCode).toHaveBeenCalledWith({
           email: "bob@example.com",
@@ -496,7 +502,7 @@ describe("ContinueWithEmailPage", () => {
 
       const codeField = await sendCode();
       await userEvent.type(codeField, "123456");
-      userEvent.click(screen.getByRole("button", { name: "Continue" }));
+      await userEvent.click(screen.getByRole("button", { name: "Continue" }));
       expect(await screen.findByRole("alert")).toHaveTextContent(
         "Code expired",
       );
@@ -511,7 +517,7 @@ describe("ContinueWithEmailPage", () => {
   describe("password mode", () => {
     test("validates both fields before signing in", async () => {
       render(<ContinueWithEmailPage />);
-      const password = switchToPassword();
+      const password = await switchToPassword();
       const submit = screen.getByRole("button", { name: "Sign In" });
 
       expect(submit).toBeDisabled();
@@ -537,7 +543,7 @@ describe("ContinueWithEmailPage", () => {
       await userEvent.type(password, "hunter22");
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
       expect(submit).toBeEnabled();
-      userEvent.click(submit);
+      await userEvent.click(submit);
 
       await waitFor(() =>
         expect(login).toHaveBeenCalledWith({
@@ -556,8 +562,8 @@ describe("ContinueWithEmailPage", () => {
       render(<ContinueWithEmailPage next={EVENT_NEXT} />);
 
       await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
-      await userEvent.type(switchToPassword(), "hunter22");
-      userEvent.click(screen.getByRole("button", { name: "Sign In" }));
+      await userEvent.type(await switchToPassword(), "hunter22");
+      await userEvent.click(screen.getByRole("button", { name: "Sign In" }));
 
       await waitFor(() =>
         expect(navigateTo).toHaveBeenCalledWith(
@@ -572,33 +578,33 @@ describe("ContinueWithEmailPage", () => {
         .mockRejectedValueOnce(new Error(""));
       render(<ContinueWithEmailPage />);
 
-      const password = switchToPassword();
+      const password = await switchToPassword();
       await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
       await userEvent.type(password, "wrong");
-      userEvent.click(screen.getByRole("button", { name: "Sign In" }));
+      await userEvent.click(screen.getByRole("button", { name: "Sign In" }));
       expect(await screen.findByRole("alert")).toHaveTextContent(
         "Invalid credentials.",
       );
 
       await userEvent.type(password, "!");
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-      userEvent.click(screen.getByRole("button", { name: "Sign In" }));
+      await userEvent.click(screen.getByRole("button", { name: "Sign In" }));
       expect(await screen.findByRole("alert")).toHaveTextContent(
         "Unable to sign in.",
       );
       expect(navigateTo).not.toHaveBeenCalled();
     });
 
-    test("links to account recovery, carrying a non-default destination", () => {
+    test("links to account recovery, carrying a non-default destination", async () => {
       const plain = render(<ContinueWithEmailPage />);
-      switchToPassword();
+      await switchToPassword();
       expect(
         screen.getByRole("link", { name: "Forgot password?" }),
       ).toHaveAttribute("href", "/recover");
       plain.unmount();
 
       render(<ContinueWithEmailPage next={EVENT_NEXT} />);
-      switchToPassword();
+      await switchToPassword();
       expect(
         screen.getByRole("link", { name: "Forgot password?" }),
       ).toHaveAttribute("href", "/recover?next=%2Fevent%3Fcode%3DABC123");

@@ -635,7 +635,9 @@ test.describe("Organizer meeting-time calendar", () => {
     // A custom virtual window on the second page keeps the slot's own
     // instants, so finalization stores exactly what the API defined.
     const customCell = cellAt(grid, 3, 0);
-    await customCell.click();
+    await expect(customCell).toHaveAttribute("data-state", "startable");
+    await pickCell(page, customCell, "Custom window");
+    await expect(customCell).toHaveAttribute("aria-selected", "true");
     await expect(candidate).toContainText("Custom window");
     const expectedSlot = event.slotGroups[7].slots[3];
     const expectedEnd = event.slotGroups[7].slots[4];
