@@ -557,6 +557,7 @@ test.describe("Releviz account and scheduling flow", () => {
     const accessCode = await latestVerificationCode(
       temporaryEmail,
       accessCodeStartedAt,
+      "temp_event_access",
     );
     await temporaryPage.getByLabel("Verification code").fill(accessCode);
     await temporaryPage
@@ -695,6 +696,7 @@ test.describe("Releviz account and scheduling flow", () => {
     const upgradeCode = await latestVerificationCode(
       temporaryEmail,
       upgradeStartedAt,
+      "register",
     );
     await temporaryPage.getByLabel("Verification code").fill(upgradeCode);
     await temporaryPage
@@ -2305,7 +2307,11 @@ test.describe("Releviz account and scheduling flow", () => {
         "If an account exists for that email, a reset code has been sent. Check your inbox.",
       ),
     ).toBeVisible();
-    const resetCode = await latestVerificationCode(email, resetStartedAt);
+    const resetCode = await latestVerificationCode(
+      email,
+      resetStartedAt,
+      "password_reset",
+    );
     await page.getByLabel("Reset code").fill(resetCode);
     await page.getByLabel("New password", { exact: true }).fill(resetPassword);
     await page.getByLabel("Confirm new password").fill(resetPassword);
@@ -2414,7 +2420,11 @@ test.describe("Releviz account and scheduling flow", () => {
         "We emailed a confirmation code. Enter it to delete your account.",
       ),
     ).toBeVisible();
-    const deleteCode = await latestVerificationCode(email, deleteStartedAt);
+    const deleteCode = await latestVerificationCode(
+      email,
+      deleteStartedAt,
+      "account_delete",
+    );
     await deleteForm.getByLabel("Confirmation code").fill(deleteCode);
     await deleteForm
       .getByRole("button", { name: "Delete account permanently" })

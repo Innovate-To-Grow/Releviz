@@ -47,10 +47,23 @@ function codeFromEmailBody(body) {
   );
 }
 
-async function latestVerificationCode(email, afterMs) {
-  const body = await latestEmailFor(email, afterMs, (message) =>
-    Boolean(codeFromEmailBody(message)),
-  );
+const VERIFICATION_EMAIL_SUBJECTS = {
+  register: "Verify your email - Releviz",
+  login: "Your login code - Releviz",
+  password_reset: "Password reset code - Releviz",
+  account_delete: "Delete account code - Releviz",
+  temp_event_access: "Your verification code - Releviz",
+};
+
+async function latestVerificationCode(email, afterMs, purpose) {
+  const subject = VERIFICATION_EMAIL_SUBJECTS[purpose];
+  if (typeof subject !== "string") {
+    throw new Error(`Unknown verification email purpose: ${purpose}`);
+  }
+  const body = await latestEmailFor(email, afterMs, (message) => {
+    const messageSubject = message.match(/^Subject:\s*(.+)$/im)?.[1]?.trim();
+    return messageSubject === subject && Boolean(codeFromEmailBody(message));
+  });
   const code = codeFromEmailBody(body);
   if (!code) throw new Error(`No verification code email found for ${email}`);
   return code;
@@ -73,7 +86,9 @@ async function latestEmailFor(email, afterMs, predicate = () => true) {
       const stat = await fs.stat(file);
       if (stat.mtimeMs < afterMs) continue;
       const body = await fs.readFile(file, "utf8");
-      const messages = body.split(/\r?\n-{20,}\r?\n/);
+      // Django can append several messages to one file. They share its mtime,
+      // so examine the last message first when selecting the latest match.
+      const messages = body.split(/\r?\n-{20,}\r?\n/).reverse();
       for (const message of messages) {
         const recipientHeader = message.match(/^To:\s*(.+)$/im)?.[1] || "";
         const recipients = recipientHeader
@@ -96,7 +111,7 @@ async function latestEmailFor(email, afterMs, predicate = () => true) {
 // Both /login and /signup render the same passwordless panel: request a code
 // for an email address, then confirm it. Existing accounts sign in and unknown
 // addresses are created, so this drives registration and login alike.
-async function continueWithEmail(page, email, startedAt) {
+async function continueWithEmail(page, email, startedAt, purpose) {
   await page.getByLabel("Email").fill(email);
   const codeStep = page.getByRole("heading", { name: "Verify Your Identity" });
   // Firefox on CI has dropped the first submit right after hydration. Asking
@@ -115,7 +130,7 @@ async function continueWithEmail(page, email, startedAt) {
     if (sent) break;
   }
   await expect(codeStep).toBeVisible();
-  const code = await latestVerificationCode(email, startedAt);
+  const code = await latestVerificationCode(email, startedAt, purpose);
   await page.getByLabel("Verification code").fill(code);
   await page.getByRole("button", { name: "Continue", exact: true }).click();
 }
@@ -130,7 +145,7 @@ async function expectDashboard(page) {
 async function registerAccount(page, email, firstName, lastName) {
   const startedAt = Date.now() - 1000;
   await page.goto("/signup");
-  await continueWithEmail(page, email, startedAt);
+  await continueWithEmail(page, email, startedAt, "register");
 
   // A brand-new account carries no name yet, so verification lands on the
   // profile-completion step before the dashboard.
@@ -157,7 +172,7 @@ async function registerAccount(page, email, firstName, lastName) {
 async function loginWithEmailCode(page, email) {
   const startedAt = Date.now() - 1000;
   await page.goto("/login");
-  await continueWithEmail(page, email, startedAt);
+  await continueWithEmail(page, email, startedAt, "login");
   await expectDashboard(page);
 }
 
