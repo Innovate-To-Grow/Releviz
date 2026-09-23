@@ -2,17 +2,30 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import {
-  MdAdd,
-  MdArchive,
-  MdContentCopy,
-  MdDeleteOutline,
-  MdEdit,
-  MdOpenInNew,
-  MdSearch,
-} from "react-icons/md";
+import Alert from "@/components/ui/Alert";
 import AppButton from "@/components/ui/AppButton";
 import AppHeader from "@/components/ui/AppHeader";
+import EmptyState from "@/components/ui/EmptyState";
+import FormField from "@/components/ui/FormField";
+import LoadingState from "@/components/ui/LoadingState";
+import Modal from "@/components/ui/Modal";
+import PageHeader from "@/components/ui/PageHeader";
+import Panel from "@/components/ui/Panel";
+import StatusBadge from "@/components/ui/StatusBadge";
+import {
+  AddIcon,
+  ArchiveIcon,
+  CalendarIcon,
+  ClockIcon,
+  CopyIcon,
+  DeleteIcon,
+  EditIcon,
+  GroupIcon,
+  LocationIcon,
+  OpenIcon,
+  SearchIcon,
+  VirtualIcon,
+} from "@/components/ui/icons";
 import { useAuth } from "@/components/auth/AuthContext";
 import { fetchDashboardEvents } from "@/lib/api/dashboard";
 import {
@@ -22,11 +35,19 @@ import {
 } from "@/lib/api/events";
 import { formatDateTimeInTimezone, formatMode } from "@/lib/format";
 import { navigateTo } from "@/lib/navigation";
-import "@material/web/textfield/outlined-text-field.js";
 
 function newRequestKey() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
   return `${Date.now()}-${Math.random()}`;
+}
+
+function ModeIcon({ mode }) {
+  const Icon = mode === "virtual" ? VirtualIcon : GroupIcon;
+  return (
+    <span className="icon-inline" aria-hidden="true">
+      <Icon />
+    </span>
+  );
 }
 
 function EventCard({
@@ -38,18 +59,35 @@ function EventCard({
   onDeleteRequested,
 }) {
   const eventUrl = `/event?code=${encodeURIComponent(event.code)}`;
+  const editLocked =
+    event.status === "finalized" || event.status === "archived";
   return (
-    <article className="dashboard-event-card">
-      <div className="dashboard-event-summary">
-        <Link href={eventUrl} className="dashboard-event-title">
-          {event.name}
-        </Link>
-        <div className="dashboard-event-meta">
-          <span>{formatMode(event.mode)}</span>
-          <span>Status: {event.status || "unknown"}</span>
-          <span>Code: {event.code}</span>
+    <article className="card dashboard-event-card">
+      <div className="card-body">
+        <h3 className="h5 mb-2">
+          <Link href={eventUrl} className="title-link">
+            {event.name}
+          </Link>
+        </h3>
+        <div className="meta-row">
+          <span>
+            <ModeIcon mode={event.mode} />
+            {formatMode(event.mode)}
+          </span>
+          <span>
+            Status:{" "}
+            <StatusBadge status={event.status}>
+              {event.status || "unknown"}
+            </StatusBadge>
+          </span>
+          <span>
+            Code: <code>{event.code}</code>
+          </span>
           {event.responseDeadline && (
             <span>
+              <span className="icon-inline" aria-hidden="true">
+                <ClockIcon />
+              </span>
               Deadline:{" "}
               {formatDateTimeInTimezone(
                 event.responseDeadline,
@@ -59,62 +97,69 @@ function EventCard({
             </span>
           )}
           {event.location && event.location !== "TBD" && (
-            <span>{event.location}</span>
+            <span>
+              <span className="icon-inline" aria-hidden="true">
+                <LocationIcon />
+              </span>
+              {event.location}
+            </span>
           )}
         </div>
-      </div>
 
-      {organizerActions && (
-        <div
-          className="dashboard-event-actions"
-          aria-label={`Actions for ${event.name}`}
-        >
-          <Link href={eventUrl} className="dashboard-action-link">
-            <MdOpenInNew aria-hidden="true" /> View
-          </Link>
-          <Link
-            href={`/edit?code=${encodeURIComponent(event.code)}`}
-            className="dashboard-action-link"
-            aria-disabled={
-              event.status === "finalized" || event.status === "archived"
-            }
-            onClick={(clickEvent) => {
-              if (event.status === "finalized" || event.status === "archived") {
-                clickEvent.preventDefault();
-              }
-            }}
+        {organizerActions && (
+          <div
+            className="d-flex flex-wrap gap-2 mt-3"
+            role="group"
+            aria-label={`Actions for ${event.name}`}
           >
-            <MdEdit aria-hidden="true" /> Edit
-          </Link>
-          <AppButton
-            variant="outlined"
-            icon={<MdContentCopy />}
-            disabled={busy}
-            onClick={() => onDuplicate(event)}
-          >
-            Duplicate
-          </AppButton>
-          {event.status !== "archived" && (
+            <Link href={eventUrl} className="btn btn-outline-secondary app-btn">
+              <span className="app-btn-icon" aria-hidden="true">
+                <OpenIcon />
+              </span>
+              <span className="app-btn-label">View</span>
+            </Link>
+            <Link
+              href={`/edit?code=${encodeURIComponent(event.code)}`}
+              className={`btn btn-outline-secondary app-btn${editLocked ? " disabled" : ""}`}
+              aria-disabled={editLocked}
+              onClick={(clickEvent) => {
+                if (editLocked) clickEvent.preventDefault();
+              }}
+            >
+              <span className="app-btn-icon" aria-hidden="true">
+                <EditIcon />
+              </span>
+              <span className="app-btn-label">Edit</span>
+            </Link>
             <AppButton
               variant="outlined"
-              icon={<MdArchive />}
+              icon={<CopyIcon />}
               disabled={busy}
-              onClick={() => onArchive(event)}
+              onClick={() => onDuplicate(event)}
             >
-              Archive
+              Duplicate
             </AppButton>
-          )}
-          <AppButton
-            variant="outlined"
-            className="app-btn-danger"
-            icon={<MdDeleteOutline />}
-            disabled={busy}
-            onClick={() => onDeleteRequested(event)}
-          >
-            Delete
-          </AppButton>
-        </div>
-      )}
+            {event.status !== "archived" && (
+              <AppButton
+                variant="outlined"
+                icon={<ArchiveIcon />}
+                disabled={busy}
+                onClick={() => onArchive(event)}
+              >
+                Archive
+              </AppButton>
+            )}
+            <AppButton
+              variant="danger"
+              icon={<DeleteIcon />}
+              disabled={busy}
+              onClick={() => onDeleteRequested(event)}
+            >
+              Delete
+            </AppButton>
+          </div>
+        )}
+      </div>
     </article>
   );
 }
@@ -263,13 +308,7 @@ function DashboardPage() {
   };
 
   if (authLoading || loading) {
-    return (
-      <div className="center-page">
-        <p style={{ color: "var(--md-sys-color-on-surface-variant)" }}>
-          Loading...
-        </p>
-      </div>
-    );
+    return <LoadingState page label="Loading..." />;
   }
 
   const handleGoToEvent = () => {
@@ -277,123 +316,246 @@ function DashboardPage() {
     if (code) navigateTo(`/event?code=${encodeURIComponent(code)}`);
   };
 
+  const deleting = Boolean(deleteTarget) && actionCode === deleteTarget.code;
+  const currentEvents = organized.filter(
+    (event) => event.status !== "archived",
+  );
+  const archivedEvents = organized.filter(
+    (event) => event.status === "archived",
+  );
+  const confirmationMismatch =
+    Boolean(deleteTarget) &&
+    deleteConfirmation.length > 0 &&
+    deleteConfirmation !== deleteTarget.code;
+
   return (
     <>
       <AppHeader pageTitle="My Dashboard" />
-      <main className="page-pad dashboard-shell">
-        {error && (
-          <div className="dashboard-message dashboard-error" role="alert">
-            {error}
-          </div>
-        )}
-        {status && (
-          <div className="dashboard-message dashboard-status" role="status">
-            {status}
-          </div>
-        )}
+      <main className="page-shell dashboard-shell">
+        <PageHeader
+          title="My Dashboard"
+          lede="Events you organize and events you have been invited to, all in one place."
+          actions={
+            <Link href="/create" className="btn btn-primary app-btn">
+              <span className="app-btn-icon" aria-hidden="true">
+                <AddIcon />
+              </span>
+              <span className="app-btn-label">Create New Event</span>
+            </Link>
+          }
+        />
 
-        <div className="dashboard-heading">
-          <h1>My Dashboard</h1>
-          <Link href="/create" className="dashboard-create-link">
-            <MdAdd aria-hidden="true" /> Create New Event
-          </Link>
-        </div>
+        <div className="d-flex flex-column gap-4">
+          {/* Opening the delete dialog clears feedback, so any error while it
+              is open belongs to the delete attempt and is shown inside the
+              dialog instead of behind its backdrop. */}
+          {error && !deleteTarget && (
+            <Alert variant="danger" role="alert">
+              {error}
+            </Alert>
+          )}
+          {status && (
+            <Alert variant="success" role="status">
+              {status}
+            </Alert>
+          )}
 
-        <div className="md-card dashboard-code-search">
-          <md-outlined-text-field
-            label="Enter Event Code"
-            value={eventCode}
-            onInput={(event) => setEventCode(event.target.value)}
-            onKeyDown={(event) => event.key === "Enter" && handleGoToEvent()}
-            style={{ flex: 1 }}
-          ></md-outlined-text-field>
-          <AppButton
-            onClick={handleGoToEvent}
-            variant="outlined"
-            icon={<MdSearch />}
+          <Panel
+            title="Open an event"
+            headingLevel={2}
+            description="Jump straight to any event when you have its code."
           >
-            Go
-          </AppButton>
+            <div className="d-flex flex-wrap align-items-end gap-2">
+              <FormField
+                label="Enter Event Code"
+                id="dashboard-event-code"
+                className="flex-grow-1 min-w-0"
+              >
+                <input
+                  type="text"
+                  className="form-control"
+                  autoComplete="off"
+                  value={eventCode}
+                  onChange={(event) => setEventCode(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      handleGoToEvent();
+                    }
+                  }}
+                />
+              </FormField>
+              <AppButton
+                onClick={handleGoToEvent}
+                variant="outlined"
+                icon={<SearchIcon />}
+              >
+                Go
+              </AppButton>
+            </div>
+          </Panel>
+
+          <Panel
+            title={`My Events (${currentEvents.length})`}
+            titleId="dashboard-my-events-heading"
+            headingLevel={2}
+            aria-labelledby="dashboard-my-events-heading"
+          >
+            {currentEvents.length > 0 ? (
+              <div className="d-flex flex-column gap-3">
+                {currentEvents.map((event) => (
+                  <EventCard
+                    key={event.code}
+                    event={event}
+                    organizerActions
+                    busy={actionCode === event.code}
+                    onArchive={handleArchive}
+                    onDuplicate={handleDuplicate}
+                    onDeleteRequested={openDeletePanel}
+                  />
+                ))}
+              </div>
+            ) : archivedEvents.length > 0 ? (
+              <EmptyState icon={<CalendarIcon />} title="No active events.">
+                Your archived events are listed below.
+              </EmptyState>
+            ) : (
+              <EmptyState
+                icon={<CalendarIcon />}
+                title="No events organized yet."
+                actions={
+                  <Link
+                    href="/create"
+                    className="btn btn-outline-secondary app-btn"
+                  >
+                    <span className="app-btn-icon" aria-hidden="true">
+                      <AddIcon />
+                    </span>
+                    <span className="app-btn-label">
+                      Create your first event
+                    </span>
+                  </Link>
+                }
+              >
+                Create an event to start collecting availability.
+              </EmptyState>
+            )}
+          </Panel>
+
+          {archivedEvents.length > 0 && (
+            <Panel
+              title={`Archived (${archivedEvents.length})`}
+              titleId="dashboard-archived-heading"
+              headingLevel={2}
+              description="Archived events are read-only. Duplicate one to start again, or delete it permanently."
+              aria-labelledby="dashboard-archived-heading"
+            >
+              <div className="d-flex flex-column gap-3">
+                {archivedEvents.map((event) => (
+                  <EventCard
+                    key={event.code}
+                    event={event}
+                    organizerActions
+                    busy={actionCode === event.code}
+                    onArchive={handleArchive}
+                    onDuplicate={handleDuplicate}
+                    onDeleteRequested={openDeletePanel}
+                  />
+                ))}
+              </div>
+            </Panel>
+          )}
+
+          <Panel
+            title={`Events I Participate In (${participating.length})`}
+            headingLevel={2}
+          >
+            {participating.length > 0 ? (
+              <div className="d-flex flex-column gap-3">
+                {participating.map((event) => (
+                  <EventCard key={event.code} event={event} />
+                ))}
+              </div>
+            ) : (
+              <EmptyState
+                icon={<GroupIcon />}
+                title="Not participating in any events yet."
+              >
+                Events you join with an invitation or event code appear here.
+              </EmptyState>
+            )}
+          </Panel>
         </div>
 
         {deleteTarget && (
-          <form
-            className="dashboard-delete-panel"
+          <Modal
+            as="form"
             onSubmit={handleDelete}
-            aria-labelledby="delete-event-heading"
+            title={`Delete ${deleteTarget.name}?`}
+            labelledBy="delete-event-heading"
+            size="md"
+            onClose={closeDeletePanel}
+            busy={deleting}
+            footer={
+              <>
+                <AppButton
+                  variant="text"
+                  onClick={closeDeletePanel}
+                  disabled={deleting}
+                >
+                  Cancel
+                </AppButton>
+                <AppButton
+                  type="submit"
+                  variant="danger-filled"
+                  icon={<DeleteIcon />}
+                  busy={deleting}
+                  disabled={
+                    deleting || deleteConfirmation !== deleteTarget.code
+                  }
+                >
+                  {deleting ? "Deleting..." : "Delete event permanently"}
+                </AppButton>
+              </>
+            }
           >
-            <h2 id="delete-event-heading">Delete {deleteTarget.name}?</h2>
+            {error && (
+              <Alert variant="danger" role="alert" className="mb-3">
+                {error}
+              </Alert>
+            )}
             <p>
               This permanently removes the event, participant responses,
               invitations, final meeting, and queued event emails. This action
               cannot be undone.
             </p>
-            <label className="field-label">
-              Type <strong>{deleteTarget.code}</strong> to confirm
+            <FormField
+              id="delete-event-confirmation"
+              label={
+                <>
+                  Type <strong>{deleteTarget.code}</strong> to confirm
+                </>
+              }
+              // Mirrors the backend rejection in
+              // src/api/apps/scheduling/services/events/mutations.py.
+              error={
+                confirmationMismatch
+                  ? "Type the event code exactly to confirm deletion"
+                  : null
+              }
+            >
               <input
+                type="text"
+                className="form-control"
                 aria-label="Event code confirmation"
+                data-autofocus
+                autoComplete="off"
                 value={deleteConfirmation}
                 onChange={(event) => setDeleteConfirmation(event.target.value)}
-                autoComplete="off"
               />
-            </label>
-            <div className="dashboard-delete-actions">
-              <AppButton variant="text" onClick={closeDeletePanel}>
-                Cancel
-              </AppButton>
-              <AppButton
-                type="submit"
-                variant="outlined"
-                className="app-btn-danger"
-                icon={<MdDeleteOutline />}
-                disabled={
-                  actionCode === deleteTarget.code ||
-                  deleteConfirmation !== deleteTarget.code
-                }
-              >
-                {actionCode === deleteTarget.code
-                  ? "Deleting..."
-                  : "Delete event permanently"}
-              </AppButton>
-            </div>
-          </form>
+            </FormField>
+          </Modal>
         )}
-
-        <section className="md-card dashboard-section">
-          <h2>My Events ({organized.length})</h2>
-          {organized.length > 0 ? (
-            <div className="dashboard-event-list">
-              {organized.map((event) => (
-                <EventCard
-                  key={event.code}
-                  event={event}
-                  organizerActions
-                  busy={actionCode === event.code}
-                  onArchive={handleArchive}
-                  onDuplicate={handleDuplicate}
-                  onDeleteRequested={openDeletePanel}
-                />
-              ))}
-            </div>
-          ) : (
-            <p className="dashboard-empty">No events organized yet.</p>
-          )}
-        </section>
-
-        <section className="md-card dashboard-section">
-          <h2>Events I Participate In ({participating.length})</h2>
-          {participating.length > 0 ? (
-            <div className="dashboard-event-list">
-              {participating.map((event) => (
-                <EventCard key={event.code} event={event} />
-              ))}
-            </div>
-          ) : (
-            <p className="dashboard-empty">
-              Not participating in any events yet.
-            </p>
-          )}
-        </section>
       </main>
     </>
   );

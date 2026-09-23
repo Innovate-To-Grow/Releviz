@@ -4,6 +4,7 @@ import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 import ContinueWithEmailPage from "@/components/auth/ContinueWithEmailPage";
 import AppHeader from "@/components/ui/AppHeader";
+import LoadingState from "@/components/ui/LoadingState";
 import { safeNextPath } from "@/lib/navigation";
 
 function LoginContent() {
@@ -33,7 +34,9 @@ export default function Login() {
         <>
           <AppHeader />
           <main className="auth-page auth-page-with-header">
-            <div className="auth-panel">Loading...</div>
+            <section className="auth-panel">
+              <LoadingState label="Loading..." className="p-0" />
+            </section>
           </main>
         </>
       }

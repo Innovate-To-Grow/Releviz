@@ -8,16 +8,11 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
-
-jest.mock("@material/web/checkbox/checkbox.js", () => ({}), { virtual: true });
-jest.mock("@material/web/dialog/dialog.js", () => ({}), { virtual: true });
-jest.mock("@material/web/slider/slider.js", () => ({}), { virtual: true });
-jest.mock("@material/web/textfield/outlined-text-field.js", () => ({}), {
-  virtual: true,
-});
+import { useState } from "react";
 
 jest.mock("@/components/auth/AuthContext", () => ({
   useAuth: jest.fn(),
@@ -68,6 +63,7 @@ jest.mock("@/lib/api/participants", () => ({
 
 jest.mock("@/lib/api/events", () => ({
   confirmFinalMeeting: jest.fn(),
+  fetchEvent: jest.fn(),
   fetchEventResults: jest.fn(),
   fetchFinalization: jest.fn(),
   fetchInvitations: jest.fn(),
@@ -85,7 +81,7 @@ import {
   joinEvent,
   updateParticipant,
 } from "@/lib/api/participants";
-import { fetchEventResults } from "@/lib/api/events";
+import { fetchEvent, fetchEventResults } from "@/lib/api/events";
 
 const member = { id: "member-1", displayName: "Morgan Member" };
 const slots = [
@@ -106,12 +102,55 @@ const slots = [
     ],
   },
 ];
+// Two days with one organizer-blocked slot each (indices 1 and 3).
+const blockedSlots = [
+  {
+    key: "2026-08-18",
+    label: "Tuesday",
+    slots: [
+      {
+        index: 0,
+        startsAt: "2026-08-18T09:00:00Z",
+        endsAt: "2026-08-18T09:30:00Z",
+        blocked: false,
+      },
+      {
+        index: 1,
+        startsAt: "2026-08-18T09:30:00Z",
+        endsAt: "2026-08-18T10:00:00Z",
+        blocked: true,
+      },
+    ],
+  },
+  {
+    key: "2026-08-19",
+    label: "Wednesday",
+    slots: [
+      {
+        index: 2,
+        startsAt: "2026-08-19T09:00:00Z",
+        endsAt: "2026-08-19T09:30:00Z",
+      },
+      {
+        index: 3,
+        startsAt: "2026-08-19T09:30:00Z",
+        endsAt: "2026-08-19T10:00:00Z",
+        blocked: true,
+      },
+    ],
+  },
+];
+const BLOCKED_NOTE =
+  "Grey striped times are blocked by the organizer and do not apply to this event.";
+// The legacy Busy start (paint Available over empty slots) keeps these
+// long-running flows readable; the Available default has its own tests.
 const baseEvent = {
   code: "EVENT123",
   name: "Planning session",
   mode: "mixed",
   location: "Room 4",
   status: "active",
+  startingAvailability: "busy",
   version: 3,
   timezone: "UTC",
   slotMinutes: 30,
@@ -128,11 +167,6 @@ function auth(user = member, loading = false) {
     loading,
     getToken: jest.fn().mockResolvedValue("token"),
   });
-}
-
-function setCustomElementValue(element, value) {
-  element.value = value;
-  fireEvent(element, new Event("input", { bubbles: true }));
 }
 
 function participant(id, userId, name, overrides = {}) {
@@ -343,6 +377,84 @@ describe("participant workflow", () => {
     expect(await screen.findByText("Schedule submitted.")).toBeInTheDocument();
   });
 
+  test("marks everything busy, reports a failed submit, and warns before unloading", async () => {
+    fetchCurrentParticipant.mockResolvedValue({
+      participant: participant("mine", member.id, member.displayName, {
+        availabilityInperson: [1, 1],
+        availabilityVirtual: [1, 1],
+      }),
+      scheduleDataIncluded: true,
+    });
+    let release;
+    updateParticipant
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            release = resolve;
+          }),
+      )
+      .mockRejectedValueOnce(new Error("Network unavailable"));
+    renderParticipant();
+    expect(
+      await screen.findByText(`Welcome, ${member.displayName}`),
+    ).toBeInTheDocument();
+    const dispatchUnload = () => {
+      const unload = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(unload);
+      return unload.defaultPrevented;
+    };
+    expect(dispatchUnload()).toBe(false);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Mark all Busy" }),
+    );
+    expect(dispatchUnload()).toBe(true);
+    await waitFor(() => expect(release).toBeDefined());
+    await act(async () => {
+      release({
+        participant: participant("mine", member.id, member.displayName, {
+          availabilityInperson: [0, 0],
+          availabilityVirtual: [0, 0],
+          version: 2,
+        }),
+      });
+    });
+    expect(
+      await screen.findByText("Draft saved. Submit when you are ready."),
+    ).toBeInTheDocument();
+    expect(updateParticipant.mock.calls[0][2]).toEqual({
+      availabilityInperson: [0, 0],
+      availabilityVirtual: [0, 0],
+      submitted: 0,
+      expectedVersion: 1,
+    });
+    expect(dispatchUnload()).toBe(false);
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Submit Availability" }),
+    );
+    expect(
+      await screen.findByText("Failed to submit: Network unavailable"),
+    ).toBeInTheDocument();
+  });
+
+  test("explains when the token for an automatic join cannot be obtained", async () => {
+    const consumeRespondIntent = jest.fn();
+    useAuth.mockReturnValue({
+      user: member,
+      loading: false,
+      getToken: jest.fn().mockRejectedValue(new Error("Session expired")),
+    });
+    renderParticipant(baseEvent, {
+      respondIntent: true,
+      consumeRespondIntent,
+    });
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "We couldn't start your response: Session expired",
+    );
+    expect(joinEvent).not.toHaveBeenCalled();
+    expect(consumeRespondIntent).toHaveBeenCalledTimes(1);
+  });
+
   test("surfaces autosave conflicts and reloads the authoritative response", async () => {
     const latest = participant("mine", member.id, member.displayName, {
       availabilityInperson: [0.5, 0],
@@ -513,6 +625,85 @@ describe("participant workflow", () => {
     ).toBeInTheDocument();
   });
 
+  test("refresh reloads the event so a changed starting schedule reaches the brush", async () => {
+    const reseeded = participant("mine", member.id, member.displayName, {
+      availabilityInperson: [0, 0],
+      availabilityVirtual: [0, 0],
+      version: 2,
+    });
+    fetchCurrentParticipant
+      .mockResolvedValueOnce({
+        participant: participant("mine", member.id, member.displayName, {
+          availabilityInperson: [1, 1],
+          availabilityVirtual: [1, 1],
+        }),
+        scheduleDataIncluded: true,
+      })
+      .mockResolvedValueOnce({
+        participant: reseeded,
+        scheduleDataIncluded: true,
+      });
+    const busyStart = { ...baseEvent, startingAvailability: "busy" };
+    fetchEvent.mockResolvedValue({ event: busyStart });
+
+    function Harness() {
+      const [event, setEvent] = useState({
+        ...baseEvent,
+        startingAvailability: "available",
+      });
+      return (
+        <EventContext.Provider value={{ event, setEvent, numSlots: 2 }}>
+          <ParticipantView />
+        </EventContext.Provider>
+      );
+    }
+    render(<Harness />);
+    await screen.findByText(`Welcome, ${member.displayName}`);
+    let choices = screen.getByRole("group", { name: "Availability status" });
+    expect(
+      within(choices).getByRole("button", { name: "Busy" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.getByRole("button", { name: "Mark all Available" }),
+    ).toBeInTheDocument();
+
+    // The organizer switched the event to a Busy start meanwhile.
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() =>
+      expect(fetchCurrentParticipant).toHaveBeenCalledTimes(2),
+    );
+    expect(fetchEvent).toHaveBeenCalledWith(baseEvent.code, "token");
+    expect(
+      await screen.findByRole("button", { name: "Mark all Busy" }),
+    ).toBeInTheDocument();
+    choices = screen.getByRole("group", { name: "Availability status" });
+    expect(
+      within(choices).getByRole("button", { name: "Available" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("grid-In-Person")).toHaveTextContent("0,0");
+    expect(
+      screen.getByText(
+        "Choose a status, then click or drag across the times below.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  test("refresh still reloads the response when the event read fails", async () => {
+    fetchCurrentParticipant.mockResolvedValue({
+      participant: participant("mine", member.id, member.displayName),
+      scheduleDataIncluded: true,
+    });
+    fetchEvent.mockRejectedValue(new Error("Event unavailable"));
+
+    renderParticipant();
+    await screen.findByText(`Welcome, ${member.displayName}`);
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() =>
+      expect(fetchCurrentParticipant).toHaveBeenCalledTimes(2),
+    );
+    expect(screen.queryByText("Event unavailable")).not.toBeInTheDocument();
+  });
+
   test("aborts refresh when the pending draft cannot be saved", async () => {
     fetchCurrentParticipant.mockResolvedValueOnce({
       participant: participant("mine", member.id, member.displayName),
@@ -570,7 +761,7 @@ describe("participant workflow", () => {
     jest.useRealTimers();
   });
 
-  test("shows authorized shared results and locks changes after finalization", async () => {
+  test("never shows group availability to a participant and locks changes after finalization", async () => {
     fetchCurrentParticipant.mockResolvedValue({
       participant: participant("mine", member.id, member.displayName, {
         submitted: true,
@@ -587,10 +778,21 @@ describe("participant workflow", () => {
       results: sharedResults,
     });
 
-    const view = renderParticipant();
+    // Even an event configured for realtime sharing shows only the person's
+    // own calendar: group availability is the organizer's view.
+    const view = renderParticipant({
+      ...baseEvent,
+      participantViewPermission: "realtime",
+    });
+    await waitFor(() => expect(fetchCurrentParticipant).toHaveBeenCalled());
     expect(
-      await screen.findByText(/Based on 2 submitted response/),
+      screen.getByRole("heading", { name: "Mark times as" }),
     ).toBeInTheDocument();
+    expect(fetchEventResults).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("heading", { name: /group availability/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/submitted response/)).not.toBeInTheDocument();
     expect(
       screen.queryByRole("heading", { name: "Individual Schedules" }),
     ).not.toBeInTheDocument();
@@ -598,6 +800,7 @@ describe("participant workflow", () => {
     await waitFor(() =>
       expect(fetchCurrentParticipant).toHaveBeenCalledTimes(2),
     );
+    expect(fetchEventResults).not.toHaveBeenCalled();
     view.unmount();
 
     renderParticipant({ ...baseEvent, status: "finalized" });
@@ -609,50 +812,6 @@ describe("participant workflow", () => {
     expect(
       screen.getByRole("button", { name: "Update Availability" }),
     ).toBeDisabled();
-  });
-
-  test("polls versioned group results until the requested revision is fresh", async () => {
-    jest.useFakeTimers();
-    fetchCurrentParticipant.mockResolvedValue({
-      participant: participant("mine", member.id, member.displayName, {
-        submitted: true,
-      }),
-      scheduleDataIncluded: true,
-    });
-    fetchEventResults
-      .mockResolvedValueOnce({
-        status: "refreshing",
-        requestedRevision: 5,
-        computedRevision: 4,
-        results: sharedResults,
-      })
-      .mockResolvedValueOnce({
-        status: "fresh",
-        requestedRevision: 5,
-        computedRevision: 5,
-        results: sharedResults,
-      });
-
-    const view = renderParticipant({ ...baseEvent, resultsRevision: 5 });
-    await act(async () => {
-      jest.advanceTimersByTime(0);
-    });
-    expect(
-      screen.getByText(/Group availability is updating for revision 5/),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/Based on 2 submitted response/),
-    ).toBeInTheDocument();
-
-    await act(async () => {
-      jest.advanceTimersByTime(2000);
-    });
-    expect(fetchEventResults).toHaveBeenCalledTimes(2);
-    expect(
-      screen.queryByText(/Group availability is updating/),
-    ).not.toBeInTheDocument();
-    view.unmount();
-    jest.useRealTimers();
   });
 
   test("renders loading and own-only empty-result semantics", async () => {
@@ -678,5 +837,205 @@ describe("participant workflow", () => {
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText("Group Availability")).not.toBeInTheDocument();
+  });
+
+  test("an Available start pre-selects Busy and lets people restore every slot to Available", async () => {
+    const availableStart = { ...baseEvent, startingAvailability: "available" };
+    joinEvent.mockResolvedValue({
+      participant: participant("mine", member.id, member.displayName, {
+        availabilityInperson: [1, 1],
+        availabilityVirtual: [1, 1],
+      }),
+    });
+    updateParticipant.mockResolvedValue({
+      participant: participant("mine", member.id, member.displayName, {
+        availabilityInperson: [1, 1],
+        availabilityVirtual: [1, 1],
+        version: 2,
+      }),
+    });
+
+    renderParticipant(availableStart);
+    await screen.findByRole("heading", { name: "Join Event" });
+    expect(
+      screen.getByText(
+        "Join, mark the times that do not work for you, then submit your response.",
+      ),
+    ).toBeInTheDocument();
+    await userEvent.click(
+      screen.getByRole("button", { name: `Join as ${member.displayName}` }),
+    );
+    await screen.findByText(`Welcome, ${member.displayName}`);
+    expect(
+      screen.getByText(
+        "Every time starts as Available. Paint Busy over the times that do not work for you.",
+      ),
+    ).toBeInTheDocument();
+
+    const choices = screen.getByRole("group", { name: "Availability status" });
+    expect(
+      within(choices).getByRole("button", { name: "Busy" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      within(choices).getByRole("button", { name: "Available" }),
+    ).toHaveAttribute("aria-pressed", "false");
+    expect(
+      screen.getByRole("button", { name: "Apply Busy to all" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Mark all Busy" }),
+    ).not.toBeInTheDocument();
+
+    // The pre-selected Busy brush paints 0 over the Available default.
+    await userEvent.click(
+      screen.getByRole("button", { name: "Paint In-Person" }),
+    );
+    expect(screen.getByTestId("grid-In-Person")).toHaveTextContent("0,1");
+    await waitFor(() =>
+      expect(updateParticipant).toHaveBeenLastCalledWith(
+        baseEvent.code,
+        "mine",
+        expect.objectContaining({
+          availabilityInperson: [0, 1],
+          availabilityVirtual: [1, 1],
+        }),
+        "token",
+      ),
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Mark all Available" }),
+    );
+    expect(screen.getByTestId("grid-In-Person")).toHaveTextContent("1,1");
+    // The mixed editor shows one channel at a time; the autosave payload
+    // proves both channels were restored.
+    await waitFor(() =>
+      expect(updateParticipant).toHaveBeenLastCalledWith(
+        baseEvent.code,
+        "mine",
+        expect.objectContaining({
+          availabilityInperson: [1, 1],
+          availabilityVirtual: [1, 1],
+        }),
+        "token",
+      ),
+    );
+  });
+
+  test("a Busy start pre-selects Available and shows Mark all Busy", async () => {
+    fetchCurrentParticipant.mockResolvedValue({
+      participant: participant("mine", member.id, member.displayName),
+      scheduleDataIncluded: true,
+    });
+
+    renderParticipant();
+    await screen.findByText(`Welcome, ${member.displayName}`);
+    const choices = screen.getByRole("group", { name: "Availability status" });
+    expect(
+      within(choices).getByRole("button", { name: "Available" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.getByRole("button", { name: "Mark all Busy" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Every time starts as Available/),
+    ).not.toBeInTheDocument();
+  });
+
+  test("the brush follows a changed starting level after the event refreshes", async () => {
+    fetchCurrentParticipant.mockResolvedValue({
+      participant: participant("mine", member.id, member.displayName),
+      scheduleDataIncluded: true,
+    });
+
+    const view = renderParticipant();
+    await screen.findByText(`Welcome, ${member.displayName}`);
+    let choices = screen.getByRole("group", { name: "Availability status" });
+    expect(
+      within(choices).getByRole("button", { name: "Available" }),
+    ).toHaveAttribute("aria-pressed", "true");
+
+    const availableStart = { ...baseEvent, startingAvailability: "available" };
+    view.rerender(
+      <EventContext.Provider value={{ event: availableStart, numSlots: 2 }}>
+        <ParticipantView />
+      </EventContext.Provider>,
+    );
+    choices = screen.getByRole("group", { name: "Availability status" });
+    expect(
+      within(choices).getByRole("button", { name: "Busy" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.getByRole("button", { name: "Mark all Available" }),
+    ).toBeInTheDocument();
+  });
+
+  test("explains organizer-blocked times and never fills them", async () => {
+    fetchCurrentParticipant.mockResolvedValue({
+      participant: participant("mine", member.id, member.displayName, {
+        availabilityInperson: [0, 0, 0, 0],
+        availabilityVirtual: [0, 0, 0, 0],
+      }),
+      scheduleDataIncluded: true,
+    });
+    updateParticipant.mockImplementation(async (_code, _id, payload) => ({
+      participant: participant("mine", member.id, member.displayName, {
+        availabilityInperson: payload.availabilityInperson,
+        availabilityVirtual: payload.availabilityVirtual,
+        version: 2,
+      }),
+    }));
+
+    renderParticipant(
+      { ...baseEvent, slotGroups: blockedSlots },
+      { numSlots: 4 },
+    );
+    await screen.findByText(`Welcome, ${member.displayName}`);
+    expect(screen.getByRole("note")).toHaveTextContent(BLOCKED_NOTE);
+
+    // Both channels of a mixed event fill around the blocked indices.
+    await userEvent.click(
+      screen.getByRole("button", { name: "Apply Available to all" }),
+    );
+    expect(screen.getByTestId("grid-In-Person")).toHaveTextContent("1,0,1,0");
+    await waitFor(() =>
+      expect(updateParticipant).toHaveBeenLastCalledWith(
+        baseEvent.code,
+        "mine",
+        expect.objectContaining({
+          availabilityInperson: [1, 0, 1, 0],
+          availabilityVirtual: [1, 0, 1, 0],
+        }),
+        "token",
+      ),
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Mark all Busy" }),
+    );
+    expect(screen.getByTestId("grid-In-Person")).toHaveTextContent("0,0,0,0");
+    await waitFor(() =>
+      expect(updateParticipant).toHaveBeenLastCalledWith(
+        baseEvent.code,
+        "mine",
+        expect.objectContaining({
+          availabilityInperson: [0, 0, 0, 0],
+          availabilityVirtual: [0, 0, 0, 0],
+        }),
+        "token",
+      ),
+    );
+  });
+
+  test("omits the blocked-times note when no slot is blocked", async () => {
+    fetchCurrentParticipant.mockResolvedValue({
+      participant: participant("mine", member.id, member.displayName),
+      scheduleDataIncluded: true,
+    });
+
+    renderParticipant();
+    await screen.findByText(`Welcome, ${member.displayName}`);
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+    expect(screen.queryByText(BLOCKED_NOTE)).not.toBeInTheDocument();
   });
 });

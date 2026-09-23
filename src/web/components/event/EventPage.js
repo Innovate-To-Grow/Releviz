@@ -7,6 +7,9 @@ import dynamic from "next/dynamic";
 import EventContext from "@/components/event/EventContext";
 import EventHeader from "@/components/event/EventHeader";
 import ParticipantView from "@/components/schedule/ParticipantView";
+import AppHeader from "@/components/ui/AppHeader";
+import LoadingState from "@/components/ui/LoadingState";
+import { AddIcon } from "@/components/ui/icons";
 import { useAuth } from "@/components/auth/AuthContext";
 import { fetchEvent, markInvitationOpened } from "@/lib/api/events";
 import { navigateTo, replaceUrl } from "@/lib/navigation";
@@ -16,9 +19,9 @@ const OrganizerView = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div className="page-pad participant-loading" aria-busy="true">
-        <p role="status">Loading organizer tools…</p>
-      </div>
+      <main className="page-shell page-shell--wide" aria-busy="true">
+        <LoadingState label="Loading organizer tools…" />
+      </main>
     ),
   },
 );
@@ -135,21 +138,29 @@ function EventPage() {
   ) {
     return (
       <main className="status-page" aria-busy="true">
-        <p role="status">Loading event...</p>
+        <LoadingState label="Loading event..." />
       </main>
     );
   }
 
   if (!event) {
     return (
-      <main className="status-page">
-        <span className="status-page-code">Event unavailable</span>
-        <h1>Event Not Found</h1>
-        <p>{error || "This event does not exist."}</p>
-        <Link className="app-btn app-btn-filled" href="/create">
-          Create New Event
-        </Link>
-      </main>
+      <>
+        <AppHeader pageTitle="Event" />
+        <main className="status-page">
+          <span className="status-page-code">Event unavailable</span>
+          <h1>Event Not Found</h1>
+          <p>{error || "This event does not exist."}</p>
+          <div className="status-page__actions">
+            <Link className="btn btn-primary app-btn" href="/create">
+              <span className="app-btn-icon" aria-hidden="true">
+                <AddIcon />
+              </span>
+              <span className="app-btn-label">Create New Event</span>
+            </Link>
+          </div>
+        </main>
+      </>
     );
   }
 

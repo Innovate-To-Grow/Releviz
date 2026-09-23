@@ -1,13 +1,16 @@
-// Material 3 tone colors for availability gradients
+// Availability heatmap palette, derived from Bootstrap's subtle border tones so
+// the grid matches the rest of the theme. Values must stay in sync with the
+// `--rv-avail-*` custom properties in app/globals.css.
+//
 // In-person: red → yellow → green
-export const color0 = "#ffb4ab"; // busy (red)
-export const color1 = "#ffdea3"; // partial (yellow)
-export const color2 = "#82d3a2"; // free (green)
+export const color0 = "#f1aeb5"; // busy (danger)
+export const color1 = "#ffe69c"; // partial (warning)
+export const color2 = "#a3cfbb"; // free (success)
 
-// Virtual: red → fuchsia → blue
-export const virtualColor0 = "#ffb4ab"; // busy (red)
-export const virtualColor1 = "#f4b8ff"; // partial (fuchsia)
-export const virtualColor2 = "#a8c7fa"; // free (blue)
+// Virtual: red → purple → blue
+export const virtualColor0 = "#f1aeb5"; // busy (danger)
+export const virtualColor1 = "#c5b3e6"; // partial (purple)
+export const virtualColor2 = "#9ec5fe"; // free (primary)
 
 function lerpRGB(a, b, amount) {
   const ar = parseInt(a.substring(1, 3), 16);

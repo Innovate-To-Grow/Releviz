@@ -2,20 +2,20 @@
 
 import Link from "next/link";
 import { useEffect, useId, useRef, useState } from "react";
-import {
-  MdDashboard,
-  MdLogin,
-  MdLogout,
-  MdPerson,
-  MdSettings,
-} from "react-icons/md";
 import { useAuth } from "@/components/auth/AuthContext";
+import Alert from "@/components/ui/Alert";
 import AppButton from "@/components/ui/AppButton";
+import {
+  AccountIcon,
+  ChevronDownIcon,
+  DashboardIcon,
+  SettingsIcon,
+  SignInIcon,
+  SignOutIcon,
+} from "@/components/ui/icons";
 import { flushPendingNavigationWork } from "@/components/schedule/useAutosaveNavigationGuard";
 
-export default function AccountMenu({
-  signedOutLabel = "Continue with email",
-}) {
+export default function AccountMenu({ signedOutLabel = "Sign in" }) {
   const { user, loading, logout } = useAuth();
   const [open, setOpen] = useState(false);
   const [logoutError, setLogoutError] = useState("");
@@ -77,19 +77,25 @@ export default function AccountMenu({
   if (!user) {
     return (
       <nav className="app-header-auth" aria-label="Account">
-        <Link className="app-header-signup" href="/login">
-          <MdLogin aria-hidden="true" /> {signedOutLabel}
+        <Link className="btn btn-outline-primary app-btn" href="/login">
+          <span className="app-btn-icon" aria-hidden="true">
+            <SignInIcon />
+          </span>
+          <span className="app-btn-label">{signedOutLabel}</span>
         </Link>
       </nav>
     );
   }
 
   return (
-    <div className="account-menu" ref={menuRef}>
+    <div
+      className={`account-menu dropdown${open ? " show" : ""}`}
+      ref={menuRef}
+    >
       <AppButton
         className="account-menu-trigger"
         variant="outlined"
-        icon={<MdPerson />}
+        icon={<AccountIcon />}
         onClick={() => setOpen((current) => !current)}
         onKeyDown={(event) => {
           if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
@@ -101,33 +107,46 @@ export default function AccountMenu({
         aria-controls={menuId}
         aria-expanded={open}
       >
-        {user.displayName}
+        <span className="account-menu-trigger__name">{user.displayName}</span>
+        <span className="app-btn-icon ms-1" aria-hidden="true">
+          <ChevronDownIcon size="0.8em" />
+        </span>
       </AppButton>
       {open && (
         <div
-          className="account-menu-popover"
+          className="dropdown-menu dropdown-menu-end show"
           id={menuId}
           role="menu"
           onKeyDown={handleMenuKeyDown}
         >
+          <div className="dropdown-header">
+            <span className="d-block text-truncate fw-semibold text-body">
+              {user.displayName}
+            </span>
+            {user.email && (
+              <span className="d-block text-truncate small">{user.email}</span>
+            )}
+          </div>
+          <div className="dropdown-divider" />
           <Link
-            className="account-menu-item"
+            className="dropdown-item d-flex align-items-center gap-2"
             href="/dashboard"
             role="menuitem"
             onClick={() => setOpen(false)}
           >
-            <MdDashboard aria-hidden="true" /> My Dashboard
+            <DashboardIcon aria-hidden="true" /> My Dashboard
           </Link>
           <Link
-            className="account-menu-item"
+            className="dropdown-item d-flex align-items-center gap-2"
             href="/settings"
             role="menuitem"
             onClick={() => setOpen(false)}
           >
-            <MdSettings aria-hidden="true" /> Settings
+            <SettingsIcon aria-hidden="true" /> Settings
           </Link>
+          <div className="dropdown-divider" />
           <button
-            className="account-menu-item account-menu-item-danger"
+            className="dropdown-item d-flex align-items-center gap-2 text-danger"
             type="button"
             role="menuitem"
             disabled={logoutPending}
@@ -154,15 +173,27 @@ export default function AccountMenu({
               }
             }}
           >
-            <MdLogout aria-hidden="true" />
+            <SignOutIcon aria-hidden="true" />
             {logoutPending ? "Logging out…" : "Log out"}
           </button>
         </div>
       )}
       {logoutError && (
-        <p className="account-menu-error" role="alert">
+        <Alert
+          variant="danger"
+          className="account-menu-error shadow-sm"
+          actions={
+            <button
+              type="button"
+              className="btn btn-sm btn-outline-danger"
+              onClick={() => setLogoutError("")}
+            >
+              Dismiss
+            </button>
+          }
+        >
           {logoutError}
-        </p>
+        </Alert>
       )}
     </div>
   );

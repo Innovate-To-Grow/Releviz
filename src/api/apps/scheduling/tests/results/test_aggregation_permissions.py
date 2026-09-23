@@ -188,6 +188,51 @@ class AggregationDomainTests(TestCase):
             results["recommendationBasis"]["order"][0],
             "highestWeightedAvailability",
         )
+        self.assertEqual(results["blockedSlotIndices"], [])
+
+    def test_blocked_slots_are_zeroed_in_every_channel_and_listed(self):
+        self.event.blocked_slots = {"date:2026-07-21": [0]}
+        self.event.save(update_fields=["blocked_slots"])
+        # Stale marks on the blocked slot stay stored but never count.
+        self.add_participant(
+            "blocked-full@example.com",
+            inperson=(1, 1),
+            virtual=(0.5, 1),
+            submitted=True,
+        )
+        weighted = self.add_participant(
+            "blocked-weighted@example.com",
+            inperson=(0, 1),
+            virtual=(1, 1),
+            submitted=True,
+        )
+        Weight.objects.create(event=self.event, participant=weighted, weight=0.5)
+
+        results = build_event_results(
+            self.event,
+            now=datetime(2026, 7, 16, 12, tzinfo=UTC),
+        )
+
+        self.assertEqual(results["slotCount"], 2)
+        self.assertEqual(results["blockedSlotIndices"], [1])
+        self.assertEqual(results["channels"]["inperson"]["unweighted"], [0.5, 0.0])
+        self.assertEqual(results["channels"]["inperson"]["weighted"], [0.6667, 0.0])
+        self.assertEqual(results["channels"]["virtual"]["unweighted"], [0.75, 0.0])
+        self.assertEqual(results["channels"]["virtual"]["weighted"], [0.6667, 0.0])
+        self.assertEqual(
+            [
+                (recommendation["channel"], recommendation["slotIndices"])
+                for recommendation in results["recommendations"]
+            ],
+            [("virtual", [0]), ("inperson", [0])],
+        )
+
+        # Arrays keep their full length before anyone answers.
+        Participant.objects.filter(event=self.event).delete()
+        empty = build_event_results(self.event)
+        self.assertEqual(empty["blockedSlotIndices"], [1])
+        self.assertEqual(empty["channels"]["inperson"]["unweighted"], [0.0, 0.0])
+        self.assertEqual(empty["channels"]["virtual"]["weighted"], [0.0, 0.0])
 
     def test_channel_parsing_validity_and_empty_or_zero_weight_results(self):
         inperson_event = Event.objects.create(
@@ -355,40 +400,24 @@ class SchedulingPermissionTests(TestCase):
 
         self.assertIsNone(visible_participants_for_user(self.event, self.unrelated))
         self.assertFalse(can_view_event_results(self.event, self.unrelated))
-        self.assertEqual(
-            self.ids(visible_participants_for_user(self.event, self.first)),
-            {self.first.pk},
-        )
-        self.assertFalse(can_view_event_results(self.event, self.first))
 
-        self.event.participant_view_permission = "all_after_submit"
-        self.event.save(update_fields=["participant_view_permission"])
-        self.assertEqual(
-            self.ids(visible_participants_for_user(self.event, self.unsubmitted)),
-            {self.unsubmitted.pk},
-        )
-        self.assertFalse(can_view_event_results(self.event, self.unsubmitted))
-        self.assertEqual(
-            self.ids(visible_participants_for_user(self.event, self.first)),
-            {self.first.pk, self.second.pk},
-        )
-        self.assertTrue(can_view_event_results(self.event, self.first))
-
-        self.event.participant_view_permission = "realtime"
-        self.event.save(update_fields=["participant_view_permission"])
-        self.assertEqual(
-            self.ids(visible_participants_for_user(self.event, self.unsubmitted)),
-            {self.first.pk, self.second.pk, self.unsubmitted.pk},
-        )
-        self.assertTrue(can_view_event_results(self.event, self.unsubmitted))
-
-        for member in (self.hidden_member, self.excluded_member):
-            with self.subTest(member=member.email):
-                self.assertEqual(
-                    self.ids(visible_participants_for_user(self.event, member)),
-                    {member.pk},
-                )
-                self.assertFalse(can_view_event_results(self.event, member))
+        # Group availability is the organizer's view: whatever the stored
+        # setting says, every participant sees only themselves.
+        for permission in ("own_only", "all_after_submit", "realtime"):
+            self.event.participant_view_permission = permission
+            self.event.save(update_fields=["participant_view_permission"])
+            for member in (
+                self.first,
+                self.unsubmitted,
+                self.hidden_member,
+                self.excluded_member,
+            ):
+                with self.subTest(permission=permission, member=member.email):
+                    self.assertEqual(
+                        self.ids(visible_participants_for_user(self.event, member)),
+                        {member.pk},
+                    )
+                    self.assertFalse(can_view_event_results(self.event, member))
 
 
 class AggregationPermissionApiTests(TestCase):
@@ -439,6 +468,8 @@ class AggregationPermissionApiTests(TestCase):
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token_for(member)}")
 
     def test_direct_api_access_and_result_visibility_matrix(self):
+        self.event.blocked_slots = {"weekday:1": [6]}
+        self.event.save(update_fields=["blocked_slots"])
         recompute_event_results(self.event.pk)
         self.assertEqual(self.client.get("/events/results").status_code, 401)
 
@@ -478,52 +509,34 @@ class AggregationPermissionApiTests(TestCase):
         self.assertEqual(organizer_results.data["results"]["unansweredParticipantTotal"], 1)
         self.assertEqual(
             organizer_results.data["results"]["channels"]["inperson"]["unweighted"],
-            [0.5] * 7,
+            [0.5] * 6 + [0.0],
         )
+        self.assertEqual(organizer_results.data["results"]["blockedSlotIndices"], [6])
         self.assertIn("private", organizer_results["Cache-Control"])
 
-        self.event.participant_view_permission = "all_after_submit"
-        self.event.save(update_fields=["participant_view_permission"])
-        self.authenticate(self.unsubmitted)
-        before_submit = self.client.get(f"/events/participants?code={self.event.code}")
-        self.assertEqual(
-            [participant["id"] for participant in before_submit.data["participants"]],
-            [str(self.unsubmitted.pk)],
-        )
-        self.assertEqual(
-            self.client.get(f"/events/results?code={self.event.code}").status_code,
-            403,
-        )
-
-        self.authenticate(self.first)
-        after_submit = self.client.get(f"/events/participants?code={self.event.code}")
-        self.assertEqual(
-            [participant["id"] for participant in after_submit.data["participants"]],
-            [str(self.first.pk)],
-        )
-        self.assertEqual(
-            self.client.get(f"/events/results?code={self.event.code}").status_code,
-            200,
-        )
-
-        self.event.participant_view_permission = "realtime"
-        self.event.save(update_fields=["participant_view_permission"])
-        self.authenticate(self.unsubmitted)
-        realtime = self.client.get(f"/events/participants?code={self.event.code}")
-        self.assertEqual(
-            [participant["id"] for participant in realtime.data["participants"]],
-            [str(self.unsubmitted.pk)],
-        )
-        self.assertEqual(
-            self.client.get(f"/events/results?code={self.event.code}").status_code,
-            200,
-        )
+        # The stored setting never opens results or the roster to participants.
+        for permission in ("all_after_submit", "realtime"):
+            self.event.participant_view_permission = permission
+            self.event.save(update_fields=["participant_view_permission"])
+            for member in (self.unsubmitted, self.first):
+                with self.subTest(permission=permission, member=member.email):
+                    self.authenticate(member)
+                    listing = self.client.get(f"/events/participants?code={self.event.code}")
+                    self.assertEqual(
+                        [participant["id"] for participant in listing.data["participants"]],
+                        [str(member.pk)],
+                    )
+                    self.assertEqual(
+                        self.client.get(f"/events/results?code={self.event.code}").status_code,
+                        403,
+                    )
 
         Weight.objects.create(
             event=self.event,
             participant=self.draft_participant,
             included=False,
         )
+        self.authenticate(self.unsubmitted)
         self.assertEqual(
             self.client.get(f"/events/results?code={self.event.code}").status_code,
             403,

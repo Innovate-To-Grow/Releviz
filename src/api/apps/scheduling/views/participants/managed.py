@@ -15,6 +15,7 @@ from apps.scheduling.payloads import api_participant, email_delivery_request_pay
 from apps.scheduling.services.invitations import (
     EventEmailRequestError,
     ManagedParticipantError,
+    create_or_reuse_managed_participant,
     create_or_reuse_managed_participant_and_send,
 )
 from apps.scheduling.services.results import mark_event_results_dirty
@@ -43,9 +44,19 @@ class ManagedParticipantView(APIView):
             idempotency_key = uuid.UUID(str(request.data.get("idempotencyKey") or ""))
         except (ValueError, TypeError, AttributeError):
             return Response({"error": "idempotencyKey must be a UUID"}, status=400)
+        organizer_managed = request.data.get("organizerManaged")
+        if organizer_managed is None:
+            organizer_managed = False
+        if not isinstance(organizer_managed, bool):
+            return Response({"error": "organizerManaged must be true or false"}, status=400)
+        send_invitation = request.data.get("sendInvitation", True)
+        if not isinstance(send_invitation, bool):
+            return Response({"error": "sendInvitation must be a boolean"}, status=400)
         normalized_email = str(request.data.get("email") or "").strip().lower()
         if (
-            normalized_email
+            send_invitation
+            and not organizer_managed
+            and normalized_email
             and not event.invitations.filter(email__iexact=normalized_email).exists()
             and not EmailDeliveryRequest.objects.filter(
                 event=event,
@@ -62,15 +73,32 @@ class ManagedParticipantView(APIView):
             if not quota.allowed:
                 raise Throttled(wait=quota.retry_after)
         try:
-            result = create_or_reuse_managed_participant_and_send(
-                event=event,
-                organizer=request.user,
-                name=request.data.get("name"),
-                email=request.data.get("email"),
-                idempotency_key=idempotency_key,
-            )
+            if send_invitation:
+                result = create_or_reuse_managed_participant_and_send(
+                    event=event,
+                    organizer=request.user,
+                    name=request.data.get("name"),
+                    email=request.data.get("email"),
+                    idempotency_key=idempotency_key,
+                    phone=request.data.get("phone") or "",
+                    organizer_managed=organizer_managed,
+                )
+            else:
+                result = create_or_reuse_managed_participant(
+                    event=event,
+                    organizer=request.user,
+                    name=request.data.get("name"),
+                    email=request.data.get("email"),
+                    phone=request.data.get("phone") or "",
+                    organizer_managed=organizer_managed,
+                )
+                result["deliveryResult"] = None
         except (ManagedParticipantError, EventEmailRequestError) as exc:
-            return Response({"error": str(exc)}, status=exc.status_code)
+            payload = {"error": str(exc)}
+            error_code = getattr(exc, "error_code", None)
+            if error_code:
+                payload["errorCode"] = error_code
+            return Response(payload, status=exc.status_code)
         participant = result["participant"]
         if result["participantCreated"] or result["participantRestored"]:
             mark_event_results_dirty(event)

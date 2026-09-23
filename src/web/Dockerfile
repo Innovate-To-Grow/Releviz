@@ -1,4 +1,4 @@
-FROM node:26.5.0-bookworm-slim@sha256:2d49d876e96237d76de412761cf05dbfe5aee325cc4406a4d41d5824c5bb8beb AS builder
+FROM node:26.8.2-bookworm-slim@sha256:cd9f682fa2885cd1056e830424764158570061c59736a1da836bc3d73df095ae AS builder
 
 WORKDIR /app
 
@@ -12,14 +12,19 @@ RUN cp package-lock.docker.json package-lock.json && npm ci
 COPY . .
 RUN npm run build
 
-FROM node:26.5.0-bookworm-slim@sha256:2d49d876e96237d76de412761cf05dbfe5aee325cc4406a4d41d5824c5bb8beb AS runner
+FROM node:26.8.2-bookworm-slim@sha256:cd9f682fa2885cd1056e830424764158570061c59736a1da836bc3d73df095ae AS runner
 
 WORKDIR /app
 
 ENV NODE_ENV=production
 ENV PORT=3000
 
-RUN rm -rf /usr/local/lib/node_modules/npm \
+# Pull in Debian security updates the base tag may not carry yet, then drop
+# the package managers the runtime never uses.
+RUN apt-get update \
+  && apt-get upgrade -y \
+  && rm -rf /var/lib/apt/lists/* \
+  && rm -rf /usr/local/lib/node_modules/npm \
     /usr/local/lib/node_modules/corepack \
     /opt/yarn-v* \
   && rm -f /usr/local/bin/npm \

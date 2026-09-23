@@ -3,17 +3,49 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import {
-  MdAdd,
-  MdArrowForward,
-  MdCheckCircle,
-  MdGroups,
-  MdLink,
-  MdSearch,
-} from "react-icons/md";
 import AppButton from "@/components/ui/AppButton";
 import AppHeader from "@/components/ui/AppHeader";
+import FormField from "@/components/ui/FormField";
+import Panel from "@/components/ui/Panel";
+import StatusBadge from "@/components/ui/StatusBadge";
+import {
+  AddIcon,
+  ArrowRightIcon,
+  BestIcon,
+  GroupIcon,
+  LinkIcon,
+  SearchIcon,
+  SuccessIcon,
+} from "@/components/ui/icons";
 import { useAuth } from "@/components/auth/AuthContext";
+
+// Illustrative heatmap for the hero: five weekday columns, four morning rows,
+// with the strongest overlap (5 of 5) landing on Tuesday at 11 AM.
+const PREVIEW_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
+const PREVIEW_ROWS = [
+  { time: "9 AM", overlaps: [2, 3, 1, 2, 2] },
+  { time: "10 AM", overlaps: [3, 4, 3, 2, 3] },
+  { time: "11 AM", overlaps: [3, 5, 4, 3, 2] },
+  { time: "12 PM", overlaps: [2, 3, 2, 1, 2] },
+];
+// `.home-preview-grid` (scheduling.css) reads this custom property for its
+// weekday column count, so the layout stays in step with PREVIEW_DAYS.
+const PREVIEW_GRID_STYLE = { "--rv-preview-columns": PREVIEW_DAYS.length };
+
+const STEPS = [
+  {
+    title: "Suggest the options",
+    copy: "Pick the dates, time range, location, and response deadline.",
+  },
+  {
+    title: "Share one link",
+    copy: "Invite your group with a secure link or event code—no spreadsheet required.",
+  },
+  {
+    title: "Choose the best time",
+    copy: "Compare everyone's availability and finalize the strongest overlap.",
+  },
+];
 
 function HomePage() {
   const router = useRouter();
@@ -39,161 +71,223 @@ function HomePage() {
   return (
     <>
       <AppHeader />
-      <main className="home-page">
-        <section className="home-hero" aria-labelledby="home-heading">
-          <div className="home-hero-copy">
-            <p className="home-eyebrow">
+      <main className="page-shell home-page">
+        <section
+          className="row g-4 g-lg-5 align-items-center home-hero"
+          aria-labelledby="home-heading"
+        >
+          <div className="col-lg-6 home-hero-copy">
+            <span className="eyebrow">
               Group scheduling without the back-and-forth
-            </p>
-            <h1 id="home-heading">Find a time that works for everyone.</h1>
-            <p className="home-lede">
+            </span>
+            <h1 id="home-heading" className="display-6 fw-semibold mb-3">
+              Find a time that works for everyone.
+            </h1>
+            <p className="lead text-secondary mb-4">
               Create a scheduling poll, share one link, and watch the best
               meeting times appear as your group responds.
             </p>
 
-            <div className="home-hero-actions">
+            <div className="d-flex flex-wrap align-items-center gap-3 home-hero-actions">
               <AppButton
                 onClick={handleOrganize}
-                icon={<MdAdd />}
+                icon={<AddIcon />}
+                size="lg"
                 disabled={loading}
                 className="home-create-button"
               >
                 Create a scheduling poll
               </AppButton>
               {user ? (
-                <Link className="home-secondary-link" href="/dashboard">
-                  Go to my dashboard <MdArrowForward aria-hidden="true" />
+                <Link
+                  className="btn btn-outline-secondary btn-lg app-btn home-secondary-link"
+                  href="/dashboard"
+                >
+                  <span className="app-btn-label">Go to my dashboard</span>
+                  <span className="app-btn-icon" aria-hidden="true">
+                    <ArrowRightIcon />
+                  </span>
                 </Link>
               ) : (
-                <p className="home-action-note">
+                <p className="text-secondary mb-0 home-action-note">
                   Continue with your email to create a free account.
                 </p>
               )}
             </div>
           </div>
 
-          <aside
-            className="home-preview"
-            aria-label="Example group availability"
-          >
-            <div className="home-preview-heading">
-              <div>
-                <p>Project kickoff</p>
-                <span>5 people responded</span>
+          <div className="col-lg-6">
+            <aside
+              className="card home-preview"
+              aria-label="Example group availability"
+            >
+              <div className="card-body">
+                <div className="d-flex flex-wrap align-items-start justify-content-between gap-2 mb-3">
+                  <div className="min-w-0">
+                    <p className="fw-semibold mb-0">Project kickoff</p>
+                    <span className="text-secondary small">
+                      5 people responded
+                    </span>
+                  </div>
+                  <StatusBadge status="success" dot={false}>
+                    <span className="icon-inline" aria-hidden="true">
+                      <SuccessIcon />
+                    </span>
+                    Live
+                  </StatusBadge>
+                </div>
+
+                <div
+                  className="home-preview-grid"
+                  aria-hidden="true"
+                  style={PREVIEW_GRID_STYLE}
+                >
+                  <span></span>
+                  {PREVIEW_DAYS.map((day) => (
+                    <strong key={day}>{day}</strong>
+                  ))}
+                  {PREVIEW_ROWS.map((row) => (
+                    <PreviewRow key={row.time} row={row} />
+                  ))}
+                </div>
+
+                {/* The legend explains the decorative heatmap above (how many
+                    of the five people are free), so it is decorative too. */}
+                <div
+                  className="home-preview-legend d-flex align-items-center gap-2 mt-3 small text-secondary"
+                  aria-hidden="true"
+                >
+                  <span>Fewer free</span>
+                  <span className="home-preview-scale d-inline-flex gap-1">
+                    {[1, 2, 3, 4, 5].map((overlap) => (
+                      <i key={overlap} className={`overlap-${overlap}`}></i>
+                    ))}
+                  </span>
+                  <span>Everyone free</span>
+                </div>
+
+                <p className="d-flex align-items-center gap-2 mt-3 mb-0 home-preview-result">
+                  <span className="icon-inline text-primary" aria-hidden="true">
+                    <BestIcon />
+                  </span>
+                  <span>
+                    <strong>Best overlap:</strong> Tuesday at 11:00 AM
+                  </span>
+                </p>
               </div>
-              <span className="home-preview-status">
-                <MdCheckCircle aria-hidden="true" /> Live
-              </span>
-            </div>
-            <div className="home-preview-grid" aria-hidden="true">
-              <span></span>
-              <strong>Mon</strong>
-              <strong>Tue</strong>
-              <strong>Wed</strong>
-              <span>10 AM</span>
-              <i className="overlap-2"></i>
-              <i className="overlap-4"></i>
-              <i className="overlap-3"></i>
-              <span>11 AM</span>
-              <i className="overlap-3"></i>
-              <i className="overlap-5"></i>
-              <i className="overlap-4"></i>
-              <span>12 PM</span>
-              <i className="overlap-2"></i>
-              <i className="overlap-3"></i>
-              <i className="overlap-2"></i>
-            </div>
-            <p className="home-preview-result">
-              <strong>Best overlap:</strong> Tuesday at 11:00 AM
-            </p>
-          </aside>
+            </aside>
+          </div>
         </section>
 
-        <section className="home-join-section" aria-labelledby="join-heading">
-          <div className="home-role-intro">
-            <span className="home-role-icon">
-              <MdGroups aria-hidden="true" />
-            </span>
-            <div>
-              <p className="home-role-label">I&apos;ve been invited</p>
-              <h2 id="join-heading">Open an existing poll</h2>
-              <p>
-                Use the event code from your organizer to add or update your
-                availability.
-              </p>
-            </div>
-          </div>
-          <form className="home-code-form" onSubmit={handleJoin}>
-            <label htmlFor="event-code">Event code</label>
-            <div className="home-code-row">
-              <input
-                id="event-code"
-                name="eventCode"
-                value={eventCode}
-                onChange={(event) => setEventCode(event.target.value)}
-                placeholder="e.g. ABC123"
-                autoCapitalize="characters"
-                autoComplete="off"
-                spellCheck="false"
-              />
-              <AppButton
-                type="submit"
-                icon={<MdSearch />}
-                disabled={loading || !eventCode.trim()}
+        <Panel
+          className="mt-5 home-join-section"
+          aria-labelledby="join-heading"
+        >
+          <div className="row g-4 align-items-start">
+            <div className="col-lg-6 d-flex gap-3 home-role-intro">
+              <span
+                className="empty-state__icon mb-0 flex-shrink-0 home-role-icon"
+                aria-hidden="true"
               >
-                Open event
-              </AppButton>
+                <GroupIcon />
+              </span>
+              <div className="min-w-0">
+                <span className="eyebrow">I&apos;ve been invited</span>
+                <h2 id="join-heading" className="h3">
+                  Open an existing poll
+                </h2>
+                <p className="text-secondary mb-0">
+                  Use the event code from your organizer to add or update your
+                  availability.
+                </p>
+              </div>
             </div>
-            {!user && (
-              <p className="home-code-help">
-                We&apos;ll verify your email, then bring you straight to the
-                event.
-              </p>
-            )}
-          </form>
-        </section>
 
-        <section className="home-steps" aria-labelledby="steps-heading">
-          <p className="home-eyebrow">One shared view, one clear answer</p>
-          <h2 id="steps-heading">How Releviz works</h2>
-          <ol>
-            <li>
-              <span>1</span>
-              <div>
-                <h3>Suggest the options</h3>
-                <p>
-                  Pick the dates, time range, location, and response deadline.
-                </p>
-              </div>
-            </li>
-            <li>
-              <span>2</span>
-              <div>
-                <h3>Share one link</h3>
-                <p>
-                  Invite your group with a secure link or event code—no
-                  spreadsheet required.
-                </p>
-              </div>
-            </li>
-            <li>
-              <span>3</span>
-              <div>
-                <h3>Choose the best time</h3>
-                <p>
-                  Compare everyone&apos;s availability and finalize the
-                  strongest overlap.
-                </p>
-              </div>
-            </li>
-          </ol>
-          <div className="home-trust-note">
-            <MdLink aria-hidden="true" />
-            Each poll keeps its own shareable code, participants, and live
-            result.
+            <div className="col-lg-6">
+              <form className="home-code-form" onSubmit={handleJoin}>
+                <FormField
+                  id="event-code"
+                  label="Event code"
+                  help={
+                    !user
+                      ? "We'll verify your email, then bring you straight to the event."
+                      : null
+                  }
+                >
+                  {(fieldProps) => (
+                    <div className="input-group home-code-row">
+                      <input
+                        {...fieldProps}
+                        type="text"
+                        className="form-control"
+                        name="eventCode"
+                        value={eventCode}
+                        onChange={(event) => setEventCode(event.target.value)}
+                        placeholder="e.g. ABC123"
+                        autoCapitalize="characters"
+                        autoComplete="off"
+                        spellCheck="false"
+                      />
+                      <AppButton
+                        type="submit"
+                        icon={<SearchIcon />}
+                        disabled={loading || !eventCode.trim()}
+                      >
+                        Open event
+                      </AppButton>
+                    </div>
+                  )}
+                </FormField>
+              </form>
+            </div>
           </div>
+        </Panel>
+
+        <section className="mt-5 home-steps" aria-labelledby="steps-heading">
+          <span className="eyebrow">One shared view, one clear answer</span>
+          <h2 id="steps-heading" className="mb-3">
+            How Releviz works
+          </h2>
+          <ol className="row g-3 list-unstyled mb-3" role="list">
+            {STEPS.map((step, index) => (
+              <li key={step.title} className="col-md-4 d-flex">
+                <div className="card w-100">
+                  <div className="card-body">
+                    <span className="section-index mb-3">{index + 1}</span>
+                    <h3 className="h5">{step.title}</h3>
+                    <p className="text-secondary mb-0">{step.copy}</p>
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ol>
+          <p className="d-flex align-items-center gap-2 text-secondary small mb-0 home-trust-note">
+            <span className="icon-inline" aria-hidden="true">
+              <LinkIcon />
+            </span>
+            <span>
+              Each poll keeps its own shareable code, participants, and live
+              result.
+            </span>
+          </p>
         </section>
       </main>
+    </>
+  );
+}
+
+// One time row of the preview heatmap: the label cell plus one overlap cell
+// per weekday. Rendered as siblings so the CSS grid places them directly.
+function PreviewRow({ row }) {
+  return (
+    <>
+      <span>{row.time}</span>
+      {row.overlaps.map((overlap, index) => (
+        <i
+          key={`${row.time}-${PREVIEW_DAYS[index]}`}
+          className={`overlap-${overlap}`}
+        ></i>
+      ))}
     </>
   );
 }

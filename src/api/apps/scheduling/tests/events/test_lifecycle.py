@@ -593,15 +593,18 @@ class LifecycleApiTests(TestCase):
         self.assertIsNotNone(first_submitted_at)
         self.assertEqual(first_submitted_at, last_submitted_at)
 
+        # Everyone starts all-available, so painting one slot Busy is the real change here.
+        self.assertEqual(participant.availability_inperson, [1, 1])
         changed_submission = self.client.put(
             base_url,
             {
-                "availabilityInperson": [1, 1],
+                "availabilityInperson": [1, 0],
                 "expectedVersion": participant.version,
             },
             format="json",
         )
         self.assertEqual(changed_submission.status_code, 200)
         participant.refresh_from_db()
+        self.assertEqual(participant.availability_inperson, [1, 0])
         self.assertEqual(participant.first_submitted_at, first_submitted_at)
         self.assertGreaterEqual(participant.last_submitted_at, last_submitted_at)

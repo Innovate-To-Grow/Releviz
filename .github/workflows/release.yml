@@ -1,0 +1,199 @@
+name: Releviz Production Release
+run-name: >-
+  ${{ github.event_name == 'workflow_run'
+      && format('Production release: {0}', github.event.workflow_run.display_title)
+      || format('Production release (manual): {0}', github.sha) }}
+
+on:
+  # Every green CI run on main is offered as one production release. A
+  # credential-free scope job decides which surfaces (backend, frontend,
+  # infrastructure) changed since each last released, then the affected
+  # surface workflows run side by side as reusable workflows of this run, so
+  # every release job reaches its protected environment at the same moment
+  # and the reviewer approves the whole release once: the "AWS ECS - Prod"
+  # (backend, infrastructure) and "AWS Amplify - Prod" (frontend) gates are
+  # listed together in a single review. Each environment still issues only
+  # its own role's short-lived credentials. Manual dispatch releases the
+  # selected surfaces unconditionally for redeploys and rollbacks.
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type DEPLOY to release the selected main commit to production
+        required: true
+        type: string
+      backend:
+        description: Release the backend (API image, ECS rollout, default admin)
+        type: boolean
+        default: true
+      frontend:
+        description: Release the frontend (Amplify static site, ECS fallback image)
+        type: boolean
+        default: true
+      infrastructure:
+        description: Release the infrastructure (Terraform for everything else)
+        type: boolean
+        default: true
+
+permissions:
+  actions: read
+  checks: read
+  contents: read
+  deployments: write
+  id-token: write
+
+concurrency:
+  group: release-production
+  cancel-in-progress: false
+
+jobs:
+  scope:
+    name: Decide which surfaces changed
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: >-
+      ${{
+        github.ref == 'refs/heads/main' && (
+          github.event_name == 'workflow_dispatch' || (
+            github.event_name == 'workflow_run' &&
+            github.event.workflow_run.conclusion == 'success' &&
+            github.event.workflow_run.event == 'push' &&
+            github.event.workflow_run.head_branch == 'main' &&
+            github.event.workflow_run.head_repository.full_name == github.repository
+          )
+        )
+      }}
+    env:
+      # workflow_run: the CI run's head commit; dispatch: the selected main commit.
+      DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+    outputs:
+      # A manual dispatch releases exactly the surfaces the operator ticked.
+      backend: >-
+        ${{ steps.backend.outputs.release == 'true' &&
+            (github.event_name != 'workflow_dispatch' || inputs.backend) }}
+      frontend: >-
+        ${{ steps.frontend.outputs.release == 'true' &&
+            (github.event_name != 'workflow_dispatch' || inputs.frontend) }}
+      infrastructure: >-
+        ${{ steps.infrastructure.outputs.release == 'true' &&
+            (github.event_name != 'workflow_dispatch' || inputs.infrastructure) }}
+    steps:
+      - name: Checkout release commit with history
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+          fetch-depth: 0
+
+      - name: Compare with the last successful backend release
+        id: backend
+        uses: ./.github/actions/release-scope
+        with:
+          surface: backend
+          release-sha: ${{ env.DEPLOY_SHA }}
+          trigger-event: ${{ github.event_name }}
+          paths: |
+            src/api
+
+      - name: Compare with the last successful frontend release
+        id: frontend
+        uses: ./.github/actions/release-scope
+        with:
+          surface: frontend
+          release-sha: ${{ env.DEPLOY_SHA }}
+          trigger-event: ${{ github.event_name }}
+          paths: |
+            src/web
+            package.json
+            package-lock.json
+            scripts/deploy/amplify-static-deploy.sh
+            scripts/deploy/amplify-apex-target.sh
+            scripts/ci/validate_amplify_static_export.py
+            infra/prod/amplify-custom-headers.json
+
+      - name: Compare with the last successful infrastructure release
+        id: infrastructure
+        uses: ./.github/actions/release-scope
+        with:
+          surface: infrastructure
+          release-sha: ${{ env.DEPLOY_SHA }}
+          trigger-event: ${{ github.event_name }}
+          paths: |
+            infra/prod
+
+  # The surface jobs are deliberately independent (none `needs` another): a
+  # dependent job would only reach its environment after the first finished
+  # and ask the reviewer again. Concurrent Terraform applies serialize on the
+  # remote state lock, as the separate workflows already did.
+  backend:
+    needs: scope
+    if: ${{ needs.scope.outputs.backend == 'true' }}
+    uses: ./.github/workflows/release-backend.yml
+    with:
+      deploy-sha: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      trigger-event: ${{ github.event_name }}
+      confirmation: ${{ inputs.confirmation }}
+
+  frontend:
+    needs: scope
+    if: ${{ needs.scope.outputs.frontend == 'true' }}
+    uses: ./.github/workflows/release-frontend.yml
+    with:
+      deploy-sha: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      trigger-event: ${{ github.event_name }}
+      confirmation: ${{ inputs.confirmation }}
+
+  infrastructure:
+    needs: scope
+    if: ${{ needs.scope.outputs.infrastructure == 'true' }}
+    uses: ./.github/workflows/release-infrastructure.yml
+    with:
+      deploy-sha: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      trigger-event: ${{ github.event_name }}
+      confirmation: ${{ inputs.confirmation }}
+
+  summary:
+    name: Summarize the production release
+    needs: [scope, backend, frontend, infrastructure]
+    if: ${{ always() && needs.scope.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      BACKEND_SCOPED: ${{ needs.scope.outputs.backend }}
+      FRONTEND_SCOPED: ${{ needs.scope.outputs.frontend }}
+      INFRASTRUCTURE_SCOPED: ${{ needs.scope.outputs.infrastructure }}
+      BACKEND_RESULT: ${{ needs.backend.result }}
+      FRONTEND_RESULT: ${{ needs.frontend.result }}
+      INFRASTRUCTURE_RESULT: ${{ needs.infrastructure.result }}
+    steps:
+      - name: Write the release summary
+        run: |
+          set -euo pipefail
+          outcome() {
+            if [ "$1" != "true" ]; then
+              echo "not released (nothing changed)"
+            else
+              echo "$2"
+            fi
+          }
+          {
+            echo "## Production release ${DEPLOY_SHA}"
+            echo
+            echo "| Surface | Outcome |"
+            echo "|---|---|"
+            echo "| Backend | $(outcome "$BACKEND_SCOPED" "$BACKEND_RESULT") |"
+            echo "| Frontend | $(outcome "$FRONTEND_SCOPED" "$FRONTEND_RESULT") |"
+            echo "| Infrastructure | $(outcome "$INFRASTRUCTURE_SCOPED" "$INFRASTRUCTURE_RESULT") |"
+          } >>"$GITHUB_STEP_SUMMARY"
+          for result in "$BACKEND_RESULT" "$FRONTEND_RESULT" "$INFRASTRUCTURE_RESULT"; do
+            case "$result" in
+              success | skipped) ;;
+              *)
+                echo "::error::A surface release did not succeed (${result})."
+                exit 1
+                ;;
+            esac
+          done

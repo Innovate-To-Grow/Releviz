@@ -6,11 +6,14 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
+import { usePathname } from "next/navigation";
 import {
   changePasswordApi,
   deleteAccountApi,
+  fetchAuthSession,
   fetchAuthSessions,
   fetchProfile,
   loginWithPassword,
@@ -47,6 +50,10 @@ function subscribeAuth(callback) {
 export function AuthProvider({ children }) {
   const [session, setSession] = useState(() => readAuthSession());
   const [loading, setLoading] = useState(true);
+  const pathname = usePathname();
+  const previousPathname = useRef(pathname);
+  const lastValidatedAt = useRef(0);
+  const validation = useRef(null);
 
   const loadSession = useCallback(() => {
     setSession(readAuthSession());
@@ -75,6 +82,54 @@ export function AuthProvider({ children }) {
       cancelled = true;
     };
   }, []);
+
+  // A session revoked from another browser is only discovered by asking the
+  // API: the cached access token still looks usable locally, and cached pages
+  // make no authenticated request until the next mutation.
+  const revalidateSession = useCallback(async ({ minInterval = 0 } = {}) => {
+    if (!readAuthSession()) return;
+    if (validation.current) return validation.current;
+    if (Date.now() - lastValidatedAt.current < minInterval) return;
+    validation.current = (async () => {
+      try {
+        await fetchAuthSession();
+      } catch (error) {
+        // Only a definitive 401 signs the browser out; a network blip or a
+        // server error must not.
+        if (error.status === 401) clearAuthSession();
+      } finally {
+        lastValidatedAt.current = Date.now();
+        validation.current = null;
+        setSession(readAuthSession());
+      }
+    })();
+    return validation.current;
+  }, []);
+
+  useEffect(() => {
+    if (previousPathname.current === pathname) return;
+    previousPathname.current = pathname;
+    revalidateSession();
+  }, [pathname, revalidateSession]);
+
+  useEffect(() => {
+    /* istanbul ignore next -- server-side render guard */
+    if (typeof window === "undefined" || typeof document === "undefined") {
+      return undefined;
+    }
+    const onFocus = () => {
+      revalidateSession({ minInterval: 30_000 });
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") onFocus();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [revalidateSession]);
 
   const getToken = useCallback(async () => {
     return getAccessToken();

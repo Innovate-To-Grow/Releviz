@@ -1,9 +1,27 @@
 "use client";
 
 import { useEffect, useState, useSyncExternalStore } from "react";
+import { useAuth } from "@/components/auth/AuthContext";
+import Alert from "@/components/ui/Alert";
 import AppButton from "@/components/ui/AppButton";
 import AppHeader from "@/components/ui/AppHeader";
-import { useAuth } from "@/components/auth/AuthContext";
+import EmptyState from "@/components/ui/EmptyState";
+import FormField from "@/components/ui/FormField";
+import LoadingState from "@/components/ui/LoadingState";
+import PageHeader from "@/components/ui/PageHeader";
+import Panel from "@/components/ui/Panel";
+import StatusBadge from "@/components/ui/StatusBadge";
+import {
+  ArrowRightIcon,
+  ChevronDownIcon,
+  DeleteIcon,
+  LockIcon,
+  SaveIcon,
+  SecurityIcon,
+  SendIcon,
+  SignOutIcon,
+  SuccessIcon,
+} from "@/components/ui/icons";
 import { requestAccountDeletionCode } from "@/lib/api/auth";
 import { navigateTo, safeNextPath } from "@/lib/navigation";
 
@@ -37,6 +55,29 @@ function serverLocationSearch() {
   return null;
 }
 
+// In-page sections listed in the sidebar navigation. The link whose target is
+// the current URL fragment is highlighted (Profile by default), mirroring the
+// previous `:target`-based CSS.
+const SETTINGS_SECTIONS = [
+  { id: "profile", label: "Profile" },
+  { id: "sessions", label: "Active sessions" },
+  { id: "password", label: "Password" },
+  { id: "danger-zone", label: "Danger zone" },
+];
+
+function subscribeToHash(callback) {
+  window.addEventListener("hashchange", callback);
+  return () => window.removeEventListener("hashchange", callback);
+}
+
+function locationHash() {
+  return window.location.hash;
+}
+
+function serverLocationHash() {
+  return "";
+}
+
 function describeSessionDevice(userAgent) {
   const value = (userAgent || "").trim();
   if (!value) return "Unknown browser";
@@ -64,6 +105,38 @@ function describeSessionDevice(userAgent) {
 
   if (browser && platform) return `${browser} on ${platform}`;
   return value.length > 80 ? "Browser session" : value;
+}
+
+// Numbered heading block shared by every settings section. Inside a
+// <summary> the copy is muted by `.disclosure__summary-copy p`, so the
+// description only needs the secondary color when it stands alone.
+function SectionIntro({
+  index,
+  title,
+  titleId,
+  titleClassName = "",
+  inSummary = false,
+  children,
+}) {
+  return (
+    <div
+      className={
+        inSummary
+          ? "disclosure__summary-copy d-flex align-items-start gap-3"
+          : "d-flex align-items-start gap-3 mb-3"
+      }
+    >
+      <span className="section-index" aria-hidden="true">
+        {index}
+      </span>
+      <div className="min-w-0">
+        <h2 id={titleId} className={`h4 mb-1 ${titleClassName}`.trim()}>
+          {title}
+        </h2>
+        <p className={inSummary ? "mb-0" : "text-secondary mb-0"}>{children}</p>
+      </div>
+    </div>
+  );
 }
 
 export default function SettingsPage() {
@@ -100,10 +173,20 @@ export default function SettingsPage() {
     locationSearch,
     serverLocationSearch,
   );
+  const hash = useSyncExternalStore(
+    subscribeToHash,
+    locationHash,
+    serverLocationHash,
+  );
   const completionResolved = search !== null;
   const completionQuery = new URLSearchParams(search || "");
   const completionActive = completionQuery.get("complete_profile") === "1";
   const completionNext = safeNextPath(completionQuery.get("next"));
+  const activeSection = SETTINGS_SECTIONS.some(
+    (section) => `#${section.id}` === hash,
+  )
+    ? hash.slice(1)
+    : SETTINGS_SECTIONS[0].id;
   const securityActionInProgress =
     Boolean(sessionAction) || passwordAction || deleteAction;
 
@@ -248,11 +331,7 @@ export default function SettingsPage() {
   };
 
   if (!completionResolved || loading || !user) {
-    return (
-      <div className="center-page">
-        <p>Loading...</p>
-      </div>
-    );
+    return <LoadingState label="Loading..." page />;
   }
 
   const displayName =
@@ -275,8 +354,8 @@ export default function SettingsPage() {
             className="auth-panel profile-onboarding-panel"
             aria-labelledby="profile-onboarding-heading"
           >
-            <header className="profile-onboarding-heading">
-              <span className="settings-eyebrow">One last step</span>
+            <header>
+              <span className="eyebrow">One last step</span>
               <h1 id="profile-onboarding-heading">Complete your profile</h1>
               <p>
                 Add your name so people can recognize your response in the
@@ -284,22 +363,23 @@ export default function SettingsPage() {
               </p>
             </header>
 
-            <form className="profile-onboarding-form" onSubmit={handleSave}>
-              {error && (
-                <div className="auth-error" role="alert">
-                  {error}
-                </div>
-              )}
+            <form className="d-flex flex-column gap-3" onSubmit={handleSave}>
+              {error && <Alert variant="danger">{error}</Alert>}
 
-              <label className="field-label profile-onboarding-email">
-                Email address
-                <input value={user.email} type="email" readOnly />
-              </label>
+              <FormField label="Email address">
+                <input
+                  className="form-control bg-body-tertiary"
+                  value={user.email}
+                  type="email"
+                  autoComplete="email"
+                  readOnly
+                />
+              </FormField>
 
-              <div className="auth-grid">
-                <label className="field-label">
-                  First name
+              <div className="form-row-2">
+                <FormField label="First name">
                   <input
+                    className="form-control"
                     value={current.firstName}
                     onChange={(event) =>
                       setField("firstName", event.target.value)
@@ -308,10 +388,10 @@ export default function SettingsPage() {
                     autoFocus
                     required
                   />
-                </label>
-                <label className="field-label">
-                  Last name
+                </FormField>
+                <FormField label="Last name">
                   <input
+                    className="form-control"
                     value={current.lastName}
                     onChange={(event) =>
                       setField("lastName", event.target.value)
@@ -319,10 +399,10 @@ export default function SettingsPage() {
                     autoComplete="family-name"
                     required
                   />
-                </label>
+                </FormField>
               </div>
 
-              <AppButton type="submit" fullWidth>
+              <AppButton type="submit" fullWidth icon={<ArrowRightIcon />}>
                 {continueToEvent ? "Continue to event" : "Continue"}
               </AppButton>
             </form>
@@ -335,344 +415,344 @@ export default function SettingsPage() {
   return (
     <>
       <AppHeader pageTitle="Account settings" />
-      <main className="page-pad settings-shell">
-        <div className="settings-panel">
-          <aside className="settings-sidebar">
-            <div className="settings-account-summary">
-              <span className="settings-avatar" aria-hidden="true">
-                {initials}
-              </span>
-              <div>
-                <span className="settings-eyebrow">Signed in as</span>
-                <strong>{displayName}</strong>
-                <span className="settings-sidebar-email">{user.email}</span>
+      <main className="page-shell settings-shell">
+        <div className="row g-4">
+          <aside className="col-lg-3">
+            <div className="sticky-lg-top" style={{ top: "1.5rem", zIndex: 1 }}>
+              <div className="card panel">
+                <div className="card-body d-flex align-items-center gap-3">
+                  <span
+                    className="rounded-circle bg-primary-subtle text-primary-emphasis fw-semibold d-inline-flex align-items-center justify-content-center flex-shrink-0"
+                    style={{ width: "3rem", height: "3rem" }}
+                    aria-hidden="true"
+                  >
+                    {initials}
+                  </span>
+                  <div className="min-w-0">
+                    <span className="eyebrow mb-0">Signed in as</span>
+                    <strong className="d-block text-truncate">
+                      {displayName}
+                    </strong>
+                    <span className="d-block small text-secondary text-truncate">
+                      {user.email}
+                    </span>
+                  </div>
+                </div>
+                <div className="card-body border-top">
+                  <nav
+                    aria-label="Settings sections"
+                    className="nav nav-pills flex-lg-column gap-1"
+                  >
+                    {SETTINGS_SECTIONS.map((section) => {
+                      const isActive = section.id === activeSection;
+                      return (
+                        <a
+                          key={section.id}
+                          className={`nav-link${isActive ? " active" : ""}`}
+                          aria-current={isActive ? "location" : undefined}
+                          href={`#${section.id}`}
+                        >
+                          {section.label}
+                        </a>
+                      );
+                    })}
+                  </nav>
+                </div>
+                <div className="card-footer small text-secondary">
+                  <span className="d-block">Account ID</span>
+                  <code className="text-body wrap-anywhere">{user.id}</code>
+                </div>
               </div>
-            </div>
-            <nav className="settings-nav" aria-label="Settings sections">
-              <a href="#profile">Profile</a>
-              <a href="#sessions">Active sessions</a>
-              <a href="#password">Password</a>
-              <a href="#danger-zone">Danger zone</a>
-            </nav>
-            <div className="settings-account-id">
-              <span>Account ID</span>
-              <code>{user.id}</code>
             </div>
           </aside>
 
-          <div className="settings-content">
-            <header className="settings-heading">
-              <div>
-                <span className="settings-eyebrow">Your account</span>
-                <h1>Account settings</h1>
-              </div>
-              <p>
-                Manage your profile, signed-in devices, and account security.
-              </p>
-            </header>
+          <div className="col-lg-9">
+            <PageHeader
+              eyebrow="Your account"
+              title="Account settings"
+              lede="Manage your profile, signed-in devices, and account security."
+            />
 
-            <form
-              id="profile"
-              className="settings-section"
-              onSubmit={handleSave}
-            >
-              <div className="settings-section-copy">
-                <span className="settings-section-index">01</span>
-                <h2>Profile</h2>
-                <p className="settings-muted">
+            <div className="d-flex flex-column gap-4">
+              <Panel
+                as="form"
+                id="profile"
+                className="settings-section"
+                onSubmit={handleSave}
+              >
+                <SectionIntro index="01" title="Profile">
                   Update the name shown across your scheduling workspace.
-                </p>
-              </div>
-              <div className="settings-section-body">
-                {error && (
-                  <div className="auth-error" role="alert">
-                    {error}
+                </SectionIntro>
+                <div className="d-flex flex-column gap-3">
+                  {error && <Alert variant="danger">{error}</Alert>}
+                  <div className="form-row-2">
+                    <FormField label="First name">
+                      <input
+                        className="form-control"
+                        value={current.firstName}
+                        onChange={(event) =>
+                          setField("firstName", event.target.value)
+                        }
+                        autoComplete="given-name"
+                        required
+                      />
+                    </FormField>
+                    <FormField label="Last name">
+                      <input
+                        className="form-control"
+                        value={current.lastName}
+                        onChange={(event) =>
+                          setField("lastName", event.target.value)
+                        }
+                        autoComplete="family-name"
+                        required
+                      />
+                    </FormField>
                   </div>
-                )}
-                <div className="auth-grid">
-                  <label className="field-label">
-                    First name
-                    <input
-                      value={current.firstName}
-                      onChange={(event) =>
-                        setField("firstName", event.target.value)
-                      }
-                      autoComplete="given-name"
-                      required
-                    />
-                  </label>
-                  <label className="field-label">
-                    Last name
-                    <input
-                      value={current.lastName}
-                      onChange={(event) =>
-                        setField("lastName", event.target.value)
-                      }
-                      autoComplete="family-name"
-                      required
-                    />
-                  </label>
+                  <div className="d-flex flex-wrap align-items-center justify-content-end gap-3">
+                    {saved && (
+                      <span
+                        className="d-inline-flex align-items-center gap-1 small text-success-emphasis"
+                        role="status"
+                        aria-live="polite"
+                      >
+                        <SuccessIcon aria-hidden="true" />
+                        Saved
+                      </span>
+                    )}
+                    <AppButton type="submit" icon={<SaveIcon />}>
+                      Save profile
+                    </AppButton>
+                  </div>
                 </div>
-                <div className="settings-actions">
-                  {saved && (
-                    <span
-                      className="settings-saved"
-                      role="status"
-                      aria-live="polite"
-                    >
-                      Saved
-                    </span>
-                  )}
-                  <AppButton type="submit">Save profile</AppButton>
-                </div>
-              </div>
-            </form>
+              </Panel>
 
-            <section
-              id="sessions"
-              className="settings-section"
-              aria-labelledby="active-sessions-heading"
-            >
-              <div className="settings-section-copy">
-                <span className="settings-section-index">02</span>
-                <h2 id="active-sessions-heading">Active sessions</h2>
-                <p className="settings-muted">
+              <Panel
+                id="sessions"
+                className="settings-section"
+                aria-labelledby="active-sessions-heading"
+              >
+                <SectionIntro
+                  index="02"
+                  title="Active sessions"
+                  titleId="active-sessions-heading"
+                >
                   Revoke devices you no longer recognize. Access is invalidated
                   immediately.
-                </p>
-              </div>
-              <div className="settings-section-body">
-                {sessionError && (
-                  <div className="auth-error" role="alert">
-                    {sessionError}
-                  </div>
-                )}
-                {sessionsLoading ? (
-                  <p>Loading active sessions...</p>
-                ) : sessions.length ? (
-                  <ul className="session-list">
-                    {sessions.map((session) => (
-                      <li
-                        key={session.id}
-                        className={`session-card${session.current ? " session-card-current" : ""}`}
-                      >
-                        <div className="session-description">
-                          <div className="session-title">
-                            <strong>
-                              {session.current ? "This device" : "Other device"}
-                            </strong>
-                            {session.current && (
-                              <span className="session-current-badge">
-                                Current
-                              </span>
-                            )}
-                          </div>
-                          <div>{describeSessionDevice(session.userAgent)}</div>
-                          <small>
-                            Last active{" "}
-                            {new Date(session.lastSeenAt).toLocaleString()}
-                            {session.ipAddress ? ` · ${session.ipAddress}` : ""}
-                          </small>
-                        </div>
-                        <AppButton
-                          variant="outlined"
-                          disabled={Boolean(sessionAction)}
-                          onClick={() => handleRevokeSession(session)}
+                </SectionIntro>
+                <div className="d-flex flex-column gap-3">
+                  {sessionError && (
+                    <Alert variant="danger">{sessionError}</Alert>
+                  )}
+                  {sessionsLoading ? (
+                    <LoadingState label="Loading active sessions..." />
+                  ) : sessions.length ? (
+                    <ul className="list-group">
+                      {sessions.map((session) => (
+                        <li
+                          key={session.id}
+                          className="list-group-item d-flex flex-wrap align-items-center justify-content-between gap-3"
                         >
-                          {sessionAction === session.id
-                            ? "Revoking..."
-                            : session.current
-                              ? "Sign out this device"
-                              : "Revoke"}
-                        </AppButton>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p>No active sessions were found.</p>
-                )}
-                <div className="settings-actions">
-                  <AppButton
-                    variant="outlined"
-                    disabled={Boolean(sessionAction)}
-                    onClick={handleLogoutAll}
-                  >
-                    {sessionAction === "all"
-                      ? "Signing out..."
-                      : "Sign out all devices"}
-                  </AppButton>
+                          <div className="min-w-0">
+                            <div className="d-flex flex-wrap align-items-center gap-2">
+                              <strong>
+                                {session.current
+                                  ? "This device"
+                                  : "Other device"}
+                              </strong>
+                              {session.current && (
+                                <StatusBadge status="success">
+                                  Current
+                                </StatusBadge>
+                              )}
+                            </div>
+                            <div>
+                              {describeSessionDevice(session.userAgent)}
+                            </div>
+                            <small className="text-secondary">
+                              Last active{" "}
+                              {new Date(session.lastSeenAt).toLocaleString()}
+                              {session.ipAddress
+                                ? ` · ${session.ipAddress}`
+                                : ""}
+                            </small>
+                          </div>
+                          <AppButton
+                            variant="outlined"
+                            icon={<SignOutIcon />}
+                            busy={sessionAction === session.id}
+                            disabled={Boolean(sessionAction)}
+                            onClick={() => handleRevokeSession(session)}
+                          >
+                            {sessionAction === session.id
+                              ? "Revoking..."
+                              : session.current
+                                ? "Sign out this device"
+                                : "Revoke"}
+                          </AppButton>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <EmptyState icon={<SecurityIcon />}>
+                      No active sessions were found.
+                    </EmptyState>
+                  )}
+                  <div className="d-flex flex-wrap gap-2">
+                    <AppButton
+                      variant="outlined"
+                      icon={<SignOutIcon />}
+                      busy={sessionAction === "all"}
+                      disabled={Boolean(sessionAction)}
+                      onClick={handleLogoutAll}
+                    >
+                      {sessionAction === "all"
+                        ? "Signing out..."
+                        : "Sign out all devices"}
+                    </AppButton>
+                  </div>
                 </div>
-              </div>
-            </section>
+              </Panel>
 
-            <form
-              id="password"
-              className="settings-disclosure"
-              onSubmit={handleChangePassword}
-            >
-              <details>
-                <summary className="settings-disclosure-summary">
-                  <div className="settings-section-copy">
-                    <span className="settings-section-index">03</span>
-                    <h2>Change password</h2>
-                    <p className="settings-muted">
+              <form
+                id="password"
+                className="settings-disclosure"
+                onSubmit={handleChangePassword}
+              >
+                <details className="disclosure">
+                  <summary>
+                    <SectionIntro index="03" title="Change password" inSummary>
                       Changing your password signs out every device, including
                       this one.
-                    </p>
-                  </div>
-                  <span className="settings-disclosure-toggle">
-                    <span className="settings-disclosure-label-closed">
-                      Show
+                    </SectionIntro>
+                    <span className="disclosure__chevron" aria-hidden="true">
+                      <ChevronDownIcon />
                     </span>
-                    <span className="settings-disclosure-label-open">Hide</span>
-                    <span
-                      className="settings-disclosure-chevron"
-                      aria-hidden="true"
-                    />
-                  </span>
-                </summary>
-                <div className="settings-disclosure-content">
-                  <div className="settings-section-body">
+                  </summary>
+                  <div className="disclosure__content d-flex flex-column gap-3">
                     {passwordError && (
-                      <div className="auth-error" role="alert">
-                        {passwordError}
-                      </div>
+                      <Alert variant="danger">{passwordError}</Alert>
                     )}
-                    <div className="settings-fields-grid settings-password-fields">
-                      <label className="field-label">
-                        Current password
-                        <input
-                          value={currentPassword}
-                          onChange={(event) =>
-                            setCurrentPassword(event.target.value)
-                          }
-                          type="password"
-                          autoComplete="current-password"
-                          required
-                        />
-                      </label>
-                      <label className="field-label">
-                        New password
-                        <input
-                          value={newPassword}
-                          onChange={(event) =>
-                            setNewPassword(event.target.value)
-                          }
-                          type="password"
-                          autoComplete="new-password"
-                          minLength={8}
-                          aria-describedby="settings-password-help"
-                          required
-                        />
-                      </label>
-                      <label className="field-label">
-                        Confirm new password
-                        <input
-                          value={newPasswordConfirm}
-                          onChange={(event) =>
-                            setNewPasswordConfirm(event.target.value)
-                          }
-                          type="password"
-                          autoComplete="new-password"
-                          minLength={8}
-                          required
-                        />
-                      </label>
-                    </div>
-                    <p id="settings-password-help" className="field-help">
-                      Use at least 8 characters.
-                    </p>
-                    <div className="settings-actions">
-                      <AppButton type="submit" disabled={passwordAction}>
+                    <FormField label="Current password">
+                      <input
+                        className="form-control"
+                        value={currentPassword}
+                        onChange={(event) =>
+                          setCurrentPassword(event.target.value)
+                        }
+                        type="password"
+                        autoComplete="current-password"
+                        required
+                      />
+                    </FormField>
+                    <FormField
+                      id="settings-password"
+                      label="New password"
+                      help="Use at least 8 characters."
+                    >
+                      <input
+                        className="form-control"
+                        value={newPassword}
+                        onChange={(event) => setNewPassword(event.target.value)}
+                        type="password"
+                        autoComplete="new-password"
+                        minLength={8}
+                        required
+                      />
+                    </FormField>
+                    <FormField label="Confirm new password">
+                      <input
+                        className="form-control"
+                        value={newPasswordConfirm}
+                        onChange={(event) =>
+                          setNewPasswordConfirm(event.target.value)
+                        }
+                        type="password"
+                        autoComplete="new-password"
+                        minLength={8}
+                        required
+                      />
+                    </FormField>
+                    <div className="d-flex flex-wrap justify-content-end gap-2">
+                      <AppButton
+                        type="submit"
+                        icon={<LockIcon />}
+                        busy={passwordAction}
+                        disabled={passwordAction}
+                      >
                         {passwordAction ? "Changing..." : "Change password"}
                       </AppButton>
                     </div>
                   </div>
-                </div>
-              </details>
-            </form>
+                </details>
+              </form>
 
-            <form
-              id="danger-zone"
-              className="settings-disclosure settings-danger-zone"
-              onSubmit={handleDeleteAccount}
-            >
-              <details>
-                <summary className="settings-disclosure-summary">
-                  <div className="settings-section-copy">
-                    <span className="settings-section-index">04</span>
-                    <h2>Delete account</h2>
-                    <p>
+              <form
+                id="danger-zone"
+                className="settings-disclosure settings-danger-zone"
+                onSubmit={handleDeleteAccount}
+              >
+                <details className="disclosure border-danger-subtle">
+                  <summary>
+                    <SectionIntro
+                      index="04"
+                      title="Delete account"
+                      titleClassName="text-danger-emphasis"
+                      inSummary
+                    >
                       Permanently remove your sign-in details and profile. This
                       cannot be undone.
-                    </p>
-                  </div>
-                  <span className="settings-disclosure-toggle">
-                    <span className="settings-disclosure-label-closed">
-                      Show
+                    </SectionIntro>
+                    <span className="disclosure__chevron" aria-hidden="true">
+                      <ChevronDownIcon />
                     </span>
-                    <span className="settings-disclosure-label-open">Hide</span>
-                    <span
-                      className="settings-disclosure-chevron"
-                      aria-hidden="true"
-                    />
-                  </span>
-                </summary>
-                <div className="settings-disclosure-content">
-                  <div className="settings-section-body">
-                    <p className="settings-danger-note">
+                  </summary>
+                  <div className="disclosure__content d-flex flex-column gap-3">
+                    <Alert variant="warning" role="note">
                       Every session will be revoked and your identity will be
                       anonymized in retained scheduling records.
-                    </p>
+                    </Alert>
                     {deleteError && (
-                      <div className="auth-error" role="alert">
-                        {deleteError}
-                      </div>
+                      <Alert variant="danger">{deleteError}</Alert>
                     )}
                     {deleteStatus && (
-                      <div
-                        className="auth-status"
-                        role="status"
-                        aria-live="polite"
-                      >
-                        {deleteStatus}
-                      </div>
+                      <Alert variant="info">{deleteStatus}</Alert>
                     )}
-                    <div className="settings-fields-grid">
-                      {deleteCodeSent && (
-                        <label className="field-label">
-                          Confirmation code
-                          <input
-                            value={deleteCode}
-                            onChange={(event) =>
-                              setDeleteCode(event.target.value)
-                            }
-                            inputMode="numeric"
-                            autoComplete="one-time-code"
-                            pattern="[0-9]{6}"
-                            maxLength={6}
-                            required
-                          />
-                        </label>
-                      )}
-                      <label className="field-label">
-                        Type DELETE to confirm
+                    {deleteCodeSent && (
+                      <FormField label="Confirmation code">
                         <input
-                          value={deleteConfirmation}
+                          className="form-control"
+                          value={deleteCode}
                           onChange={(event) =>
-                            setDeleteConfirmation(event.target.value)
+                            setDeleteCode(event.target.value)
                           }
-                          autoComplete="off"
-                          spellCheck="false"
+                          inputMode="numeric"
+                          autoComplete="one-time-code"
+                          pattern="[0-9]{6}"
+                          maxLength={6}
                           required
                         />
-                      </label>
-                    </div>
-                    <div className="settings-actions">
+                      </FormField>
+                    )}
+                    <FormField label="Type DELETE to confirm">
+                      <input
+                        className="form-control"
+                        value={deleteConfirmation}
+                        onChange={(event) =>
+                          setDeleteConfirmation(event.target.value)
+                        }
+                        autoComplete="off"
+                        spellCheck="false"
+                        required
+                      />
+                    </FormField>
+                    <div className="d-flex flex-wrap justify-content-end gap-2">
                       <AppButton
                         type="submit"
-                        variant="outlined"
+                        variant="danger"
                         className="app-btn-danger"
+                        icon={deleteCodeSent ? <DeleteIcon /> : <SendIcon />}
+                        busy={deleteAction}
                         disabled={
                           deleteAction ||
                           deleteConfirmation !== "DELETE" ||
@@ -689,9 +769,9 @@ export default function SettingsPage() {
                       </AppButton>
                     </div>
                   </div>
-                </div>
-              </details>
-            </form>
+                </details>
+              </form>
+            </div>
           </div>
         </div>
       </main>

@@ -2,6 +2,7 @@
 
 from rest_framework.response import Response
 
+from apps.scheduling.services.activity import roster_activity
 from apps.scheduling.services.roster_imports import RosterImportError
 
 from ..helpers import PrivateAPIView
@@ -28,10 +29,16 @@ class RosterView(PrivateAPIView):
             return error
         try:
             page, page_size = pagination(request)
-            queryset = apply_roster_filters(roster_queryset(event), request.query_params)
+            roster = roster_queryset(event)
+            queryset = apply_roster_filters(roster, request.query_params)
         except RosterImportError as exc:
             return error_response(exc)
-        stats = roster_stats(queryset)
+        # The whole-roster digest the workspace compares against its activity
+        # poll. It is read before the page so it can never be newer than what
+        # the page shows: a write that lands in between is picked up by the
+        # next poll instead of being masked.
+        activity = roster_activity(event)
+        stats = roster_stats(event, queryset, groups_queryset=roster)
         offset = (page - 1) * page_size
         participants = list(
             queryset.order_by("sort_order", "created_at")[offset : offset + page_size]
@@ -45,6 +52,7 @@ class RosterView(PrivateAPIView):
                     total=stats["total"],
                 ),
                 "stats": stats,
+                "activity": activity,
                 "latestDeliveryRequest": latest_delivery_request(event),
             }
         )
