@@ -16,8 +16,10 @@ import {
   changePasswordApi,
   confirmPasswordReset,
   deleteAccountApi,
+  fetchAuthSession,
   fetchAuthSessions,
   fetchProfile,
+  impersonateLogin,
   loginWithPassword,
   logoutApi,
   requestPasswordResetCode,
@@ -32,7 +34,6 @@ import {
   verifyUnifiedEmailAuthCode,
 } from "@/lib/api/auth";
 import { fetchDashboardEvents } from "@/lib/api/dashboard";
-import { submitFeedback } from "@/lib/api/feedback";
 import {
   confirmFinalMeeting,
   createEvent,
@@ -41,6 +42,7 @@ import {
   duplicateEvent,
   fetchDeliveryRequest,
   fetchEvent,
+  fetchEventActivity,
   fetchEventResults,
   fetchFinalization,
   fetchInvitations,
@@ -56,12 +58,17 @@ import {
   cancelRosterImport,
   commitRosterImport,
   configureRosterImport,
+  createRosterGroup,
   createRosterImport,
+  deleteRosterGroup,
   fetchRoster,
+  fetchRosterGroups,
   fetchRosterImportRows,
   fetchRosterSchedule,
   patchRosterBulk,
   patchRosterParticipant,
+  renameRosterGroup,
+  sendRosterInvitations,
 } from "@/lib/api/roster";
 import {
   createManagedParticipant,
@@ -430,6 +437,50 @@ describe("auth API helpers", () => {
     );
   });
 
+  test("impersonateLogin exchanges the admin token for a session", async () => {
+    const authBody = {
+      access: "impersonated",
+      user: { id: "member" },
+      next_step: "account",
+      requires_profile_completion: false,
+      message: "Signed in",
+    };
+    global.fetch.mockResolvedValueOnce(jsonResponse(authBody));
+
+    await expect(impersonateLogin({ token: "abc123" })).resolves.toEqual(
+      authBody,
+    );
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/authn/impersonate-login/",
+      expect.objectContaining({
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: "abc123" }),
+        credentials: "include",
+      }),
+    );
+    expect(readAuthSession()).toEqual(
+      expect.objectContaining({
+        access: "impersonated",
+        user: expect.objectContaining({ id: "member" }),
+        nextStep: "account",
+        requiresProfileCompletion: false,
+      }),
+    );
+  });
+
+  test("impersonateLogin rejects with the backend detail and leaves no session", async () => {
+    global.fetch.mockResolvedValueOnce(
+      jsonResponse({ detail: "Invalid impersonation link." }, { status: 400 }),
+    );
+
+    await expect(impersonateLogin({ token: "stale" })).rejects.toThrow(
+      "Invalid impersonation link.",
+    );
+    expect(readAuthSession()).toBeNull();
+  });
+
   test("auth helpers throw extracted errors and update profile sessions", async () => {
     writeAuthSession({ access: "a", user: { id: "old" } });
     global.fetch
@@ -525,6 +576,55 @@ describe("auth API helpers", () => {
       "/authn/logout/",
       expect.objectContaining({ body: "{}", credentials: "include" }),
     );
+  });
+
+  test("fetchAuthSession checks liveness without writing the session store", async () => {
+    writeAuthSession({ access: "tok", user: { id: "u" } });
+    const before = readAuthSession();
+    global.fetch.mockResolvedValueOnce(
+      jsonResponse({ user: { member_uuid: "u" }, next_step: "account" }),
+    );
+
+    await expect(fetchAuthSession()).resolves.toEqual({
+      user: { member_uuid: "u" },
+      next_step: "account",
+    });
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/authn/session/",
+      expect.objectContaining({
+        credentials: "include",
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
+    expect(readAuthSession()).toBe(before);
+  });
+
+  test("fetchAuthSession rejects with the status once a refresh also fails", async () => {
+    writeAuthSession({ access: "tok", user: { id: "u" } });
+    global.fetch
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            detail: "This session has been signed out.",
+            code: "session_revoked",
+          },
+          { status: 401 },
+        ),
+      )
+      .mockResolvedValueOnce(textResponse("revoked", { status: 401 }));
+
+    await expect(fetchAuthSession()).rejects.toMatchObject({
+      message: "This session has been signed out.",
+      status: 401,
+    });
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      2,
+      "/authn/refresh/",
+      expect.objectContaining({ method: "POST", credentials: "include" }),
+    );
+    expect(readAuthSession()).toBeNull();
   });
 
   test("lists sessions and revokes one or every device", async () => {
@@ -843,6 +943,7 @@ describe("business API helpers", () => {
         timezone: "America/Los_Angeles",
         remindersEnabled: false,
         reminderHoursBefore: 12,
+        startingAvailability: "busy",
       },
       "tok",
     );
@@ -874,6 +975,7 @@ describe("business API helpers", () => {
       "tok",
     );
     await fetchEventResults("ABC 123", "tok");
+    await fetchEventActivity("ABC 123", "tok");
     await previewFinalMeeting(
       "ABC 123",
       {
@@ -938,7 +1040,7 @@ describe("business API helpers", () => {
     await commitRosterImport(
       "ABC 123",
       "import 1",
-      { mode: "merge", idempotencyKey: "import-key" },
+      { mode: "merge", idempotencyKey: "import-key", sendInvitations: false },
       "tok",
     );
     await cancelRosterImport("ABC 123", "import 1", "tok");
@@ -969,6 +1071,19 @@ describe("business API helpers", () => {
       },
       "tok",
     );
+    await fetchRosterGroups("ABC 123", "tok");
+    await createRosterGroup("ABC 123", { name: "Faculty" }, "tok");
+    await renameRosterGroup("ABC 123", "group 7", { name: "Staff" }, "tok");
+    await deleteRosterGroup("ABC 123", "group 7", "tok");
+    await sendRosterInvitations(
+      "ABC 123",
+      {
+        participantIds: ["participant 1", "participant 2"],
+        resend: true,
+        idempotencyKey: "roster-invite-key",
+      },
+      "tok",
+    );
     await fetchParticipants("ABC 123", "tok");
     await expect(fetchCurrentParticipant("ABC 123", "tok")).resolves.toEqual({
       participant: null,
@@ -981,6 +1096,7 @@ describe("business API helpers", () => {
         name: "Temporary Person",
         email: "temp@example.com",
         idempotencyKey: "managed-key",
+        sendInvitation: false,
       },
       "tok",
     );
@@ -988,12 +1104,6 @@ describe("business API helpers", () => {
     await fetchParticipantsIncludeHidden("ABC 123", "tok");
     await unhideParticipant("ABC 123", "user 1", "tok");
     await deleteParticipant("ABC 123", "user 1", "tok");
-    await submitFeedback({
-      category: "problem",
-      message: "Something failed",
-      pagePath: "/event",
-      consentToFollowUp: true,
-    });
 
     const urls = global.fetch.mock.calls.map(([url]) => url);
     expect(urls).toContain("/dashboard/events");
@@ -1006,9 +1116,18 @@ describe("business API helpers", () => {
         body: JSON.stringify({
           name: "Minimal",
           accessMode: "invite_only",
+          startingAvailability: "available",
           meetingDurationMinutes: 30,
           status: "active",
         }),
+      }),
+    );
+    // Phone and the organizer-managed flag default to "" / false.
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/events",
+      expect.objectContaining({
+        method: "POST",
+        body: expect.stringContaining('"startingAvailability":"busy"'),
       }),
     );
     expect(global.fetch).toHaveBeenCalledWith(
@@ -1018,7 +1137,10 @@ describe("business API helpers", () => {
         body: JSON.stringify({
           name: "Temporary Person",
           email: "temp@example.com",
+          phone: "",
+          organizerManaged: false,
           idempotencyKey: "managed-key",
+          sendInvitation: false,
         }),
       }),
     );
@@ -1055,6 +1177,7 @@ describe("business API helpers", () => {
       }),
     );
     expect(urls).toContain("/events/results?code=ABC%20123");
+    expect(urls).toContain("/events/activity?code=ABC%20123");
     expect(urls).toContain("/events/finalization/preview?code=ABC%20123");
     expect(urls).toContain("/events/finalization?code=ABC%20123");
     expect(urls).toContain("/events/lifecycle?code=ABC%20123");
@@ -1078,8 +1201,16 @@ describe("business API helpers", () => {
     expect(urls).toContain(
       "/events/roster-imports/import%201/rows?code=ABC+123&page=2&pageSize=25",
     );
-    expect(urls).toContain(
+    expect(global.fetch).toHaveBeenCalledWith(
       "/events/roster-imports/import%201/commit?code=ABC%20123",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          mode: "merge",
+          idempotencyKey: "import-key",
+          sendInvitations: false,
+        }),
+      }),
     );
     expect(urls).toContain(
       "/events/roster?code=ABC+123&page=2&pageSize=100&search=Ada&group=Faculty&submitted=true",
@@ -1089,6 +1220,23 @@ describe("business API helpers", () => {
     );
     expect(urls).toContain("/events/roster/participant%201?code=ABC%20123");
     expect(urls).toContain("/events/roster/bulk?code=ABC%20123");
+    expect(urls).toContain("/events/roster/groups?code=ABC%20123");
+    expect(urls).toContain("/events/roster/groups/group%207?code=ABC%20123");
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/events/roster/invitations?code=ABC%20123",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          Authorization: "Bearer tok",
+        }),
+        body: JSON.stringify({
+          participantIds: ["participant 1", "participant 2"],
+          resend: true,
+          idempotencyKey: "roster-invite-key",
+        }),
+      }),
+    );
     expect(global.fetch).toHaveBeenCalledWith(
       "/events/invitations?code=ABC%20123",
       expect.objectContaining({
@@ -1111,18 +1259,6 @@ describe("business API helpers", () => {
     expect(urls).toContain(
       "/events/participants/update/unhide?code=ABC%20123&participantId=user%201",
     );
-    expect(global.fetch).toHaveBeenCalledWith(
-      "/feedback",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
-          category: "problem",
-          message: "Something failed",
-          pagePath: "/event",
-          consentToFollowUp: true,
-        }),
-      }),
-    );
   });
 
   test("business API helpers throw extracted errors", async () => {
@@ -1136,6 +1272,7 @@ describe("business API helpers", () => {
     await expect(duplicateEvent("BAD", {})).rejects.toThrow("nope");
     await expect(deleteEvent("BAD", {})).rejects.toThrow("nope");
     await expect(fetchEventResults("BAD")).rejects.toThrow("nope");
+    await expect(fetchEventActivity("BAD")).rejects.toThrow("nope");
     await expect(previewFinalMeeting("BAD", {})).rejects.toThrow("nope");
     await expect(confirmFinalMeeting("BAD", {})).rejects.toThrow("nope");
     await expect(fetchFinalization("BAD")).rejects.toThrow("nope");
@@ -1173,6 +1310,21 @@ describe("business API helpers", () => {
       patchRosterParticipant("BAD", "participant", {}),
     ).rejects.toThrow("nope");
     await expect(patchRosterBulk("BAD", {})).rejects.toThrow("nope");
+    await expect(fetchRosterGroups("BAD")).rejects.toThrow("nope");
+    await expect(createRosterGroup("BAD", { name: "x" })).rejects.toThrow(
+      "nope",
+    );
+    await expect(
+      renameRosterGroup("BAD", "group", { name: "x" }),
+    ).rejects.toThrow("nope");
+    await expect(deleteRosterGroup("BAD", "group")).rejects.toThrow("nope");
+    await expect(
+      sendRosterInvitations("BAD", {
+        participantIds: ["p"],
+        resend: false,
+        idempotencyKey: "roster-invite-key",
+      }),
+    ).rejects.toThrow("nope");
     await expect(fetchParticipants("BAD")).rejects.toThrow("nope");
     await expect(fetchCurrentParticipant("BAD")).rejects.toThrow("nope");
     await expect(joinEvent("BAD")).rejects.toThrow("nope");
@@ -1180,12 +1332,6 @@ describe("business API helpers", () => {
     await expect(fetchParticipantsIncludeHidden("BAD")).rejects.toThrow("nope");
     await expect(unhideParticipant("BAD", "p")).rejects.toThrow("nope");
     await expect(deleteParticipant("BAD", "p")).rejects.toThrow("nope");
-    await expect(
-      submitFeedback({
-        category: "problem",
-        message: "Failed",
-      }),
-    ).rejects.toThrow("nope");
   });
 
   test("downloads the authenticated final calendar with the server filename", async () => {
@@ -1303,6 +1449,190 @@ describe("business API helpers", () => {
       status: 502,
       errorCode: null,
       participant: null,
+    });
+  });
+
+  test("roster group helpers build authenticated requests and surface conflicts", async () => {
+    const group = { id: 7, name: "Faculty", count: 0, weight: null };
+    global.fetch
+      .mockResolvedValueOnce(jsonResponse({ groups: [group] }))
+      .mockResolvedValueOnce(
+        jsonResponse({ group, groups: [group] }, { status: 201 }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ group: { ...group, name: "Staff" }, groups: [] }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ groups: [] }));
+
+    await expect(fetchRosterGroups("ABC 123", "tok")).resolves.toEqual({
+      groups: [group],
+    });
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      "/events/roster/groups?code=ABC%20123",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+        credentials: "include",
+      }),
+    );
+    expect(global.fetch.mock.calls[0][1].method).toBeUndefined();
+
+    await expect(
+      createRosterGroup("ABC 123", { name: "Faculty" }, "tok"),
+    ).resolves.toEqual({ group, groups: [group] });
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      "/events/roster/groups?code=ABC%20123",
+      expect.objectContaining({
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer tok",
+        },
+        body: JSON.stringify({ name: "Faculty" }),
+        credentials: "include",
+      }),
+    );
+
+    await expect(
+      renameRosterGroup("ABC 123", 7, { name: "Staff" }, "tok"),
+    ).resolves.toEqual({ group: { ...group, name: "Staff" }, groups: [] });
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      "/events/roster/groups/7?code=ABC%20123",
+      expect.objectContaining({
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer tok",
+        },
+        body: JSON.stringify({ name: "Staff" }),
+        credentials: "include",
+      }),
+    );
+
+    await expect(deleteRosterGroup("ABC 123", 7, "tok")).resolves.toEqual({
+      groups: [],
+    });
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      "/events/roster/groups/7?code=ABC%20123",
+      expect.objectContaining({
+        method: "DELETE",
+        headers: { Authorization: "Bearer tok" },
+        credentials: "include",
+      }),
+    );
+    expect(global.fetch.mock.calls[3][1].body).toBeUndefined();
+
+    // Duplicate names are a 409 whose message is the server's own wording.
+    global.fetch
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { error: "A group named Faculty already exists." },
+          { status: 409 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { error: "A group named Faculty already exists." },
+          { status: 409 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ error: "Group not found" }, { status: 404 }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { error: "ALL is reserved for every group." },
+          {
+            status: 400,
+          },
+        ),
+      );
+    await expect(
+      createRosterGroup("ABC 123", { name: "faculty" }, "tok"),
+    ).rejects.toMatchObject({
+      message: "A group named Faculty already exists.",
+      status: 409,
+      code: null,
+    });
+    await expect(
+      renameRosterGroup("ABC 123", 8, { name: "FACULTY" }, "tok"),
+    ).rejects.toMatchObject({
+      message: "A group named Faculty already exists.",
+      status: 409,
+    });
+    await expect(
+      deleteRosterGroup("ABC 123", 999, "tok"),
+    ).rejects.toMatchObject({ message: "Group not found", status: 404 });
+    await expect(
+      createRosterGroup("ABC 123", { name: "ALL" }, "tok"),
+    ).rejects.toMatchObject({
+      message: "ALL is reserved for every group.",
+      status: 400,
+    });
+  });
+
+  test("roster invitation sends expose throttling, closed events, and HTTP fallbacks", async () => {
+    const payload = {
+      participantIds: ["participant-1"],
+      resend: false,
+      idempotencyKey: "roster-invite-key",
+    };
+    global.fetch
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            deliveryRequest: { id: "dr-1", recipientCount: 1 },
+            requestedCount: 1,
+            queuedCount: 1,
+            skippedCount: 0,
+            idempotent: false,
+          },
+          { status: 202 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { detail: "Request was throttled. Expected available in 9 seconds." },
+          { status: 429 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            error: "Responses are closed",
+            errorCode: "event_not_active",
+            event: { code: "ABC", status: "closed" },
+          },
+          { status: 409 },
+        ),
+      )
+      .mockResolvedValueOnce(textResponse("gateway", { status: 502 }));
+
+    await expect(
+      sendRosterInvitations("ABC", payload, "tok"),
+    ).resolves.toMatchObject({ queuedCount: 1, skippedCount: 0 });
+    await expect(
+      sendRosterInvitations("ABC", payload, "tok"),
+    ).rejects.toMatchObject({
+      message: "Request was throttled. Expected available in 9 seconds.",
+      status: 429,
+      code: null,
+      event: null,
+    });
+    await expect(
+      sendRosterInvitations("ABC", payload, "tok"),
+    ).rejects.toMatchObject({
+      message: "Responses are closed",
+      status: 409,
+      code: "event_not_active",
+      event: { code: "ABC", status: "closed" },
+    });
+    await expect(
+      sendRosterInvitations("ABC", payload, "tok"),
+    ).rejects.toMatchObject({
+      message: "HTTP 502",
+      status: 502,
+      code: null,
+      event: null,
     });
   });
 
@@ -1526,5 +1856,35 @@ describe("business API helpers", () => {
       participant: { id: "participant-1", version: 2 },
       payload: expect.objectContaining({ code: "participant_exists" }),
     });
+  });
+
+  test("managed participant requests carry the phone and organizer-managed flag", async () => {
+    global.fetch.mockResolvedValue(jsonResponse({ ok: true }));
+
+    await createManagedParticipant(
+      "ABC",
+      {
+        name: "Managed Person",
+        email: "organizer@example.com",
+        phone: "+1 (555) 010-0199",
+        organizerManaged: true,
+        idempotencyKey: "managed-key",
+      },
+      "tok",
+    );
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/events/participants/managed?code=ABC",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          name: "Managed Person",
+          email: "organizer@example.com",
+          phone: "+1 (555) 010-0199",
+          organizerManaged: true,
+          idempotencyKey: "managed-key",
+        }),
+      }),
+    );
   });
 });

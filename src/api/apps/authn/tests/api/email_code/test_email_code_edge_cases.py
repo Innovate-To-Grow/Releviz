@@ -228,6 +228,9 @@ class PublicEmailCodeViewEdgeTests(APITestCase):
         self.assertIsNotNone(contact.member)
         self.assertFalse(contact.member.is_active)
         mock_send.assert_called()
+        # Subscribe keeps its own newsletter CTA; only the login source remaps to register.
+        self.assertEqual(mock_send.call_args.kwargs["link_flow"], "auth")
+        self.assertEqual(mock_send.call_args.kwargs["link_source"], "subscribe")
 
     def test_email_auth_request_claims_unclaimed_contact_email(self, _c, mock_send):
         # An unclaimed ContactEmail should be claimed by the new pending member.

@@ -7,7 +7,12 @@ const ROOT = path.resolve(__dirname, "../..");
 const RESOURCE_AUDIT_MANIFEST = [
   ".github/dependabot.yml",
   ".github/workflows/ci.yml",
-  ".github/workflows/deploy-prod.yml",
+  ".github/workflows/release.yml",
+  ".github/workflows/release-backend.yml",
+  ".github/workflows/release-frontend.yml",
+  ".github/workflows/release-infrastructure.yml",
+  ".github/actions/release-preflight/action.yml",
+  ".github/actions/release-scope/action.yml",
   ".gitignore",
   ".pre-commit-config.yaml",
   "README.md",
@@ -40,6 +45,7 @@ const RESOURCE_AUDIT_MANIFEST = [
   "src/api/apps/core/static/admin/js/material-web-text-field.js",
   "src/api/apps/core/static/images/i2glogo.png",
   "src/api/apps/core/static/images/releviz-mark.png",
+  "src/api/apps/core/templates/403.html",
   "src/api/apps/core/templates/404.html",
   "src/api/apps/core/templates/admin/actions.html",
   "src/api/apps/core/templates/admin/base_site.html",
@@ -120,6 +126,7 @@ const RESOURCE_AUDIT_MANIFEST = [
   "scripts/quality-gate.sh",
   "scripts/ci/check_bundle_size.py",
   "scripts/ci/check_npm_licenses.py",
+  "scripts/ci/last-successful-release.sh",
   "scripts/ci/plan_django_tests.py",
   "scripts/ci/plan_e2e_tests.py",
   "scripts/ci/summarize_workflow_jobs.py",
@@ -181,6 +188,28 @@ test.describe("repository resource audit", () => {
     expect(runner).toContain('export PYTHON_BIN="$python_bin"');
     expect(runner).toContain("export NEXT_E2E_SERVER=1");
     expect(runner).toContain("export PRINT_EMAILS_TO_TERMINAL=0");
+  });
+
+  test("unknown paths render the app 404 page", async ({ page }) => {
+    // The e2e frontend is a Next server (`next start`), which answers 404 for
+    // app/not-found.js; Amplify reproduces that status through its final
+    // catch-all rule, which must follow every 301 redirect rule.
+    const response = await page.goto("/this-page-does-not-exist/");
+    expect(response?.status()).toBe(404);
+    await expect(
+      page.getByRole("heading", { name: "Page not found" }),
+    ).toBeVisible();
+    await expect(page.getByRole("link", { name: "Go home" })).toBeVisible();
+
+    const terraform = fs.readFileSync(
+      path.join(ROOT, "infra/prod/main.tf"),
+      "utf8",
+    );
+    const notFoundRule = terraform.indexOf('source = "/<*>"');
+    expect(notFoundRule).toBeGreaterThan(-1);
+    expect(notFoundRule).toBeGreaterThan(
+      terraform.lastIndexOf('status = "301"'),
+    );
   });
 
   test("API workspace scripts use the relocatable virtualenv interpreter", async () => {

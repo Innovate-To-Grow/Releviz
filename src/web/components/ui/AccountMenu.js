@@ -15,9 +15,7 @@ import {
 } from "@/components/ui/icons";
 import { flushPendingNavigationWork } from "@/components/schedule/useAutosaveNavigationGuard";
 
-export default function AccountMenu({
-  signedOutLabel = "Continue with email",
-}) {
+export default function AccountMenu({ signedOutLabel = "Sign in" }) {
   const { user, loading, logout } = useAuth();
   const [open, setOpen] = useState(false);
   const [logoutError, setLogoutError] = useState("");
@@ -109,7 +107,7 @@ export default function AccountMenu({
         aria-controls={menuId}
         aria-expanded={open}
       >
-        {user.displayName}
+        <span className="account-menu-trigger__name">{user.displayName}</span>
         <span className="app-btn-icon ms-1" aria-hidden="true">
           <ChevronDownIcon size="0.8em" />
         </span>

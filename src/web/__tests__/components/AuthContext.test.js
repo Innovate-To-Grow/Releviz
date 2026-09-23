@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 
@@ -18,6 +18,7 @@ import {
 import {
   changePasswordApi,
   deleteAccountApi,
+  fetchAuthSession,
   fetchAuthSessions,
   fetchProfile,
   loginWithPassword,
@@ -32,9 +33,16 @@ import {
   verifyUnifiedEmailAuthCode,
 } from "@/lib/api/auth";
 
+let pathname = "/";
+
+jest.mock("next/navigation", () => ({
+  usePathname: () => pathname,
+}));
+
 jest.mock("@/lib/api/auth", () => ({
   changePasswordApi: jest.fn(),
   deleteAccountApi: jest.fn(),
+  fetchAuthSession: jest.fn(),
   fetchAuthSessions: jest.fn(),
   fetchProfile: jest.fn(),
   loginWithPassword: jest.fn(),
@@ -141,6 +149,8 @@ describe("AuthContext", () => {
     sessionStorage.clear();
     clearAuthSession();
     global.fetch = jest.fn().mockResolvedValue(jsonResponse({}, 401));
+    pathname = "/";
+    fetchAuthSession.mockResolvedValue({ user: {} });
     delete window.__token;
     delete window.__sessions;
   });
@@ -373,5 +383,148 @@ describe("AuthContext", () => {
     );
     await userEvent.click(screen.getByText("token"));
     await waitFor(() => expect(window.__token).toBeNull());
+  });
+
+  async function renderWithSession(displayName) {
+    const view = render(
+      <AuthProvider>
+        <Probe />
+      </AuthProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("loading")).toHaveTextContent("false"),
+    );
+    act(() => {
+      writeAuthSession({ access: "a", user: { displayName } });
+    });
+    expect(screen.getByTestId("user")).toHaveTextContent(displayName);
+    return view;
+  }
+
+  function navigateClientSide(view, nextPathname) {
+    pathname = nextPathname;
+    view.rerender(
+      <AuthProvider>
+        <Probe />
+      </AuthProvider>,
+    );
+  }
+
+  test("revalidates the session on client-side route changes only", async () => {
+    const view = await renderWithSession("Route User");
+    expect(fetchAuthSession).not.toHaveBeenCalled();
+
+    navigateClientSide(view, "/create");
+    await waitFor(() => expect(fetchAuthSession).toHaveBeenCalledTimes(1));
+    await act(async () => {});
+
+    expect(screen.getByTestId("user")).toHaveTextContent("Route User");
+    expect(readAuthSession().access).toBe("a");
+  });
+
+  test("signs out when a route change finds the session revoked", async () => {
+    fetchAuthSession.mockRejectedValue(
+      Object.assign(new Error("This session has been signed out."), {
+        status: 401,
+      }),
+    );
+    const view = await renderWithSession("Revoked User");
+
+    navigateClientSide(view, "/create");
+
+    await waitFor(() =>
+      expect(screen.getByTestId("user")).toHaveTextContent("none"),
+    );
+    expect(readAuthSession()).toBeNull();
+  });
+
+  test("keeps the session when the liveness check fails without a 401", async () => {
+    fetchAuthSession.mockRejectedValue(new Error("network down"));
+    const view = await renderWithSession("Offline User");
+
+    navigateClientSide(view, "/create");
+    await waitFor(() => expect(fetchAuthSession).toHaveBeenCalledTimes(1));
+    await act(async () => {});
+
+    expect(screen.getByTestId("user")).toHaveTextContent("Offline User");
+    expect(readAuthSession().access).toBe("a");
+  });
+
+  test("revalidates on focus and visibility at most every 30 seconds", async () => {
+    let resolveCheck;
+    fetchAuthSession.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveCheck = resolve;
+      }),
+    );
+    const view = await renderWithSession("Focus User");
+
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    expect(fetchAuthSession).toHaveBeenCalledTimes(1);
+
+    // A second trigger while the first check is in flight is deduplicated.
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(fetchAuthSession).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      resolveCheck({ user: {} });
+    });
+
+    // Within the interval the check is skipped entirely.
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(fetchAuthSession).toHaveBeenCalledTimes(1);
+
+    const realNow = Date.now();
+    const nowSpy = jest.spyOn(Date, "now").mockReturnValue(realNow + 31_000);
+    try {
+      await act(async () => {
+        window.dispatchEvent(new Event("focus"));
+      });
+      expect(fetchAuthSession).toHaveBeenCalledTimes(2);
+      expect(screen.getByTestId("user")).toHaveTextContent("Focus User");
+
+      // A hidden tab never triggers the check.
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => "hidden",
+      });
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(fetchAuthSession).toHaveBeenCalledTimes(2);
+
+      // Listeners are removed on unmount.
+      view.unmount();
+      nowSpy.mockReturnValue(realNow + 120_000);
+      window.dispatchEvent(new Event("focus"));
+      expect(fetchAuthSession).toHaveBeenCalledTimes(2);
+    } finally {
+      delete document.visibilityState;
+      nowSpy.mockRestore();
+    }
+  });
+
+  test("never checks liveness without a session", async () => {
+    const view = render(
+      <AuthProvider>
+        <Probe />
+      </AuthProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("loading")).toHaveTextContent("false"),
+    );
+
+    navigateClientSide(view, "/create");
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    expect(fetchAuthSession).not.toHaveBeenCalled();
   });
 });

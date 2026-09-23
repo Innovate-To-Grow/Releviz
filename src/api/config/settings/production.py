@@ -30,15 +30,6 @@ BACKEND_URL = required_env("BACKEND_URL")
 REQUIRE_ENCRYPTED_PASSWORDS = os.environ.get("REQUIRE_ENCRYPTED_PASSWORDS", "1") != "0"
 FIELD_ENCRYPTION_KEY = required_env("DJANGO_FIELD_ENCRYPTION_KEY")
 METRICS_BEARER_TOKEN = required_env("METRICS_BEARER_TOKEN")
-try:
-    feedback_retention_days = int(os.environ.get("FEEDBACK_SUBMISSION_RETENTION_DAYS", "730"))
-except ValueError as exc:
-    raise ImproperlyConfigured(
-        "FEEDBACK_SUBMISSION_RETENTION_DAYS must be a positive integer."
-    ) from exc
-if feedback_retention_days < 1:
-    raise ImproperlyConfigured("FEEDBACK_SUBMISSION_RETENTION_DAYS must be a positive integer.")
-FEEDBACK_SUBMISSION_RETENTION = timedelta(days=feedback_retention_days)  # noqa: F405
 USE_SES_EMAIL_PROVIDER = os.environ.get("USE_SES_EMAIL_PROVIDER", "1") != "0"
 if os.environ.get("PRINT_EMAILS_TO_TERMINAL", "0") != "0":
     raise ImproperlyConfigured("PRINT_EMAILS_TO_TERMINAL cannot be enabled in production.")

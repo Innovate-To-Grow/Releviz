@@ -193,10 +193,6 @@ AUTH_RATE_LIMITS = {
         "ip": {"limit": 2000, "window": 86400, "block": 3600},
         "identity": {"limit": 1000, "window": 86400, "block": 3600},
     },
-    "feedback": {
-        "ip": {"limit": 20, "window": 3600, "block": 3600},
-        "identity": {"limit": 20, "window": 3600, "block": 3600},
-    },
 }
 AUTH_FAILURE_LIMITS = {
     "password_login": {
@@ -241,7 +237,6 @@ AUTH_EMAIL_DJANGO_BACKEND_FALLBACK = False
 PRINT_EMAILS_TO_TERMINAL = os.environ.get("PRINT_EMAILS_TO_TERMINAL", "0") != "0"
 DEFAULT_FROM_EMAIL = "noreply@releviz.local"
 METRICS_BEARER_TOKEN = os.environ.get("METRICS_BEARER_TOKEN", "").strip()
-FEEDBACK_SUBMISSION_RETENTION = timedelta(days=730)
 
 LOGGING = {
     "version": 1,

@@ -8,6 +8,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
@@ -82,11 +83,14 @@ import {
 } from "@/lib/api/tempAccess";
 import { navigateTo } from "@/lib/navigation";
 
+// Most of these flows exercise the legacy Busy start (paint Available over
+// empty slots); the Available default has its own tests below.
 const event = {
   code: "ABC123",
   name: "Design review",
   mode: "inperson",
   status: "active",
+  startingAvailability: "busy",
   responseDeadline: "2099-01-01T00:00:00Z",
   slotCount: 2,
   slotGroups: [
@@ -100,6 +104,33 @@ const event = {
     },
   ],
 };
+
+// A hybrid event with one organizer-blocked slot per day (indices 1 and 3).
+const blockedEvent = {
+  ...event,
+  mode: "mixed",
+  slotCount: 4,
+  slotGroups: [
+    {
+      key: "mon",
+      label: "Monday",
+      slots: [
+        { index: 0, localStart: "09:00", localEnd: "09:30", blocked: false },
+        { index: 1, localStart: "09:30", localEnd: "10:00", blocked: true },
+      ],
+    },
+    {
+      key: "tue",
+      label: "Tuesday",
+      slots: [
+        { index: 2, localStart: "09:00", localEnd: "09:30" },
+        { index: 3, localStart: "09:30", localEnd: "10:00", blocked: true },
+      ],
+    },
+  ],
+};
+const BLOCKED_NOTE =
+  "Grey striped times are blocked by the organizer and do not apply to this event.";
 
 function participant(overrides = {}) {
   return {
@@ -768,6 +799,123 @@ describe("temporary event access page", () => {
         screen.getByText("Draft saved. Submit when you are ready."),
       ).toBeInTheDocument(),
     );
+  });
+
+  test("an Available start pre-selects Busy, explains the flow, and offers Mark all Available", async () => {
+    const availableStart = { ...event, startingAvailability: "available" };
+    fetchTempAccessSession.mockResolvedValue(
+      session({
+        event: availableStart,
+        participant: participant({
+          availabilityInperson: [1, 1],
+          availabilityVirtual: [1, 1],
+        }),
+      }),
+    );
+    render(<TempAccessClient />);
+    expect(
+      await screen.findByRole("heading", { name: "Your schedule" }),
+    ).toBeInTheDocument();
+
+    const choices = screen.getByRole("group", { name: "Availability status" });
+    expect(
+      within(choices).getByRole("button", { name: "Busy" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      within(choices).getByRole("button", { name: "Available" }),
+    ).toHaveAttribute("aria-pressed", "false");
+    expect(
+      screen.getByText(
+        "Every time starts as Available. Paint Busy over the times that do not work for you.",
+      ),
+    ).toBeInTheDocument();
+    // The legacy instruction would contradict the pre-selected Busy brush.
+    expect(
+      screen.queryByText(
+        "Choose a status, then click or drag across the times that work for you.",
+      ),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Mark all Busy" }),
+    ).not.toBeInTheDocument();
+
+    // The pre-selected Busy brush paints 0 over the Available default.
+    await userEvent.click(
+      screen.getByRole("button", { name: "Paint in-person" }),
+    );
+    expect(screen.getByTestId("schedule-editor")).toHaveTextContent("0,1");
+    await waitFor(() =>
+      expect(updateTempAccessParticipant).toHaveBeenLastCalledWith(
+        "ABC123",
+        expect.objectContaining({ availabilityInperson: [0, 1] }),
+      ),
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Mark all Available" }),
+    );
+    expect(screen.getByTestId("schedule-editor")).toHaveTextContent("1,1");
+    await waitFor(() =>
+      expect(updateTempAccessParticipant).toHaveBeenLastCalledWith(
+        "ABC123",
+        expect.objectContaining({ availabilityInperson: [1, 1] }),
+      ),
+    );
+  });
+
+  test("a Busy start keeps the Available brush and hides the Available-start hint", async () => {
+    render(<TempAccessClient />);
+    expect(
+      await screen.findByRole("heading", { name: "Your schedule" }),
+    ).toBeInTheDocument();
+    const choices = screen.getByRole("group", { name: "Availability status" });
+    expect(
+      within(choices).getByRole("button", { name: "Available" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.getByRole("button", { name: "Mark all Busy" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Every time starts as Available/),
+    ).not.toBeInTheDocument();
+  });
+
+  test("explains organizer-blocked times and never fills them", async () => {
+    fetchTempAccessSession.mockResolvedValue(session({ event: blockedEvent }));
+    render(<TempAccessClient />);
+    expect(
+      await screen.findByRole("heading", { name: "Your schedule" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("note")).toHaveTextContent(BLOCKED_NOTE);
+
+    // Both channels fill around the blocked indices.
+    await userEvent.click(screen.getByRole("button", { name: "Apply to all" }));
+    expect(screen.getByTestId("schedule-editor")).toHaveTextContent("1,0,1,0");
+    expect(screen.getByTestId("virtual-values")).toHaveTextContent("1,0,1,0");
+    await waitFor(() =>
+      expect(updateTempAccessParticipant).toHaveBeenLastCalledWith(
+        "ABC123",
+        expect.objectContaining({
+          availabilityInperson: [1, 0, 1, 0],
+          availabilityVirtual: [1, 0, 1, 0],
+        }),
+      ),
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Mark all Busy" }),
+    );
+    expect(screen.getByTestId("schedule-editor")).toHaveTextContent("0,0,0,0");
+    expect(screen.getByTestId("virtual-values")).toHaveTextContent("0,0,0,0");
+  });
+
+  test("omits the blocked-times note when no slot is blocked", async () => {
+    render(<TempAccessClient />);
+    expect(
+      await screen.findByRole("heading", { name: "Your schedule" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+    expect(screen.queryByText(BLOCKED_NOTE)).not.toBeInTheDocument();
   });
 
   test("reports a submit conflict and a generic submit failure", async () => {

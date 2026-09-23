@@ -23,11 +23,13 @@ import {
   createRosterImport,
   fetchRosterImportRows,
 } from "@/lib/api/roster";
+import { rosterImportStatusMessage } from "@/lib/roster-import-status";
 
 const FIELD_OPTIONS = [
   ["name", "Name", true],
   ["email", "Email", true],
   ["group", "Group", false],
+  ["phone", "Phone", false],
   ["weight", "Weight", false],
   ["included", "Included", false],
 ];
@@ -60,6 +62,7 @@ function suggestedMapping(headers = [], current = {}) {
     name: ["name", "fullname", "participant", "participantname"],
     email: ["email", "emailaddress", "mail"],
     group: ["group", "team", "department", "organization"],
+    phone: ["phone", "phonenumber", "mobile", "cell", "tel", "telephone"],
     weight: ["weight", "priority"],
     included: ["included", "include", "counted"],
   };
@@ -185,6 +188,7 @@ export default function RosterImportWizard({
   const [pagination, setPagination] = useState(null);
   const [phase, setPhase] = useState("source");
   const [mode, setMode] = useState("merge");
+  const [sendInvitations, setSendInvitations] = useState(false);
   const [confirmationCode, setConfirmationCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -443,23 +447,20 @@ export default function RosterImportWizard({
         {
           mode,
           idempotencyKey: idempotencyKey.current,
+          sendInvitations,
           ...(mode === "rebuild" ? { confirmationCode } : {}),
         },
         token,
       );
-      const receipt = data.receipt || {};
-      const importedCount = receipt.importedCount || 0;
-      const createdCount = receipt.createdCount || 0;
-      const updatedCount = receipt.updatedCount || 0;
-      const invitedCount =
-        data.autoInvitedCount ?? receipt.invitedCount ?? createdCount;
       setStatus(
-        createdCount > 0 || invitedCount > 0
-          ? `Imported ${importedCount} people: ${createdCount} added, ${updatedCount} updated. ${invitedCount} invitation${invitedCount === 1 ? "" : "s"} queued.`
-          : `Imported ${importedCount} people: no new participants were added, so no invitations were sent.`,
+        rosterImportStatusMessage({
+          receipt: data.receipt,
+          autoInvitedCount: data.autoInvitedCount,
+          sendInvitations,
+        }),
       );
       setPhase("complete");
-      onCommitted?.(data);
+      onCommitted?.({ ...data, sendInvitations });
     } catch (requestError) {
       if (requestError.event) onEventChange?.(requestError.event);
       setError(
@@ -491,6 +492,7 @@ export default function RosterImportWizard({
   const includeByDefaultId = `${fieldIds}-include-by-default`;
   const mergeModeId = `${fieldIds}-mode-merge`;
   const rebuildModeId = `${fieldIds}-mode-rebuild`;
+  const sendInvitationsId = `${fieldIds}-send-invitations`;
   const commitDisabled =
     busy ||
     !record?.summary?.valid ||
@@ -578,7 +580,7 @@ export default function RosterImportWizard({
                   value={pastedText}
                   onChange={(event) => setPastedText(event.target.value)}
                   placeholder={
-                    "name\temail\tgroup\nAda\tada@example.com\tFaculty"
+                    "name\temail\tgroup\nAda\tada@example.com\tFaculty; Team 3"
                   }
                 />
               </FormField>
@@ -687,7 +689,10 @@ export default function RosterImportWizard({
             <legend className="fs-6 fw-semibold mb-2">Defaults</legend>
             <div className="row g-3 align-items-end">
               <div className="col-12 col-md-4">
-                <FormField label="Default group">
+                <FormField
+                  label="Default group"
+                  help="Blank = unassigned, ALL = every group, separate several names with ;"
+                >
                   <input
                     className="form-control"
                     value={defaults.group}
@@ -798,6 +803,7 @@ export default function RosterImportWizard({
                     <th scope="col">Name</th>
                     <th scope="col">Email</th>
                     <th scope="col">Group</th>
+                    <th scope="col">Phone</th>
                     <th scope="col">Weight</th>
                     <th scope="col">Included</th>
                     <th scope="col">Validation</th>
@@ -892,6 +898,31 @@ export default function RosterImportWizard({
                         <td>
                           <input
                             className="form-control form-control-sm"
+                            aria-label={`Phone for row ${row.rowNumber}`}
+                            type="tel"
+                            maxLength={32}
+                            value={rowDraftValue(row, "phone", row.phone || "")}
+                            disabled={busy}
+                            onChange={(event) =>
+                              updateRowDraft(
+                                row.id,
+                                "phone",
+                                event.target.value,
+                              )
+                            }
+                            onBlur={(event) =>
+                              void saveRowDraft(
+                                row,
+                                "phone",
+                                event.target.value,
+                                row.phone || "",
+                              )
+                            }
+                          />
+                        </td>
+                        <td>
+                          <input
+                            className="form-control form-control-sm"
                             style={{ width: "6rem" }}
                             aria-label={`Weight for row ${row.rowNumber}`}
                             type="number"
@@ -970,8 +1001,9 @@ export default function RosterImportWizard({
               Import behavior
             </legend>
             <p className="roster-import__hint form-text mt-0 mb-3">
-              New participants receive an invitation automatically. Existing
-              participants are updated without another email.
+              Existing participants are updated without another email. New
+              people are emailed only if you tick the box; you can also send
+              invitations later from the roster.
             </p>
             <div className="form-check">
               <input
@@ -1010,8 +1042,10 @@ export default function RosterImportWizard({
                   className="roster-import__warning"
                 >
                   Rebuilding clears schedules, invitations, and pending
-                  delivery, then sends a new invitation to every imported
-                  participant.
+                  delivery. With invitations enabled below it sends a new
+                  invitation to every imported participant; otherwise everyone
+                  starts as Not sent and gets no reminders until you send
+                  invitations.
                 </Alert>
                 <div className="row">
                   <div className="col-12 col-md-6">
@@ -1033,6 +1067,18 @@ export default function RosterImportWizard({
                 </div>
               </div>
             )}
+            <div className="form-check mt-3">
+              <input
+                id={sendInvitationsId}
+                className="form-check-input"
+                type="checkbox"
+                checked={sendInvitations}
+                onChange={(event) => setSendInvitations(event.target.checked)}
+              />
+              <label className="form-check-label" htmlFor={sendInvitationsId}>
+                Send invitations to newly added people
+              </label>
+            </div>
           </fieldset>
 
           <div className="d-flex flex-wrap gap-2">
@@ -1054,8 +1100,12 @@ export default function RosterImportWizard({
               {busy
                 ? "Importing…"
                 : mode === "rebuild"
-                  ? "Rebuild roster and send invitations"
-                  : "Merge roster and invite new people"}
+                  ? sendInvitations
+                    ? "Rebuild roster and send invitations"
+                    : "Rebuild roster"
+                  : sendInvitations
+                    ? "Merge roster and invite new people"
+                    : "Merge roster"}
             </AppButton>
           </div>
         </div>

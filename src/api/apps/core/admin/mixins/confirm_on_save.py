@@ -222,7 +222,9 @@ class ConfirmOnSaveMixin:
         # confirmation (and its data diff). Execution is additionally gated by
         # the underlying ``changeform_view``/``delete_view`` permission checks.
         if not self.has_view_permission(request):
-            raise PermissionDenied
+            raise PermissionDenied(
+                f"You do not have permission to view {self.opts.verbose_name_plural}."
+            )
         session_key = self._session_key()
         pending = request.session.get(session_key)
         if not pending:
@@ -509,7 +511,9 @@ class ConfirmOnSaveMixin:
         # See _confirm_change_view: gate the bulk-action confirmation on per-app
         # access (execution re-checks via response_action / the action itself).
         if not self.has_view_permission(request):
-            raise PermissionDenied
+            raise PermissionDenied(
+                f"You do not have permission to view {self.opts.verbose_name_plural}."
+            )
         session_key = self._session_action_key()
         pending = request.session.get(session_key)
         if not pending:

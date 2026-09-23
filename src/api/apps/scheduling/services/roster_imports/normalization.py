@@ -6,11 +6,24 @@ from collections import defaultdict
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 
+from apps.authn.models import ContactEmail
 from apps.scheduling.models import RosterImportBatch, RosterImportRow
+from apps.scheduling.services.invitations.addresses import phone_issue
+from apps.scheduling.services.invitations.errors import (
+    INACTIVE_ACCOUNT_MESSAGE,
+    SHARED_ACCOUNT_MESSAGE,
+    UNVERIFIED_FULL_ACCOUNT_MESSAGE,
+)
+from apps.scheduling.services.roster_groups import format_group_cell, parse_group_cell
 
 from .errors import RosterImportError
 from .limits import MAX_ROSTER_ROWS
 from .mapping import display_cell, parse_included
+
+_PHONE_ERRORS = {
+    "too_long": "phone is too long (max 32).",
+    "invalid": "phone is invalid.",
+}
 
 
 def _mapped_value(row: RosterImportRow, mapping: dict, field: str):
@@ -23,6 +36,20 @@ def _mapped_value(row: RosterImportRow, mapping: dict, field: str):
     if isinstance(value, str) and value.lstrip().startswith("="):
         return None, f"{field} cannot contain a formula."
     return value, None
+
+
+def normalize_group_cell(value) -> str:
+    """Return a group cell in its canonical ``ALL; A; B`` spelling.
+
+    A cell that does not parse is kept as typed (stripped) so the organizer
+    sees it next to the error ``validate_identity_fields`` reports for it.
+    """
+
+    cell = str(value if value is not None else "").strip()
+    try:
+        return format_group_cell(*parse_group_cell(cell))
+    except RosterImportError:
+        return cell
 
 
 def validate_identity_fields(name: str, email: str, group_name: str) -> list[str]:
@@ -40,9 +67,16 @@ def validate_identity_fields(name: str, email: str, group_name: str) -> list[str
             validate_email(email)
         except ValidationError:
             errors.append("email is invalid.")
-    if len(group_name) > 100:
-        errors.append("group is too long (max 100).")
+    try:
+        parse_group_cell(group_name)
+    except RosterImportError as exc:
+        errors.append(str(exc))
     return errors
+
+
+def validate_phone(phone: str) -> list[str]:
+    issue = phone_issue(phone)
+    return [_PHONE_ERRORS[issue]] if issue else []
 
 
 def _normalize_row(row: RosterImportRow, mapping: dict, defaults: dict) -> None:
@@ -58,6 +92,9 @@ def _normalize_row(row: RosterImportRow, mapping: dict, defaults: dict) -> None:
     if "email" not in mapping:
         errors.append("Map an email column.")
 
+    raw_phone, error = _mapped_value(row, mapping, "phone")
+    if error:
+        errors.append(error)
     raw_group, error = _mapped_value(row, mapping, "group")
     if error:
         errors.append(error)
@@ -70,7 +107,9 @@ def _normalize_row(row: RosterImportRow, mapping: dict, defaults: dict) -> None:
 
     name = display_cell(raw_name)
     email = display_cell(raw_email).lower()
-    group_name = display_cell(raw_group) if "group" in mapping else str(defaults.get("group", ""))
+    phone = display_cell(raw_phone) if "phone" in mapping else ""
+    group_cell = display_cell(raw_group) if "group" in mapping else defaults.get("group") or ""
+    group_name = normalize_group_cell(group_cell)
     weight = defaults.get("weight", 1.0)
     if "weight" in mapping and raw_weight not in {None, ""}:
         try:
@@ -89,9 +128,11 @@ def _normalize_row(row: RosterImportRow, mapping: dict, defaults: dict) -> None:
             included = True
 
     errors.extend(validate_identity_fields(name, email, group_name))
+    errors.extend(validate_phone(phone))
     row.name = name[:100]
     row.email = email[:254]
-    row.group_name = group_name[:100]
+    row.phone = phone[:32]
+    row.group_name = group_name
     row.weight = weight
     row.included = included
     row.selected = True
@@ -118,7 +159,14 @@ def apply_duplicate_rules(rows: list[RosterImportRow]) -> None:
         if len(duplicates) < 2:
             continue
         signatures = {
-            (row.name, row.email, row.group_name, float(row.weight), bool(row.included))
+            (
+                row.name,
+                row.email,
+                row.group_name,
+                row.phone,
+                float(row.weight),
+                bool(row.included),
+            )
             for row in duplicates
         }
         if len(signatures) == 1:
@@ -132,6 +180,55 @@ def apply_duplicate_rules(rows: list[RosterImportRow]) -> None:
                 dict.fromkeys(
                     [*(duplicate.validation_errors or []), "Conflicting duplicate email."]
                 )
+            )
+
+
+_ACCOUNT_MESSAGES = frozenset(
+    {INACTIVE_ACCOUNT_MESSAGE, UNVERIFIED_FULL_ACCOUNT_MESSAGE, SHARED_ACCOUNT_MESSAGE}
+)
+
+
+def _remove_account_errors(errors: list) -> list:
+    return [error for error in errors if error not in _ACCOUNT_MESSAGES]
+
+
+def apply_account_rules(rows: list[RosterImportRow]) -> None:
+    """Flag selected rows whose address the commit would refuse to bind."""
+
+    candidates = []
+    for row in rows:
+        row.validation_errors = _remove_account_errors(row.validation_errors or [])
+        if row.selected and row.email:
+            candidates.append(row)
+    contacts = {
+        contact.email_address.lower(): contact
+        for contact in ContactEmail.objects.select_related("member").filter(
+            email_address__in={row.email.lower() for row in candidates}
+        )
+    }
+    by_member = defaultdict(list)
+    for row in candidates:
+        contact = contacts.get(row.email.lower())
+        if contact is None or contact.member_id is None:
+            continue
+        by_member[contact.member_id].append(row)
+        member = contact.member
+        if not member.is_active:
+            message = INACTIVE_ACCOUNT_MESSAGE
+        elif getattr(member, "access_level", "full") == "full" and not contact.verified:
+            message = UNVERIFIED_FULL_ACCOUNT_MESSAGE
+        else:
+            continue
+        row.validation_errors = list(dict.fromkeys([*row.validation_errors, message]))
+    # Unknown and orphan addresses each mint their own member at commit time, so
+    # only rows bound to an existing member can collide on one account. Every row
+    # in a group is flagged so the survivors clear once the others are deselected.
+    for shared in by_member.values():
+        if len(shared) < 2:
+            continue
+        for row in shared:
+            row.validation_errors = list(
+                dict.fromkeys([*row.validation_errors, SHARED_ACCOUNT_MESSAGE])
             )
 
 
@@ -177,6 +274,7 @@ def normalize_import_batch(batch: RosterImportBatch) -> None:
     for row in rows:
         _normalize_row(row, batch.column_mapping or {}, batch.defaults or {})
     apply_duplicate_rules(rows)
+    apply_account_rules(rows)
     if rows_summary(rows)["valid"] > MAX_ROSTER_ROWS:
         raise RosterImportError(
             f"An import may contain at most {MAX_ROSTER_ROWS} valid participants."
@@ -187,6 +285,7 @@ def normalize_import_batch(batch: RosterImportBatch) -> None:
             [
                 "name",
                 "email",
+                "phone",
                 "group_name",
                 "weight",
                 "included",

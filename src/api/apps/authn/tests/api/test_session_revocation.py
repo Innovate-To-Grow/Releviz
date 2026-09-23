@@ -1,5 +1,6 @@
 """Revoking refresh sessions must take effect before access tokens expire."""
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
@@ -33,6 +34,9 @@ class SessionRevocationTests(APITestCase):
 
     def _profile(self, access):
         return self.client.get("/authn/profile/", headers={"Authorization": f"Bearer {access}"})
+
+    def _session(self, access):
+        return self.client.get("/authn/session/", headers={"Authorization": f"Bearer {access}"})
 
     def test_access_token_works_while_a_session_is_live(self):
         self.assertEqual(self._profile(self.refresh.access_token).status_code, 200)
@@ -94,3 +98,23 @@ class SessionRevocationTests(APITestCase):
             refreshed_access[SESSION_REFRESH_JTI_CLAIM],
             current_refresh["jti"],
         )
+
+    def test_session_check_and_refresh_both_fail_once_the_session_is_revoked(self):
+        # The frontend's liveness check and its silent refresh must both refuse
+        # a session revoked from another browser, before the access token expires.
+        refresh = issue_session_refresh_token(self.member)
+        access = refresh.access_token
+        self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME] = str(refresh)
+
+        self.assertEqual(self._session(access).status_code, 200)
+
+        outstanding = OutstandingToken.objects.get(user=self.member, jti=refresh["jti"])
+        BlacklistedToken.objects.create(token=outstanding)
+
+        revoked = self._session(access)
+        self.assertEqual(revoked.status_code, 401)
+        self.assertEqual(revoked.data["code"], "session_revoked")
+
+        refreshed = self.client.post("/authn/refresh/", {}, format="json")
+        self.assertEqual(refreshed.status_code, 401)
+        self.assertEqual(refreshed.cookies[settings.AUTH_REFRESH_COOKIE_NAME]["max-age"], 0)
