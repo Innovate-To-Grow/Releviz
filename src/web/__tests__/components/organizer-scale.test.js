@@ -2408,8 +2408,9 @@ describe("scaled organizer workspace", () => {
     }
 
     test("loads a new response into every section without Refresh and keeps the pick", async () => {
+      const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTime });
       const { setEvent } = await renderLiveWorkspace();
-      await userEvent.click(
+      await user.click(
         screen.getByRole("button", { name: "Choose this time" }),
       );
       const finalize = document.getElementById("organizer-finalize");
@@ -2623,6 +2624,7 @@ describe("scaled organizer workspace", () => {
     });
 
     test("waits for a manual refresh and never overlaps its own passes", async () => {
+      const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTime });
       await renderLiveWorkspace();
       let releaseEvent;
       fetchEvent.mockImplementationOnce(
@@ -2632,7 +2634,7 @@ describe("scaled organizer workspace", () => {
           }),
       );
       await act(async () => {
-        await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+        await user.click(screen.getByRole("button", { name: "Refresh" }));
       });
       await waitFor(() => expect(releaseEvent).toBeDefined());
       await tick();
