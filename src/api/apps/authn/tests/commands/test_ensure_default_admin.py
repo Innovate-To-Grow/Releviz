@@ -29,8 +29,6 @@ class EnsureDefaultAdminCommandTests(TestCase):
                 Command(),
                 yes=True,
                 email="demo-admin@example.com",
-                first_name="Demo",
-                last_name="Admin",
                 stdout=out,
             )
 
@@ -52,7 +50,7 @@ class EnsureDefaultAdminCommandTests(TestCase):
         self.assertEqual(
             ContactEmail.objects.filter(email_address="demo-admin@example.com").count(), 1
         )
-        self.assertEqual(member.first_name, "Demo")
+        self.assertEqual(member.first_name, "Default")
         self.assertEqual(member.last_name, "Admin")
         self.assertTrue(member.is_active)
         self.assertTrue(member.is_staff)
