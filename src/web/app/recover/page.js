@@ -8,6 +8,7 @@ import AppHeader from "@/components/ui/AppHeader";
 import FormField from "@/components/ui/FormField";
 import { LockIcon, SendIcon } from "@/components/ui/icons";
 import { confirmPasswordReset, requestPasswordResetCode } from "@/lib/api/auth";
+import { EMAIL_PATTERN } from "@/lib/email";
 import { navigateTo } from "@/lib/navigation";
 
 export default function RecoverAccountPage() {
@@ -19,6 +20,7 @@ export default function RecoverAccountPage() {
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const trimmedEmail = email.trim();
 
   const requestCode = async (event) => {
     event.preventDefault();
@@ -26,7 +28,7 @@ export default function RecoverAccountPage() {
     setStatus("");
     setLoading(true);
     try {
-      await requestPasswordResetCode({ email });
+      await requestPasswordResetCode({ email: trimmedEmail });
       setStep("reset");
       setStatus(
         "If an account exists for that email, a reset code has been sent. Check your inbox.",
@@ -48,7 +50,12 @@ export default function RecoverAccountPage() {
     }
     setLoading(true);
     try {
-      await confirmPasswordReset({ email, code, password, passwordConfirm });
+      await confirmPasswordReset({
+        email: trimmedEmail,
+        code,
+        password,
+        passwordConfirm,
+      });
       navigateTo("/login?status=password-reset");
     } catch (err) {
       setError(err.message || "Unable to reset your password.");
@@ -146,7 +153,10 @@ export default function RecoverAccountPage() {
             fullWidth
             icon={step === "request" ? <SendIcon /> : <LockIcon />}
             busy={loading}
-            disabled={loading}
+            disabled={
+              loading ||
+              (step === "request" && !EMAIL_PATTERN.test(trimmedEmail))
+            }
           >
             {loading
               ? step === "request"

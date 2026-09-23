@@ -92,6 +92,8 @@ class SeedAdminE2ECommandTests(TestCase):
         participant = Participant.objects.get(event=event, member=nonstaff_member)
         self.assertEqual(participant.participant_name, "Nonstaff E2E")
         self.assertTrue(participant.submitted)
+        # The seeded account answered for itself, so the organizer cannot edit it.
+        self.assertIsNotNone(participant.response_claimed_at)
         self.assertEqual(len(participant.availability_inperson), 80)
         self.assertEqual(list(participant.groups.values_list("name", flat=True)), ["Design Review"])
         self.assertFalse(participant.all_groups)

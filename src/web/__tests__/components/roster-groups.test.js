@@ -363,33 +363,82 @@ describe("RosterGroups", () => {
   });
 
   test("deletes a group only after the organizer confirms", async () => {
-    const confirmSpy = jest
-      .spyOn(window, "confirm")
-      .mockReturnValueOnce(false)
-      .mockReturnValueOnce(true);
-    try {
-      const { onDelete } = renderGroups();
-      const remove = within(row("Faculty")).getByRole("button", {
-        name: "Delete group",
-      });
-      await click(remove);
-      expect(confirmSpy).toHaveBeenCalledWith(
-        "Delete group Faculty? People stay on the roster.",
-      );
-      expect(onDelete).not.toHaveBeenCalled();
+    const { onDelete } = renderGroups();
+    const remove = within(row("Faculty")).getByRole("button", {
+      name: "Delete group",
+    });
+    const confirmDialog = () =>
+      screen.getByRole("alertdialog", { name: "Delete group Faculty?" });
 
-      await click(remove);
-      expect(onDelete).toHaveBeenCalledTimes(1);
-      expect(onDelete).toHaveBeenCalledWith({
-        id: 1,
-        name: "Faculty",
-        count: 2,
-        weight: 1,
-      });
-      await waitFor(() => expect(remove).not.toHaveAttribute("aria-busy"));
-    } finally {
-      confirmSpy.mockRestore();
-    }
+    // Cancel is the safe default: it has focus, sends nothing, and hands
+    // focus back to the row's button.
+    await click(remove);
+    expect(confirmDialog()).toHaveAccessibleDescription(
+      "People stay on the roster.",
+    );
+    const cancel = within(confirmDialog()).getByRole("button", {
+      name: "Cancel",
+    });
+    expect(cancel).toHaveFocus();
+    await click(cancel);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(remove).toHaveFocus();
+
+    // Escape cancels too.
+    await click(remove);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(onDelete).not.toHaveBeenCalled();
+
+    await click(remove);
+    await click(
+      within(confirmDialog()).getByRole("button", { name: "Delete group" }),
+    );
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(onDelete).toHaveBeenCalledTimes(1);
+    expect(onDelete).toHaveBeenCalledWith({
+      id: 1,
+      name: "Faculty",
+      count: 2,
+      weight: 1,
+    });
+    await waitFor(() => expect(remove).not.toHaveAttribute("aria-busy"));
+    // The deleted row's button goes away, so focus lands on the heading.
+    expect(screen.getByRole("heading", { name: "Groups" })).toHaveFocus();
+  });
+
+  test("keeps focus on the row when a confirmed delete fails", async () => {
+    const { onDelete } = renderGroups({
+      onDelete: jest.fn().mockResolvedValue(false),
+    });
+    const remove = within(row("Faculty")).getByRole("button", {
+      name: "Delete group",
+    });
+    await click(remove);
+    await click(
+      within(
+        screen.getByRole("alertdialog", { name: "Delete group Faculty?" }),
+      ).getByRole("button", { name: "Delete group" }),
+    );
+    expect(onDelete).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(remove).not.toHaveAttribute("aria-busy"));
+    expect(remove).toHaveFocus();
+  });
+
+  test("drops an open delete confirmation when the roster locks", async () => {
+    const { handlers, onDelete, rerender } = renderGroups();
+    await click(
+      within(row("Faculty")).getByRole("button", { name: "Delete group" }),
+    );
+    expect(
+      screen.getByRole("alertdialog", { name: "Delete group Faculty?" }),
+    ).toBeInTheDocument();
+    rerender(
+      <RosterGroups {...handlers} groups={groups} selectedCount={2} readOnly />,
+    );
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(onDelete).not.toHaveBeenCalled();
   });
 
   test("creates an empty group with validation", async () => {

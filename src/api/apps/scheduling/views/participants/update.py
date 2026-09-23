@@ -9,9 +9,9 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.scheduling.models import Event, Participant, ScheduleEditRecord
+from apps.scheduling.models import Event, EventInvitation, Participant, ScheduleEditRecord
 from apps.scheduling.payloads import api_participant
-from apps.scheduling.permissions import weight_for_participant
+from apps.scheduling.permissions import organizer_may_edit_response, weight_for_participant
 from apps.scheduling.services.availability import validate_availability
 from apps.scheduling.services.events import response_write_error
 from apps.scheduling.services.invitations import (
@@ -37,6 +37,31 @@ from ..helpers import (
 )
 
 security_logger = logging.getLogger("releviz.security")
+
+OWNED_RESPONSE_ERROR = (
+    "This participant now manages their own response, so the organizer can no longer change it."
+)
+
+
+def _unclaimed_row_has_self_evidence(participant) -> bool:
+    """Fallback for a full-account row that should already be claimed.
+
+    Catches rows the previous release touched during a rolling deploy (it wrote
+    SELF edit records and accepted invitations, but no claim) and any future
+    path that forgets to claim: a participant-authored edit, an accepted linked
+    invitation, or no organizer invitation at all (the person joined on their
+    own; every organizer add/import links one).
+    """
+    linked = EventInvitation.objects.filter(
+        event_id=participant.event_id, member_id=participant.member_id
+    )
+    return (
+        ScheduleEditRecord.objects.filter(
+            participant_id=participant.pk, source=ScheduleEditRecord.Source.SELF
+        ).exists()
+        or linked.filter(accepted_at__isnull=False).exists()
+        or not linked.exists()
+    )
 
 
 class ParticipantUpdateView(APIView):
@@ -80,8 +105,11 @@ class ParticipantUpdateView(APIView):
 
         is_organizer = event.organizer_id == request.user.pk
         is_self = participant.member_id == request.user.pk
-        is_temporary = participant.member.access_level == "temporary"
-        organizer_can_edit_response = is_organizer and is_temporary
+        access_level = participant.member.access_level
+        is_temporary = access_level == "temporary"
+        organizer_can_edit_response = (
+            is_organizer and not is_self and organizer_may_edit_response(participant)
+        )
         response_fields = {"availabilityInperson", "availabilityVirtual", "submitted"}
         is_response_mutation = any(field in request.data for field in response_fields)
         is_name_mutation = "name" in request.data
@@ -90,14 +118,31 @@ class ParticipantUpdateView(APIView):
         )
         is_versioned_mutation = is_response_mutation or is_name_mutation
 
-        if is_organizer and not is_temporary and is_versioned_mutation:
+        if (
+            organizer_can_edit_response
+            and is_versioned_mutation
+            and not is_temporary
+            and not participant.organizer_managed
+            and _unclaimed_row_has_self_evidence(participant)
+        ):
+            participant.response_claimed_at = timezone.now()
+            participant.save(update_fields=["response_claimed_at", "updated_at"])
+            organizer_can_edit_response = False
+
+        if (
+            is_organizer
+            and not is_self
+            and is_versioned_mutation
+            and not organizer_can_edit_response
+        ):
             security_logger.warning(
                 "organizer_participant_edit_denied",
                 extra={
                     "event_id": str(event.pk),
                     "organizer_id": str(request.user.pk),
                     "member_id": str(participant.member_id),
-                    "account_access": "full",
+                    "account_access": access_level,
+                    "reason": "participant_owns_response",
                 },
             )
 
@@ -113,11 +158,8 @@ class ParticipantUpdateView(APIView):
             }
             if is_organizer:
                 payload = {
-                    "error": (
-                        "This participant has full access; the organizer can no longer "
-                        "change their availability."
-                    ),
-                    "errorCode": "organizer_edit_full_account",
+                    "error": OWNED_RESPONSE_ERROR,
+                    "errorCode": "organizer_edit_participant_owned",
                     "participant": response_participant_payload(),
                 }
             if is_organizer:
@@ -129,8 +171,11 @@ class ParticipantUpdateView(APIView):
                 "errorCode": "participant_update_forbidden",
             }
             if is_organizer:
-                payload["errorCode"] = "organizer_edit_full_account"
-                payload["participant"] = response_participant_payload()
+                payload = {
+                    "error": OWNED_RESPONSE_ERROR,
+                    "errorCode": "organizer_edit_participant_owned",
+                    "participant": response_participant_payload(),
+                }
                 return private_response(payload, status=403)
             return Response(payload, status=403)
         if not is_organizer and not is_self:
@@ -273,6 +318,7 @@ class ParticipantUpdateView(APIView):
                     event=event,
                     member=participant.member,
                     submitted=True,
+                    accept=not organizer_can_edit_response,
                 )
             elif not participant.submitted and (
                 "availability_inperson" in updates
@@ -283,6 +329,7 @@ class ParticipantUpdateView(APIView):
                     event=event,
                     member=participant.member,
                     draft_saved=True,
+                    accept=not organizer_can_edit_response,
                 )
 
         if is_versioned_mutation:
@@ -295,6 +342,13 @@ class ParticipantUpdateView(APIView):
                     },
                     status=428,
                 )
+            if is_self and is_response_mutation and participant.response_claimed_at is None:
+                # The person answered (or tried to) for themselves: from now on only
+                # they can change this response. Committed even when the version
+                # check below returns 409 or finds nothing to change.
+                participant.response_claimed_at = timezone.now()
+                participant.save(update_fields=["response_claimed_at", "updated_at"])
+                mark_invitation_for_member(event=event, member=participant.member)
             if participant.version != expected_version:
                 if values_match():
                     track_unchanged_response()
@@ -364,7 +418,12 @@ class ParticipantUpdateView(APIView):
             update_fields=[*updates.keys(), *timestamp_fields, "version", "updated_at"]
         )
         if updates.get("submitted"):
-            mark_invitation_for_member(event=event, member=participant.member, submitted=True)
+            mark_invitation_for_member(
+                event=event,
+                member=participant.member,
+                submitted=True,
+                accept=not organizer_can_edit_response,
+            )
         elif not participant.submitted and (
             "availability_inperson" in updates
             or "availability_virtual" in updates
@@ -377,14 +436,16 @@ class ParticipantUpdateView(APIView):
                     event=event,
                     member=participant.member,
                     draft_saved=True,
+                    accept=not organizer_can_edit_response,
                 )
         if organizer_can_edit_response and is_versioned_mutation:
             security_logger.info(
-                "temporary_participant_organizer_updated",
+                "organizer_participant_response_updated",
                 extra={
                     "event_id": str(event.pk),
                     "organizer_id": str(request.user.pk),
                     "member_id": str(participant.member_id),
+                    "account_access": access_level,
                     "participant_version": participant.version,
                     "submitted": participant.submitted,
                 },

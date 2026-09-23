@@ -277,6 +277,9 @@ class AcceptInvitationView(View):
     def _upgrade_member(self, member, invitation):
         member.is_staff = True
         member.is_active = True
+        # Only verified contacts reach this path and temporary contacts are created
+        # unverified, so no temporary member is upgraded here. If that changes, claim
+        # their event responses the way ``_complete_registration`` (auth/email_code.py) does.
         member.access_level = member.AccessLevel.FULL
         member.save(update_fields=["is_staff", "is_active", "access_level", "updated_at"])
         invitation.mark_accepted(member)

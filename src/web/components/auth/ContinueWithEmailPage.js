@@ -10,6 +10,7 @@ import BrandLogo from "@/components/ui/BrandLogo";
 import FormField from "@/components/ui/FormField";
 import LoadingState from "@/components/ui/LoadingState";
 import { ArrowRightIcon, EmailIcon } from "@/components/ui/icons";
+import { EMAIL_PATTERN } from "@/lib/email";
 import { navigateTo, safeNextPath } from "@/lib/navigation";
 
 const AUTH_ENTRY_PATHS = new Set([
@@ -21,8 +22,6 @@ const AUTH_ENTRY_PATHS = new Set([
   "/sign-up",
   "/signup",
 ]);
-
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export function destinationAfterAuthentication(next, data = {}) {
   const safeDestination = safeNextPath(next);

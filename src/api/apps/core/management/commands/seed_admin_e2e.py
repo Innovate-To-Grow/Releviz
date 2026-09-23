@@ -7,6 +7,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
+from django.utils import timezone
 
 from apps.authn.models import ContactEmail
 from apps.scheduling.models import Event, Participant, ParticipantGroup, UserEvent, Weight
@@ -240,6 +241,8 @@ class Command(BaseCommand):
                 "availability_virtual": list(reversed(availability)),
                 "submitted": True,
                 "sort_order": 1,
+                # The seeded full account answered for itself, so it stays Self-managed.
+                "response_claimed_at": timezone.now(),
             },
         )
         # Group names are unique per event case-insensitively, so look the

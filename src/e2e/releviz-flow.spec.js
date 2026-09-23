@@ -846,6 +846,14 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(
       page.getByText("Added Avery was added. No invitation was sent."),
     ).toBeVisible();
+    // Adding someone never selects them, so the next Send invitation cannot
+    // quietly include a person who was added without one.
+    await expect(page.getByText("0 selected", { exact: true })).toHaveCount(2);
+    await expect(
+      page
+        .getByRole("button", { name: "Send invitation", exact: true })
+        .first(),
+    ).toBeDisabled();
 
     const rosterAfterAdd = await apiJson(
       request,
@@ -967,6 +975,158 @@ test.describe("Releviz account and scheduling flow", () => {
       organizer_email: organizerEmail,
       phone: managedPhone,
     });
+  });
+
+  test("lets the organizer enter a schedule for an existing full account until that person responds", async ({
+    browser,
+    page,
+    request,
+  }) => {
+    const runId = `${Date.now()}-${Math.round(Math.random() * 100_000)}`;
+    const organizerEmail = `full-organizer-${runId}@example.com`;
+    const participantEmail = `fiona-${runId}@example.com`;
+    const eventName = `Full account roster ${runId}`;
+    const participantName = "Full Fiona";
+
+    const participantContext = await browser.newContext();
+    const participantPage = await participantContext.newPage();
+    await registerAccount(participantPage, participantEmail, "Fiona", "Full");
+    const participantSession = await readSession(participantPage);
+
+    await registerAccount(page, organizerEmail, "Owen", "Organizer");
+    await page.getByRole("link", { name: "Create New Event" }).click();
+    await fillTextbox(page, "Event Name", eventName);
+    await page.getByRole("button", { name: "Create Event" }).click();
+    await page.waitForURL(/\/event\?code=/);
+    const eventCode = new URL(page.url()).searchParams.get("code");
+    expect(eventCode).toMatch(/^[A-Z0-9]+$/);
+    const organizerSession = await readSession(page);
+
+    await page.getByRole("button", { name: "Add person", exact: true }).click();
+    await fillTextbox(page, "Full name", participantName);
+    await fillTextbox(page, "Email address", participantEmail);
+    await page.getByRole("button", { name: "Add only" }).click();
+    await expect(
+      page.getByText(
+        `${participantName} was added. No invitation was sent. They already have a Releviz account, so you can use Edit schedule until they respond themselves.`,
+      ),
+    ).toBeVisible();
+
+    const fullRow = page.locator("tr.roster-table__row", {
+      hasText: participantName,
+    });
+    await expect(fullRow).toContainText("Full account");
+    await expect(fullRow).toContainText("Not sent");
+    await fullRow.getByRole("button", { name: "Edit schedule" }).click();
+    const organizerDrawer = page.getByRole("dialog", {
+      name: `Edit ${participantName}'s schedule`,
+    });
+    await expect(organizerDrawer).toBeVisible();
+    await expect(
+      organizerDrawer.getByText("Full account · not responded yet"),
+    ).toBeVisible();
+    await organizerDrawer
+      .getByRole("button", { name: "Submit on behalf" })
+      .click();
+    await expect(
+      organizerDrawer.getByText("Schedule submitted."),
+    ).toBeVisible();
+
+    // Entering the response is not an acceptance: the row stays Not sent
+    // and the organizer keeps the right to edit it.
+    const rosterAfterSubmit = await apiJson(
+      request,
+      "GET",
+      `/events/roster?code=${eventCode}`,
+      organizerSession.access,
+    );
+    expect(rosterAfterSubmit.response.status()).toBe(200);
+    expect(
+      rosterAfterSubmit.payload.participants.find(
+        (participant) => participant.email === participantEmail,
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        memberId: participantSession.user.id,
+        accountAccess: "full",
+        canOrganizerEditAvailability: true,
+        submitted: true,
+        invitationStatus: "not_sent",
+      }),
+    );
+
+    // With the drawer still open, Fiona saves her own answers, which makes
+    // the response hers.
+    const ownState = await apiJson(
+      request,
+      "GET",
+      `/events/participants?code=${eventCode}`,
+      participantSession.access,
+    );
+    expect(ownState.response.status()).toBe(200);
+    const ownResponse = ownState.payload.participants.find(
+      (participant) => participant.id === participantSession.user.id,
+    );
+    expect(ownResponse).toEqual(expect.objectContaining({ submitted: 1 }));
+    const ownSchedule = [...ownResponse.availabilityInperson];
+    ownSchedule[0] = ownSchedule[0] === 1 ? 0 : 1;
+    const ownSave = await apiJson(
+      request,
+      "PUT",
+      `/events/participants/update?code=${eventCode}&participantId=${participantSession.user.id}`,
+      participantSession.access,
+      {
+        availabilityInperson: ownSchedule,
+        expectedVersion: ownResponse.version,
+      },
+    );
+    expect(ownSave.response.status()).toBe(200);
+
+    await organizerDrawer.getByRole("button", { name: "Save draft" }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(
+      page.getByText(
+        `${participantName} now manages their own response, so you can no longer edit their schedule.`,
+      ),
+    ).toBeVisible();
+
+    await refreshWorkspace(page);
+    await expect(fullRow).toContainText("Self-managed");
+    await expect(
+      fullRow.getByRole("button", { name: "Edit schedule" }),
+    ).toHaveCount(0);
+    const rosterAfterClaim = await apiJson(
+      request,
+      "GET",
+      `/events/roster?code=${eventCode}`,
+      organizerSession.access,
+    );
+    expect(rosterAfterClaim.response.status()).toBe(200);
+    const claimedParticipant = rosterAfterClaim.payload.participants.find(
+      (participant) => participant.email === participantEmail,
+    );
+    expect(claimedParticipant).toEqual(
+      expect.objectContaining({
+        accountAccess: "full",
+        canOrganizerEditAvailability: false,
+      }),
+    );
+    const deniedUpdate = await apiJson(
+      request,
+      "PUT",
+      `/events/participants/update?code=${eventCode}&participantId=${participantSession.user.id}`,
+      organizerSession.access,
+      {
+        availabilityInperson: ownResponse.availabilityInperson,
+        expectedVersion: claimedParticipant.version,
+      },
+    );
+    expect(deniedUpdate.response.status()).toBe(403);
+    expect(deniedUpdate.payload.errorCode).toBe(
+      "organizer_edit_participant_owned",
+    );
+
+    await participantContext.close();
   });
 
   test("runs the scaled roster-to-calendar workflow and persists it to Postgres", async ({
@@ -1693,6 +1853,53 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(secondGroupRow).toContainText("1 person");
     await expect(groupRow).toContainText("2 people");
     await page.getByLabel("Select Manual Participant").uncheck();
+
+    // Deleting a group asks in the page first. A throwaway group with one
+    // member shows the delete keeps that person and their other groups; the
+    // roster checks below still see only E2E Group and E2E Second.
+    await page.getByRole("button", { name: "New group", exact: true }).click();
+    await page.getByLabel("New group name").fill("E2E Throwaway");
+    await page
+      .getByRole("button", { name: "Create group", exact: true })
+      .click();
+    await expect(page.getByText("Created E2E Throwaway.")).toBeVisible();
+    const throwawayGroupRow = groupsTable.locator(
+      '[data-roster-group="E2E Throwaway"]',
+    );
+    await page.getByLabel("Select Manual Participant").check();
+    await throwawayGroupRow
+      .getByRole("button", { name: "Add selected" })
+      .click();
+    await expect(
+      page.getByText("Added 1 person to E2E Throwaway."),
+    ).toBeVisible();
+    await page.getByLabel("Select Manual Participant").uncheck();
+    await throwawayGroupRow
+      .getByRole("button", { name: "Delete group" })
+      .click();
+    const deleteGroupDialog = page.getByRole("alertdialog", {
+      name: "Delete group E2E Throwaway?",
+    });
+    await expect(deleteGroupDialog).toContainText("People stay on the roster.");
+    await expect(
+      deleteGroupDialog.getByRole("button", { name: "Cancel" }),
+    ).toBeFocused();
+    await deleteGroupDialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(deleteGroupDialog).toHaveCount(0);
+    await expect(throwawayGroupRow).toContainText("1 person");
+    await throwawayGroupRow
+      .getByRole("button", { name: "Delete group" })
+      .click();
+    await deleteGroupDialog
+      .getByRole("button", { name: "Delete group" })
+      .click();
+    await expect(page.getByText("Deleted E2E Throwaway.")).toBeVisible();
+    await expect(deleteGroupDialog).toHaveCount(0);
+    await expect(throwawayGroupRow).toHaveCount(0);
+    await expect(page.getByLabel("Select Manual Participant")).toBeVisible();
+    await expect(secondGroupRow).toContainText("1 person");
+    await expect(groupRow).toContainText("2 people");
+
     const rosterAfterGroups = await apiJson(
       request,
       "GET",

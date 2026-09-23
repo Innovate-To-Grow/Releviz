@@ -25,6 +25,9 @@ const config = [
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
       ],
       "no-console": ["error", { allow: ["error"] }],
+      // Native dialogs block the page and are auto-dismissed under automation;
+      // use components/ui/ConfirmDialog instead.
+      "no-alert": "error",
       "react-hooks/exhaustive-deps": "error",
       "react-hooks/purity": "error",
       "react-hooks/refs": "error",

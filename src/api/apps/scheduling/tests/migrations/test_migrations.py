@@ -1,3 +1,4 @@
+from datetime import timedelta
 from importlib import import_module
 from unittest.mock import patch
 
@@ -367,6 +368,157 @@ class ParticipantGroupMigrationTests(TransactionTestCase):
             "scheduling_participantgroup",
             connection.introspection.table_names(),
         )
+
+
+class ParticipantResponseClaimBackfillTests(TransactionTestCase):
+    """0009 claims every full-account response except untouched organizer adds."""
+
+    migrate_from = ("scheduling", "0008_participant_response_claimed_at")
+    migrate_to = ("scheduling", "0009_backfill_participant_response_claims")
+
+    @staticmethod
+    def targets(executor, scheduling_node):
+        """Pin every other app at its leaf so historical models match the real tables."""
+        return [node for node in executor.loader.graph.leaf_nodes() if node[0] != "scheduling"] + [
+            scheduling_node
+        ]
+
+    def setUp(self):
+        super().setUp()
+        self.executor = MigrationExecutor(connection)
+        from_targets = self.targets(self.executor, self.migrate_from)
+        self.executor.migrate(from_targets)
+        old_apps = self.executor.loader.project_state(from_targets).apps
+        Member = old_apps.get_model("authn", "Member")
+        Event = old_apps.get_model("scheduling", "Event")
+        Participant = old_apps.get_model("scheduling", "Participant")
+        EventInvitation = old_apps.get_model("scheduling", "EventInvitation")
+        ScheduleEditRecord = old_apps.get_model("scheduling", "ScheduleEditRecord")
+        TemporaryEventSession = old_apps.get_model("scheduling", "TemporaryEventSession")
+
+        organizer = Member.objects.create(
+            email="claim-organizer@example.com", password="!", first_name="Org"
+        )
+        event = Event.objects.create(
+            code="MIGCLAIM",
+            name="Claim backfill",
+            organizer=organizer,
+            days=[1],
+            start_minutes=9 * 60,
+            end_minutes=10 * 60,
+        )
+        self.base = timezone.now() - timedelta(days=1)
+        self.ids = {}
+
+        def row(
+            label,
+            *,
+            member=None,
+            access_level="full",
+            invitation_offset=timedelta(seconds=1),
+            linked=True,
+            invitation_fields=None,
+            **fields,
+        ):
+            member = member or Member.objects.create(
+                email=f"claim-{label}@example.com",
+                password="!",
+                first_name=label,
+                access_level=access_level,
+            )
+            participant = Participant.objects.create(
+                event=event,
+                member=member,
+                participant_name=label,
+                availability_inperson=[0, 0],
+                availability_virtual=[0, 0],
+                **fields,
+            )
+            Participant.objects.filter(pk=participant.pk).update(created_at=self.base)
+            invitation = None
+            if invitation_offset is not None:
+                invitation = EventInvitation.objects.create(
+                    event=event,
+                    email=member.email,
+                    member=member if linked else None,
+                    invited_by=organizer,
+                    **(invitation_fields or {}),
+                )
+                EventInvitation.objects.filter(pk=invitation.pk).update(
+                    created_at=self.base + invitation_offset
+                )
+            self.ids[label] = participant.pk
+            return participant, invitation
+
+        row("untouched")
+        row("opened", invitation_fields={"status": "opened", "opened_at": self.base})
+        row("accepted", invitation_fields={"accepted_at": self.base})
+        row("joined_at", invitation_fields={"joined_at": self.base})
+        row("draft_saved_at", invitation_fields={"draft_saved_at": self.base})
+        row("submitted_at", invitation_fields={"submitted_at": self.base})
+        for status in ("joined", "draft_saved", "submitted"):
+            row(f"status_{status}", invitation_fields={"status": status})
+        row("no_invitation", invitation_offset=None)
+        row("email_only", linked=False)
+        row("older_invitation", invitation_offset=-timedelta(minutes=1))
+        row("late_invitation", invitation_offset=timedelta(minutes=11))
+        for label, source in (("self_record", "self"), ("organizer_record", "organizer")):
+            participant, _invitation = row(label)
+            ScheduleEditRecord.objects.create(
+                event=event,
+                participant=participant,
+                source=source,
+                action="draft",
+                participant_version=1,
+            )
+        participant, invitation = row("temp_session")
+        TemporaryEventSession.objects.create(
+            member=participant.member,
+            participant=participant,
+            invitation=invitation,
+            secret_hash="claim-backfill-session",
+            expires_at=self.base,
+        )
+        self.first_submitted_at = self.base + timedelta(hours=2)
+        self.first_draft_saved_at = self.base + timedelta(hours=1)
+        row("submitted", submitted=True)
+        row("drafted", first_draft_saved_at=self.first_draft_saved_at)
+        row(
+            "first_submitted",
+            first_draft_saved_at=self.first_draft_saved_at,
+            first_submitted_at=self.first_submitted_at,
+        )
+        row("organizer_own", member=organizer)
+        row(
+            "temporary",
+            access_level="temporary",
+            submitted=True,
+            invitation_fields={"accepted_at": self.base},
+        )
+        row("organizer_managed", organizer_managed=True, submitted=True)
+
+        self.executor = MigrationExecutor(connection)
+        self.to_targets = self.targets(self.executor, self.migrate_to)
+        self.executor.migrate(self.to_targets)
+
+    def tearDown(self):
+        executor = MigrationExecutor(connection)
+        executor.migrate(executor.loader.graph.leaf_nodes())
+        super().tearDown()
+
+    def test_backfill_leaves_only_untouched_organizer_adds_unclaimed(self):
+        migrated_apps = self.executor.loader.project_state(self.to_targets).apps
+        Participant = migrated_apps.get_model("scheduling", "Participant")
+        claims = {
+            label: Participant.objects.get(pk=pk).response_claimed_at
+            for label, pk in self.ids.items()
+        }
+        unclaimed = {"untouched", "opened", "temporary", "organizer_managed"}
+        self.assertEqual({label for label, value in claims.items() if value is None}, unclaimed)
+        # The claim time is the earliest proof of ownership that is still on the row.
+        self.assertEqual(claims["no_invitation"], self.base)
+        self.assertEqual(claims["drafted"], self.first_draft_saved_at)
+        self.assertEqual(claims["first_submitted"], self.first_submitted_at)
 
 
 class LegacyGroupNameTests(SimpleTestCase):

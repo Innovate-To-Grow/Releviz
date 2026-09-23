@@ -1,8 +1,9 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import Alert from "@/components/ui/Alert";
 import AppButton from "@/components/ui/AppButton";
+import ConfirmDialog from "@/components/ui/ConfirmDialog";
 import FormField from "@/components/ui/FormField";
 import StatusBadge from "@/components/ui/StatusBadge";
 import { CheckIcon, GroupIcon } from "@/components/ui/icons";
@@ -100,6 +101,8 @@ export default function RosterGroups({
   // Which button's request is in flight, so only that button shows a spinner
   // while `busyGroup` (owned by the parent) disables the rest.
   const [pendingAction, setPendingAction] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const titleRef = useRef(null);
 
   const namedGroups = groups.filter((group) => group.name !== "");
   const busy = Boolean(busyGroup);
@@ -179,21 +182,27 @@ export default function RosterGroups({
     if (renamed) setRenaming(null);
   };
 
-  const confirmDelete = async (group) => {
-    const confirmed = window.confirm(
-      `Delete group ${group.name}? People stay on the roster.`,
+  const confirmDelete = async () => {
+    const group = deleteTarget;
+    setDeleteTarget(null);
+    const deleted = await runAction(
+      `${groupFilterValue(group.name)}:delete`,
+      () => onDelete(group),
     );
-    if (!confirmed) return;
-    await runAction(`${groupFilterValue(group.name)}:delete`, () =>
-      onDelete(group),
-    );
+    // The row and its Delete button are gone, so focus a stable landmark.
+    if (deleted) titleRef.current?.focus();
   };
 
   return (
     <section className="roster-groups" aria-labelledby={`${ids}-groups-title`}>
       <div className="roster-groups__header">
         <div className="roster-groups__copy">
-          <h4 id={`${ids}-groups-title`} className="roster-groups__title">
+          <h4
+            ref={titleRef}
+            id={`${ids}-groups-title`}
+            className="roster-groups__title"
+            tabIndex={-1}
+          >
             Groups
           </h4>
           <p className="roster-groups__description">
@@ -462,7 +471,7 @@ export default function RosterGroups({
                                 variant="danger"
                                 disabled={busy}
                                 busy={pendingAction === `${filterValue}:delete`}
-                                onClick={() => void confirmDelete(group)}
+                                onClick={() => setDeleteTarget(group)}
                               >
                                 Delete group
                               </AppButton>
@@ -494,6 +503,16 @@ export default function RosterGroups({
           No groups yet. Create a group, then select people in the list and add
           them to it.
         </p>
+      )}
+
+      {deleteTarget && !readOnly && (
+        <ConfirmDialog
+          title={`Delete group ${deleteTarget.name}?`}
+          description="People stay on the roster."
+          confirmLabel="Delete group"
+          onConfirm={() => void confirmDelete()}
+          onCancel={() => setDeleteTarget(null)}
+        />
       )}
     </section>
   );

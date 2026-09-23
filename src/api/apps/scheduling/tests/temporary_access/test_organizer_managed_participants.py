@@ -444,6 +444,9 @@ class OrganizerManagedParticipantTests(TestCase):
         self.assertEqual(own["accountAccess"], "full")
         self.assertFalse(own["organizerManaged"])
         self.assertFalse(own["canOrganizerEditAvailability"])
+        self.assertIsNotNone(
+            Participant.objects.get(event=self.event, member=self.organizer).response_claimed_at
+        )
 
     def test_final_notifications_and_reminders_skip_managed_people(self):
         self.assertEqual(self.add_managed("Grandma Ruth").status_code, 201)

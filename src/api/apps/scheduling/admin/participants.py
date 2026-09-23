@@ -45,6 +45,8 @@ class ParticipantAdmin(ModelAdmin):
         "groups__name",
     )
     filter_horizontal = ("groups",)
+    # Staff must not reopen a response the person already owns.
+    readonly_fields = ("response_claimed_at",)
 
     def get_queryset(self, request):
         return super().get_queryset(request).prefetch_related("groups")

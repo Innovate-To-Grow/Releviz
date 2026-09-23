@@ -29,6 +29,11 @@ class Participant(TimestampedModel):
     first_draft_saved_at = models.DateTimeField(null=True, blank=True)
     first_submitted_at = models.DateTimeField(null=True, blank=True)
     last_submitted_at = models.DateTimeField(null=True, blank=True)
+    # Set the first time the person acts on this response themselves (joins, saves or
+    # submits their own response, or upgrades a temporary identity). While NULL on a
+    # full account, the event organizer may still enter the response for them. Never
+    # cleared while the row exists.
+    response_claimed_at = models.DateTimeField(null=True, blank=True)
     hidden = models.BooleanField(default=False)
     groups = models.ManyToManyField(ParticipantGroup, related_name="participants", blank=True)
     # Membership in every group the event has now or gains later.

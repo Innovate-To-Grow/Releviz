@@ -81,6 +81,23 @@ def weight_for_participant(event, participant):
     return event.weights.filter(participant=participant).first()
 
 
+def organizer_may_edit_response(participant) -> bool:
+    """Whether the event organizer may enter or change this participant's response.
+
+    Organizer-managed and temporary people stay co-editable. A full account is
+    editable only until the person claims the response (joins, saves or submits
+    it themselves, or upgrades from a temporary identity). The organizer's own
+    row always follows the participant path.
+    """
+    if participant.member_id == participant.event.organizer_id:
+        return False
+    return (
+        participant.organizer_managed
+        or getattr(participant.member, "access_level", "full") == "temporary"
+        or participant.response_claimed_at is None
+    )
+
+
 def can_view_event_results(event, user) -> bool:
     """Only the organizer sees group availability.
 

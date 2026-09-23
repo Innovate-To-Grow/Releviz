@@ -180,6 +180,15 @@ export function ManagedScheduleDrawer({
     !responsesOpen ||
     Boolean(conflictParticipant) ||
     !participantName.trim();
+  // A full account stays organizer-editable only until the person responds
+  // themselves; organizer-managed and temporary rows are always shared.
+  const fullAccount =
+    !participant.organizerManaged && participant.accountAccess === "full";
+  const eyebrow = participant.organizerManaged
+    ? "Organizer-managed participant"
+    : fullAccount
+      ? "Full account · not responded yet"
+      : "Temporary participant";
 
   return (
     <div className="app-drawer-layer managed-drawer-layer">
@@ -199,7 +208,7 @@ export function ManagedScheduleDrawer({
       >
         <header className="app-drawer__header managed-drawer__header">
           <div className="min-w-0">
-            <span className="eyebrow">Temporary participant</span>
+            <span className="eyebrow">{eyebrow}</span>
             <h2 id="managed-drawer-title">
               Edit {participant.name}&apos;s schedule
             </h2>
@@ -217,7 +226,11 @@ export function ManagedScheduleDrawer({
         <div className="app-drawer__body managed-drawer__body">
           <FormField
             label="Event display name"
-            help="You and this participant edit the same response. A version conflict will never be silently overwritten."
+            help={
+              fullAccount
+                ? "You can enter this schedule until they join, save, or submit it themselves; after that only they can change it. A version conflict will never be silently overwritten."
+                : "You and this participant edit the same response. A version conflict will never be silently overwritten."
+            }
           >
             <input
               type="text"

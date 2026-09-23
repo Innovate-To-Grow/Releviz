@@ -2,6 +2,7 @@
 
 from django.conf import settings
 from django.db import transaction
+from django.utils import timezone
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -120,6 +121,7 @@ class ParticipantsView(APIView):
         if len(name) > 100:
             return Response({"error": "Name too long (max 100)"}, status=400)
 
+        now = timezone.now()
         participant, created = Participant.objects.get_or_create(
             event=event,
             member=request.user,
@@ -127,11 +129,19 @@ class ParticipantsView(APIView):
                 "participant_name": name,
                 "availability_inperson": default_availability(event),
                 "availability_virtual": default_availability(event),
+                "response_claimed_at": now,
             },
         )
         if participant.participant_name != name:
             participant.participant_name = name
             participant.save(update_fields=["participant_name", "updated_at"])
+        if not created:
+            # Joining takes ownership of a row the organizer may have added. A
+            # conditional UPDATE (no SELECT ... FOR UPDATE): an already-claimed row
+            # matches nothing and takes no row lock, so repeat joins never wait.
+            Participant.objects.filter(pk=participant.pk, response_claimed_at__isnull=True).update(
+                response_claimed_at=now, updated_at=now
+            )
 
         if event.organizer_id != request.user.pk:
             UserEvent.objects.get_or_create(member=request.user, event=event, role="participant")

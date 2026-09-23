@@ -403,9 +403,13 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
         self.assertEqual(organizer_denied.status_code, 403)
         self.assertEqual(
             organizer_denied.data["errorCode"],
-            "organizer_edit_full_account",
+            "organizer_edit_participant_owned",
         )
         self.assertEqual(organizer_denied.data["participant"]["accountAccess"], "full")
+        # No organizer invitation links this row, so the person joined on their own:
+        # the write-time guard claims it.
+        full_participant.refresh_from_db()
+        self.assertIsNotNone(full_participant.response_claimed_at)
 
         endpoint = (
             f"/events/participants/update?code={self.event.code}&participantId={self.temporary.pk}"
@@ -672,6 +676,8 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
         self.assertIsNotNone(self.session.revoked_at)
         self.assertEqual(self.participant.member_id, self.temporary.pk)
         self.assertEqual(self.participant.participant_name, "Formal Identity")
+        # The upgrade hands the response to the person.
+        self.assertIsNotNone(self.participant.response_claimed_at)
 
     def test_upgrade_registration_errors_do_not_expose_the_session_email(self):
         endpoint = f"/events/temp-access/upgrade-registration?code={self.event.code}"

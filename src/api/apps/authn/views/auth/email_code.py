@@ -1,6 +1,8 @@
 """Views for public email-code auth flows."""
 
 from django.contrib.auth import get_user_model
+from django.db.models import Value
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import AllowAny
@@ -214,12 +216,21 @@ def _complete_registration(challenge):
         from apps.scheduling.models import Participant, TemporaryEventSession
 
         now = timezone.now()
+        # Upgrading hands every existing participation to the person: the organizer
+        # can no longer change those responses. Member lock (above), then participant
+        # rows, each written once: a second UPDATE of a row in this transaction would
+        # re-run its foreign-key checks and share-lock its Event at commit.
         display_name = member.display_name().strip()[:100]
         if display_name:
             Participant.objects.filter(member=member).exclude(participant_name=display_name).update(
                 participant_name=display_name,
+                response_claimed_at=Coalesce("response_claimed_at", Value(now)),
                 updated_at=now,
             )
+        Participant.objects.filter(member=member, response_claimed_at__isnull=True).update(
+            response_claimed_at=now,
+            updated_at=now,
+        )
         TemporaryEventSession.objects.filter(
             member=member,
             revoked_at__isnull=True,

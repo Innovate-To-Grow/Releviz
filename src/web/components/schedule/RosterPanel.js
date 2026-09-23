@@ -12,6 +12,7 @@ import {
 } from "react";
 import Alert from "@/components/ui/Alert";
 import AppButton from "@/components/ui/AppButton";
+import ConfirmDialog from "@/components/ui/ConfirmDialog";
 import EmptyState from "@/components/ui/EmptyState";
 import FormField from "@/components/ui/FormField";
 import LoadingState from "@/components/ui/LoadingState";
@@ -64,6 +65,15 @@ const DELIVERY_LABELS = {
 // "ALL; A" when they belong to every group), which is what the row edits.
 function groupValue(participant) {
   return participant.group ?? "";
+}
+
+const OWNED_RESPONSE_CODES = new Set([
+  "organizer_edit_participant_owned",
+  "organizer_edit_full_account", // legacy backend during a split release
+]);
+
+function ownedResponseMessage(name) {
+  return `${name} now manages their own response, so you can no longer edit their schedule.`;
 }
 
 function accountLabel(participant) {
@@ -217,6 +227,8 @@ const RosterPanel = forwardRef(function RosterPanel(
   const [editorError, setEditorError] = useState("");
   const [editorStatus, setEditorStatus] = useState("");
   const [editorConflict, setEditorConflict] = useState(null);
+  // Closing a drawer with unsaved edits asks first; this is that question.
+  const [discardPending, setDiscardPending] = useState(false);
   // Rows whose last patch hit a newer version, shaped
   // { [participantId]: { name, participant, message } }. A row stays locked
   // until the organizer reloads the latest values.
@@ -441,7 +453,6 @@ const RosterPanel = forwardRef(function RosterPanel(
         throw new Error("The participant was added without a roster ID.");
       }
 
-      updateSelected((current) => new Set([...current, addedParticipant.id]));
       onResultsInvalidated?.();
       const autoInvitedCount = data.autoInvitedCount || 0;
       const alreadyOnRoster = data.created === false && !data.restored;
@@ -454,17 +465,23 @@ const RosterPanel = forwardRef(function RosterPanel(
       await loadRoster();
       const displayName = addedParticipant.name || normalizedName;
       const alreadyOnRosterNotice = `${displayName} is already on this roster. No new invitation was sent.`;
-      setInviteNotice(
-        inviteManaged
-          ? data.created || data.restored
-            ? `${displayName} was added. Use Edit schedule to enter their availability.`
-            : alreadyOnRosterNotice
-          : autoInvitedCount > 0
-            ? `${displayName} is ready to respond. Their invitation was queued.`
-            : sendInvitation || alreadyOnRoster
-              ? alreadyOnRosterNotice
-              : `${displayName} was added. No invitation was sent.`,
-      );
+      const baseNotice = inviteManaged
+        ? data.created || data.restored
+          ? `${displayName} was added. Use Edit schedule to enter their availability.`
+          : alreadyOnRosterNotice
+        : autoInvitedCount > 0
+          ? `${displayName} is ready to respond. Their invitation was queued.`
+          : sendInvitation || alreadyOnRoster
+            ? alreadyOnRosterNotice
+            : `${displayName} was added. No invitation was sent.`;
+      const fullAccountNote =
+        !inviteManaged &&
+        (data.created || data.restored) &&
+        addedParticipant.accountAccess === "full" &&
+        addedParticipant.canOrganizerEditAvailability
+          ? " They already have a Releviz account, so you can use Edit schedule until they respond themselves."
+          : "";
+      setInviteNotice(`${baseNotice}${fullAccountNote}`);
       setShowInvite(false);
       setInviteName("");
       setInviteEmail("");
@@ -586,6 +603,7 @@ const RosterPanel = forwardRef(function RosterPanel(
     setEditorError("");
     setEditorStatus("");
     setEditorConflict(null);
+    setDiscardPending(false);
     updateRowConflicts({});
   }, [event.status, startingBrush, updateRowConflicts, updateSelected]);
 
@@ -935,6 +953,13 @@ const RosterPanel = forwardRef(function RosterPanel(
     try {
       const token = await getToken();
       const data = await fetchRosterSchedule(event.code, participant.id, token);
+      if (data.participant?.canOrganizerEditAvailability === false) {
+        // Claimed since the roster loaded. Reload first: loadRoster clears
+        // the panel error when it starts.
+        loadRoster();
+        setError(ownedResponseMessage(participant.name));
+        return;
+      }
       const loaded = participantFromSchedule(data, event.slotCount || 0);
       setEditor(loaded);
       setEditorName(loaded.name);
@@ -953,20 +978,24 @@ const RosterPanel = forwardRef(function RosterPanel(
   };
 
   const closeEditor = () => {
+    // The drawer's Escape listener still calls this while the question is up.
+    if (discardPending) return;
     const dirty =
       editor &&
       (editorName !== editor.name ||
         JSON.stringify(editorInperson) !==
           JSON.stringify(editor.inpersonArray) ||
         JSON.stringify(editorVirtual) !== JSON.stringify(editor.virtualArray));
-    if (
-      dirty &&
-      !window.confirm(
-        "Discard the unsaved changes to this participant's schedule?",
-      )
-    ) {
+    if (dirty) {
+      setDiscardPending(true);
       return;
     }
+    setEditor(null);
+    setEditorConflict(null);
+  };
+
+  const discardEditor = () => {
+    setDiscardPending(false);
     setEditor(null);
     setEditorConflict(null);
   };
@@ -1026,15 +1055,14 @@ const RosterPanel = forwardRef(function RosterPanel(
         );
       } else if (
         requestError.status === 403 &&
-        (requestError.errorCode || requestError.code) ===
-          "organizer_edit_full_account"
+        OWNED_RESPONSE_CODES.has(requestError.errorCode || requestError.code)
       ) {
+        const name = editor.name;
         setEditor(null);
+        setDiscardPending(false);
         // Reload first: loadRoster clears the panel error when it starts.
         loadRoster();
-        setError(
-          "This person now has a full account, so organizer editing is no longer allowed.",
-        );
+        setError(ownedResponseMessage(name));
       } else {
         setEditorError(requestError.message || "Unable to save this schedule.");
       }
@@ -2321,6 +2349,18 @@ const RosterPanel = forwardRef(function RosterPanel(
         onReloadLatest={reloadConflict}
         onClose={closeEditor}
       />
+      {/* A sibling of the drawer, not inside it, so the drawer's Tab trap
+          leaves it alone; it renders later, so it stacks on top. */}
+      {discardPending && (
+        <ConfirmDialog
+          title="Discard unsaved changes?"
+          description="Discard the unsaved changes to this participant's schedule?"
+          confirmLabel="Discard changes"
+          cancelLabel="Keep editing"
+          onConfirm={discardEditor}
+          onCancel={() => setDiscardPending(false)}
+        />
+      )}
     </div>
   );
 });
