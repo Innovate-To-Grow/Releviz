@@ -47,7 +47,9 @@ module.exports = defineConfig({
     // scrolling after every pick; while that animation runs, a click aimed at
     // a calendar cell can land on the wrong element (seen on Firefox in CI).
     // The app honours reduced motion, so the suite asks for it.
-    reducedMotion: "reduce",
+    contextOptions: {
+      reducedMotion: "reduce",
+    },
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     video: "retain-on-failure",

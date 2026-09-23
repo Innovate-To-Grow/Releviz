@@ -8,7 +8,7 @@ from django.db import transaction
 
 from apps.authn.models import ContactEmail
 
-DEFAULT_FIRST_NAME = "Demo"
+DEFAULT_FIRST_NAME = "Default"
 DEFAULT_LAST_NAME = "Admin"
 
 
