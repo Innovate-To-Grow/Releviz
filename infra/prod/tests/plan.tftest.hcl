@@ -324,11 +324,11 @@ run "production_plan" {
       ]) == 1 &&
       contains(
         [for rule in aws_amplify_app.frontend.custom_rule : "${rule.source}|${rule.target}|${rule.status}"],
-        "/<*>|/404.html|404"
+        "/<*>|/404.html|404-200"
       ) &&
       aws_amplify_app.frontend.custom_rule[length(aws_amplify_app.frontend.custom_rule) - 1].source == "/<*>"
     )
-    error_message = "Amplify must serve the exported Next 404 document through exactly one final catch-all rule."
+    error_message = "Amplify must serve the exported Next 404 document through exactly one final 404 rewrite, never a redirect."
   }
 
   assert {
@@ -755,7 +755,7 @@ run "production_api_subdomain_transition" {
       ]) == 1 &&
       contains(
         [for rule in aws_amplify_app.frontend.custom_rule : "${rule.source}|${rule.target}|${rule.status}"],
-        "/<*>|/404.html|404"
+        "/<*>|/404.html|404-200"
       ) &&
       aws_amplify_app.frontend.custom_rule[length(aws_amplify_app.frontend.custom_rule) - 1].source == "/<*>"
     )

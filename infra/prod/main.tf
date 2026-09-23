@@ -811,14 +811,16 @@ resource "aws_amplify_app" "frontend" {
 
   # Amplify serves its own bare 404 for missing objects. This rule is evaluated
   # last, so every 301 above still wins; a 404-type rule only fires for missing
-  # objects and serves the exported Next 404 document with a real 404 status.
+  # objects. Amplify's "404-200" is a 404 rewrite: it keeps the requested URL
+  # and serves the exported document with HTTP 404. "404" is a redirect and
+  # instead sends a 302 to /404.html.
   dynamic "custom_rule" {
     for_each = var.enable_amplify_not_found_rule ? ["/404.html"] : []
 
     content {
       source = "/<*>"
       target = custom_rule.value
-      status = "404"
+      status = "404-200"
     }
   }
 
