@@ -1,0 +1,153 @@
+"use client";
+
+import { AvailableIcon, BusyIcon, PartialIcon } from "./icons";
+
+/** The three availability levels used across every schedule editor. */
+export const AVAILABILITY_CHOICES = [
+  { label: "Busy", value: 0, key: "busy", Icon: BusyIcon },
+  { label: "If needed", value: 0.5, key: "partial", Icon: PartialIcon },
+  { label: "Available", value: 1, key: "free", Icon: AvailableIcon },
+];
+
+export function availabilityKey(value) {
+  const numeric = Number(value) || 0;
+  if (numeric <= 0) return "busy";
+  if (numeric >= 1) return "free";
+  return "partial";
+}
+
+export function availabilityLabel(value) {
+  const key = availabilityKey(value);
+  return AVAILABILITY_CHOICES.find((choice) => choice.key === key)?.label;
+}
+
+// Non-color cue per swatch level. "blocked" is the grey striped organizer
+// block seen by participants; "blocked-paint" is the red cell painted in the
+// organizer's blocked-times editor.
+const SWATCH_GLYPHS = { free: "✓", partial: "◐", "blocked-paint": "✕" };
+
+/**
+ * The level every slot starts at for an event: 1 when the organizer kept the
+ * Available start, otherwise 0 (Busy). A payload without the setting comes
+ * from an API release that still seeded every schedule Busy, so it reads as
+ * a Busy start.
+ */
+export function startingAvailabilityValue(event) {
+  return event?.startingAvailability === "available" ? 1 : 0;
+}
+
+/**
+ * The brush an editor pre-selects: the opposite of the starting level, so
+ * people paint over the times that differ from the default.
+ */
+export function startingBrushValue(event) {
+  return startingAvailabilityValue(event) === 1 ? 0 : 1;
+}
+
+/** Colored swatch with the same non-color cue used inside grid cells. */
+export function AvailabilitySwatch({ level = "busy", virtual = false }) {
+  const glyph = SWATCH_GLYPHS[level] || "";
+  return (
+    <span
+      className={`availability-swatch availability-swatch--${level}${virtual ? " availability-swatch--virtual" : ""}`}
+      aria-hidden="true"
+    >
+      {glyph}
+    </span>
+  );
+}
+
+/**
+ * Legend explaining the grid colors and glyphs. Pass `virtual` to show the
+ * virtual-channel palette, or `channels="both"` to show both. `hasBlocked`
+ * appends the organizer-blocked item; `blockedOnly` lists nothing but that
+ * item (for grids that hide the availability legend yet contain blocks).
+ */
+export function AvailabilityLegend({
+  virtual = false,
+  channels = "single",
+  className = "",
+  showValues = false,
+  hasBlocked = false,
+  blockedOnly = false,
+}) {
+  const items = blockedOnly
+    ? []
+    : AVAILABILITY_CHOICES.map((choice) => ({
+        ...choice,
+        detail: showValues ? `${choice.value}` : null,
+      }));
+  return (
+    <ul
+      className={`availability-legend ${className}`.trim()}
+      aria-label="Availability legend"
+    >
+      {items.map((item) => (
+        <li key={item.key} className="availability-legend__item">
+          {channels === "both" ? (
+            <>
+              <AvailabilitySwatch level={item.key} />
+              <AvailabilitySwatch level={item.key} virtual />
+            </>
+          ) : (
+            <AvailabilitySwatch level={item.key} virtual={virtual} />
+          )}
+          <span>{item.label}</span>
+          {item.detail && (
+            <span className="text-secondary">({item.detail})</span>
+          )}
+        </li>
+      ))}
+      {(hasBlocked || blockedOnly) && (
+        <li className="availability-legend__item">
+          <AvailabilitySwatch level="blocked" />
+          <span>Blocked</span>
+        </li>
+      )}
+      {channels === "both" && !blockedOnly && (
+        <li className="availability-legend__item text-secondary">
+          Left swatch: in person · right swatch: virtual
+        </li>
+      )}
+    </ul>
+  );
+}
+
+/**
+ * Segmented "Mark times as" control. Buttons expose `aria-pressed` so the
+ * current level is announced, and each label carries its color swatch.
+ */
+export function AvailabilityChoice({
+  value,
+  onChange,
+  disabled = false,
+  virtual = false,
+  label = "Availability status",
+  size = "md",
+  className = "",
+}) {
+  return (
+    <div
+      role="group"
+      aria-label={label}
+      className={`btn-group availability-choice-group ${size === "sm" ? "btn-group-sm" : ""} ${className}`.trim()}
+    >
+      {AVAILABILITY_CHOICES.map((choice) => {
+        const active = value === choice.value;
+        return (
+          <button
+            key={choice.key}
+            type="button"
+            className={`btn ${active ? "btn-primary" : "btn-outline-secondary"}`}
+            aria-pressed={active}
+            disabled={disabled}
+            onClick={() => onChange(choice.value)}
+          >
+            <AvailabilitySwatch level={choice.key} virtual={virtual} />
+            {choice.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}

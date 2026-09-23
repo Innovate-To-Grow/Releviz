@@ -8,6 +8,7 @@ from django.utils import timezone
 from apps.scheduling.models import Event
 from apps.scheduling.services.slots import (
     SlotConfigurationError,
+    blocked_slot_indices,
     build_event_slot_groups,
     event_window_duration_minutes,
     valid_localizations,
@@ -161,6 +162,8 @@ def normalize_final_time(
         slot_indices = _matching_absolute_slot_indices(event, starts_at, ends_at)
     else:
         slot_indices = _weekly_slot_indices(event, starts_at, ends_at, zone)
+    if blocked_slot_indices(event).intersection(slot_indices):
+        raise FinalizationError("The confirmed meeting overlaps a blocked slot.")
 
     expected_duration = int(getattr(event, "meeting_duration_minutes", event.slot_minutes))
     actual_duration = int((ends_at - starts_at).total_seconds() // 60)

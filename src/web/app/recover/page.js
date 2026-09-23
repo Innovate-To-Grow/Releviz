@@ -2,8 +2,11 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import Alert from "@/components/ui/Alert";
 import AppButton from "@/components/ui/AppButton";
 import AppHeader from "@/components/ui/AppHeader";
+import FormField from "@/components/ui/FormField";
+import { LockIcon, SendIcon } from "@/components/ui/icons";
 import { confirmPasswordReset, requestPasswordResetCode } from "@/lib/api/auth";
 import { navigateTo } from "@/lib/navigation";
 
@@ -78,19 +81,11 @@ export default function RecoverAccountPage() {
               your password signs out every device.
             </p>
           </div>
-          {error && (
-            <div className="auth-error" role="alert">
-              {error}
-            </div>
-          )}
-          {status && (
-            <div className="auth-status" role="status" aria-live="polite">
-              {status}
-            </div>
-          )}
-          <label>
-            Email
+          {error && <Alert variant="danger">{error}</Alert>}
+          {status && <Alert variant="info">{status}</Alert>}
+          <FormField label="Email">
             <input
+              className="form-control"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
               type="email"
@@ -98,44 +93,44 @@ export default function RecoverAccountPage() {
               disabled={step === "reset"}
               required
             />
-          </label>
+          </FormField>
           {step === "reset" && (
             <>
               <button
                 type="button"
-                className="auth-inline-link"
+                className="btn btn-link p-0 align-self-start"
                 onClick={useDifferentEmail}
               >
                 Use a different email
               </button>
-              <label>
-                Reset code
+              <FormField label="Reset code">
                 <input
+                  className="form-control"
                   value={code}
                   onChange={(event) => setCode(event.target.value)}
                   inputMode="numeric"
                   autoComplete="one-time-code"
                   required
                 />
-              </label>
-              <label>
-                New password
+              </FormField>
+              <FormField
+                id="recover-password"
+                label="New password"
+                help="Use at least 8 characters."
+              >
                 <input
+                  className="form-control"
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
                   type="password"
                   autoComplete="new-password"
                   minLength={8}
-                  aria-describedby="recover-password-help"
                   required
                 />
-              </label>
-              <p id="recover-password-help" className="field-help">
-                Use at least 8 characters.
-              </p>
-              <label>
-                Confirm new password
+              </FormField>
+              <FormField label="Confirm new password">
                 <input
+                  className="form-control"
                   value={passwordConfirm}
                   onChange={(event) => setPasswordConfirm(event.target.value)}
                   type="password"
@@ -143,10 +138,16 @@ export default function RecoverAccountPage() {
                   minLength={8}
                   required
                 />
-              </label>
+              </FormField>
             </>
           )}
-          <AppButton type="submit" fullWidth disabled={loading}>
+          <AppButton
+            type="submit"
+            fullWidth
+            icon={step === "request" ? <SendIcon /> : <LockIcon />}
+            busy={loading}
+            disabled={loading}
+          >
             {loading
               ? step === "request"
                 ? "Sending..."
@@ -155,7 +156,7 @@ export default function RecoverAccountPage() {
                 ? "Send reset code"
                 : "Reset password"}
           </AppButton>
-          <p className="auth-switch">
+          <p className="text-center mb-0">
             <Link href="/login">Back to login</Link>
           </p>
         </form>

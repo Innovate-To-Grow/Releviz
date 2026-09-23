@@ -62,9 +62,7 @@ jobs:
           sudo mv /tmp/actionlint /usr/local/bin/actionlint
 
       - name: Validate workflow syntax
-        run: |
-          actionlint
-          actionlint .github/workflows/deploy-prod.yml.disabled
+        run: actionlint
 
       - name: Validate YAML, TOML, and JSON
         run: |

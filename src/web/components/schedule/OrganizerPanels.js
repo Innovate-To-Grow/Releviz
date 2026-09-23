@@ -1,27 +1,84 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { GoVerified } from "react-icons/go";
-import { MdClose, MdRefresh, MdSave } from "react-icons/md";
+import Alert from "@/components/ui/Alert";
 import AppButton from "@/components/ui/AppButton";
+import {
+  AvailabilityChoice,
+  startingAvailabilityValue,
+} from "@/components/ui/Availability";
+import FormField from "@/components/ui/FormField";
+import { RefreshIcon, SaveIcon, VerifiedIcon } from "@/components/ui/icons";
+import StatusBadge from "@/components/ui/StatusBadge";
 import ScheduleChannelEditor from "@/components/schedule/ScheduleChannelEditor";
+
+function formatClockTime(value) {
+  return new Date(value).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+/**
+ * The live-sync line under the event name: whether new responses are being
+ * picked up on their own, and when the workspace last changed because of it.
+ * `live` is null when the workspace is not syncing (the event is not active).
+ */
+export function LiveSyncStatus({ live }) {
+  if (!live) return null;
+  const paused = Boolean(live.error);
+  return (
+    <p className="organizer-heading__live small mb-0">
+      <StatusBadge
+        status={paused ? "warning" : "success"}
+        className="organizer-heading__live-badge me-2"
+      >
+        {paused ? "Live updates paused" : "Live"}
+      </StatusBadge>
+      {/* Only the state line is announced; the timestamp changes too often
+          to be read out every time. */}
+      <span role="status" className="text-secondary">
+        {paused
+          ? `${live.error} Use Refresh to load new responses.`
+          : "New responses load automatically."}
+      </span>
+      {live.updatedAt ? (
+        <>
+          {" "}
+          {/* The separator and the time wrap as one unit on narrow screens. */}
+          <span className="organizer-heading__live-time text-secondary text-nowrap">
+            <span aria-hidden="true">·</span>{" "}
+            <time dateTime={new Date(live.updatedAt).toISOString()}>
+              Updated {formatClockTime(live.updatedAt)}
+            </time>
+          </span>
+        </>
+      ) : null}
+    </p>
+  );
+}
 
 export function OrganizerHeader({
   event,
   onRefresh,
   refreshing = false,
   controls = null,
+  live = null,
 }) {
   return (
-    <header className="organizer-heading">
-      <div className="organizer-heading__content">
-        <span className="organizer-eyebrow">Event workspace</span>
-        <h2 className="organizer-title">
+    <header className="organizer-heading page-header">
+      <div className="page-header__copy organizer-heading__content">
+        <span className="eyebrow organizer-eyebrow">Event workspace</span>
+        <h2 className="organizer-title mb-1">
           {event?.name?.trim() || "Untitled event"}
         </h2>
+        <LiveSyncStatus live={live} />
       </div>
+      {/* The lifecycle badge lives in EventControls (passed as `controls`), so
+          the header does not repeat it. `mw-100` lets the action row wrap
+          inside narrow viewports instead of overflowing the page. */}
       <div
-        className="organizer-heading__actions"
+        className="page-header__actions organizer-heading__actions align-items-start mw-100"
         role="group"
         aria-label="Workspace actions"
       >
@@ -29,7 +86,7 @@ export function OrganizerHeader({
         <AppButton
           onClick={onRefresh}
           variant="outlined"
-          icon={<MdRefresh />}
+          icon={<RefreshIcon />}
           disabled={refreshing}
           aria-busy={refreshing}
         >
@@ -116,25 +173,33 @@ export function ManagedScheduleDrawer({
 
   if (!participant) return null;
 
+  const editingLocked =
+    !responsesOpen || saving || Boolean(conflictParticipant);
+  const actionsLocked =
+    saving ||
+    !responsesOpen ||
+    Boolean(conflictParticipant) ||
+    !participantName.trim();
+
   return (
-    <div className="managed-drawer-layer">
+    <div className="app-drawer-layer managed-drawer-layer">
       <button
         type="button"
-        className="managed-drawer-backdrop"
+        className="app-drawer-backdrop managed-drawer-backdrop"
         aria-label="Close schedule editor"
         onClick={onClose}
         disabled={saving}
       />
       <aside
         ref={drawerRef}
-        className="managed-drawer"
+        className="app-drawer managed-drawer"
         role="dialog"
         aria-modal="true"
         aria-labelledby="managed-drawer-title"
       >
-        <header className="managed-drawer__header">
-          <div>
-            <p>Temporary participant</p>
+        <header className="app-drawer__header managed-drawer__header">
+          <div className="min-w-0">
+            <span className="eyebrow">Temporary participant</span>
             <h2 id="managed-drawer-title">
               Edit {participant.name}&apos;s schedule
             </h2>
@@ -142,19 +207,21 @@ export function ManagedScheduleDrawer({
           <button
             ref={closeButtonRef}
             type="button"
-            className="managed-drawer__close"
+            className="btn-close managed-drawer__close"
             aria-label="Close schedule editor"
             onClick={onClose}
             disabled={saving}
-          >
-            <MdClose aria-hidden="true" />
-          </button>
+          />
         </header>
 
-        <div className="managed-drawer__body">
-          <label className="managed-drawer__name">
-            <span>Event display name</span>
+        <div className="app-drawer__body managed-drawer__body">
+          <FormField
+            label="Event display name"
+            help="You and this participant edit the same response. A version conflict will never be silently overwritten."
+          >
             <input
+              type="text"
+              className="form-control"
               value={participantName}
               onChange={(changeEvent) =>
                 setParticipantName(changeEvent.target.value)
@@ -162,39 +229,18 @@ export function ManagedScheduleDrawer({
               maxLength={100}
               disabled={!responsesOpen || saving}
             />
-          </label>
-          <p className="managed-drawer__hint">
-            You and this participant edit the same response. A version conflict
-            will never be silently overwritten.
-          </p>
+          </FormField>
 
-          <div>
-            <p className="managed-drawer__hint">Mark times as</p>
-            <div
-              className="managed-drawer__choices"
-              role="group"
-              aria-label="Availability status"
-            >
-              {[
-                { label: "Busy", value: 0 },
-                { label: "If needed", value: 0.5 },
-                { label: "Available", value: 1 },
-              ].map((choice) => (
-                <AppButton
-                  key={choice.value}
-                  variant={
-                    availabilityValue === choice.value ? "filled" : "outlined"
-                  }
-                  aria-pressed={availabilityValue === choice.value}
-                  disabled={
-                    !responsesOpen || saving || Boolean(conflictParticipant)
-                  }
-                  onClick={() => onAvailabilityValueChange(choice.value)}
-                >
-                  {choice.label}
-                </AppButton>
-              ))}
-            </div>
+          <div className="schedule-toolbar__group">
+            <p className="schedule-toolbar__label">Mark times as</p>
+            <AvailabilityChoice
+              label="Availability status"
+              value={availabilityValue}
+              onChange={onAvailabilityValueChange}
+              disabled={editingLocked}
+              virtual={mode === "virtual"}
+              className="flex-wrap"
+            />
           </div>
 
           <ScheduleChannelEditor
@@ -202,60 +248,63 @@ export function ManagedScheduleDrawer({
             slotGroups={event.slotGroups}
             inperson={inperson}
             virtual={virtual}
-            readOnly={!responsesOpen || saving || Boolean(conflictParticipant)}
+            startingValue={startingAvailabilityValue(event)}
+            readOnly={editingLocked}
             onInpersonPaint={onInpersonPaint}
             onVirtualPaint={onVirtualPaint}
             onCopy={onCopy}
+            legend={false}
           />
 
           {!responsesOpen && (
-            <p className="managed-participants__error" role="note">
+            <Alert variant="warning" role="note">
               Availability can only be edited while this event is active.
-            </p>
+            </Alert>
           )}
           {error && (
-            <div className="managed-drawer__error" role="alert">
-              <p>{error}</p>
-              {conflictParticipant && (
-                <AppButton variant="outlined" onClick={onReloadLatest}>
-                  Reload latest response
-                </AppButton>
-              )}
-            </div>
+            <Alert
+              variant="danger"
+              role="alert"
+              className="managed-drawer__error"
+              actions={
+                conflictParticipant ? (
+                  <AppButton variant="outlined" onClick={onReloadLatest}>
+                    Reload latest response
+                  </AppButton>
+                ) : null
+              }
+            >
+              <p className="mb-0">{error}</p>
+            </Alert>
           )}
           {status && (
-            <p className="managed-drawer__status" role="status">
+            <Alert
+              variant="success"
+              role="status"
+              className="managed-drawer__status"
+            >
               {status}
-            </p>
+            </Alert>
           )}
         </div>
 
-        <footer className="managed-drawer__footer">
+        <footer className="app-drawer__footer managed-drawer__footer">
           <AppButton variant="outlined" onClick={onClose} disabled={saving}>
             Cancel
           </AppButton>
           <AppButton
             variant="outlined"
-            icon={<MdSave />}
+            icon={<SaveIcon />}
             onClick={onSaveDraft}
-            disabled={
-              saving ||
-              !responsesOpen ||
-              Boolean(conflictParticipant) ||
-              !participantName.trim()
-            }
+            disabled={actionsLocked}
           >
             {saving ? "Saving..." : "Save draft"}
           </AppButton>
           <AppButton
-            icon={<GoVerified />}
+            variant="filled"
+            icon={<VerifiedIcon />}
             onClick={onSubmit}
-            disabled={
-              saving ||
-              !responsesOpen ||
-              Boolean(conflictParticipant) ||
-              !participantName.trim()
-            }
+            disabled={actionsLocked}
           >
             {saving ? "Saving..." : "Submit on behalf"}
           </AppButton>

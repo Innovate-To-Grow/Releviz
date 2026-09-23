@@ -39,6 +39,7 @@ def roster_import_row_payload(row: RosterImportRow) -> dict:
         "rowNumber": row.row_number,
         "name": row.name,
         "email": row.email,
+        "phone": row.phone,
         "group": row.group_name,
         "weight": float(row.weight),
         "included": row.included,

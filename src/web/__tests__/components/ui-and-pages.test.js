@@ -20,6 +20,18 @@ import ScheduleGrid from "@/components/schedule/ScheduleGrid";
 import useAutosaveNavigationGuard from "@/components/schedule/useAutosaveNavigationGuard";
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
 import EventHeader from "@/components/event/EventHeader";
+import AccountMenu from "@/components/ui/AccountMenu";
+import StatusBadge, { toneFor } from "@/components/ui/StatusBadge";
+import {
+  AVAILABILITY_CHOICES,
+  AvailabilityChoice,
+  AvailabilityLegend,
+  AvailabilitySwatch,
+  availabilityKey,
+  availabilityLabel,
+  startingAvailabilityValue,
+  startingBrushValue,
+} from "@/components/ui/Availability";
 import { DAY_LABELS, DAYS_PER_WEEK } from "@/lib/constants";
 import { formatHour, formatMode, formatTime } from "@/lib/format";
 
@@ -27,18 +39,6 @@ function PendingDraftGuard({ flush, hasPending = () => true, pending = true }) {
   useAutosaveNavigationGuard({ hasPending, flush, pending });
   return null;
 }
-
-jest.mock("@material/web/textfield/outlined-text-field.js", () => ({}), {
-  virtual: true,
-});
-jest.mock("@material/web/select/outlined-select.js", () => ({}), {
-  virtual: true,
-});
-jest.mock("@material/web/select/select-option.js", () => ({}), {
-  virtual: true,
-});
-jest.mock("@material/web/slider/slider.js", () => ({}), { virtual: true });
-jest.mock("@material/web/checkbox/checkbox.js", () => ({}), { virtual: true });
 
 const push = jest.fn();
 const replace = jest.fn();
@@ -78,10 +78,6 @@ jest.mock("@/lib/api/auth", () => ({
   confirmPasswordReset: jest.fn(),
   requestPasswordResetCode: jest.fn(),
   requestAccountDeletionCode: jest.fn(),
-}));
-
-jest.mock("@/lib/api/feedback", () => ({
-  submitFeedback: jest.fn(),
 }));
 
 jest.mock("@/lib/navigation", () => ({
@@ -140,9 +136,7 @@ import LoginPage from "@/app/login/page";
 import RecoverAccountPage from "@/app/recover/page";
 import SignupPage from "@/app/signup/page";
 import SettingsPage from "@/app/settings/page";
-import FeedbackPage, { safeFeedbackPath } from "@/app/feedback/page";
 import PrivacyPage, { metadata as privacyMetadata } from "@/app/privacy/page";
-import SupportPage, { metadata as supportMetadata } from "@/app/support/page";
 import TermsPage, { metadata as termsMetadata } from "@/app/terms/page";
 import SignInPage, {
   generateStaticParams as generateSignInStaticParams,
@@ -155,7 +149,6 @@ import {
   requestAccountDeletionCode,
   requestPasswordResetCode,
 } from "@/lib/api/auth";
-import { submitFeedback } from "@/lib/api/feedback";
 import { navigateTo } from "@/lib/navigation";
 
 describe("small UI modules", () => {
@@ -196,11 +189,15 @@ describe("small UI modules", () => {
       </>,
     );
     expect(screen.getByText("Save").closest("button")).toHaveClass(
+      "btn",
+      "btn-primary",
+      "w-100",
       "app-btn-full",
       "extra",
     );
     expect(screen.getByTestId("icon")).toBeInTheDocument();
     expect(screen.getByText("Cancel").closest("button")).toHaveClass(
+      "btn-outline-secondary",
       "app-btn-outlined",
     );
   });
@@ -350,6 +347,77 @@ describe("small UI modules", () => {
       "tabindex",
       "0",
     );
+  });
+
+  test("ScheduleGrid moves keyboard focus across rows, columns and the whole grid", () => {
+    const painted = jest.fn();
+    const slot = (index, localStart, localEnd) => ({
+      index,
+      localStart,
+      localEnd,
+      startDayOffset: 0,
+      endDayOffset: 0,
+    });
+    const slotGroups = [
+      {
+        key: "weekday:1",
+        label: "Mon",
+        weekday: 1,
+        slots: [slot(0, "09:00", "09:30"), slot(1, "09:30", "10:00")],
+      },
+      {
+        key: "weekday:2",
+        label: "Tue",
+        weekday: 2,
+        slots: [slot(2, "09:00", "09:30"), slot(3, "09:30", "10:00")],
+      },
+      {
+        key: "weekday:3",
+        label: "Wed",
+        weekday: 3,
+        slots: [slot(4, "09:00", "09:30")],
+      },
+    ];
+    render(
+      <ScheduleGrid
+        schedule={Array(5).fill(0)}
+        slotGroups={slotGroups}
+        readOnly={false}
+        onCellPaint={painted}
+      />,
+    );
+    const cell = (index) =>
+      document.querySelector(`[data-cell-idx='${index}']`);
+    cell(0).focus();
+    fireEvent.keyDown(cell(0), { key: "ArrowRight" });
+    expect(cell(2)).toHaveFocus();
+    fireEvent.keyDown(cell(2), { key: "ArrowDown" });
+    expect(cell(3)).toHaveFocus();
+    fireEvent.keyDown(cell(3), { key: "ArrowLeft" });
+    expect(cell(1)).toHaveFocus();
+    fireEvent.keyDown(cell(1), { key: "ArrowUp" });
+    expect(cell(0)).toHaveFocus();
+    fireEvent.keyDown(cell(0), { key: "End" });
+    expect(cell(4)).toHaveFocus();
+    fireEvent.keyDown(cell(4), { key: "Home" });
+    expect(cell(0)).toHaveFocus();
+    fireEvent.keyDown(cell(0), { key: "End", ctrlKey: true });
+    expect(cell(4)).toHaveFocus();
+    fireEvent.keyDown(cell(4), { key: "Home", ctrlKey: true });
+    expect(cell(0)).toHaveFocus();
+    // Edges and unrelated keys leave focus alone; Space paints.
+    fireEvent.keyDown(cell(0), { key: "ArrowUp" });
+    fireEvent.keyDown(cell(0), { key: "Tab" });
+    expect(cell(0)).toHaveFocus();
+    fireEvent.keyDown(cell(0), { key: " " });
+    expect(painted).toHaveBeenCalledWith(
+      0,
+      expect.objectContaining({ phase: "keyboard", pointerType: "keyboard" }),
+    );
+    // A wider row has no cell beneath a short column's last row.
+    cell(4).focus();
+    fireEvent.keyDown(cell(4), { key: "ArrowDown" });
+    expect(cell(4)).toHaveFocus();
   });
 
   test("ScheduleGrid supports read-only specific dates", () => {
@@ -522,6 +590,302 @@ describe("small UI modules", () => {
     );
   });
 
+  // Mon: 0 blocked (stored 1), 1 open, 2 open · Tue: 3 open, 4 blocked
+  // (stored 0.5), 5 open.
+  const blockedSlotGroups = () => {
+    const slot = (index, localStart, localEnd, blocked = false) => ({
+      index,
+      localStart,
+      localEnd,
+      startDayOffset: 0,
+      endDayOffset: 0,
+      blocked,
+    });
+    return [
+      {
+        key: "weekday:1",
+        label: "Mon",
+        weekday: 1,
+        slots: [
+          slot(0, "09:00", "09:30", true),
+          slot(1, "09:30", "10:00"),
+          slot(2, "10:00", "10:30"),
+        ],
+      },
+      {
+        key: "weekday:2",
+        label: "Tue",
+        weekday: 2,
+        slots: [
+          slot(3, "09:00", "09:30"),
+          slot(4, "09:30", "10:00", true),
+          slot(5, "10:00", "10:30"),
+        ],
+      },
+    ];
+  };
+
+  test("ScheduleGrid renders organizer-blocked slots as inert cells that strokes and keys skip", () => {
+    const painted = jest.fn();
+    document.elementFromPoint = jest.fn();
+    render(
+      <ScheduleGrid
+        schedule={[1, 0, 1, 0, 0.5, 0]}
+        slotGroups={blockedSlotGroups()}
+        readOnly={false}
+        onCellPaint={painted}
+        participantDetails={[{ name: "Ada", schedule: [1, 0, 1, 0, 0.5, 0] }]}
+      />,
+    );
+    const cell = (index) =>
+      document.querySelector(`[data-cell-idx='${index}']`);
+
+    for (const [index, label] of [
+      [0, "Mon, 9:00 AM – 9:30 AM, blocked for this event"],
+      [4, "Tue, 9:30 AM – 10:00 AM, blocked for this event"],
+    ]) {
+      expect(cell(index)).toHaveClass(
+        "schedule-grid-cell",
+        "schedule-grid-cell-blocked",
+      );
+      expect(cell(index)).toHaveAttribute("role", "gridcell");
+      expect(cell(index)).toHaveAttribute("aria-disabled", "true");
+      expect(cell(index)).toHaveAttribute("data-blocked", "true");
+      expect(cell(index)).toHaveAttribute("aria-label", label);
+      expect(cell(index)).toHaveAttribute("title", label);
+      expect(cell(index)).not.toHaveAttribute("tabindex");
+      expect(cell(index)).not.toHaveAttribute("data-availability");
+      expect(cell(index)).not.toHaveAttribute("aria-selected");
+      expect(cell(index).style.backgroundColor).toBe("");
+      expect(cell(index)).toBeEmptyDOMElement();
+    }
+    expect(cell(0)).toHaveAttribute("data-first-row", "true");
+    expect(cell(0)).toHaveAttribute("data-first-column", "true");
+    expect(cell(4)).not.toHaveAttribute("data-first-row");
+    expect(cell(4)).not.toHaveAttribute("data-first-column");
+    // Open cells keep their stored availability and glyph.
+    expect(cell(2)).toHaveAttribute("data-availability", "free");
+    expect(cell(2)).toHaveTextContent("✓");
+    expect(cell(2)).toHaveAttribute("title", expect.stringContaining("Ada"));
+
+    // The roving tab stop skips the blocked first cell.
+    const tabbable = document.querySelectorAll(
+      "[role='gridcell'][tabindex='0']",
+    );
+    expect(tabbable).toHaveLength(1);
+    expect(tabbable[0]).toBe(cell(1));
+
+    // Blocked cells have no pointer or keyboard handlers at all.
+    fireEvent.pointerDown(cell(0), {
+      button: 0,
+      pointerId: 1,
+      pointerType: "mouse",
+    });
+    fireEvent.keyDown(cell(0), { key: "Enter" });
+    fireEvent.keyDown(cell(4), { key: " " });
+    expect(painted).not.toHaveBeenCalled();
+
+    // A stroke crossing a blocked cell never paints it.
+    fireEvent.pointerDown(cell(3), {
+      button: 0,
+      pointerId: 2,
+      pointerType: "mouse",
+    });
+    expect(painted).toHaveBeenCalledTimes(1);
+    expect(painted).toHaveBeenLastCalledWith(
+      3,
+      expect.objectContaining({ phase: "start" }),
+    );
+    document.elementFromPoint.mockReturnValue(cell(4));
+    fireEvent.pointerMove(cell(3), {
+      clientX: 1,
+      clientY: 1,
+      pointerId: 2,
+      pointerType: "mouse",
+    });
+    expect(painted).toHaveBeenCalledTimes(1);
+    // Even a target that reports a blocked index without the marker attribute
+    // (an inner node of a blocked cell, say) is ignored by paintCell.
+    document.elementFromPoint.mockReturnValue({
+      closest: () => ({ dataset: { cellIdx: "0" } }),
+    });
+    fireEvent.pointerMove(cell(3), {
+      clientX: 2,
+      clientY: 2,
+      pointerId: 2,
+      pointerType: "mouse",
+    });
+    expect(painted).toHaveBeenCalledTimes(1);
+    document.elementFromPoint.mockReturnValue(cell(5));
+    fireEvent.pointerMove(cell(3), {
+      clientX: 3,
+      clientY: 3,
+      pointerId: 2,
+      pointerType: "mouse",
+    });
+    expect(painted).toHaveBeenCalledTimes(2);
+    expect(painted).toHaveBeenLastCalledWith(
+      5,
+      expect.objectContaining({ phase: "move" }),
+    );
+    fireEvent.pointerUp(cell(3), { pointerId: 2, pointerType: "mouse" });
+
+    // Arrow keys step over blocked cells and stop when only blocked cells
+    // remain in that direction.
+    cell(3).focus();
+    fireEvent.keyDown(cell(3), { key: "ArrowDown" });
+    expect(cell(5)).toHaveFocus();
+    fireEvent.keyDown(cell(5), { key: "ArrowUp" });
+    expect(cell(3)).toHaveFocus();
+    fireEvent.keyDown(cell(3), { key: "ArrowLeft" });
+    expect(cell(3)).toHaveFocus();
+    fireEvent.keyDown(cell(3), { key: "Home", ctrlKey: true });
+    expect(cell(1)).toHaveFocus();
+  });
+
+  test("ScheduleGrid blockedEditing mode paints every slot as blocked or open", () => {
+    const painted = jest.fn();
+    document.elementFromPoint = jest.fn();
+    render(
+      <ScheduleGrid
+        schedule={[1, 0, 0.5, 0, 1, 0]}
+        slotGroups={blockedSlotGroups()}
+        readOnly={false}
+        onCellPaint={painted}
+        blockedEditing
+      />,
+    );
+    const cell = (index) =>
+      document.querySelector(`[data-cell-idx='${index}']`);
+
+    // `slot.blocked` is ignored: index 0 is an ordinary paintable cell.
+    expect(document.querySelector("[data-blocked='true']")).toBeNull();
+    expect(
+      document.querySelectorAll(".schedule-grid-cell-blocked"),
+    ).toHaveLength(0);
+    expect(document.querySelectorAll("[data-blocked-paint]")).toHaveLength(6);
+    expect(cell(0)).toHaveClass("schedule-grid-cell");
+    expect(cell(0)).toHaveAttribute("tabindex", "0");
+    expect(cell(0)).toHaveAttribute("data-blocked-paint", "true");
+    expect(cell(0)).toHaveAttribute("aria-selected", "true");
+    expect(cell(0)).toHaveAttribute(
+      "aria-label",
+      "Mon, 9:00 AM – 9:30 AM, blocked",
+    );
+    expect(cell(0)).toHaveAttribute("title", "Mon, 9:00 AM – 9:30 AM, blocked");
+    expect(
+      cell(0).querySelector(".schedule-grid-cell__glyph"),
+    ).toHaveTextContent("✕");
+    expect(cell(2)).toHaveAttribute("data-blocked-paint", "true");
+    expect(cell(1)).toHaveAttribute("data-blocked-paint", "false");
+    expect(cell(1)).toHaveAttribute("aria-selected", "false");
+    expect(cell(1)).toHaveAttribute(
+      "aria-label",
+      "Mon, 9:30 AM – 10:00 AM, open",
+    );
+    expect(cell(1)).toHaveAttribute("title", "Mon, 9:30 AM – 10:00 AM, open");
+    expect(
+      cell(1).querySelector(".schedule-grid-cell__glyph"),
+    ).toHaveTextContent("");
+    for (const index of [0, 1, 4]) {
+      expect(cell(index)).not.toHaveAttribute("data-availability");
+      expect(cell(index)).not.toHaveAttribute("aria-disabled");
+      expect(cell(index).style.backgroundColor).toBe("");
+    }
+
+    // Pointer strokes and the keyboard paint exactly as in availability mode.
+    fireEvent.pointerDown(cell(0), {
+      button: 0,
+      pointerId: 3,
+      pointerType: "mouse",
+    });
+    expect(painted).toHaveBeenLastCalledWith(
+      0,
+      expect.objectContaining({ phase: "start", type: "pointerdown" }),
+    );
+    document.elementFromPoint.mockReturnValue(cell(4));
+    fireEvent.pointerMove(cell(0), {
+      clientX: 1,
+      clientY: 1,
+      pointerId: 3,
+      pointerType: "mouse",
+    });
+    expect(painted).toHaveBeenLastCalledWith(
+      4,
+      expect.objectContaining({ phase: "move" }),
+    );
+    fireEvent.pointerUp(cell(0), { pointerId: 3, pointerType: "mouse" });
+    cell(0).focus();
+    fireEvent.keyDown(cell(0), { key: "ArrowDown" });
+    expect(cell(1)).toHaveFocus();
+    fireEvent.keyDown(cell(1), { key: "ArrowRight" });
+    expect(cell(4)).toHaveFocus();
+    fireEvent.keyDown(cell(4), { key: " " });
+    expect(painted).toHaveBeenLastCalledWith(
+      4,
+      expect.objectContaining({ phase: "keyboard", pointerType: "keyboard" }),
+    );
+    expect(painted).toHaveBeenCalledTimes(3);
+  });
+
+  test("ScheduleGrid blockedEditing respects readOnly", () => {
+    const painted = jest.fn();
+    render(
+      <ScheduleGrid
+        schedule={[1]}
+        slotGroups={[blockedSlotGroups()[0]].map((group) => ({
+          ...group,
+          slots: group.slots.slice(0, 1),
+        }))}
+        readOnly
+        onCellPaint={painted}
+        blockedEditing
+      />,
+    );
+    const cell = document.querySelector("[data-cell-idx='0']");
+    expect(cell).toHaveAttribute("aria-readonly", "true");
+    expect(cell).toHaveAttribute("data-blocked-paint", "true");
+    expect(cell).not.toHaveAttribute("tabindex");
+    fireEvent.pointerDown(cell, {
+      button: 0,
+      pointerId: 4,
+      pointerType: "mouse",
+    });
+    fireEvent.keyDown(cell, { key: "Enter" });
+    expect(painted).not.toHaveBeenCalled();
+  });
+
+  test("ScheduleGrid takes an accessible name from ariaLabel without a title", () => {
+    const { unmount } = render(
+      <ScheduleGrid
+        schedule={[0]}
+        slotGroups={[blockedSlotGroups()[0]]}
+        ariaLabel="Blocked times"
+        blockedEditing
+      />,
+    );
+    expect(
+      screen.getByRole("grid", { name: "Blocked times" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("heading")).not.toBeInTheDocument();
+
+    unmount();
+    render(
+      <ScheduleGrid
+        schedule={[0]}
+        slotGroups={[blockedSlotGroups()[0]]}
+        label="Virtual"
+        ariaLabel="Virtual availability"
+      />,
+    );
+    expect(
+      screen.getByRole("grid", { name: "Virtual availability" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { level: 4, name: "Virtual" }),
+    ).toBeInTheDocument();
+  });
+
   test("EventDetailsGrid renders defaults, dates, and extra cards", () => {
     const localeSpy = jest.spyOn(Date.prototype, "toLocaleString");
     render(
@@ -588,6 +952,151 @@ describe("small UI modules", () => {
       screen.getByText("11:00 PM - 1:00 AM (next day)"),
     ).toBeInTheDocument();
   });
+
+  test("EventDetailsGrid organizer variant counts blocked slots in the schedule tile", () => {
+    const event = {
+      mode: "mixed",
+      startTime: "09:00",
+      endTime: "17:00",
+      crossesMidnight: false,
+      days: [1, 2],
+      timezone: "America/New_York",
+      status: "active",
+      accessMode: "open_link",
+      meetingDurationMinutes: 60,
+      slotMinutes: 30,
+      resultsRevision: 4,
+      code: "ABC123",
+      location: "Room 4",
+      responseDeadline: "2026-07-08T12:00:00.000Z",
+      blockedSlots: { "weekday:1": [0, 1], "weekday:2": [5] },
+    };
+    const { rerender } = render(
+      <EventDetailsGrid event={event} variant="organizer" />,
+    );
+    const overview = screen.getByLabelText("Event overview");
+    expect(
+      within(overview).getByText(
+        "9:00 AM - 5:00 PM · America/New_York · 3 slots blocked",
+      ),
+    ).toBeInTheDocument();
+    expect(within(overview).getByText("Mon, Tue")).toBeInTheDocument();
+    expect(
+      within(overview).getByText("Mixed · 60 minutes"),
+    ).toBeInTheDocument();
+    expect(within(overview).getByText("Anyone with code")).toBeInTheDocument();
+    expect(within(overview).getByText("Room 4")).toBeInTheDocument();
+    expect(
+      within(overview).queryByText("Confirmed meeting"),
+    ).not.toBeInTheDocument();
+
+    // Empty, missing and malformed maps all read as no blocked slots.
+    for (const blockedSlots of [
+      {},
+      undefined,
+      "nope",
+      { "weekday:1": "not-a-list" },
+    ]) {
+      rerender(
+        <EventDetailsGrid
+          event={{ ...event, blockedSlots }}
+          variant="organizer"
+        />,
+      );
+      expect(
+        screen.getByText("9:00 AM - 5:00 PM · America/New_York"),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/slots blocked/)).not.toBeInTheDocument();
+    }
+  });
+
+  test("EventDetailsGrid organizer variant toggles details and honours extra cards", async () => {
+    render(
+      <EventDetailsGrid
+        variant="organizer"
+        event={{
+          mode: "virtual",
+          startTime: "09:00",
+          endTime: "10:00",
+          daySelectionType: "specific_dates",
+          specificDates: ["2026-07-08", "2026-07-09"],
+          timezone: "UTC",
+          status: "finalized",
+          code: "XYZ789",
+          finalMeeting: {
+            startsAt: "2026-07-20T09:00:00.000Z",
+            endsAt: "2026-07-20T10:00:00.000Z",
+            channel: "virtual",
+          },
+        }}
+        extraCards={[
+          { label: "Access", value: "Roster" },
+          { label: "Meeting duration", value: "45 minutes" },
+          { label: "Result revision", value: 9 },
+        ]}
+      />,
+    );
+    expect(screen.getByText("2026-07-08, 2026-07-09")).toBeInTheDocument();
+    expect(screen.getByText("9:00 AM - 10:00 AM · UTC")).toBeInTheDocument();
+    expect(screen.getByText("Virtual · 45 minutes")).toBeInTheDocument();
+    expect(screen.getByText("Roster")).toBeInTheDocument();
+    expect(screen.getByText("No deadline")).toBeInTheDocument();
+    expect(screen.getByText("Location not set")).toBeInTheDocument();
+    expect(screen.getByText("Confirmed meeting")).toBeInTheDocument();
+    expect(screen.getByText("Virtual · Location not set")).toBeInTheDocument();
+
+    const toggle = screen.getByRole("button", { name: "Show all details" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Event code")).not.toBeInTheDocument();
+    await userEvent.click(toggle);
+    const details = screen.getByLabelText("Additional event details");
+    expect(within(details).getByText("XYZ789")).toBeInTheDocument();
+    expect(within(details).getByText("Finalized")).toBeInTheDocument();
+    expect(within(details).getByText("9")).toBeInTheDocument();
+    expect(within(details).getByText("30 minutes")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Hide details" }));
+    expect(screen.queryByText("Event code")).not.toBeInTheDocument();
+
+    // Bare events fall back on every tile.
+    render(<EventDetailsGrid variant="organizer" event={{}} />);
+    expect(screen.getByText("Days not set")).toBeInTheDocument();
+    expect(screen.getByText("Not set - Not set · UTC")).toBeInTheDocument();
+    expect(screen.getByText("In-Person · 30 minutes")).toBeInTheDocument();
+    expect(screen.getByText("Invite only")).toBeInTheDocument();
+  });
+
+  test("EventDetailsGrid organizer details show how participants start", () => {
+    const { rerender } = render(
+      <EventDetailsGrid
+        variant="organizer"
+        event={{
+          code: "ORG1",
+          slotMinutes: 30,
+          status: "active",
+          startingAvailability: "available",
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Show all details" }));
+    expect(
+      screen.getByText("Participants start as").nextElementSibling,
+    ).toHaveTextContent("Available");
+
+    rerender(
+      <EventDetailsGrid
+        variant="organizer"
+        event={{
+          code: "ORG1",
+          slotMinutes: 30,
+          status: "active",
+          startingAvailability: "busy",
+        }}
+      />,
+    );
+    expect(
+      screen.getByText("Participants start as").nextElementSibling,
+    ).toHaveTextContent("Busy");
+  });
 });
 
 describe("role-aware headers", () => {
@@ -601,11 +1110,14 @@ describe("role-aware headers", () => {
   });
 
   test("EventHeader shows event identity, role, and dashboard navigation", () => {
-    const { rerender } = render(
+    const { container, rerender } = render(
       <EventHeader eventName="Team Sync" eventCode="ABC12345" isOrganizer />,
     );
 
     expect(screen.getByText("Team Sync")).toBeInTheDocument();
+    const actions = container.querySelector(".event-header-actions");
+    expect(actions).toHaveClass("d-flex");
+    expect(actions).not.toHaveClass("flex-shrink-0");
     expect(screen.getByText("#ABC12345")).toBeInTheDocument();
     expect(screen.getByText("Organizer")).toBeInTheDocument();
 
@@ -624,6 +1136,271 @@ describe("role-aware headers", () => {
     expect(screen.getByText("Participant")).toBeInTheDocument();
   });
 
+  test("EventHeader copies the share link and falls back when the clipboard is unavailable", async () => {
+    jest.useFakeTimers();
+    const writeText = jest.fn().mockResolvedValue();
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    try {
+      const { rerender } = render(
+        <EventHeader eventName="Team Sync" eventCode="ABC12345" />,
+      );
+      // Without a role the badge is omitted entirely.
+      expect(screen.queryByText("Organizer")).not.toBeInTheDocument();
+      expect(screen.queryByText("Participant")).not.toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Copy share link" }),
+        );
+      });
+      expect(writeText).toHaveBeenCalledWith(
+        `${window.location.origin}/event?code=ABC12345`,
+      );
+      expect(
+        screen.getByRole("button", { name: "Link copied" }),
+      ).toBeInTheDocument();
+      act(() => {
+        jest.advanceTimersByTime(2000);
+      });
+      expect(
+        screen.getByRole("button", { name: "Copy share link" }),
+      ).toBeInTheDocument();
+
+      // A rejected clipboard write copies through a temporary input instead.
+      writeText.mockRejectedValueOnce(new Error("denied"));
+      const execCommand = jest.fn().mockReturnValue(true);
+      document.execCommand = execCommand;
+      rerender(<EventHeader eventName="Team Sync" isOrganizer={false} />);
+      expect(screen.queryByText(/^#/)).not.toBeInTheDocument();
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Copy share link" }),
+        );
+      });
+      expect(execCommand).toHaveBeenCalledWith("copy");
+      expect(
+        screen.getByRole("button", { name: "Link copied" }),
+      ).toBeInTheDocument();
+      expect(document.querySelector("body > input")).toBeNull();
+      act(() => {
+        jest.advanceTimersByTime(2000);
+      });
+      expect(
+        screen.getByRole("button", { name: "Copy share link" }),
+      ).toBeInTheDocument();
+    } finally {
+      delete document.execCommand;
+      delete navigator.clipboard;
+      jest.useRealTimers();
+    }
+  });
+
+  test("AccountMenu renders the signed-out entry point and hides while loading", () => {
+    useAuth.mockReturnValue({ user: null, loading: true, logout: jest.fn() });
+    const { rerender } = render(<AccountMenu signedOutLabel="Log in" />);
+    expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
+    useAuth.mockReturnValue({ user: null, loading: false, logout: jest.fn() });
+    rerender(<AccountMenu signedOutLabel="Log in" />);
+    expect(screen.getByRole("link", { name: "Log in" })).toHaveAttribute(
+      "href",
+      "/login",
+    );
+  });
+
+  test("AccountMenu closes on outside presses, wraps keyboard focus, and reports logout failures", async () => {
+    const logout = jest.fn().mockRejectedValue(new Error("Session busy"));
+    useAuth.mockReturnValue({
+      user: { displayName: "Prachi" },
+      loading: false,
+      logout,
+    });
+    render(
+      <div>
+        <button type="button">Elsewhere</button>
+        <AccountMenu />
+      </div>,
+    );
+    const trigger = screen.getByRole("button", { name: "Prachi" });
+    fireEvent.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    // The header only shows an email when the account has one.
+    expect(screen.queryByText(/@/)).not.toBeInTheDocument();
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Elsewhere" }));
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.keyDown(trigger, { key: "ArrowUp" });
+    const items = screen.getAllByRole("menuitem");
+    expect(items[0]).toHaveFocus();
+    fireEvent.keyDown(items[0], { key: "ArrowUp" });
+    expect(items[items.length - 1]).toHaveFocus();
+    fireEvent.keyDown(items[items.length - 1], { key: "ArrowDown" });
+    expect(items[0]).toHaveFocus();
+    fireEvent.keyDown(items[0], { key: "End" });
+    expect(items[items.length - 1]).toHaveFocus();
+    fireEvent.keyDown(items[items.length - 1], { key: "Home" });
+    expect(items[0]).toHaveFocus();
+    fireEvent.keyDown(items[0], { key: "Tab" });
+    expect(items[0]).toHaveFocus();
+    const settings = screen.getByRole("menuitem", { name: "Settings" });
+    // jsdom cannot navigate; the menu still closes on the item's click.
+    settings.addEventListener("click", (event) => event.preventDefault());
+    fireEvent.click(settings);
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.click(trigger);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Log out" }));
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("Session busy"),
+    );
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  test("Availability helpers and controls cover every level", () => {
+    expect(availabilityKey(undefined)).toBe("busy");
+    expect(availabilityKey("abc")).toBe("busy");
+    expect(availabilityKey(0.5)).toBe("partial");
+    expect(availabilityKey(2)).toBe("free");
+    expect(availabilityLabel(1)).toBe("Available");
+    expect(availabilityLabel(0.25)).toBe("If needed");
+    expect(AVAILABILITY_CHOICES.map((choice) => choice.value)).toEqual([
+      0, 0.5, 1,
+    ]);
+
+    // Slots start at the organizer's chosen level and the brush pre-selects
+    // the opposite. A payload without the setting comes from an API that
+    // still seeds every schedule Busy, so it reads as a Busy start.
+    expect(startingAvailabilityValue(undefined)).toBe(0);
+    expect(startingAvailabilityValue({})).toBe(0);
+    expect(
+      startingAvailabilityValue({ startingAvailability: "available" }),
+    ).toBe(1);
+    expect(startingAvailabilityValue({ startingAvailability: "busy" })).toBe(0);
+    expect(startingBrushValue(undefined)).toBe(1);
+    expect(startingBrushValue({ startingAvailability: "available" })).toBe(0);
+    expect(startingBrushValue({ startingAvailability: "busy" })).toBe(1);
+
+    const { container, rerender } = render(
+      <AvailabilitySwatch level="free" virtual />,
+    );
+    expect(container.firstChild).toHaveClass(
+      "availability-swatch--free",
+      "availability-swatch--virtual",
+    );
+    expect(container.firstChild).toHaveTextContent("✓");
+    rerender(<AvailabilitySwatch level="partial" />);
+    expect(container.firstChild).toHaveTextContent("◐");
+    rerender(<AvailabilitySwatch />);
+    expect(container.firstChild).toHaveTextContent("");
+    rerender(<AvailabilitySwatch level="blocked" />);
+    expect(container.firstChild).toHaveClass("availability-swatch--blocked");
+    expect(container.firstChild).toHaveTextContent("");
+    rerender(<AvailabilitySwatch level="blocked-paint" />);
+    expect(container.firstChild).toHaveClass(
+      "availability-swatch--blocked-paint",
+    );
+    expect(container.firstChild).toHaveTextContent("✕");
+
+    rerender(<AvailabilityLegend channels="both" showValues />);
+    const legend = screen.getByRole("list", { name: "Availability legend" });
+    expect(legend).toHaveTextContent(
+      "Left swatch: in person · right swatch: virtual",
+    );
+    expect(legend).toHaveTextContent("(0.5)");
+    expect(
+      legend.querySelectorAll(".availability-swatch--virtual"),
+    ).toHaveLength(3);
+    expect(legend).not.toHaveTextContent("Blocked");
+    rerender(<AvailabilityLegend virtual className="extra" />);
+    expect(screen.getByRole("list")).toHaveClass("extra");
+    expect(
+      screen
+        .getByRole("list")
+        .querySelectorAll(".availability-swatch--virtual"),
+    ).toHaveLength(3);
+    expect(screen.queryByText("(0.5)")).not.toBeInTheDocument();
+
+    // `hasBlocked` appends the organizer-blocked item after the three levels.
+    rerender(<AvailabilityLegend hasBlocked />);
+    let items = screen
+      .getByRole("list", { name: "Availability legend" })
+      .querySelectorAll(".availability-legend__item");
+    expect(items).toHaveLength(4);
+    expect(items[3]).toHaveTextContent("Blocked");
+    expect(
+      items[3].querySelector(".availability-swatch--blocked"),
+    ).toBeInTheDocument();
+    // `blockedOnly` lists nothing but that item, even for both channels.
+    rerender(<AvailabilityLegend channels="both" hasBlocked blockedOnly />);
+    items = screen
+      .getByRole("list", { name: "Availability legend" })
+      .querySelectorAll(".availability-legend__item");
+    expect(items).toHaveLength(1);
+    expect(items[0]).toHaveTextContent("Blocked");
+    expect(screen.queryByText("Busy")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Left swatch/)).not.toBeInTheDocument();
+    rerender(<AvailabilityLegend blockedOnly />);
+    expect(
+      screen.getByRole("list", { name: "Availability legend" }),
+    ).toHaveTextContent("Blocked");
+    expect(screen.queryByText("Available")).not.toBeInTheDocument();
+
+    const onChange = jest.fn();
+    rerender(
+      <AvailabilityChoice value={0.5} onChange={onChange} size="sm" virtual />,
+    );
+    const group = screen.getByRole("group", { name: "Availability status" });
+    expect(group).toHaveClass("btn-group-sm");
+    expect(screen.getByRole("button", { name: "If needed" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Available" }));
+    expect(onChange).toHaveBeenCalledWith(1);
+    rerender(
+      <AvailabilityChoice
+        value={0}
+        onChange={onChange}
+        disabled
+        label="Paint"
+      />,
+    );
+    expect(screen.getByRole("group", { name: "Paint" })).not.toHaveClass(
+      "btn-group-sm",
+    );
+    expect(screen.getByRole("button", { name: "Busy" })).toBeDisabled();
+  });
+
+  test("StatusBadge maps tones and renders with or without a dot", () => {
+    expect(toneFor("not_sent")).toBe(toneFor("not-sent"));
+    expect(toneFor("")).toBe("secondary");
+    expect(toneFor("something-unknown")).toBe("secondary");
+    const { container, rerender } = render(
+      <StatusBadge status="active" label="Live now" data-testid="badge" />,
+    );
+    expect(screen.getByTestId("badge")).toHaveTextContent("Live now");
+    expect(screen.getByTestId("badge")).not.toHaveClass("status-badge--word");
+    expect(container.querySelector(".status-badge__dot")).toBeInTheDocument();
+    rerender(<StatusBadge />);
+    expect(container.firstChild).toHaveTextContent("neutral");
+    rerender(<StatusBadge status="archived" dot={false} />);
+    expect(container.firstChild).toHaveTextContent("archived");
+    expect(container.firstChild).toHaveClass("status-badge--word");
+    expect(container.querySelector(".status-badge__dot")).toBeNull();
+    rerender(
+      <StatusBadge status="primary">
+        <span>Best match</span>
+      </StatusBadge>,
+    );
+    expect(container.firstChild).not.toHaveClass("status-badge--word");
+  });
+
   test("AppHeader shows page context and handles authenticated navigation", async () => {
     const logout = jest.fn().mockResolvedValue();
     useAuth.mockReturnValue({
@@ -634,7 +1411,7 @@ describe("role-aware headers", () => {
 
     render(<AppHeader pageTitle="Create event" contextLabel="Organizer" />);
 
-    expect(screen.getByText("/ Create event")).toBeInTheDocument();
+    expect(screen.getByText("Create event")).toBeInTheDocument();
     expect(screen.getByText("Organizer")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Prachi" }));
     expect(screen.getByRole("menuitem", { name: "Settings" })).toHaveAttribute(
@@ -749,9 +1526,10 @@ describe("role-aware headers", () => {
 
     useAuth.mockReturnValue({ user: null, loading: false, logout: jest.fn() });
     render(<AppHeader pageTitle="My Dashboard" />);
-    expect(
-      screen.getByRole("link", { name: "Continue with email" }),
-    ).toHaveAttribute("href", "/login");
+    expect(screen.getByRole("link", { name: "Sign in" })).toHaveAttribute(
+      "href",
+      "/login",
+    );
   });
 });
 
@@ -782,11 +1560,18 @@ describe("app pages", () => {
     expect(screen.getByText("edit client")).toBeInTheDocument();
     expect(screen.getByText("event client")).toBeInTheDocument();
     expect(screen.getByText("Page not found")).toBeInTheDocument();
+    const footerNav = screen.getByRole("navigation", { name: "Footer" });
     expect(
-      screen.getByRole("navigation", { name: "Legal" }),
-    ).toBeInTheDocument();
+      within(footerNav).queryByRole("link", { name: "Support" }),
+    ).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("link", { name: "Support" }),
+      within(footerNav).getByRole("link", { name: "Privacy" }),
+    ).toHaveAttribute("href", "/privacy");
+    expect(
+      within(footerNav).getByRole("link", { name: "Terms" }),
+    ).toHaveAttribute("href", "/terms");
+    expect(
+      screen.queryByRole("navigation", { name: "Legal" }),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("link", { name: "Report a problem" }),
@@ -815,128 +1600,34 @@ describe("app pages", () => {
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/signup"));
   });
 
-  test("privacy, terms, and support pages provide working entry points", () => {
+  test("privacy and terms pages provide working entry points", () => {
     expect(privacyMetadata.title).toBe("Privacy | Releviz");
     expect(termsMetadata.title).toBe("Terms | Releviz");
-    expect(supportMetadata.title).toBe("Support | Releviz");
     const privacy = render(<PrivacyPage />);
     expect(
       screen.getByRole("heading", { name: "Privacy notice" }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "support page" })).toHaveAttribute(
-      "href",
-      "/support",
-    );
+    expect(
+      screen.getByRole("link", { name: "Account settings" }),
+    ).toHaveAttribute("href", "/settings");
+    expect(
+      screen.queryByRole("link", { name: /support/i }),
+    ).not.toBeInTheDocument();
     privacy.unmount();
 
-    const terms = render(<TermsPage />);
+    render(<TermsPage />);
     expect(
       screen.getByRole("heading", { name: "Terms of service" }),
     ).toBeInTheDocument();
     expect(
+      screen.getByRole("link", { name: "Account settings" }),
+    ).toHaveAttribute("href", "/settings");
+    expect(
       screen.getByRole("link", { name: "privacy notice" }),
     ).toHaveAttribute("href", "/privacy");
-    terms.unmount();
-
-    render(<SupportPage />);
     expect(
-      screen.getByRole("heading", { name: "How can we help?" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("link", { name: "Open feedback form" }),
-    ).toHaveAttribute("href", "/feedback?from=/support");
-    expect(
-      screen.getByRole("link", { name: "account recovery" }),
-    ).toHaveAttribute("href", "/recover");
-  });
-
-  test("feedback path sanitization excludes origins and URL secrets", () => {
-    expect(safeFeedbackPath("")).toBe("");
-    expect(safeFeedbackPath("event")).toBe("");
-    expect(safeFeedbackPath("//evil.example/path")).toBe("");
-    expect(safeFeedbackPath("/event?code=SECRET#availability")).toBe("/event");
-    expect(safeFeedbackPath(`/${"a".repeat(600)}`)).toHaveLength(500);
-  });
-
-  test("feedback form submits bounded context and exposes progress and success", async () => {
-    let resolveFeedback;
-    submitFeedback.mockReturnValueOnce(
-      new Promise((resolve) => {
-        resolveFeedback = resolve;
-      }),
-    );
-    searchParams = new URLSearchParams("from=%2Fevent%3Fcode%3DSECRET");
-    render(<FeedbackPage />);
-
-    await userEvent.selectOptions(
-      screen.getByLabelText("Feedback type"),
-      "usability",
-    );
-    await userEvent.type(
-      screen.getByLabelText("What happened, or what would you change?"),
-      "The save state was hard to understand.",
-    );
-    await userEvent.click(
-      screen.getByLabelText(
-        /service team may follow up using my account contact information/i,
-      ),
-    );
-    await userEvent.click(
-      screen.getByRole("button", { name: "Send feedback" }),
-    );
-    expect(screen.getByRole("button", { name: "Sending…" })).toBeDisabled();
-    expect(submitFeedback).toHaveBeenCalledWith({
-      category: "usability",
-      message: "The save state was hard to understand.",
-      pagePath: "/event",
-      consentToFollowUp: true,
-    });
-
-    await act(async () => {
-      resolveFeedback({ status: "received" });
-    });
-    expect(
-      await screen.findByText("Thank you. Your feedback was received."),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByLabelText("What happened, or what would you change?"),
-    ).toHaveValue("");
-    expect(
-      screen.getByLabelText(
-        /service team may follow up using my account contact information/i,
-      ),
-    ).not.toBeChecked();
-  });
-
-  test("feedback form exposes specific and generic retryable failures", async () => {
-    submitFeedback.mockRejectedValueOnce(
-      new Error("Feedback service unavailable"),
-    );
-    const first = render(<FeedbackPage />);
-    await userEvent.type(
-      screen.getByLabelText("What happened, or what would you change?"),
-      "A useful report",
-    );
-    await userEvent.click(
-      screen.getByRole("button", { name: "Send feedback" }),
-    );
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Feedback service unavailable",
-    );
-    first.unmount();
-
-    submitFeedback.mockRejectedValueOnce(new Error());
-    render(<FeedbackPage />);
-    await userEvent.type(
-      screen.getByLabelText("What happened, or what would you change?"),
-      "Another useful report",
-    );
-    await userEvent.click(
-      screen.getByRole("button", { name: "Send feedback" }),
-    );
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Unable to send feedback. Please try again.",
-    );
+      screen.queryByRole("link", { name: /support/i }),
+    ).not.toBeInTheDocument();
   });
 
   test("Login uses the unified email flow and sanitizes next", async () => {
@@ -946,16 +1637,12 @@ describe("app pages", () => {
     searchParams = new URLSearchParams("next=//evil.example");
     const firstLogin = render(<LoginPage />);
     await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
-    await userEvent.click(
-      screen.getByRole("button", { name: "Continue with email" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     await userEvent.type(
-      await screen.findByLabelText("Verification code"),
+      await screen.findByLabelText("Verification Code"),
       "123456",
     );
-    await userEvent.click(
-      screen.getByRole("button", { name: "Verify and continue" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/dashboard"));
     expect(verifyEmailAuthCode).toHaveBeenCalledWith({
       email: "ada@example.com",
@@ -966,9 +1653,7 @@ describe("app pages", () => {
     requestEmailAuthCode.mockRejectedValueOnce(new Error("No code"));
     render(<LoginPage />);
     await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
-    await userEvent.click(
-      screen.getByRole("button", { name: "Continue with email" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     expect(await screen.findByText("No code")).toBeInTheDocument();
   });
 
@@ -1007,32 +1692,24 @@ describe("app pages", () => {
     searchParams = new URLSearchParams("next=/event?code=ABC123");
     const firstLogin = render(<LoginPage />);
     await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
-    await userEvent.click(
-      screen.getByRole("button", { name: "Continue with email" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     await userEvent.type(
-      await screen.findByLabelText("Verification code"),
+      await screen.findByLabelText("Verification Code"),
       "123456",
     );
-    await userEvent.click(
-      screen.getByRole("button", { name: "Verify and continue" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     expect(navigateTo).toHaveBeenCalledWith("/event?code=ABC123");
     firstLogin.unmount();
 
     searchParams = new URLSearchParams();
     render(<LoginPage />);
     await userEvent.type(screen.getByLabelText("Email"), "new@example.com");
-    await userEvent.click(
-      screen.getByRole("button", { name: "Continue with email" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     await userEvent.type(
-      await screen.findByLabelText("Verification code"),
+      await screen.findByLabelText("Verification Code"),
       "654321",
     );
-    await userEvent.click(
-      screen.getByRole("button", { name: "Verify and continue" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     await waitFor(() =>
       expect(navigateTo).toHaveBeenCalledWith(
         "/settings?complete_profile=1&next=%2Fdashboard",
@@ -1204,21 +1881,17 @@ describe("app pages", () => {
     expect(screen.queryByLabelText("First name")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Password")).not.toBeInTheDocument();
     await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
-    await userEvent.click(
-      screen.getByRole("button", { name: "Continue with email" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     expect(requestEmailAuthCode).toHaveBeenCalledWith({
       email: "ada@example.com",
       next: "/dashboard",
       source: "login",
     });
     await userEvent.type(
-      await screen.findByLabelText("Verification code"),
+      await screen.findByLabelText("Verification Code"),
       "123456",
     );
-    await userEvent.click(
-      screen.getByRole("button", { name: "Verify and continue" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/dashboard"));
   });
 
@@ -1234,16 +1907,12 @@ describe("app pages", () => {
     render(<SignupPage />);
 
     await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
-    await userEvent.click(
-      screen.getByRole("button", { name: "Continue with email" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     await userEvent.type(
-      await screen.findByLabelText("Verification code"),
+      await screen.findByLabelText("Verification Code"),
       "123456",
     );
-    await userEvent.click(
-      screen.getByRole("button", { name: "Verify and continue" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
 
     await waitFor(() =>
       expect(navigateTo).toHaveBeenCalledWith("/event?code=ABC123"),

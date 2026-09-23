@@ -39,6 +39,7 @@ jest.mock("@/lib/navigation", () => {
 });
 
 import SignupPage from "@/app/signup/page";
+import { navigateTo } from "@/lib/navigation";
 
 describe("temporary-account upgrade registration", () => {
   beforeEach(() => {
@@ -151,5 +152,75 @@ describe("temporary-account upgrade registration", () => {
     expect(
       screen.getByRole("button", { name: "Send verification code" }),
     ).toBeDisabled();
+  });
+
+  async function fillDetails() {
+    await screen.findByDisplayValue("temp@example.com");
+    await userEvent.type(screen.getByLabelText("First name"), "Taylor");
+    await userEvent.type(screen.getByLabelText("Last name"), "Temp");
+    await userEvent.type(screen.getByLabelText("Password"), "password123");
+  }
+
+  test("rejects mismatched passwords and reports registration failures", async () => {
+    startTemporaryUpgradeRegistration.mockRejectedValueOnce(
+      new Error("Email already registered"),
+    );
+    render(<SignupPage />);
+    await fillDetails();
+    await userEvent.type(
+      screen.getByLabelText("Confirm password"),
+      "different",
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Send verification code" }),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Passwords do not match.",
+    );
+    expect(startTemporaryUpgradeRegistration).not.toHaveBeenCalled();
+
+    await userEvent.clear(screen.getByLabelText("Confirm password"));
+    await userEvent.type(
+      screen.getByLabelText("Confirm password"),
+      "password123",
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Send verification code" }),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Email already registered",
+    );
+    expect(screen.getByLabelText("First name")).toBeInTheDocument();
+  });
+
+  test("sends verified accounts to profile completion or the requested page and reports bad codes", async () => {
+    verifySignup
+      .mockRejectedValueOnce(new Error("Code expired"))
+      .mockResolvedValueOnce({ next_step: "complete_profile" })
+      .mockResolvedValueOnce({});
+    render(<SignupPage />);
+    await fillDetails();
+    await userEvent.type(
+      screen.getByLabelText("Confirm password"),
+      "password123",
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Send verification code" }),
+    );
+    const code = await screen.findByLabelText("Verification code");
+    await userEvent.type(code, "111111");
+    const verify = screen.getByRole("button", { name: "Verify and continue" });
+    await userEvent.click(verify);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Code expired");
+    await userEvent.click(verify);
+    await waitFor(() =>
+      expect(navigateTo).toHaveBeenCalledWith(
+        "/settings?complete_profile=1&next=%2Fevent%3Fcode%3DABC123",
+      ),
+    );
+    await userEvent.click(verify);
+    await waitFor(() =>
+      expect(navigateTo).toHaveBeenLastCalledWith("/event?code=ABC123"),
+    );
   });
 });

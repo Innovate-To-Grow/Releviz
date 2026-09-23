@@ -4,8 +4,6 @@ import logging
 
 from apps.authn.security import client_ip, security_log_key
 from apps.scheduling.payloads import api_event, api_participant
-from apps.scheduling.permissions import can_view_event_results
-from apps.scheduling.services.results import serialize_result_snapshot
 from apps.scheduling.services.temporary_access import (
     clear_temporary_session_cookie,
     temporary_session_member_has_full_access,
@@ -30,19 +28,15 @@ def log_temporary_session_denied(request, *, event_code: str, operation: str) ->
 
 def temp_access_payload(session):
     event = session.participant.event
-    can_view_results = can_view_event_results(event, session.member)
-    payload = {
+    return {
         "event": api_event(event),
         "participant": api_participant(session.participant),
         "email": session.member.get_primary_email(),
-        "canViewResults": can_view_results,
+        # A temporary participant only ever sees their own calendar; the key
+        # stays so older clients keep reading a definite answer.
+        "canViewResults": False,
         "sessionExpiresAt": session.expires_at.isoformat(),
     }
-    if can_view_results:
-        snapshot = serialize_result_snapshot(event)
-        payload["resultSnapshot"] = snapshot
-        payload["results"] = snapshot["results"]
-    return payload
 
 
 def inactive_session_response(request, *, event_code: str, operation: str):

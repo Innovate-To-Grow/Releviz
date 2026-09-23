@@ -1,20 +1,48 @@
 "use client";
 
 import { useId, useRef, useState } from "react";
+import Alert from "@/components/ui/Alert";
 import AppButton from "@/components/ui/AppButton";
+import { AvailabilityLegend } from "@/components/ui/Availability";
+import { CopyIcon, GroupIcon, VirtualIcon } from "@/components/ui/icons";
 import ScheduleGrid from "@/components/schedule/ScheduleGrid";
 
-function schedulesMatch(first = [], second = []) {
+function blockedSlotIndices(slotGroups) {
+  const blocked = new Set();
+  for (const group of Array.isArray(slotGroups) ? slotGroups : []) {
+    for (const slot of group?.slots || []) {
+      if (slot?.blocked) blocked.add(slot.index);
+    }
+  }
+  return blocked;
+}
+
+// Organizer-blocked indices are hidden in the grid and ignored by results,
+// so they never drive the copy button or the replace confirmation.
+function schedulesMatch(first = [], second = [], blocked = new Set()) {
   return (
     first.length === second.length &&
-    first.every((value, index) => Number(value) === Number(second[index]))
+    first.every(
+      (value, index) =>
+        blocked.has(index) || Number(value) === Number(second[index]),
+    )
   );
 }
 
-function hasAvailability(schedule = []) {
-  return schedule.some((value) => Number(value) > 0);
+function isPainted(schedule = [], startingValue, blocked = new Set()) {
+  return schedule.some(
+    (value, index) => !blocked.has(index) && Number(value) !== startingValue,
+  );
 }
 
+/**
+ * Single- or dual-channel availability editor.
+ *
+ * Mixed events keep independent In-person and Virtual schedules behind an
+ * accessible tablist. Copying one channel over another asks for confirmation
+ * whenever the target was painted, i.e. no longer matches the starting level
+ * every slot began at (`startingValue`, 0 for a Busy start).
+ */
 export default function ScheduleChannelEditor({
   mode,
   slotGroups,
@@ -22,9 +50,11 @@ export default function ScheduleChannelEditor({
   virtual,
   readOnly,
   showValues = false,
+  startingValue = 0,
   onInpersonPaint,
   onVirtualPaint,
   onCopy,
+  legend = true,
 }) {
   const [activeChannel, setActiveChannel] = useState(
     mode === "virtual" ? "virtual" : "inperson",
@@ -40,6 +70,10 @@ export default function ScheduleChannelEditor({
   const targetSchedule = schedules[otherChannel] || [];
   const channelLabel = channel === "virtual" ? "Virtual" : "In-Person";
   const targetLabel = otherChannel === "virtual" ? "Virtual" : "In-Person";
+  // Organizer-blocked slots render grey-striped in the grid, so the legend
+  // needs a "Blocked" item even when the availability legend is hidden.
+  const blockedIndices = blockedSlotIndices(slotGroups);
+  const hasBlocked = blockedIndices.size > 0;
 
   const copySchedule = (source, target) => {
     onCopy?.(source, target);
@@ -48,8 +82,8 @@ export default function ScheduleChannelEditor({
   };
 
   const requestCopy = () => {
-    if (schedulesMatch(schedule, targetSchedule)) return;
-    if (hasAvailability(targetSchedule)) {
+    if (schedulesMatch(schedule, targetSchedule, blockedIndices)) return;
+    if (isPainted(targetSchedule, startingValue, blockedIndices)) {
       setPendingCopy({ source: channel, target: otherChannel });
       return;
     }
@@ -81,50 +115,51 @@ export default function ScheduleChannelEditor({
     selectChannel(channels[nextIndex], { focus: true });
   };
 
+  const tabs = [
+    { key: "inperson", label: "In person", Icon: GroupIcon },
+    { key: "virtual", label: "Virtual", Icon: VirtualIcon },
+  ];
+
   return (
     <div className="schedule-channel-editor">
       {mode === "mixed" && (
         <div className="schedule-channel-editor__toolbar">
-          <div
-            className="schedule-channel-tabs"
+          <ul
+            className="nav nav-pills schedule-channel-tabs"
             role="tablist"
             aria-label="Schedule channel"
           >
-            <button
-              type="button"
-              role="tab"
-              id={`${tabsId}-inperson-tab`}
-              aria-controls={`${tabsId}-inperson-panel`}
-              aria-selected={activeChannel === "inperson"}
-              tabIndex={activeChannel === "inperson" ? 0 : -1}
-              ref={(node) => {
-                tabRefs.current.inperson = node;
-              }}
-              onClick={() => selectChannel("inperson")}
-              onKeyDown={handleTabKeyDown}
-            >
-              In person
-            </button>
-            <button
-              type="button"
-              role="tab"
-              id={`${tabsId}-virtual-tab`}
-              aria-controls={`${tabsId}-virtual-panel`}
-              aria-selected={activeChannel === "virtual"}
-              tabIndex={activeChannel === "virtual" ? 0 : -1}
-              ref={(node) => {
-                tabRefs.current.virtual = node;
-              }}
-              onClick={() => selectChannel("virtual")}
-              onKeyDown={handleTabKeyDown}
-            >
-              Virtual
-            </button>
-          </div>
+            {tabs.map(({ key, label, Icon }) => (
+              <li className="nav-item" role="presentation" key={key}>
+                <button
+                  type="button"
+                  role="tab"
+                  className={`nav-link${activeChannel === key ? " active" : ""}`}
+                  id={`${tabsId}-${key}-tab`}
+                  aria-controls={`${tabsId}-${key}-panel`}
+                  aria-selected={activeChannel === key}
+                  tabIndex={activeChannel === key ? 0 : -1}
+                  ref={(node) => {
+                    tabRefs.current[key] = node;
+                  }}
+                  onClick={() => selectChannel(key)}
+                  onKeyDown={handleTabKeyDown}
+                >
+                  <Icon aria-hidden="true" />
+                  {label}
+                </button>
+              </li>
+            ))}
+          </ul>
           <AppButton
             variant="outlined"
+            size="sm"
+            icon={<CopyIcon />}
             onClick={requestCopy}
-            disabled={readOnly || schedulesMatch(schedule, targetSchedule)}
+            disabled={
+              readOnly ||
+              schedulesMatch(schedule, targetSchedule, blockedIndices)
+            }
           >
             Copy {channelLabel} to {targetLabel}
           </AppButton>
@@ -132,36 +167,55 @@ export default function ScheduleChannelEditor({
       )}
 
       {pendingCopy && (
-        <div
-          className="schedule-copy-confirmation"
+        <Alert
+          variant="warning"
           role="alertdialog"
           aria-labelledby="schedule-copy-title"
           aria-describedby="schedule-copy-description"
+          actions={
+            <>
+              <AppButton
+                variant="filled"
+                size="sm"
+                onClick={() =>
+                  copySchedule(pendingCopy.source, pendingCopy.target)
+                }
+              >
+                Replace schedule
+              </AppButton>
+              <AppButton
+                variant="outlined"
+                size="sm"
+                onClick={() => setPendingCopy(null)}
+              >
+                Cancel
+              </AppButton>
+            </>
+          }
         >
-          <div>
-            <strong id="schedule-copy-title">
-              Replace {targetLabel} availability?
-            </strong>
-            <p id="schedule-copy-description">
-              This copies every {channelLabel} value and replaces the current{" "}
-              {targetLabel} schedule.
-            </p>
-          </div>
-          <div>
-            <AppButton
-              variant="outlined"
-              onClick={() =>
-                copySchedule(pendingCopy.source, pendingCopy.target)
-              }
-            >
-              Replace schedule
-            </AppButton>
-            <AppButton variant="outlined" onClick={() => setPendingCopy(null)}>
-              Cancel
-            </AppButton>
-          </div>
-        </div>
+          <strong id="schedule-copy-title" className="d-block mb-1">
+            Replace {targetLabel} availability?
+          </strong>
+          <p id="schedule-copy-description" className="mb-0">
+            This copies every {channelLabel} value and replaces the current{" "}
+            {targetLabel} schedule.
+          </p>
+        </Alert>
       )}
+
+      {!showValues &&
+        (legend ? (
+          <AvailabilityLegend
+            virtual={channel === "virtual"}
+            hasBlocked={hasBlocked}
+          />
+        ) : hasBlocked ? (
+          <AvailabilityLegend
+            virtual={channel === "virtual"}
+            hasBlocked
+            blockedOnly
+          />
+        ) : null)}
 
       <div
         role={mode === "mixed" ? "tabpanel" : undefined}

@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import LoadingState from "@/components/ui/LoadingState";
 import TempAccessClient from "./TempAccessClient";
 
 export const metadata = {
@@ -8,7 +9,13 @@ export const metadata = {
 
 export default function TempAccessPage() {
   return (
-    <Suspense fallback={<div aria-live="polite">Opening event access…</div>}>
+    <Suspense
+      fallback={
+        <div className="status-page">
+          <LoadingState label="Opening event access…" />
+        </div>
+      }
+    >
       <TempAccessClient />
     </Suspense>
   );
