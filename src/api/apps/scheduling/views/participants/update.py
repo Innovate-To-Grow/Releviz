@@ -22,6 +22,12 @@ from apps.scheduling.services.results import (
     participant_is_excluded,
     request_event_results_recompute,
 )
+from apps.scheduling.services.roster_groups import (
+    memberships_differ,
+    parse_group_cell,
+    set_participant_groups,
+)
+from apps.scheduling.services.roster_imports import RosterImportError
 
 from ..helpers import (
     organizer_participant_payload,
@@ -36,7 +42,7 @@ security_logger = logging.getLogger("releviz.security")
 class ParticipantUpdateView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def _get_event_participant(self, request):
+    def _get_event_participant(self, request, *, lock_event=False):
         code = request.query_params.get("code", "")
         participant_id = request.query_params.get("participantId", "")
         if not code or not participant_id:
@@ -53,6 +59,10 @@ class ParticipantUpdateView(APIView):
             return event, None, Response({"error": "Participant not found"}, status=404)
         # Serialize with account upgrades and schedule reconfiguration through
         # the participation row, while avoiding the shared Event row hot spot.
+        # Group edits are the exception: they take the Event lock first, in
+        # the same event-then-participant order as every other roster writer.
+        if lock_event:
+            Event.objects.select_for_update().get(pk=event.pk)
         participant = Participant.objects.select_for_update(of=("self",)).get(pk=participant.pk)
         event = Event.objects.get(pk=participant.event_id)
         member = get_user_model().objects.get(pk=participant.member_id)
@@ -62,7 +72,9 @@ class ParticipantUpdateView(APIView):
 
     @transaction.atomic
     def put(self, request):
-        event, participant, error = self._get_event_participant(request)
+        event, participant, error = self._get_event_participant(
+            request, lock_event="groupName" in request.data
+        )
         if error:
             return error
 
@@ -202,6 +214,9 @@ class ParticipantUpdateView(APIView):
                 return Response({"error": "submitted must be a boolean"}, status=400)
             updates["submitted"] = bool(submitted)
 
+        # Memberships live in a many-to-many table, so the parsed cell is kept
+        # apart from ``updates`` (which only ever holds Participant columns).
+        group_cell = None
         if "groupName" in request.data:
             if not is_organizer:
                 return Response(
@@ -211,7 +226,10 @@ class ParticipantUpdateView(APIView):
                     },
                     status=403,
                 )
-            updates["group_name"] = request.data.get("groupName") or None
+            try:
+                group_cell = parse_group_cell(request.data.get("groupName"))
+            except RosterImportError as exc:
+                return Response({"error": str(exc)}, status=400)
 
         if "sortOrder" in request.data:
             if not is_organizer:
@@ -231,10 +249,16 @@ class ParticipantUpdateView(APIView):
             except (TypeError, ValueError):
                 return Response({"error": "sortOrder must be an integer or null"}, status=400)
 
-        if not updates:
+        if not updates and group_cell is None:
             return private_response({"participant": response_participant_payload()})
 
+        groups_dirty = group_cell is not None and memberships_differ(
+            participant=participant, all_groups=group_cell[0], names=group_cell[1]
+        )
+
         def values_match():
+            if groups_dirty:
+                return False
             for key, value in updates.items():
                 current = getattr(participant, key)
                 if current != value:
@@ -286,6 +310,13 @@ class ParticipantUpdateView(APIView):
                     },
                     status=409,
                 )
+
+        # Every 4xx exit is behind us, so the membership write is safe inside
+        # this atomic request; a change bumps the version like a rename does.
+        if groups_dirty:
+            set_participant_groups(
+                participant=participant, all_groups=group_cell[0], names=group_cell[1]
+            )
 
         if values_match():
             track_unchanged_response()

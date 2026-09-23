@@ -260,9 +260,17 @@ class TemporaryAccountCoverageTests(TestCase):
             verified=False,
         )
 
-        for label, contact in (
-            ("unverified secondary", unverified_secondary),
-            ("pending primary", pending_primary),
+        for label, contact, expected_message in (
+            (
+                "unverified secondary",
+                unverified_secondary,
+                "This email belongs to an unverified full account.",
+            ),
+            (
+                "pending primary",
+                pending_primary,
+                "This email belongs to an inactive account.",
+            ),
         ):
             with self.subTest(label=label):
                 model_counts = {
@@ -295,10 +303,7 @@ class TemporaryAccountCoverageTests(TestCase):
                     )
 
                 self.assertEqual(caught.exception.status_code, 409)
-                self.assertEqual(
-                    str(caught.exception),
-                    "Unable to create a participant with this email address.",
-                )
+                self.assertEqual(str(caught.exception), expected_message)
                 self.assertFalse(
                     Participant.objects.filter(
                         event=self.event,
@@ -394,10 +399,7 @@ class TemporaryAccountCoverageTests(TestCase):
             )
 
         self.assertEqual(caught.exception.status_code, 409)
-        self.assertEqual(
-            str(caught.exception),
-            "Unable to create a participant with this email address.",
-        )
+        self.assertEqual(str(caught.exception), "This email belongs to an inactive account.")
         self.assertFalse(Participant.objects.filter(event=self.event, member=inactive).exists())
         self.assertFalse(EventInvitation.objects.filter(event=self.event).exists())
 
@@ -474,7 +476,7 @@ class TemporaryAccountCoverageTests(TestCase):
         payload = api_participant(participant, organizer_private=True)
 
         self.assertEqual(payload["email"], "contact-only@example.com")
-        self.assertEqual(payload["invitationStatus"], "invited")
+        self.assertEqual(payload["invitationStatus"], "sent")
         self.assertEqual(payload["accountAccess"], "full")
         self.assertFalse(payload["canOrganizerEditAvailability"])
 

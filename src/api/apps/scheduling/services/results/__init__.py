@@ -17,6 +17,7 @@ from .snapshots import (
     recompute_due_event_results,
     recompute_event_results,
     request_event_results_recompute,
+    result_snapshot_state,
     serialize_result_snapshot,
 )
 
@@ -36,5 +37,6 @@ __all__ = [
     "recompute_event_results",
     "request_event_results_recompute",
     "result_channels",
+    "result_snapshot_state",
     "serialize_result_snapshot",
 ]

@@ -141,9 +141,9 @@ def request_event_results_recompute(event_or_id) -> EventResultInvalidation:
     return EventResultInvalidation.objects.create(event_id=event_id)
 
 
-def serialize_result_snapshot(event: Event) -> dict:
-    flush_event_result_invalidations(event)
-    snapshot = ensure_result_snapshot(event)
+def result_snapshot_state(snapshot: EventResultSnapshot) -> dict:
+    """The freshness fields of a snapshot, without its payload."""
+
     return {
         "status": snapshot.status,
         "requestedRevision": snapshot.requested_revision,
@@ -151,6 +151,14 @@ def serialize_result_snapshot(event: Event) -> dict:
         "generatedAt": (
             snapshot.completed_at.isoformat() if snapshot.completed_at is not None else None
         ),
+    }
+
+
+def serialize_result_snapshot(event: Event) -> dict:
+    flush_event_result_invalidations(event)
+    snapshot = ensure_result_snapshot(event)
+    return {
+        **result_snapshot_state(snapshot),
         "lastError": snapshot.last_error if snapshot.status == "failed" else "",
         "results": snapshot.payload or None,
     }

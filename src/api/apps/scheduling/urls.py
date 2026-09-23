@@ -102,6 +102,17 @@ urlpatterns = [
         name="api-roster-imports",
     ),
     path("events/roster/bulk", views.RosterBulkView.as_view(), name="api-roster-bulk"),
+    path("events/roster/groups", views.RosterGroupsView.as_view(), name="api-roster-groups"),
+    path(
+        "events/roster/groups/<int:group_id>",
+        views.RosterGroupView.as_view(),
+        name="api-roster-group",
+    ),
+    path(
+        "events/roster/invitations",
+        views.RosterInvitationsView.as_view(),
+        name="api-roster-invitations",
+    ),
     path(
         "events/roster/<str:participant_id>/schedule",
         views.RosterParticipantScheduleView.as_view(),
@@ -114,6 +125,7 @@ urlpatterns = [
     ),
     path("events/roster", views.RosterView.as_view(), name="api-roster"),
     path("events/results", views.EventResultsView.as_view(), name="api-event-results"),
+    path("events/activity", views.EventActivityView.as_view(), name="api-event-activity"),
     path("events/weights", views.WeightsView.as_view(), name="api-weights"),
     path("events/duplicate", views.EventDuplicateView.as_view(), name="api-event-duplicate"),
     path("events", views.EventsView.as_view(), name="api-events"),

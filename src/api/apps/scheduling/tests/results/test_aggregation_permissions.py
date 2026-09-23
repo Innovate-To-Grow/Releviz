@@ -188,6 +188,51 @@ class AggregationDomainTests(TestCase):
             results["recommendationBasis"]["order"][0],
             "highestWeightedAvailability",
         )
+        self.assertEqual(results["blockedSlotIndices"], [])
+
+    def test_blocked_slots_are_zeroed_in_every_channel_and_listed(self):
+        self.event.blocked_slots = {"date:2026-07-21": [0]}
+        self.event.save(update_fields=["blocked_slots"])
+        # Stale marks on the blocked slot stay stored but never count.
+        self.add_participant(
+            "blocked-full@example.com",
+            inperson=(1, 1),
+            virtual=(0.5, 1),
+            submitted=True,
+        )
+        weighted = self.add_participant(
+            "blocked-weighted@example.com",
+            inperson=(0, 1),
+            virtual=(1, 1),
+            submitted=True,
+        )
+        Weight.objects.create(event=self.event, participant=weighted, weight=0.5)
+
+        results = build_event_results(
+            self.event,
+            now=datetime(2026, 7, 16, 12, tzinfo=UTC),
+        )
+
+        self.assertEqual(results["slotCount"], 2)
+        self.assertEqual(results["blockedSlotIndices"], [1])
+        self.assertEqual(results["channels"]["inperson"]["unweighted"], [0.5, 0.0])
+        self.assertEqual(results["channels"]["inperson"]["weighted"], [0.6667, 0.0])
+        self.assertEqual(results["channels"]["virtual"]["unweighted"], [0.75, 0.0])
+        self.assertEqual(results["channels"]["virtual"]["weighted"], [0.6667, 0.0])
+        self.assertEqual(
+            [
+                (recommendation["channel"], recommendation["slotIndices"])
+                for recommendation in results["recommendations"]
+            ],
+            [("virtual", [0]), ("inperson", [0])],
+        )
+
+        # Arrays keep their full length before anyone answers.
+        Participant.objects.filter(event=self.event).delete()
+        empty = build_event_results(self.event)
+        self.assertEqual(empty["blockedSlotIndices"], [1])
+        self.assertEqual(empty["channels"]["inperson"]["unweighted"], [0.0, 0.0])
+        self.assertEqual(empty["channels"]["virtual"]["weighted"], [0.0, 0.0])
 
     def test_channel_parsing_validity_and_empty_or_zero_weight_results(self):
         inperson_event = Event.objects.create(
@@ -423,6 +468,8 @@ class AggregationPermissionApiTests(TestCase):
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token_for(member)}")
 
     def test_direct_api_access_and_result_visibility_matrix(self):
+        self.event.blocked_slots = {"weekday:1": [6]}
+        self.event.save(update_fields=["blocked_slots"])
         recompute_event_results(self.event.pk)
         self.assertEqual(self.client.get("/events/results").status_code, 401)
 
@@ -462,8 +509,9 @@ class AggregationPermissionApiTests(TestCase):
         self.assertEqual(organizer_results.data["results"]["unansweredParticipantTotal"], 1)
         self.assertEqual(
             organizer_results.data["results"]["channels"]["inperson"]["unweighted"],
-            [0.5] * 7,
+            [0.5] * 6 + [0.0],
         )
+        self.assertEqual(organizer_results.data["results"]["blockedSlotIndices"], [6])
         self.assertIn("private", organizer_results["Cache-Control"])
 
         # The stored setting never opens results or the roster to participants.

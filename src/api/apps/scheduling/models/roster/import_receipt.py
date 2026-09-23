@@ -20,9 +20,12 @@ class RosterImportReceipt(TimestampedModel):
         on_delete=models.CASCADE,
         related_name="roster_import_receipts",
     )
+    # RESTRICT still blocks a standalone batch delete, but Django clears the
+    # restriction when the receipt is itself collected through the
+    # Event -> receipt CASCADE, so event and account deletion succeed.
     batch = models.OneToOneField(
         RosterImportBatch,
-        on_delete=models.PROTECT,
+        on_delete=models.RESTRICT,
         related_name="receipt",
     )
     committed_by = models.ForeignKey(
