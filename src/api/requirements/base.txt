@@ -184,9 +184,9 @@ django-cors-headers==4.9.0 \
     --hash=sha256:15c7f20727f90044dcee2216a9fd7303741a864865f0c3657e28b7056f61b449 \
     --hash=sha256:fe5d7cb59fdc2c8c646ce84b727ac2bca8912a247e6e68e1fb507372178e59e8
     # via -r src/api/requirements/base.in
-django-unfold==0.102.0 \
-    --hash=sha256:08ac9f05331a8923b62f26fe7c82758cfd15cebc5c686e262127dab2553b43ab \
-    --hash=sha256:85162f48e402588863d9ae3c963d589535499f7326965899108c705f6b2586cf
+django-unfold==0.104.1 \
+    --hash=sha256:13b52e8100f2d844568cf08a2057cacd3686bc1083e0e491d05fc688025c966f \
+    --hash=sha256:4eece526e1e80f5133632acae260cc53ab2f52020ff9f64bb98d9c9c738d9888
     # via -r src/api/requirements/base.in
 djangorestframework==3.18.0 \
     --hash=sha256:2323a5111837e0b784dcb8323abc78ecc54fa2a5af7aff2677cf50cdd849477f \
