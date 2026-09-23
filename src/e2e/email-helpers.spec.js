@@ -33,7 +33,10 @@ async function readVerificationCode(mailDirectory, email, afterMs, purpose) {
       path.join(__dirname, "helpers/releviz.js"),
       JSON.stringify({ email, afterMs, purpose }),
     ],
-    { env: { ...process.env, EMAIL_FILE_PATH: mailDirectory } },
+    {
+      env: { ...process.env, EMAIL_FILE_PATH: mailDirectory },
+      timeout: 30_000,
+    },
   );
   return stdout;
 }
