@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import Alert from "@/components/ui/Alert";
 import AppButton from "@/components/ui/AppButton";
 import ConfirmDialog from "@/components/ui/ConfirmDialog";
@@ -101,12 +101,9 @@ export default function RosterGroups({
   // Which button's request is in flight, so only that button shows a spinner
   // while `busyGroup` (owned by the parent) disables the rest.
   const [pendingAction, setPendingAction] = useState("");
-  const [deleteTarget, setDeleteTarget] = useState(null);
+  // Group awaiting delete confirmation in the in-page dialog.
+  const [pendingDelete, setPendingDelete] = useState(null);
   const titleRef = useRef(null);
-  // Each row's Delete button by filter value, and the one to focus again
-  // once a failed delete leaves the roster idle.
-  const deleteButtons = useRef(new Map());
-  const refocusDelete = useRef("");
 
   const namedGroups = groups.filter((group) => group.name !== "");
   const busy = Boolean(busyGroup);
@@ -114,21 +111,14 @@ export default function RosterGroups({
   const newGroupNameId = `${ids}-new-group-name`;
   // The question is about the group as it was when asked: a lock, a rename or
   // a delete elsewhere drops it rather than acting on something else later.
-  const pendingDelete =
-    deleteTarget && !readOnly
+  const deleteTarget =
+    pendingDelete && !readOnly
       ? (namedGroups.find(
           (group) =>
-            group.id === deleteTarget.id && group.name === deleteTarget.name,
+            group.id === pendingDelete.id && group.name === pendingDelete.name,
         ) ?? null)
       : null;
-  if (deleteTarget && !pendingDelete) setDeleteTarget(null);
-
-  useEffect(() => {
-    if (busy || !refocusDelete.current) return;
-    const button = deleteButtons.current.get(refocusDelete.current);
-    refocusDelete.current = "";
-    button?.focus();
-  });
+  if (pendingDelete && !deleteTarget) setPendingDelete(null);
 
   const runAction = async (key, action) => {
     setPendingAction(key);
@@ -204,22 +194,14 @@ export default function RosterGroups({
   };
 
   const confirmDelete = async () => {
-    const group = pendingDelete;
-    const filterValue = groupFilterValue(group.name);
-    setDeleteTarget(null);
-    const deleted = await runAction(`${filterValue}:delete`, () =>
-      onDelete(group),
+    const group = deleteTarget;
+    const deleted = await runAction(
+      `${groupFilterValue(group.name)}:delete`,
+      () => onDelete(group),
     );
-    if (deleted) {
-      // The row and its Delete button are gone, so focus a stable landmark.
-      titleRef.current?.focus();
-      return;
-    }
-    // The row stays, but its button was disabled (and lost focus) while the
-    // request ran: focus it now, or once the roster is idle again.
-    const button = deleteButtons.current.get(filterValue);
-    if (button && !button.disabled) button.focus();
-    else refocusDelete.current = filterValue;
+    setPendingDelete(null);
+    // The row and its Delete button are gone, so focus a stable landmark.
+    if (deleted) titleRef.current?.focus();
   };
 
   return (
@@ -496,20 +478,11 @@ export default function RosterGroups({
                                 </AppButton>
                               )}
                               <AppButton
-                                ref={(node) => {
-                                  if (node)
-                                    deleteButtons.current.set(
-                                      filterValue,
-                                      node,
-                                    );
-                                  else
-                                    deleteButtons.current.delete(filterValue);
-                                }}
                                 size="sm"
                                 variant="danger"
                                 disabled={busy}
                                 busy={pendingAction === `${filterValue}:delete`}
-                                onClick={() => setDeleteTarget(group)}
+                                onClick={() => setPendingDelete(group)}
                               >
                                 Delete group
                               </AppButton>
@@ -543,14 +516,18 @@ export default function RosterGroups({
         </p>
       )}
 
-      {pendingDelete && (
+      {deleteTarget && (
         <ConfirmDialog
-          title={`Delete group ${pendingDelete.name}?`}
-          description="People stay on the roster."
+          title={`Delete group ${deleteTarget.name}?`}
           confirmLabel="Delete group"
+          busy={
+            pendingAction === `${groupFilterValue(deleteTarget.name)}:delete`
+          }
           onConfirm={() => void confirmDelete()}
-          onCancel={() => setDeleteTarget(null)}
-        />
+          onClose={() => setPendingDelete(null)}
+        >
+          <p className="mb-0">People stay on the roster.</p>
+        </ConfirmDialog>
       )}
     </section>
   );

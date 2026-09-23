@@ -1877,7 +1877,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await throwawayGroupRow
       .getByRole("button", { name: "Delete group" })
       .click();
-    const deleteGroupDialog = page.getByRole("alertdialog", {
+    const deleteGroupDialog = page.getByRole("dialog", {
       name: "Delete group E2E Throwaway?",
     });
     await expect(deleteGroupDialog).toContainText("People stay on the roster.");

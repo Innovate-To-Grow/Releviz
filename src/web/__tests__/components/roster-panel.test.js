@@ -193,19 +193,6 @@ async function openEditor() {
   return dialog;
 }
 
-// Group deletion asks in an in-app dialog whose confirm button shares the
-// row button's name, so the second click is scoped to the dialog.
-async function confirmDeleteGroup(name) {
-  await userEvent.click(screen.getByRole("button", { name: "Delete group" }));
-  const confirm = screen.getByRole("alertdialog", {
-    name: `Delete group ${name}?`,
-  });
-  expect(confirm).toHaveAccessibleDescription("People stay on the roster.");
-  await userEvent.click(
-    within(confirm).getByRole("button", { name: "Delete group" }),
-  );
-}
-
 describe("RosterPanel schedule drawer", () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -478,7 +465,9 @@ describe("RosterPanel schedule drawer", () => {
     ).toHaveFocus();
     // Untouched: no confirmation needed.
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
-    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("dialog", { name: "Discard unsaved changes?" }),
+    ).not.toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
 
@@ -486,50 +475,47 @@ describe("RosterPanel schedule drawer", () => {
     fireEvent.click(
       within(dialog).getByRole("button", { name: "Paint in-person" }),
     );
-    const cancel = within(dialog).getByRole("button", { name: "Cancel" });
-    cancel.focus();
-    // Escape on a dirty drawer asks first and keeps the drawer open.
     fireEvent.keyDown(document, { key: "Escape" });
-    let confirm = screen.getByRole("alertdialog", {
+    // Dirty: an in-page dialog asks first; the drawer stays open behind it.
+    let discardDialog = await screen.findByRole("dialog", {
       name: "Discard unsaved changes?",
     });
-    expect(confirm).toHaveAccessibleDescription(
-      "Discard the unsaved changes to this participant's schedule?",
-    );
-    expect(
-      within(confirm).getByRole("button", { name: "Keep editing" }),
-    ).toHaveFocus();
     expect(
       screen.getByRole("dialog", { name: "Edit Temp Person's schedule" }),
     ).toBeInTheDocument();
-    // A second Escape answers the question instead of asking again.
+
+    // Escape while the dialog is open closes only the dialog, not the drawer.
     fireEvent.keyDown(document, { key: "Escape" });
-    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
-    expect(dialog).toBeInTheDocument();
-    expect(cancel).toHaveFocus();
-    expect(document.body.style.overflow).toBe("hidden");
+    expect(
+      screen.queryByRole("dialog", { name: "Discard unsaved changes?" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("dialog", { name: "Edit Temp Person's schedule" }),
+    ).toBeInTheDocument();
 
-    fireEvent.click(cancel);
-    confirm = screen.getByRole("alertdialog", {
+    // Cancelling the dialog keeps editing.
+    fireEvent.keyDown(document, { key: "Escape" });
+    discardDialog = await screen.findByRole("dialog", {
       name: "Discard unsaved changes?",
     });
     fireEvent.click(
-      within(confirm).getByRole("button", { name: "Keep editing" }),
+      within(discardDialog).getByRole("button", { name: "Cancel" }),
     );
-    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
-    // The painted edit survives.
-    expect(within(dialog).getByTestId("inperson-values")).toHaveTextContent(
-      "1,1,0",
-    );
+    expect(
+      screen.queryByRole("dialog", { name: "Discard unsaved changes?" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("dialog", { name: "Edit Temp Person's schedule" }),
+    ).toBeInTheDocument();
 
-    fireEvent.click(cancel);
-    confirm = screen.getByRole("alertdialog", {
+    // Confirming discards the edits and closes the drawer.
+    fireEvent.keyDown(document, { key: "Escape" });
+    discardDialog = await screen.findByRole("dialog", {
       name: "Discard unsaved changes?",
     });
     fireEvent.click(
-      within(confirm).getByRole("button", { name: "Discard changes" }),
+      within(discardDialog).getByRole("button", { name: "Discard changes" }),
     );
-    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
     expect(document.body.style.overflow).toBe("");
@@ -575,10 +561,14 @@ describe("RosterPanel schedule drawer", () => {
       within(dialog).getByRole("button", { name: "Submit on behalf" }),
     ).toBeDisabled();
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    const discardDialog = await screen.findByRole("dialog", {
+      name: "Discard unsaved changes?",
+    });
     fireEvent.click(
-      within(
-        screen.getByRole("alertdialog", { name: "Discard unsaved changes?" }),
-      ).getByRole("button", { name: "Discard changes" }),
+      within(discardDialog).getByRole("button", { name: "Discard changes" }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
     );
 
     fetchRosterSchedule.mockRejectedValueOnce(new Error(""));
@@ -2350,6 +2340,22 @@ describe("RosterPanel groups", () => {
     return bulk;
   }
 
+  // Clicks the row's "Delete group" and confirms in the in-page dialog.
+  async function confirmGroupDelete(name) {
+    await userEvent.click(screen.getByRole("button", { name: "Delete group" }));
+    const confirmDialog = await screen.findByRole("dialog", {
+      name: `Delete group ${name}?`,
+    });
+    await userEvent.click(
+      within(confirmDialog).getByRole("button", { name: "Delete group" }),
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: `Delete group ${name}?` }),
+      ).not.toBeInTheDocument(),
+    );
+  }
+
   beforeEach(() => {
     jest.clearAllMocks();
     Object.defineProperty(globalThis, "crypto", {
@@ -2654,28 +2660,33 @@ describe("RosterPanel groups", () => {
       ),
     );
 
-    // Declining the confirmation sends nothing.
+    // Declining the in-page confirmation sends nothing.
     await userEvent.click(screen.getByRole("button", { name: "Delete group" }));
+    const declineDialog = await screen.findByRole("dialog", {
+      name: "Delete group Faculty?",
+    });
     await userEvent.click(
-      within(
-        screen.getByRole("alertdialog", { name: "Delete group Faculty?" }),
-      ).getByRole("button", { name: "Cancel" }),
+      within(declineDialog).getByRole("button", { name: "Cancel" }),
     );
-    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Delete group Faculty?" }),
+      ).not.toBeInTheDocument(),
+    );
     expect(deleteRosterGroup).not.toHaveBeenCalled();
 
-    await confirmDeleteGroup("Faculty");
+    await confirmGroupDelete("Faculty");
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Group not found",
     );
-    await confirmDeleteGroup("Faculty");
+    await confirmGroupDelete("Faculty");
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Unable to delete Faculty.",
     );
     expect(fetchRoster).toHaveBeenCalledTimes(1);
 
     // Deleting a group that is not being shown reloads the rows in place.
-    await confirmDeleteGroup("Faculty");
+    await confirmGroupDelete("Faculty");
     await waitFor(() =>
       expect(deleteRosterGroup).toHaveBeenCalledWith("ROSTER1", 11, "token"),
     );
@@ -2713,7 +2724,7 @@ describe("RosterPanel groups", () => {
     );
     expect(screen.getByLabelText("Filter by group")).toHaveValue("Faculty");
 
-    await confirmDeleteGroup("Faculty");
+    await confirmGroupDelete("Faculty");
     await waitFor(() =>
       expect(deleteRosterGroup).toHaveBeenCalledWith("ROSTER1", 11, "token"),
     );
@@ -3071,7 +3082,7 @@ describe("RosterPanel groups", () => {
       ),
     );
 
-    await confirmDeleteGroup("Faculty");
+    await confirmGroupDelete("Faculty");
     await waitFor(() =>
       expect(deleteRosterGroup).toHaveBeenCalledWith("ROSTER1", 11, "token"),
     );

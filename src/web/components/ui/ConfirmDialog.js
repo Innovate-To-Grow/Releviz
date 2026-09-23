@@ -1,68 +1,51 @@
 "use client";
 
-import { useId } from "react";
 import AppButton from "@/components/ui/AppButton";
 import Modal from "@/components/ui/Modal";
 
 /**
- * In-app replacement for `window.confirm`, built on Modal so it keeps the
- * focus trap, Escape handling and focus restore.
- *
- * - Renders as an `alertdialog`; the description is its accessible
- *   description.
- * - The cancel (safe) button receives focus first, so pressing Enter right
- *   away never runs the destructive action. Escape, the close button and a
- *   backdrop click all cancel.
- * - `danger` (the default) styles the confirm button as destructive.
+ * In-page replacement for window.confirm: a small destructive-action dialog
+ * built on Modal. Rendered as a form so Enter confirms; initial focus lands on
+ * Cancel (the safe action) via `data-autofocus`. Escape, the backdrop, and the
+ * header close button all cancel.
  */
 export default function ConfirmDialog({
-  open = true,
   title,
-  description = null,
-  confirmLabel = "Confirm",
+  confirmLabel,
   cancelLabel = "Cancel",
-  onConfirm,
-  onCancel,
   busy = false,
-  danger = true,
+  onConfirm,
+  onClose,
+  size = "md",
   children,
 }) {
-  const descriptionId = useId();
-
   return (
     <Modal
-      open={open}
+      as="form"
+      size={size}
       title={title}
-      onClose={onCancel}
       busy={busy}
-      role="alertdialog"
-      aria-describedby={description ? descriptionId : undefined}
+      onClose={onClose}
+      onSubmit={(submitEvent) => {
+        submitEvent.preventDefault();
+        onConfirm?.();
+      }}
       footer={
         <>
           <AppButton
             variant="text"
-            onClick={onCancel}
-            disabled={busy}
             data-autofocus
+            onClick={onClose}
+            disabled={busy}
           >
             {cancelLabel}
           </AppButton>
-          <AppButton
-            variant={danger ? "danger-filled" : "filled"}
-            onClick={onConfirm}
-            busy={busy}
-            disabled={busy}
-          >
+          <AppButton type="submit" variant="danger-filled" busy={busy}>
             {confirmLabel}
           </AppButton>
         </>
       }
     >
-      {description && (
-        <p id={descriptionId} className="mb-0">
-          {description}
-        </p>
-      )}
       {children}
     </Modal>
   );

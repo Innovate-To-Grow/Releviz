@@ -227,8 +227,8 @@ const RosterPanel = forwardRef(function RosterPanel(
   const [editorError, setEditorError] = useState("");
   const [editorStatus, setEditorStatus] = useState("");
   const [editorConflict, setEditorConflict] = useState(null);
-  // Closing a drawer with unsaved edits asks first; this is that question.
-  const [discardPending, setDiscardPending] = useState(false);
+  // Whether the in-page "discard unsaved changes" confirmation is open.
+  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
   // Rows whose last patch hit a newer version, shaped
   // { [participantId]: { name, participant, message } }. A row stays locked
   // until the organizer reloads the latest values.
@@ -603,7 +603,7 @@ const RosterPanel = forwardRef(function RosterPanel(
     setEditorError("");
     setEditorStatus("");
     setEditorConflict(null);
-    setDiscardPending(false);
+    setDiscardConfirmOpen(false);
     updateRowConflicts({});
   }, [event.status, startingBrush, updateRowConflicts, updateSelected]);
 
@@ -978,8 +978,9 @@ const RosterPanel = forwardRef(function RosterPanel(
   };
 
   const closeEditor = () => {
-    // The drawer's Escape listener still calls this while the question is up.
-    if (discardPending) return;
+    // The drawer also fires onClose for Escape while the discard dialog is
+    // open; ignore those so one keypress closes only the dialog.
+    if (discardConfirmOpen) return;
     const dirty =
       editor &&
       (editorName !== editor.name ||
@@ -987,15 +988,15 @@ const RosterPanel = forwardRef(function RosterPanel(
           JSON.stringify(editor.inpersonArray) ||
         JSON.stringify(editorVirtual) !== JSON.stringify(editor.virtualArray));
     if (dirty) {
-      setDiscardPending(true);
+      setDiscardConfirmOpen(true);
       return;
     }
     setEditor(null);
     setEditorConflict(null);
   };
 
-  const discardEditor = () => {
-    setDiscardPending(false);
+  const discardEditorChanges = () => {
+    setDiscardConfirmOpen(false);
     setEditor(null);
     setEditorConflict(null);
   };
@@ -1059,7 +1060,7 @@ const RosterPanel = forwardRef(function RosterPanel(
       ) {
         const name = editor.name;
         setEditor(null);
-        setDiscardPending(false);
+        setDiscardConfirmOpen(false);
         // Reload first: loadRoster clears the panel error when it starts.
         loadRoster();
         setError(ownedResponseMessage(name));
@@ -2349,17 +2350,19 @@ const RosterPanel = forwardRef(function RosterPanel(
         onReloadLatest={reloadConflict}
         onClose={closeEditor}
       />
-      {/* A sibling of the drawer, not inside it, so the drawer's Tab trap
-          leaves it alone; it renders later, so it stacks on top. */}
-      {discardPending && (
+
+      {discardConfirmOpen && (
         <ConfirmDialog
           title="Discard unsaved changes?"
-          description="Discard the unsaved changes to this participant's schedule?"
           confirmLabel="Discard changes"
-          cancelLabel="Keep editing"
-          onConfirm={discardEditor}
-          onCancel={() => setDiscardPending(false)}
-        />
+          onConfirm={discardEditorChanges}
+          onClose={() => setDiscardConfirmOpen(false)}
+        >
+          <p className="mb-0">
+            You have unsaved changes to this participant&apos;s schedule.
+            Discard them?
+          </p>
+        </ConfirmDialog>
       )}
     </div>
   );
