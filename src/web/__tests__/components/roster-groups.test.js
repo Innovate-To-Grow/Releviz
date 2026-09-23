@@ -363,33 +363,44 @@ describe("RosterGroups", () => {
   });
 
   test("deletes a group only after the organizer confirms", async () => {
-    const confirmSpy = jest
-      .spyOn(window, "confirm")
-      .mockReturnValueOnce(false)
-      .mockReturnValueOnce(true);
-    try {
-      const { onDelete } = renderGroups();
-      const remove = within(row("Faculty")).getByRole("button", {
-        name: "Delete group",
-      });
-      await click(remove);
-      expect(confirmSpy).toHaveBeenCalledWith(
-        "Delete group Faculty? People stay on the roster.",
-      );
-      expect(onDelete).not.toHaveBeenCalled();
+    const { onDelete } = renderGroups();
+    const remove = within(row("Faculty")).getByRole("button", {
+      name: "Delete group",
+    });
 
-      await click(remove);
-      expect(onDelete).toHaveBeenCalledTimes(1);
-      expect(onDelete).toHaveBeenCalledWith({
-        id: 1,
-        name: "Faculty",
-        count: 2,
-        weight: 1,
-      });
-      await waitFor(() => expect(remove).not.toHaveAttribute("aria-busy"));
-    } finally {
-      confirmSpy.mockRestore();
-    }
+    // Declining the in-page dialog sends nothing.
+    await click(remove);
+    let dialog = await screen.findByRole("dialog", {
+      name: "Delete group Faculty?",
+    });
+    expect(dialog).toHaveTextContent("People stay on the roster.");
+    await click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Delete group Faculty?" }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(onDelete).not.toHaveBeenCalled();
+
+    // Confirming in the dialog deletes the group.
+    await click(remove);
+    dialog = await screen.findByRole("dialog", {
+      name: "Delete group Faculty?",
+    });
+    await click(within(dialog).getByRole("button", { name: "Delete group" }));
+    expect(onDelete).toHaveBeenCalledTimes(1);
+    expect(onDelete).toHaveBeenCalledWith({
+      id: 1,
+      name: "Faculty",
+      count: 2,
+      weight: 1,
+    });
+    await waitFor(() => expect(remove).not.toHaveAttribute("aria-busy"));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Delete group Faculty?" }),
+      ).not.toBeInTheDocument(),
+    );
   });
 
   test("creates an empty group with validation", async () => {

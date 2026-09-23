@@ -3,6 +3,7 @@
 import { useId, useState } from "react";
 import Alert from "@/components/ui/Alert";
 import AppButton from "@/components/ui/AppButton";
+import ConfirmDialog from "@/components/ui/ConfirmDialog";
 import FormField from "@/components/ui/FormField";
 import StatusBadge from "@/components/ui/StatusBadge";
 import { CheckIcon, GroupIcon } from "@/components/ui/icons";
@@ -100,6 +101,8 @@ export default function RosterGroups({
   // Which button's request is in flight, so only that button shows a spinner
   // while `busyGroup` (owned by the parent) disables the rest.
   const [pendingAction, setPendingAction] = useState("");
+  // Group awaiting delete confirmation in the in-page dialog.
+  const [pendingDelete, setPendingDelete] = useState(null);
 
   const namedGroups = groups.filter((group) => group.name !== "");
   const busy = Boolean(busyGroup);
@@ -179,14 +182,12 @@ export default function RosterGroups({
     if (renamed) setRenaming(null);
   };
 
-  const confirmDelete = async (group) => {
-    const confirmed = window.confirm(
-      `Delete group ${group.name}? People stay on the roster.`,
-    );
-    if (!confirmed) return;
+  const confirmDelete = async () => {
+    const group = pendingDelete;
     await runAction(`${groupFilterValue(group.name)}:delete`, () =>
       onDelete(group),
     );
+    setPendingDelete(null);
   };
 
   return (
@@ -462,7 +463,7 @@ export default function RosterGroups({
                                 variant="danger"
                                 disabled={busy}
                                 busy={pendingAction === `${filterValue}:delete`}
-                                onClick={() => void confirmDelete(group)}
+                                onClick={() => setPendingDelete(group)}
                               >
                                 Delete group
                               </AppButton>
@@ -494,6 +495,20 @@ export default function RosterGroups({
           No groups yet. Create a group, then select people in the list and add
           them to it.
         </p>
+      )}
+
+      {pendingDelete && (
+        <ConfirmDialog
+          title={`Delete group ${pendingDelete.name}?`}
+          confirmLabel="Delete group"
+          busy={
+            pendingAction === `${groupFilterValue(pendingDelete.name)}:delete`
+          }
+          onConfirm={() => void confirmDelete()}
+          onClose={() => setPendingDelete(null)}
+        >
+          <p className="mb-0">People stay on the roster.</p>
+        </ConfirmDialog>
       )}
     </section>
   );

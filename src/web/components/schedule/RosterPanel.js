@@ -12,6 +12,7 @@ import {
 } from "react";
 import Alert from "@/components/ui/Alert";
 import AppButton from "@/components/ui/AppButton";
+import ConfirmDialog from "@/components/ui/ConfirmDialog";
 import EmptyState from "@/components/ui/EmptyState";
 import FormField from "@/components/ui/FormField";
 import LoadingState from "@/components/ui/LoadingState";
@@ -217,6 +218,8 @@ const RosterPanel = forwardRef(function RosterPanel(
   const [editorError, setEditorError] = useState("");
   const [editorStatus, setEditorStatus] = useState("");
   const [editorConflict, setEditorConflict] = useState(null);
+  // Whether the in-page "discard unsaved changes" confirmation is open.
+  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
   // Rows whose last patch hit a newer version, shaped
   // { [participantId]: { name, participant, message } }. A row stays locked
   // until the organizer reloads the latest values.
@@ -586,6 +589,7 @@ const RosterPanel = forwardRef(function RosterPanel(
     setEditorError("");
     setEditorStatus("");
     setEditorConflict(null);
+    setDiscardConfirmOpen(false);
     updateRowConflicts({});
   }, [event.status, startingBrush, updateRowConflicts, updateSelected]);
 
@@ -953,20 +957,25 @@ const RosterPanel = forwardRef(function RosterPanel(
   };
 
   const closeEditor = () => {
+    // The drawer also fires onClose for Escape while the discard dialog is
+    // open; ignore those so one keypress closes only the dialog.
+    if (discardConfirmOpen) return;
     const dirty =
       editor &&
       (editorName !== editor.name ||
         JSON.stringify(editorInperson) !==
           JSON.stringify(editor.inpersonArray) ||
         JSON.stringify(editorVirtual) !== JSON.stringify(editor.virtualArray));
-    if (
-      dirty &&
-      !window.confirm(
-        "Discard the unsaved changes to this participant's schedule?",
-      )
-    ) {
+    if (dirty) {
+      setDiscardConfirmOpen(true);
       return;
     }
+    setEditor(null);
+    setEditorConflict(null);
+  };
+
+  const discardEditorChanges = () => {
+    setDiscardConfirmOpen(false);
     setEditor(null);
     setEditorConflict(null);
   };
@@ -2321,6 +2330,20 @@ const RosterPanel = forwardRef(function RosterPanel(
         onReloadLatest={reloadConflict}
         onClose={closeEditor}
       />
+
+      {discardConfirmOpen && (
+        <ConfirmDialog
+          title="Discard unsaved changes?"
+          confirmLabel="Discard changes"
+          onConfirm={discardEditorChanges}
+          onClose={() => setDiscardConfirmOpen(false)}
+        >
+          <p className="mb-0">
+            You have unsaved changes to this participant&apos;s schedule.
+            Discard them?
+          </p>
+        </ConfirmDialog>
+      )}
     </div>
   );
 });
