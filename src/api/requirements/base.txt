@@ -9,7 +9,7 @@ asgiref==3.12.1 \
 boto3==1.43.73 \
     --hash=sha256:5b54da301c387abe30c5b3a5335652f1ebd73e814c725ba805d27a2d477ce547 \
     --hash=sha256:6e6c755e5039f204882c01d7936a46abce539b3f5bbb534a23a3f2afbc86f576
-    # via -r requirements/base.in
+    # via -r src/api/requirements/base.in
 botocore==1.43.73 \
     --hash=sha256:068433028e011ccbeab1dd7c46b1090c24e378397693c66e67ca571176498daa \
     --hash=sha256:0fa1e63c24b3531be3e1bc1687a88b3be9e63a430153f24edd93efc162bb1c51
@@ -20,7 +20,7 @@ certifi==2026.7.22 \
     --hash=sha256:62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775 \
     --hash=sha256:741e2c3b351ddf169a738da9f2c048608ff7f2c5cc02f1ebc6b118bb090d5d55
     # via sentry-sdk
-cffi==2.1.1 \
+cffi==2.1.1 ; platform_python_implementation != 'PyPy' \
     --hash=sha256:046bfc24911b37851ee1b51aab8bffe713d89c68c6a057b09484ce9fd5f69b4e \
     --hash=sha256:06c72bb76605a4b0cd0aad6930b69d4baf7dd5d806cfc409b824191099700e66 \
     --hash=sha256:0beceaabe56af686895136a2de78db54ecd8e4046b236b8fd6d6cb61389e9bf2 \
@@ -169,12 +169,12 @@ cryptography==50.0.0 \
     --hash=sha256:f59e38625469987d7ef6d495323c55e7db6c212eaf6112267e0d3b565a2e9c9f \
     --hash=sha256:f89831ef99dd7dd169ab06d63a831adb9e20a87aac6d380266bbda5823349169 \
     --hash=sha256:fd9192b7b70c573d7f214eb1ae35e00d359f6f5e4b27c7e21e30de1fc6204645
-    # via -r requirements/base.in
+    # via -r src/api/requirements/base.in
 django==6.1 \
     --hash=sha256:6c132cd980c9392b06807d4ca52d72530d631dc65a85d9dacede00a780cefbbe \
     --hash=sha256:86a2aacd59b817e4d6ac2ebfe22356c58f66f7b24e503f71b7c2fead677ee48b
     # via
-    #   -r requirements/base.in
+    #   -r src/api/requirements/base.in
     #   django-cors-headers
     #   django-unfold
     #   djangorestframework
@@ -183,21 +183,21 @@ django==6.1 \
 django-cors-headers==4.9.0 \
     --hash=sha256:15c7f20727f90044dcee2216a9fd7303741a864865f0c3657e28b7056f61b449 \
     --hash=sha256:fe5d7cb59fdc2c8c646ce84b727ac2bca8912a247e6e68e1fb507372178e59e8
-    # via -r requirements/base.in
+    # via -r src/api/requirements/base.in
 django-unfold==0.104.1 \
     --hash=sha256:13b52e8100f2d844568cf08a2057cacd3686bc1083e0e491d05fc688025c966f \
     --hash=sha256:4eece526e1e80f5133632acae260cc53ab2f52020ff9f64bb98d9c9c738d9888
-    # via -r requirements/base.in
+    # via -r src/api/requirements/base.in
 djangorestframework==3.18.0 \
     --hash=sha256:2323a5111837e0b784dcb8323abc78ecc54fa2a5af7aff2677cf50cdd849477f \
     --hash=sha256:381fc44d3249c9565c5f723850855b734e99030eb30957a49f506d3fe11d7dcb
     # via
-    #   -r requirements/base.in
+    #   -r src/api/requirements/base.in
     #   djangorestframework-simplejwt
 djangorestframework-simplejwt==5.5.1 \
     --hash=sha256:2c30f3707053d384e9f315d11c2daccfcb548d4faa453111ca19a542b732e469 \
     --hash=sha256:e72c5572f51d7803021288e2057afcbd03f17fe11d484096f40a460abc76e87f
-    # via -r requirements/base.in
+    # via -r src/api/requirements/base.in
 et-xmlfile==2.0.0 \
     --hash=sha256:7a91720bc756843502c3b7504c77b8fe44217c85c537d85037f0f536151b2caa \
     --hash=sha256:dab3f4764309081ce75662649be815c4c9081e88f0837825f90fd28317d4da54
@@ -211,12 +211,12 @@ jmespath==1.1.0 \
 openpyxl==3.1.5 \
     --hash=sha256:5282c12b107bffeef825f4617dc029afaf41d0ea60823bbb665ef3079dc79de2 \
     --hash=sha256:cf0e3cf56142039133628b5acffe8ef0c12bc902d2aadd3e0fe5878dc08d1050
-    # via -r requirements/base.in
-psycopg[binary]==3.3.4 \
+    # via -r src/api/requirements/base.in
+psycopg==3.3.4 \
     --hash=sha256:b6bbc25ccf05c8fad3b061d9db2ef0909a555171b84b07f29458a447253d679a \
     --hash=sha256:e21207764952cff81b6b8bdacad9a3939f2793367fdac2987b3aac36a651b5bc
-    # via -r requirements/base.in
-psycopg-binary==3.3.4 \
+    # via -r src/api/requirements/base.in
+psycopg-binary==3.3.4 ; implementation_name != 'pypy' \
     --hash=sha256:018fbed325936da502feb546642c982dcc4b9ffdea32dfef78dbf3b7f7ad4070 \
     --hash=sha256:0579252a1202cd73e4da137a1426e2dae993ae44e757605344282af3a082848c \
     --hash=sha256:136f199a407b5348b9b857c504aff60c77622a28482e7195839ce1b51238c4cc \
@@ -273,7 +273,7 @@ psycopg-binary==3.3.4 \
     --hash=sha256:fa1cbc10768a796c96d3243656016bf4e337c81c71097270bb7b0ad6210d9765 \
     --hash=sha256:fbd1d4ed566895ad2d3bf4ddfd8bae90026930ddf29df3b9d91d32c8c47866a7
     # via psycopg
-pycparser==3.0 \
+pycparser==3.0 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy' \
     --hash=sha256:600f49d217304a5902ac3c37e1281c9fe94e4d0489de643a9504c5cdfdfc6b29 \
     --hash=sha256:b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992
     # via cffi
@@ -289,10 +289,10 @@ s3transfer==0.19.2 \
     --hash=sha256:ba0309fd86be3c27dbf78cdd813c13c5e1df16e5874b99d2535ebbdfb9892993 \
     --hash=sha256:d8168eccca828cbb2cd573675333f3bddd254313a9c42494b84c76b539e8ba25
     # via boto3
-sentry-sdk[django]==2.68.0 \
+sentry-sdk==2.68.0 \
     --hash=sha256:538e56c2d03679d42f7c0cb5f1af73a7a510b00abc7e296c13ac49b107b713a4 \
     --hash=sha256:648c58e9887311a03470a41539e24bdbbf64a30ca4f5336f7e3dcc87276400b3
-    # via -r requirements/base.in
+    # via -r src/api/requirements/base.in
 six==1.17.0 \
     --hash=sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274 \
     --hash=sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81
@@ -301,6 +301,16 @@ sqlparse==0.6.0 \
     --hash=sha256:113c35c75365ab9cc9c7231d68c6428fb11c085fc8e9eb1ad659b7ddbf6cd2b9 \
     --hash=sha256:b861c0288ce2fa56209a9a6412d2e066ac664b3873b89c26c9d8415e8e32996f
     # via django
+typing-extensions==4.16.0 ; python_full_version < '3.13' \
+    --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8 \
+    --hash=sha256:dc983d19a509c94dba722ee6abd33940f7c05a89e243c47e907eb4db6f1a43e5
+    # via psycopg
+tzdata==2026.3 ; sys_platform == 'win32' \
+    --hash=sha256:4a1518b8993086a7982523e071643f3c0e5f213e75b21318e78bcabfff9d1415 \
+    --hash=sha256:dc096730c87af6cab1b171c9d532be840741ff5d459015e7f6947bd7d7e54931
+    # via
+    #   django
+    #   psycopg
 urllib3==2.7.0 \
     --hash=sha256:231e0ec3b63ceb14667c67be60f2f2c40a518cb38b03af60abc813da26505f4c \
     --hash=sha256:9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897
@@ -310,4 +320,4 @@ urllib3==2.7.0 \
 whitenoise==6.12.0 \
     --hash=sha256:f723ebb76a112e98816ff80fcea0a6c9b8ecde835f8ddda25df7a30a3c2db6ad \
     --hash=sha256:fc5e8c572e33ebf24795b47b6a7da8da3c00cff2349f5b04c02f28d0cc5a3cc2
-    # via -r requirements/base.in
+    # via -r src/api/requirements/base.in
