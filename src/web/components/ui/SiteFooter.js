@@ -14,7 +14,7 @@ export default function SiteFooter() {
           className="site-footer-brand"
           logoClassName="brand-logo brand-logo--footer"
         />
-        <nav aria-label="Legal">
+        <nav aria-label="Footer">
           <ul className="site-footer-links">
             {footerLinks.map((link) => (
               <li key={link.href}>

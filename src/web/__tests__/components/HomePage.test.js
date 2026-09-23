@@ -54,9 +54,10 @@ describe("HomePage", () => {
     expect(
       screen.getByText(/Create a scheduling poll, share one link/i),
     ).toBeInTheDocument();
-    expect(
-      screen.getByRole("link", { name: "Continue with email" }),
-    ).toHaveAttribute("href", "/login");
+    expect(screen.getByRole("link", { name: "Sign in" })).toHaveAttribute(
+      "href",
+      "/login",
+    );
     expect(
       screen.getByRole("heading", { name: "Open an existing poll" }),
     ).toBeInTheDocument();

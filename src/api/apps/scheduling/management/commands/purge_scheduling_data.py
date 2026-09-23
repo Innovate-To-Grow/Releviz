@@ -206,7 +206,7 @@ class Command(BaseCommand):
             EmailDeliveryJob.objects.using(database).filter(pk__in=job_ids).delete()
             EmailAuthChallenge.objects.using(database).filter(pk__in=challenge_ids).delete()
 
-            # Receipt.batch is PROTECT, so receipts must be removed before Events cascade batches.
+            # Receipt.batch is RESTRICT; deleting receipts first keeps the purge order explicit.
             RosterImportReceipt.objects.using(database).all().delete()
             LogEntry.objects.using(database).filter(
                 Q(content_type__app_label="scheduling")
