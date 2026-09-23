@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import Alert from "@/components/ui/Alert";
 import AppButton from "@/components/ui/AppButton";
 import ConfirmDialog from "@/components/ui/ConfirmDialog";
@@ -103,11 +103,32 @@ export default function RosterGroups({
   const [pendingAction, setPendingAction] = useState("");
   const [deleteTarget, setDeleteTarget] = useState(null);
   const titleRef = useRef(null);
+  // Each row's Delete button by filter value, and the one to focus again
+  // once a failed delete leaves the roster idle.
+  const deleteButtons = useRef(new Map());
+  const refocusDelete = useRef("");
 
   const namedGroups = groups.filter((group) => group.name !== "");
   const busy = Boolean(busyGroup);
   const hasSelection = selectedCount > 0;
   const newGroupNameId = `${ids}-new-group-name`;
+  // The question is about the group as it was when asked: a lock, a rename or
+  // a delete elsewhere drops it rather than acting on something else later.
+  const pendingDelete =
+    deleteTarget && !readOnly
+      ? (namedGroups.find(
+          (group) =>
+            group.id === deleteTarget.id && group.name === deleteTarget.name,
+        ) ?? null)
+      : null;
+  if (deleteTarget && !pendingDelete) setDeleteTarget(null);
+
+  useEffect(() => {
+    if (busy || !refocusDelete.current) return;
+    const button = deleteButtons.current.get(refocusDelete.current);
+    refocusDelete.current = "";
+    button?.focus();
+  });
 
   const runAction = async (key, action) => {
     setPendingAction(key);
@@ -183,14 +204,22 @@ export default function RosterGroups({
   };
 
   const confirmDelete = async () => {
-    const group = deleteTarget;
+    const group = pendingDelete;
+    const filterValue = groupFilterValue(group.name);
     setDeleteTarget(null);
-    const deleted = await runAction(
-      `${groupFilterValue(group.name)}:delete`,
-      () => onDelete(group),
+    const deleted = await runAction(`${filterValue}:delete`, () =>
+      onDelete(group),
     );
-    // The row and its Delete button are gone, so focus a stable landmark.
-    if (deleted) titleRef.current?.focus();
+    if (deleted) {
+      // The row and its Delete button are gone, so focus a stable landmark.
+      titleRef.current?.focus();
+      return;
+    }
+    // The row stays, but its button was disabled (and lost focus) while the
+    // request ran: focus it now, or once the roster is idle again.
+    const button = deleteButtons.current.get(filterValue);
+    if (button && !button.disabled) button.focus();
+    else refocusDelete.current = filterValue;
   };
 
   return (
@@ -467,6 +496,15 @@ export default function RosterGroups({
                                 </AppButton>
                               )}
                               <AppButton
+                                ref={(node) => {
+                                  if (node)
+                                    deleteButtons.current.set(
+                                      filterValue,
+                                      node,
+                                    );
+                                  else
+                                    deleteButtons.current.delete(filterValue);
+                                }}
                                 size="sm"
                                 variant="danger"
                                 disabled={busy}
@@ -505,9 +543,9 @@ export default function RosterGroups({
         </p>
       )}
 
-      {deleteTarget && !readOnly && (
+      {pendingDelete && (
         <ConfirmDialog
-          title={`Delete group ${deleteTarget.name}?`}
+          title={`Delete group ${pendingDelete.name}?`}
           description="People stay on the roster."
           confirmLabel="Delete group"
           onConfirm={() => void confirmDelete()}

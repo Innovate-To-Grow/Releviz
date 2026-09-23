@@ -142,7 +142,7 @@ class ParticipantUpdateView(APIView):
                     "organizer_id": str(request.user.pk),
                     "member_id": str(participant.member_id),
                     "account_access": access_level,
-                    "reason": "participant_owns_response",
+                    "denial_reason": "participant_owns_response",
                 },
             )
 

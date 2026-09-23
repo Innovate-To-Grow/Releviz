@@ -438,7 +438,77 @@ describe("RosterGroups", () => {
       <RosterGroups {...handlers} groups={groups} selectedCount={2} readOnly />,
     );
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    // Reactivating later must not bring the old question back.
+    rerender(<RosterGroups {...handlers} groups={groups} selectedCount={2} />);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(onDelete).not.toHaveBeenCalled();
+  });
+
+  test("drops an open delete confirmation when the group changes underneath it", async () => {
+    const { handlers, onDelete, rerender } = renderGroups();
+    await click(
+      within(row("Faculty")).getByRole("button", { name: "Delete group" }),
+    );
+    // Another session renames Faculty; the question named the old group.
+    const renamed = groups.map((group) =>
+      group.id === 1 ? { ...group, name: "Staff" } : group,
+    );
+    rerender(<RosterGroups {...handlers} groups={renamed} selectedCount={2} />);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+
+    await click(
+      within(row("Students")).getByRole("button", { name: "Delete group" }),
+    );
+    rerender(
+      <RosterGroups
+        {...handlers}
+        groups={renamed.filter((group) => group.id !== 2)}
+        selectedCount={2}
+      />,
+    );
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(onDelete).not.toHaveBeenCalled();
+  });
+
+  test("returns focus to the row once a failed delete leaves the roster idle", async () => {
+    // The roster disables every group button while the request runs, which
+    // drops focus in a real browser; the row must get it back afterwards.
+    let rejectDelete;
+    const { handlers, rerender } = renderGroups({
+      onDelete: jest.fn(
+        () =>
+          new Promise((resolve) => {
+            rejectDelete = () => resolve(false);
+          }),
+      ),
+    });
+    const remove = within(row("Faculty")).getByRole("button", {
+      name: "Delete group",
+    });
+    await click(remove);
+    await click(
+      within(
+        screen.getByRole("alertdialog", { name: "Delete group Faculty?" }),
+      ).getByRole("button", { name: "Delete group" }),
+    );
+    // Browsers drop focus from a button once it is disabled; jsdom cannot
+    // blur a disabled element, so drop it just before the roster disables it.
+    act(() => remove.blur());
+    rerender(
+      <RosterGroups
+        {...handlers}
+        groups={groups}
+        selectedCount={2}
+        busyGroup="Faculty"
+      />,
+    );
+    expect(remove).toBeDisabled();
+    await act(async () => rejectDelete());
+    expect(remove).not.toHaveFocus();
+
+    rerender(<RosterGroups {...handlers} groups={groups} selectedCount={2} />);
+    expect(remove).toBeEnabled();
+    expect(remove).toHaveFocus();
   });
 
   test("creates an empty group with validation", async () => {

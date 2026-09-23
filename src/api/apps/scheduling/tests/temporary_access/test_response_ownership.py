@@ -1,5 +1,6 @@
 """Who may enter a participant's response: the organizer until the person claims it."""
 
+import json
 import uuid
 from datetime import timedelta
 from unittest.mock import patch
@@ -13,6 +14,7 @@ from rest_framework.test import APIClient
 
 from apps.authn.models import ContactEmail
 from apps.authn.tests.helpers import create_member, token_for
+from apps.core.utils.logging import JsonFormatter
 from apps.scheduling.models import (
     Event,
     EventInvitation,
@@ -385,7 +387,8 @@ class ResponseOwnershipTests(TestCase):
                     denied = self.organizer_write(member)
                 self.assert_owned_denial(denied)
                 self.assertEqual(
-                    log.warning.call_args.kwargs["extra"]["reason"], "participant_owns_response"
+                    log.warning.call_args.kwargs["extra"]["denial_reason"],
+                    "participant_owns_response",
                 )
                 self.assertEqual(log.warning.call_args.kwargs["extra"]["account_access"], "full")
                 stamped = self.row(member)
@@ -403,6 +406,28 @@ class ResponseOwnershipTests(TestCase):
             self.assertEqual(log.info.call_args.args[0], "organizer_participant_response_updated")
             self.assertEqual(log.info.call_args.kwargs["extra"]["account_access"], "full")
             self.assertIsNone(self.row(member).response_claimed_at)
+
+    def test_audit_log_lines_keep_the_account_class(self):
+        # Production logs keep only allow-listed fields, and the account class is
+        # what tells an organizer write to a full account from a temporary co-edit.
+        member = self.fresh_full_account("audit")
+        with self.assertLogs("releviz.security", level="INFO") as captured:
+            self.assertEqual(self.organizer_write(member).status_code, 200)
+            own = self.put(
+                client_for(member),
+                member,
+                {"availabilityInperson": [1, 0], "expectedVersion": self.version(member)},
+            )
+            self.assertEqual(own.status_code, 200, own.data)
+            self.assert_owned_denial(self.organizer_write(member, (1, 1)))
+        lines = {
+            line["event"]: line
+            for line in (json.loads(JsonFormatter().format(record)) for record in captured.records)
+        }
+        self.assertEqual(lines["organizer_participant_response_updated"]["account_access"], "full")
+        denied = lines["organizer_participant_edit_denied"]
+        self.assertEqual(denied["account_access"], "full")
+        self.assertEqual(denied["denial_reason"], "participant_owns_response")
 
     def test_organizer_own_row_is_never_organizer_editable(self):
         preview = self.organizer_client.post(

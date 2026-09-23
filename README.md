@@ -61,7 +61,8 @@ the table). It skips anyone whose invitation was already sent or is still queued
 people already invited** is ticked; a resend keeps any custom message. The **Invitation** badge on
 each row shows **Not sent** (no email yet), **Sent** (emailed, including opened), or **Accepted**
 (the person verified their link, joined, or saved or submitted their own response after the email;
-a response you enter for them does not count); **Filter by invitation** offers the same three
+a response you enter for them does not count, although an invitation an earlier release already
+marked **Accepted** that way keeps the badge); **Filter by invitation** offers the same three
 states. People who are **Not sent** receive no reminders until they are invited. Reminders still
 skip anyone whose response is submitted, including one you submitted for them.
 
@@ -474,9 +475,9 @@ SHA at candidate, production-default, and canonical stages. To check which backe
 live, read `release` from `https://api.releviz.com/health` (also `/health/live` and
 `/health/ready`): it is the backend's `SENTRY_RELEASE`, which the backend release sets to the
 deployed 40-character commit SHA, or `null` when unset. If a release fails after replacing
-Amplify `main`, CD
-downloads the previous release's trusted Actions artifact, verifies its SHA256 and embedded
-`release.json`, and republishes it with Amplify `CreateDeployment` and `StartDeployment`. It does
+Amplify `main`, CD downloads the previous release's trusted Actions artifact, verifies its SHA256
+and embedded `release.json`, and republishes it with Amplify `CreateDeployment` and
+`StartDeployment`. It does
 not retry completed Amplify job metadata, because this manually deployed,
 repository-disconnected app requires a freshly uploaded deployment. GitHub retains these rollback
 artifacts for 90 days; after that boundary, an old Amplify job record alone is not a recoverable
