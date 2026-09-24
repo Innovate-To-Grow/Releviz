@@ -15,10 +15,7 @@ import Alert from "@/components/ui/Alert";
 import LoadingState from "@/components/ui/LoadingState";
 import { CalendarIcon, ResultsIcon, RosterIcon } from "@/components/ui/icons";
 import { fetchEvent, fetchEventActivity } from "@/lib/api/events";
-import {
-  readLiveRefreshInterval,
-  storeLiveRefreshInterval,
-} from "@/lib/liveRefresh";
+import { createLiveRefreshScheduler } from "@/lib/liveRefresh";
 import { selectionFromRecommendation } from "@/lib/meetingWindows";
 
 // Workspace order: event facts, then the meeting-time calendar with its
@@ -34,11 +31,12 @@ const SECTION_IDS = SECTION_LINKS.map((section) => section.id);
 const SECTION_SCROLL_STYLE = { scrollMarginTop: "4rem" };
 
 // Live sync: while the event is active and this tab is visible, the
-// workspace polls a small activity digest (as often as the organizer chose in
-// the header, every 5 s by default, or not at all) and silently re-reads only
-// the sections whose digest moved, so new responses, invitation opens, and
-// edits from another session appear without pressing Refresh and without
-// touching what the organizer is doing (a pick, a row draft, an open drawer).
+// workspace polls a small activity digest and silently re-reads only the
+// sections whose digest moved, so new responses, invitation opens, and edits
+// from another session appear without pressing Refresh and without touching
+// what the organizer is doing (a pick, a row draft, an open drawer). It is
+// always on; only its pace adapts (see lib/liveRefresh): quick while things
+// change or the organizer is active, easing off while the workspace is quiet.
 const EVENT_DIGEST_KEYS = ["version", "status"];
 const RESULTS_DIGEST_KEYS = [
   "status",
@@ -116,9 +114,11 @@ export default function OrganizerScaleView() {
   const [refreshStatus, setRefreshStatus] = useState("");
   const [refreshError, setRefreshError] = useState("");
   const [liveSync, setLiveSync] = useState({ error: "", updatedAt: null });
-  const [liveInterval, setLiveInterval] = useState(readLiveRefreshInterval);
   const refreshInFlight = useRef(false);
   const syncInFlight = useRef(false);
+  // The live-sync scheduler while the event is active, so the organizer's
+  // own actions can keep its pace up.
+  const paceRef = useRef(null);
   const eventRef = useRef(event);
   const rosterRef = useRef(null);
   const resultsRef = useRef(null);
@@ -178,6 +178,7 @@ export default function OrganizerScaleView() {
     setRefreshError("");
     setSelection(null);
     setRefreshCount((current) => current + 1);
+    paceRef.current?.hurry();
 
     try {
       const token = await getToken();
@@ -220,8 +221,9 @@ export default function OrganizerScaleView() {
 
   // One live-sync pass: compare the server's digest with what each section
   // shows and re-read only what moved. The manual Refresh wins over it.
+  // Resolves to the pass's outcome, which sets the pace of the next one.
   const syncWorkspace = useCallback(async () => {
-    if (refreshInFlight.current || syncInFlight.current) return;
+    if (refreshInFlight.current || syncInFlight.current) return "skipped";
     syncInFlight.current = true;
     try {
       const token = await getToken();
@@ -274,12 +276,14 @@ export default function OrganizerScaleView() {
             ? { ...current, error: "" }
             : current,
       );
+      return changed ? "changed" : "quiet";
     } catch (requestError) {
       const detail = requestError?.message ? ` (${requestError.message})` : "";
       setLiveSync((current) => ({
         ...current,
         error: `New responses could not be loaded automatically${detail}.`,
       }));
+      return "failed";
     } finally {
       syncInFlight.current = false;
     }
@@ -291,46 +295,38 @@ export default function OrganizerScaleView() {
   }, [syncWorkspace]);
 
   // Responses are only collected while the event is active, so that is the
-  // only time the digest is polled, and only while the organizer has not
-  // turned the checks off. A hidden tab skips its turns and catches up the
-  // moment it is shown again.
+  // only time the digest is polled. A hidden tab skips its turns and catches
+  // up the moment it is shown again; the window regaining focus and the
+  // network returning check at once too, and working in the page keeps the
+  // pace up (so does an edit of the organizer's own, through ``paceRef``).
   const live = event.status === "active";
-  const polling = live && liveInterval > 0;
   useEffect(() => {
-    if (!polling) return undefined;
-    let generation = 0;
-    let timer = null;
-    const run = async (chain) => {
-      if (chain !== generation) return;
-      if (document.visibilityState === "visible") await syncRef.current();
-      if (chain !== generation) return;
-      timer = window.setTimeout(() => run(chain), liveInterval);
-    };
+    if (!live) return undefined;
+    const scheduler = createLiveRefreshScheduler({
+      check: () => syncRef.current(),
+    });
+    paceRef.current = scheduler;
+    const wake = () => scheduler.wake();
+    const hurry = () => scheduler.hurry();
     const handleVisibility = () => {
-      if (document.visibilityState !== "visible") return;
-      generation += 1;
-      window.clearTimeout(timer);
-      void run(generation);
+      if (document.visibilityState === "visible") wake();
     };
     document.addEventListener("visibilitychange", handleVisibility);
-    timer = window.setTimeout(() => run(generation), liveInterval);
+    window.addEventListener("focus", wake);
+    window.addEventListener("online", wake);
+    document.addEventListener("pointerdown", hurry, { passive: true });
+    document.addEventListener("keydown", hurry, { passive: true });
+    scheduler.start();
     return () => {
-      generation += 1;
-      window.clearTimeout(timer);
+      scheduler.stop();
+      paceRef.current = null;
       document.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("focus", wake);
+      window.removeEventListener("online", wake);
+      document.removeEventListener("pointerdown", hurry);
+      document.removeEventListener("keydown", hurry);
     };
-  }, [event.code, polling, liveInterval]);
-
-  // The choice is remembered in this browser. Turning the checks back on
-  // catches up at once rather than a whole interval later.
-  const changeLiveInterval = useCallback(
-    (next) => {
-      storeLiveRefreshInterval(next);
-      setLiveInterval(next);
-      if (next > 0 && liveInterval === 0) void syncRef.current();
-    },
-    [liveInterval],
-  );
+  }, [event.code, live]);
 
   const handleChoose = useCallback(
     (recommendation) => {
@@ -346,6 +342,8 @@ export default function OrganizerScaleView() {
   const invalidateResults = useCallback(() => {
     setSelection(null);
     setResultsInvalidationKey((current) => current + 1);
+    // The organizer is editing: keep new responses coming in quickly.
+    paceRef.current?.hurry();
   }, []);
 
   const handleEventSaved = useCallback(
@@ -383,8 +381,6 @@ export default function OrganizerScaleView() {
         onRefresh={refreshWorkspace}
         refreshing={refreshing}
         live={live ? liveSync : null}
-        liveInterval={liveInterval}
-        onLiveIntervalChange={changeLiveInterval}
         controls={
           <EventControls
             event={event}

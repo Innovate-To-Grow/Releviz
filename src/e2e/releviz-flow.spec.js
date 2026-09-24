@@ -600,8 +600,9 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(temporaryPage.getByText("Schedule submitted.")).toBeVisible();
 
     // The organizer workspace picks the response up on its own (its live
-    // sync polls every 5 s): the roster counts it and the results move on to
-    // a newer revision, with no Refresh press.
+    // sync checks every 3 s while things change and eases off to every 15 s
+    // while nothing does): the roster counts it and the results move on to a
+    // newer revision, with no Refresh press.
     await expect(page.getByLabel("Roster summary")).toContainText("1 submitted", {
       timeout: 20_000,
     });
@@ -610,15 +611,8 @@ test.describe("Releviz account and scheduling flow", () => {
       .poll(() => currentResultsRevision(page), { timeout: 20_000 })
       .toBeGreaterThan(revisionBeforeResponse);
     await expect(page.getByText("New responses load automatically.")).toBeVisible();
-    // How often it checks is the organizer's choice; switched off, only
-    // Refresh loads new responses.
-    const checkRate = page.getByLabel("Check for new responses");
-    await expect(checkRate).toHaveValue("5000");
-    await checkRate.selectOption({ label: "Off" });
-    await expect(page.getByText("Auto-refresh off")).toBeVisible();
-    await expect(page.getByText("Use Refresh to load new responses.")).toBeVisible();
-    await checkRate.selectOption({ label: "Every 5 seconds" });
-    await expect(page.getByText("New responses load automatically.")).toBeVisible();
+    // Live sync cannot be switched off: the header offers no rate control.
+    await expect(page.getByLabel("Check for new responses")).toHaveCount(0);
 
     await organizerDrawer.getByRole("button", { name: "Save draft" }).click();
     await expect(

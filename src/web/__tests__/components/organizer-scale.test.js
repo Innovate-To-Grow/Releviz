@@ -52,39 +52,14 @@ jest.mock("@/components/event/CreateEventClient", () => ({
   ),
 }));
 jest.mock("@/components/schedule/OrganizerPanels", () => ({
-  OrganizerHeader: ({
-    event,
-    onRefresh,
-    refreshing,
-    controls,
-    live,
-    liveInterval,
-    onLiveIntervalChange,
-  }) => (
+  OrganizerHeader: ({ event, onRefresh, refreshing, controls, live }) => (
     <header>
       <h2>{event.name}</h2>
       <span data-testid="organizer-header-event-status">{event.status}</span>
       {live && (
-        <p
-          data-testid="live-sync"
-          data-updated={live.updatedAt ? "yes" : "no"}
-          data-interval={String(liveInterval)}
-        >
+        <p data-testid="live-sync" data-updated={live.updatedAt ? "yes" : "no"}>
           {live.error || "Live"}
         </p>
-      )}
-      {live && (
-        <select
-          aria-label="Check for new responses"
-          value={liveInterval}
-          onChange={(changeEvent) =>
-            onLiveIntervalChange(Number(changeEvent.target.value))
-          }
-        >
-          <option value="5000">Every 5 seconds</option>
-          <option value="15000">Every 15 seconds</option>
-          <option value="0">Off</option>
-        </select>
       )}
       <div role="group" aria-label="Workspace actions">
         {controls}
@@ -133,6 +108,7 @@ jest.mock("@/lib/api/roster", () => ({
 import { useAuth } from "@/components/auth/AuthContext";
 import EventContext from "@/components/event/EventContext";
 import OrganizerScaleView from "@/components/schedule/OrganizerScaleView";
+import { LIVE_REFRESH_FASTEST_MS } from "@/lib/liveRefresh";
 import {
   confirmFinalMeeting,
   fetchDeliveryRequest,
@@ -2461,7 +2437,10 @@ describe("scaled organizer workspace", () => {
   });
 
   describe("live sync", () => {
-    const LIVE_INTERVAL = 5000;
+    // The pace eases off after each quiet pass, from the fastest (3 s)
+    // through these waits to the slowest (15 s), and snaps back on activity.
+    const FASTEST = LIVE_REFRESH_FASTEST_MS;
+    const EASED = [4500, 6750, 10125, 15000];
 
     beforeEach(() => {
       jest.useFakeTimers();
@@ -2486,7 +2465,7 @@ describe("scaled organizer workspace", () => {
       return view;
     }
 
-    async function tick(ms = LIVE_INTERVAL) {
+    async function tick(ms = FASTEST) {
       await act(async () => {
         jest.advanceTimersByTime(ms);
       });
@@ -2610,7 +2589,8 @@ describe("scaled organizer workspace", () => {
       const { setEvent } = await renderLiveWorkspace();
       await tick();
       await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(1));
-      await tick();
+      // A quiet pass eases the pace off, so the next one waits longer.
+      await tick(EASED[0]);
       await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(2));
       expect(fetchEvent).not.toHaveBeenCalled();
       expect(fetchRoster).not.toHaveBeenCalled();
@@ -2626,7 +2606,7 @@ describe("scaled organizer workspace", () => {
         ...baseActivity,
         event: { version: 2, status: "active" },
       });
-      await tick();
+      await tick(EASED[1]);
       await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(3));
       expect(setEvent).not.toHaveBeenCalled();
     });
@@ -2671,8 +2651,8 @@ describe("scaled organizer workspace", () => {
         document.dispatchEvent(new Event("visibilitychange"));
       });
       expect(fetchEventActivity).toHaveBeenCalledTimes(1);
-      // The interval then continues from the catch-up pass.
-      await tick(LIVE_INTERVAL - 1);
+      // The pace then continues from the catch-up pass, which found nothing.
+      await tick(EASED[0] - 1);
       expect(fetchEventActivity).toHaveBeenCalledTimes(1);
       await tick(1);
       await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(2));
@@ -2694,7 +2674,8 @@ describe("scaled organizer workspace", () => {
         activityWith({ roster: { submitted: 1 } }),
       );
       fetchRoster.mockRejectedValueOnce(new Error(""));
-      await tick();
+      // A failed pass eases the pace off like a quiet one.
+      await tick(EASED[0]);
       await waitFor(() =>
         expect(screen.getByTestId("live-sync")).toHaveTextContent(
           "New responses could not be loaded automatically.",
@@ -2705,7 +2686,7 @@ describe("scaled organizer workspace", () => {
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 
       // The next clean pass clears the notice even though nothing changed.
-      await tick();
+      await tick(EASED[1]);
       await waitFor(() =>
         expect(screen.getByTestId("live-sync")).toHaveTextContent("Live"),
       );
@@ -2803,7 +2784,7 @@ describe("scaled organizer workspace", () => {
         stats: { total: 1, submitted: 1, notSubmitted: 0, groups: [] },
         activity: { ...rosterActivity, submitted: 1 },
       });
-      await tick();
+      await tick(EASED[0]);
       await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(2));
       await waitFor(() =>
         expect(screen.getByTestId("live-sync")).toHaveAttribute(
@@ -2813,56 +2794,86 @@ describe("scaled organizer workspace", () => {
       );
     });
 
-    test("checks at the rate the organizer picks and remembers it in this browser", async () => {
+    test("eases off while nothing changes and snaps back when a response arrives", async () => {
       await renderLiveWorkspace();
-      const rate = screen.getByLabelText("Check for new responses");
-      expect(rate).toHaveValue("5000");
-
-      fireEvent.change(rate, { target: { value: "15000" } });
-      expect(
-        window.localStorage.getItem("releviz.organizer.live-refresh-ms"),
-      ).toBe("15000");
-      expect(screen.getByTestId("live-sync")).toHaveAttribute(
-        "data-interval",
-        "15000",
-      );
-      // A slower rate waits its full interval; nothing runs early.
-      await tick(LIVE_INTERVAL);
-      expect(fetchEventActivity).not.toHaveBeenCalled();
-      await tick(15000 - LIVE_INTERVAL);
-      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(1));
-    });
-
-    test("stops checking when turned off and catches up at once when turned back on", async () => {
-      await renderLiveWorkspace();
-      const rate = screen.getByLabelText("Check for new responses");
-      fireEvent.change(rate, { target: { value: "0" } });
-      await tick(LIVE_INTERVAL * 3);
-      expect(fetchEventActivity).not.toHaveBeenCalled();
-      // Showing the tab again does not wake a check that is switched off.
-      setTabVisibility("visible");
-      await act(async () => {
-        document.dispatchEvent(new Event("visibilitychange"));
-      });
-      expect(fetchEventActivity).not.toHaveBeenCalled();
-
-      await act(async () => {
-        fireEvent.change(rate, { target: { value: "5000" } });
-      });
-      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(1));
       await tick();
-      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(2));
-      expect(
-        window.localStorage.getItem("releviz.organizer.live-refresh-ms"),
-      ).toBe("5000");
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(1));
+      // Each quiet pass waits longer for the next, down to the slowest pace.
+      for (const [index, wait] of EASED.entries()) {
+        await tick(wait - 1);
+        expect(fetchEventActivity).toHaveBeenCalledTimes(index + 1);
+        await tick(1);
+        await waitFor(() =>
+          expect(fetchEventActivity).toHaveBeenCalledTimes(index + 2),
+        );
+      }
+      await tick(EASED.at(-1));
+      await waitFor(() =>
+        expect(fetchEventActivity).toHaveBeenCalledTimes(EASED.length + 2),
+      );
+
+      // A response arrives: the pass that loads it brings the next one close
+      // behind it again.
+      fetchEventActivity.mockResolvedValue(
+        activityWith({ event: { resultsRevision: 4 } }),
+      );
+      await tick(EASED.at(-1));
+      await waitFor(() =>
+        expect(fetchEventActivity).toHaveBeenCalledTimes(EASED.length + 3),
+      );
+      await tick(FASTEST - 1);
+      expect(fetchEventActivity).toHaveBeenCalledTimes(EASED.length + 3);
+      await tick(1);
+      await waitFor(() =>
+        expect(fetchEventActivity).toHaveBeenCalledTimes(EASED.length + 4),
+      );
     });
 
-    test("starts at the rate remembered in this browser", async () => {
-      window.localStorage.setItem("releviz.organizer.live-refresh-ms", "0");
+    test("checks at once when the window regains focus or the network returns", async () => {
       await renderLiveWorkspace();
-      expect(screen.getByLabelText("Check for new responses")).toHaveValue("0");
-      await tick(LIVE_INTERVAL * 2);
-      expect(fetchEventActivity).not.toHaveBeenCalled();
+      await act(async () => {
+        window.dispatchEvent(new Event("focus"));
+      });
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        window.dispatchEvent(new Event("online"));
+      });
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(2));
+      // The pace restarts from the catch-up pass, which found nothing.
+      await tick(EASED[0] - 1);
+      expect(fetchEventActivity).toHaveBeenCalledTimes(2);
+      await tick(1);
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(3));
+    });
+
+    test("keeps the pace up while the organizer is working in the page", async () => {
+      await renderLiveWorkspace();
+      await tick();
+      await tick(EASED[0]);
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(2));
+      // The next pass is 6.75 s out; a click pulls it in to the fastest pace.
+      await tick(1000);
+      await act(async () => {
+        document.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+      });
+      await tick(FASTEST - 1);
+      expect(fetchEventActivity).toHaveBeenCalledTimes(2);
+      await tick(1);
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(3));
+      // A pass already close by keeps its slot, but the pace after it
+      // restarts from the fastest: 4.5 s rather than 6.75 s.
+      await tick(2000);
+      await act(async () => {
+        document.dispatchEvent(new Event("keydown", { bubbles: true }));
+      });
+      await tick(EASED[0] - 2000 - 1);
+      expect(fetchEventActivity).toHaveBeenCalledTimes(3);
+      await tick(1);
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(4));
+      await tick(EASED[0] - 1);
+      expect(fetchEventActivity).toHaveBeenCalledTimes(4);
+      await tick(1);
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(5));
     });
 
     test("does not poll while responses are closed", async () => {
@@ -2870,7 +2881,7 @@ describe("scaled organizer workspace", () => {
       await screen.findByText("Ada Faculty");
       fetchEventActivity.mockClear();
       expect(screen.queryByTestId("live-sync")).not.toBeInTheDocument();
-      await tick(LIVE_INTERVAL * 2);
+      await tick(FASTEST * 2);
       expect(fetchEventActivity).not.toHaveBeenCalled();
     });
   });
