@@ -9,6 +9,7 @@ from apps.scheduling.payloads import (
     roster_import_receipt_payload,
     roster_import_row_payload,
 )
+from apps.scheduling.services.invitations import organizer_addresses
 from apps.scheduling.services.roster_imports import (
     RosterImportError,
     cancel_roster_import,
@@ -103,11 +104,13 @@ class RosterImportRowsView(PrivateAPIView):
         ).order_by("row_number")
         total = rows.count()
         offset = (page - 1) * page_size
+        addresses = organizer_addresses(event.organizer_id)
         return Response(
             {
                 "import": roster_import_payload(batch),
                 "rows": [
-                    roster_import_row_payload(row) for row in rows[offset : offset + page_size]
+                    roster_import_row_payload(row, addresses=addresses)
+                    for row in rows[offset : offset + page_size]
                 ],
                 "pagination": page_payload(
                     page=page,

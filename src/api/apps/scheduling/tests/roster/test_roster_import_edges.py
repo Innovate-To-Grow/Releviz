@@ -36,6 +36,7 @@ from apps.scheduling.payloads import roster as roster_payloads
 from apps.scheduling.services import roster_imports
 from apps.scheduling.services.invitations import (
     EventEmailRequestError,
+    OrganizerAddresses,
     mark_invitation_for_member,
 )
 from apps.scheduling.views.roster import helpers as roster_helpers
@@ -148,6 +149,45 @@ class RosterImportParserEdgeTests(SimpleTestCase):
         self.assertEqual(
             roster_imports.normalization.validate_identity_fields("", "", ""),
             ["name is required.", "email is required."],
+        )
+        addresses = OrganizerAddresses(
+            owned=frozenset({"me@example.com", "alias@example.com"}),
+            verified=frozenset({"me@example.com"}),
+            default="me@example.com",
+        )
+        for email, expected in (
+            ("", []),
+            ("me@example.com", []),
+            (
+                "alias@example.com",
+                [
+                    "Verify this address on your account before using it for someone "
+                    "without an email."
+                ],
+            ),
+            ("other@example.com", []),
+        ):
+            with self.subTest(email=email):
+                self.assertEqual(
+                    roster_imports.normalization.validate_identity_fields(
+                        "Name", email, "", addresses=addresses
+                    ),
+                    expected,
+                )
+        # Without an address to file them under, blank emails never pair up.
+        blanks = [
+            RosterImportRow(name="Same", email="", selected=True),
+            RosterImportRow(name="Same", email="", selected=True),
+        ]
+        roster_imports.normalization.apply_duplicate_rules(blanks)
+        self.assertEqual(
+            [row.duplicate_status for row in blanks],
+            [RosterImportRow.DuplicateStatus.UNIQUE] * 2,
+        )
+        roster_imports.normalization.apply_duplicate_rules(blanks, addresses)
+        self.assertEqual(
+            [row.duplicate_status for row in blanks],
+            [RosterImportRow.DuplicateStatus.UNIQUE, RosterImportRow.DuplicateStatus.IDENTICAL],
         )
         errors = roster_imports.normalization.validate_identity_fields(
             "n" * 101,
@@ -582,6 +622,8 @@ class RosterImportDatabaseEdgeTests(TestCase):
             RosterImportRow(row_number=2, name="Payload", phone="555-010-2000")
         )
         self.assertEqual(row_payload["phone"], "555-010-2000")
+        # Without the organizer's addresses a blank email is just missing.
+        self.assertFalse(row_payload["organizerManaged"])
         self.assertEqual(
             list(row_payload),
             [
@@ -589,6 +631,7 @@ class RosterImportDatabaseEdgeTests(TestCase):
                 "rowNumber",
                 "name",
                 "email",
+                "organizerManaged",
                 "phone",
                 "group",
                 "weight",

@@ -1,6 +1,10 @@
 """API payloads for roster imports."""
 
 from apps.scheduling.models import RosterImportBatch, RosterImportReceipt, RosterImportRow
+from apps.scheduling.services.invitations.addresses import (
+    NO_ORGANIZER_ADDRESSES,
+    OrganizerAddresses,
+)
 from apps.scheduling.services.roster_imports.mapping import display_cell
 
 
@@ -33,12 +37,19 @@ def roster_import_payload(batch: RosterImportBatch) -> dict:
     }
 
 
-def roster_import_row_payload(row: RosterImportRow) -> dict:
+def roster_import_row_payload(
+    row: RosterImportRow,
+    *,
+    addresses: OrganizerAddresses = NO_ORGANIZER_ADDRESSES,
+) -> dict:
     return {
         "id": str(row.pk),
         "rowNumber": row.row_number,
         "name": row.name,
         "email": row.email,
+        # A blank email, or one of the organizer's own, adds a person the
+        # organizer manages: no account, no invitation.
+        "organizerManaged": addresses.manages(row.email),
         "phone": row.phone,
         "group": row.group_name,
         "weight": float(row.weight),

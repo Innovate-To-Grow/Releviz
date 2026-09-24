@@ -46,7 +46,8 @@ The Roster tab also accepts `.xlsx`, `.csv`, or pasted CSV/TSV. Map the required
 columns and optional `group`, `weight`, `included`, and `phone` columns, preview and correct rows,
 then commit as one of the modes below. In the `group` column, blank means unassigned, `ALL` means
 every group (including groups created later), and several names are separated by `;` (for example
-`Faculty; Team 3`).
+`Faculty; Team 3`). A row whose email is blank, or is one of your own addresses, adds a person with no
+email of their own (see below); the preview marks those rows.
 
 - **Merge** — add/update people while preserving existing schedules and delivery history.
 - **Rebuild** — type the event code to destructively replace the roster, schedules, invitations,
@@ -76,19 +77,23 @@ The `phone` column (also recognized as `phone number`, `mobile`, `cell`, or `tel
 digits, spaces, and `+ - ( ) .`, with at least 7 digits and at most 32 characters. Phones are shown
 on the roster and editable per row; Releviz never uses them to send anything.
 
-To add a person who has no email of their own, open **Add person**, enter their name, one of your
-own verified email addresses, and an optional phone, tick **No email of their own — use one of mine
-and I'll enter their schedule**, then click **Add person** (the **Add and send invitation** action is
-hidden while the box is ticked). No invitation, reminder, or final notification is ever sent for
-that person, and you receive nothing extra; the row shows
-**Organizer-managed** and **Not sent**, and you enter their availability with **Edit schedule**.
-Several people can share your address. Each is matched by name under that address, so give two
-different people distinct names (for example "John Smith (Team B)"); re-entering an identical name
-returns the existing row. Typing your own address without the checkbox is refused with a hint to
-tick it.
+To add a person who has no email of their own, open **Add person**, enter their name and an optional
+phone, tick **No email of their own — use one of mine and I'll enter their schedule**, and click
+**Add person** (the **Add and send invitation** action is hidden while the box is ticked). The email
+can stay blank: the person is filed under your account's primary verified address, or under
+another of your verified addresses if you type it. No invitation, reminder, or final notification is
+ever sent for that person, and you receive nothing extra; the row shows **Organizer-managed**,
+**No email**, and **Not sent**, and you enter their availability with **Edit schedule**. Several
+people can share your address. Each is matched by name under that address, so give two different
+people distinct names (for example "John Smith (Team B)"); re-entering an identical name returns the
+existing row. Typing your own address without the checkbox is refused with a hint to tick it.
 
-Roster import cannot create organizer-managed people: a sheet that repeats your address is flagged
-because two rows would resolve to one account. Add such people one by one with **Add person**.
+A roster import adds the same kind of person for a row with a blank email or one of your own
+addresses (it never makes you a participant of your own event), matched by name under that address
+exactly as above, so re-importing the sheet updates them instead of adding duplicates. Two rows for
+the same name without an email are merged when identical and flagged as a conflicting duplicate
+name otherwise. Your address must be verified; a blank email is only accepted while your account
+has a verified address to file it under.
 
 Invite-only links are visible only to the organizer, existing participants, temporary recipients
 using their event-scoped code flow, or full accounts whose verified email matches an invitation.
@@ -140,9 +145,13 @@ Roster, Results, and Finalize. The organizer can:
   submit their own response, or upgrade a temporary identity to a full account). After that the
   row shows **Self-managed** and only they can change their answers; a version conflict is never
   silently overwritten;
-- create groups (empty at first) and fill them from the list checkboxes; a person may be in many
-  groups, and the `ALL` flag places them in every group. **Delete group** asks for confirmation in
-  the page before deleting, and the group's people stay on the roster;
+- create groups (empty at first) and fill them from the roster, which lists each person's name and
+  email followed by an **All** column and one checkbox column per group: tick a person's box in a
+  column to add them to that group, so one person can sit in several groups, and tick **All** to
+  place them in every group, including groups created later (their group boxes then show ticked
+  and locked). The Groups panel adds or removes everyone checked in the list at once. **Delete
+  group** asks for confirmation in the page before deleting, and the group's people stay on the
+  roster;
 - apply group/filter/selection weight and included changes, then override an individual;
 - view the top ten meeting-duration candidates ranked by weighted availability, unweighted
   availability, fully available count, and configured-time order;
@@ -155,12 +164,15 @@ cannot start a meeting either. Blocked times are excluded from the results (thei
 reported as 0), never form part of a ranked window, and cannot be finalized into; edit them from
 **Blocked times** on the Overview panel.
 
-While the event is active, the workspace keeps itself current: every 5 seconds (only while the tab
-is visible) it reads a small activity digest (`GET /events/activity`) and silently re-reads just the
-sections that changed, so new responses, invitation opens, and edits made in another session appear
-without pressing Refresh and without disturbing a pick, a row draft, or an open drawer. The header
-shows a "Live" badge with the time of the last such update, or "Live updates paused" with the
-reason if a pass fails. Refresh remains the manual, everything-at-once re-read.
+While the event is active, the workspace keeps itself current: at the rate chosen under **Check for
+new responses** in the header (every 5 seconds by default, or 15 seconds, 30 seconds, a minute, or
+Off; remembered in this browser) and only while the tab is visible, it reads a small activity digest
+(`GET /events/activity`) and silently re-reads just the sections that changed, so new responses,
+invitation opens, and edits made in another session appear without pressing Refresh and without
+disturbing a pick, a row draft, or an open drawer. The header shows a "Live" badge with the time of
+the last such update, "Live updates paused" with the reason if a pass fails, or "Auto-refresh off".
+Turning the checks back on catches up at once. Refresh remains the manual, everything-at-once
+re-read.
 
 For a multi-slot meeting, each person's candidate score is their minimum availability across the
 whole interval. The weighted score is `sum(person_score * weight) / sum(positive weights)` across

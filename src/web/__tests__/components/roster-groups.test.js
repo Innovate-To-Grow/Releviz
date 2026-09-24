@@ -108,6 +108,14 @@ describe("summarizeGroups", () => {
       { id: null, name: "Guests", count: null, weight: null },
       { id: null, name: "Staff", count: 2, weight: null },
     ]);
+    // Numbered names sort by value, not character by character.
+    expect(
+      summarizeGroups([
+        { id: 10, name: "Team 10" },
+        { id: 2, name: "Team 2" },
+        { id: 1, name: "Team 1" },
+      ]).map((group) => group.name),
+    ).toEqual(["Team 1", "Team 2", "Team 10"]);
     expect(summarizeGroups(undefined)).toEqual([]);
     expect(groupFilterValue("")).toBe(UNGROUPED);
     expect(groupFilterValue("Faculty")).toBe("Faculty");
@@ -123,7 +131,7 @@ describe("RosterGroups", () => {
     renderGroups();
     expect(
       screen.getByText(
-        "People can belong to several groups. Setting a group's weight applies it to everyone currently in that group, including people who are also in other groups.",
+        "People can belong to several groups: tick a group's column in the roster below, or All for every group. Setting a group's weight applies it to everyone currently in that group, including people who are also in other groups.",
       ),
     ).toBeInTheDocument();
     const table = screen.getByRole("region", { name: "Roster groups" });
@@ -693,7 +701,7 @@ describe("RosterGroups", () => {
     });
     expect(
       screen.getByText(
-        "No groups yet. Create a group, then select people in the list and add them to it.",
+        "No groups yet. Create a group, then tick its column for each person in the roster below.",
       ),
     ).toBeInTheDocument();
     // An unknown head count renders as nothing rather than "null people".

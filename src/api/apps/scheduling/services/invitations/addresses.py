@@ -1,6 +1,7 @@
 """Email address parsing, member resolution, and contact phone checks."""
 
 import re
+from dataclasses import dataclass
 
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
@@ -12,6 +13,48 @@ from .errors import ManagedParticipantError
 PHONE_MAX_LENGTH = 32
 PHONE_MIN_DIGITS = 7
 _PHONE_PATTERN = re.compile(r"[0-9 +().\-]+")
+
+
+@dataclass(frozen=True)
+class OrganizerAddresses:
+    """The organizer's own addresses, which stand in for people with no email of their own.
+
+    A roster entry describes such a person when its email is blank or is one of
+    these addresses. A blank email is filed under ``default``: the primary
+    verified address, else the oldest verified one, else nothing (and then a
+    blank email is simply missing).
+    """
+
+    owned: frozenset[str] = frozenset()
+    verified: frozenset[str] = frozenset()
+    default: str = ""
+
+    def manages(self, email: str) -> bool:
+        return email in self.owned if email else bool(self.default)
+
+    def contact_for(self, email: str) -> str:
+        return email or self.default
+
+
+NO_ORGANIZER_ADDRESSES = OrganizerAddresses()
+
+
+def organizer_addresses(organizer_id) -> OrganizerAddresses:
+    contacts = [
+        (address.strip().lower(), verified, email_type == "primary")
+        for address, verified, email_type in ContactEmail.objects.filter(member_id=organizer_id)
+        .order_by("created_at", "pk")
+        .values_list("email_address", "verified", "email_type")
+    ]
+    verified = [address for address, is_verified, _primary in contacts if is_verified]
+    primary = [
+        address for address, is_verified, is_primary in contacts if is_verified and is_primary
+    ]
+    return OrganizerAddresses(
+        owned=frozenset(address for address, _verified, _primary in contacts),
+        verified=frozenset(verified),
+        default=(primary or verified or [""])[0],
+    )
 
 
 def phone_issue(value: str) -> str:

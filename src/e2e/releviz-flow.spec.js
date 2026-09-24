@@ -190,15 +190,17 @@ assert EmailDeliveryJob.objects.filter(
     event=event,
     message_type=EmailMessageLog.MessageType.INVITATION,
 ).count() == 0
+# The organizer never becomes a participant of their own event.
+assert not Participant.objects.filter(event=event, member=organizer).exists()
 managed = Participant.objects.filter(event=event, organizer_managed=True)
-assert managed.count() == 1
-participant = managed.get()
-assert participant.contact_email == data["organizer_email"]
-assert participant.contact_phone == data["phone"]
-assert participant.member_id != organizer.pk
-assert participant.member.access_level == "temporary"
-assert participant.member.email == ""
-assert not ContactEmail.objects.filter(member=participant.member).exists()
+assert sorted(managed.values_list("participant_name", flat=True)) == sorted(data["names"])
+assert managed.get(participant_name=data["names"][0]).contact_phone == data["phone"]
+for participant in managed:
+    assert participant.contact_email == data["organizer_email"]
+    assert participant.member_id != organizer.pk
+    assert participant.member.access_level == "temporary"
+    assert participant.member.email == ""
+    assert not ContactEmail.objects.filter(member=participant.member).exists()
 # The shared address still belongs to the organizer alone.
 assert ContactEmail.objects.get(email_address=data["organizer_email"]).member_id == organizer.pk
 `;
@@ -608,6 +610,15 @@ test.describe("Releviz account and scheduling flow", () => {
       .poll(() => currentResultsRevision(page), { timeout: 20_000 })
       .toBeGreaterThan(revisionBeforeResponse);
     await expect(page.getByText("New responses load automatically.")).toBeVisible();
+    // How often it checks is the organizer's choice; switched off, only
+    // Refresh loads new responses.
+    const checkRate = page.getByLabel("Check for new responses");
+    await expect(checkRate).toHaveValue("5000");
+    await checkRate.selectOption({ label: "Off" });
+    await expect(page.getByText("Auto-refresh off")).toBeVisible();
+    await expect(page.getByText("Use Refresh to load new responses.")).toBeVisible();
+    await checkRate.selectOption({ label: "Every 5 seconds" });
+    await expect(page.getByText("New responses load automatically.")).toBeVisible();
 
     await organizerDrawer.getByRole("button", { name: "Save draft" }).click();
     await expect(
@@ -920,8 +931,9 @@ test.describe("Releviz account and scheduling flow", () => {
     await temporaryContext.close();
   });
 
-  test("adds a person under the organizer's own email without inviting them", async ({
+  test("adds people with no email of their own without inviting them", async ({
     page,
+    request,
   }) => {
     const runId = `${Date.now()}-${Math.round(Math.random() * 100_000)}`;
     const organizerEmail = `managing-organizer-${runId}@example.com`;
@@ -938,9 +950,10 @@ test.describe("Releviz account and scheduling flow", () => {
     expect(eventCode).toMatch(/^[A-Z0-9]+$/);
     const organizerSession = await readSession(page);
 
+    // The email can stay blank: the person is filed under the organizer's
+    // own address, which never becomes theirs.
     await page.getByRole("button", { name: "Add person", exact: true }).click();
     await fillTextbox(page, "Full name", managedName);
-    await fillTextbox(page, "Email address", organizerEmail);
     await fillTextbox(page, "Phone (optional)", managedPhone);
     await page
       .getByRole("checkbox", {
@@ -949,7 +962,7 @@ test.describe("Releviz account and scheduling flow", () => {
       .check();
     await expect(
       page.getByText(
-        "Enter one of your own verified email addresses. No invitation is sent.",
+        "Leave blank to use your account email, or enter another of your verified addresses. No invitation is sent.",
       ),
     ).toBeVisible();
     await page.getByRole("button", { name: "Add person", exact: true }).click();
@@ -963,6 +976,8 @@ test.describe("Releviz account and scheduling flow", () => {
       hasText: managedName,
     });
     await expect(managedRow).toContainText("Organizer-managed");
+    await expect(managedRow).toContainText("No email");
+    await expect(managedRow).not.toContainText(organizerEmail);
     await expect(managedRow).toContainText(managedPhone);
     await expect(managedRow).toContainText("Not sent");
     await expect(
@@ -973,8 +988,47 @@ test.describe("Releviz account and scheduling flow", () => {
       code: eventCode,
       organizer_id: organizerSession.user.id,
       organizer_email: organizerEmail,
+      names: [managedName],
       phone: managedPhone,
     });
+
+    // A roster import treats a blank email, or the organizer's own address,
+    // the same way: people the organizer manages, never invited, even with
+    // invitations switched on for the import.
+    const imported = await importRoster(
+      request,
+      eventCode,
+      organizerSession.access,
+      "name,email,group\n" +
+        "Sam No Email,,ALL\n" +
+        `Organizer Twin,${organizerEmail},\n`,
+    );
+    expect(imported.receipt).toEqual(
+      expect.objectContaining({ importedCount: 2, createdCount: 2 }),
+    );
+    expect(imported.autoInvitedCount).toBe(0);
+    assertOrganizerManagedState({
+      code: eventCode,
+      organizer_id: organizerSession.user.id,
+      organizer_email: organizerEmail,
+      names: [managedName, "Sam No Email", "Organizer Twin"],
+      phone: managedPhone,
+    });
+    const dashboard = await apiJson(
+      request,
+      "GET",
+      "/dashboard/events",
+      organizerSession.access,
+    );
+    expect(dashboard.payload.participating).toEqual([]);
+    const samRow = page.locator("tr.roster-table__row", {
+      hasText: "Sam No Email",
+    });
+    await expect(samRow).toContainText("No email", { timeout: 20_000 });
+    await expect(samRow.getByLabel("All groups for Sam No Email")).toBeChecked();
+    await expect(
+      samRow.getByRole("button", { name: "Edit schedule" }),
+    ).toBeVisible();
   });
 
   test("lets the organizer enter a schedule for an existing full account until that person responds", async ({
@@ -1853,6 +1907,26 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(secondGroupRow).toContainText("1 person");
     await expect(groupRow).toContainText("2 people");
     await page.getByLabel("Select Manual Participant").uncheck();
+
+    // Every group is also a checkbox column on the roster rows: ticking one
+    // adds that single membership, and All puts the person in every group.
+    const patInSecond = page.getByLabel("Pat Participant in E2E Second");
+    await expect(page.getByLabel("Manual Participant in E2E Second")).toBeChecked();
+    await expect(patInSecond).not.toBeChecked();
+    await patInSecond.check();
+    await expect(secondGroupRow).toContainText("2 people");
+    await patInSecond.uncheck();
+    await expect(secondGroupRow).toContainText("1 person");
+    const patInAll = page.getByLabel("All groups for Pat Participant");
+    await patInAll.check();
+    await expect(patInSecond).toBeChecked();
+    await expect(patInSecond).toBeDisabled();
+    await expect(secondGroupRow).toContainText("2 people");
+    await patInAll.uncheck();
+    await expect(patInSecond).toBeEnabled();
+    await expect(patInSecond).not.toBeChecked();
+    await expect(secondGroupRow).toContainText("1 person");
+    await expect(groupRow).toContainText("2 people");
 
     // Deleting a group asks in the page first. A throwaway group with one
     // member shows the delete keeps that person and their other groups; the

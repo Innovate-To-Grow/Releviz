@@ -15,6 +15,10 @@ import Alert from "@/components/ui/Alert";
 import LoadingState from "@/components/ui/LoadingState";
 import { CalendarIcon, ResultsIcon, RosterIcon } from "@/components/ui/icons";
 import { fetchEvent, fetchEventActivity } from "@/lib/api/events";
+import {
+  readLiveRefreshInterval,
+  storeLiveRefreshInterval,
+} from "@/lib/liveRefresh";
 import { selectionFromRecommendation } from "@/lib/meetingWindows";
 
 // Workspace order: event facts, then the meeting-time calendar with its
@@ -30,11 +34,11 @@ const SECTION_IDS = SECTION_LINKS.map((section) => section.id);
 const SECTION_SCROLL_STYLE = { scrollMarginTop: "4rem" };
 
 // Live sync: while the event is active and this tab is visible, the
-// workspace polls a small activity digest and silently re-reads only the
-// sections whose digest moved, so new responses, invitation opens, and edits
-// from another session appear without pressing Refresh and without touching
-// what the organizer is doing (a pick, a row draft, an open drawer).
-const LIVE_SYNC_INTERVAL_MS = 5000;
+// workspace polls a small activity digest (as often as the organizer chose in
+// the header, every 5 s by default, or not at all) and silently re-reads only
+// the sections whose digest moved, so new responses, invitation opens, and
+// edits from another session appear without pressing Refresh and without
+// touching what the organizer is doing (a pick, a row draft, an open drawer).
 const EVENT_DIGEST_KEYS = ["version", "status"];
 const RESULTS_DIGEST_KEYS = [
   "status",
@@ -112,6 +116,7 @@ export default function OrganizerScaleView() {
   const [refreshStatus, setRefreshStatus] = useState("");
   const [refreshError, setRefreshError] = useState("");
   const [liveSync, setLiveSync] = useState({ error: "", updatedAt: null });
+  const [liveInterval, setLiveInterval] = useState(readLiveRefreshInterval);
   const refreshInFlight = useRef(false);
   const syncInFlight = useRef(false);
   const eventRef = useRef(event);
@@ -286,18 +291,20 @@ export default function OrganizerScaleView() {
   }, [syncWorkspace]);
 
   // Responses are only collected while the event is active, so that is the
-  // only time the digest is polled. A hidden tab skips its turns and catches
-  // up the moment it is shown again.
+  // only time the digest is polled, and only while the organizer has not
+  // turned the checks off. A hidden tab skips its turns and catches up the
+  // moment it is shown again.
   const live = event.status === "active";
+  const polling = live && liveInterval > 0;
   useEffect(() => {
-    if (!live) return undefined;
+    if (!polling) return undefined;
     let generation = 0;
     let timer = null;
     const run = async (chain) => {
       if (chain !== generation) return;
       if (document.visibilityState === "visible") await syncRef.current();
       if (chain !== generation) return;
-      timer = window.setTimeout(() => run(chain), LIVE_SYNC_INTERVAL_MS);
+      timer = window.setTimeout(() => run(chain), liveInterval);
     };
     const handleVisibility = () => {
       if (document.visibilityState !== "visible") return;
@@ -306,13 +313,24 @@ export default function OrganizerScaleView() {
       void run(generation);
     };
     document.addEventListener("visibilitychange", handleVisibility);
-    timer = window.setTimeout(() => run(generation), LIVE_SYNC_INTERVAL_MS);
+    timer = window.setTimeout(() => run(generation), liveInterval);
     return () => {
       generation += 1;
       window.clearTimeout(timer);
       document.removeEventListener("visibilitychange", handleVisibility);
     };
-  }, [event.code, live]);
+  }, [event.code, polling, liveInterval]);
+
+  // The choice is remembered in this browser. Turning the checks back on
+  // catches up at once rather than a whole interval later.
+  const changeLiveInterval = useCallback(
+    (next) => {
+      storeLiveRefreshInterval(next);
+      setLiveInterval(next);
+      if (next > 0 && liveInterval === 0) void syncRef.current();
+    },
+    [liveInterval],
+  );
 
   const handleChoose = useCallback(
     (recommendation) => {
@@ -365,6 +383,8 @@ export default function OrganizerScaleView() {
         onRefresh={refreshWorkspace}
         refreshing={refreshing}
         live={live ? liveSync : null}
+        liveInterval={liveInterval}
+        onLiveIntervalChange={changeLiveInterval}
         controls={
           <EventControls
             event={event}

@@ -6,6 +6,7 @@ from rest_framework.response import Response
 from apps.scheduling.models import Weight
 from apps.scheduling.services.invitations import ManagedParticipantError, normalize_phone
 from apps.scheduling.services.roster_groups import (
+    MAX_GROUPS_PER_CELL,
     parse_group_cell,
     set_participant_groups,
     validate_group_names,
@@ -24,7 +25,8 @@ from .helpers import (
 from .queries import boolean_query, group_stats, participant_summary, roster_queryset
 
 # Any of these keys in the body rewrites the person's memberships.
-GROUP_KEYS = ("group", "groupName", "groups", "allGroups")
+GROUP_KEYS = ("group", "groupName", "groups", "allGroups", "addGroupIds", "removeGroupIds")
+DELETED_GROUP_MESSAGE = "This group was deleted in another session."
 
 
 def _group_name_list(value) -> list[str]:
@@ -35,11 +37,47 @@ def _group_name_list(value) -> list[str]:
     return validate_group_names(value)
 
 
-def _requested_groups(data, participant) -> tuple[bool, list[str]]:
+def _group_id_list(data, key) -> list[int]:
+    value = data.get(key)
+    if (
+        not isinstance(value, list)
+        or len(value) > MAX_GROUPS_PER_CELL
+        or not all(isinstance(item, int) and not isinstance(item, bool) for item in value)
+    ):
+        raise RosterImportError(f"{key} must be an array of group ids.")
+    return value
+
+
+def _toggled_names(event, data, names) -> list[str]:
+    """Apply ``addGroupIds`` then ``removeGroupIds`` to a list of group names.
+
+    The roster's per-group checkboxes send these. An id names a group that
+    exists: adding to one deleted in another session is refused rather than
+    recreating it, while removing from it is already done.
+    """
+
+    add_ids = _group_id_list(data, "addGroupIds") if "addGroupIds" in data else []
+    remove_ids = _group_id_list(data, "removeGroupIds") if "removeGroupIds" in data else []
+    found = dict(
+        event.participant_groups.filter(pk__in=[*add_ids, *remove_ids]).values_list("pk", "name")
+    )
+    if any(group_id not in found for group_id in add_ids):
+        raise RosterImportError(DELETED_GROUP_MESSAGE, status_code=409)
+    held = {name.lower() for name in names}
+    for group_id in add_ids:
+        if found[group_id].lower() not in held:
+            held.add(found[group_id].lower())
+            names = [*names, found[group_id]]
+    dropped = {found[group_id].lower() for group_id in remove_ids if group_id in found}
+    return [name for name in names if name.lower() not in dropped]
+
+
+def _requested_groups(event, data, participant) -> tuple[bool, list[str]]:
     """Resolve the ``(all_groups, names)`` target from the body without writing.
 
     A cell (``group``/``groupName``) replaces the current state; ``groups``
-    then overrides the names and ``allGroups`` the flag.
+    then overrides the names and ``allGroups`` the flag; ``addGroupIds`` and
+    ``removeGroupIds`` finally adjust single memberships.
     """
 
     if "group" in data or "groupName" in data:
@@ -51,6 +89,8 @@ def _requested_groups(data, participant) -> tuple[bool, list[str]]:
         names = _group_name_list(data.get("groups"))
     if "allGroups" in data:
         all_groups = boolean_query(data.get("allGroups"), "allGroups")
+    if "addGroupIds" in data or "removeGroupIds" in data:
+        names = _toggled_names(event, data, names)
     return all_groups, names
 
 
@@ -93,7 +133,7 @@ class RosterParticipantView(PrivateAPIView):
                         changed = True
                 groups_supplied = any(key in request.data for key in GROUP_KEYS)
                 if groups_supplied:
-                    all_groups, group_names = _requested_groups(request.data, participant)
+                    all_groups, group_names = _requested_groups(event, request.data, participant)
                 if "phone" in request.data:
                     try:
                         phone = normalize_phone(request.data.get("phone"))

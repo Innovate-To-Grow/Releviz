@@ -28,6 +28,7 @@ from apps.scheduling.services.roster_groups import (
     add_participant_groups,
     assign_memberships,
     create_group,
+    delete_group,
     ensure_groups,
     format_group_cell,
     memberships_differ,
@@ -1170,6 +1171,77 @@ class RosterParticipantGroupPatchTests(RosterGroupTestCase):
         self.assertEqual(len(accepted.data["participant"]["groups"]), 100)
         self.assertEqual(self.versions(one), (2,))
         self.assertEqual(ParticipantGroup.objects.filter(event=self.event).count(), 101)
+
+    def test_group_ids_add_and_remove_single_memberships(self):
+        one = self.add_participant("One", groups=["A"])
+        a = ParticipantGroup.objects.get(event=self.event, name="A")
+        b = create_group(event=self.event, name="B")
+        c = create_group(event=self.event, name="C")
+
+        added = self.patch_participant(one, {"addGroupIds": [b.pk, c.pk, b.pk]})
+        self.assertEqual(added.status_code, 200, added.data)
+        self.assertEqual(added.data["participant"]["group"], "A; B; C")
+        self.assertEqual(added.data["participant"]["version"], 2)
+        self.assertEqual(
+            added.data["groups"],
+            [group_entry(a, 1, 1.0), group_entry(b, 1, 1.0), group_entry(c, 1, 1.0)],
+        )
+
+        # Re-adding a membership or dropping one the person lacks is a no-op.
+        for payload in [{"addGroupIds": [a.pk]}, {"removeGroupIds": []}]:
+            with self.subTest(payload=payload):
+                unchanged = self.patch_participant(one, payload)
+                self.assertEqual(unchanged.status_code, 200, unchanged.data)
+                self.assertEqual(unchanged.data["participant"]["version"], 2)
+
+        removed = self.patch_participant(one, {"removeGroupIds": [a.pk]})
+        self.assertEqual(removed.data["participant"]["group"], "B; C")
+        self.assertEqual(removed.data["participant"]["version"], 3)
+
+        # Adds land before removes, and neither touches the every-group flag.
+        both = self.patch_participant(
+            one, {"allGroups": True, "addGroupIds": [a.pk], "removeGroupIds": [b.pk, c.pk]}
+        )
+        self.assertEqual(both.status_code, 200, both.data)
+        self.assertEqual(both.data["participant"]["group"], "ALL; A")
+        self.assertEqual(self.group_names(one), ["A"])
+
+    def test_group_ids_refuse_a_deleted_group_instead_of_recreating_it(self):
+        one = self.add_participant("One", groups=["A"])
+        gone = create_group(event=self.event, name="Gone")
+        gone_id = gone.pk
+        delete_group(group=gone)
+        foreign = create_group(event=self.create_event("GROUPS02", "Other event"), name="Foreign")
+
+        for group_id in (gone_id, foreign.pk):
+            with self.subTest(group_id=group_id):
+                refused = self.patch_participant(one, {"addGroupIds": [group_id]})
+                self.assertEqual(refused.status_code, 409, refused.data)
+                self.assertEqual(
+                    refused.data, {"error": "This group was deleted in another session."}
+                )
+        self.assertFalse(ParticipantGroup.objects.filter(event=self.event, name="Gone").exists())
+        self.assertFalse(ParticipantGroup.objects.filter(event=self.event, name="Foreign").exists())
+        self.assertEqual(self.versions(one), (1,))
+
+        # Leaving a group that is already gone has nothing left to do.
+        left = self.patch_participant(one, {"removeGroupIds": [gone_id]})
+        self.assertEqual(left.status_code, 200, left.data)
+        self.assertEqual(left.data["participant"]["group"], "A")
+        self.assertEqual(self.versions(one), (1,))
+
+    def test_group_id_lists_are_validated(self):
+        one = self.add_participant("One", groups=["A"])
+        for key in ("addGroupIds", "removeGroupIds"):
+            for value in ("1", [1, "2"], [True], None, list(range(1, MAX_GROUPS_PER_CELL + 2))):
+                with self.subTest(key=key, value=value):
+                    response = self.patch_participant(one, {key: value})
+                    self.assertEqual(response.status_code, 400, response.data)
+                    self.assertEqual(
+                        response.data, {"error": f"{key} must be an array of group ids."}
+                    )
+        self.assertEqual(self.versions(one), (1,))
+        self.assertEqual(self.group_names(one), ["A"])
 
     def test_blank_cell_clears_memberships_and_the_flag(self):
         one = self.add_participant("One", groups=["A"], all_groups=True)

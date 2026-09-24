@@ -12,7 +12,8 @@ export const UNGROUPED = "__ungrouped__";
 
 // Roster stats list groups as [{ id, name, count, weight }]; older payloads
 // send bare names or a { name: count } map. Ungrouped people carry an empty
-// name and a null id and sort last. `weight` is the value everyone in the
+// name and a null id and sort last; numbers in names sort by value, so
+// "Team 2" comes before "Team 10". `weight` is the value everyone in the
 // group shares, or null when members differ (or the group is empty).
 export function summarizeGroups(rawGroups) {
   const entries = Array.isArray(rawGroups)
@@ -34,7 +35,7 @@ export function summarizeGroups(rawGroups) {
     .sort(
       (a, b) =>
         Number(a.name === "") - Number(b.name === "") ||
-        a.name.localeCompare(b.name),
+        a.name.localeCompare(b.name, undefined, { numeric: true }),
     );
 }
 
@@ -72,8 +73,9 @@ function groupNameError(value) {
  * Organizer grouping controls: every group with its head count and shared
  * weight, inline weight and rename edits, group creation and deletion, and a
  * way to add the people selected in the roster table to a group (or remove
- * them from one). People can belong to several groups at once, so a person
- * counts in every group they are a member of.
+ * them from one); single memberships are ticked in the roster's group
+ * columns. People can belong to several groups at once, so a person counts in
+ * every group they are a member of.
  */
 export default function RosterGroups({
   groups,
@@ -217,9 +219,10 @@ export default function RosterGroups({
             Groups
           </h4>
           <p className="roster-groups__description">
-            People can belong to several groups. Setting a group&apos;s weight
-            applies it to everyone currently in that group, including people who
-            are also in other groups.
+            People can belong to several groups: tick a group&apos;s column in
+            the roster below, or All for every group. Setting a group&apos;s
+            weight applies it to everyone currently in that group, including
+            people who are also in other groups.
           </p>
         </div>
         {!readOnly && (
@@ -511,8 +514,8 @@ export default function RosterGroups({
 
       {namedGroups.length === 0 && (
         <p className="roster-groups__empty small text-secondary mb-0">
-          No groups yet. Create a group, then select people in the list and add
-          them to it.
+          No groups yet. Create a group, then tick its column for each person in
+          the roster below.
         </p>
       )}
 

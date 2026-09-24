@@ -52,14 +52,39 @@ jest.mock("@/components/event/CreateEventClient", () => ({
   ),
 }));
 jest.mock("@/components/schedule/OrganizerPanels", () => ({
-  OrganizerHeader: ({ event, onRefresh, refreshing, controls, live }) => (
+  OrganizerHeader: ({
+    event,
+    onRefresh,
+    refreshing,
+    controls,
+    live,
+    liveInterval,
+    onLiveIntervalChange,
+  }) => (
     <header>
       <h2>{event.name}</h2>
       <span data-testid="organizer-header-event-status">{event.status}</span>
       {live && (
-        <p data-testid="live-sync" data-updated={live.updatedAt ? "yes" : "no"}>
+        <p
+          data-testid="live-sync"
+          data-updated={live.updatedAt ? "yes" : "no"}
+          data-interval={String(liveInterval)}
+        >
           {live.error || "Live"}
         </p>
+      )}
+      {live && (
+        <select
+          aria-label="Check for new responses"
+          value={liveInterval}
+          onChange={(changeEvent) =>
+            onLiveIntervalChange(Number(changeEvent.target.value))
+          }
+        >
+          <option value="5000">Every 5 seconds</option>
+          <option value="15000">Every 15 seconds</option>
+          <option value="0">Off</option>
+        </select>
       )}
       <div role="group" aria-label="Workspace actions">
         {controls}
@@ -383,6 +408,7 @@ describe("scaled organizer workspace", () => {
     jest.resetAllMocks();
     window.history.replaceState({}, "", "/event?code=BIG1000");
     window.sessionStorage.clear();
+    window.localStorage.clear();
     window.matchMedia = jest.fn().mockReturnValue({ matches: false });
     HTMLElement.prototype.scrollIntoView = jest.fn();
     global.IntersectionObserver = class IntersectionObserver {
@@ -415,6 +441,8 @@ describe("scaled organizer workspace", () => {
           name: "Ada Faculty",
           email: "ada@example.com",
           group: "Faculty",
+          groups: [{ id: 11, name: "Faculty" }],
+          allGroups: false,
           weight: 0.8,
           included: true,
           submitted: false,
@@ -431,7 +459,7 @@ describe("scaled organizer workspace", () => {
         notSubmitted: 1,
         included: 1,
         excluded: 0,
-        groups: [{ name: "Faculty", count: 1 }],
+        groups: [{ id: 11, name: "Faculty", count: 1, weight: 0.8 }],
       },
       activity: rosterActivity,
     });
@@ -840,7 +868,11 @@ describe("scaled organizer workspace", () => {
     expect(
       await screen.findByText("Full name is required."),
     ).toBeInTheDocument();
-    expect(screen.getByText("Email address is required.")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Email address is required. If they have none, tick "No email of their own".',
+      ),
+    ).toBeInTheDocument();
     expect(createManagedParticipant).not.toHaveBeenCalled();
 
     await userEvent.type(invite.name, "Manual Person");
@@ -955,7 +987,9 @@ describe("scaled organizer workspace", () => {
       await within(invite.section).findByText("Full name is required."),
     ).toBeInTheDocument();
     expect(
-      within(invite.section).getByText("Email address is required."),
+      within(invite.section).getByText(
+        'Email address is required. If they have none, tick "No email of their own".',
+      ),
     ).toBeInTheDocument();
     expect(
       within(invite.section).queryByText(
@@ -1054,7 +1088,7 @@ describe("scaled organizer workspace", () => {
     );
   });
 
-  test("adds a person the organizer manages under one of their own addresses", async () => {
+  test("adds a person the organizer manages without typing an email", async () => {
     createManagedParticipant.mockResolvedValueOnce({
       participant: {
         id: "managed-1",
@@ -1087,17 +1121,31 @@ describe("scaled organizer workspace", () => {
     const phone = within(invite.section).getByLabelText("Phone (optional)");
     expect(managed).not.toBeChecked();
     expect(invite.submit.querySelector(".app-btn-icon")).not.toBeNull();
+    const managedHelp =
+      "Leave blank to use your account email, or enter another of your verified addresses. No invitation is sent.";
     expect(
-      within(invite.section).queryByText(
-        "Enter one of your own verified email addresses. No invitation is sent.",
-      ),
+      within(invite.section).queryByText(managedHelp),
     ).not.toBeInTheDocument();
 
+    // A blank email is refused until the person is marked as having none;
+    // ticking the box clears that error and makes the field optional.
+    fireEvent.submit(invite.submit.closest("form"));
+    expect(
+      await within(invite.section).findByText(
+        'Email address is required. If they have none, tick "No email of their own".',
+      ),
+    ).toBeInTheDocument();
     await userEvent.click(managed);
     expect(managed).toBeChecked();
-    expect(invite.email).toHaveAccessibleDescription(
-      "Enter one of your own verified email addresses. No invitation is sent.",
-    );
+    expect(
+      within(invite.section).queryByText(/Email address is required/),
+    ).not.toBeInTheDocument();
+    expect(invite.email).toHaveAccessibleDescription(managedHelp);
+    expect(
+      within(invite.section).getByText("(optional)", {
+        selector: "label[for='roster-invite-email'] span",
+      }),
+    ).toBeInTheDocument();
     const submit = within(invite.section).getByRole("button", {
       name: "Add person",
     });
@@ -1109,7 +1157,17 @@ describe("scaled organizer workspace", () => {
     ).not.toBeInTheDocument();
 
     await userEvent.type(invite.name, "Managed Person");
-    await userEvent.type(invite.email, "organizer@example.com");
+    // A typed address is still checked, even though it is optional here.
+    await userEvent.type(invite.email, "not-an-email");
+    await userEvent.tab();
+    expect(
+      await within(invite.section).findByText("Enter a valid email address."),
+    ).toBeInTheDocument();
+    await userEvent.clear(invite.email);
+    await userEvent.tab();
+    expect(
+      within(invite.section).queryByText("Enter a valid email address."),
+    ).not.toBeInTheDocument();
     await userEvent.type(phone, "+1 555 010 0199");
     fetchRoster.mockResolvedValueOnce({
       participants: [
@@ -1140,7 +1198,7 @@ describe("scaled organizer workspace", () => {
         event.code,
         {
           name: "Managed Person",
-          email: "organizer@example.com",
+          email: "",
           phone: "+1 555 010 0199",
           organizerManaged: true,
           idempotencyKey: "request-key",
@@ -1160,9 +1218,11 @@ describe("scaled organizer workspace", () => {
         name: /Managed Person/,
       })
     ).closest("tr");
-    expect(row).toHaveTextContent(
-      "organizer@example.com · +1 555 010 0199 · Organizer-managed",
-    );
+    // The row never shows the organizer's own address as theirs.
+    expect(row).not.toHaveTextContent("organizer@example.com");
+    expect(within(row).getByText("No email")).toBeInTheDocument();
+    expect(within(row).getByText("Organizer-managed")).toBeInTheDocument();
+    expect(within(row).getByText("+1 555 010 0199")).toBeInTheDocument();
     expect(within(row).getByText("Not sent")).toBeInTheDocument();
     expect(
       within(row).getByRole("button", { name: "Edit schedule" }),
@@ -1296,7 +1356,7 @@ describe("scaled organizer workspace", () => {
     expect(screen.getByLabelText("Filter by group")).toBeEnabled();
     expect(screen.getByLabelText("Select all on page")).toBeDisabled();
     expect(screen.getByLabelText("Select Ada Faculty")).toBeDisabled();
-    expect(screen.getByLabelText("Groups for Ada Faculty")).toBeDisabled();
+    expect(screen.getByLabelText("Ada Faculty in Faculty")).toBeDisabled();
     expect(screen.getByLabelText("All groups for Ada Faculty")).toBeDisabled();
     expect(screen.getByLabelText("Phone for Ada Faculty")).toBeDisabled();
     expect(screen.getByLabelText("Weight for Ada Faculty")).toBeDisabled();
@@ -1689,26 +1749,59 @@ describe("scaled organizer workspace", () => {
     const row = screen
       .getByRole("rowheader", { name: /Ada Faculty/ })
       .closest("tr");
-    await waitFor(() =>
-      expect(row).toHaveTextContent(
-        "ada@example.com · +1 (555) 010-0199 · Temporary",
-      ),
-    );
+    // The phone is shown under the email; the account class sits by the name.
+    expect(
+      await within(row).findByText("+1 (555) 010-0199"),
+    ).toBeInTheDocument();
+    expect(within(row).getByText("ada@example.com")).toBeInTheDocument();
+    expect(within(row).getByText("Temporary")).toBeInTheDocument();
     expect(phone).toHaveValue("+1 (555) 010-0199");
   });
 
   test("rolls an inline roster draft back when the server rejects it", async () => {
     patchRosterParticipant.mockRejectedValueOnce(
-      Object.assign(new Error("Group is not allowed"), { status: 400 }),
+      Object.assign(new Error("Enter a valid phone number."), { status: 400 }),
     );
     renderView();
-    const group = await screen.findByLabelText("Groups for Ada Faculty");
-    fireEvent.change(group, { target: { value: "Invalid group" } });
-    expect(group).toHaveValue("Invalid group");
-    fireEvent.blur(group);
+    const phone = await screen.findByLabelText("Phone for Ada Faculty");
+    fireEvent.change(phone, { target: { value: "call me" } });
+    expect(phone).toHaveValue("call me");
+    fireEvent.blur(phone);
 
-    expect(await screen.findByText("Group is not allowed")).toBeInTheDocument();
-    await waitFor(() => expect(group).toHaveValue("Faculty"));
+    expect(
+      await screen.findByText("Enter a valid phone number."),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(phone).toHaveValue(""));
+  });
+
+  test("shows a membership click at once and rolls it back when refused", async () => {
+    let refuse;
+    patchRosterParticipant.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          refuse = reject;
+        }),
+    );
+    renderView();
+    const faculty = await screen.findByLabelText("Ada Faculty in Faculty");
+    expect(faculty).toBeChecked();
+
+    fireEvent.click(faculty);
+    expect(faculty).not.toBeChecked();
+    await waitFor(() =>
+      expect(patchRosterParticipant).toHaveBeenCalledWith(
+        event.code,
+        "roster-1",
+        { removeGroupIds: [11], expectedVersion: 1 },
+        "token",
+      ),
+    );
+    await act(async () => {
+      refuse(Object.assign(new Error("Not now"), { status: 400 }));
+    });
+
+    expect(await screen.findByText("Not now")).toBeInTheDocument();
+    expect(faculty).toBeChecked();
   });
 
   test("serializes rapid updates to one roster row with the latest version", async () => {
@@ -1730,9 +1823,8 @@ describe("scaled organizer workspace", () => {
         resultsRevision: 5,
       });
     renderView();
-    const group = await screen.findByLabelText("Groups for Ada Faculty");
-    fireEvent.change(group, { target: { value: "Research" } });
-    fireEvent.blur(group);
+    const faculty = await screen.findByLabelText("Ada Faculty in Faculty");
+    fireEvent.click(faculty);
     await waitFor(() =>
       expect(patchRosterParticipant).toHaveBeenCalledTimes(1),
     );
@@ -2719,6 +2811,58 @@ describe("scaled organizer workspace", () => {
           "yes",
         ),
       );
+    });
+
+    test("checks at the rate the organizer picks and remembers it in this browser", async () => {
+      await renderLiveWorkspace();
+      const rate = screen.getByLabelText("Check for new responses");
+      expect(rate).toHaveValue("5000");
+
+      fireEvent.change(rate, { target: { value: "15000" } });
+      expect(
+        window.localStorage.getItem("releviz.organizer.live-refresh-ms"),
+      ).toBe("15000");
+      expect(screen.getByTestId("live-sync")).toHaveAttribute(
+        "data-interval",
+        "15000",
+      );
+      // A slower rate waits its full interval; nothing runs early.
+      await tick(LIVE_INTERVAL);
+      expect(fetchEventActivity).not.toHaveBeenCalled();
+      await tick(15000 - LIVE_INTERVAL);
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(1));
+    });
+
+    test("stops checking when turned off and catches up at once when turned back on", async () => {
+      await renderLiveWorkspace();
+      const rate = screen.getByLabelText("Check for new responses");
+      fireEvent.change(rate, { target: { value: "0" } });
+      await tick(LIVE_INTERVAL * 3);
+      expect(fetchEventActivity).not.toHaveBeenCalled();
+      // Showing the tab again does not wake a check that is switched off.
+      setTabVisibility("visible");
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(fetchEventActivity).not.toHaveBeenCalled();
+
+      await act(async () => {
+        fireEvent.change(rate, { target: { value: "5000" } });
+      });
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(1));
+      await tick();
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(2));
+      expect(
+        window.localStorage.getItem("releviz.organizer.live-refresh-ms"),
+      ).toBe("5000");
+    });
+
+    test("starts at the rate remembered in this browser", async () => {
+      window.localStorage.setItem("releviz.organizer.live-refresh-ms", "0");
+      await renderLiveWorkspace();
+      expect(screen.getByLabelText("Check for new responses")).toHaveValue("0");
+      await tick(LIVE_INTERVAL * 2);
+      expect(fetchEventActivity).not.toHaveBeenCalled();
     });
 
     test("does not poll while responses are closed", async () => {

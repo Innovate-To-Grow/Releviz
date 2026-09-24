@@ -373,6 +373,59 @@ test("organizer header states whether new responses are loading on their own", (
   ).toBeEmptyDOMElement();
 });
 
+test("organizer header lets the organizer choose how often new responses are checked", () => {
+  const onLiveIntervalChange = jest.fn();
+  const { rerender } = render(
+    <OrganizerHeader
+      event={baseEvent}
+      onRefresh={jest.fn()}
+      live={{ error: "", updatedAt: null }}
+      onLiveIntervalChange={onLiveIntervalChange}
+    />,
+  );
+  const rate = screen.getByLabelText("Check for new responses");
+  expect(rate).toHaveValue("5000");
+  expect(
+    within(rate)
+      .getAllByRole("option")
+      .map((option) => [option.textContent, option.value]),
+  ).toEqual([
+    ["Every 5 seconds", "5000"],
+    ["Every 15 seconds", "15000"],
+    ["Every 30 seconds", "30000"],
+    ["Every minute", "60000"],
+    ["Off", "0"],
+  ]);
+  fireEvent.change(rate, { target: { value: "60000" } });
+  expect(onLiveIntervalChange).toHaveBeenCalledWith(60000);
+
+  // Switched off, the line says so even when the last pass had failed.
+  rerender(
+    <OrganizerHeader
+      event={baseEvent}
+      onRefresh={jest.fn()}
+      live={{ error: "Offline.", updatedAt: null }}
+      liveInterval={0}
+      onLiveIntervalChange={onLiveIntervalChange}
+    />,
+  );
+  expect(screen.getByText("Auto-refresh off")).toBeInTheDocument();
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "Use Refresh to load new responses.",
+  );
+  expect(screen.getByRole("status")).not.toHaveTextContent("Offline.");
+  expect(screen.getByLabelText("Check for new responses")).toHaveValue("0");
+
+  // Without a handler there is nothing to choose.
+  rerender(
+    <LiveSyncStatus live={{ error: "", updatedAt: null }} interval={15000} />,
+  );
+  expect(
+    screen.queryByLabelText("Check for new responses"),
+  ).not.toBeInTheDocument();
+  expect(screen.getByText("Live")).toBeInTheDocument();
+});
+
 test("managed schedule drawer is a labelled modal dialog that traps focus and closes on Escape", async () => {
   const { props } = renderDrawer();
 

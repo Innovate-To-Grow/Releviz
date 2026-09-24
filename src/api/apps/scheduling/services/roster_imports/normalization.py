@@ -8,7 +8,12 @@ from django.core.validators import validate_email
 
 from apps.authn.models import ContactEmail
 from apps.scheduling.models import RosterImportBatch, RosterImportRow
-from apps.scheduling.services.invitations.addresses import phone_issue
+from apps.scheduling.services.invitations.addresses import (
+    NO_ORGANIZER_ADDRESSES,
+    OrganizerAddresses,
+    organizer_addresses,
+    phone_issue,
+)
 from apps.scheduling.services.invitations.errors import (
     INACTIVE_ACCOUNT_MESSAGE,
     SHARED_ACCOUNT_MESSAGE,
@@ -24,6 +29,15 @@ _PHONE_ERRORS = {
     "too_long": "phone is too long (max 32).",
     "invalid": "phone is invalid.",
 }
+DUPLICATE_EMAIL_MESSAGE = "Conflicting duplicate email."
+DUPLICATE_NAME_MESSAGE = "Conflicting duplicate name."
+UNVERIFIED_OWN_ADDRESS_MESSAGE = (
+    "Verify this address on your account before using it for someone without an email."
+)
+
+
+def batch_organizer_addresses(batch: RosterImportBatch) -> OrganizerAddresses:
+    return organizer_addresses(batch.event.organizer_id)
 
 
 def _mapped_value(row: RosterImportRow, mapping: dict, field: str):
@@ -52,16 +66,28 @@ def normalize_group_cell(value) -> str:
         return cell
 
 
-def validate_identity_fields(name: str, email: str, group_name: str) -> list[str]:
+def validate_identity_fields(
+    name: str,
+    email: str,
+    group_name: str,
+    *,
+    addresses: OrganizerAddresses = NO_ORGANIZER_ADDRESSES,
+) -> list[str]:
     errors = []
     if not name:
         errors.append("name is required.")
     elif len(name) > 100:
         errors.append("name is too long (max 100).")
     if not email:
-        errors.append("email is required.")
+        # A blank email is someone the organizer manages, filed under their
+        # primary address; without a verified one there is nowhere to file them.
+        if not addresses.default:
+            errors.append("email is required.")
     elif len(email) > 254:
         errors.append("email is too long (max 254).")
+    elif email in addresses.owned:
+        if email not in addresses.verified:
+            errors.append(UNVERIFIED_OWN_ADDRESS_MESSAGE)
     else:
         try:
             validate_email(email)
@@ -79,7 +105,12 @@ def validate_phone(phone: str) -> list[str]:
     return [_PHONE_ERRORS[issue]] if issue else []
 
 
-def _normalize_row(row: RosterImportRow, mapping: dict, defaults: dict) -> None:
+def _normalize_row(
+    row: RosterImportRow,
+    mapping: dict,
+    defaults: dict,
+    addresses: OrganizerAddresses = NO_ORGANIZER_ADDRESSES,
+) -> None:
     errors = []
     raw_name, error = _mapped_value(row, mapping, "name")
     if error:
@@ -127,7 +158,7 @@ def _normalize_row(row: RosterImportRow, mapping: dict, defaults: dict) -> None:
             errors.append(str(exc))
             included = True
 
-    errors.extend(validate_identity_fields(name, email, group_name))
+    errors.extend(validate_identity_fields(name, email, group_name, addresses=addresses))
     errors.extend(validate_phone(phone))
     row.name = name[:100]
     row.email = email[:254]
@@ -141,27 +172,50 @@ def _normalize_row(row: RosterImportRow, mapping: dict, defaults: dict) -> None:
 
 
 def _remove_duplicate_error(errors: list) -> list:
-    return [error for error in errors if error != "Conflicting duplicate email."]
+    return [
+        error for error in errors if error not in {DUPLICATE_EMAIL_MESSAGE, DUPLICATE_NAME_MESSAGE}
+    ]
 
 
-def apply_duplicate_rules(rows: list[RosterImportRow]) -> None:
-    by_email = defaultdict(list)
+def managed_key(address: str, name: str) -> tuple[str, str]:
+    """Who a person without an email of their own is: their filing address and name."""
+
+    return address.lower(), name.lower()
+
+
+def _identity_key(row: RosterImportRow, addresses: OrganizerAddresses):
+    """Rows sharing a key land on one roster entry: an account by email, or a
+    person the organizer manages by filing address and name."""
+
+    if addresses.manages(row.email):
+        if not row.name:
+            return None
+        return ("managed", *managed_key(addresses.contact_for(row.email), row.name))
+    return ("email", row.email) if row.email else None
+
+
+def apply_duplicate_rules(
+    rows: list[RosterImportRow],
+    addresses: OrganizerAddresses = NO_ORGANIZER_ADDRESSES,
+) -> None:
+    by_identity = defaultdict(list)
     for row in rows:
         row.validation_errors = _remove_duplicate_error(row.validation_errors or [])
         if row.selected:
             row.duplicate_status = RosterImportRow.DuplicateStatus.UNIQUE
-            if row.email:
-                by_email[row.email].append(row)
+            key = _identity_key(row, addresses)
+            if key is not None:
+                by_identity[key].append(row)
         elif row.duplicate_status == RosterImportRow.DuplicateStatus.CONFLICT:
             row.duplicate_status = RosterImportRow.DuplicateStatus.UNIQUE
 
-    for duplicates in by_email.values():
+    for (kind, address, *_name), duplicates in by_identity.items():
         if len(duplicates) < 2:
             continue
         signatures = {
             (
                 row.name,
-                row.email,
+                address,
                 row.group_name,
                 row.phone,
                 float(row.weight),
@@ -174,12 +228,11 @@ def apply_duplicate_rules(rows: list[RosterImportRow]) -> None:
                 duplicate.selected = False
                 duplicate.duplicate_status = RosterImportRow.DuplicateStatus.IDENTICAL
             continue
+        message = DUPLICATE_NAME_MESSAGE if kind == "managed" else DUPLICATE_EMAIL_MESSAGE
         for duplicate in duplicates:
             duplicate.duplicate_status = RosterImportRow.DuplicateStatus.CONFLICT
             duplicate.validation_errors = list(
-                dict.fromkeys(
-                    [*(duplicate.validation_errors or []), "Conflicting duplicate email."]
-                )
+                dict.fromkeys([*(duplicate.validation_errors or []), message])
             )
 
 
@@ -192,13 +245,20 @@ def _remove_account_errors(errors: list) -> list:
     return [error for error in errors if error not in _ACCOUNT_MESSAGES]
 
 
-def apply_account_rules(rows: list[RosterImportRow]) -> None:
-    """Flag selected rows whose address the commit would refuse to bind."""
+def apply_account_rules(
+    rows: list[RosterImportRow],
+    addresses: OrganizerAddresses = NO_ORGANIZER_ADDRESSES,
+) -> None:
+    """Flag selected rows whose address the commit would refuse to bind.
+
+    Rows under the organizer's own addresses describe people the organizer
+    manages, so they never bind to an account and are left alone.
+    """
 
     candidates = []
     for row in rows:
         row.validation_errors = _remove_account_errors(row.validation_errors or [])
-        if row.selected and row.email:
+        if row.selected and row.email and row.email not in addresses.owned:
             candidates.append(row)
     contacts = {
         contact.email_address.lower(): contact
@@ -271,10 +331,11 @@ def normalize_import_batch(batch: RosterImportBatch) -> None:
         return
     batch.rows.exclude(worksheet=batch.selected_worksheet).update(selected=False)
     rows = active_rows(batch)
+    addresses = batch_organizer_addresses(batch)
     for row in rows:
-        _normalize_row(row, batch.column_mapping or {}, batch.defaults or {})
-    apply_duplicate_rules(rows)
-    apply_account_rules(rows)
+        _normalize_row(row, batch.column_mapping or {}, batch.defaults or {}, addresses)
+    apply_duplicate_rules(rows, addresses)
+    apply_account_rules(rows, addresses)
     if rows_summary(rows)["valid"] > MAX_ROSTER_ROWS:
         raise RosterImportError(
             f"An import may contain at most {MAX_ROSTER_ROWS} valid participants."

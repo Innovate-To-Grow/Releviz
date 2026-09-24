@@ -620,42 +620,258 @@ class RosterImportApiTests(TestCase):
             [("Rebuilt", "555-010-4000")],
         )
 
-    def test_rows_repeating_the_organizer_address_are_flagged(self):
+    def preview_rows(self, import_id):
+        rows = self.client.get(f"/events/roster-imports/{import_id}/rows?code={self.event.code}")
+        self.assertEqual(rows.status_code, 200, rows.data)
+        return {row["name"]: row for row in rows.data["rows"]}
+
+    def test_rows_without_their_own_email_become_organizer_managed_people(self):
         preview = self.paste(
-            "name,email,phone\n"
-            "Owner Twin,owner@example.com,555-010-1000\n"
-            "Owner Other,owner@example.com,555-010-2000\n"
+            "name,email,group,phone\n"
+            "Guy No Email,,Faculty,555-010-1000\n"
+            "Owner Twin,owner@example.com,,\n"
+            "Owner Other,OWNER@example.com,ALL,555-010-2000\n"
+            "Ada,ada@example.com,,\n"
         )
         self.assertEqual(preview.status_code, 201, preview.data)
         import_id = preview.data["import"]["id"]
-        rows = self.client.get(f"/events/roster-imports/{import_id}/rows?code={self.event.code}")
-        expected_errors = [
-            "Conflicting duplicate email.",
-            "Another selected row already uses this person's account.",
-        ]
-        for row in rows.data["rows"]:
-            self.assertEqual(row["duplicate"], "conflict")
-            self.assertEqual(row["errors"], expected_errors)
-        blocked = self.commit(import_id)
-        self.assertEqual(blocked.status_code, 409)
-        self.assertEqual(blocked.data["invalidRowCount"], 2)
+        self.assertEqual(
+            preview.data["import"]["summary"],
+            {"total": 4, "selected": 4, "valid": 4, "invalid": 0, "conflicts": 0},
+        )
+        rows = self.preview_rows(import_id)
+        self.assertEqual(
+            {name: (row["email"], row["organizerManaged"]) for name, row in rows.items()},
+            {
+                "Guy No Email": ("", True),
+                "Owner Twin": ("owner@example.com", True),
+                "Owner Other": ("owner@example.com", True),
+                "Ada": ("ada@example.com", False),
+            },
+        )
+        self.assertTrue(all(row["valid"] and not row["errors"] for row in rows.values()))
 
-        deselected = self.client.put(
-            f"/events/roster-imports/{import_id}?code={self.event.code}",
-            {"rowUpdates": [{"id": rows.data["rows"][1]["id"], "selected": False}]},
+        committed = self.commit(import_id, send_invitations=True)
+        self.assertEqual(committed.status_code, 201, committed.data)
+        self.assertEqual(committed.data["receipt"]["createdCount"], 4)
+        # Only the person with an address of their own is invited.
+        self.assertEqual(committed.data["autoInvitedCount"], 1)
+        self.assertEqual(
+            list(EventInvitation.objects.filter(event=self.event).values_list("email", flat=True)),
+            ["ada@example.com"],
+        )
+        # The organizer never becomes a participant of their own event.
+        self.assertFalse(
+            Participant.objects.filter(event=self.event, member=self.organizer).exists()
+        )
+        self.assertEqual(
+            list(
+                UserEvent.objects.filter(member=self.organizer, event=self.event).values_list(
+                    "role", flat=True
+                )
+            ),
+            ["organizer"],
+        )
+        dashboard = self.client.get("/dashboard/events")
+        self.assertEqual([event["code"] for event in dashboard.data["organized"]], ["ROSTER01"])
+        self.assertEqual(dashboard.data["participating"], [])
+
+        managed = {
+            participant.participant_name: participant
+            for participant in Participant.objects.filter(event=self.event, organizer_managed=True)
+        }
+        self.assertEqual(set(managed), {"Guy No Email", "Owner Twin", "Owner Other"})
+        for participant in managed.values():
+            self.assertEqual(participant.contact_email, "owner@example.com")
+            self.assertEqual(participant.member.email, "")
+            self.assertEqual(participant.member.access_level, "temporary")
+            self.assertFalse(participant.member.has_usable_password())
+            self.assertFalse(participant.member.contact_emails.exists())
+            self.assertTrue(
+                UserEvent.objects.filter(
+                    member=participant.member, event=self.event, role="participant"
+                ).exists()
+            )
+        self.assertEqual(managed["Guy No Email"].contact_phone, "555-010-1000")
+        self.assertEqual(
+            list(managed["Guy No Email"].groups.values_list("name", flat=True)), ["Faculty"]
+        )
+        self.assertTrue(managed["Owner Other"].all_groups)
+        self.assertTrue(
+            Weight.objects.filter(participant=managed["Guy No Email"], weight=1.0).exists()
+        )
+
+        roster = self.client.get(f"/events/roster?code={self.event.code}")
+        self.assertEqual(roster.status_code, 200, roster.data)
+        by_name = {row["name"]: row for row in roster.data["participants"]}
+        for name in managed:
+            self.assertTrue(by_name[name]["organizerManaged"])
+            self.assertTrue(by_name[name]["canOrganizerEditAvailability"])
+            self.assertEqual(by_name[name]["invitationStatus"], "not_sent")
+        self.assertFalse(by_name["Ada"]["organizerManaged"])
+
+    def test_merge_finds_managed_people_again_by_address_and_name(self):
+        added = self.client.post(
+            f"/events/participants/managed?code={self.event.code}",
+            {
+                "name": "Guy No Email",
+                "email": "",
+                "organizerManaged": True,
+                "sendInvitation": False,
+                "idempotencyKey": str(uuid.uuid4()),
+            },
             format="json",
         )
-        self.assertEqual(deselected.status_code, 200, deselected.data)
-        self.assertEqual(deselected.data["import"]["summary"]["valid"], 1)
-        committed = self.commit(import_id)
+        self.assertEqual(added.status_code, 201, added.data)
+        guy = Participant.objects.get(event=self.event, organizer_managed=True)
+        self.assertEqual(guy.contact_email, "owner@example.com")
+        hidden = Participant.objects.create(
+            event=self.event,
+            member=create_member("hidden-shell@example.com", "Hidden", "Shell"),
+            participant_name="Hidden Shell",
+            hidden=True,
+        )
+        hidden.member.contact_emails.all().delete()
+        hidden.member.email = ""
+        hidden.member.save(update_fields=["email"])
+        hidden.organizer_managed = True
+        hidden.contact_email = "owner@example.com"
+        hidden.save(update_fields=["organizer_managed", "contact_email"])
+        member_count = type(self.organizer).objects.count()
+
+        preview = self.paste(
+            "name,email,group,phone\n"
+            "guy no email,,Team 3,555-010-3000\n"
+            "HIDDEN SHELL,owner@example.com,,\n"
+        )
+        self.assertEqual(preview.status_code, 201, preview.data)
+        committed = self.commit(preview.data["import"]["id"], send_invitations=True)
         self.assertEqual(committed.status_code, 201, committed.data)
-        # The import binds the organizer's own row to the organizer; it never
-        # mints an organizer-managed person.
+        self.assertEqual(committed.data["receipt"]["createdCount"], 0)
+        self.assertEqual(committed.data["receipt"]["updatedCount"], 2)
+        # Restoring someone without an email of their own never invites them.
+        self.assertEqual(committed.data["autoInvitedCount"], 0)
+        self.assertFalse(EventInvitation.objects.filter(event=self.event).exists())
+        self.assertEqual(type(self.organizer).objects.count(), member_count)
+
+        guy.refresh_from_db()
+        self.assertEqual(guy.participant_name, "guy no email")
+        self.assertEqual(guy.contact_phone, "555-010-3000")
+        self.assertEqual(list(guy.groups.values_list("name", flat=True)), ["Team 3"])
+        self.assertEqual(guy.version, 2)
+        hidden.refresh_from_db()
+        self.assertFalse(hidden.hidden)
+        self.assertEqual(hidden.participant_name, "HIDDEN SHELL")
+        self.assertEqual(Participant.objects.filter(event=self.event).count(), 2)
+
+        # A later cell only adds a group, which alone bumps the version.
+        regroup = self.paste("name,email,group\nguy no email,,Team 3; Faculty\n")
+        self.assertEqual(self.commit(regroup.data["import"]["id"]).status_code, 201)
+        guy.refresh_from_db()
+        self.assertEqual(sorted(guy.groups.values_list("name", flat=True)), ["Faculty", "Team 3"])
+        self.assertEqual(guy.version, 3)
+
+    def test_rows_for_people_without_an_email_are_deduplicated_by_name(self):
+        preview = self.paste(
+            "name,email,group\nGuy,,A\nGuy,owner@example.com,A\nPat,,A\npat,,B\n,,C\n"
+        )
+        self.assertEqual(preview.status_code, 201, preview.data)
+        self.assertEqual(
+            preview.data["import"]["summary"],
+            {"total": 5, "selected": 4, "valid": 1, "invalid": 3, "conflicts": 2},
+        )
+        rows = self.client.get(
+            f"/events/roster-imports/{preview.data['import']['id']}/rows?code={self.event.code}"
+        ).data["rows"]
+        # Blank and own-address spellings of one person are one identical row.
+        self.assertEqual(
+            [(row["name"], row["duplicate"], row["selected"], row["errors"]) for row in rows],
+            [
+                ("Guy", "unique", True, []),
+                ("Guy", "identical", False, []),
+                ("Pat", "conflict", True, ["Conflicting duplicate name."]),
+                ("pat", "conflict", True, ["Conflicting duplicate name."]),
+                ("", "unique", True, ["name is required."]),
+            ],
+        )
+
+    def test_rows_without_an_email_need_a_verified_address_of_the_organizer(self):
+        ContactEmail.objects.create(
+            member=self.organizer,
+            email_address="alias@example.com",
+            email_type="secondary",
+            verified=False,
+        )
+        preview = self.paste("name,email\nAlias Person,alias@example.com\n")
+        self.assertEqual(preview.status_code, 201, preview.data)
+        rows = self.preview_rows(preview.data["import"]["id"])
+        self.assertTrue(rows["Alias Person"]["organizerManaged"])
+        self.assertEqual(
+            rows["Alias Person"]["errors"],
+            ["Verify this address on your account before using it for someone without an email."],
+        )
+
+        ContactEmail.objects.filter(member=self.organizer).update(verified=False)
+        preview = self.paste("name,email\nGuy No Email,\n")
+        self.assertEqual(preview.status_code, 201, preview.data)
+        rows = self.preview_rows(preview.data["import"]["id"])
+        self.assertFalse(rows["Guy No Email"]["organizerManaged"])
+        self.assertEqual(rows["Guy No Email"]["errors"], ["email is required."])
+
+    def test_commit_refuses_rows_whose_address_changed_since_the_preview(self):
+        for pasted in ("name,email\nGuy No Email,\n", "name,email\nOwner Row,owner@example.com\n"):
+            with self.subTest(pasted=pasted):
+                ContactEmail.objects.filter(member=self.organizer).update(verified=True)
+                preview = self.paste(pasted)
+                self.assertEqual(preview.data["import"]["summary"]["valid"], 1)
+                ContactEmail.objects.filter(member=self.organizer).update(verified=False)
+                refused = self.commit(preview.data["import"]["id"])
+                self.assertEqual(refused.status_code, 409, refused.data)
+                self.assertEqual(
+                    refused.data["error"],
+                    "Your email addresses changed after this preview was made. "
+                    "Review the rows again before importing.",
+                )
+                self.assertEqual(
+                    RosterImportBatch.objects.get(pk=preview.data["import"]["id"]).status,
+                    RosterImportBatch.Status.PREVIEW,
+                )
+        self.assertFalse(Participant.objects.filter(event=self.event).exists())
+
+        alias = ContactEmail.objects.create(
+            member=self.organizer,
+            email_address="alias@example.com",
+            email_type="secondary",
+            verified=True,
+        )
+        ContactEmail.objects.filter(member=self.organizer).update(verified=True)
+        preview = self.paste("name,email\nGuy,\nGuy,alias@example.com\n")
+        self.assertEqual(preview.data["import"]["summary"]["valid"], 2)
+        # The blank row now files under the alias, where the other row already is.
+        ContactEmail.objects.filter(member=self.organizer).exclude(pk=alias.pk).update(
+            email_type="secondary"
+        )
+        ContactEmail.objects.filter(pk=alias.pk).update(email_type="primary")
+        clashed = self.commit(preview.data["import"]["id"])
+        self.assertEqual(clashed.status_code, 409, clashed.data)
+        self.assertEqual(
+            clashed.data["error"], "Two selected rows describe the same person without an email."
+        )
+        self.assertFalse(Participant.objects.filter(event=self.event).exists())
+
+    def test_rebuild_replaces_managed_people_with_the_imported_ones(self):
+        first = self.paste("name,email\nGuy No Email,\n")
+        self.assertEqual(self.commit(first.data["import"]["id"]).status_code, 201)
+        old_member = Participant.objects.get(event=self.event).member_id
+        rebuilt = self.paste("name,email\nGuy No Email,\n")
+        response = self.commit(
+            rebuilt.data["import"]["id"], mode="rebuild", confirmation=self.event.code
+        )
+        self.assertEqual(response.status_code, 201, response.data)
         participant = Participant.objects.get(event=self.event)
-        self.assertEqual(participant.member, self.organizer)
-        self.assertEqual(participant.contact_phone, "555-010-1000")
-        self.assertFalse(participant.organizer_managed)
-        self.assertFalse(Participant.objects.filter(organizer_managed=True).exists())
+        self.assertTrue(participant.organizer_managed)
+        self.assertNotEqual(participant.member_id, old_member)
+        self.assertFalse(type(self.organizer).objects.filter(pk=old_member).exists())
 
     def test_commit_without_invitations_adds_people_and_replays_only_with_the_same_flag(self):
         full_member = create_member("verified@example.com", "Verified", "Member")
