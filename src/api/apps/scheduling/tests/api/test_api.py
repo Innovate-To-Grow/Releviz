@@ -189,6 +189,8 @@ class RelevizApiTests(TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.data["participant"]["hidden"], 0)
 
+    # Pinned so a SENTRY_RELEASE exported in the shell cannot change the bodies.
+    @override_settings(APP_RELEASE="")
     def test_health_and_missing_or_unknown_event_errors(self):
         live = self.client.get("/health/live")
         self.assertEqual(live.data, {"ok": True, "release": None})
@@ -225,6 +227,7 @@ class RelevizApiTests(TestCase):
         )
         self.assertEqual(self.client.get("/events/weights?code=NOPE").status_code, 404)
 
+    @override_settings(APP_RELEASE="")
     @patch("apps.scheduling.views.health.connection.cursor")
     def test_readiness_reports_database_failure_without_details(self, cursor):
         cursor.side_effect = DatabaseError("database credentials must not leak")
