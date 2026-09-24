@@ -16,28 +16,29 @@ TERRAFORM_ENVIRONMENTS = {
     "production": ROOT / "infra/prod/main.tf",
 }
 # The production release is one orchestrating workflow (release.yml) that runs
-# a no-credential scope job and then calls three surface workflows (backend,
-# frontend, infrastructure) as reusable workflows side by side, so every
-# release job reaches its protected environment in the same review and the
-# reviewer approves the whole release once. Each surface's release job is
-# gated by its own environment: "AWS ECS - Prod" (backend, infrastructure) or
-# "AWS Amplify - Prod" (frontend), each with its own bootstrap-managed OIDC
+# a no-credential scope job and then calls two surface workflows (backend,
+# frontend) as reusable workflows side by side, so every release job reaches
+# its protected environment in the same review and the reviewer approves the
+# whole release once. Each surface's release job is gated by its own
+# environment: "AWS ECS - Prod" (backend, which owns all production Terraform)
+# or "AWS Amplify - Prod" (frontend), each with its own bootstrap-managed OIDC
 # role. A surface workflow can also be dispatched alone. Two composite actions
 # and one script are shared.
 PRODUCTION_RELEASE_ORCHESTRATOR = ROOT / ".github/workflows/release.yml"
 PRODUCTION_RELEASE_WORKFLOWS = {
     "backend": ROOT / ".github/workflows/release-backend.yml",
     "frontend": ROOT / ".github/workflows/release-frontend.yml",
-    "infrastructure": ROOT / ".github/workflows/release-infrastructure.yml",
 }
 RELEASE_PREFLIGHT_ACTION = ROOT / ".github/actions/release-preflight/action.yml"
 RELEASE_SCOPE_ACTION = ROOT / ".github/actions/release-scope/action.yml"
 LAST_RELEASE_SCRIPT = ROOT / "scripts/ci/last-successful-release.sh"
-# The single 3,000-line release workflow was retired when releases were split;
-# it must not come back beside the split workflows.
+# The single 3,000-line release workflow was retired when releases were split,
+# and the separate infrastructure release was later folded into the backend
+# release; neither may come back beside the surface workflows.
 RETIRED_RELEASE_WORKFLOWS = (
     ".github/workflows/deploy-prod.yml",
     ".github/workflows/deploy-prod.yml.disabled",
+    ".github/workflows/release-infrastructure.yml",
 )
 PRODUCTION_AMPLIFY_CUSTOM_HEADERS = ROOT / "infra/prod/amplify-custom-headers.json"
 AMPLIFY_DEPLOY_SCRIPT = ROOT / "scripts/deploy/amplify-static-deploy.sh"
@@ -160,7 +161,7 @@ FORBIDDEN_ORCHESTRATOR_RULES = {
     r"aws |configure-aws-credentials": "cloud credentials",
     r"\$\{\{\s*secrets\.": "GitHub secrets",
     (
-        r"needs:[^\n]*\b(backend|frontend|infrastructure)\b[^\n]*\n(\s*if:[^\n]*\n)?"
+        r"needs:[^\n]*\b(backend|frontend)\b[^\n]*\n(\s*if:[^\n]*\n)?"
         r"\s*uses:\s*\./\.github/workflows/release-"
     ): "a surface job that waits for another surface (it would ask for a second approval)",
 }
@@ -205,9 +206,9 @@ FORBIDDEN_SURFACE_WORKFLOW_RULES = {
     r"github\.event\.workflow_run": "the CI run payload (the orchestrator resolves the release commit)",
 }
 
-# Backend and infrastructure releases run from the "AWS ECS - Prod" environment
-# under the production role, which owns Terraform state, ECS, and the
-# application secrets' metadata.
+# Backend releases run from the "AWS ECS - Prod" environment under the
+# production role, which owns Terraform state, ECS, and the application
+# secrets' metadata.
 ECS_ENVIRONMENT_RULES = {
     r"environment:\s*\n\s*name:\s*AWS ECS - Prod": "the AWS ECS - Prod environment gate",
     r"AWS_ROLE_ARN:\s*\$\{\{\s*vars\.AWS_PROD_ROLE_ARN\s*\}\}": (
@@ -234,10 +235,6 @@ AMPLIFY_ENVIRONMENT_RULES = {
 # environment.
 SCOPED_FORBIDDEN_RELEASE_WORKFLOW_RULES = {
     "backend": {
-        r"AWS Amplify - Prod": "the frontend environment",
-        r"AWS_PROD_FRONTEND_ROLE_ARN": "the frontend-only role variable",
-    },
-    "infrastructure": {
         r"AWS Amplify - Prod": "the frontend environment",
         r"AWS_PROD_FRONTEND_ROLE_ARN": "the frontend-only role variable",
     },
@@ -308,21 +305,31 @@ SCOPED_RELEASE_WORKFLOW_RULES = {
         r"TF_VAR_frontend_image_tag:\s*\$\{\{\s*steps\.frontend_tag\.outputs\.sha\s*\}\}": (
             "the resolved fallback frontend tag in the plan"
         ),
-        r"Detect live Amplify not-found routing": "live Amplify not-found routing detection",
-        (
-            r"Plan the backend release[\s\S]{0,400}"
-            r"TF_VAR_enable_amplify_not_found_rule:\s*\$\{\{\s*"
-            r"steps\.not_found_rule\.outputs\.live\s*\}\}"
-            r"[\s\S]{0,400}backend-release\.tfplan"
-        ): "the live Amplify not-found state in the backend plan",
-        r"-out=backend-release\.tfplan": "a saved backend plan",
-        (
-            r"aws_\(ecs_task_definition\|ecs_service\|appautoscaling_\(target\|policy\)"
-            r"\|cloudwatch_\(metric_alarm\|log_group\|log_metric_filter\|event_rule\|event_target\)\)"
-        ): "a runtime-only backend plan guard",
-        r"Release those changes through the infrastructure workflow first": (
-            "a redirect of non-runtime changes to the infrastructure release"
+        r"aws amplify update-app[\s\S]{0,120}--custom-headers": (
+            "installation of the reviewed Amplify security headers"
         ),
+        r'grep -Fq "https://\$\{API_DOMAIN\}" <<<"\$live_headers"': (
+            "verification of the retained API connect-src policy"
+        ),
+        r"-out=backend-release\.tfplan": "a saved backend plan",
+        r'startswith\("aws_amplify_branch\."\)': "untouched Amplify branches",
+        r'startswith\("aws_amplify_domain_association\."\)': "an untouched Amplify domain",
+        r"del\(\.custom_rule\)": "Amplify app changes limited to redirect rules",
+        r"requires an administrator-run, reviewed apply": (
+            "a redirect of destructive changes to an administrator"
+        ),
+        r"## Backend plan": "a plan summary for the reviewer",
+        (
+            r'for service in \\\s*\n\s*"\$\{\{ steps\.terraform\.outputs\.backend_service \}\}" \\\s*\n'
+            r'\s*"\$\{\{ steps\.terraform\.outputs\.frontend_service \}\}"'
+        ): "ALB target health for the backend and the fallback frontend",
+        r"strict-transport-security: max-age=31536000; includeSubDomains": "HSTS verification",
+        r"connect-src 'self' https://\$\{API_DOMAIN\}": "CSP connect-src verification",
+        r"jq -r '\.static_routes\[\]' src/web/amplify-routes\.json": "static route smoke",
+        r"https://\$\{PROD_DOMAIN\}/releviz-smoke-missing-\$\{DEPLOY_SHA\}/\?missing_check=": (
+            "canonical unknown-path 404 smoke"
+        ),
+        r'grep -Fq "Page not found"': "the exported Next 404 document in unknown-path smoke",
         (
             r'"recompute_event_results","--watch","--poll-interval=1"'
         ): "the exact result-worker command",
@@ -454,36 +461,6 @@ SCOPED_RELEASE_WORKFLOW_RULES = {
             r"steps\.production_deploy\.outputs\.terminal_confirmed == 'true'"
         ): "a rollback gated on a verified artifact and a terminal production job",
     },
-    "infrastructure": {
-        **ECS_ENVIRONMENT_RULES,
-        **TERRAFORM_STEADY_STATE_RULES,
-        r"aws amplify update-app[\s\S]{0,120}--custom-headers": (
-            "installation of the reviewed Amplify security headers"
-        ),
-        (
-            r'released="\$\(scripts/ci/last-successful-release\.sh "\$surface"\)"[\s\S]{0,1500}'
-            r'resolve backend "\$ECR_BACKEND"[\s\S]{0,200}resolve frontend "\$ECR_FRONTEND"'
-        ): "application images held at their latest successful releases",
-        r"TF_VAR_backend_image_tag:\s*\$\{\{\s*steps\.images\.outputs\.backend\s*\}\}": (
-            "the resolved backend tag in the plan"
-        ),
-        r"TF_VAR_frontend_image_tag:\s*\$\{\{\s*steps\.images\.outputs\.frontend\s*\}\}": (
-            "the resolved fallback frontend tag in the plan"
-        ),
-        r"-out=infrastructure-release\.tfplan": "a saved infrastructure plan",
-        r'startswith\("aws_amplify_branch\."\)': "untouched Amplify branches",
-        r'startswith\("aws_amplify_domain_association\."\)': "an untouched Amplify domain",
-        r"del\(\.custom_rule\)": "Amplify app changes limited to redirect rules",
-        r"requires an administrator-run, reviewed apply": (
-            "a redirect of destructive changes to an administrator"
-        ),
-        r"## Infrastructure plan": "a plan summary for the reviewer",
-        r"jq -r '\.static_routes\[\]' src/web/amplify-routes\.json": "static route smoke",
-        r"https://\$\{PROD_DOMAIN\}/releviz-smoke-missing-\$\{DEPLOY_SHA\}/\?missing_check=": (
-            "canonical unknown-path 404 smoke"
-        ),
-        r'grep -Fq "Page not found"': "the exported Next 404 document in unknown-path smoke",
-    },
 }
 
 # The frontend release must keep its steps in this order.
@@ -510,38 +487,24 @@ FRONTEND_RELEASE_ORDER = (
 # The backend release must keep its steps in this order.
 BACKEND_RELEASE_ORDER = (
     "Release preflight",
+    "Install reviewed Amplify security headers",
     "Build and push immutable backend image",
     "Resolve the ECS fallback frontend image for this plan",
-    "Detect live Amplify not-found routing",
     "Plan the backend release",
     "Guard the backend release plan",
     "Apply the exact backend release plan",
     "Wait for backend, workers, and fallback frontend ECS services",
     "Verify ECS services use Terraform-selected task definitions",
     "Verify the backend release identity and worker contract",
-    "Verify backend ALB target health",
-    "Run backend smoke tests",
-    "Ensure production default administrator through one-off ECS task",
-    "Clean up an interrupted default-administrator task",
-)
-
-INFRASTRUCTURE_RELEASE_ORDER = (
-    "Release preflight",
-    "Install reviewed Amplify security headers",
-    "Resolve the application images for this plan",
-    "Plan the infrastructure release",
-    "Guard the infrastructure release plan",
-    "Apply the exact infrastructure release plan",
-    "Wait for ECS services to stabilize on the applied release",
-    "Verify ECS services use Terraform-selected task definitions",
     "Verify ALB target health",
     "Run production smoke tests",
+    "Ensure production default administrator through one-off ECS task",
+    "Clean up an interrupted default-administrator task",
 )
 
 RELEASE_STEP_ORDERS = {
     "backend": BACKEND_RELEASE_ORDER,
     "frontend": FRONTEND_RELEASE_ORDER,
-    "infrastructure": INFRASTRUCTURE_RELEASE_ORDER,
 }
 
 RELEASE_PREFLIGHT_RULES = {
@@ -553,7 +516,7 @@ RELEASE_PREFLIGHT_RULES = {
     r"git rev-parse HEAD": "exact checked-out release verification",
     r"CI Result": "successful CI enforcement",
     r'environment_name="AWS ECS - Prod"': (
-        "the AWS ECS - Prod configuration contract for backend and infrastructure releases"
+        "the AWS ECS - Prod configuration contract for backend releases"
     ),
     r'environment_name="AWS Amplify - Prod"': (
         "the AWS Amplify - Prod configuration contract for frontend releases"
@@ -617,7 +580,7 @@ RELEASE_SCOPE_RULES = {
 # the retired single workflow before a surface has released once.
 LAST_RELEASE_SCRIPT_RULES = {
     r"set -euo pipefail": "strict shell settings",
-    r"backend \| frontend \| infrastructure\) ;;": "the three release surfaces",
+    r"backend \| frontend\) ;;": "the two release surfaces",
     r"workflows/release\.yml/runs\?branch=main&status=completed": (
         "the orchestrated release history"
     ),
@@ -651,7 +614,7 @@ def production_cd_errors(root: Path = ROOT) -> list[str]:
 
     for retired in RETIRED_RELEASE_WORKFLOWS:
         if (root / retired).exists():
-            errors.append(f"retired single release workflow remains: {retired}")
+            errors.append(f"retired release workflow remains: {retired}")
 
     orchestrator = paths["orchestrator"]
     if not orchestrator.exists():

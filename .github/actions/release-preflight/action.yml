@@ -3,14 +3,14 @@ description: >-
   Shared entry checks for every production release workflow: the manual
   DEPLOY confirmation, the exact checked-out commit, a green CI Result for
   it, the release scope's Environment configuration ("AWS ECS - Prod" for
-  backend and infrastructure, "AWS Amplify - Prod" for the frontend),
+  the backend, "AWS Amplify - Prod" for the frontend),
   short-lived AWS credentials for that scope's role through GitHub OIDC, the
   assumed identity, and (for Terraform scopes) the protected remote state.
   Reads the release job's environment variables.
 
 inputs:
   scope:
-    description: backend, frontend, or infrastructure
+    description: backend or frontend
     required: true
 
 runs:
@@ -29,7 +29,7 @@ runs:
           exit 1
         fi
         case "$RELEASE_SCOPE" in
-          backend | frontend | infrastructure) ;;
+          backend | frontend) ;;
           *)
             echo "::error::Unknown release scope: ${RELEASE_SCOPE}"
             exit 1

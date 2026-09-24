@@ -327,16 +327,18 @@ jq -r "$filter" "$file"
         }
 
     def test_rejects_unknown_surfaces(self):
-        result = self.run_script("database", {})
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("usage:", result.stderr)
+        # The infrastructure surface was folded into the backend release.
+        for surface in ("database", "infrastructure"):
+            with self.subTest(surface=surface):
+                result = self.run_script(surface, {})
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("usage:", result.stderr)
 
     def test_answers_from_the_surface_job_not_the_run(self):
         newest, older = "a" * 40, "b" * 40
         responses = {
             **self.orchestrated_runs(
-                # The newest run released the frontend but the backend failed
-                # and the infrastructure was skipped.
+                # The newest run released the frontend but the backend failed.
                 (
                     2,
                     "2026-09-22T10:00:00Z",
@@ -356,18 +358,16 @@ jq -r "$filter" "$file"
                     "workflow_run",
                     [
                         ("backend / Release backend to production", "success"),
-                        ("infrastructure / Release infrastructure to production", "success"),
+                        ("frontend / Release frontend to production", "skipped"),
                     ],
                 ),
             ),
             **self.workflow_runs("release-backend.yml"),
             **self.workflow_runs("release-frontend.yml"),
-            **self.workflow_runs("release-infrastructure.yml"),
         }
         for surface, expected in (
             ("backend", older),
             ("frontend", newest),
-            ("infrastructure", older),
         ):
             with self.subTest(surface=surface):
                 result = self.run_script(surface, responses)
@@ -428,15 +428,15 @@ jq -r "$filter" "$file"
         legacy = "1" * 40
         responses = {
             **self.orchestrated_runs(),
-            **self.workflow_runs("release-infrastructure.yml"),
+            **self.workflow_runs("release-backend.yml"),
             **self.workflow_runs("deploy-prod.yml", ("2026-09-01T00:00:00Z", legacy)),
         }
-        result = self.run_script("infrastructure", responses)
+        result = self.run_script("backend", responses)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), legacy)
 
         responses.update(self.workflow_runs("deploy-prod.yml"))
-        result = self.run_script("infrastructure", responses)
+        result = self.run_script("backend", responses)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "")
 
@@ -1332,7 +1332,6 @@ class ProductionReleaseWorkflowTests(TestCase):
         ".github/workflows/release.yml",
         ".github/workflows/release-backend.yml",
         ".github/workflows/release-frontend.yml",
-        ".github/workflows/release-infrastructure.yml",
         ".github/actions/release-preflight/action.yml",
         ".github/actions/release-scope/action.yml",
         "scripts/ci/last-successful-release.sh",
@@ -1347,25 +1346,24 @@ class ProductionReleaseWorkflowTests(TestCase):
 
     def test_live_not_found_detection_preserves_rewrites_and_checks_legacy_redirects(self):
         repository = Path(__file__).resolve().parents[3]
-        for surface in ("backend", "frontend"):
-            source = (repository / f".github/workflows/release-{surface}.yml").read_text()
-            query_line = next(line for line in source.splitlines() if "jq -r 'any(.[]?;" in line)
-            query = query_line.split("jq -r '", 1)[1].rsplit("'", 1)[0]
-            for status, target, expected in (
-                ("404-200", "/404.html", "true"),
-                ("404", "/404.html", "true"),
-                ("200", "/404.html", "false"),
-                ("404-200", "/index.html", "false"),
-            ):
-                with self.subTest(surface=surface, status=status, target=target):
-                    result = subprocess.run(
-                        ["jq", "-r", query],
-                        input=json.dumps([{"source": "/<*>", "target": target, "status": status}]),
-                        capture_output=True,
-                        text=True,
-                        check=True,
-                    )
-                    self.assertEqual(result.stdout.strip(), expected)
+        source = (repository / ".github/workflows/release-frontend.yml").read_text()
+        query_line = next(line for line in source.splitlines() if "jq -r 'any(.[]?;" in line)
+        query = query_line.split("jq -r '", 1)[1].rsplit("'", 1)[0]
+        for status, target, expected in (
+            ("404-200", "/404.html", "true"),
+            ("404", "/404.html", "true"),
+            ("200", "/404.html", "false"),
+            ("404-200", "/index.html", "false"),
+        ):
+            with self.subTest(status=status, target=target):
+                result = subprocess.run(
+                    ["jq", "-r", query],
+                    input=json.dumps([{"source": "/<*>", "target": target, "status": status}]),
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                self.assertEqual(result.stdout.strip(), expected)
 
     def test_repository_release_workflows_satisfy_contract(self):
         paths = production_release_paths()
@@ -1374,7 +1372,6 @@ class ProductionReleaseWorkflowTests(TestCase):
             [
                 "backend",
                 "frontend",
-                "infrastructure",
                 "last-release",
                 "orchestrator",
                 "preflight",
@@ -1392,7 +1389,6 @@ class ProductionReleaseWorkflowTests(TestCase):
             self.assertIn("production release workflow is missing", errors)
             self.assertIn("backend release workflow is missing", errors)
             self.assertIn("frontend release workflow is missing", errors)
-            self.assertIn("infrastructure release workflow is missing", errors)
             self.assertIn("release preflight action is missing", errors)
             self.assertIn("release scope action is missing", errors)
             self.assertIn("last-successful-release script is missing", errors)
@@ -1406,7 +1402,21 @@ class ProductionReleaseWorkflowTests(TestCase):
                 "on:\n  workflow_dispatch:\n", encoding="utf-8"
             )
             self.assertIn(
-                "retired single release workflow remains: .github/workflows/deploy-prod.yml",
+                "retired release workflow remains: .github/workflows/deploy-prod.yml",
+                production_cd_errors(root),
+            )
+
+    def test_retired_infrastructure_release_workflow_is_rejected(self):
+        # Infrastructure is released by the backend workflow; a separate
+        # infrastructure workflow would apply Terraform outside that contract.
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_release_files(root)
+            (root / ".github/workflows/release-infrastructure.yml").write_text(
+                "on:\n  workflow_dispatch:\n", encoding="utf-8"
+            )
+            self.assertIn(
+                "retired release workflow remains: .github/workflows/release-infrastructure.yml",
                 production_cd_errors(root),
             )
 
@@ -1415,7 +1425,6 @@ class ProductionReleaseWorkflowTests(TestCase):
         orchestrator = ".github/workflows/release.yml"
         backend = ".github/workflows/release-backend.yml"
         frontend = ".github/workflows/release-frontend.yml"
-        infrastructure = ".github/workflows/release-infrastructure.yml"
         preflight = ".github/actions/release-preflight/action.yml"
         scope = ".github/actions/release-scope/action.yml"
         last_release = "scripts/ci/last-successful-release.sh"
@@ -1454,11 +1463,11 @@ class ProductionReleaseWorkflowTests(TestCase):
             ),
             (
                 orchestrator,
-                "    if: ${{ needs.scope.outputs.infrastructure == 'true' }}",
+                "    if: ${{ needs.scope.outputs.frontend == 'true' }}",
                 "    if: ${{ always() }}",
-                "production release omits a infrastructure surface job that depends only on the "
-                "scope job, runs only when the infrastructure changed, and calls the "
-                "infrastructure workflow with the release commit",
+                "production release omits a frontend surface job that depends only on the "
+                "scope job, runs only when the frontend changed, and calls the "
+                "frontend workflow with the release commit",
             ),
             (
                 orchestrator,
@@ -1520,16 +1529,16 @@ class ProductionReleaseWorkflowTests(TestCase):
                 "frontend release retains its own CI trigger",
             ),
             (
-                infrastructure,
+                backend,
                 "    if: ${{ github.ref == 'refs/heads/main' }}",
                 "    if: ${{ always() }}",
-                "infrastructure release omits a release job restricted to main",
+                "backend release omits a release job restricted to main",
             ),
             (
-                infrastructure,
+                backend,
                 "    if: ${{ github.ref == 'refs/heads/main' }}",
                 "    needs: scope\n    if: ${{ github.ref == 'refs/heads/main' }}",
-                "infrastructure release retains a scope job of its own",
+                "backend release retains a scope job of its own",
             ),
             (
                 backend,
@@ -1550,31 +1559,32 @@ class ProductionReleaseWorkflowTests(TestCase):
                 "frontend release omits the calling run's trigger event for the shared preflight",
             ),
             (
-                infrastructure,
+                backend,
                 "AWS_ROLE_ARN: ${{ vars.AWS_PROD_ROLE_ARN }}",
                 "AWS_ROLE_ARN: ${{ secrets.AWS_PROD_ROLE_ARN }}",
-                "infrastructure release retains GitHub secrets (production secrets live in "
+                "backend release retains GitHub secrets (production secrets live in "
                 "AWS Secrets Manager)",
             ),
             (
                 backend,
                 "        with:\n          scope: backend",
-                "        with:\n          scope: infrastructure",
+                "        with:\n          scope: frontend",
                 "backend release omits the backend preflight scope",
             ),
             (
-                infrastructure,
+                backend,
                 "cancel-in-progress: false",
                 "cancel-in-progress: true",
-                "infrastructure release omits non-cancelling release concurrency",
+                "backend release omits non-cancelling release concurrency",
             ),
             (
-                infrastructure,
-                "      group: release-infrastructure",
+                backend,
                 "      group: release-backend",
-                "infrastructure release omits its own release-job concurrency group",
+                "      group: release-frontend",
+                "backend release omits its own release-job concurrency group",
             ),
-            # Backend: immutable images, guarded plan, workers, default admin.
+            # Backend: immutable images, the guarded Terraform plan for all of
+            # production, workers, default admin.
             (
                 backend,
                 f"TF_VAR_backend_image_tag: {surface_sha}",
@@ -1602,8 +1612,8 @@ class ProductionReleaseWorkflowTests(TestCase):
             ),
             (
                 backend,
-                'or .change.actions == ["delete"]',
-                "or false",
+                '.change.actions == ["delete"]\n',
+                "false\n",
                 "backend release omits a no-destroy plan guard",
             ),
             (
@@ -1687,24 +1697,42 @@ class ProductionReleaseWorkflowTests(TestCase):
                 'AMPLIFY_TIMEOUT_SECONDS: "60"',
                 "frontend release omits the bounded Amplify deployment-helper timeout",
             ),
-            # Infrastructure: guarded plan and held images.
             (
-                infrastructure,
-                "TF_VAR_frontend_image_tag: ${{ steps.images.outputs.frontend }}",
+                backend,
+                "TF_VAR_frontend_image_tag: ${{ steps.frontend_tag.outputs.sha }}",
                 f"TF_VAR_frontend_image_tag: {release_sha}",
-                "infrastructure release omits the resolved fallback frontend tag in the plan",
+                "backend release omits the resolved fallback frontend tag in the plan",
             ),
             (
-                infrastructure,
+                backend,
                 'or (.address | startswith("aws_amplify_domain_association."))',
                 "or false",
-                "infrastructure release omits an untouched Amplify domain",
+                "backend release omits an untouched Amplify domain",
             ),
             (
-                infrastructure,
+                backend,
                 "del(.custom_rule)",
                 "del(.tags)",
-                "infrastructure release omits Amplify app changes limited to redirect rules",
+                "backend release omits Amplify app changes limited to redirect rules",
+            ),
+            (
+                backend,
+                "aws amplify update-app",
+                "aws amplify get-app",
+                "backend release omits installation of the reviewed Amplify security headers",
+            ),
+            (
+                backend,
+                '            "${{ steps.terraform.outputs.backend_service }}" \\\n'
+                '            "${{ steps.terraform.outputs.frontend_service }}"; do',
+                '            "${{ steps.terraform.outputs.backend_service }}"; do',
+                "backend release omits ALB target health for the backend and the fallback frontend",
+            ),
+            (
+                backend,
+                "jq -r '.static_routes[]' src/web/amplify-routes.json",
+                "jq -r '.static_routes[0]' src/web/amplify-routes.json",
+                "backend release omits static route smoke",
             ),
             # Shared preflight and scope actions.
             (
@@ -1732,8 +1760,8 @@ class ProductionReleaseWorkflowTests(TestCase):
                 "release preflight omits native Terraform state locking",
             ),
             # Environment separation: the frontend releases from
-            # "AWS Amplify - Prod" under the frontend-only role; backend and
-            # infrastructure keep "AWS ECS - Prod" and the production role.
+            # "AWS Amplify - Prod" under the frontend-only role; the backend
+            # keeps "AWS ECS - Prod" and the production role.
             (
                 frontend,
                 "    environment:\n      name: AWS Amplify - Prod",
@@ -1781,10 +1809,10 @@ class ProductionReleaseWorkflowTests(TestCase):
                 "backend release omits the production OIDC role from the AWS ECS - Prod environment",
             ),
             (
-                infrastructure,
+                backend,
                 "AWS_ROLE_ARN: ${{ vars.AWS_PROD_ROLE_ARN }}",
                 "AWS_ROLE_ARN: ${{ vars.AWS_PROD_FRONTEND_ROLE_ARN }}",
-                "infrastructure release retains the frontend-only role variable",
+                "backend release retains the frontend-only role variable",
             ),
             (
                 preflight,
@@ -1798,7 +1826,7 @@ class ProductionReleaseWorkflowTests(TestCase):
                 'environment_name="AWS ECS - Prod"',
                 'environment_name="Production"',
                 "release preflight omits the AWS ECS - Prod configuration contract for backend "
-                "and infrastructure releases",
+                "releases",
             ),
             (
                 preflight,
@@ -1818,20 +1846,8 @@ class ProductionReleaseWorkflowTests(TestCase):
                 "false; then",
                 "release preflight omits a frontend least-privilege probe",
             ),
-            # Amplify not-found routing: released by infrastructure, held by
-            # the backend plan, and smoked by every release that can see it.
-            (
-                backend,
-                "TF_VAR_enable_amplify_not_found_rule: ${{ steps.not_found_rule.outputs.live }}",
-                'TF_VAR_enable_amplify_not_found_rule: "true"',
-                "backend release omits the live Amplify not-found state in the backend plan",
-            ),
-            (
-                backend,
-                "- name: Detect live Amplify not-found routing",
-                "- name: Skip live Amplify not-found routing",
-                "backend release omits live Amplify not-found routing detection",
-            ),
+            # Amplify not-found routing: released by the backend plan and
+            # smoked by every release that can see it.
             (
                 frontend,
                 "NOT_FOUND_RULE_LIVE: ${{ steps.not_found_rule.outputs.live }}",
@@ -1851,10 +1867,16 @@ class ProductionReleaseWorkflowTests(TestCase):
                 "frontend release omits canonical unknown-path 404 smoke",
             ),
             (
-                infrastructure,
+                backend,
                 'grep -Fq "Page not found"',
                 'grep -Fq "Not Found"',
-                "infrastructure release omits the exported Next 404 document in unknown-path smoke",
+                "backend release omits the exported Next 404 document in unknown-path smoke",
+            ),
+            (
+                backend,
+                "https://${PROD_DOMAIN}/releviz-smoke-missing-${DEPLOY_SHA}/?missing_check=",
+                "https://${PROD_DOMAIN}/?missing_check=",
+                "backend release omits canonical unknown-path 404 smoke",
             ),
             (
                 scope,

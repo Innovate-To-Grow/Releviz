@@ -3,11 +3,14 @@ run-name: "Backend release (manual): ${{ github.sha }}"
 
 on:
   # Called by the production release workflow (release.yml), which decides
-  # from a credential-free scope whether src/api changed and runs every
-  # affected surface side by side so the reviewer approves the whole release
-  # once. The release job waits in the "AWS ECS - Prod" environment for that
-  # approval before AWS credentials are issued. Manual dispatch of this file
-  # alone stays available for redeploys and rollbacks of just the backend.
+  # from a credential-free scope whether src/api or infra/prod changed and
+  # runs every affected surface side by side so the reviewer approves the
+  # whole release once. The backend release owns all production Terraform:
+  # the API image and ECS runtime as well as the rest of the AWS
+  # infrastructure. The release job waits in the "AWS ECS - Prod" environment
+  # for that approval before AWS credentials are issued. Manual dispatch of
+  # this file alone stays available for redeploys, rollbacks, and reconciling
+  # drift.
   workflow_call:
     inputs:
       deploy-sha:
@@ -104,6 +107,24 @@ jobs:
         with:
           scope: backend
 
+      - name: Install reviewed Amplify security headers
+        run: |
+          set -euo pipefail
+          custom_headers="$(jq -c . infra/prod/amplify-custom-headers.json)"
+          aws amplify update-app \
+            --app-id "$AMPLIFY_APP_ID" \
+            --custom-headers "$custom_headers" >/dev/null
+          live_headers="$(
+            aws amplify get-app \
+              --app-id "$AMPLIFY_APP_ID" \
+              --query app.customHeaders \
+              --output text
+          )"
+          if ! grep -Fq "https://${API_DOMAIN}" <<<"$live_headers"; then
+            echo "::error::Amplify did not retain the reviewed API connect-src policy."
+            exit 1
+          fi
+
       - name: Ensure the immutable backend ECR repository exists
         run: |
           set -euo pipefail
@@ -185,25 +206,8 @@ jobs:
           echo "sha=$tag" >>"$GITHUB_OUTPUT"
           echo "::notice::ECS fallback frontend stays on ${tag} (${source})."
 
-      - name: Detect live Amplify not-found routing
-        id: not_found_rule
-        run: |
-          set -euo pipefail
-          # The not-found rule is released by the infrastructure workflow; a
-          # backend plan carries the live state so the Amplify app stays a no-op.
-          live="$(
-            aws amplify get-app \
-              --app-id "$AMPLIFY_APP_ID" \
-              --query app.customRules \
-              --output json |
-              jq -r 'any(.[]?; .source == "/<*>" and .target == "/404.html" and (.status == "404-200" or .status == "404"))'
-          )"
-          echo "live=$live" >>"$GITHUB_OUTPUT"
-          echo "::notice::Live Amplify not-found routing for this plan: ${live}."
-
       - name: Plan the backend release
         env:
-          TF_VAR_enable_amplify_not_found_rule: ${{ steps.not_found_rule.outputs.live }}
           TF_VAR_frontend_image_tag: ${{ steps.frontend_tag.outputs.sha }}
         run: |
           terraform -chdir=infra/prod plan -input=false -lock-timeout=15m \
@@ -212,32 +216,50 @@ jobs:
       - name: Guard the backend release plan
         run: |
           set -euo pipefail
-          # A backend release may only roll the application runtime (ECS task
-          # definitions and services, autoscaling, alarms, logs, the reminder
-          # schedule). Anything else belongs to the infrastructure release.
+          plan_json="${RUNNER_TEMP}/backend-release.json"
+          terraform -chdir=infra/prod show -json backend-release.tfplan >"$plan_json"
+          # Nothing may be destroyed outright, the live Amplify branches and
+          # domain stay untouched, and the Amplify app may only change its
+          # redirect rules (custom headers are installed separately).
           unexpected="$(
-            terraform -chdir=infra/prod show -json backend-release.tfplan |
-              jq -c '
-                [
-                  .resource_changes[]?
-                  | select(.change.actions != ["no-op"])
-                  | select(
-                      (
-                        .address
-                        | test("^aws_(ecs_task_definition|ecs_service|appautoscaling_(target|policy)|cloudwatch_(metric_alarm|log_group|log_metric_filter|event_rule|event_target))\\.")
-                        | not
+            jq -c '
+              [
+                .resource_changes[]?
+                | select(.change.actions != ["no-op"])
+                | select(
+                    .change.actions == ["delete"]
+                    or (.address | startswith("aws_amplify_branch."))
+                    or (.address | startswith("aws_amplify_domain_association."))
+                    or (
+                      .address == "aws_amplify_app.frontend"
+                      and (
+                        .change.actions != ["update"]
+                        or (
+                          (.change.before | del(.custom_rule))
+                          != (.change.after | del(.custom_rule))
+                        )
                       )
-                      or .change.actions == ["delete"]
                     )
-                  | {address, actions: .change.actions}
-                ]
-              '
+                  )
+                | {address, actions: .change.actions}
+              ]
+            ' "$plan_json"
           )"
           if [ "$unexpected" != "[]" ]; then
-            echo "::error::The backend release plan changes resources outside the application runtime: ${unexpected}"
-            echo "::error::Release those changes through the infrastructure workflow first."
+            echo "::error::The backend release plan contains changes the automated release refuses: ${unexpected}"
+            echo "::error::Destroying resources or changing the live Amplify branches or domain requires an administrator-run, reviewed apply."
             exit 1
           fi
+          {
+            echo "## Backend plan"
+            echo
+            jq -r '
+              .resource_changes[]?
+              | select(.change.actions != ["no-op"])
+              | "- `\(.address)`: \(.change.actions | join(", "))"
+            ' "$plan_json"
+            echo
+          } >>"$GITHUB_STEP_SUMMARY"
 
       - name: Apply the exact backend release plan
         run: terraform -chdir=infra/prod apply -input=false -auto-approve backend-release.tfplan
@@ -438,33 +460,41 @@ jobs:
             exit 1
           fi
 
-      - name: Verify backend ALB target health
+      - name: Verify ALB target health
         run: |
           set -euo pipefail
-          target_group="$(
-            aws ecs describe-services \
-              --cluster "${{ steps.terraform.outputs.cluster_name }}" \
-              --services "${{ steps.terraform.outputs.backend_service }}" \
-              --query "services[0].loadBalancers[0].targetGroupArn" \
-              --output text
-          )"
-          for attempt in $(seq 1 30); do
-            health="$(aws elbv2 describe-target-health --target-group-arn "$target_group")"
-            if jq -e '
-              [.TargetHealthDescriptions[].TargetHealth.State] as $states
-              | ($states | length) > 0
-              and all($states[]; . == "healthy")
-            ' <<<"$health" >/dev/null; then
-              exit 0
+          for service in \
+            "${{ steps.terraform.outputs.backend_service }}" \
+            "${{ steps.terraform.outputs.frontend_service }}"; do
+            target_group="$(
+              aws ecs describe-services \
+                --cluster "${{ steps.terraform.outputs.cluster_name }}" \
+                --services "$service" \
+                --query "services[0].loadBalancers[0].targetGroupArn" \
+                --output text
+            )"
+            healthy=false
+            for attempt in $(seq 1 30); do
+              health="$(aws elbv2 describe-target-health --target-group-arn "$target_group")"
+              if jq -e '
+                [.TargetHealthDescriptions[].TargetHealth.State] as $states
+                | ($states | length) > 0
+                and all($states[]; . == "healthy")
+              ' <<<"$health" >/dev/null; then
+                healthy=true
+                break
+              fi
+              echo "Target health for ${service} is converging; attempt=${attempt}/30"
+              jq -r '.TargetHealthDescriptions[].TargetHealth.State' <<<"$health"
+              sleep 10
+            done
+            if [ "$healthy" != "true" ]; then
+              echo "::error::ALB targets for ${service} did not become healthy."
+              exit 1
             fi
-            echo "Backend target health is converging; attempt=${attempt}/30"
-            jq -r '.TargetHealthDescriptions[].TargetHealth.State' <<<"$health"
-            sleep 10
           done
-          echo "::error::Backend ALB targets did not become healthy."
-          exit 1
 
-      - name: Run backend smoke tests
+      - name: Run production smoke tests
         env:
           DEPLOYED_API_DOMAIN: ${{ steps.terraform.outputs.api_domain }}
         run: |
@@ -490,6 +520,74 @@ jobs:
             --retry-all-errors \
             --retry-delay 5 \
             "https://${DEPLOYED_API_DOMAIN}/static/admin/css/base.css" >/dev/null
+          canonical_security_headers="${RUNNER_TEMP}/canonical-security.headers"
+          curl \
+            --connect-timeout 5 \
+            --fail \
+            --max-time 20 \
+            --silent \
+            --show-error \
+            --retry 20 \
+            --retry-all-errors \
+            --retry-delay 5 \
+            --dump-header "$canonical_security_headers" \
+            --output /dev/null \
+            "https://${PROD_DOMAIN}/"
+          if ! grep -Fqi "strict-transport-security: max-age=31536000; includeSubDomains" \
+            "$canonical_security_headers" ||
+            ! grep -Fqi "x-content-type-options: nosniff" "$canonical_security_headers" ||
+            ! grep -Fqi "x-frame-options: DENY" "$canonical_security_headers" ||
+            ! grep -Fqi "referrer-policy: no-referrer" "$canonical_security_headers" ||
+            ! grep -i '^content-security-policy:' "$canonical_security_headers" |
+              grep -Fq "connect-src 'self' https://${API_DOMAIN}"; then
+            echo "::error::Canonical Amplify responses do not contain the reviewed security-header policy."
+            exit 1
+          fi
+          while IFS= read -r route; do
+            for path in "/${route}" "/${route}/"; do
+              curl \
+                --connect-timeout 5 \
+                --fail \
+                --location \
+                --max-time 20 \
+                --show-error \
+                --retry 20 \
+                --retry-all-errors \
+                --retry-delay 5 \
+                "https://${PROD_DOMAIN}${path}" >/dev/null
+            done
+          done < <(jq -r '.static_routes[]' src/web/amplify-routes.json)
+          # The applied plan carries the app-level not-found rule; unknown
+          # paths must serve the exported 404 document with a 404 status.
+          missing_page_body="${RUNNER_TEMP}/canonical-missing-page.html"
+          missing_page_status=""
+          for attempt in $(seq 1 30); do
+            : >"$missing_page_body"
+            missing_page_status="$(
+              curl \
+                --connect-timeout 5 \
+                --header "Cache-Control: no-cache" \
+                --header "Pragma: no-cache" \
+                --max-time 20 \
+                --silent \
+                --show-error \
+                --output "$missing_page_body" \
+                --write-out "%{http_code}" \
+                "https://${PROD_DOMAIN}/releviz-smoke-missing-${DEPLOY_SHA}/?missing_check=${attempt}" ||
+                true
+            )"
+            if [ "$missing_page_status" = "404" ] &&
+              grep -Fq "Page not found" "$missing_page_body"; then
+              break
+            fi
+            echo "Unknown-path routing is still converging; status=${missing_page_status:-request-failed}, attempt=${attempt}/30"
+            sleep 5
+          done
+          if [ "$missing_page_status" != "404" ] ||
+            ! grep -Fq "Page not found" "$missing_page_body"; then
+            echo "::error::Canonical unknown path did not serve the app 404 page with a 404 status."
+            exit 1
+          fi
           preflight_headers="${RUNNER_TEMP}/api-preflight.headers"
           preflight_status="$(
             curl \
