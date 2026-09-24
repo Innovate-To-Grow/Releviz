@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef } from "react";
+import { useEffect, useRef } from "react";
 import Alert from "@/components/ui/Alert";
 import AppButton from "@/components/ui/AppButton";
 import {
@@ -11,10 +11,6 @@ import FormField from "@/components/ui/FormField";
 import { RefreshIcon, SaveIcon, VerifiedIcon } from "@/components/ui/icons";
 import StatusBadge from "@/components/ui/StatusBadge";
 import ScheduleChannelEditor from "@/components/schedule/ScheduleChannelEditor";
-import {
-  DEFAULT_LIVE_REFRESH_MS,
-  LIVE_REFRESH_OPTIONS,
-} from "@/lib/liveRefresh";
 
 function formatClockTime(value) {
   return new Date(value).toLocaleTimeString([], {
@@ -25,72 +21,41 @@ function formatClockTime(value) {
 
 /**
  * The live-sync line under the event name: whether new responses are being
- * picked up on their own, and when the workspace last changed because of it,
- * plus how often it checks (`interval`, in ms; 0 means off).
- * `live` is null when the workspace is not syncing (the event is not active).
+ * picked up on their own, and when the workspace last changed because of it.
+ * Live sync is always on while the event is active; `live` is null when the
+ * workspace is not syncing (the event is not active).
  */
-export function LiveSyncStatus({
-  live,
-  interval = DEFAULT_LIVE_REFRESH_MS,
-  onIntervalChange = null,
-}) {
-  const rateId = useId();
+export function LiveSyncStatus({ live }) {
   if (!live) return null;
-  const off = interval === 0;
-  const paused = !off && Boolean(live.error);
+  const paused = Boolean(live.error);
   return (
-    <div className="organizer-heading__live small">
-      <p className="mb-0">
-        <StatusBadge
-          status={off ? "neutral" : paused ? "warning" : "success"}
-          className="organizer-heading__live-badge me-2"
-        >
-          {off ? "Auto-refresh off" : paused ? "Live updates paused" : "Live"}
-        </StatusBadge>
-        {/* Only the state line is announced; the timestamp changes too often
-            to be read out every time. */}
-        <span role="status" className="text-secondary">
-          {off
-            ? "Use Refresh to load new responses."
-            : paused
-              ? `${live.error} Use Refresh to load new responses.`
-              : "New responses load automatically."}
-        </span>
-        {live.updatedAt ? (
-          <>
-            {" "}
-            {/* The separator and the time wrap as one unit on narrow screens. */}
-            <span className="organizer-heading__live-time text-secondary text-nowrap">
-              <span aria-hidden="true">·</span>{" "}
-              <time dateTime={new Date(live.updatedAt).toISOString()}>
-                Updated {formatClockTime(live.updatedAt)}
-              </time>
-            </span>
-          </>
-        ) : null}
-      </p>
-      {onIntervalChange && (
-        <div className="organizer-heading__live-rate d-flex flex-wrap align-items-center gap-2 mt-2">
-          <label htmlFor={rateId} className="text-secondary mb-0">
-            Check for new responses
-          </label>
-          <select
-            id={rateId}
-            className="form-select form-select-sm w-auto"
-            value={interval}
-            onChange={(changeEvent) =>
-              onIntervalChange(Number(changeEvent.target.value))
-            }
-          >
-            {LIVE_REFRESH_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
-    </div>
+    <p className="organizer-heading__live small mb-0">
+      <StatusBadge
+        status={paused ? "warning" : "success"}
+        className="organizer-heading__live-badge me-2"
+      >
+        {paused ? "Live updates paused" : "Live"}
+      </StatusBadge>
+      {/* Only the state line is announced; the timestamp changes too often
+          to be read out every time. */}
+      <span role="status" className="text-secondary">
+        {paused
+          ? `${live.error} Use Refresh to load new responses.`
+          : "New responses load automatically."}
+      </span>
+      {live.updatedAt ? (
+        <>
+          {" "}
+          {/* The separator and the time wrap as one unit on narrow screens. */}
+          <span className="organizer-heading__live-time text-secondary text-nowrap">
+            <span aria-hidden="true">·</span>{" "}
+            <time dateTime={new Date(live.updatedAt).toISOString()}>
+              Updated {formatClockTime(live.updatedAt)}
+            </time>
+          </span>
+        </>
+      ) : null}
+    </p>
   );
 }
 
@@ -100,8 +65,6 @@ export function OrganizerHeader({
   refreshing = false,
   controls = null,
   live = null,
-  liveInterval = DEFAULT_LIVE_REFRESH_MS,
-  onLiveIntervalChange = null,
 }) {
   return (
     <header className="organizer-heading page-header">
@@ -110,11 +73,7 @@ export function OrganizerHeader({
         <h2 className="organizer-title mb-1">
           {event?.name?.trim() || "Untitled event"}
         </h2>
-        <LiveSyncStatus
-          live={live}
-          interval={liveInterval}
-          onIntervalChange={onLiveIntervalChange}
-        />
+        <LiveSyncStatus live={live} />
       </div>
       {/* The lifecycle badge lives in EventControls (passed as `controls`), so
           the header does not repeat it. `mw-100` lets the action row wrap

@@ -164,15 +164,16 @@ cannot start a meeting either. Blocked times are excluded from the results (thei
 reported as 0), never form part of a ranked window, and cannot be finalized into; edit them from
 **Blocked times** on the Overview panel.
 
-While the event is active, the workspace keeps itself current: at the rate chosen under **Check for
-new responses** in the header (every 5 seconds by default, or 15 seconds, 30 seconds, a minute, or
-Off; remembered in this browser) and only while the tab is visible, it reads a small activity digest
-(`GET /events/activity`) and silently re-reads just the sections that changed, so new responses,
-invitation opens, and edits made in another session appear without pressing Refresh and without
-disturbing a pick, a row draft, or an open drawer. The header shows a "Live" badge with the time of
-the last such update, "Live updates paused" with the reason if a pass fails, or "Auto-refresh off".
-Turning the checks back on catches up at once. Refresh remains the manual, everything-at-once
-re-read.
+While the event is active, the workspace keeps itself current on its own; there is no switch to
+turn this off. Only while the tab is visible, it reads a small activity digest (`GET /events/activity`)
+and silently re-reads just the sections that changed, so new responses, invitation opens, and edits
+made in another session appear without pressing Refresh and without disturbing a pick, a row draft,
+or an open drawer. The pace adapts: about every 3 seconds while responses are arriving or the
+organizer is working in the page, easing off step by step to every 15 seconds while nothing changes,
+and at once when the tab is shown again, the window regains focus, or the network comes back. The
+header shows a "Live" badge with the time of the last such update, or "Live updates paused" with the
+reason if a pass fails (the checks continue and clear the notice on the next clean pass). Refresh
+remains the manual, everything-at-once re-read.
 
 For a multi-slot meeting, each person's candidate score is their minimum availability across the
 whole interval. The weighted score is `sum(person_score * weight) / sum(positive weights)` across
