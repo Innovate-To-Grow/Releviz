@@ -1714,20 +1714,18 @@ describe("RosterPanel organizer-managed people", () => {
       name: "Roster participants",
     });
     const rowFor = (name) =>
-      within(table)
-        .getByRole("rowheader", { name: new RegExp(name) })
-        .closest("tr");
-    const managedRow = rowFor("Managed Person");
+      within(table).getByRole("rowheader", { name }).closest("tr");
+    const managedRow = rowFor(/Managed Person/);
     expect(managedRow).not.toHaveTextContent("organizer@example.com");
     expect(within(managedRow).getByText("No email")).toBeInTheDocument();
     expect(within(managedRow).getByText("+1 555 010 0199")).toBeInTheDocument();
     expect(
       within(managedRow).getByText("Organizer-managed"),
     ).toBeInTheDocument();
-    const plainRow = rowFor("Plain Person");
+    const plainRow = rowFor(/Plain Person/);
     expect(within(plainRow).getByText("temp@example.com")).toBeInTheDocument();
     expect(within(plainRow).getByText("Temporary")).toBeInTheDocument();
-    const fullRow = rowFor("Full Person");
+    const fullRow = rowFor(/Full Person/);
     expect(within(fullRow).getByText("No email")).toBeInTheDocument();
     expect(within(fullRow).getByText("Full account")).toBeInTheDocument();
     // The organizer enters a managed person's schedule.
