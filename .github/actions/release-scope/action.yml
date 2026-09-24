@@ -9,7 +9,7 @@ description: >-
 
 inputs:
   surface:
-    description: backend, frontend, or infrastructure
+    description: backend or frontend
     required: true
   paths:
     description: Newline-separated git pathspecs that this surface releases

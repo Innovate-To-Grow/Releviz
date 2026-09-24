@@ -10,7 +10,6 @@ const RESOURCE_AUDIT_MANIFEST = [
   ".github/workflows/release.yml",
   ".github/workflows/release-backend.yml",
   ".github/workflows/release-frontend.yml",
-  ".github/workflows/release-infrastructure.yml",
   ".github/actions/release-preflight/action.yml",
   ".github/actions/release-scope/action.yml",
   ".gitignore",

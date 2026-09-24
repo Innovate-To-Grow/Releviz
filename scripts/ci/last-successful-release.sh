@@ -2,7 +2,7 @@
 # Print the commit a production release surface last released successfully
 # on main, or nothing when it has never been released.
 #
-#   scripts/ci/last-successful-release.sh <backend|frontend|infrastructure>
+#   scripts/ci/last-successful-release.sh <backend|frontend>
 #
 # Production releases run as one "Releviz Production Release" workflow whose
 # surface jobs are reusable workflows, so a surface's history is the set of
@@ -20,9 +20,9 @@ set -euo pipefail
 
 surface="${1:-}"
 case "$surface" in
-  backend | frontend | infrastructure) ;;
+  backend | frontend) ;;
   *)
-    echo "usage: $0 <backend|frontend|infrastructure>" >&2
+    echo "usage: $0 <backend|frontend>" >&2
     exit 2
     ;;
 esac
@@ -38,7 +38,7 @@ orchestrated_success() {
   while IFS=$'\t' read -r run_id created_at head_sha; do
     [ -n "$run_id" ] || continue
     # A surface's job is named "<surface> / <job name>" in the orchestrating
-    # run; the surface is one of three literal words, so it is safe to inline.
+    # run; the surface is one of two literal words, so it is safe to inline.
     job_conclusion="$(
       api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" \
         --jq "[.jobs[] | select(.name | startswith(\"${surface} / \")) | .conclusion] | first // \"\"" \

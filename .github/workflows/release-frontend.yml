@@ -163,10 +163,10 @@ jobs:
         id: not_found_rule
         run: |
           set -euo pipefail
-          # The infrastructure release installs the app-level not-found rule;
-          # once it is live, every artifact must serve its 404 document.
-          # Recognize the legacy redirect too, so it cannot bypass the strict
-          # HTTP 404 smoke before infrastructure replaces it with a rewrite.
+          # The backend release installs the app-level not-found rule; once
+          # it is live, every artifact must serve its 404 document. Recognize
+          # the legacy redirect too, so it cannot bypass the strict HTTP 404
+          # smoke before the backend release replaces it with a rewrite.
           live="$(
             aws amplify get-app \
               --app-id "$AMPLIFY_APP_ID" \
