@@ -464,6 +464,8 @@ class TemporaryAccountCoverageTests(TestCase):
             participant_name="Contact participant",
             availability_inperson=default_availability(self.event),
             availability_virtual=default_availability(self.event),
+            # Never organizer-added (the invitation below is not member-linked).
+            response_claimed_at=timezone.now(),
         )
         EventInvitation.objects.create(
             event=self.event,
@@ -543,7 +545,8 @@ class TemporaryAccountCoverageTests(TestCase):
         self.assertEqual(payload["email"], "work-alias@example.com")
         self.assertNotEqual(payload["email"], "personal@example.com")
         self.assertEqual(payload["accountAccess"], "full")
-        self.assertFalse(payload["canOrganizerEditAvailability"])
+        # Added by the organizer and not yet claimed by the person.
+        self.assertTrue(payload["canOrganizerEditAvailability"])
 
     def test_organizer_participant_listing_ignores_duplicate_member_invitations(self):
         first = create_member("first@example.com", "First", "Member")

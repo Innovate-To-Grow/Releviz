@@ -2,6 +2,7 @@
 
 import logging
 
+from django.conf import settings
 from django.db import DatabaseError, connection
 from django.utils.cache import patch_cache_control
 from rest_framework.decorators import api_view, permission_classes
@@ -14,7 +15,7 @@ logger = logging.getLogger(__name__)
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def health_live(request):
-    response = Response({"ok": True})
+    response = Response({"ok": True, "release": settings.APP_RELEASE or None})
     patch_cache_control(response, no_store=True)
     return response
 
@@ -29,10 +30,16 @@ def health_ready(request):
     except DatabaseError:
         logger.warning("readiness_check_failed", exc_info=True)
         response = Response(
-            {"ok": False, "checks": {"database": "unavailable"}},
+            {
+                "ok": False,
+                "checks": {"database": "unavailable"},
+                "release": settings.APP_RELEASE or None,
+            },
             status=503,
         )
     else:
-        response = Response({"ok": True, "checks": {"database": "ok"}})
+        response = Response(
+            {"ok": True, "checks": {"database": "ok"}, "release": settings.APP_RELEASE or None}
+        )
     patch_cache_control(response, no_store=True)
     return response

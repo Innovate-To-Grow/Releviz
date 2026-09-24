@@ -425,6 +425,45 @@ test("managed schedule drawer is a labelled modal dialog that traps focus and cl
   expect(props.onClose).toHaveBeenCalledTimes(1);
 });
 
+test("managed schedule drawer explains who can edit each kind of participant", () => {
+  const { rerender } = renderDrawer({
+    participant: {
+      id: "roster-2",
+      name: "Full Fiona",
+      accountAccess: "full",
+      canOrganizerEditAvailability: true,
+    },
+  });
+  expect(
+    screen.getByText("Full account · not responded yet"),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByRole("textbox", { name: "Event display name" }),
+  ).toHaveAccessibleDescription(
+    "You can enter this schedule until they join, save, or submit it themselves; after that only they can change it. A version conflict will never be silently overwritten.",
+  );
+
+  // Organizer-managed people are always shared, whatever their account.
+  rerender(
+    <ManagedScheduleDrawer
+      {...renderDrawerProps({
+        participant: {
+          id: "roster-3",
+          name: "Managed Morgan",
+          accountAccess: "full",
+          organizerManaged: true,
+        },
+      })}
+    />,
+  );
+  expect(screen.getByText("Organizer-managed participant")).toBeInTheDocument();
+  expect(
+    screen.getByRole("textbox", { name: "Event display name" }),
+  ).toHaveAccessibleDescription(
+    "You and this participant edit the same response. A version conflict will never be silently overwritten.",
+  );
+});
+
 test("managed schedule drawer locks editing while saving, closed, or conflicted", () => {
   const { rerender } = renderDrawer({ participantName: "   " });
   expect(screen.getByRole("button", { name: "Save draft" })).toBeDisabled();

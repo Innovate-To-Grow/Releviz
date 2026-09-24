@@ -999,7 +999,8 @@ class RosterImportApiTests(TestCase):
         )
         self.assertEqual(schedule.status_code, 200)
         self.assertEqual(schedule.data["participant"]["memberId"], str(full_member.pk))
-        self.assertFalse(schedule.data["participant"]["canOrganizerEditAvailability"])
+        # Imported and untouched: the organizer may enter it until the person responds.
+        self.assertTrue(schedule.data["participant"]["canOrganizerEditAvailability"])
         self.assertIn("availabilityInperson", schedule.data["schedule"])
 
         patched = self.client.patch(

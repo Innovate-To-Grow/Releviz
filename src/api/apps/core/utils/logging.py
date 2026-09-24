@@ -36,6 +36,8 @@ SAFE_LOG_FIELDS = (
     "recipient_count",
     "deleted_version",
     "exception_type",
+    "account_access",
+    "denial_reason",
 )
 
 

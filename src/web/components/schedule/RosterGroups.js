@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import Alert from "@/components/ui/Alert";
 import AppButton from "@/components/ui/AppButton";
 import ConfirmDialog from "@/components/ui/ConfirmDialog";
@@ -103,11 +103,22 @@ export default function RosterGroups({
   const [pendingAction, setPendingAction] = useState("");
   // Group awaiting delete confirmation in the in-page dialog.
   const [pendingDelete, setPendingDelete] = useState(null);
+  const titleRef = useRef(null);
 
   const namedGroups = groups.filter((group) => group.name !== "");
   const busy = Boolean(busyGroup);
   const hasSelection = selectedCount > 0;
   const newGroupNameId = `${ids}-new-group-name`;
+  // The question is about the group as it was when asked: a lock, a rename or
+  // a delete elsewhere drops it rather than acting on something else later.
+  const deleteTarget =
+    pendingDelete && !readOnly
+      ? (namedGroups.find(
+          (group) =>
+            group.id === pendingDelete.id && group.name === pendingDelete.name,
+        ) ?? null)
+      : null;
+  if (pendingDelete && !deleteTarget) setPendingDelete(null);
 
   const runAction = async (key, action) => {
     setPendingAction(key);
@@ -183,18 +194,26 @@ export default function RosterGroups({
   };
 
   const confirmDelete = async () => {
-    const group = pendingDelete;
-    await runAction(`${groupFilterValue(group.name)}:delete`, () =>
-      onDelete(group),
+    const group = deleteTarget;
+    const deleted = await runAction(
+      `${groupFilterValue(group.name)}:delete`,
+      () => onDelete(group),
     );
     setPendingDelete(null);
+    // The row and its Delete button are gone, so focus a stable landmark.
+    if (deleted) titleRef.current?.focus();
   };
 
   return (
     <section className="roster-groups" aria-labelledby={`${ids}-groups-title`}>
       <div className="roster-groups__header">
         <div className="roster-groups__copy">
-          <h4 id={`${ids}-groups-title`} className="roster-groups__title">
+          <h4
+            ref={titleRef}
+            id={`${ids}-groups-title`}
+            className="roster-groups__title"
+            tabIndex={-1}
+          >
             Groups
           </h4>
           <p className="roster-groups__description">
@@ -497,12 +516,12 @@ export default function RosterGroups({
         </p>
       )}
 
-      {pendingDelete && (
+      {deleteTarget && (
         <ConfirmDialog
-          title={`Delete group ${pendingDelete.name}?`}
+          title={`Delete group ${deleteTarget.name}?`}
           confirmLabel="Delete group"
           busy={
-            pendingAction === `${groupFilterValue(pendingDelete.name)}:delete`
+            pendingAction === `${groupFilterValue(deleteTarget.name)}:delete`
           }
           onConfirm={() => void confirmDelete()}
           onClose={() => setPendingDelete(null)}

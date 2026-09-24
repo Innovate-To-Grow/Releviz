@@ -175,7 +175,8 @@ class EmailCodeCompletionBranchTests(TestCase):
         with patch.object(Participant.objects, "filter", wraps=Participant.objects.filter) as query:
             payload = email_code._complete_registration(challenge)
         self.assertEqual(payload["message"], "Email verified. Registration successful.")
-        query.assert_not_called()
+        # Only the ownership claim runs; the empty display name skips the rename.
+        query.assert_called_once_with(member=member, response_claimed_at__isnull=True)
 
 
 class ViewHelperBranchTests(TestCase):

@@ -21,6 +21,7 @@ from django.db.models.functions import Coalesce, NullIf
 from apps.scheduling.models import EventInvitation, Participant, Weight
 from apps.scheduling.payloads.delivery import delivery_request_status_payload
 from apps.scheduling.payloads.participants import participant_memberships
+from apps.scheduling.permissions import organizer_may_edit_response
 from apps.scheduling.services.roster_imports import RosterImportError
 
 UNGROUPED_FILTER = "__ungrouped__"
@@ -53,10 +54,6 @@ def roster_queryset(event):
                 invitation_query.values("email")[:1],
                 output_field=CharField(),
             ),
-            roster_invitation_state=Subquery(
-                invitation_query.values("status")[:1],
-                output_field=CharField(),
-            ),
             roster_invitation_first_sent=Subquery(
                 invitation_query.values("first_sent_at")[:1],
                 output_field=DateTimeField(),
@@ -77,17 +74,7 @@ def roster_queryset(event):
         ),
         roster_invitation_status=Case(
             When(roster_invitation_first_sent__isnull=True, then=Value("not_sent")),
-            When(
-                Q(roster_invitation_accepted__isnull=False)
-                | Q(
-                    roster_invitation_state__in=[
-                        EventInvitation.Status.JOINED,
-                        EventInvitation.Status.DRAFT_SAVED,
-                        EventInvitation.Status.SUBMITTED,
-                    ]
-                ),
-                then=Value("accepted"),
-            ),
+            When(roster_invitation_accepted__isnull=False, then=Value("accepted")),
             default=Value("sent"),
             output_field=CharField(),
         ),
@@ -181,7 +168,7 @@ def participant_summary(participant) -> dict:
         "submitted": participant.submitted,
         "accountAccess": account_access,
         "organizerManaged": participant.organizer_managed,
-        "canOrganizerEditAvailability": account_access == "temporary",
+        "canOrganizerEditAvailability": organizer_may_edit_response(participant),
         "invitationStatus": getattr(participant, "roster_invitation_status", "not_sent"),
         "version": participant.version,
     }

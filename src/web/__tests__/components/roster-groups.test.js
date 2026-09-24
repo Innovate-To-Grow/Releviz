@@ -403,6 +403,116 @@ describe("RosterGroups", () => {
     );
   });
 
+  test("moves focus to the Groups heading once a confirmed delete succeeds", async () => {
+    // RosterPanel drops the deleted group from the list before the delete
+    // settles; the row's button goes with it, so focus lands on the heading.
+    let finishDelete;
+    const { handlers, rerender } = renderGroups({
+      onDelete: jest.fn(
+        () =>
+          new Promise((resolve) => {
+            finishDelete = () => resolve(true);
+          }),
+      ),
+    });
+    await click(
+      within(row("Faculty")).getByRole("button", { name: "Delete group" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Delete group Faculty?",
+    });
+    await click(within(dialog).getByRole("button", { name: "Delete group" }));
+    rerender(
+      <RosterGroups
+        {...handlers}
+        groups={groups.filter((group) => group.id !== 1)}
+        selectedCount={2}
+      />,
+    );
+    await act(async () => finishDelete());
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Groups" })).toHaveFocus();
+  });
+
+  test("returns focus to the row when a confirmed delete fails", async () => {
+    // The roster disables every group button while the request runs and
+    // re-enables them before the delete settles, as RosterPanel does.
+    let finishDelete;
+    const { handlers, rerender } = renderGroups({
+      onDelete: jest.fn(
+        () =>
+          new Promise((resolve) => {
+            finishDelete = () => resolve(false);
+          }),
+      ),
+    });
+    const remove = within(row("Faculty")).getByRole("button", {
+      name: "Delete group",
+    });
+    await click(remove);
+    const dialog = await screen.findByRole("dialog", {
+      name: "Delete group Faculty?",
+    });
+    await click(within(dialog).getByRole("button", { name: "Delete group" }));
+    rerender(
+      <RosterGroups
+        {...handlers}
+        groups={groups}
+        selectedCount={2}
+        busyGroup="Faculty"
+      />,
+    );
+    expect(remove).toBeDisabled();
+    rerender(<RosterGroups {...handlers} groups={groups} selectedCount={2} />);
+    await act(async () => finishDelete());
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(remove).toHaveFocus();
+  });
+
+  test("drops an open delete confirmation when the roster locks", async () => {
+    const { handlers, onDelete, rerender } = renderGroups();
+    await click(
+      within(row("Faculty")).getByRole("button", { name: "Delete group" }),
+    );
+    expect(
+      screen.getByRole("dialog", { name: "Delete group Faculty?" }),
+    ).toBeInTheDocument();
+    rerender(
+      <RosterGroups {...handlers} groups={groups} selectedCount={2} readOnly />,
+    );
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    // Reactivating later must not bring the old question back.
+    rerender(<RosterGroups {...handlers} groups={groups} selectedCount={2} />);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(onDelete).not.toHaveBeenCalled();
+  });
+
+  test("drops an open delete confirmation when the group changes underneath it", async () => {
+    const { handlers, onDelete, rerender } = renderGroups();
+    await click(
+      within(row("Faculty")).getByRole("button", { name: "Delete group" }),
+    );
+    // Another session renames Faculty; the question named the old group.
+    const renamed = groups.map((group) =>
+      group.id === 1 ? { ...group, name: "Staff" } : group,
+    );
+    rerender(<RosterGroups {...handlers} groups={renamed} selectedCount={2} />);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    await click(
+      within(row("Students")).getByRole("button", { name: "Delete group" }),
+    );
+    rerender(
+      <RosterGroups
+        {...handlers}
+        groups={renamed.filter((group) => group.id !== 2)}
+        selectedCount={2}
+      />,
+    );
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(onDelete).not.toHaveBeenCalled();
+  });
+
   test("creates an empty group with validation", async () => {
     // No selection is needed (and `selectedCount` may be left out entirely).
     const handlers = makeHandlers();

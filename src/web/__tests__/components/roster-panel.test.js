@@ -387,20 +387,56 @@ describe("RosterPanel schedule drawer", () => {
     );
   });
 
-  test("closes the drawer when the person upgraded to a full account, and reports other failures", async () => {
+  test("closes the drawer when the person took over their response", async () => {
     await renderPanel();
-    const upgraded = Object.assign(new Error("Forbidden"), {
+    const owned = Object.assign(new Error("Forbidden"), {
       status: 403,
-      errorCode: "organizer_edit_full_account",
+      errorCode: "organizer_edit_participant_owned",
     });
-    updateParticipant.mockRejectedValueOnce(upgraded);
+    updateParticipant.mockRejectedValueOnce(owned);
     let dialog = await openEditor();
     fireEvent.click(within(dialog).getByRole("button", { name: "Save draft" }));
     await waitFor(() =>
       expect(screen.getByRole("alert")).toHaveTextContent(
-        "This person now has a full account, so organizer editing is no longer allowed.",
+        "Temp Person now manages their own response, so you can no longer edit their schedule.",
       ),
     );
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(fetchRoster).toHaveBeenCalledTimes(2);
+
+    // A backend from before the rename still sends the legacy code.
+    updateParticipant.mockRejectedValueOnce(
+      Object.assign(new Error("Forbidden"), {
+        status: 403,
+        code: "organizer_edit_full_account",
+      }),
+    );
+    dialog = await openEditor();
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Submit on behalf" }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Temp Person now manages their own response, so you can no longer edit their schedule.",
+    );
+
+    // Any other 403 stays inside the drawer.
+    updateParticipant.mockRejectedValueOnce(
+      Object.assign(new Error("Not allowed."), {
+        status: 403,
+        errorCode: "event_not_active",
+      }),
+    );
+    dialog = await openEditor();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save draft" }));
+    await waitFor(() =>
+      expect(within(dialog).getByRole("alert")).toHaveTextContent(
+        "Not allowed.",
+      ),
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 
     updateParticipant.mockRejectedValueOnce(
@@ -481,6 +517,8 @@ describe("RosterPanel schedule drawer", () => {
       within(discardDialog).getByRole("button", { name: "Discard changes" }),
     );
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+    expect(document.body.style.overflow).toBe("");
 
     // Tab wraps inside the drawer.
     dialog = await openEditor();
@@ -540,6 +578,67 @@ describe("RosterPanel schedule drawer", () => {
         "Unable to load Temp Person's schedule.",
       ),
     );
+  });
+
+  test("edits a full account's schedule until they respond themselves", async () => {
+    fetchRoster.mockResolvedValue(
+      rosterResponse([participant({ accountAccess: "full" })]),
+    );
+    fetchRosterSchedule.mockResolvedValue(
+      scheduleResponse({
+        participant: {
+          id: "roster-row-1",
+          memberId: "p-1",
+          name: "Temp Person",
+          version: 4,
+          accountAccess: "full",
+          canOrganizerEditAvailability: true,
+        },
+      }),
+    );
+    updateParticipant.mockResolvedValue({ participant: { version: 5 } });
+    await renderPanel();
+    const row = (await screen.findByText("Temp Person")).closest("tr");
+    expect(row).toHaveTextContent("Full account");
+    const dialog = await openEditor();
+    expect(
+      within(dialog).getByText("Full account · not responded yet"),
+    ).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save draft" }));
+    await waitFor(() =>
+      expect(updateParticipant).toHaveBeenCalledWith(
+        "ROSTER1",
+        "p-1",
+        expect.objectContaining({ name: "Temp Person", submitted: 0 }),
+        "token",
+      ),
+    );
+  });
+
+  test("reloads instead of opening a response the person has claimed since the roster loaded", async () => {
+    fetchRosterSchedule.mockResolvedValue(
+      scheduleResponse({
+        participant: {
+          id: "roster-row-1",
+          memberId: "p-1",
+          name: "Temp Person",
+          version: 4,
+          accountAccess: "full",
+          canOrganizerEditAvailability: false,
+        },
+      }),
+    );
+    await renderPanel();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Edit schedule" }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Temp Person now manages their own response, so you can no longer edit their schedule.",
+      ),
+    );
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(fetchRoster).toHaveBeenCalledTimes(2);
   });
 
   test("locks editing while responses are closed", async () => {
@@ -1810,6 +1909,76 @@ describe("RosterPanel adds people and sends invitations", () => {
       "Ben is already on this roster. No new invitation was sent.",
     );
     expect(onDeliveryRequestChange).not.toHaveBeenCalled();
+  });
+
+  test("Add only for an existing full account explains Edit schedule and selects nobody", async () => {
+    createManagedParticipant.mockResolvedValueOnce({
+      participant: {
+        id: "m-9",
+        name: "Avery",
+        accountAccess: "full",
+        canOrganizerEditAvailability: true,
+      },
+      created: true,
+      memberCreated: false,
+      autoInvitedCount: 0,
+    });
+    sendRosterInvitations.mockResolvedValueOnce({
+      deliveryRequest: null,
+      requestedCount: 1,
+      queuedCount: 1,
+      skippedCount: 0,
+    });
+    const { form, name, email } = await openAddPersonForm();
+    fireEvent.change(name, { target: { value: "Avery" } });
+    fireEvent.change(email, { target: { value: "avery@example.com" } });
+    fireEvent.submit(form);
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Avery was added. No invitation was sent. They already have a Releviz account, so you can use Edit schedule until they respond themselves.",
+    );
+    await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(2));
+
+    // Adding someone never selects them, so the next send reaches only the
+    // people the organizer checks.
+    expect(screen.getAllByText("0 selected")).toHaveLength(2);
+    screen
+      .getAllByRole("button", { name: "Send invitation" })
+      .forEach((button) => expect(button).toBeDisabled());
+    fireEvent.click(screen.getByLabelText("Select Ben"));
+    expect(screen.getAllByText("1 selected")).toHaveLength(2);
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Send invitation" })[0],
+    );
+    await waitFor(() =>
+      expect(sendRosterInvitations).toHaveBeenCalledWith(
+        "ROSTER1",
+        expect.objectContaining({ participantIds: ["p-2"] }),
+        "token",
+      ),
+    );
+  });
+
+  test("Add only skips the Edit schedule hint for an account the organizer cannot edit", async () => {
+    createManagedParticipant.mockResolvedValueOnce({
+      participant: {
+        id: "m-9",
+        name: "Avery",
+        accountAccess: "full",
+        canOrganizerEditAvailability: false,
+      },
+      created: false,
+      restored: true,
+      autoInvitedCount: 0,
+    });
+    const { form, name, email } = await openAddPersonForm();
+    fireEvent.change(name, { target: { value: "Avery" } });
+    fireEvent.change(email, { target: { value: "avery@example.com" } });
+    fireEvent.submit(form);
+    const notice = await screen.findByRole("status");
+    expect(notice).toHaveTextContent(
+      "Avery was added. No invitation was sent.",
+    );
+    expect(notice).not.toHaveTextContent("Edit schedule");
   });
 
   test("Add and send invitation queues the email and shows its own busy label", async () => {

@@ -644,6 +644,8 @@ class EventInvitationUnifiedAuthTests(APITestCase):
         self.assertTrue(contact.verified)
         self.assertEqual(participant.pk, original_ids["participant"])
         self.assertEqual(participant.member_id, member.pk)
+        # The upgrade hands the response to the person.
+        self.assertIsNotNone(participant.response_claimed_at)
         self.assertEqual(invitation.pk, original_ids["invitation"])
         self.assertEqual(invitation.member_id, member.pk)
         self.assertEqual(user_event.pk, original_ids["user_event"])

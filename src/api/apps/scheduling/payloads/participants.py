@@ -1,5 +1,6 @@
 """API payloads for participants and their weights."""
 
+from apps.scheduling.permissions import organizer_may_edit_response
 from apps.scheduling.services.roster_groups import format_group_cell
 
 _INVITATION_NOT_PROVIDED = object()
@@ -76,11 +77,7 @@ def api_participant(
     account_access = getattr(member, "access_level", "full")
     if invitation is None or invitation.first_sent_at is None:
         invitation_status = "not_sent"
-    elif invitation.accepted_at is not None or invitation.status in {
-        "joined",
-        "draft_saved",
-        "submitted",
-    }:
+    elif invitation.accepted_at is not None:
         invitation_status = "accepted"
     else:
         invitation_status = "sent"
@@ -92,7 +89,7 @@ def api_participant(
             "email": private_email,
             "phone": participant.contact_phone,
             "invitationStatus": invitation_status,
-            "canOrganizerEditAvailability": account_access == "temporary",
+            "canOrganizerEditAvailability": organizer_may_edit_response(participant),
         }
     )
     return data

@@ -264,10 +264,12 @@ LOGGING = {
     },
 }
 
+APP_RELEASE = os.environ.get("SENTRY_RELEASE", "").strip()
+
 SENTRY_ENABLED = initialize_error_tracking(
     dsn=os.environ.get("SENTRY_DSN", "").strip(),
     environment=os.environ.get("SENTRY_ENVIRONMENT", "").strip(),
-    release=os.environ.get("SENTRY_RELEASE", "").strip(),
+    release=APP_RELEASE,
     traces_sample_rate=os.environ.get("SENTRY_TRACES_SAMPLE_RATE", "0.05").strip(),
 )
 

@@ -7,6 +7,8 @@ const footerLinks = [
 ];
 
 export default function SiteFooter() {
+  // Inlined at build time; empty outside the release pipeline.
+  const releaseSha = (process.env.NEXT_PUBLIC_RELEASE_SHA || "").trim();
   return (
     <footer className="site-footer">
       <div className="site-footer-inner">
@@ -23,6 +25,15 @@ export default function SiteFooter() {
             ))}
           </ul>
         </nav>
+        {releaseSha && (
+          <p
+            className="site-footer-release"
+            data-release={releaseSha}
+            title={releaseSha}
+          >
+            Release {releaseSha.slice(0, 7)}
+          </p>
+        )}
       </div>
     </footer>
   );

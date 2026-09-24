@@ -534,7 +534,9 @@ class RosterInvitationApiTests(TestCase):
         self.assertEqual(entered.data["participant"]["invitationStatus"], "not_sent")
         grace_invitation = EventInvitation.objects.get(event=self.event, member=grace.member)
         self.assertEqual(grace_invitation.status, EventInvitation.Status.SUBMITTED)
-        self.assertIsNotNone(grace_invitation.accepted_at)
+        # A response the organizer enters is not the person accepting the invitation.
+        self.assertIsNone(grace_invitation.accepted_at)
+        self.assertIsNone(grace_invitation.joined_at)
         self.assertIsNone(grace_invitation.first_sent_at)
         self.assertEqual(self.roster_statuses()["grace@example.com"], "not_sent")
         self.assertEqual(self.participant_statuses()["grace@example.com"], "not_sent")
@@ -579,5 +581,21 @@ class RosterInvitationApiTests(TestCase):
         resend_grace = self.send([grace.pk])
         self.assertEqual(resend_grace.data["queuedCount"], 1)
         self.assertEqual(dispatch_due_email_jobs(limit=10)["sent"], 1)
+        self.assertEqual(self.roster_statuses()["grace@example.com"], "sent")
+        self.assertEqual(self.participant_statuses()["grace@example.com"], "sent")
+
+        grace.refresh_from_db()
+        grace_client = APIClient()
+        grace_client.credentials(HTTP_AUTHORIZATION=f"Bearer {token_for(grace.member)}")
+        own = grace_client.put(
+            (f"/events/participants/update?code={self.event.code}&participantId={grace.member_id}"),
+            {
+                "availabilityInperson": [1, 1],
+                "submitted": 1,
+                "expectedVersion": grace.version,
+            },
+            format="json",
+        )
+        self.assertEqual(own.status_code, 200, own.data)
         self.assertEqual(self.roster_statuses()["grace@example.com"], "accepted")
         self.assertEqual(self.participant_statuses()["grace@example.com"], "accepted")

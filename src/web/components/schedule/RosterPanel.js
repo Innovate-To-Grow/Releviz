@@ -67,6 +67,15 @@ function groupValue(participant) {
   return participant.group ?? "";
 }
 
+const OWNED_RESPONSE_CODES = new Set([
+  "organizer_edit_participant_owned",
+  "organizer_edit_full_account", // legacy backend during a split release
+]);
+
+function ownedResponseMessage(name) {
+  return `${name} now manages their own response, so you can no longer edit their schedule.`;
+}
+
 function accountLabel(participant) {
   if (participant.organizerManaged) return "Organizer-managed";
   return participant.accountAccess === "temporary"
@@ -444,7 +453,6 @@ const RosterPanel = forwardRef(function RosterPanel(
         throw new Error("The participant was added without a roster ID.");
       }
 
-      updateSelected((current) => new Set([...current, addedParticipant.id]));
       onResultsInvalidated?.();
       const autoInvitedCount = data.autoInvitedCount || 0;
       const alreadyOnRoster = data.created === false && !data.restored;
@@ -457,17 +465,23 @@ const RosterPanel = forwardRef(function RosterPanel(
       await loadRoster();
       const displayName = addedParticipant.name || normalizedName;
       const alreadyOnRosterNotice = `${displayName} is already on this roster. No new invitation was sent.`;
-      setInviteNotice(
-        inviteManaged
-          ? data.created || data.restored
-            ? `${displayName} was added. Use Edit schedule to enter their availability.`
-            : alreadyOnRosterNotice
-          : autoInvitedCount > 0
-            ? `${displayName} is ready to respond. Their invitation was queued.`
-            : sendInvitation || alreadyOnRoster
-              ? alreadyOnRosterNotice
-              : `${displayName} was added. No invitation was sent.`,
-      );
+      const baseNotice = inviteManaged
+        ? data.created || data.restored
+          ? `${displayName} was added. Use Edit schedule to enter their availability.`
+          : alreadyOnRosterNotice
+        : autoInvitedCount > 0
+          ? `${displayName} is ready to respond. Their invitation was queued.`
+          : sendInvitation || alreadyOnRoster
+            ? alreadyOnRosterNotice
+            : `${displayName} was added. No invitation was sent.`;
+      const fullAccountNote =
+        !inviteManaged &&
+        (data.created || data.restored) &&
+        addedParticipant.accountAccess === "full" &&
+        addedParticipant.canOrganizerEditAvailability
+          ? " They already have a Releviz account, so you can use Edit schedule until they respond themselves."
+          : "";
+      setInviteNotice(`${baseNotice}${fullAccountNote}`);
       setShowInvite(false);
       setInviteName("");
       setInviteEmail("");
@@ -939,6 +953,13 @@ const RosterPanel = forwardRef(function RosterPanel(
     try {
       const token = await getToken();
       const data = await fetchRosterSchedule(event.code, participant.id, token);
+      if (data.participant?.canOrganizerEditAvailability === false) {
+        // Claimed since the roster loaded. Reload first: loadRoster clears
+        // the panel error when it starts.
+        loadRoster();
+        setError(ownedResponseMessage(participant.name));
+        return;
+      }
       const loaded = participantFromSchedule(data, event.slotCount || 0);
       setEditor(loaded);
       setEditorName(loaded.name);
@@ -1035,15 +1056,14 @@ const RosterPanel = forwardRef(function RosterPanel(
         );
       } else if (
         requestError.status === 403 &&
-        (requestError.errorCode || requestError.code) ===
-          "organizer_edit_full_account"
+        OWNED_RESPONSE_CODES.has(requestError.errorCode || requestError.code)
       ) {
+        const name = editor.name;
         setEditor(null);
+        setDiscardConfirmOpen(false);
         // Reload first: loadRoster clears the panel error when it starts.
         loadRoster();
-        setError(
-          "This person now has a full account, so organizer editing is no longer allowed.",
-        );
+        setError(ownedResponseMessage(name));
       } else {
         setEditorError(requestError.message || "Unable to save this schedule.");
       }

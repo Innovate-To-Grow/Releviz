@@ -40,7 +40,14 @@ def mark_invitation_for_member(
     member,
     submitted: bool = False,
     draft_saved: bool = False,
+    accept: bool = True,
 ) -> None:
+    """Advance the member's invitations on this event to match their response.
+
+    ``accept=False`` is for responses the organizer enters on someone's behalf: the
+    status and response timestamps still advance (so reminders skip a submitted
+    response), but accepted_at/joined_at stay reserved for the person's own actions.
+    """
     normalized = member_invitation_emails(member)
     if not normalized:
         return
@@ -73,12 +80,13 @@ def mark_invitation_for_member(
         if status_order.get(invitation.status, 0) < status_order[target_status]:
             invitation.status = target_status
             update_fields.append("status")
-        if invitation.accepted_at is None:
-            invitation.accepted_at = now
-            update_fields.append("accepted_at")
-        if invitation.joined_at is None:
-            invitation.joined_at = now
-            update_fields.append("joined_at")
+        if accept:
+            if invitation.accepted_at is None:
+                invitation.accepted_at = now
+                update_fields.append("accepted_at")
+            if invitation.joined_at is None:
+                invitation.joined_at = now
+                update_fields.append("joined_at")
         if draft_saved:
             invitation.draft_saved_at = now
             update_fields.append("draft_saved_at")

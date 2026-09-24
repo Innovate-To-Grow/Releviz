@@ -16,6 +16,7 @@ from apps.scheduling.models import (
     Event,
     EventInvitation,
     Participant,
+    ScheduleEditRecord,
     TemporaryEventSession,
 )
 from apps.scheduling.services.results.snapshots import recompute_event_results
@@ -178,22 +179,57 @@ class TemporaryParticipantAccessTests(TestCase):
         self.assertEqual(full.status_code, 201)
         self.assertEqual(full.data["participant"]["id"], str(self.full_member.pk))
         self.assertEqual(full.data["participant"]["accountAccess"], "full")
-        self.assertFalse(full.data["participant"]["canOrganizerEditAvailability"])
-        denied = self.organizer_client.put(
-            (
-                f"/events/participants/update?code={self.event.code}"
-                f"&participantId={self.full_member.pk}"
-            ),
+        # The existing account has not answered yet, so the organizer may enter it.
+        self.assertTrue(full.data["participant"]["canOrganizerEditAvailability"])
+        update_url = (
+            f"/events/participants/update?code={self.event.code}"
+            f"&participantId={self.full_member.pk}"
+        )
+        entered = self.organizer_client.put(
+            update_url,
             {
-                "availabilityInperson": [1, 1],
+                "availabilityInperson": [0, 1],
                 "submitted": 0,
                 "expectedVersion": full.data["participant"]["version"],
             },
             format="json",
         )
+        self.assertEqual(entered.status_code, 200, entered.data)
+        full_participant = Participant.objects.get(event=self.event, member=self.full_member)
+        self.assertIsNone(full_participant.response_claimed_at)
+        self.assertEqual(
+            full_participant.schedule_edit_records.get().source,
+            ScheduleEditRecord.Source.ORGANIZER,
+        )
+
+        full_client = APIClient()
+        full_client.credentials(HTTP_AUTHORIZATION=f"Bearer {token_for(self.full_member)}")
+        own = full_client.put(
+            update_url,
+            {
+                "availabilityInperson": [1, 0],
+                "submitted": 0,
+                "expectedVersion": entered.data["participant"]["version"],
+            },
+            format="json",
+        )
+        self.assertEqual(own.status_code, 200, own.data)
+        full_participant.refresh_from_db()
+        self.assertIsNotNone(full_participant.response_claimed_at)
+
+        denied = self.organizer_client.put(
+            update_url,
+            {
+                "availabilityInperson": [1, 1],
+                "submitted": 0,
+                "expectedVersion": own.data["participant"]["version"],
+            },
+            format="json",
+        )
         self.assertEqual(denied.status_code, 403)
-        self.assertEqual(denied.data["errorCode"], "organizer_edit_full_account")
+        self.assertEqual(denied.data["errorCode"], "organizer_edit_participant_owned")
         self.assertEqual(denied.data["participant"]["accountAccess"], "full")
+        self.assertIs(denied.data["participant"]["canOrganizerEditAvailability"], False)
 
     def test_managed_add_only_creates_the_person_without_queueing_an_invitation(self):
         key = uuid.uuid4()
@@ -264,7 +300,7 @@ class TemporaryParticipantAccessTests(TestCase):
         self.assertEqual(full.data["participant"]["id"], str(self.full_member.pk))
         self.assertFalse(full.data["memberCreated"])
         self.assertEqual(full.data["participant"]["accountAccess"], "full")
-        self.assertFalse(full.data["participant"]["canOrganizerEditAvailability"])
+        self.assertTrue(full.data["participant"]["canOrganizerEditAvailability"])
         self.assertEqual(full.data["participant"]["invitationStatus"], "not_sent")
         self.assertIsNone(full.data["deliveryRequest"])
         self.assertEqual(full.data["autoInvitedCount"], 0)

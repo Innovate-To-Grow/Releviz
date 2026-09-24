@@ -38,7 +38,9 @@ after finalization the event must be reactivated first.
 
 Adding people and sending invitations are separate steps. **Add person** opens a form with two
 actions: **Add only** puts the person on the roster without sending email (pressing Enter does the
-same), and **Add and send invitation** also emails their secure link right away.
+same), and **Add and send invitation** also emails their secure link right away. If the email
+already belongs to a Releviz account, that account is added; until the person responds themselves
+you can still enter their schedule with **Edit schedule**.
 
 The Roster tab also accepts `.xlsx`, `.csv`, or pasted CSV/TSV. Map the required `name` and `email`
 columns and optional `group`, `weight`, `included`, and `phone` columns, preview and correct rows,
@@ -58,8 +60,11 @@ To invite later, check people in the roster table and use **Send invitation** (s
 the table). It skips anyone whose invitation was already sent or is still queued unless **Resend to
 people already invited** is ticked; a resend keeps any custom message. The **Invitation** badge on
 each row shows **Not sent** (no email yet), **Sent** (emailed, including opened), or **Accepted**
-(joined, saved a draft, or submitted after the email); **Filter by invitation** offers the same
-three states. People who are **Not sent** receive no reminders until they are invited.
+(the person verified their link, joined, or saved or submitted their own response after the email;
+a response you enter for them does not count, although an invitation an earlier release already
+marked **Accepted** that way keeps the badge); **Filter by invitation** offers the same three
+states. People who are **Not sent** receive no reminders until they are invited. Reminders still
+skip anyone whose response is submitted, including one you submitted for them.
 
 Only three actions send invitations: **Add and send invitation**, an import committed with the
 checkbox ticked, and **Send invitation**. Each commits its roster changes and durable invitation
@@ -101,6 +106,9 @@ Each participant:
    slots with that availability level
 4. Clicks **Submit Schedule** when done
 
+If the organizer already added them, they skip **Join** and see any schedule the organizer entered;
+their first save or submit makes the response theirs.
+
 By default every slot starts **Available** (all green in person, all blue virtual), so a
 participant paints **Busy** over the times that do not work rather than hunting for the times that
 do. The brush pre-selects the opposite of the starting state (Busy for an Available start), and
@@ -126,10 +134,15 @@ Roster, Results, and Finalize. The organizer can:
 
 - search/filter a server-paginated roster (50 rows by default, 100 maximum);
 - load one person's schedule only when its edit drawer opens;
-- co-edit a temporary participant while the event is active, until that identity upgrades to a
-  verified full account;
+- enter, save, or submit someone's schedule with **Edit schedule** while the event is active:
+  always for organizer-managed and temporary people, and for someone with a full account (including
+  one that already existed when you added them) until they respond themselves (join, save or
+  submit their own response, or upgrade a temporary identity to a full account). After that the
+  row shows **Self-managed** and only they can change their answers; a version conflict is never
+  silently overwritten;
 - create groups (empty at first) and fill them from the list checkboxes; a person may be in many
-  groups, and the `ALL` flag places them in every group;
+  groups, and the `ALL` flag places them in every group. **Delete group** asks for confirmation in
+  the page before deleting, and the group's people stay on the roster;
 - apply group/filter/selection weight and included changes, then override an individual;
 - view the top ten meeting-duration candidates ranked by weighted availability, unweighted
   availability, fully available count, and configured-time order;
@@ -301,7 +314,8 @@ that an application, browser, infrastructure, or security area was skipped.
 - `APP_LOG_LEVEL` (default: `INFO`; structured JSON application log threshold)
 - `SENTRY_DSN` (optional; external error tracking remains disabled when empty)
 - `SENTRY_ENVIRONMENT`
-- `SENTRY_RELEASE` (use an immutable image digest or Git revision)
+- `SENTRY_RELEASE` (use an immutable image digest or Git revision; also reported as `release` by
+  the health endpoints)
 - `SENTRY_TRACES_SAMPLE_RATE` (default: `0.05`, range `0` through `1`)
 - `EMAIL_WORKER_BATCH_SIZE`, `EMAIL_WORKER_CONCURRENCY`, `EMAIL_WORKER_RATE_PER_SECOND`, and
   `EMAIL_WORKER_POLL_SECONDS` (defaults: `100`, `10`, `10`, and `1`)
@@ -339,8 +353,12 @@ semantics, and continuous recommendations use the configured meeting duration.
 The roster source format, preview/merge/rebuild flow, duplicate rules, and paginated roster APIs
 are implemented in the scheduling app.
 
-Temporary/full identity rules, the restricted link session, shared versioned editing, upgrade, and
-rollback behavior are enforced by the authn app. Organizer-managed people are the one exception:
+Temporary/full identity rules, the restricted link session, upgrade, and rollback behavior are
+enforced by the authn app. The scheduling app enforces shared versioned editing and response
+ownership: the organizer may enter a full account's response only until the person claims it on
+that event (`Participant.response_claimed_at`, set when they join, save or submit their own
+response, or upgrade from a temporary identity, and never cleared while the row exists; a roster
+rebuild deletes rows, answers and claims together). Organizer-managed people are the one exception:
 they are backed by an identity-less temporary member with no contact email, the shared address
 stays the organizer's login identity, and phone numbers are display-only (no SMS, no phone login).
 
@@ -453,10 +471,13 @@ and reminder tasks never receive the administrator password.
 
 The current SHA-tagged ECS frontend remains a hot migration fallback. The workflow also retains
 each Amplify ZIP and SHA256 file for 90 days and checks `/release.json` against the exact selected
-SHA at candidate, production-default, and canonical stages. If a release fails after replacing
-Amplify `main`, CD
-downloads the previous release's trusted Actions artifact, verifies its SHA256 and embedded
-`release.json`, and republishes it with Amplify `CreateDeployment` and `StartDeployment`. It does
+SHA at candidate, production-default, and canonical stages. To check which backend commit is
+live, read `release` from `https://api.releviz.com/health` (also `/health/live` and
+`/health/ready`): it is the backend's `SENTRY_RELEASE`, which the backend release sets to the
+deployed 40-character commit SHA, or `null` when unset. If a release fails after replacing
+Amplify `main`, CD downloads the previous release's trusted Actions artifact, verifies its SHA256
+and embedded `release.json`, and republishes it with Amplify `CreateDeployment` and
+`StartDeployment`. It does
 not retry completed Amplify job metadata, because this manually deployed,
 repository-disconnected app requires a freshly uploaded deployment. GitHub retains these rollback
 artifacts for 90 days; after that boundary, an old Amplify job record alone is not a recoverable

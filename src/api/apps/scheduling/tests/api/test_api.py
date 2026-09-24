@@ -2,7 +2,7 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.db import DatabaseError
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
 from apps.authn.tests.helpers import create_member, token_for
@@ -189,14 +189,18 @@ class RelevizApiTests(TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.data["participant"]["hidden"], 0)
 
+    # Pinned so a SENTRY_RELEASE exported in the shell cannot change the bodies.
+    @override_settings(APP_RELEASE="")
     def test_health_and_missing_or_unknown_event_errors(self):
         live = self.client.get("/health/live")
-        self.assertEqual(live.data, {"ok": True})
+        self.assertEqual(live.data, {"ok": True, "release": None})
         self.assertIn("no-store", live["Cache-Control"])
         for path in ["/health", "/health/ready"]:
             response = self.client.get(path)
             self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.data, {"ok": True, "checks": {"database": "ok"}})
+            self.assertEqual(
+                response.data, {"ok": True, "checks": {"database": "ok"}, "release": None}
+            )
             self.assertIn("no-store", response["Cache-Control"])
         self.assertEqual(self.client.get("/api/health").status_code, 404)
         self.authenticate(self.organizer)
@@ -223,6 +227,7 @@ class RelevizApiTests(TestCase):
         )
         self.assertEqual(self.client.get("/events/weights?code=NOPE").status_code, 404)
 
+    @override_settings(APP_RELEASE="")
     @patch("apps.scheduling.views.health.connection.cursor")
     def test_readiness_reports_database_failure_without_details(self, cursor):
         cursor.side_effect = DatabaseError("database credentials must not leak")
@@ -233,10 +238,32 @@ class RelevizApiTests(TestCase):
             self.assertEqual(response.status_code, 503)
             self.assertEqual(
                 response.data,
-                {"ok": False, "checks": {"database": "unavailable"}},
+                {"ok": False, "checks": {"database": "unavailable"}, "release": None},
             )
             self.assertNotContains(response, "credentials", status_code=503)
             self.assertIn("readiness_check_failed", logs.output[0])
+
+    @override_settings(APP_RELEASE="0123456789abcdef0123456789abcdef01234567")
+    def test_health_probes_report_the_release(self):
+        release = "0123456789abcdef0123456789abcdef01234567"
+        self.assertEqual(self.client.get("/health/live").data, {"ok": True, "release": release})
+        for path in ["/health", "/health/ready"]:
+            response = self.client.get(path)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(
+                response.data, {"ok": True, "checks": {"database": "ok"}, "release": release}
+            )
+
+        with patch("apps.scheduling.views.health.connection.cursor") as cursor:
+            cursor.side_effect = DatabaseError("unavailable")
+            for path in ["/health", "/health/ready"]:
+                with self.assertLogs("apps.scheduling.views.health", level="WARNING"):
+                    response = self.client.get(path)
+                self.assertEqual(response.status_code, 503)
+                self.assertEqual(
+                    response.data,
+                    {"ok": False, "checks": {"database": "unavailable"}, "release": release},
+                )
 
     def test_event_create_validation_and_defaults(self):
         self.authenticate(self.organizer)

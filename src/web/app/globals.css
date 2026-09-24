@@ -315,6 +315,14 @@ code {
   color: var(--bs-link-hover-color);
 }
 
+.site-footer-release {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--bs-secondary-color);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
 /* ---------------------------------------------------------------------------
  * Shared components
  * ------------------------------------------------------------------------- */

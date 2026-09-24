@@ -1452,6 +1452,34 @@ describe("business API helpers", () => {
     });
   });
 
+  test("participant updates pass the owned-response refusal through", async () => {
+    global.fetch.mockResolvedValueOnce(
+      jsonResponse(
+        {
+          error:
+            "This participant now manages their own response, so the organizer can no longer change it.",
+          errorCode: "organizer_edit_participant_owned",
+          participant: {
+            id: "participant-1",
+            canOrganizerEditAvailability: false,
+          },
+        },
+        { status: 403 },
+      ),
+    );
+
+    await expect(
+      updateParticipant("ABC", "participant-1", {}, "tok"),
+    ).rejects.toMatchObject({
+      status: 403,
+      errorCode: "organizer_edit_participant_owned",
+      participant: {
+        id: "participant-1",
+        canOrganizerEditAvailability: false,
+      },
+    });
+  });
+
   test("roster group helpers build authenticated requests and surface conflicts", async () => {
     const group = { id: 7, name: "Faculty", count: 0, weight: null };
     global.fetch

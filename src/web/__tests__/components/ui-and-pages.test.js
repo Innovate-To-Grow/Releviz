@@ -21,6 +21,7 @@ import useAutosaveNavigationGuard from "@/components/schedule/useAutosaveNavigat
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
 import EventHeader from "@/components/event/EventHeader";
 import AccountMenu from "@/components/ui/AccountMenu";
+import SiteFooter from "@/components/ui/SiteFooter";
 import StatusBadge, { toneFor } from "@/components/ui/StatusBadge";
 import {
   AVAILABILITY_CHOICES,
@@ -1538,6 +1539,7 @@ describe("app pages", () => {
     jest.clearAllMocks();
     searchParams = new URLSearchParams();
     delete process.env.AMPLIFY_STATIC_EXPORT;
+    delete process.env.NEXT_PUBLIC_RELEASE_SHA;
     useAuth.mockReturnValue({ user: null, loading: false, logout: jest.fn() });
   });
 
@@ -1576,6 +1578,7 @@ describe("app pages", () => {
     expect(
       screen.queryByRole("link", { name: "Report a problem" }),
     ).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Release /)).not.toBeInTheDocument();
     SignInPage();
     SignUpPage();
     expect(redirect).toHaveBeenCalledWith("/login");
@@ -1752,15 +1755,48 @@ describe("app pages", () => {
     ).toBeInTheDocument();
   });
 
+  test("site footer shows the build release only when one is provided", () => {
+    const sha = "0123456789abcdef0123456789abcdef01234567";
+    process.env.NEXT_PUBLIC_RELEASE_SHA = ` ${sha} `;
+    const { rerender } = render(<SiteFooter />);
+    const release = screen.getByText("Release 0123456");
+    expect(release).toHaveAttribute("data-release", sha);
+    expect(release).toHaveAttribute("title", sha);
+
+    process.env.NEXT_PUBLIC_RELEASE_SHA = "   ";
+    rerender(<SiteFooter />);
+    expect(screen.queryByText(/^Release /)).not.toBeInTheDocument();
+
+    delete process.env.NEXT_PUBLIC_RELEASE_SHA;
+    rerender(<SiteFooter />);
+    expect(screen.queryByText(/^Release /)).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("navigation", { name: "Footer" }),
+    ).toBeInTheDocument();
+  });
+
   test("Account recovery requests a code, validates passwords, and resets", async () => {
     requestPasswordResetCode.mockResolvedValue({ message: "sent" });
     confirmPasswordReset.mockResolvedValue({ message: "reset" });
     const recovery = render(<RecoverAccountPage />);
+    const email = screen.getByLabelText("Email");
+    const sendResetCode = screen.getByRole("button", {
+      name: "Send reset code",
+    });
 
-    await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
-    await userEvent.click(
-      screen.getByRole("button", { name: "Send reset code" }),
-    );
+    expect(sendResetCode).toBeDisabled();
+    await userEvent.type(email, "   ");
+    expect(sendResetCode).toBeDisabled();
+    await userEvent.clear(email);
+    await userEvent.type(email, "ada@example");
+    expect(sendResetCode).toBeDisabled();
+    await userEvent.click(sendResetCode);
+    await userEvent.type(email, "{Enter}");
+    expect(requestPasswordResetCode).not.toHaveBeenCalled();
+
+    await userEvent.type(email, ".com");
+    expect(sendResetCode).toBeEnabled();
+    await userEvent.click(sendResetCode);
     await waitFor(() =>
       expect(requestPasswordResetCode).toHaveBeenCalledWith({
         email: "ada@example.com",

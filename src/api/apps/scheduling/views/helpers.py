@@ -57,7 +57,8 @@ def organizer_participant_payload(participant, event):
 
 
 def organizer_response_write_error(event) -> str | None:
-    """Organizers may fill temporary schedules outside the participant deadline."""
+    """Organizers may fill schedules they may still enter (organizer-managed,
+    temporary, or not yet claimed) outside the participant deadline."""
 
     if event.status != Event.Status.ACTIVE:
         return f"Organizer-entered responses cannot change while the event is {event.status}."
