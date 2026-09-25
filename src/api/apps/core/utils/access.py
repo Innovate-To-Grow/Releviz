@@ -3,7 +3,7 @@
 The project replaced per-user Django ``user_permissions`` with coarse per-app access:
 an admin member carries a list of app labels (``Member.admin_apps``) and may
 view/add/change/delete every model in any app on that list. ``is_superuser`` (the
-I2G Master account) bypasses the list entirely.
+Releviz Master account) bypasses the list entirely.
 
 This helper is the single source of truth for that decision across the Django admin,
 admin navigation, and member permission helpers. It deliberately *duck-types* the
@@ -15,7 +15,7 @@ keeps no import dependency on ``apps.authn``.
 def user_can_access_app(user, app_label: str) -> bool:
     """Return whether ``user`` may manage records in the Django app ``app_label``.
 
-    Access requires an authenticated, active staff member. Superusers (I2G Master)
+    Access requires an authenticated, active staff member. Superusers (Releviz Master)
     are always granted. Everyone else is granted only for the apps listed in their
     ``admin_apps``.
     """

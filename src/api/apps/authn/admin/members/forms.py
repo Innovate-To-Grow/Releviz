@@ -34,8 +34,8 @@ def admin_app_choices():
 class Base64ImageWidget(forms.ClearableFileInput):
     """File upload widget that stores the image as a base64-encoded string in a TextField."""
 
-    # i2g-admin-file-input: see admin/css/file-input.css (WebKit file button styling).
-    _file_classes = "i2g-admin-file-input block w-full text-sm text-font-default-light dark:text-font-default-dark"
+    # releviz-admin-file-input: see admin/css/file-input.css (WebKit file button styling).
+    _file_classes = "releviz-admin-file-input block w-full text-sm text-font-default-light dark:text-font-default-dark"
 
     def __init__(self, attrs=None):
         defaults = {"class": self._file_classes}
@@ -144,7 +144,7 @@ class MemberChangeForm(UserChangeForm):
         required=False,
         widget=forms.CheckboxSelectMultiple,
         label=_("Admin apps"),
-        help_text=_("Apps this member may manage. Superusers (I2G Master) ignore this list."),
+        help_text=_("Apps this member may manage. Superusers (Releviz Master) ignore this list."),
     )
 
     class Meta(UserChangeForm.Meta):
@@ -181,7 +181,7 @@ class MemberImportForm(forms.Form):
         "w-full border border-base-200 dark:border-base-700 bg-white dark:bg-base-900"
         " text-font-default-light dark:text-font-default-dark rounded-default px-3 py-2 text-sm"
     )
-    _file_classes = "i2g-admin-file-input block w-full text-sm text-font-default-light dark:text-font-default-dark"
+    _file_classes = "releviz-admin-file-input block w-full text-sm text-font-default-light dark:text-font-default-dark"
 
     excel_file = forms.FileField(
         label="Excel File",

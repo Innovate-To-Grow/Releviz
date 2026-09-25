@@ -14,7 +14,7 @@ _SESSION_STEP = "admin_login_step"
 _SESSION_EMAIL = "admin_login_email"
 _SESSION_MEMBER_ID = "admin_login_member_id"
 _SESSION_HIDE_EMAIL = "admin_login_hide_email"
-LAST_ADMIN_LOGIN_COOKIE_NAME = "i2g_last_admin_member"
+LAST_ADMIN_LOGIN_COOKIE_NAME = "releviz_last_admin_member"
 LAST_ADMIN_LOGIN_COOKIE_MAX_AGE = 60 * 60 * 24 * 30
 _LAST_ADMIN_LOGIN_COOKIE_PATH = "/admin/"
 

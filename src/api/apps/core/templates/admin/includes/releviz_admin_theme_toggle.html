@@ -1,19 +1,19 @@
 {% load i18n %}
 
-<div class="i2g-admin-theme-toggle"
-     data-testid="i2g-admin-theme-toggle"
+<div class="releviz-admin-theme-toggle"
+     data-testid="releviz-admin-theme-toggle"
      x-data="{ openTheme: false, adminTheme: window.adminTheme || 'auto', switchAdminTheme(themeName) { window.switchTheme(themeName); this.adminTheme = themeName; this.openTheme = false } }"
-     x-on:i2g-admin-theme-change.window="adminTheme = $event.detail.theme">
+     x-on:releviz-admin-theme-change.window="adminTheme = $event.detail.theme">
     <button type="button"
-            class="i2g-admin-theme-toggle__button"
+            class="releviz-admin-theme-toggle__button"
             aria-label="{% translate 'Switch admin theme' %}"
             aria-haspopup="menu"
             x-on:click="openTheme = !openTheme"
             x-bind:aria-expanded="openTheme.toString()">
-        <span class="material-symbols-outlined i2g-admin-theme-toggle__icon"
+        <span class="material-symbols-outlined releviz-admin-theme-toggle__icon"
               aria-hidden="true"
               x-text="adminTheme == 'dark' && 'dark_mode' || adminTheme == 'light' && 'light_mode' || 'computer'">computer</span>
-        <span class="i2g-admin-theme-toggle__text"
+        <span class="releviz-admin-theme-toggle__text"
               data-light-label="{% translate 'Light' %}"
               data-dark-label="{% translate 'Dark' %}"
               data-system-label="{% translate 'System' %}"
@@ -23,14 +23,14 @@
     <!-- Alpine's .escape modifier handles the Escape key; it does not disable JSF escaping. -->
     <!-- nosemgrep: java.lang.security.audit.xss.jsf.autoescape-disabled.autoescape-disabled -->
     <nav x-on:keydown.escape.window="openTheme = false"
-         class="i2g-admin-theme-toggle__menu"
+         class="releviz-admin-theme-toggle__menu"
          aria-label="{% translate 'Admin theme options' %}"
          x-cloak
          x-show="openTheme"
          x-transition
          x-on:click.outside="openTheme = false">
         <button type="button"
-                class="i2g-admin-theme-toggle__option"
+                class="releviz-admin-theme-toggle__option"
                 data-admin-theme-choice="light"
                 x-on:click="switchAdminTheme('light')"
                 x-bind:class="adminTheme == 'light' && 'is-active'">
@@ -39,7 +39,7 @@
         </button>
 
         <button type="button"
-                class="i2g-admin-theme-toggle__option"
+                class="releviz-admin-theme-toggle__option"
                 data-admin-theme-choice="dark"
                 x-on:click="switchAdminTheme('dark')"
                 x-bind:class="adminTheme == 'dark' && 'is-active'">
@@ -48,7 +48,7 @@
         </button>
 
         <button type="button"
-                class="i2g-admin-theme-toggle__option"
+                class="releviz-admin-theme-toggle__option"
                 data-admin-theme-choice="auto"
                 x-on:click="switchAdminTheme('auto')"
                 x-bind:class="adminTheme == 'auto' && 'is-active'">

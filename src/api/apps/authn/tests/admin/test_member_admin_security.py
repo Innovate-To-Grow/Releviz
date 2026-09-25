@@ -80,7 +80,7 @@ class ImpersonateAuthorizationTests(TestCase):
         self.assertTrue(ImpersonationToken.objects.filter(member=self.regular_target).exists())
 
     def test_superuser_cannot_impersonate_another_superuser(self):
-        # Even I2G Master may not impersonate another privileged account.
+        # Even Releviz Master may not impersonate another privileged account.
         other_super = Member.objects.create_superuser(
             password="StrongPass123!", first_name="Other", last_name="Master", is_active=True
         )

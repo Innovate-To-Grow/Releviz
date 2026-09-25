@@ -76,11 +76,11 @@ html[x-cloak] {
     padding-right: 0 !important;
 }
 
-.i2g-admin-theme-toggle {
+.releviz-admin-theme-toggle {
     position: relative;
 }
 
-.i2g-admin-theme-toggle__button {
+.releviz-admin-theme-toggle__button {
     align-items: center;
     background-color: var(--md-sys-color-surface-container-lowest);
     border: 1px solid var(--md-sys-color-outline-variant);
@@ -98,34 +98,34 @@ html[x-cloak] {
     white-space: nowrap;
 }
 
-.i2g-admin-theme-toggle__button:hover,
-.i2g-admin-theme-toggle__button[aria-expanded="true"] {
+.releviz-admin-theme-toggle__button:hover,
+.releviz-admin-theme-toggle__button[aria-expanded="true"] {
     background-color: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
     border-color: var(--md-sys-color-primary);
     color: var(--md-sys-color-primary);
 }
 
-.i2g-admin-theme-toggle__button:focus-visible,
-.i2g-admin-theme-toggle__option:focus-visible {
+.releviz-admin-theme-toggle__button:focus-visible,
+.releviz-admin-theme-toggle__option:focus-visible {
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--md-sys-color-primary) 28%, transparent);
     outline: none;
 }
 
-.i2g-admin-theme-toggle__icon,
-.i2g-admin-theme-toggle__option .material-symbols-outlined {
+.releviz-admin-theme-toggle__icon,
+.releviz-admin-theme-toggle__option .material-symbols-outlined {
     font-size: 18px !important;
     line-height: 1 !important;
     min-width: 18px;
     text-align: center;
 }
 
-.i2g-admin-theme-toggle__text {
+.releviz-admin-theme-toggle__text {
     max-width: 5.5rem;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 
-.i2g-admin-theme-toggle__menu {
+.releviz-admin-theme-toggle__menu {
     background-color: var(--md-sys-color-surface-container-lowest);
     border: 1px solid var(--md-sys-color-outline-variant);
     border-radius: var(--md-sys-shape-corner-small);
@@ -141,7 +141,7 @@ html[x-cloak] {
     z-index: 60;
 }
 
-.i2g-admin-theme-toggle__option {
+.releviz-admin-theme-toggle__option {
     align-items: center;
     background: transparent;
     border: 0;
@@ -159,25 +159,25 @@ html[x-cloak] {
     width: 100%;
 }
 
-.i2g-admin-theme-toggle__option:hover {
+.releviz-admin-theme-toggle__option:hover {
     background-color: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
     color: var(--md-sys-color-primary);
 }
 
-.i2g-admin-theme-toggle__option.is-active {
+.releviz-admin-theme-toggle__option.is-active {
     background-color: var(--md-sys-color-primary-container);
     color: var(--md-sys-color-on-primary-container);
 }
 
-.dark .i2g-admin-theme-toggle__button,
-.dark .i2g-admin-theme-toggle__menu {
+.dark .releviz-admin-theme-toggle__button,
+.dark .releviz-admin-theme-toggle__menu {
     background-color: var(--md-sys-color-surface-container);
 }
 
-.dark .i2g-admin-theme-toggle__button {
+.dark .releviz-admin-theme-toggle__button {
     color: var(--md-sys-color-on-surface);
 }
 
-.dark .i2g-admin-theme-toggle__option:hover {
+.dark .releviz-admin-theme-toggle__option:hover {
     background-color: color-mix(in srgb, var(--md-sys-color-primary) 16%, transparent);
 }

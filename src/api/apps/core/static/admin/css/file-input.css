@@ -5,14 +5,14 @@
  * control looks like plain text.
  */
 
-.i2g-admin-file-input {
+.releviz-admin-file-input {
     min-height: 2.75rem;
     padding: 0.25rem 0;
     line-height: 1.5;
 }
 
-.i2g-admin-file-input::file-selector-button,
-.i2g-admin-file-input::-webkit-file-upload-button {
+.releviz-admin-file-input::file-selector-button,
+.releviz-admin-file-input::-webkit-file-upload-button {
     -webkit-appearance: none;
     appearance: none;
     margin-right: 1rem;
@@ -28,21 +28,21 @@
     transition: background-color 0.15s ease, border-color 0.15s ease;
 }
 
-.i2g-admin-file-input::file-selector-button:hover,
-.i2g-admin-file-input::-webkit-file-upload-button:hover {
+.releviz-admin-file-input::file-selector-button:hover,
+.releviz-admin-file-input::-webkit-file-upload-button:hover {
     background-color: color-mix(in srgb, var(--md-sys-color-primary, #305f9d) 8%, var(--md-sys-color-surface-container, #f6f3f3));
     border-color: var(--md-sys-color-primary, #305f9d);
 }
 
-.dark .i2g-admin-file-input::file-selector-button,
-.dark .i2g-admin-file-input::-webkit-file-upload-button {
+.dark .releviz-admin-file-input::file-selector-button,
+.dark .releviz-admin-file-input::-webkit-file-upload-button {
     border-color: var(--md-sys-color-outline-variant, #444746);
     background-color: var(--md-sys-color-surface-container-high, #2b2b2f);
     color: var(--md-sys-color-on-surface, #e8eaed);
 }
 
-.dark .i2g-admin-file-input::file-selector-button:hover,
-.dark .i2g-admin-file-input::-webkit-file-upload-button:hover {
+.dark .releviz-admin-file-input::file-selector-button:hover,
+.dark .releviz-admin-file-input::-webkit-file-upload-button:hover {
     background-color: color-mix(in srgb, var(--md-sys-color-primary, #a8c7fa) 12%, var(--md-sys-color-surface-container-high, #2b2b2f));
     border-color: var(--md-sys-color-primary, #a8c7fa);
 }

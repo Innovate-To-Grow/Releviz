@@ -3,7 +3,7 @@
 {% if not theme %}
     <div class="relative"
          x-data="{ openTheme: false, adminTheme: window.adminTheme || 'auto', switchAdminTheme(themeName) { window.switchTheme(themeName); this.adminTheme = themeName; this.openTheme = false } }"
-         x-on:i2g-admin-theme-change.window="adminTheme = $event.detail.theme">
+         x-on:releviz-admin-theme-change.window="adminTheme = $event.detail.theme">
         <button type="button"
                 class="block cursor-pointer h-[18px] leading-none border-0 bg-transparent p-0 text-inherit hover:text-base-700 dark:hover:text-base-200"
                 aria-label="{% trans 'Switch admin theme' %}"

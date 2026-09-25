@@ -34,7 +34,7 @@ class AdminThemeRenderingTests(TestCase):
             return
 
         self.assertIn('x-data="theme(', html)
-        self.assertIn("admin/js/i2g-admin-theme-runtime.js", html)
+        self.assertIn("admin/js/releviz-admin-theme-runtime.js", html)
         self.assertIn("adminTheme", html)
         self.assertIn('data-admin-theme-choice="auto"', html)
 
@@ -54,14 +54,14 @@ class AdminThemeRenderingTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assert_persisted_admin_theme_defaults_to_system(response)
-        self.assertContains(response, 'data-testid="i2g-admin-theme-toggle"')
+        self.assertContains(response, 'data-testid="releviz-admin-theme-toggle"')
         self.assertNotContains(response, '<html lang="en-us" dir="ltr" class="light"')
 
     def test_authenticated_admin_header_renders_theme_toggle(self):
         response = self.client.get(reverse("admin:index"))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'data-testid="i2g-admin-theme-toggle"')
+        self.assertContains(response, 'data-testid="releviz-admin-theme-toggle"')
         self.assertContains(response, 'aria-label="Switch admin theme"')
         self.assertContains(response, 'aria-label="Admin theme options"')
         self.assertContains(response, "light_mode")
@@ -93,8 +93,8 @@ class AdminThemeRenderingTests(TestCase):
         path = finders.find("admin/css/google-material-admin-overrides.css")
         self.assertIsNotNone(path)
         source = Path(path).read_text()
-        self.assertIn(".i2g-admin-theme-toggle__button", source)
-        self.assertIn(".i2g-admin-theme-toggle__option.is-active", source)
+        self.assertIn(".releviz-admin-theme-toggle__button", source)
+        self.assertIn(".releviz-admin-theme-toggle__option.is-active", source)
 
     def test_root_x_cloak_does_not_hide_admin_shell(self):
         response = self.client.get(reverse("admin:index"))
@@ -130,15 +130,15 @@ class AdminThemeRenderingTests(TestCase):
                 html = response.content.decode()
 
                 self.assertEqual(response.status_code, 200)
-                self.assertIn("/static/admin/js/i2g-admin-theme-runtime.js", html)
+                self.assertIn("/static/admin/js/releviz-admin-theme-runtime.js", html)
                 self.assertIn("/static/unfold/js/app.js", html)
                 self.assertLess(
-                    html.index("/static/admin/js/i2g-admin-theme-runtime.js"),
+                    html.index("/static/admin/js/releviz-admin-theme-runtime.js"),
                     html.index("/static/unfold/js/app.js"),
                 )
 
     def test_admin_theme_runtime_static_asset_defines_contract(self):
-        path = finders.find("admin/js/i2g-admin-theme-runtime.js")
+        path = finders.find("admin/js/releviz-admin-theme-runtime.js")
         self.assertIsNotNone(path)
         source = Path(path).read_text()
 
@@ -160,7 +160,7 @@ class AdminThemeRenderingTests(TestCase):
     def test_admin_template_scripts_are_resolvable_static_assets(self):
         response = self.client.get(reverse("admin:index"))
         for script_path in (
-            "admin/js/i2g-admin-theme-runtime.js",
+            "admin/js/releviz-admin-theme-runtime.js",
             "admin/js/csp-actions.js",
             "admin/js/sidebar-scroll.js",
             "admin/js/material-web-text-field.js",
