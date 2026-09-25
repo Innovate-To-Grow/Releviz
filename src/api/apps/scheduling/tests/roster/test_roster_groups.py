@@ -61,12 +61,32 @@ def membership_deletes(queries):
     ]
 
 
-def group_entry(group, count, weight):
-    return {"id": group.pk, "name": group.name, "count": count, "weight": weight}
+def _shared_included(count, included):
+    # Everyone counts as included unless a test says otherwise; an empty
+    # group has nobody to share the flag.
+    if included is not None:
+        return included
+    return True if count else None
 
 
-def ungrouped_entry(count, weight):
-    return {"id": None, "name": "", "count": count, "weight": weight}
+def group_entry(group, count, weight, included=None):
+    return {
+        "id": group.pk,
+        "name": group.name,
+        "count": count,
+        "weight": weight,
+        "included": _shared_included(count, included),
+    }
+
+
+def ungrouped_entry(count, weight, included=None):
+    return {
+        "id": None,
+        "name": "",
+        "count": count,
+        "weight": weight,
+        "included": _shared_included(count, included),
+    }
 
 
 class RosterGroupTestCase(TestCase):
@@ -1056,7 +1076,7 @@ class RosterGroupStatsTests(RosterGroupTestCase):
                 group_entry(alpha, 2, 0.5),
                 group_entry(beta, 2, None),
                 group_entry(empty, 0, None),
-                group_entry(gamma, 1, 0.5),
+                group_entry(gamma, 1, 0.5, included=False),
             ],
         )
 

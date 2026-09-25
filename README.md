@@ -42,9 +42,33 @@ same), and **Add and send invitation** also emails their secure link right away.
 already belongs to a Releviz account, that account is added; until the person responds themselves
 you can still enter their schedule with **Edit schedule**.
 
+**Add myself** puts you, the organizer, on your own roster under your account's name and address
+(it is shown until you are on the roster) and opens your schedule; your row reads **You
+(organizer)** and **Edit my schedule** enters or changes your own answers, which count in the
+results like everyone else's. You are never sent an invitation, reminder, or final notification for
+your own row. Typing one of your own addresses into **Add person** without the box below points you
+to **Add myself**.
+
+Each row also has **Edit details** and **Remove**. **Edit details** fixes a name or an email address
+entered by mistake. A name can be changed for anyone whose schedule you still enter (a person who
+answers under their own account keeps their account's name). An email can be changed only until the
+person has signed in with their link, joined, or answered: the row then moves to the account behind
+the new address (or a new temporary identity), keeps its name, groups, weight, and any schedule you
+entered, and gets a fresh invitation that is **Not sent** until you send it; the old invitation and
+its link stop working and any queued email to the old address is canceled. Adding an email to a
+person with no email of their own makes them an ordinary person you can invite. **Remove** asks in
+the page first and then deletes the person with their schedule, group memberships, and invitation
+(an invitation link already sent stops working); it waits while an email to them is being handed
+to the provider. To keep someone's answers but leave them out of the results, untick **Included**
+instead.
+
 **Import roster** in the Roster section accepts `.xlsx`, `.csv`, or pasted CSV/TSV. Map the
 required `name` and `email` columns and optional `group`, `weight`, `included`, and `phone` columns,
-preview and correct rows, then commit as one of the modes below. In the `group` column, blank means
+preview and correct rows, then commit as one of the modes below. Columns are matched by their
+header, singular or plural (`Group`, `Groups`, `Team`, `Teams`, `Emails`, ...); check the mapping
+before previewing. A field without a column says what every row gets instead (for example **No
+column (no group)**, **No column (weight 1)**, or **No column (everyone included)**), following the
+**Defaults** below the mapping. In the `group` column, blank means
 unassigned, `ALL` means every group (including groups created later), and several names are
 separated by `;` or `,` (for example `Faculty; Team 3` or `Faculty, Team 3`); a group name itself
 cannot contain either character. A row whose email is blank, or is one of your own addresses, adds a
@@ -159,9 +183,16 @@ organizer can:
   email followed by an **All** column and one checkbox column per group: tick a person's box in a
   column to add them to that group, so one person can sit in several groups, and tick **All** to
   place them in every group, including groups created later (their group boxes then show ticked
-  and locked). The Groups panel adds or removes everyone checked in the list at once. **Delete
-  group** asks for confirmation in the page before deleting, and the group's people stay on the
-  roster;
+  and locked). Ticked boxes are only a draft: they are highlighted and a bar at the bottom of the
+  screen counts the unsaved changes until **Save group changes** saves them (or **Discard** puts
+  every box back); leaving the page with unsaved ticks asks first. The Groups panel adds or
+  removes everyone checked in the list at once. **Delete group** asks for confirmation in the page
+  before deleting, and the group's people stay on the roster;
+- include or leave out a whole group with its **Included** box in the Groups panel (it shows a
+  mixed state when only some of the group's people are included), count one group alone with
+  **Only this group** (everyone in it is included, everyone else left out, weights untouched) to
+  see that group's best meeting times, and bring everyone back with **Include everyone**. People
+  in several groups follow the last change, exactly as with a group's weight;
 - apply group/filter/selection weight and included changes, then override an individual;
 - view the top ten meeting-duration candidates ranked by weighted availability, unweighted
   availability, fully available count, and configured-time order;

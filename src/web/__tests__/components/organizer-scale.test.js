@@ -1750,7 +1750,7 @@ describe("scaled organizer workspace", () => {
     await waitFor(() => expect(phone).toHaveValue(""));
   });
 
-  test("shows a membership click at once and rolls it back when refused", async () => {
+  test("shows a membership click at once and keeps it as a draft when refused", async () => {
     let refuse;
     patchRosterParticipant.mockImplementationOnce(
       () =>
@@ -1764,6 +1764,10 @@ describe("scaled organizer workspace", () => {
 
     fireEvent.click(faculty);
     expect(faculty).not.toBeChecked();
+    expect(patchRosterParticipant).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Save group changes" }));
+    // The boxes stay locked while the save is in flight.
+    expect(faculty).toBeDisabled();
     await waitFor(() =>
       expect(patchRosterParticipant).toHaveBeenCalledWith(
         event.code,
@@ -1777,6 +1781,11 @@ describe("scaled organizer workspace", () => {
     });
 
     expect(await screen.findByText("Not now")).toBeInTheDocument();
+    // The refused change stays on screen as an unsaved draft to retry or
+    // discard.
+    expect(faculty).not.toBeChecked();
+    expect(faculty).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
     expect(faculty).toBeChecked();
   });
 
@@ -1801,6 +1810,7 @@ describe("scaled organizer workspace", () => {
     renderView();
     const faculty = await screen.findByLabelText("Ada Faculty in Faculty");
     fireEvent.click(faculty);
+    fireEvent.click(screen.getByRole("button", { name: "Save group changes" }));
     await waitFor(() =>
       expect(patchRosterParticipant).toHaveBeenCalledTimes(1),
     );

@@ -12,10 +12,18 @@ _HEADER_ALIASES = {
     "name": {"name", "full name", "participant", "participant name", "attendee"},
     "email": {"email", "email address", "e-mail", "e-mail address"},
     "phone": {"phone", "phone number", "mobile", "cell", "telephone"},
-    "group": {"group", "group name", "department", "cohort", "team"},
+    "group": {"group", "group name", "department", "cohort", "team", "team name"},
     "weight": {"weight", "priority"},
     "included": {"included", "include", "counted", "enabled"},
 }
+
+
+def _header_matches(canonical: str, aliases: set) -> bool:
+    """An alias or its plural ("Groups", "Teams", "Emails") names the field."""
+
+    return canonical in aliases or (canonical.endswith("s") and canonical[:-1] in aliases)
+
+
 MAPPING_KEYS = set(_HEADER_ALIASES)
 
 
@@ -38,8 +46,9 @@ def auto_mapping(headers: list) -> dict:
     for index, header in enumerate(headers):
         canonical = _canonical_header(header)
         for field, aliases in _HEADER_ALIASES.items():
-            if field not in mapping and canonical in aliases:
+            if field not in mapping and _header_matches(canonical, aliases):
                 mapping[field] = index
+                break
     return mapping
 
 

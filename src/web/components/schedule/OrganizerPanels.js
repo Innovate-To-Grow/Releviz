@@ -174,22 +174,27 @@ export function ManagedScheduleDrawer({
 
   if (!participant) return null;
 
+  // The organizer's own row: they answer for themselves, under the name on
+  // their account, so there is no name to edit and nobody to act for.
+  const ownResponse = Boolean(participant.isOrganizer);
   const editingLocked =
     !responsesOpen || saving || Boolean(conflictParticipant);
   const actionsLocked =
     saving ||
     !responsesOpen ||
     Boolean(conflictParticipant) ||
-    !participantName.trim();
+    (!ownResponse && !participantName.trim());
   // A full account stays organizer-editable only until the person responds
   // themselves; organizer-managed and temporary rows are always shared.
   const fullAccount =
     !participant.organizerManaged && participant.accountAccess === "full";
-  const eyebrow = participant.organizerManaged
-    ? "Organizer-managed participant"
-    : fullAccount
-      ? "Full account · not responded yet"
-      : "Temporary participant";
+  const eyebrow = ownResponse
+    ? "Your own response"
+    : participant.organizerManaged
+      ? "Organizer-managed participant"
+      : fullAccount
+        ? "Full account · not responded yet"
+        : "Temporary participant";
 
   return (
     <div className="app-drawer-layer managed-drawer-layer">
@@ -211,7 +216,9 @@ export function ManagedScheduleDrawer({
           <div className="min-w-0">
             <span className="eyebrow">{eyebrow}</span>
             <h2 id="managed-drawer-title">
-              Edit {participant.name}&apos;s schedule
+              {ownResponse
+                ? "Edit my schedule"
+                : `Edit ${participant.name}'s schedule`}
             </h2>
           </div>
           <button
@@ -225,25 +232,32 @@ export function ManagedScheduleDrawer({
         </header>
 
         <div className="app-drawer__body managed-drawer__body">
-          <FormField
-            label="Event display name"
-            help={
-              fullAccount
-                ? "You can enter this schedule until they join, save, or submit it themselves; after that only they can change it. A version conflict will never be silently overwritten."
-                : "You and this participant edit the same response. A version conflict will never be silently overwritten."
-            }
-          >
-            <input
-              type="text"
-              className="form-control"
-              value={participantName}
-              onChange={(changeEvent) =>
-                setParticipantName(changeEvent.target.value)
+          {ownResponse ? (
+            <p className="text-secondary mb-0">
+              You answer as {participant.name}, the name on your account. Your
+              answers count in the results like everyone else&apos;s.
+            </p>
+          ) : (
+            <FormField
+              label="Event display name"
+              help={
+                fullAccount
+                  ? "You can enter this schedule until they join, save, or submit it themselves; after that only they can change it. A version conflict will never be silently overwritten."
+                  : "You and this participant edit the same response. A version conflict will never be silently overwritten."
               }
-              maxLength={100}
-              disabled={!responsesOpen || saving}
-            />
-          </FormField>
+            >
+              <input
+                type="text"
+                className="form-control"
+                value={participantName}
+                onChange={(changeEvent) =>
+                  setParticipantName(changeEvent.target.value)
+                }
+                maxLength={100}
+                disabled={!responsesOpen || saving}
+              />
+            </FormField>
+          )}
 
           <div className="schedule-toolbar__group">
             <p className="schedule-toolbar__label">Mark times as</p>
@@ -320,7 +334,7 @@ export function ManagedScheduleDrawer({
             onClick={onSubmit}
             disabled={actionsLocked}
           >
-            {saving ? "Saving..." : "Submit on behalf"}
+            {saving ? "Saving..." : ownResponse ? "Submit" : "Submit on behalf"}
           </AppButton>
         </footer>
       </aside>

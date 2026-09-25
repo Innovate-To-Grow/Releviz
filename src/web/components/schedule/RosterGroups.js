@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import Alert from "@/components/ui/Alert";
 import AppButton from "@/components/ui/AppButton";
 import ConfirmDialog from "@/components/ui/ConfirmDialog";
@@ -10,11 +10,12 @@ import { CheckIcon, GroupIcon } from "@/components/ui/icons";
 
 export const UNGROUPED = "__ungrouped__";
 
-// Roster stats list groups as [{ id, name, count, weight }]; older payloads
-// send bare names or a { name: count } map. Ungrouped people carry an empty
-// name and a null id and sort last; numbers in names sort by value, so
-// "Team 2" comes before "Team 10". `weight` is the value everyone in the
-// group shares, or null when members differ (or the group is empty).
+// Roster stats list groups as [{ id, name, count, weight, included }]; older
+// payloads send bare names or a { name: count } map. Ungrouped people carry an
+// empty name and a null id and sort last; numbers in names sort by value, so
+// "Team 2" comes before "Team 10". `weight` and `included` are the values
+// everyone in the group shares, or null when members differ (or the group is
+// empty).
 export function summarizeGroups(rawGroups) {
   const entries = Array.isArray(rawGroups)
     ? rawGroups.map((item) =>
@@ -31,6 +32,7 @@ export function summarizeGroups(rawGroups) {
       name: String(item.name ?? ""),
       count: Number.isFinite(Number(item.count)) ? Number(item.count) : null,
       weight: typeof item.weight === "number" ? item.weight : null,
+      included: typeof item.included === "boolean" ? item.included : null,
     }))
     .sort(
       (a, b) =>
@@ -70,9 +72,20 @@ function groupNameError(value) {
   return "";
 }
 
+// A checkbox that can also show "some but not all" (the DOM-only
+// `indeterminate` state has no attribute, so it is set on the element).
+function MixedCheckbox({ mixed, ...props }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = Boolean(mixed);
+  }, [mixed]);
+  return <input ref={ref} type="checkbox" {...props} />;
+}
+
 /**
- * Organizer grouping controls: every group with its head count and shared
- * weight, inline weight and rename edits, group creation and deletion, and a
+ * Organizer grouping controls: every group with its head count, shared weight
+ * and shared inclusion, inline weight, inclusion and rename edits, group
+ * creation and deletion, a way to count one group alone in the results, and a
  * way to add the people selected in the roster table to a group (or remove
  * them from one); single memberships are ticked in the roster's group
  * columns. People can belong to several groups at once, so a person counts in
@@ -86,6 +99,10 @@ export default function RosterGroups({
   busyGroup = "",
   onShowGroup,
   onSetWeight,
+  onSetIncluded,
+  onIncludeOnly,
+  onIncludeEveryone,
+  excludedCount = 0,
   onRename,
   onDelete,
   onAddSelected,
@@ -221,23 +238,41 @@ export default function RosterGroups({
           </h4>
           <p className="roster-groups__description">
             People can belong to several groups: tick a group&apos;s column in
-            the roster below, or All for every group. Setting a group&apos;s
-            weight applies it to everyone currently in that group, including
-            people who are also in other groups.
+            the roster below, or All for every group, then save the changes. A
+            group&apos;s weight and Included box apply to everyone currently in
+            that group, including people who are also in other groups. Use Only
+            this group to see one group&apos;s best meeting times in the
+            results.
           </p>
         </div>
         {!readOnly && (
-          <AppButton
-            variant={creating ? "outlined" : "filled"}
-            size="sm"
-            icon={<GroupIcon />}
-            onClick={creating ? closeCreate : openCreate}
-            disabled={busy}
-            aria-expanded={creating}
-            aria-controls={`${ids}-new-group`}
-          >
-            {creating ? "Close new group" : "New group"}
-          </AppButton>
+          <div className="d-flex flex-wrap gap-2">
+            {excludedCount > 0 && (
+              <AppButton
+                variant="outlined"
+                size="sm"
+                icon={<CheckIcon />}
+                busy={pendingAction === "include-everyone"}
+                disabled={busy}
+                onClick={() =>
+                  void runAction("include-everyone", () => onIncludeEveryone())
+                }
+              >
+                Include everyone
+              </AppButton>
+            )}
+            <AppButton
+              variant={creating ? "outlined" : "filled"}
+              size="sm"
+              icon={<GroupIcon />}
+              onClick={creating ? closeCreate : openCreate}
+              disabled={busy}
+              aria-expanded={creating}
+              aria-controls={`${ids}-new-group`}
+            >
+              {creating ? "Close new group" : "New group"}
+            </AppButton>
+          </div>
         )}
       </div>
 
@@ -303,6 +338,7 @@ export default function RosterGroups({
                   <th scope="col">Group</th>
                   <th scope="col">People</th>
                   <th scope="col">Weight</th>
+                  <th scope="col">Included</th>
                   <th scope="col">
                     <span className="visually-hidden">Actions</span>
                   </th>
@@ -319,6 +355,8 @@ export default function RosterGroups({
                   // A shared weight is null when members differ; an empty
                   // group has nothing to share and nothing to edit.
                   const mixed = group.weight === null && group.count > 0;
+                  const mixedIncluded =
+                    group.included === null && group.count > 0;
                   const weightInputId = `${ids}-weight-${filterValue}`;
                   return (
                     <tr key={filterValue} data-roster-group={filterValue}>
@@ -426,6 +464,37 @@ export default function RosterGroups({
                           )}
                         </div>
                       </td>
+                      <td className="roster-groups__included-cell">
+                        <div className="d-flex align-items-center gap-2">
+                          <MixedCheckbox
+                            className="form-check-input mt-0"
+                            aria-label={
+                              named
+                                ? `Include group ${group.name}`
+                                : "Include ungrouped people"
+                            }
+                            checked={group.included === true}
+                            mixed={mixedIncluded}
+                            disabled={readOnly || busy || empty}
+                            title={
+                              mixedIncluded
+                                ? "Some people in this group are left out"
+                                : undefined
+                            }
+                            onChange={(changeEvent) => {
+                              const next = changeEvent.target.checked;
+                              void runAction(`${filterValue}:include`, () =>
+                                onSetIncluded(group.name, next),
+                              );
+                            }}
+                          />
+                          {mixedIncluded && (
+                            <StatusBadge status="neutral" dot={false}>
+                              Some
+                            </StatusBadge>
+                          )}
+                        </div>
+                      </td>
                       <td className="roster-groups__actions-cell">
                         <div className="roster-groups__actions">
                           {!readOnly && !named && (
@@ -445,6 +514,20 @@ export default function RosterGroups({
                           )}
                           {!readOnly && named && (
                             <>
+                              <AppButton
+                                size="sm"
+                                variant="outlined"
+                                disabled={busy || empty}
+                                busy={pendingAction === `${filterValue}:only`}
+                                title="Leave everyone else out of the results"
+                                onClick={() =>
+                                  void runAction(`${filterValue}:only`, () =>
+                                    onIncludeOnly(group),
+                                  )
+                                }
+                              >
+                                Only this group
+                              </AppButton>
                               <AppButton
                                 size="sm"
                                 variant="outlined"

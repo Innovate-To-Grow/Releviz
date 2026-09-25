@@ -1101,9 +1101,9 @@ code {
   overflow: hidden;
 }
 
-.table-shell .table-responsive {
-  max-height: 70vh;
-}
+/* Tables grow with the page instead of scrolling inside it (no max-height):
+   a second vertical scroll bar under the pointer made the page itself hard
+   to scroll. Wide tables still scroll sideways. */
 
 .table-shell .table {
   margin-bottom: 0;

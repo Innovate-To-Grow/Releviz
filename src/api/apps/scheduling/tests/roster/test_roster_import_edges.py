@@ -1198,9 +1198,15 @@ class RosterImportDatabaseEdgeTests(TestCase):
         self.assertEqual(
             roster.data["stats"]["groups"],
             [
-                {"id": faculty.pk, "name": "Faculty", "count": 3, "weight": 1.0},
-                {"id": students.pk, "name": "Students", "count": 3, "weight": 1.0},
-                {"id": None, "name": "", "count": 1, "weight": 1.0},
+                {"id": faculty.pk, "name": "Faculty", "count": 3, "weight": 1.0, "included": True},
+                {
+                    "id": students.pk,
+                    "name": "Students",
+                    "count": 3,
+                    "weight": 1.0,
+                    "included": True,
+                },
+                {"id": None, "name": "", "count": 1, "weight": 1.0, "included": True},
             ],
         )
         by_name = {row["name"]: row for row in roster.data["participants"]}
@@ -1668,9 +1674,15 @@ class RosterImportDatabaseEdgeTests(TestCase):
         self.assertEqual(
             regrouped.data["groups"],
             [
-                {"id": faculty.pk, "name": "Faculty", "count": 1, "weight": 1.0},
-                {"id": sent.pk, "name": "Sent", "count": 1, "weight": 1.0},
-                {"id": students.pk, "name": "Students", "count": 1, "weight": 1.0},
+                {"id": faculty.pk, "name": "Faculty", "count": 1, "weight": 1.0, "included": True},
+                {"id": sent.pk, "name": "Sent", "count": 1, "weight": 1.0, "included": False},
+                {
+                    "id": students.pk,
+                    "name": "Students",
+                    "count": 1,
+                    "weight": 1.0,
+                    "included": True,
+                },
             ],
         )
         self.assertFalse(self.event.participant_groups.filter(name__iexact="ignored").exists())

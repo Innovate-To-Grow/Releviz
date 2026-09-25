@@ -60,15 +60,18 @@ jest.mock("@/components/schedule/ScheduleChannelEditor", () => ({
 
 jest.mock("@/lib/api/participants", () => ({
   createManagedParticipant: jest.fn(),
+  joinEvent: jest.fn(),
   updateParticipant: jest.fn(),
 }));
 
 jest.mock("@/lib/api/roster", () => ({
   createRosterGroup: jest.fn(),
   deleteRosterGroup: jest.fn(),
+  deleteRosterParticipant: jest.fn(),
   fetchRoster: jest.fn(),
   fetchRosterGroups: jest.fn(),
   fetchRosterSchedule: jest.fn(),
+  includeOnlyRosterGroup: jest.fn(),
   patchRosterBulk: jest.fn(),
   patchRosterParticipant: jest.fn(),
   renameRosterGroup: jest.fn(),
@@ -78,13 +81,16 @@ jest.mock("@/lib/api/roster", () => ({
 import RosterPanel from "@/components/schedule/RosterPanel";
 import {
   createManagedParticipant,
+  joinEvent,
   updateParticipant,
 } from "@/lib/api/participants";
 import {
   createRosterGroup,
   deleteRosterGroup,
+  deleteRosterParticipant,
   fetchRoster,
   fetchRosterSchedule,
+  includeOnlyRosterGroup,
   patchRosterBulk,
   patchRosterParticipant,
   renameRosterGroup,
@@ -748,13 +754,17 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
       const alpha = screen.getByLabelText(`Alpha in ${name}`);
       expect(alpha).toBeChecked();
       expect(alpha).toBeDisabled();
-      expect(alpha).toHaveAttribute("title", "Included through All groups");
+      expect(alpha).toHaveAttribute(
+        "title",
+        `${name}: included through All groups`,
+      );
       expect(screen.getByLabelText(`Beta in ${name}`)).not.toBeChecked();
       expect(screen.getByLabelText(`Gamma in ${name}`)).not.toBeChecked();
       expect(screen.getByLabelText(`Delta in ${name}`)).toBeChecked();
       expect(screen.getByLabelText(`Delta in ${name}`)).toBeEnabled();
-      expect(screen.getByLabelText(`Delta in ${name}`)).not.toHaveAttribute(
+      expect(screen.getByLabelText(`Delta in ${name}`)).toHaveAttribute(
         "title",
+        name,
       );
     }
     expect(within(table).getByText("Self-managed")).toBeInTheDocument();
@@ -2655,6 +2665,74 @@ describe("RosterPanel groups", () => {
     );
   });
 
+  test("keeps a group created while a quiet reload was in flight", async () => {
+    const panel = createRef();
+    createRosterGroup.mockResolvedValue({
+      group: { id: 12, name: "Board", count: 0, weight: null },
+      groups: [
+        { id: 12, name: "Board", count: 0, weight: null },
+        facultyGroup,
+        ungrouped,
+      ],
+    });
+    await renderPanel({ ref: panel });
+    await screen.findByText("Ada");
+    const staleListing = fetchRoster.mock.results[0].value;
+    let finishStaleReload;
+    fetchRoster.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishStaleReload = () => staleListing.then(resolve);
+        }),
+    );
+    // The live sync starts a quiet reload; its listing predates the group.
+    let staleReload;
+    act(() => {
+      staleReload = panel.current.refresh("token", { silent: true });
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "New group" }));
+    fireEvent.change(screen.getByLabelText("New group name"), {
+      target: { value: "Board" },
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Create group" }));
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Created Board.",
+    );
+    expect(screen.getByLabelText("Weight for group Board")).toBeInTheDocument();
+
+    await act(async () => {
+      finishStaleReload();
+      await staleReload;
+    });
+    // The older listing does not take the new group away again.
+    expect(screen.getByLabelText("Weight for group Board")).toBeInTheDocument();
+    expect(screen.getByLabelText("Roster summary")).toHaveTextContent(
+      "2 groups",
+    );
+
+    // A listing that starts after the change is taken as it is.
+    fetchRoster.mockResolvedValueOnce(
+      rosterResponse([participant({ id: "p-1", name: "Ada" })], {
+        stats: {
+          ...stats,
+          groups: [
+            { id: 12, name: "Board", count: 1, weight: 1 },
+            facultyGroup,
+          ],
+        },
+      }),
+    );
+    await act(async () => {
+      await panel.current.refresh("token", { silent: true });
+    });
+    expect(
+      within(screen.getByRole("region", { name: "Roster groups" })).getByText(
+        "1 person",
+      ),
+    ).toBeInTheDocument();
+  });
+
   test("reloads the roster when a created group carries no stats and reports failures", async () => {
     createRosterGroup
       .mockRejectedValueOnce(
@@ -2821,7 +2899,7 @@ describe("RosterPanel groups", () => {
     );
   });
 
-  test("ticks a person's group columns and the All flag from the row", async () => {
+  test("ticks a person's group columns and the All flag, then saves them together", async () => {
     const boardGroup = { id: 12, name: "Board", count: 0, weight: null };
     fetchRoster.mockResolvedValue(
       rosterResponse(
@@ -2841,43 +2919,21 @@ describe("RosterPanel groups", () => {
     patchRosterParticipant
       .mockResolvedValueOnce({
         participant: ada({
-          group: "Board; Faculty",
-          groups: [
-            { id: 12, name: "Board" },
-            { id: 11, name: "Faculty" },
-          ],
-          version: 5,
-        }),
-        groups: [{ ...boardGroup, count: 1, weight: 1 }, facultyGroup],
-      })
-      .mockResolvedValueOnce({
-        participant: ada({
-          group: "ALL; Board; Faculty",
-          groups: [
-            { id: 12, name: "Board" },
-            { id: 11, name: "Faculty" },
-          ],
-          allGroups: true,
-          version: 6,
-        }),
-      })
-      .mockResolvedValueOnce({
-        participant: ada({
-          group: "Board; Faculty",
-          groups: [
-            { id: 12, name: "Board" },
-            { id: 11, name: "Faculty" },
-          ],
-          allGroups: false,
-          version: 7,
-        }),
-      })
-      .mockResolvedValueOnce({
-        participant: ada({
           group: "Board",
           groups: [{ id: 12, name: "Board" }],
-          allGroups: false,
-          version: 8,
+          version: 5,
+        }),
+        groups: [
+          { ...boardGroup, count: 1, weight: 1 },
+          { ...facultyGroup, count: 0, weight: null },
+        ],
+      })
+      .mockResolvedValueOnce({
+        participant: ada({
+          group: "ALL; Board",
+          groups: [{ id: 12, name: "Board" }],
+          allGroups: true,
+          version: 6,
         }),
       });
     await renderPanel();
@@ -2887,23 +2943,84 @@ describe("RosterPanel groups", () => {
     expect(board).not.toBeChecked();
     expect(faculty).toBeChecked();
     expect(all).not.toBeChecked();
+    // Each box names its group, since the header row scrolls away.
+    expect(board).toHaveAttribute("title", "Board");
+    expect(
+      screen.queryByRole("region", { name: "Unsaved group changes" }),
+    ).not.toBeInTheDocument();
 
-    // Ticking a second group adds it without touching the first.
+    // A tick is only a draft: it shows at once, is marked, and waits.
     fireEvent.click(board);
     expect(board).toBeChecked();
+    expect(board.closest("td")).toHaveClass(
+      "roster-table__group-cell--pending",
+    );
+    const bar = screen.getByRole("region", { name: "Unsaved group changes" });
+    expect(bar).toHaveTextContent("1 unsaved group change for 1 person.");
+    expect(patchRosterParticipant).not.toHaveBeenCalled();
+
+    // Ticking it back is no change at all.
+    fireEvent.click(board);
+    expect(board).not.toBeChecked();
+    expect(board.closest("td")).not.toHaveClass(
+      "roster-table__group-cell--pending",
+    );
+    expect(
+      screen.queryByRole("region", { name: "Unsaved group changes" }),
+    ).not.toBeInTheDocument();
+
+    // All covers every group, so each column shows ticked and locked.
+    fireEvent.click(board);
+    fireEvent.click(all);
+    expect(all).toBeChecked();
+    for (const box of [board, faculty]) {
+      expect(box).toBeChecked();
+      expect(box).toBeDisabled();
+    }
+    expect(faculty).toHaveAttribute(
+      "title",
+      "Faculty: included through All groups",
+    );
+    expect(
+      screen.getByRole("region", { name: "Unsaved group changes" }),
+    ).toHaveTextContent("2 unsaved group changes for 1 person.");
+    // Leaving the page now asks first.
+    const leave = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(leave);
+    expect(leave.defaultPrevented).toBe(true);
+
+    // Discard puts every box back as saved.
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    expect(board).not.toBeChecked();
+    expect(all).not.toBeChecked();
+    expect(faculty).toBeEnabled();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Unsaved group changes were discarded.",
+    );
+    const stay = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(stay);
+    expect(stay.defaultPrevented).toBe(false);
+
+    // Adding one group and dropping another is one request for the row.
+    fireEvent.click(board);
+    fireEvent.click(faculty);
+    fireEvent.click(screen.getByRole("button", { name: "Save group changes" }));
     await waitFor(() =>
       expect(patchRosterParticipant).toHaveBeenCalledWith(
         "ROSTER1",
         "p-1",
-        { addGroupIds: [12], expectedVersion: 4 },
+        { addGroupIds: [12], removeGroupIds: [11], expectedVersion: 4 },
         "token",
       ),
     );
     expect(await screen.findByRole("status")).toHaveTextContent(
-      "Ada was updated.",
+      "Saved group changes for 1 person.",
     );
     expect(board).toBeChecked();
-    expect(faculty).toBeChecked();
+    expect(faculty).not.toBeChecked();
+    expect(
+      screen.queryByRole("region", { name: "Unsaved group changes" }),
+    ).not.toBeInTheDocument();
     // The recounted groups arrive with the patch; no reload is needed.
     expect(
       within(screen.getByRole("region", { name: "Roster groups" })).getByText(
@@ -2912,8 +3029,8 @@ describe("RosterPanel groups", () => {
     ).toBeInTheDocument();
     expect(fetchRoster).toHaveBeenCalledTimes(1);
 
-    // All covers every group, so each column shows ticked and locked.
     fireEvent.click(all);
+    fireEvent.click(screen.getByRole("button", { name: "Save group changes" }));
     await waitFor(() =>
       expect(patchRosterParticipant).toHaveBeenLastCalledWith(
         "ROSTER1",
@@ -2922,42 +3039,93 @@ describe("RosterPanel groups", () => {
         "token",
       ),
     );
-    await waitFor(() => expect(all).toBeChecked());
-    for (const box of [board, faculty]) {
-      expect(box).toBeChecked();
-      expect(box).toBeDisabled();
-    }
-
-    // Clearing All brings back the explicit memberships underneath.
-    fireEvent.click(all);
     await waitFor(() =>
-      expect(patchRosterParticipant).toHaveBeenLastCalledWith(
-        "ROSTER1",
-        "p-1",
-        { allGroups: false, expectedVersion: 6 },
-        "token",
-      ),
+      expect(
+        screen.queryByRole("region", { name: "Unsaved group changes" }),
+      ).not.toBeInTheDocument(),
     );
-    await waitFor(() => expect(faculty).toBeEnabled());
-    expect(all).not.toBeChecked();
-    expect(board).toBeChecked();
-    expect(faculty).toBeChecked();
-
-    fireEvent.click(faculty);
-    await waitFor(() =>
-      expect(patchRosterParticipant).toHaveBeenLastCalledWith(
-        "ROSTER1",
-        "p-1",
-        { removeGroupIds: [11], expectedVersion: 7 },
-        "token",
-      ),
-    );
-    await waitFor(() => expect(faculty).not.toBeChecked());
-    expect(board).toBeChecked();
-    expect(patchRosterParticipant).toHaveBeenCalledTimes(4);
+    expect(all).toBeChecked();
+    expect(patchRosterParticipant).toHaveBeenCalledTimes(2);
   });
 
-  test("reloads the roster when a ticked group was deleted in another session", async () => {
+  test("saves ticks for several people and keeps the ones that failed", async () => {
+    patchRosterParticipant
+      .mockResolvedValueOnce({
+        participant: participant({
+          id: "p-2",
+          name: "Ben",
+          group: "",
+          groups: [],
+          version: 5,
+        }),
+      })
+      .mockRejectedValueOnce(new Error("Cara could not be saved"));
+    await renderPanel();
+    fireEvent.click(await screen.findByLabelText("Ben in Faculty"));
+    fireEvent.click(screen.getByLabelText("Cara in Faculty"));
+    expect(
+      screen.getByRole("region", { name: "Unsaved group changes" }),
+    ).toHaveTextContent("2 unsaved group changes for 2 people.");
+
+    fireEvent.click(screen.getByRole("button", { name: "Save group changes" }));
+    await waitFor(() =>
+      expect(patchRosterParticipant).toHaveBeenCalledTimes(2),
+    );
+    expect(patchRosterParticipant).toHaveBeenCalledWith(
+      "ROSTER1",
+      "p-2",
+      { removeGroupIds: [11], expectedVersion: 4 },
+      "token",
+    );
+    expect(patchRosterParticipant).toHaveBeenCalledWith(
+      "ROSTER1",
+      "p-3",
+      { addGroupIds: [11], expectedVersion: 4 },
+      "token",
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Cara could not be saved",
+    );
+    // Ben's change is saved; Cara's tick stays a draft to retry.
+    await waitFor(() =>
+      expect(
+        screen.getByRole("region", { name: "Unsaved group changes" }),
+      ).toHaveTextContent("1 unsaved group change for 1 person."),
+    );
+    expect(screen.getByLabelText("Ben in Faculty")).not.toBeChecked();
+    expect(screen.getByLabelText("Cara in Faculty")).toBeChecked();
+  });
+
+  test("drops a tick for a group deleted in another session", async () => {
+    const panel = createRef();
+    await renderPanel({ ref: panel });
+    fireEvent.click(await screen.findByLabelText("Cara in Faculty"));
+    expect(
+      screen.getByRole("region", { name: "Unsaved group changes" }),
+    ).toBeInTheDocument();
+    fetchRoster.mockResolvedValue(
+      rosterResponse(
+        [participant({ id: "p-3", name: "Cara", group: "", groups: [] })],
+        { stats: { ...stats, groups: [ungrouped] } },
+      ),
+    );
+    // The workspace's live sync reloads the page quietly.
+    await act(async () => {
+      await panel.current.refresh("token", { silent: true });
+    });
+    await waitFor(() =>
+      expect(
+        screen.queryByLabelText("Cara in Faculty"),
+      ).not.toBeInTheDocument(),
+    );
+    // The column is gone, and so is the change that nothing could save.
+    expect(
+      screen.queryByRole("region", { name: "Unsaved group changes" }),
+    ).not.toBeInTheDocument();
+    expect(patchRosterParticipant).not.toHaveBeenCalled();
+  });
+
+  test("reloads the roster when a saved tick names a group deleted in another session", async () => {
     patchRosterParticipant.mockRejectedValueOnce(
       Object.assign(new Error("This group was deleted in another session."), {
         status: 409,
@@ -2973,6 +3141,7 @@ describe("RosterPanel groups", () => {
     );
 
     fireEvent.click(cara);
+    fireEvent.click(screen.getByRole("button", { name: "Save group changes" }));
     await waitFor(() =>
       expect(patchRosterParticipant).toHaveBeenCalledWith(
         "ROSTER1",
@@ -2990,11 +3159,11 @@ describe("RosterPanel groups", () => {
         screen.queryByLabelText("Cara in Faculty"),
       ).not.toBeInTheDocument(),
     );
-    // A refused click is not a conflict: the row stays editable.
+    // A refused save is not a conflict: the row stays editable.
     expect(screen.getByLabelText("All groups for Cara")).toBeEnabled();
   });
 
-  test("keeps a conflicting membership click on screen until the row is reloaded", async () => {
+  test("keeps a conflicting membership save on screen until the row is reloaded", async () => {
     const latest = participant({
       id: "p-3",
       name: "Cara",
@@ -3011,6 +3180,7 @@ describe("RosterPanel groups", () => {
     await renderPanel();
     const cara = await screen.findByLabelText("Cara in Faculty");
     fireEvent.click(cara);
+    fireEvent.click(screen.getByRole("button", { name: "Save group changes" }));
     expect(
       await screen.findByRole("button", { name: "Reload latest participant" }),
     ).toBeInTheDocument();
@@ -3027,6 +3197,9 @@ describe("RosterPanel groups", () => {
       expect(screen.getByLabelText("Cara in Faculty")).not.toBeChecked(),
     );
     expect(screen.getByLabelText("Cara in Faculty")).toBeEnabled();
+    expect(
+      screen.queryByRole("region", { name: "Unsaved group changes" }),
+    ).not.toBeInTheDocument();
   });
 
   test("applies the group stats returned by a per-person patch", async () => {
@@ -3533,5 +3706,588 @@ describe("RosterPanel groups", () => {
       screen.queryByRole("region", { name: "Roster groups" }),
     ).not.toBeInTheDocument();
     expect(screen.getByLabelText("All groups for Ada")).toBeChecked();
+  });
+});
+
+describe("RosterPanel people corrections", () => {
+  const ada = participant({
+    id: "p-1",
+    memberId: "m-1",
+    name: "Ada",
+    email: "ada@exmaple.com",
+    canOrganizerEditEmail: true,
+  });
+  const ben = participant({
+    id: "p-2",
+    memberId: "m-2",
+    name: "Ben",
+    email: "ben@example.com",
+    accountAccess: "full",
+    canOrganizerEditAvailability: false,
+    canOrganizerEditEmail: false,
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    fetchRoster.mockResolvedValue(
+      rosterResponse([ada, ben], { organizerOnRoster: false }),
+    );
+  });
+
+  test("adds the organizer to their own roster and opens their schedule", async () => {
+    const onResultsInvalidated = jest.fn();
+    joinEvent.mockResolvedValue({
+      participant: { id: "m-org", name: "Olive Organizer" },
+    });
+    fetchRosterSchedule.mockResolvedValue(
+      scheduleResponse({
+        participant: {
+          id: "p-org",
+          memberId: "m-org",
+          name: "Olive Organizer",
+          isOrganizer: true,
+          canOrganizerEditAvailability: false,
+          version: 1,
+        },
+      }),
+    );
+    await renderPanel({ onResultsInvalidated });
+    const addMyself = await screen.findByRole("button", { name: "Add myself" });
+    fetchRoster.mockResolvedValue(
+      rosterResponse(
+        [
+          ada,
+          ben,
+          participant({
+            id: "p-org",
+            memberId: "m-org",
+            name: "Olive Organizer",
+            email: "olive@example.com",
+            accountAccess: "full",
+            isOrganizer: true,
+            canOrganizerEditAvailability: false,
+            canOrganizerEditEmail: false,
+            invitationStatus: "not_sent",
+          }),
+        ],
+        { organizerOnRoster: true },
+      ),
+    );
+
+    fireEvent.click(addMyself);
+
+    await waitFor(() =>
+      expect(joinEvent).toHaveBeenCalledWith("ROSTER1", "token"),
+    );
+    const drawer = await screen.findByRole("dialog", {
+      name: "Edit my schedule",
+    });
+    expect(fetchRosterSchedule).toHaveBeenCalledWith(
+      "ROSTER1",
+      "m-org",
+      "token",
+    );
+    expect(onResultsInvalidated).toHaveBeenCalled();
+    expect(within(drawer).getByText("Your own response")).toBeInTheDocument();
+    // Their name comes from their account, so there is none to edit.
+    expect(
+      within(drawer).queryByLabelText("Event display name"),
+    ).not.toBeInTheDocument();
+    expect(
+      within(drawer).getByText(/You answer as Olive Organizer/),
+    ).toBeInTheDocument();
+    expect(
+      within(drawer).getByRole("button", { name: "Submit" }),
+    ).toBeEnabled();
+    expect(
+      screen.getByText(
+        "You are on the roster now. Enter your availability with Edit my schedule on your row.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Add myself" }),
+    ).not.toBeInTheDocument();
+
+    // Saving their own answers never sends a name.
+    updateParticipant.mockResolvedValue({
+      participant: {
+        name: "Olive Organizer",
+        availabilityInperson: [0, 1, 0],
+        availabilityVirtual: [1, 0, 0],
+        submitted: 1,
+        version: 2,
+      },
+    });
+    fireEvent.click(within(drawer).getByRole("button", { name: "Submit" }));
+    await waitFor(() =>
+      expect(updateParticipant).toHaveBeenCalledWith(
+        "ROSTER1",
+        "m-org",
+        {
+          availabilityInperson: [0, 1, 0],
+          availabilityVirtual: [1, 0, 0],
+          submitted: 1,
+          expectedVersion: 4,
+        },
+        "token",
+      ),
+    );
+    fireEvent.click(
+      within(drawer).getByRole("button", { name: "Close schedule editor" }),
+    );
+
+    // Their row is labelled as theirs and edits their own schedule.
+    const row = screen
+      .getByText("Olive Organizer")
+      .closest("[data-roster-participant-id]");
+    expect(row).toHaveTextContent("You (organizer)");
+    expect(
+      within(row).getByRole("button", { name: "Edit my schedule" }),
+    ).toBeInTheDocument();
+    expect(
+      within(row).queryByRole("button", {
+        name: "Edit name and email for Olive Organizer",
+      }),
+    ).not.toBeInTheDocument();
+  });
+
+  test("hides Add myself until the roster says the organizer is missing", async () => {
+    fetchRoster.mockResolvedValue(rosterResponse([ada]));
+    await renderPanel();
+    await screen.findByText("Ada");
+    expect(
+      screen.queryByRole("button", { name: "Add myself" }),
+    ).not.toBeInTheDocument();
+  });
+
+  test("reports a failed Add myself", async () => {
+    joinEvent
+      .mockRejectedValueOnce(new Error("Name is required"))
+      .mockRejectedValueOnce(new Error(""));
+    await renderPanel();
+    fireEvent.click(await screen.findByRole("button", { name: "Add myself" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Name is required",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Add myself" }));
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Unable to add you to the roster.",
+      ),
+    );
+    expect(fetchRosterSchedule).not.toHaveBeenCalled();
+  });
+
+  test("adds the organizer without opening an editor when no row id comes back", async () => {
+    joinEvent.mockResolvedValue({});
+    await renderPanel();
+    fireEvent.click(await screen.findByRole("button", { name: "Add myself" }));
+    await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(2));
+    expect(fetchRosterSchedule).not.toHaveBeenCalled();
+  });
+
+  test("corrects a mistyped email and name from Edit details", async () => {
+    const onResultsInvalidated = jest.fn();
+    patchRosterParticipant.mockResolvedValue({
+      participant: { ...ada, name: "Ada L.", email: "ada@example.com" },
+      resultsRevision: 7,
+    });
+    await renderPanel({ onResultsInvalidated });
+    // Ben answered himself: nothing about him can change here.
+    expect(
+      screen.queryByRole("button", { name: "Edit name and email for Ben" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Edit name and email for Ada",
+      }),
+    );
+    const dialog = screen.getByRole("dialog", { name: "Edit Ada" });
+    fireEvent.change(within(dialog).getByLabelText(/Full name/), {
+      target: { value: "Ada L." },
+    });
+    fireEvent.change(within(dialog).getByLabelText(/Email address/), {
+      target: { value: "ada@example.com" },
+    });
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Save details" }),
+    );
+
+    await waitFor(() =>
+      expect(patchRosterParticipant).toHaveBeenCalledWith(
+        "ROSTER1",
+        "p-1",
+        { name: "Ada L.", email: "ada@example.com", expectedVersion: 4 },
+        "token",
+      ),
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Edit Ada" }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Ada L. now uses ada@example.com. Their invitation has not been sent to this address yet.",
+    );
+    expect(onResultsInvalidated).toHaveBeenCalledWith(7);
+    expect(screen.getByText("ada@example.com")).toBeInTheDocument();
+  });
+
+  test("renames without a request when nothing changed, and keeps the dialog on errors", async () => {
+    patchRosterParticipant
+      .mockRejectedValueOnce(
+        Object.assign(new Error("ada@example.com is already on this roster."), {
+          status: 409,
+        }),
+      )
+      .mockResolvedValueOnce({ participant: { ...ada, name: "Ada K." } });
+    await renderPanel();
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Edit name and email for Ada",
+      }),
+    );
+    let dialog = screen.getByRole("dialog", { name: "Edit Ada" });
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Save details" }),
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Edit Ada" }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(patchRosterParticipant).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit name and email for Ada" }),
+    );
+    dialog = screen.getByRole("dialog", { name: "Edit Ada" });
+    fireEvent.change(within(dialog).getByLabelText(/Email address/), {
+      target: { value: "ada@example.com" },
+    });
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Save details" }),
+    );
+    // The reason shows in the dialog, not under the table.
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "ada@example.com is already on this roster.",
+    );
+    expect(
+      screen.queryByText("ada@example.com is already on this roster.", {
+        selector: ".roster-panel__message *, .roster-panel__message",
+      }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.change(within(dialog).getByLabelText(/Email address/), {
+      target: { value: "ada@exmaple.com" },
+    });
+    fireEvent.change(within(dialog).getByLabelText(/Full name/), {
+      target: { value: "Ada K." },
+    });
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Save details" }),
+    );
+    await waitFor(() =>
+      expect(patchRosterParticipant).toHaveBeenLastCalledWith(
+        "ROSTER1",
+        "p-1",
+        { name: "Ada K.", expectedVersion: 4 },
+        "token",
+      ),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Ada was updated.",
+    );
+  });
+
+  test("closes the dialog on a version conflict and offers the reload", async () => {
+    patchRosterParticipant.mockRejectedValueOnce(
+      Object.assign(new Error("The participant changed in another session."), {
+        status: 409,
+        participant: { ...ada, version: 9 },
+      }),
+    );
+    await renderPanel();
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Edit name and email for Ada",
+      }),
+    );
+    const dialog = screen.getByRole("dialog", { name: "Edit Ada" });
+    fireEvent.change(within(dialog).getByLabelText(/Full name/), {
+      target: { value: "Ada B." },
+    });
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Save details" }),
+    );
+    expect(
+      await screen.findByRole("button", { name: "Reload latest participant" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("dialog", { name: "Edit Ada" }),
+    ).not.toBeInTheDocument();
+    // The row stays locked until reloaded.
+    expect(
+      screen.getByRole("button", { name: "Edit name and email for Ada" }),
+    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Remove Ada" })).toBeDisabled();
+  });
+
+  test("removes a person after confirming, and reports failures", async () => {
+    const onResultsInvalidated = jest.fn();
+    deleteRosterParticipant
+      .mockResolvedValueOnce({
+        deleted: true,
+        resultsRevision: 12,
+        groups: [{ id: null, name: "", count: 1, weight: 1, included: true }],
+      })
+      .mockRejectedValueOnce(
+        new Error("An email to this person is being sent right now."),
+      )
+      .mockRejectedValueOnce(new Error(""));
+    await renderPanel({ onResultsInvalidated });
+    fireEvent.click(await screen.findByLabelText("Select Ada"));
+    expect(screen.getAllByText("1 selected")[0]).toBeInTheDocument();
+
+    // Cancel leaves everything as it was.
+    fireEvent.click(screen.getByRole("button", { name: "Remove Ada" }));
+    let dialog = screen.getByRole("dialog", {
+      name: "Remove Ada from the roster?",
+    });
+    expect(dialog).toHaveTextContent(
+      "To keep their answers but leave them out of the results, untick Included instead.",
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(deleteRosterParticipant).not.toHaveBeenCalled();
+
+    fetchRoster.mockResolvedValue(rosterResponse([ben]));
+    fireEvent.click(screen.getByRole("button", { name: "Remove Ada" }));
+    dialog = screen.getByRole("dialog", {
+      name: "Remove Ada from the roster?",
+    });
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Remove person" }),
+    );
+    await waitFor(() =>
+      expect(deleteRosterParticipant).toHaveBeenCalledWith(
+        "ROSTER1",
+        "p-1",
+        "token",
+      ),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Ada was removed from the roster.",
+    );
+    expect(onResultsInvalidated).toHaveBeenCalledWith(12);
+    expect(screen.queryByText("Ada")).not.toBeInTheDocument();
+    expect(screen.getAllByText("0 selected")[0]).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove Ben" }));
+    fireEvent.click(
+      within(
+        screen.getByRole("dialog", { name: "Remove Ben from the roster?" }),
+      ).getByRole("button", { name: "Remove person" }),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "An email to this person is being sent right now.",
+    );
+    expect(
+      screen.queryByRole("dialog", { name: "Remove Ben from the roster?" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove Ben" }));
+    fireEvent.click(
+      within(
+        screen.getByRole("dialog", { name: "Remove Ben from the roster?" }),
+      ).getByRole("button", { name: "Remove person" }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Unable to remove Ben.",
+      ),
+    );
+  });
+
+  test("keeps the other stats when a removal returns no groups", async () => {
+    deleteRosterParticipant.mockResolvedValueOnce({ deleted: true });
+    await renderPanel();
+    fireEvent.click(await screen.findByRole("button", { name: "Remove Ada" }));
+    fireEvent.click(
+      within(
+        screen.getByRole("dialog", { name: "Remove Ada from the roster?" }),
+      ).getByRole("button", { name: "Remove person" }),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Ada was removed from the roster.",
+    );
+  });
+
+  test("hides row corrections while the roster is read-only", async () => {
+    await renderPanel({ event: { ...event, status: "closed" } });
+    await screen.findByText("Ada");
+    expect(
+      screen.queryByRole("button", { name: "Remove Ada" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Edit name and email for Ada" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Add myself" }),
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe("RosterPanel group inclusion", () => {
+  const faculty = {
+    id: 11,
+    name: "Faculty",
+    count: 2,
+    weight: 1,
+    included: true,
+  };
+  const students = {
+    id: 12,
+    name: "Students",
+    count: 1,
+    weight: 1,
+    included: false,
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    Object.defineProperty(globalThis, "crypto", {
+      configurable: true,
+      value: { randomUUID: jest.fn().mockReturnValue("include-key") },
+    });
+    fetchRoster.mockResolvedValue(
+      rosterResponse(
+        [
+          participant({
+            id: "p-1",
+            name: "Ada",
+            groups: [{ id: 11, name: "Faculty" }],
+          }),
+        ],
+        {
+          stats: {
+            total: 3,
+            submitted: 0,
+            notSubmitted: 3,
+            included: 2,
+            excluded: 1,
+            groups: [faculty, students],
+          },
+        },
+      ),
+    );
+    patchRosterBulk.mockResolvedValue({ updatedCount: 2, resultsRevision: 5 });
+  });
+
+  test("includes or leaves out a whole group", async () => {
+    const onResultsInvalidated = jest.fn();
+    await renderPanel({ onResultsInvalidated });
+    fireEvent.click(await screen.findByLabelText("Include group Faculty"));
+    await waitFor(() =>
+      expect(patchRosterBulk).toHaveBeenCalledWith(
+        "ROSTER1",
+        {
+          group: "Faculty",
+          updates: { included: false },
+          idempotencyKey: "include-key",
+        },
+        "token",
+      ),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Left 2 people in Faculty out of the results.",
+    );
+    expect(onResultsInvalidated).toHaveBeenCalledWith(5);
+
+    fireEvent.click(screen.getByLabelText("Include group Students"));
+    await waitFor(() =>
+      expect(patchRosterBulk).toHaveBeenLastCalledWith(
+        "ROSTER1",
+        expect.objectContaining({
+          group: "Students",
+          updates: { included: true },
+        }),
+        "token",
+      ),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Included 2 people in Students.",
+    );
+  });
+
+  test("counts one group alone and brings everyone back", async () => {
+    const onResultsInvalidated = jest.fn();
+    includeOnlyRosterGroup
+      .mockResolvedValueOnce({
+        includedCount: 2,
+        updatedCount: 1,
+        resultsRevision: 6,
+        groups: [faculty, { ...students, included: false }],
+      })
+      .mockRejectedValueOnce(new Error(""));
+    await renderPanel({ onResultsInvalidated });
+    const facultyRow = (
+      await screen.findByRole("region", {
+        name: "Roster groups",
+      })
+    ).querySelector('[data-roster-group="Faculty"]');
+    fireEvent.click(
+      within(facultyRow).getByRole("button", { name: "Only this group" }),
+    );
+    await waitFor(() =>
+      expect(includeOnlyRosterGroup).toHaveBeenCalledWith(
+        "ROSTER1",
+        11,
+        "token",
+      ),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Only Faculty counts in the results now. Use Include everyone to bring the others back.",
+    );
+    expect(onResultsInvalidated).toHaveBeenCalledWith(6);
+    await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(2));
+
+    fireEvent.click(
+      within(facultyRow).getByRole("button", { name: "Only this group" }),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Unable to include only Faculty.",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Include everyone" }));
+    await waitFor(() =>
+      expect(patchRosterBulk).toHaveBeenCalledWith(
+        "ROSTER1",
+        {
+          filter: { all: true },
+          updates: { included: true },
+          idempotencyKey: "include-key",
+        },
+        "token",
+      ),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Everyone is included in the results again (2 people changed).",
+    );
+  });
+
+  test("leaves the results alone when including only a group changes nothing", async () => {
+    const onResultsInvalidated = jest.fn();
+    includeOnlyRosterGroup.mockResolvedValueOnce({ updatedCount: 0 });
+    await renderPanel({ onResultsInvalidated });
+    const facultyRow = (
+      await screen.findByRole("region", {
+        name: "Roster groups",
+      })
+    ).querySelector('[data-roster-group="Faculty"]');
+    fireEvent.click(
+      within(facultyRow).getByRole("button", { name: "Only this group" }),
+    );
+    await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(2));
+    expect(onResultsInvalidated).not.toHaveBeenCalled();
   });
 });

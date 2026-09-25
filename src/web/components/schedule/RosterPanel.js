@@ -20,15 +20,18 @@ import Panel from "@/components/ui/Panel";
 import StatusBadge from "@/components/ui/StatusBadge";
 import { startingBrushValue } from "@/components/ui/Availability";
 import {
+  AccountIcon,
   CheckIcon,
   ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  DeleteIcon,
   EditIcon,
   GroupIcon,
   ImportIcon,
   InviteIcon,
   RefreshIcon,
+  SaveIcon,
   SearchIcon,
   SendIcon,
 } from "@/components/ui/icons";
@@ -39,15 +42,21 @@ import RosterGroups, {
   summarizeGroups,
 } from "@/components/schedule/RosterGroups";
 import RosterImportWizard from "@/components/schedule/RosterImportWizard";
+import RosterPersonDialog, {
+  detailsEditable,
+} from "@/components/schedule/RosterPersonDialog";
 import {
   createManagedParticipant,
+  joinEvent,
   updateParticipant,
 } from "@/lib/api/participants";
 import {
   createRosterGroup,
   deleteRosterGroup,
+  deleteRosterParticipant,
   fetchRoster,
   fetchRosterSchedule,
+  includeOnlyRosterGroup,
   patchRosterBulk,
   patchRosterParticipant,
   renameRosterGroup,
@@ -64,6 +73,16 @@ const DELIVERY_LABELS = {
 // Explicit memberships come as [{ id, name }]; the every-group flag is separate.
 function inGroup(participant, group) {
   return (participant.groups || []).some((item) => item.id === group.id);
+}
+
+// Ticked group boxes wait in a draft keyed "allGroups" or "group:<id>" until
+// the organizer saves them.
+const ALL_GROUPS_FIELD = "allGroups";
+const groupField = (groupId) => `group:${groupId}`;
+
+function savedMembership(participant, field) {
+  if (field === ALL_GROUPS_FIELD) return Boolean(participant.allGroups);
+  return inGroup(participant, { id: Number(field.slice("group:".length)) });
 }
 
 const OWNED_RESPONSE_CODES = new Set([
@@ -88,6 +107,7 @@ function wrappableEmail(email) {
 }
 
 function accountLabel(participant) {
+  if (participant.isOrganizer) return "You (organizer)";
   if (participant.organizerManaged) return "Organizer-managed";
   return participant.accountAccess === "temporary"
     ? "Temporary"
@@ -252,6 +272,21 @@ const RosterPanel = forwardRef(function RosterPanel(
   // { [participantId]: { name, participant, message } }. A row stays locked
   // until the organizer reloads the latest values.
   const [rowConflicts, setRowConflicts] = useState({});
+  // Group boxes ticked but not saved yet, shaped
+  // { [participantId]: { participant, values: { [field]: boolean } } }.
+  // They survive reloads and page changes until saved or discarded.
+  const [groupDrafts, setGroupDrafts] = useState({});
+  const [groupSaving, setGroupSaving] = useState(false);
+  // Whether the organizer answers as a participant too; null until loaded.
+  const [organizerOnRoster, setOrganizerOnRoster] = useState(null);
+  const [addingSelf, setAddingSelf] = useState(false);
+  // The row whose name and email are being edited, and the row awaiting
+  // removal confirmation.
+  const [detailsTarget, setDetailsTarget] = useState(null);
+  const [detailsBusy, setDetailsBusy] = useState(false);
+  const [detailsError, setDetailsError] = useState("");
+  const [removeTarget, setRemoveTarget] = useState(null);
+  const [removeBusy, setRemoveBusy] = useState(false);
   const requestNumber = useRef(0);
   // The whole-roster digest the last listing carried, for the workspace's
   // live sync to compare against its activity poll. Null until loaded.
@@ -266,11 +301,24 @@ const RosterPanel = forwardRef(function RosterPanel(
   const participantsRef = useRef(participants);
   const rowConflictsRef = useRef(rowConflicts);
   const rowMutationQueuesRef = useRef(new Map());
+  const lastRowError = useRef("");
+  // Counts the group stats this session took from its own changes. A
+  // listing requested before one of them carries older groups (an empty
+  // group's creation moves nothing the live sync watches), so it keeps the
+  // groups on screen, as a reload never moves a row backwards either.
+  const groupsEpochRef = useRef(0);
   const controlIds = useId();
 
   useEffect(() => {
     participantsRef.current = participants;
   }, [participants]);
+
+  // Group stats a change of this session returned: newer than any listing
+  // already in flight.
+  const applyGroupStats = useCallback((groups) => {
+    groupsEpochRef.current += 1;
+    setStats((current) => ({ ...current, groups }));
+  }, []);
 
   const updateSelected = useCallback((updater) => {
     const next =
@@ -303,6 +351,7 @@ const RosterPanel = forwardRef(function RosterPanel(
   const loadRoster = useCallback(
     async (providedToken, { throwOnError = false, silent = false } = {}) => {
       const currentRequest = ++requestNumber.current;
+      const groupsEpoch = groupsEpochRef.current;
       if (!silent) {
         setLoading(true);
         setError("");
@@ -356,13 +405,28 @@ const RosterPanel = forwardRef(function RosterPanel(
             for (const participantId of caughtUp) delete next[participantId];
             return next;
           });
+          setGroupDrafts((current) => {
+            const next = { ...current };
+            for (const participantId of caughtUp) delete next[participantId];
+            return next;
+          });
         }
         setPagination(
           data.pagination || { page, pageSize, total: 0, pages: 1 },
         );
+        const loadedStats = data.stats || {
+          total: 0,
+          submitted: 0,
+          notSubmitted: 0,
+          groups: [],
+        };
         setStats(
-          data.stats || { total: 0, submitted: 0, notSubmitted: 0, groups: [] },
+          groupsEpoch === groupsEpochRef.current
+            ? loadedStats
+            : (current) => ({ ...loadedStats, groups: current.groups }),
         );
+        if (typeof data.organizerOnRoster === "boolean")
+          setOrganizerOnRoster(data.organizerOnRoster);
         setLoaded(true);
         const recoveredDelivery =
           data.latestDeliveryRequest ||
@@ -625,9 +689,19 @@ const RosterPanel = forwardRef(function RosterPanel(
     setEditorConflict(null);
     setDiscardConfirmOpen(false);
     updateRowConflicts({});
+    setGroupDrafts({});
+    setDetailsTarget(null);
+    setDetailsError("");
+    setRemoveTarget(null);
   }, [event.status, startingBrush, updateRowConflicts, updateSelected]);
 
-  const patchRow = async (participant, updates) => {
+  // `reportError: false` leaves the panel alert alone so a dialog can show
+  // the reason itself (read from lastRowError).
+  const patchRow = async (
+    participant,
+    updates,
+    { reportError = true } = {},
+  ) => {
     const previous =
       rowMutationQueuesRef.current.get(participant.id) || Promise.resolve();
     const request = previous
@@ -662,8 +736,7 @@ const RosterPanel = forwardRef(function RosterPanel(
             onResultsInvalidated?.(data.resultsRevision);
           // The server recounts the groups so their shared weights stay true
           // without reloading the whole page of people.
-          if (Array.isArray(data.groups))
-            setStats((current) => ({ ...current, groups: data.groups }));
+          if (Array.isArray(data.groups)) applyGroupStats(data.groups);
           return "saved";
         } catch (requestError) {
           if (requestError.status === 409 && requestError.participant) {
@@ -683,7 +756,9 @@ const RosterPanel = forwardRef(function RosterPanel(
           }
           // Reload first: loadRoster clears the panel error when it starts.
           if (requestError.status === 409) await loadRoster();
-          setError(requestError.message || `Unable to update ${latest.name}.`);
+          lastRowError.current =
+            requestError.message || `Unable to update ${latest.name}.`;
+          if (reportError) setError(lastRowError.current);
           return "failed";
         }
       });
@@ -734,12 +809,27 @@ const RosterPanel = forwardRef(function RosterPanel(
     if (result !== "conflict") clearRowDraft(participant.id, field, value);
   };
 
-  // A membership checkbox shows the click at once as a row draft and settles
-  // on the server's answer; clicks on one row reach the server in order.
-  const toggleMembership = async (participant, field, updates, checked) => {
-    updateRowDraft(participant.id, field, checked);
-    const result = await patchRow(participant, updates);
-    if (result !== "conflict") clearRowDraft(participant.id, field, checked);
+  // A membership checkbox only records the click: nothing reaches the server
+  // until Save group changes, so a stray click is easy to take back. Ticking a
+  // box back to its saved state drops that part of the draft.
+  const stageMembership = (participant, field, checked) => {
+    setGroupDrafts((current) => {
+      const values = { ...(current[participant.id]?.values || {}) };
+      if (checked === savedMembership(participant, field)) delete values[field];
+      else values[field] = checked;
+      const next = { ...current };
+      if (Object.keys(values).length)
+        next[participant.id] = { participant, values };
+      else delete next[participant.id];
+      return next;
+    });
+  };
+
+  const membershipValue = (participant, field) => {
+    const values = groupDrafts[participant.id]?.values || {};
+    return Object.hasOwn(values, field)
+      ? values[field]
+      : savedMembership(participant, field);
   };
 
   const bulkTarget = () => {
@@ -866,6 +956,141 @@ const RosterPanel = forwardRef(function RosterPanel(
       groupFilterValue(name),
     );
 
+  const setGroupIncluded = (name, included) =>
+    applyGroupUpdate(
+      { group: name },
+      { included },
+      (count) =>
+        included
+          ? `Included ${peopleCount(count)} in ${name || "Ungrouped"}.`
+          : `Left ${peopleCount(count)} in ${name || "Ungrouped"} out of the results.`,
+      groupFilterValue(name),
+    );
+
+  const includeEveryone = () =>
+    applyGroupUpdate(
+      { filter: { all: true } },
+      { included: true },
+      (count) =>
+        `Everyone is included in the results again (${peopleCount(count)} changed).`,
+      "include-everyone",
+    );
+
+  // One request includes the group's people and leaves everyone else out, so
+  // the results show the times that suit this group alone.
+  const includeOnlyGroup = (entry) =>
+    applyGroupRequest(
+      groupFilterValue(entry.name),
+      (token) => includeOnlyRosterGroup(event.code, entry.id, token),
+      {
+        status: `Only ${entry.name} counts in the results now. Use Include everyone to bring the others back.`,
+        fallback: `Unable to include only ${entry.name}.`,
+        onSuccess: async (data) => {
+          if (data?.resultsRevision !== undefined)
+            onResultsInvalidated?.(data.resultsRevision);
+          await loadRoster();
+        },
+      },
+    );
+
+  // The organizer joins their own event like any participant; their row then
+  // opens straight in the schedule editor.
+  const addMyself = async () => {
+    if (addingSelf) return;
+    setError("");
+    setStatus("");
+    setInviteNotice("");
+    setAddingSelf(true);
+    try {
+      const token = await getToken();
+      const data = await joinEvent(event.code, token);
+      onResultsInvalidated?.();
+      await loadRoster();
+      setInviteNotice(
+        "You are on the roster now. Enter your availability with Edit my schedule on your row.",
+      );
+      if (data?.participant?.id) {
+        await openEditor({
+          id: data.participant.id,
+          name: data.participant.name || "You",
+        });
+      }
+    } catch (requestError) {
+      setError(requestError.message || "Unable to add you to the roster.");
+    } finally {
+      setAddingSelf(false);
+    }
+  };
+
+  const openDetails = (participant) => {
+    setDetailsError("");
+    setDetailsTarget(participant);
+  };
+
+  const closeDetails = () => {
+    if (detailsBusy) return;
+    setDetailsTarget(null);
+    setDetailsError("");
+  };
+
+  const saveDetails = async (updates) => {
+    if (!detailsTarget) return;
+    if (!Object.keys(updates).length) {
+      closeDetails();
+      return;
+    }
+    setDetailsBusy(true);
+    setDetailsError("");
+    const result = await patchRow(detailsTarget, updates, {
+      reportError: false,
+    });
+    setDetailsBusy(false);
+    if (result === "saved") {
+      setDetailsTarget(null);
+      if (updates.email) {
+        setStatus(
+          `${updates.name || detailsTarget.name} now uses ${updates.email}. Their invitation has not been sent to this address yet.`,
+        );
+      }
+    } else if (result === "conflict") {
+      setDetailsTarget(null);
+    } else {
+      setDetailsError(lastRowError.current);
+    }
+  };
+
+  const confirmRemove = async () => {
+    const target = removeTarget;
+    if (!target || removeBusy) return;
+    setRemoveBusy(true);
+    setError("");
+    setStatus("");
+    try {
+      const token = await getToken();
+      const data = await deleteRosterParticipant(event.code, target.id, token);
+      setRemoveTarget(null);
+      updateSelected((current) => {
+        const next = new Set(current);
+        next.delete(target.id);
+        return next;
+      });
+      setGroupDrafts((current) => {
+        const next = { ...current };
+        delete next[target.id];
+        return next;
+      });
+      if (Array.isArray(data?.groups)) applyGroupStats(data.groups);
+      onResultsInvalidated?.(data?.resultsRevision);
+      await loadRoster();
+      setStatus(`${target.name} was removed from the roster.`);
+    } catch (requestError) {
+      setRemoveTarget(null);
+      setError(requestError.message || `Unable to remove ${target.name}.`);
+    } finally {
+      setRemoveBusy(false);
+    }
+  };
+
   // Groups are rows of their own: creating, renaming and deleting one goes
   // through the group endpoints rather than a bulk patch of its members. The
   // response carries the recounted group stats; anything that changes the
@@ -882,8 +1107,7 @@ const RosterPanel = forwardRef(function RosterPanel(
       const token = await getToken();
       const data = await request(token);
       setStatus(describe);
-      if (Array.isArray(data?.groups))
-        setStats((current) => ({ ...current, groups: data.groups }));
+      if (Array.isArray(data?.groups)) applyGroupStats(data.groups);
       await onSuccess?.(data);
       return true;
     } catch (requestError) {
@@ -981,7 +1205,11 @@ const RosterPanel = forwardRef(function RosterPanel(
     try {
       const token = await getToken();
       const data = await fetchRosterSchedule(event.code, participant.id, token);
-      if (data.participant?.canOrganizerEditAvailability === false) {
+      // The organizer's own row is theirs to answer, never someone else's.
+      if (
+        data.participant?.canOrganizerEditAvailability === false &&
+        !data.participant?.isOrganizer
+      ) {
         // Claimed since the roster loaded. Reload first: loadRoster clears
         // the panel error when it starts.
         loadRoster();
@@ -1040,7 +1268,8 @@ const RosterPanel = forwardRef(function RosterPanel(
         event.code,
         editor.id,
         {
-          name: editorName.trim(),
+          // The organizer's own name comes from their account.
+          ...(editor.isOrganizer ? {} : { name: editorName.trim() }),
           availabilityInperson: editorInperson,
           availabilityVirtual: editorVirtual,
           submitted: submit ? 1 : 0,
@@ -1128,6 +1357,11 @@ const RosterPanel = forwardRef(function RosterPanel(
       delete next[participantId];
       return next;
     });
+    setGroupDrafts((current) => {
+      const next = { ...current };
+      delete next[participantId];
+      return next;
+    });
     updateRowConflicts((current) => {
       const next = { ...current };
       delete next[participantId];
@@ -1140,6 +1374,77 @@ const RosterPanel = forwardRef(function RosterPanel(
 
   const groupSummaries = summarizeGroups(stats.groups);
   const namedGroups = groupSummaries.filter((item) => item.name !== "");
+  // The saved state comes from the row on screen when it is there (it may
+  // have moved on since the box was ticked) and from the ticked row otherwise.
+  // A box for a group deleted since is dropped rather than recreating it.
+  const existingGroupIds = new Set(namedGroups.map((entry) => entry.id));
+  const pendingGroupEdits = Object.entries(groupDrafts)
+    .map(([participantId, draft]) => {
+      const participant =
+        participants.find((candidate) => candidate.id === participantId) ||
+        draft.participant;
+      const updates = {};
+      let changes = 0;
+      for (const [field, checked] of Object.entries(draft.values)) {
+        if (checked === savedMembership(participant, field)) continue;
+        if (field === ALL_GROUPS_FIELD) {
+          updates.allGroups = checked;
+        } else {
+          const groupId = Number(field.slice("group:".length));
+          if (!existingGroupIds.has(groupId)) continue;
+          const key = checked ? "addGroupIds" : "removeGroupIds";
+          updates[key] = [...(updates[key] || []), groupId];
+        }
+        changes += 1;
+      }
+      return { participant, updates, changes };
+    })
+    .filter((edit) => edit.changes > 0);
+  const pendingGroupChanges = pendingGroupEdits.reduce(
+    (total, edit) => total + edit.changes,
+    0,
+  );
+  const hasUnsavedGroups = pendingGroupChanges > 0;
+
+  // Leaving the page with ticked but unsaved boxes asks first.
+  useEffect(() => {
+    if (!hasUnsavedGroups) return undefined;
+    const warn = (unloadEvent) => {
+      unloadEvent.preventDefault();
+      unloadEvent.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [hasUnsavedGroups]);
+
+  const saveGroupDrafts = async () => {
+    if (groupSaving || !pendingGroupEdits.length) return;
+    const edits = pendingGroupEdits;
+    setGroupSaving(true);
+    try {
+      const results = await Promise.all(
+        edits.map((edit) => patchRow(edit.participant, edit.updates)),
+      );
+      const savedIds = edits
+        .filter((_edit, index) => results[index] === "saved")
+        .map((edit) => edit.participant.id);
+      setGroupDrafts((current) => {
+        const next = { ...current };
+        for (const participantId of savedIds) delete next[participantId];
+        return next;
+      });
+      if (savedIds.length === edits.length) {
+        setStatus(`Saved group changes for ${peopleCount(savedIds.length)}.`);
+      }
+    } finally {
+      setGroupSaving(false);
+    }
+  };
+
+  const discardGroupDrafts = () => {
+    setGroupDrafts({});
+    setStatus("Unsaved group changes were discarded.");
+  };
   const groups = groupSummaries.map(({ name }) => ({
     value: groupFilterValue(name),
     label: name === "" ? "Ungrouped" : name,
@@ -1278,6 +1583,18 @@ const RosterPanel = forwardRef(function RosterPanel(
               >
                 {showInvite ? "Close add person" : "Add person"}
               </AppButton>
+              {organizerOnRoster === false && (
+                <AppButton
+                  variant="outlined"
+                  icon={<AccountIcon />}
+                  busy={addingSelf}
+                  disabled={addingSelf || inviteBusy}
+                  onClick={() => void addMyself()}
+                  title="Answer this event yourself, under your own account"
+                >
+                  {addingSelf ? "Adding…" : "Add myself"}
+                </AppButton>
+              )}
               <AppButton
                 variant="outlined"
                 icon={<ImportIcon />}
@@ -1600,6 +1917,10 @@ const RosterPanel = forwardRef(function RosterPanel(
                 setPage(1);
               }}
               onSetWeight={setGroupWeight}
+              onSetIncluded={setGroupIncluded}
+              onIncludeOnly={includeOnlyGroup}
+              onIncludeEveryone={includeEveryone}
+              excludedCount={stats.excluded || 0}
               onRename={renameGroup}
               onDelete={deleteGroup}
               onAddSelected={addSelectedToGroup}
@@ -2013,13 +2334,20 @@ const RosterPanel = forwardRef(function RosterPanel(
                     const includedId = `${controlIds}-included-${participant.id}`;
                     const rowLocked =
                       !rosterMutable || Boolean(rowConflicts[participant.id]);
-                    const everyGroup = Boolean(
-                      rowDraftValue(
-                        participant,
-                        "allGroups",
-                        Boolean(participant.allGroups),
-                      ),
+                    const groupsLocked = rowLocked || groupSaving;
+                    const everyGroup = membershipValue(
+                      participant,
+                      ALL_GROUPS_FIELD,
                     );
+                    const pendingFields =
+                      groupDrafts[participant.id]?.values || {};
+                    // Marked exactly when the box differs from what is saved.
+                    const pendingClass = (field) =>
+                      Object.hasOwn(pendingFields, field) &&
+                      pendingFields[field] !==
+                        savedMembership(participant, field)
+                        ? " roster-table__group-cell--pending"
+                        : "";
                     return (
                       <tr
                         className="roster-table__row"
@@ -2052,7 +2380,8 @@ const RosterPanel = forwardRef(function RosterPanel(
                             {accountLabel(participant)}
                           </small>
                           <div className="mt-2">
-                            {participant.canOrganizerEditAvailability ? (
+                            {participant.isOrganizer ||
+                            participant.canOrganizerEditAvailability ? (
                               <AppButton
                                 variant="outlined"
                                 size="sm"
@@ -2060,7 +2389,9 @@ const RosterPanel = forwardRef(function RosterPanel(
                                 onClick={() => openEditor(participant)}
                                 disabled={!editorAllowed}
                               >
-                                Edit schedule
+                                {participant.isOrganizer
+                                  ? "Edit my schedule"
+                                  : "Edit schedule"}
                               </AppButton>
                             ) : (
                               <small className="text-secondary">
@@ -2068,6 +2399,32 @@ const RosterPanel = forwardRef(function RosterPanel(
                               </small>
                             )}
                           </div>
+                          {rosterMutable && (
+                            <div className="roster-table__row-actions">
+                              {detailsEditable(participant) && (
+                                <AppButton
+                                  variant="text"
+                                  size="sm"
+                                  aria-label={`Edit name and email for ${participant.name}`}
+                                  disabled={rowLocked}
+                                  onClick={() => openDetails(participant)}
+                                >
+                                  Edit details
+                                </AppButton>
+                              )}
+                              <AppButton
+                                variant="text"
+                                size="sm"
+                                className="roster-table__remove"
+                                icon={<DeleteIcon />}
+                                aria-label={`Remove ${participant.name}`}
+                                disabled={rowLocked}
+                                onClick={() => setRemoveTarget(participant)}
+                              >
+                                Remove
+                              </AppButton>
+                            </div>
+                          )}
                         </th>
                         <td className="roster-table__email">
                           {/* A person without an email of their own is filed
@@ -2085,55 +2442,53 @@ const RosterPanel = forwardRef(function RosterPanel(
                             </small>
                           ) : null}
                         </td>
-                        <td className="roster-table__group-cell">
+                        <td
+                          className={`roster-table__group-cell${pendingClass(
+                            ALL_GROUPS_FIELD,
+                          )}`}
+                        >
                           <input
                             className="form-check-input"
                             aria-label={`All groups for ${participant.name}`}
                             type="checkbox"
                             checked={everyGroup}
-                            disabled={rowLocked}
+                            disabled={groupsLocked}
                             onChange={(event) =>
-                              void toggleMembership(
+                              stageMembership(
                                 participant,
-                                "allGroups",
-                                { allGroups: event.target.checked },
+                                ALL_GROUPS_FIELD,
                                 event.target.checked,
                               )
                             }
                           />
                         </td>
                         {namedGroups.map((entry) => {
-                          const field = `group:${entry.id}`;
-                          const member = Boolean(
-                            rowDraftValue(
-                              participant,
-                              field,
-                              inGroup(participant, entry),
-                            ),
-                          );
+                          const field = groupField(entry.id);
+                          const member = membershipValue(participant, field);
                           return (
                             <td
                               key={entry.id ?? entry.name}
-                              className="roster-table__group-cell"
+                              className={`roster-table__group-cell${pendingClass(
+                                field,
+                              )}`}
                             >
                               <input
                                 className="form-check-input"
                                 aria-label={`${participant.name} in ${entry.name}`}
                                 type="checkbox"
                                 checked={everyGroup || member}
-                                disabled={rowLocked || everyGroup}
+                                disabled={groupsLocked || everyGroup}
+                                // The header row scrolls away with the page,
+                                // so each box names its group on hover.
                                 title={
                                   everyGroup
-                                    ? "Included through All groups"
-                                    : undefined
+                                    ? `${entry.name}: included through All groups`
+                                    : entry.name
                                 }
                                 onChange={(event) =>
-                                  void toggleMembership(
+                                  stageMembership(
                                     participant,
                                     field,
-                                    event.target.checked
-                                      ? { addGroupIds: [entry.id] }
-                                      : { removeGroupIds: [entry.id] },
                                     event.target.checked,
                                   )
                                 }
@@ -2278,6 +2633,39 @@ const RosterPanel = forwardRef(function RosterPanel(
             </div>
           </div>
         )}
+        {hasUnsavedGroups && (
+          <div
+            className="roster-panel__group-drafts"
+            role="region"
+            aria-label="Unsaved group changes"
+          >
+            <p className="mb-0" role="status">
+              <strong>
+                {pendingGroupChanges} unsaved group{" "}
+                {pendingGroupChanges === 1 ? "change" : "changes"}
+              </strong>{" "}
+              for {peopleCount(pendingGroupEdits.length)}. Ticked boxes are not
+              saved until you save them.
+            </p>
+            <div className="d-flex flex-wrap gap-2">
+              <AppButton
+                variant="text"
+                onClick={discardGroupDrafts}
+                disabled={groupSaving}
+              >
+                Discard
+              </AppButton>
+              <AppButton
+                icon={<SaveIcon />}
+                busy={groupSaving}
+                disabled={groupSaving || !rosterMutable}
+                onClick={() => void saveGroupDrafts()}
+              >
+                {groupSaving ? "Saving…" : "Save group changes"}
+              </AppButton>
+            </div>
+          </div>
+        )}
         {showPagination && (
           <div className="pagination-row roster-panel__pagination">
             <div className="d-flex align-items-center gap-2">
@@ -2409,6 +2797,38 @@ const RosterPanel = forwardRef(function RosterPanel(
         onReloadLatest={reloadConflict}
         onClose={closeEditor}
       />
+
+      {detailsTarget && (
+        <RosterPersonDialog
+          participant={detailsTarget}
+          busy={detailsBusy}
+          error={detailsError}
+          onSave={(updates) => void saveDetails(updates)}
+          onClose={closeDetails}
+        />
+      )}
+
+      {removeTarget && (
+        <ConfirmDialog
+          title={`Remove ${removeTarget.name} from the roster?`}
+          confirmLabel="Remove person"
+          busy={removeBusy}
+          onConfirm={() => void confirmRemove()}
+          onClose={() => {
+            if (!removeBusy) setRemoveTarget(null);
+          }}
+        >
+          <p>
+            Their schedule, group memberships and invitation are deleted, and
+            any invitation link already sent stops working. This cannot be
+            undone.
+          </p>
+          <p className="mb-0 text-secondary">
+            To keep their answers but leave them out of the results, untick
+            Included instead.
+          </p>
+        </ConfirmDialog>
+      )}
 
       {discardConfirmOpen && (
         <ConfirmDialog

@@ -12,6 +12,7 @@ from apps.scheduling.services.roster_groups import (
     validate_group_names,
 )
 from apps.scheduling.services.roster_imports import RosterImportError
+from apps.scheduling.services.roster_people import change_participant_email, remove_participant
 
 from ..helpers import PrivateAPIView
 from .helpers import (
@@ -171,6 +172,14 @@ class RosterParticipantView(PrivateAPIView):
                         or weight.included != new_included
                     )
 
+                # The address moves the row to another account, so it is the
+                # first write, after every other field has been validated.
+                email_changed = "email" in request.data and change_participant_email(
+                    event=event,
+                    participant=participant,
+                    organizer=request.user,
+                    email=request.data.get("email"),
+                )
                 if groups_supplied:
                     # Persists ``all_groups`` and the memberships itself.
                     changed |= set_participant_groups(
@@ -193,8 +202,13 @@ class RosterParticipantView(PrivateAPIView):
                             "updated_at",
                         ]
                     )
-                # Results never read groups, so only a weight edit dirties them.
-                revision = mark_results_dirty(event) if weight_changed else event.results_revision
+                # Results never read groups, so only a weight edit or a move to
+                # another account dirties them.
+                revision = (
+                    mark_results_dirty(event)
+                    if weight_changed or email_changed
+                    else event.results_revision
+                )
                 enriched = roster_queryset(event).get(pk=participant.pk)
         except RosterImportError as exc:
             return error_response(exc)
@@ -203,6 +217,30 @@ class RosterParticipantView(PrivateAPIView):
                 "participant": participant_summary(enriched),
                 "resultsRevision": revision,
                 # A weight or group edit changes what the groups share.
+                "groups": group_stats(event, roster_queryset(event)),
+            }
+        )
+
+    def delete(self, request, participant_id):
+        try:
+            with transaction.atomic():
+                event, error = event_for_organizer(request, lock=True)
+                if error:
+                    return error
+                write_error = roster_write_error(event)
+                if write_error:
+                    return write_error
+                participant = participant_for_path(event, participant_id, lock=True)
+                if participant is None:
+                    return Response({"error": "Participant not found"}, status=404)
+                remove_participant(event=event, participant=participant)
+                revision = mark_results_dirty(event)
+        except RosterImportError as exc:
+            return error_response(exc)
+        return Response(
+            {
+                "deleted": True,
+                "resultsRevision": revision,
                 "groups": group_stats(event, roster_queryset(event)),
             }
         )

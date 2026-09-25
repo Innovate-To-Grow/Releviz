@@ -18,11 +18,13 @@ from django.db.models import (
 )
 from django.db.models.functions import Coalesce, NullIf
 
-from apps.scheduling.models import EventInvitation, Participant, Weight
+from apps.authn.models import ContactEmail
+from apps.scheduling.models import EventInvitation, Participant, TemporaryEventSession, Weight
 from apps.scheduling.payloads.delivery import delivery_request_status_payload
 from apps.scheduling.payloads.participants import participant_memberships
 from apps.scheduling.permissions import organizer_may_edit_response
 from apps.scheduling.services.roster_imports import RosterImportError
+from apps.scheduling.services.roster_people import email_change_allowed
 
 UNGROUPED_FILTER = "__ungrouped__"
 
@@ -62,13 +64,25 @@ def roster_queryset(event):
                 invitation_query.values("accepted_at")[:1],
                 output_field=DateTimeField(),
             ),
+            # Whether the person ever opened a temporary link session.
+            roster_signed_in=Exists(
+                TemporaryEventSession.objects.filter(participant_id=OuterRef("pk"))
+            ),
         )
     )
+    # Accounts created with an email code keep their address only as a
+    # primary contact email (Member.get_primary_email), so that is the last
+    # resort for someone without an invitation, such as the organizer's own
+    # row.
+    primary_contact = ContactEmail.objects.filter(
+        member_id=OuterRef("member_id"), email_type="primary"
+    ).order_by("created_at")
     return queryset.annotate(
         roster_email=Coalesce(
             NullIf("contact_email", Value("")),
             "roster_invitation_email",
-            "member__email",
+            NullIf("member__email", Value("")),
+            Subquery(primary_contact.values("email_address")[:1], output_field=CharField()),
             Value(""),
             output_field=CharField(),
         ),
@@ -155,6 +169,7 @@ def apply_roster_filters(queryset, params):
 
 def participant_summary(participant) -> dict:
     account_access = getattr(participant.member, "access_level", "full")
+    is_organizer = participant.member_id == participant.event.organizer_id
     return {
         "id": str(participant.pk),
         "participantId": str(participant.pk),
@@ -169,25 +184,35 @@ def participant_summary(participant) -> dict:
         "accountAccess": account_access,
         "organizerManaged": participant.organizer_managed,
         "canOrganizerEditAvailability": organizer_may_edit_response(participant),
+        # The organizer's own row: they answer for themselves under their account.
+        "isOrganizer": is_organizer,
+        "canOrganizerEditEmail": email_change_allowed(
+            participant,
+            invitation_accepted=getattr(participant, "roster_invitation_accepted", None)
+            is not None,
+            has_session=bool(getattr(participant, "roster_signed_in", False)),
+        ),
         "invitationStatus": getattr(participant, "roster_invitation_status", "not_sent"),
         "version": participant.version,
     }
 
 
-def _group_entry(group_id, name, member_ids, weights) -> dict:
-    # The weight shared by everyone counted in the group, or ``None`` when
-    # they carry different weights (or nobody is counted).
+def _group_entry(group_id, name, member_ids, weights, included) -> dict:
+    # The weight and the included flag shared by everyone counted in the
+    # group, each ``None`` when they differ (or nobody is counted).
     shared = {weights[pk] for pk in member_ids}
+    shared_included = {included[pk] for pk in member_ids}
     return {
         "id": group_id,
         "name": name,
         "count": len(member_ids),
         "weight": float(shared.pop()) if len(shared) == 1 else None,
+        "included": shared_included.pop() if len(shared_included) == 1 else None,
     }
 
 
 def group_stats(event, queryset) -> list[dict]:
-    """Every group of the event with its head count and the weight its members share.
+    """Every group of the event with its head count and what its members share.
 
     Groups are listed in name order, empty ones included. A person counts
     once in each group they belong to, and someone flagged ``all_groups``
@@ -196,9 +221,11 @@ def group_stats(event, queryset) -> list[dict]:
     """
 
     weights = {}
+    included = {}
     everywhere = set()
-    for row in queryset.values("pk", "roster_weight", "all_groups"):
+    for row in queryset.values("pk", "roster_weight", "roster_included", "all_groups"):
         weights[row["pk"]] = row["roster_weight"]
+        included[row["pk"]] = bool(row["roster_included"])
         if row["all_groups"]:
             everywhere.add(row["pk"])
     members = defaultdict(set)
@@ -210,12 +237,12 @@ def group_stats(event, queryset) -> list[dict]:
             members[group_id].add(participant_id)
 
     stats = [
-        _group_entry(group.pk, group.name, members[group.pk] | everywhere, weights)
+        _group_entry(group.pk, group.name, members[group.pk] | everywhere, weights, included)
         for group in event.participant_groups.all()
     ]
     ungrouped = set(weights) - everywhere - set().union(*members.values())
     if ungrouped:
-        stats.append(_group_entry(None, "", ungrouped, weights))
+        stats.append(_group_entry(None, "", ungrouped, weights, included))
     return stats
 
 

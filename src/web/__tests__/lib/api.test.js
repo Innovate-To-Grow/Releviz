@@ -61,10 +61,12 @@ import {
   createRosterGroup,
   createRosterImport,
   deleteRosterGroup,
+  deleteRosterParticipant,
   fetchRoster,
   fetchRosterGroups,
   fetchRosterImportRows,
   fetchRosterSchedule,
+  includeOnlyRosterGroup,
   patchRosterBulk,
   patchRosterParticipant,
   renameRosterGroup,
@@ -1075,6 +1077,8 @@ describe("business API helpers", () => {
     await createRosterGroup("ABC 123", { name: "Faculty" }, "tok");
     await renameRosterGroup("ABC 123", "group 7", { name: "Staff" }, "tok");
     await deleteRosterGroup("ABC 123", "group 7", "tok");
+    await includeOnlyRosterGroup("ABC 123", "group 7", "tok");
+    await deleteRosterParticipant("ABC 123", "participant 1", "tok");
     await sendRosterInvitations(
       "ABC 123",
       {
@@ -1106,6 +1110,14 @@ describe("business API helpers", () => {
     await deleteParticipant("ABC 123", "user 1", "tok");
 
     const urls = global.fetch.mock.calls.map(([url]) => url);
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/events/roster/groups/group%207/include-only?code=ABC%20123",
+      expect.objectContaining({ method: "POST", body: "{}" }),
+    );
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/events/roster/participant%201?code=ABC%20123",
+      expect.objectContaining({ method: "DELETE" }),
+    );
     expect(urls).toContain("/dashboard/events");
     expect(urls).toContain("/events?code=ABC%20123");
     expect(urls).toContain("/events/duplicate?code=ABC%20123");

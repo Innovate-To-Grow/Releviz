@@ -1198,8 +1198,8 @@ class RosterImportApiTests(TestCase):
         self.assertEqual(
             roster.data["stats"]["groups"],
             [
-                {"id": group_a.pk, "name": "A", "count": 2, "weight": 1.0},
-                {"id": group_b.pk, "name": "B", "count": 1, "weight": 1.0},
+                {"id": group_a.pk, "name": "A", "count": 2, "weight": 1.0, "included": True},
+                {"id": group_b.pk, "name": "B", "count": 1, "weight": 1.0, "included": True},
             ],
         )
         self.assertNotIn("availabilityInperson", roster.data["participants"][0])
@@ -1239,9 +1239,9 @@ class RosterImportApiTests(TestCase):
         self.assertEqual(
             patched.data["groups"],
             [
-                {"id": group_a.pk, "name": "A", "count": 2, "weight": 1.0},
-                {"id": group_b.pk, "name": "B", "count": 0, "weight": None},
-                {"id": group_c.pk, "name": "C", "count": 1, "weight": 0.3},
+                {"id": group_a.pk, "name": "A", "count": 2, "weight": 1.0, "included": True},
+                {"id": group_b.pk, "name": "B", "count": 0, "weight": None, "included": None},
+                {"id": group_c.pk, "name": "C", "count": 1, "weight": 0.3, "included": False},
             ],
         )
         stale = self.client.patch(
@@ -1283,9 +1283,9 @@ class RosterImportApiTests(TestCase):
         self.assertEqual(
             regrouped.data["stats"]["groups"],
             [
-                {"id": group_a.pk, "name": "A", "count": 2, "weight": 0.6},
-                {"id": group_b.pk, "name": "B", "count": 0, "weight": None},
-                {"id": group_c.pk, "name": "C", "count": 1, "weight": 0.3},
+                {"id": group_a.pk, "name": "A", "count": 2, "weight": 0.6, "included": False},
+                {"id": group_b.pk, "name": "B", "count": 0, "weight": None, "included": None},
+                {"id": group_c.pk, "name": "C", "count": 1, "weight": 0.3, "included": False},
             ],
         )
         one = Participant.objects.get(event=self.event, participant_name="One")
@@ -1301,8 +1301,8 @@ class RosterImportApiTests(TestCase):
         self.assertEqual(
             mixed.data["stats"]["groups"],
             [
-                {"id": group_a.pk, "name": "A", "count": 2, "weight": None},
-                {"id": group_b.pk, "name": "B", "count": 0, "weight": None},
-                {"id": group_c.pk, "name": "C", "count": 1, "weight": 0.3},
+                {"id": group_a.pk, "name": "A", "count": 2, "weight": None, "included": False},
+                {"id": group_b.pk, "name": "B", "count": 0, "weight": None, "included": None},
+                {"id": group_c.pk, "name": "C", "count": 1, "weight": 0.3, "included": False},
             ],
         )

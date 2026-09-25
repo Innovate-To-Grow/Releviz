@@ -30,6 +30,7 @@ from .participants import (
 )
 from .roster import (
     RosterBulkView,
+    RosterGroupIncludeOnlyView,
     RosterGroupsView,
     RosterGroupView,
     RosterImportCollectionView,
@@ -77,6 +78,7 @@ __all__ = [
     "EventFinalizationView",
     # Roster
     "RosterBulkView",
+    "RosterGroupIncludeOnlyView",
     "RosterGroupView",
     "RosterGroupsView",
     "RosterImportCollectionView",
