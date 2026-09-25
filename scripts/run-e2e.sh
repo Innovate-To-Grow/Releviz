@@ -55,4 +55,4 @@ scripts/db/wait-for-postgres.sh
   --password "${DJANGO_SUPERUSER_PASSWORD}" \
   --settings=config.settings.e2e
 npm --workspace=releviz-web run build
-npm exec --workspace=releviz-web -- playwright test --config=../e2e/playwright.config.js
+npm exec --workspace=releviz-web -- playwright test --config=../e2e/playwright.config.js "$@"

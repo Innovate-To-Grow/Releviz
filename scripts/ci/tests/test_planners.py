@@ -1,75 +1,61 @@
+import json
+import subprocess
+import sys
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from unittest import TestCase
 
 from scripts.ci.plan_django_tests import APPS, select_apps
-from scripts.ci.plan_e2e_tests import ALL_PROJECTS, read_changed_files, select_matrix
+from scripts.ci.plan_e2e_tests import ALL_PROJECTS, select_matrix
+
+ROOT = Path(__file__).resolve().parents[3]
+
+
+def run_planner(script: str, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(ROOT / "scripts/ci" / script), *args],
+        capture_output=True,
+        check=False,
+        cwd=ROOT,
+        text=True,
+    )
 
 
 class DjangoPlannerTests(TestCase):
-    def test_explicit_full_mode_runs_every_app_for_a_narrow_pr(self):
-        self.assertEqual(
-            select_apps(
-                "pull_request",
-                ["src/api/apps/scheduling/views.py"],
-                full=True,
-            ),
-            list(APPS),
+    def test_every_app_is_selected(self):
+        self.assertEqual(select_apps(), list(APPS))
+
+    def test_full_flag_prints_every_app_for_the_workflow(self):
+        result = run_planner("plan_django_tests.py", "--full")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, 'apps=["authn","core","mail","scheduling"]\n')
+
+    def test_focused_arguments_are_rejected(self):
+        result = run_planner(
+            "plan_django_tests.py", "--event-name", "pull_request", "--changed-files", "changed.txt"
         )
-
-    def test_push_runs_every_app(self):
-        self.assertEqual(select_apps("push", ["src/api/apps/core/views.py"]), list(APPS))
-
-    def test_shared_backend_change_runs_every_app(self):
-        self.assertEqual(select_apps("pull_request", ["src/api/config/urls.py"]), list(APPS))
-
-    def test_scheduling_change_is_focused(self):
-        self.assertEqual(
-            select_apps("pull_request", ["src/api/apps/scheduling/views.py"]),
-            ["scheduling"],
-        )
-
-    def test_auth_change_includes_dependent_apps(self):
-        self.assertEqual(
-            select_apps("pull_request", ["src/api/apps/authn/models.py"]),
-            ["authn", "mail", "scheduling"],
-        )
-
-    def test_mail_change_uses_current_app_name_and_includes_scheduling(self):
-        self.assertEqual(
-            select_apps("pull_request", ["src/api/apps/mail/services.py"]),
-            ["mail", "scheduling"],
-        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("unrecognized arguments", result.stderr)
 
 
 class E2EPlannerTests(TestCase):
-    def test_explicit_full_mode_runs_every_browser_and_spec(self):
-        matrix = select_matrix(
-            "pull_request",
-            ["src/e2e/accessibility.spec.js"],
-            full=True,
-        )
-
+    def test_every_browser_runs_every_spec(self):
+        matrix = select_matrix()
         self.assertEqual([item["project"] for item in matrix], list(ALL_PROJECTS))
         self.assertTrue(all(item["spec_args"] == "" for item in matrix))
 
-    def test_push_runs_all_browsers(self):
-        matrix = select_matrix("push", ["src/web/app/page.js"])
-        self.assertEqual([item["project"] for item in matrix], list(ALL_PROJECTS))
-
-    def test_normal_pr_uses_chromium(self):
+    def test_full_flag_prints_the_matrix_and_projects_for_the_workflow(self):
+        result = run_planner("plan_e2e_tests.py", "--full")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        matrix_line, projects_line = result.stdout.splitlines()
         self.assertEqual(
-            select_matrix("pull_request", ["src/web/app/page.js"]),
-            [{"project": "chromium", "spec_args": ""}],
+            json.loads(matrix_line.removeprefix("matrix=")),
+            [{"project": project, "spec_args": ""} for project in ALL_PROJECTS],
         )
+        self.assertEqual(json.loads(projects_line.removeprefix("projects=")), list(ALL_PROJECTS))
 
-    def test_accessibility_pr_uses_all_browsers_and_selected_spec(self):
-        matrix = select_matrix("pull_request", ["src/e2e/accessibility.spec.js"])
-        self.assertEqual([item["project"] for item in matrix], list(ALL_PROJECTS))
-        self.assertTrue(
-            all(item["spec_args"] == "src/e2e/accessibility.spec.js" for item in matrix)
+    def test_focused_arguments_are_rejected(self):
+        result = run_planner(
+            "plan_e2e_tests.py", "--event-name", "pull_request", "--changed-files", "changed.txt"
         )
-
-    def test_missing_changed_file_is_empty(self):
-        with TemporaryDirectory() as directory:
-            self.assertEqual(read_changed_files(Path(directory) / "missing.txt"), [])
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("unrecognized arguments", result.stderr)
