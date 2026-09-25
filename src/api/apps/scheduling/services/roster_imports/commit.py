@@ -25,6 +25,7 @@ from apps.scheduling.models import (
 )
 from apps.scheduling.services.availability import default_availability
 from apps.scheduling.services.events.lifecycle import response_write_error
+from apps.scheduling.services.invitations.addresses import organizer_addresses
 from apps.scheduling.services.invitations.delivery import upsert_and_send_invitations
 from apps.scheduling.services.invitations.errors import EventEmailRequestError
 from apps.scheduling.services.managed_members import delete_organizer_managed_members
@@ -33,6 +34,7 @@ from apps.scheduling.services.roster_groups import assign_memberships, parse_gro
 from .batches import require_preview, scrub_batch
 from .errors import RosterImportError
 from .limits import MAX_ROSTER_ROWS
+from .normalization import managed_key
 
 
 def _fingerprint(payload: dict) -> str:
@@ -228,15 +230,49 @@ def _rebuild_event_roster(event: Event, now) -> None:
     event.version += 1
 
 
+def _managed_participants(event: Event) -> dict:
+    """The event's organizer-managed people keyed by filing address and name."""
+
+    managed = {}
+    for participant in (
+        Participant.objects.select_for_update()
+        .filter(event=event, organizer_managed=True)
+        .order_by("pk")
+    ):
+        managed.setdefault(
+            managed_key(participant.contact_email, participant.participant_name), participant
+        )
+    return managed
+
+
+def _managed_member(name: str):
+    """An identity-less member for a person with no email of their own."""
+
+    Member = get_user_model()
+    member = Member(
+        email="",
+        first_name=name,
+        is_active=True,
+        access_level=Member.AccessLevel.TEMPORARY,
+    )
+    member.set_unusable_password()
+    return member
+
+
 def _write_roster(
     event: Event,
     organizer,
     rows: list[RosterImportRow],
     *,
-    members=None,
+    members: dict,
+    addresses,
 ):
-    members = members or _resolve_members(rows)
-    member_ids = [members[row.email].pk for row in rows]
+    # A row under a blank email or one of the organizer's own addresses is a
+    # person the organizer manages: a fresh identity-less member, found again
+    # by filing address and name, that never gets an invitation. ``members``
+    # resolves every other row's email to its account.
+    account_rows = [row for row in rows if not addresses.manages(row.email)]
+    member_ids = [members[row.email].pk for row in account_rows]
     existing = {
         participant.member_id: participant
         for participant in Participant.objects.select_for_update().filter(
@@ -244,15 +280,27 @@ def _write_roster(
             member_id__in=member_ids,
         )
     }
+    managed = _managed_participants(event)
+    managed_keys = [
+        managed_key(addresses.contact_for(row.email), row.name)
+        for row in rows
+        if addresses.manages(row.email)
+    ]
+    if len(set(managed_keys)) != len(managed_keys):
+        raise RosterImportError(
+            "Two selected rows describe the same person without an email.",
+            status_code=409,
+        )
     current_member_ids = set(
         Participant.objects.filter(event=event).values_list("member_id", flat=True)
     )
-    if len(current_member_ids | set(member_ids)) > MAX_ROSTER_ROWS:
+    new_managed_count = sum(key not in managed for key in managed_keys)
+    if len(current_member_ids | set(member_ids)) + new_managed_count > MAX_ROSTER_ROWS:
         raise RosterImportError(
             f"An event can have at most {MAX_ROSTER_ROWS} participants.",
             status_code=409,
         )
-    roster_emails = {row.email for row in rows}
+    roster_emails = {row.email for row in account_rows}
     current_invitation_emails = set(event.invitations.values_list("email", flat=True))
     if len(current_invitation_emails | roster_emails) > MAX_ROSTER_ROWS:
         raise RosterImportError(
@@ -260,30 +308,45 @@ def _write_roster(
             status_code=409,
         )
 
+    new_members = []
     new_participants = []
     changed_participants = []
     invitation_emails = []
-    participant_by_email = {}
+    # The roster entry behind each row, in row order.
+    row_participants = []
     # (participant, (all_groups, names)) for every row whose cell sets memberships.
     # A blank cell leaves an existing person's groups alone on merge.
     assignments = []
     for sort_order, row in enumerate(rows, 1):
-        member = members[row.email]
-        participant = existing.get(member.pk)
+        organizer_managed = addresses.manages(row.email)
+        if organizer_managed:
+            contact_email = addresses.contact_for(row.email)
+            member = None
+            participant = managed.get(managed_key(contact_email, row.name))
+        else:
+            contact_email = ""
+            member = members[row.email]
+            participant = existing.get(member.pk)
         all_groups, group_names = parse_group_cell(row.group_name)
         if participant is None:
+            if organizer_managed:
+                member = _managed_member(row.name)
+                new_members.append(member)
+            else:
+                invitation_emails.append(row.email)
             participant = Participant(
                 event=event,
                 member=member,
                 participant_name=row.name,
+                contact_email=contact_email,
                 contact_phone=row.phone,
+                organizer_managed=organizer_managed,
                 availability_inperson=default_availability(event),
                 availability_virtual=default_availability(event),
                 all_groups=all_groups,
                 sort_order=sort_order,
             )
             new_participants.append(participant)
-            invitation_emails.append(row.email)
             if group_names:
                 assignments.append((participant, (all_groups, group_names)))
         else:
@@ -301,19 +364,23 @@ def _write_roster(
             if changed:
                 participant.version += 1
                 changed_participants.append(participant)
-            if restored:
+            if restored and not organizer_managed:
                 invitation_emails.append(row.email)
             if all_groups or group_names:
                 assignments.append((participant, (all_groups, group_names)))
-        participant_by_email[row.email] = participant
+        row_participants.append(participant)
 
+    if new_members:
+        get_user_model().objects.bulk_create(new_members)
     if new_participants:
         Participant.objects.bulk_create(new_participants)
     if assignments:
         # Membership edits on people already on the roster bump their version
         # like any other identity change; new rows carry their version already.
         bumped = {participant.pk for participant in changed_participants}
-        existing_by_pk = {participant.pk: participant for participant in existing.values()}
+        existing_by_pk = {
+            participant.pk: participant for participant in [*existing.values(), *managed.values()]
+        }
         for participant_id in assign_memberships(event=event, assignments=assignments):
             participant = existing_by_pk.get(participant_id)
             if participant is not None and participant.pk not in bumped:
@@ -326,7 +393,10 @@ def _write_roster(
         )
 
     UserEvent.objects.bulk_create(
-        [UserEvent(member=members[row.email], event=event, role="participant") for row in rows],
+        [
+            UserEvent(member_id=participant.member_id, event=event, role="participant")
+            for participant in row_participants
+        ],
         ignore_conflicts=True,
     )
 
@@ -334,12 +404,12 @@ def _write_roster(
         invitation.email: invitation
         for invitation in EventInvitation.objects.select_for_update().filter(
             event=event,
-            email__in=[row.email for row in rows],
+            email__in=[row.email for row in account_rows],
         )
     }
     new_invitations = []
     changed_invitations = []
-    for row in rows:
+    for row in account_rows:
         member = members[row.email]
         invitation = invitations.get(row.email)
         if invitation is None:
@@ -369,7 +439,7 @@ def _write_roster(
             ["member", "invited_by", "updated_at"],
         )
 
-    participant_ids = [participant_by_email[row.email].pk for row in rows]
+    participant_ids = [participant.pk for participant in row_participants]
     weights = {
         weight.participant_id: weight
         for weight in Weight.objects.select_for_update().filter(
@@ -379,8 +449,7 @@ def _write_roster(
     }
     new_weights = []
     changed_weights = []
-    for row in rows:
-        participant = participant_by_email[row.email]
+    for row, participant in zip(rows, row_participants, strict=True):
         weight = weights.get(participant.pk)
         if weight is None:
             new_weights.append(
@@ -503,11 +572,25 @@ def commit_roster_import(*, event: Event, batch_id, organizer, data):
                 raise RosterImportError(
                     f"An import may contain at most {MAX_ROSTER_ROWS} participants."
                 )
+            # The preview classified blank and own-address rows against the
+            # organizer's addresses as they were then; refuse rather than bind
+            # a row the preview never showed as it would now be imported.
+            addresses = organizer_addresses(organizer.pk)
+            if any(
+                addresses.contact_for(row.email) not in addresses.verified
+                for row in rows
+                if not row.email or addresses.manages(row.email)
+            ):
+                raise RosterImportError(
+                    "Your email addresses changed after this preview was made. "
+                    "Review the rows again before importing.",
+                    status_code=409,
+                )
 
             batch.status = RosterImportBatch.Status.COMMITTING
             batch.save(update_fields=["status", "updated_at"])
             now = timezone.now()
-            members = _resolve_members(rows)
+            members = _resolve_members([row for row in rows if not addresses.manages(row.email)])
             if mode == RosterImportReceipt.Mode.REBUILD:
                 _rebuild_event_roster(event, now)
             created_count, updated_count, invitation_emails = _write_roster(
@@ -515,6 +598,7 @@ def commit_roster_import(*, event: Event, batch_id, organizer, data):
                 organizer,
                 rows,
                 members=members,
+                addresses=addresses,
             )
             event.results_revision += 1
             event_update_fields = ["results_revision", "updated_at"]

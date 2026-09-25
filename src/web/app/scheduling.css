@@ -779,6 +779,58 @@
   white-space: nowrap;
 }
 
+.roster-table .roster-table__email {
+  min-width: 10rem;
+  max-width: 16rem;
+  overflow-wrap: anywhere;
+}
+
+/* One narrow checkbox column per group (plus All). Headers keep the group
+   name as typed and wrap between words instead of widening the table. */
+.roster-table .roster-table__group-col {
+  min-width: 4.5rem;
+  max-width: 8rem;
+  text-align: center;
+  text-transform: none;
+  letter-spacing: normal;
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+
+.roster-table .roster-table__group-cell {
+  text-align: center;
+}
+
+.roster-table .roster-table__group-cell .form-check-input {
+  margin-top: 0;
+}
+
+/* With many groups the table scrolls sideways; the checkbox and name columns
+   stay put so every tick is next to the person it belongs to. Cells already
+   paint the table background, so the frozen columns cover what scrolls. */
+@media (min-width: 768px) {
+  .roster-table .roster-table__select,
+  .roster-table .roster-table__person {
+    position: sticky;
+    z-index: 1;
+  }
+
+  .roster-table .roster-table__select {
+    left: 0;
+    width: 2.75rem;
+    min-width: 2.75rem;
+  }
+
+  .roster-table .roster-table__person {
+    left: 2.75rem;
+  }
+
+  .roster-table thead .roster-table__select,
+  .roster-table thead .roster-table__person {
+    z-index: 3;
+  }
+}
+
 /* Groups table: name, head count, shared weight, and row actions */
 .roster-groups__header {
   display: flex;

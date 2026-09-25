@@ -61,10 +61,9 @@ const DELIVERY_LABELS = {
   accepted: "Accepted",
 };
 
-// The server formats a person's memberships as one cell string ("A; B", or
-// "ALL; A" when they belong to every group), which is what the row edits.
-function groupValue(participant) {
-  return participant.group ?? "";
+// Explicit memberships come as [{ id, name }]; the every-group flag is separate.
+function inGroup(participant, group) {
+  return (participant.groups || []).some((item) => item.id === group.id);
 }
 
 const OWNED_RESPONSE_CODES = new Set([
@@ -74,6 +73,18 @@ const OWNED_RESPONSE_CODES = new Set([
 
 function ownedResponseMessage(name) {
   return `${name} now manages their own response, so you can no longer edit their schedule.`;
+}
+
+// Long addresses wrap after the @ before they break anywhere else.
+function wrappableEmail(email) {
+  const at = email.indexOf("@") + 1;
+  return (
+    <>
+      {email.slice(0, at)}
+      <wbr />
+      {email.slice(at)}
+    </>
+  );
 }
 
 function accountLabel(participant) {
@@ -119,9 +130,14 @@ function fullNameError(value) {
   return "";
 }
 
-function emailAddressError(value) {
+// Someone with no email of their own may leave it blank: the server files
+// them under the organizer's account email.
+function emailAddressError(value, { optional = false } = {}) {
   const normalized = String(value || "").trim();
-  if (!normalized) return "Email address is required.";
+  if (!normalized)
+    return optional
+      ? ""
+      : 'Email address is required. If they have none, tick "No email of their own".';
   if (normalized.length > 254)
     return "Email address must be 254 characters or fewer.";
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized))
@@ -408,7 +424,7 @@ const RosterPanel = forwardRef(function RosterPanel(
     const normalizedPhone = invitePhone.trim();
     const nextErrors = {
       name: fullNameError(inviteName),
-      email: emailAddressError(inviteEmail),
+      email: emailAddressError(inviteEmail, { optional: inviteManaged }),
       phone: phoneNumberError(invitePhone),
     };
     setInviteErrors(nextErrors);
@@ -712,6 +728,14 @@ const RosterPanel = forwardRef(function RosterPanel(
     // conflict keeps the typed value on screen until the organizer reloads
     // the row.
     if (result !== "conflict") clearRowDraft(participant.id, field, value);
+  };
+
+  // A membership checkbox shows the click at once as a row draft and settles
+  // on the server's answer; clicks on one row reach the server in order.
+  const toggleMembership = async (participant, field, updates, checked) => {
+    updateRowDraft(participant.id, field, checked);
+    const result = await patchRow(participant, updates);
+    if (result !== "conflict") clearRowDraft(participant.id, field, checked);
   };
 
   const bulkTarget = () => {
@@ -1162,7 +1186,6 @@ const RosterPanel = forwardRef(function RosterPanel(
     : inviteBusyAction === "add"
       ? "Adding…"
       : "Add only";
-  const groupListId = `${controlIds}-group-names`;
   const bulkApplyWeightId = `${controlIds}-bulk-apply-weight`;
   const bulkWeightId = `${controlIds}-bulk-weight`;
   const bulkApplyIncludedId = `${controlIds}-bulk-apply-included`;
@@ -1340,10 +1363,11 @@ const RosterPanel = forwardRef(function RosterPanel(
                 <FormField
                   id="roster-invite-email"
                   label="Email address"
-                  required
+                  required={!inviteManaged}
+                  optional={inviteManaged}
                   help={
                     inviteManaged
-                      ? "Enter one of your own verified email addresses. No invitation is sent."
+                      ? "Leave blank to use your account email, or enter another of your verified addresses. No invitation is sent."
                       : null
                   }
                   error={inviteErrors.email || null}
@@ -1371,11 +1395,36 @@ const RosterPanel = forwardRef(function RosterPanel(
                     onBlur={() =>
                       setInviteErrors((current) => ({
                         ...current,
-                        email: emailAddressError(inviteEmail),
+                        email: emailAddressError(inviteEmail, {
+                          optional: inviteManaged,
+                        }),
                       }))
                     }
                   />
                 </FormField>
+              </div>
+
+              <div className="form-check mt-3">
+                <input
+                  id="roster-invite-managed"
+                  className="form-check-input"
+                  type="checkbox"
+                  checked={inviteManaged}
+                  disabled={inviteBusy}
+                  onChange={(changeEvent) => {
+                    setInviteManaged(changeEvent.target.checked);
+                    setInviteErrors((current) => ({ ...current, email: "" }));
+                    setInviteFormError("");
+                    inviteIdempotencyKey.current = "";
+                  }}
+                />
+                <label
+                  className="form-check-label"
+                  htmlFor="roster-invite-managed"
+                >
+                  No email of their own — use one of mine and I&apos;ll enter
+                  their schedule
+                </label>
               </div>
 
               <div className="form-row-2 mt-3">
@@ -1412,28 +1461,6 @@ const RosterPanel = forwardRef(function RosterPanel(
                     }
                   />
                 </FormField>
-              </div>
-
-              <div className="form-check mt-3">
-                <input
-                  id="roster-invite-managed"
-                  className="form-check-input"
-                  type="checkbox"
-                  checked={inviteManaged}
-                  disabled={inviteBusy}
-                  onChange={(changeEvent) => {
-                    setInviteManaged(changeEvent.target.checked);
-                    setInviteFormError("");
-                    inviteIdempotencyKey.current = "";
-                  }}
-                />
-                <label
-                  className="form-check-label"
-                  htmlFor="roster-invite-managed"
-                >
-                  No email of their own — use one of mine and I&apos;ll enter
-                  their schedule
-                </label>
               </div>
 
               {inviteFormError && (
@@ -1573,12 +1600,6 @@ const RosterPanel = forwardRef(function RosterPanel(
               onCreate={createGroup}
             />
           )}
-          {/* Existing group names complete the per-person inputs. */}
-          <datalist id={groupListId}>
-            {namedGroups.map(({ name }) => (
-              <option key={name} value={name} />
-            ))}
-          </datalist>
 
           {rosterMutable && hasRosterEntries && (
             <details
@@ -1922,7 +1943,7 @@ const RosterPanel = forwardRef(function RosterPanel(
                 </caption>
                 <thead>
                   <tr>
-                    <th scope="col">
+                    <th scope="col" className="roster-table__select">
                       <input
                         className="form-check-input"
                         aria-label="Select all on page"
@@ -1950,28 +1971,54 @@ const RosterPanel = forwardRef(function RosterPanel(
                         }
                       />
                     </th>
-                    <th scope="col">Person</th>
+                    <th scope="col" className="roster-table__person">
+                      Name
+                    </th>
+                    <th scope="col" className="roster-table__email">
+                      Email
+                    </th>
+                    <th
+                      scope="col"
+                      className="roster-table__group-col"
+                      title="Every group, including groups created later"
+                    >
+                      All
+                    </th>
+                    {namedGroups.map((entry) => (
+                      <th
+                        key={entry.id ?? entry.name}
+                        scope="col"
+                        className="roster-table__group-col"
+                        title={entry.name}
+                      >
+                        {entry.name}
+                      </th>
+                    ))}
                     <th scope="col">Settings</th>
                     <th scope="col">Status</th>
                   </tr>
                 </thead>
                 <tbody>
                   {participants.map((participant) => {
-                    const groupId = `${controlIds}-group-${participant.id}`;
-                    const groupHelpId = `${groupId}-help`;
-                    const allGroupsId = `${controlIds}-all-groups-${participant.id}`;
                     const phoneId = `${controlIds}-phone-${participant.id}`;
                     const weightId = `${controlIds}-weight-${participant.id}`;
                     const includedId = `${controlIds}-included-${participant.id}`;
                     const rowLocked =
                       !rosterMutable || Boolean(rowConflicts[participant.id]);
+                    const everyGroup = Boolean(
+                      rowDraftValue(
+                        participant,
+                        "allGroups",
+                        Boolean(participant.allGroups),
+                      ),
+                    );
                     return (
                       <tr
                         className="roster-table__row"
                         key={participant.id}
                         data-roster-participant-id={participant.id}
                       >
-                        <td>
+                        <td className="roster-table__select">
                           <input
                             className="form-check-input"
                             aria-label={`Select ${participant.name}`}
@@ -1994,9 +2041,6 @@ const RosterPanel = forwardRef(function RosterPanel(
                             {participant.name}
                           </strong>
                           <small className="d-block text-secondary">
-                            {participant.email || "No email"}
-                            {participant.phone ? ` · ${participant.phone}` : ""}
-                            {" · "}
                             {accountLabel(participant)}
                           </small>
                           <div className="mt-2">
@@ -2017,73 +2061,80 @@ const RosterPanel = forwardRef(function RosterPanel(
                             )}
                           </div>
                         </th>
+                        <td className="roster-table__email">
+                          {/* A person without an email of their own is filed
+                              under the organizer's address, which is not theirs
+                              to show. */}
+                          {participant.organizerManaged ||
+                          !participant.email ? (
+                            <span className="text-secondary">No email</span>
+                          ) : (
+                            <span>{wrappableEmail(participant.email)}</span>
+                          )}
+                          {participant.phone ? (
+                            <small className="d-block text-secondary">
+                              {participant.phone}
+                            </small>
+                          ) : null}
+                        </td>
+                        <td className="roster-table__group-cell">
+                          <input
+                            className="form-check-input"
+                            aria-label={`All groups for ${participant.name}`}
+                            type="checkbox"
+                            checked={everyGroup}
+                            disabled={rowLocked}
+                            onChange={(event) =>
+                              void toggleMembership(
+                                participant,
+                                "allGroups",
+                                { allGroups: event.target.checked },
+                                event.target.checked,
+                              )
+                            }
+                          />
+                        </td>
+                        {namedGroups.map((entry) => {
+                          const field = `group:${entry.id}`;
+                          const member = Boolean(
+                            rowDraftValue(
+                              participant,
+                              field,
+                              inGroup(participant, entry),
+                            ),
+                          );
+                          return (
+                            <td
+                              key={entry.id ?? entry.name}
+                              className="roster-table__group-cell"
+                            >
+                              <input
+                                className="form-check-input"
+                                aria-label={`${participant.name} in ${entry.name}`}
+                                type="checkbox"
+                                checked={everyGroup || member}
+                                disabled={rowLocked || everyGroup}
+                                title={
+                                  everyGroup
+                                    ? "Included through All groups"
+                                    : undefined
+                                }
+                                onChange={(event) =>
+                                  void toggleMembership(
+                                    participant,
+                                    field,
+                                    event.target.checked
+                                      ? { addGroupIds: [entry.id] }
+                                      : { removeGroupIds: [entry.id] },
+                                    event.target.checked,
+                                  )
+                                }
+                              />
+                            </td>
+                          );
+                        })}
                         <td className="roster-table__settings-cell">
                           <div className="d-flex flex-wrap align-items-end gap-2">
-                            <div>
-                              <label
-                                className="form-label small text-secondary mb-1"
-                                htmlFor={groupId}
-                              >
-                                Groups
-                              </label>
-                              <input
-                                id={groupId}
-                                className="form-control form-control-sm"
-                                style={{ width: "11rem" }}
-                                aria-label={`Groups for ${participant.name}`}
-                                aria-describedby={groupHelpId}
-                                list={groupListId}
-                                placeholder="Ungrouped"
-                                value={rowDraftValue(
-                                  participant,
-                                  "group",
-                                  groupValue(participant),
-                                )}
-                                disabled={rowLocked}
-                                onChange={(event) =>
-                                  updateRowDraft(
-                                    participant.id,
-                                    "group",
-                                    event.target.value,
-                                  )
-                                }
-                                onBlur={(event) =>
-                                  void saveRowDraft(
-                                    participant,
-                                    "group",
-                                    event.target.value,
-                                    groupValue(participant),
-                                  )
-                                }
-                              />
-                              <small
-                                id={groupHelpId}
-                                className="d-block text-secondary"
-                              >
-                                Separate names with ; or type ALL
-                              </small>
-                            </div>
-                            <div className="form-check mb-1">
-                              <input
-                                id={allGroupsId}
-                                className="form-check-input"
-                                aria-label={`All groups for ${participant.name}`}
-                                type="checkbox"
-                                checked={Boolean(participant.allGroups)}
-                                disabled={rowLocked}
-                                onChange={(event) =>
-                                  void patchRow(participant, {
-                                    allGroups: event.target.checked,
-                                  })
-                                }
-                              />
-                              <label
-                                className="form-check-label small"
-                                htmlFor={allGroupsId}
-                              >
-                                Every group
-                              </label>
-                            </div>
                             <div>
                               <label
                                 className="form-label small text-secondary mb-1"

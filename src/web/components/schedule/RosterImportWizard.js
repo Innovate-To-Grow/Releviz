@@ -871,6 +871,12 @@ export default function RosterImportWizard({
                               )
                             }
                           />
+                          {row.organizerManaged && (
+                            <small className="d-block text-secondary mt-1">
+                              No email of their own: you&apos;ll enter their
+                              schedule
+                            </small>
+                          )}
                         </td>
                         <td>
                           <input
@@ -1003,7 +1009,9 @@ export default function RosterImportWizard({
             <p className="roster-import__hint form-text mt-0 mb-3">
               Existing participants are updated without another email. New
               people are emailed only if you tick the box; you can also send
-              invitations later from the roster.
+              invitations later from the roster. A blank email, or one of your
+              own addresses, adds someone with no email of their own: they are
+              never emailed, and you enter their schedule.
             </p>
             <div className="form-check">
               <input

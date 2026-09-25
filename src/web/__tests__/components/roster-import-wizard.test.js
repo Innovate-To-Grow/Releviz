@@ -1028,3 +1028,87 @@ test("maps a phone column, shows it in the review table, and saves phone edits",
   fireEvent.blur(adaPhone);
   expect(configureRosterImport.mock.calls.length).toBe(callsBefore);
 });
+
+test("marks rows without an email of their own as people the organizer manages", async () => {
+  const record = {
+    id: "import-9",
+    worksheets: [
+      {
+        name: "Pasted data",
+        rowCount: 3,
+        defaultHeaderRow: 1,
+        headers: ["name", "email", "group"],
+      },
+    ],
+    selectedWorksheet: "Pasted data",
+    headerRow: 1,
+    headers: ["name", "email", "group"],
+    columnMapping: { name: 0, email: 1, group: 2 },
+    defaults: { weight: 1, included: true },
+    summary: { total: 2, selected: 2, valid: 2, invalid: 0, conflicts: 0 },
+  };
+  const row = (overrides) => ({
+    weight: 1,
+    included: true,
+    selected: true,
+    valid: true,
+    duplicate: "unique",
+    errors: [],
+    ...overrides,
+  });
+  createRosterImport.mockResolvedValue({ import: record });
+  configureRosterImport.mockResolvedValue({ import: record });
+  fetchRosterImportRows.mockResolvedValue({
+    import: record,
+    rows: [
+      row({
+        id: "row-9",
+        rowNumber: 2,
+        name: "Guy No Email",
+        email: "",
+        group: "ALL",
+        organizerManaged: true,
+      }),
+      row({
+        id: "row-10",
+        rowNumber: 3,
+        name: "Ada",
+        email: "ada@example.com",
+        group: "",
+        organizerManaged: false,
+      }),
+    ],
+    pagination: { page: 1, pageSize: 50, total: 2, pages: 1 },
+  });
+  renderWizard();
+  await userEvent.click(screen.getByRole("tab", { name: "Paste spreadsheet" }));
+  fireEvent.change(screen.getByLabelText("Pasted roster rows"), {
+    target: {
+      value: "name\temail\tgroup\nGuy No Email\t\tALL\nAda\tada@example.com\t",
+    },
+  });
+  await userEvent.click(
+    screen.getByRole("button", { name: "Continue to mapping" }),
+  );
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Preview rows" }),
+  );
+  await screen.findByDisplayValue("Guy No Email");
+
+  const note = "No email of their own: you'll enter their schedule";
+  const region = screen.getByRole("region", {
+    name: "Imported rows awaiting review",
+  });
+  expect(within(region).getAllByText(note)).toHaveLength(1);
+  expect(
+    within(screen.getByLabelText("Email for row 2").closest("td")).getByText(
+      note,
+    ),
+  ).toBeInTheDocument();
+  expect(within(region).getAllByText("Ready")).toHaveLength(2);
+  expect(
+    screen.getByRole("group", { name: "Import behavior" }),
+  ).toHaveTextContent(
+    "A blank email, or one of your own addresses, adds someone with no email of their own: they are never emailed, and you enter their schedule.",
+  );
+});

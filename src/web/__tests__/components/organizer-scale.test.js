@@ -108,6 +108,7 @@ jest.mock("@/lib/api/roster", () => ({
 import { useAuth } from "@/components/auth/AuthContext";
 import EventContext from "@/components/event/EventContext";
 import OrganizerScaleView from "@/components/schedule/OrganizerScaleView";
+import { LIVE_REFRESH_FASTEST_MS } from "@/lib/liveRefresh";
 import {
   confirmFinalMeeting,
   fetchDeliveryRequest,
@@ -383,6 +384,7 @@ describe("scaled organizer workspace", () => {
     jest.resetAllMocks();
     window.history.replaceState({}, "", "/event?code=BIG1000");
     window.sessionStorage.clear();
+    window.localStorage.clear();
     window.matchMedia = jest.fn().mockReturnValue({ matches: false });
     HTMLElement.prototype.scrollIntoView = jest.fn();
     global.IntersectionObserver = class IntersectionObserver {
@@ -415,6 +417,8 @@ describe("scaled organizer workspace", () => {
           name: "Ada Faculty",
           email: "ada@example.com",
           group: "Faculty",
+          groups: [{ id: 11, name: "Faculty" }],
+          allGroups: false,
           weight: 0.8,
           included: true,
           submitted: false,
@@ -431,7 +435,7 @@ describe("scaled organizer workspace", () => {
         notSubmitted: 1,
         included: 1,
         excluded: 0,
-        groups: [{ name: "Faculty", count: 1 }],
+        groups: [{ id: 11, name: "Faculty", count: 1, weight: 0.8 }],
       },
       activity: rosterActivity,
     });
@@ -840,7 +844,11 @@ describe("scaled organizer workspace", () => {
     expect(
       await screen.findByText("Full name is required."),
     ).toBeInTheDocument();
-    expect(screen.getByText("Email address is required.")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Email address is required. If they have none, tick "No email of their own".',
+      ),
+    ).toBeInTheDocument();
     expect(createManagedParticipant).not.toHaveBeenCalled();
 
     await userEvent.type(invite.name, "Manual Person");
@@ -955,7 +963,9 @@ describe("scaled organizer workspace", () => {
       await within(invite.section).findByText("Full name is required."),
     ).toBeInTheDocument();
     expect(
-      within(invite.section).getByText("Email address is required."),
+      within(invite.section).getByText(
+        'Email address is required. If they have none, tick "No email of their own".',
+      ),
     ).toBeInTheDocument();
     expect(
       within(invite.section).queryByText(
@@ -1054,7 +1064,7 @@ describe("scaled organizer workspace", () => {
     );
   });
 
-  test("adds a person the organizer manages under one of their own addresses", async () => {
+  test("adds a person the organizer manages without typing an email", async () => {
     createManagedParticipant.mockResolvedValueOnce({
       participant: {
         id: "managed-1",
@@ -1087,17 +1097,31 @@ describe("scaled organizer workspace", () => {
     const phone = within(invite.section).getByLabelText("Phone (optional)");
     expect(managed).not.toBeChecked();
     expect(invite.submit.querySelector(".app-btn-icon")).not.toBeNull();
+    const managedHelp =
+      "Leave blank to use your account email, or enter another of your verified addresses. No invitation is sent.";
     expect(
-      within(invite.section).queryByText(
-        "Enter one of your own verified email addresses. No invitation is sent.",
-      ),
+      within(invite.section).queryByText(managedHelp),
     ).not.toBeInTheDocument();
 
+    // A blank email is refused until the person is marked as having none;
+    // ticking the box clears that error and makes the field optional.
+    fireEvent.submit(invite.submit.closest("form"));
+    expect(
+      await within(invite.section).findByText(
+        'Email address is required. If they have none, tick "No email of their own".',
+      ),
+    ).toBeInTheDocument();
     await userEvent.click(managed);
     expect(managed).toBeChecked();
-    expect(invite.email).toHaveAccessibleDescription(
-      "Enter one of your own verified email addresses. No invitation is sent.",
-    );
+    expect(
+      within(invite.section).queryByText(/Email address is required/),
+    ).not.toBeInTheDocument();
+    expect(invite.email).toHaveAccessibleDescription(managedHelp);
+    expect(
+      within(invite.section).getByText("(optional)", {
+        selector: "label[for='roster-invite-email'] span",
+      }),
+    ).toBeInTheDocument();
     const submit = within(invite.section).getByRole("button", {
       name: "Add person",
     });
@@ -1109,7 +1133,17 @@ describe("scaled organizer workspace", () => {
     ).not.toBeInTheDocument();
 
     await userEvent.type(invite.name, "Managed Person");
-    await userEvent.type(invite.email, "organizer@example.com");
+    // A typed address is still checked, even though it is optional here.
+    await userEvent.type(invite.email, "not-an-email");
+    await userEvent.tab();
+    expect(
+      await within(invite.section).findByText("Enter a valid email address."),
+    ).toBeInTheDocument();
+    await userEvent.clear(invite.email);
+    await userEvent.tab();
+    expect(
+      within(invite.section).queryByText("Enter a valid email address."),
+    ).not.toBeInTheDocument();
     await userEvent.type(phone, "+1 555 010 0199");
     fetchRoster.mockResolvedValueOnce({
       participants: [
@@ -1140,7 +1174,7 @@ describe("scaled organizer workspace", () => {
         event.code,
         {
           name: "Managed Person",
-          email: "organizer@example.com",
+          email: "",
           phone: "+1 555 010 0199",
           organizerManaged: true,
           idempotencyKey: "request-key",
@@ -1160,9 +1194,11 @@ describe("scaled organizer workspace", () => {
         name: /Managed Person/,
       })
     ).closest("tr");
-    expect(row).toHaveTextContent(
-      "organizer@example.com · +1 555 010 0199 · Organizer-managed",
-    );
+    // The row never shows the organizer's own address as theirs.
+    expect(row).not.toHaveTextContent("organizer@example.com");
+    expect(within(row).getByText("No email")).toBeInTheDocument();
+    expect(within(row).getByText("Organizer-managed")).toBeInTheDocument();
+    expect(within(row).getByText("+1 555 010 0199")).toBeInTheDocument();
     expect(within(row).getByText("Not sent")).toBeInTheDocument();
     expect(
       within(row).getByRole("button", { name: "Edit schedule" }),
@@ -1296,7 +1332,7 @@ describe("scaled organizer workspace", () => {
     expect(screen.getByLabelText("Filter by group")).toBeEnabled();
     expect(screen.getByLabelText("Select all on page")).toBeDisabled();
     expect(screen.getByLabelText("Select Ada Faculty")).toBeDisabled();
-    expect(screen.getByLabelText("Groups for Ada Faculty")).toBeDisabled();
+    expect(screen.getByLabelText("Ada Faculty in Faculty")).toBeDisabled();
     expect(screen.getByLabelText("All groups for Ada Faculty")).toBeDisabled();
     expect(screen.getByLabelText("Phone for Ada Faculty")).toBeDisabled();
     expect(screen.getByLabelText("Weight for Ada Faculty")).toBeDisabled();
@@ -1689,26 +1725,59 @@ describe("scaled organizer workspace", () => {
     const row = screen
       .getByRole("rowheader", { name: /Ada Faculty/ })
       .closest("tr");
-    await waitFor(() =>
-      expect(row).toHaveTextContent(
-        "ada@example.com · +1 (555) 010-0199 · Temporary",
-      ),
-    );
+    // The phone is shown under the email; the account class sits by the name.
+    expect(
+      await within(row).findByText("+1 (555) 010-0199"),
+    ).toBeInTheDocument();
+    expect(within(row).getByText("ada@example.com")).toBeInTheDocument();
+    expect(within(row).getByText("Temporary")).toBeInTheDocument();
     expect(phone).toHaveValue("+1 (555) 010-0199");
   });
 
   test("rolls an inline roster draft back when the server rejects it", async () => {
     patchRosterParticipant.mockRejectedValueOnce(
-      Object.assign(new Error("Group is not allowed"), { status: 400 }),
+      Object.assign(new Error("Enter a valid phone number."), { status: 400 }),
     );
     renderView();
-    const group = await screen.findByLabelText("Groups for Ada Faculty");
-    fireEvent.change(group, { target: { value: "Invalid group" } });
-    expect(group).toHaveValue("Invalid group");
-    fireEvent.blur(group);
+    const phone = await screen.findByLabelText("Phone for Ada Faculty");
+    fireEvent.change(phone, { target: { value: "call me" } });
+    expect(phone).toHaveValue("call me");
+    fireEvent.blur(phone);
 
-    expect(await screen.findByText("Group is not allowed")).toBeInTheDocument();
-    await waitFor(() => expect(group).toHaveValue("Faculty"));
+    expect(
+      await screen.findByText("Enter a valid phone number."),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(phone).toHaveValue(""));
+  });
+
+  test("shows a membership click at once and rolls it back when refused", async () => {
+    let refuse;
+    patchRosterParticipant.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          refuse = reject;
+        }),
+    );
+    renderView();
+    const faculty = await screen.findByLabelText("Ada Faculty in Faculty");
+    expect(faculty).toBeChecked();
+
+    fireEvent.click(faculty);
+    expect(faculty).not.toBeChecked();
+    await waitFor(() =>
+      expect(patchRosterParticipant).toHaveBeenCalledWith(
+        event.code,
+        "roster-1",
+        { removeGroupIds: [11], expectedVersion: 1 },
+        "token",
+      ),
+    );
+    await act(async () => {
+      refuse(Object.assign(new Error("Not now"), { status: 400 }));
+    });
+
+    expect(await screen.findByText("Not now")).toBeInTheDocument();
+    expect(faculty).toBeChecked();
   });
 
   test("serializes rapid updates to one roster row with the latest version", async () => {
@@ -1730,9 +1799,8 @@ describe("scaled organizer workspace", () => {
         resultsRevision: 5,
       });
     renderView();
-    const group = await screen.findByLabelText("Groups for Ada Faculty");
-    fireEvent.change(group, { target: { value: "Research" } });
-    fireEvent.blur(group);
+    const faculty = await screen.findByLabelText("Ada Faculty in Faculty");
+    fireEvent.click(faculty);
     await waitFor(() =>
       expect(patchRosterParticipant).toHaveBeenCalledTimes(1),
     );
@@ -2369,7 +2437,10 @@ describe("scaled organizer workspace", () => {
   });
 
   describe("live sync", () => {
-    const LIVE_INTERVAL = 5000;
+    // The pace eases off after each quiet pass, from the fastest (3 s)
+    // through these waits to the slowest (15 s), and snaps back on activity.
+    const FASTEST = LIVE_REFRESH_FASTEST_MS;
+    const EASED = [4500, 6750, 10125, 15000];
 
     beforeEach(() => {
       jest.useFakeTimers();
@@ -2394,7 +2465,7 @@ describe("scaled organizer workspace", () => {
       return view;
     }
 
-    async function tick(ms = LIVE_INTERVAL) {
+    async function tick(ms = FASTEST) {
       await act(async () => {
         jest.advanceTimersByTime(ms);
       });
@@ -2518,7 +2589,8 @@ describe("scaled organizer workspace", () => {
       const { setEvent } = await renderLiveWorkspace();
       await tick();
       await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(1));
-      await tick();
+      // A quiet pass eases the pace off, so the next one waits longer.
+      await tick(EASED[0]);
       await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(2));
       expect(fetchEvent).not.toHaveBeenCalled();
       expect(fetchRoster).not.toHaveBeenCalled();
@@ -2534,7 +2606,7 @@ describe("scaled organizer workspace", () => {
         ...baseActivity,
         event: { version: 2, status: "active" },
       });
-      await tick();
+      await tick(EASED[1]);
       await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(3));
       expect(setEvent).not.toHaveBeenCalled();
     });
@@ -2579,8 +2651,8 @@ describe("scaled organizer workspace", () => {
         document.dispatchEvent(new Event("visibilitychange"));
       });
       expect(fetchEventActivity).toHaveBeenCalledTimes(1);
-      // The interval then continues from the catch-up pass.
-      await tick(LIVE_INTERVAL - 1);
+      // The pace then continues from the catch-up pass, which found nothing.
+      await tick(EASED[0] - 1);
       expect(fetchEventActivity).toHaveBeenCalledTimes(1);
       await tick(1);
       await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(2));
@@ -2602,7 +2674,8 @@ describe("scaled organizer workspace", () => {
         activityWith({ roster: { submitted: 1 } }),
       );
       fetchRoster.mockRejectedValueOnce(new Error(""));
-      await tick();
+      // A failed pass eases the pace off like a quiet one.
+      await tick(EASED[0]);
       await waitFor(() =>
         expect(screen.getByTestId("live-sync")).toHaveTextContent(
           "New responses could not be loaded automatically.",
@@ -2613,7 +2686,7 @@ describe("scaled organizer workspace", () => {
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 
       // The next clean pass clears the notice even though nothing changed.
-      await tick();
+      await tick(EASED[1]);
       await waitFor(() =>
         expect(screen.getByTestId("live-sync")).toHaveTextContent("Live"),
       );
@@ -2711,7 +2784,7 @@ describe("scaled organizer workspace", () => {
         stats: { total: 1, submitted: 1, notSubmitted: 0, groups: [] },
         activity: { ...rosterActivity, submitted: 1 },
       });
-      await tick();
+      await tick(EASED[0]);
       await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(2));
       await waitFor(() =>
         expect(screen.getByTestId("live-sync")).toHaveAttribute(
@@ -2721,12 +2794,94 @@ describe("scaled organizer workspace", () => {
       );
     });
 
+    test("eases off while nothing changes and snaps back when a response arrives", async () => {
+      await renderLiveWorkspace();
+      await tick();
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(1));
+      // Each quiet pass waits longer for the next, down to the slowest pace.
+      for (const [index, wait] of EASED.entries()) {
+        await tick(wait - 1);
+        expect(fetchEventActivity).toHaveBeenCalledTimes(index + 1);
+        await tick(1);
+        await waitFor(() =>
+          expect(fetchEventActivity).toHaveBeenCalledTimes(index + 2),
+        );
+      }
+      await tick(EASED.at(-1));
+      await waitFor(() =>
+        expect(fetchEventActivity).toHaveBeenCalledTimes(EASED.length + 2),
+      );
+
+      // A response arrives: the pass that loads it brings the next one close
+      // behind it again.
+      fetchEventActivity.mockResolvedValue(
+        activityWith({ event: { resultsRevision: 4 } }),
+      );
+      await tick(EASED.at(-1));
+      await waitFor(() =>
+        expect(fetchEventActivity).toHaveBeenCalledTimes(EASED.length + 3),
+      );
+      await tick(FASTEST - 1);
+      expect(fetchEventActivity).toHaveBeenCalledTimes(EASED.length + 3);
+      await tick(1);
+      await waitFor(() =>
+        expect(fetchEventActivity).toHaveBeenCalledTimes(EASED.length + 4),
+      );
+    });
+
+    test("checks at once when the window regains focus or the network returns", async () => {
+      await renderLiveWorkspace();
+      await act(async () => {
+        window.dispatchEvent(new Event("focus"));
+      });
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        window.dispatchEvent(new Event("online"));
+      });
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(2));
+      // The pace restarts from the catch-up pass, which found nothing.
+      await tick(EASED[0] - 1);
+      expect(fetchEventActivity).toHaveBeenCalledTimes(2);
+      await tick(1);
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(3));
+    });
+
+    test("keeps the pace up while the organizer is working in the page", async () => {
+      await renderLiveWorkspace();
+      await tick();
+      await tick(EASED[0]);
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(2));
+      // The next pass is 6.75 s out; a click pulls it in to the fastest pace.
+      await tick(1000);
+      await act(async () => {
+        document.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+      });
+      await tick(FASTEST - 1);
+      expect(fetchEventActivity).toHaveBeenCalledTimes(2);
+      await tick(1);
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(3));
+      // A pass already close by keeps its slot, but the pace after it
+      // restarts from the fastest: 4.5 s rather than 6.75 s.
+      await tick(2000);
+      await act(async () => {
+        document.dispatchEvent(new Event("keydown", { bubbles: true }));
+      });
+      await tick(EASED[0] - 2000 - 1);
+      expect(fetchEventActivity).toHaveBeenCalledTimes(3);
+      await tick(1);
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(4));
+      await tick(EASED[0] - 1);
+      expect(fetchEventActivity).toHaveBeenCalledTimes(4);
+      await tick(1);
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(5));
+    });
+
     test("does not poll while responses are closed", async () => {
       renderView(jest.fn(), { ...event, status: "closed" });
       await screen.findByText("Ada Faculty");
       fetchEventActivity.mockClear();
       expect(screen.queryByTestId("live-sync")).not.toBeInTheDocument();
-      await tick(LIVE_INTERVAL * 2);
+      await tick(FASTEST * 2);
       expect(fetchEventActivity).not.toHaveBeenCalled();
     });
   });

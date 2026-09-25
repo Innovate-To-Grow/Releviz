@@ -373,6 +373,22 @@ test("organizer header states whether new responses are loading on their own", (
   ).toBeEmptyDOMElement();
 });
 
+test("organizer header keeps live sync on with nothing to switch it off", () => {
+  render(
+    <OrganizerHeader
+      event={baseEvent}
+      onRefresh={jest.fn()}
+      live={{ error: "", updatedAt: null }}
+    />,
+  );
+  expect(screen.getByText("Live")).toBeInTheDocument();
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "New responses load automatically.",
+  );
+  expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+  expect(screen.queryByText("Auto-refresh off")).not.toBeInTheDocument();
+});
+
 test("managed schedule drawer is a labelled modal dialog that traps focus and closes on Escape", async () => {
   const { props } = renderDrawer();
 

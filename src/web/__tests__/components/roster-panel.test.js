@@ -690,6 +690,10 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
             id: "d",
             name: "Delta",
             group: "Faculty; Staff",
+            groups: [
+              { id: 1, name: "Faculty" },
+              { id: 2, name: "Staff" },
+            ],
             invitationStatus: "accepted",
             submitted: 1,
           }),
@@ -713,25 +717,46 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
     expect(
       within(groupFilter).getByRole("option", { name: "Ungrouped" }),
     ).toHaveValue("__ungrouped__");
-    // The row edits the cell string the server formatted, and the flag shows
-    // as its own checkbox.
-    expect(screen.getByLabelText("Groups for Alpha")).toHaveValue(
-      "ALL; Faculty",
-    );
-    expect(screen.getByLabelText("All groups for Alpha")).toBeChecked();
-    expect(screen.getByLabelText("Groups for Beta")).toHaveValue("");
-    expect(screen.getByLabelText("All groups for Beta")).not.toBeChecked();
-    expect(screen.getByLabelText("Groups for Gamma")).toHaveValue("");
-    expect(screen.getByLabelText("Groups for Delta")).toHaveValue(
-      "Faculty; Staff",
-    );
-    expect(
-      screen.getByLabelText("Groups for Delta"),
-    ).toHaveAccessibleDescription("Separate names with ; or type ALL");
     expect(screen.getByLabelText("Roster summary")).toHaveTextContent(
       "2 groups",
     );
     const table = screen.getByRole("region", { name: "Roster participants" });
+    // Name, email, then All and one checkbox column per group, headed by the
+    // group's name as typed.
+    expect(
+      within(table)
+        .getAllByRole("columnheader")
+        .map((cell) => cell.textContent),
+    ).toEqual([
+      "",
+      "Name",
+      "Email",
+      "All",
+      "Faculty",
+      "Staff",
+      "Settings",
+      "Status",
+    ]);
+    expect(
+      within(table).getByRole("columnheader", { name: "All" }),
+    ).toHaveAttribute("title", "Every group, including groups created later");
+    // The All flag ticks (and locks) every column; explicit memberships tick
+    // their own columns.
+    expect(screen.getByLabelText("All groups for Alpha")).toBeChecked();
+    expect(screen.getByLabelText("All groups for Beta")).not.toBeChecked();
+    for (const name of ["Faculty", "Staff"]) {
+      const alpha = screen.getByLabelText(`Alpha in ${name}`);
+      expect(alpha).toBeChecked();
+      expect(alpha).toBeDisabled();
+      expect(alpha).toHaveAttribute("title", "Included through All groups");
+      expect(screen.getByLabelText(`Beta in ${name}`)).not.toBeChecked();
+      expect(screen.getByLabelText(`Gamma in ${name}`)).not.toBeChecked();
+      expect(screen.getByLabelText(`Delta in ${name}`)).toBeChecked();
+      expect(screen.getByLabelText(`Delta in ${name}`)).toBeEnabled();
+      expect(screen.getByLabelText(`Delta in ${name}`)).not.toHaveAttribute(
+        "title",
+      );
+    }
     expect(within(table).getByText("Self-managed")).toBeInTheDocument();
     expect(
       within(table).getByText("Full account", { exact: false }),
@@ -881,7 +906,7 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
     expect(fetchRoster).toHaveBeenCalledTimes(1);
     expect(weight).toHaveValue(0.25);
     expect(weight).toBeDisabled();
-    expect(screen.getByLabelText("Groups for Temp Person")).toBeDisabled();
+    expect(screen.getByLabelText("All groups for Temp Person")).toBeDisabled();
     expect(screen.getByLabelText("Include Temp Person")).toBeDisabled();
     expect(screen.getByLabelText("Select Temp Person")).toBeEnabled();
     expect(screen.getByRole("button", { name: "Edit schedule" })).toBeEnabled();
@@ -902,7 +927,7 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
       0.8,
     );
     expect(screen.getByLabelText("Weight for Temp Person")).toBeEnabled();
-    expect(screen.getByLabelText("Groups for Temp Person")).toBeEnabled();
+    expect(screen.getByLabelText("All groups for Temp Person")).toBeEnabled();
     expect(screen.getByLabelText("Include Temp Person")).not.toBeChecked();
     expect(screen.getByLabelText("Include Temp Person")).toBeEnabled();
 
@@ -1072,7 +1097,7 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
     ).not.toBeInTheDocument();
     expect(screen.getByLabelText("Weight for Temp Person")).toHaveValue(0.8);
     expect(screen.getByLabelText("Weight for Temp Person")).toBeEnabled();
-    expect(screen.getByLabelText("Groups for Temp Person")).toBeEnabled();
+    expect(screen.getByLabelText("All groups for Temp Person")).toBeEnabled();
     expect(screen.getByLabelText("Include Temp Person")).toBeEnabled();
 
     // The next patch sends the refreshed version, not the one that conflicted.
@@ -1368,7 +1393,7 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
 
 describe("RosterPanel organizer-managed people", () => {
   const managedHelp =
-    "Enter one of your own verified email addresses. No invitation is sent.";
+    "Leave blank to use your account email, or enter another of your verified addresses. No invitation is sent.";
   const managedLabel =
     "No email of their own — use one of mine and I'll enter their schedule";
 
@@ -1658,7 +1683,7 @@ describe("RosterPanel organizer-managed people", () => {
     ).toBeInTheDocument();
   });
 
-  test("labels organizer-managed rows and shows the phone between email and account", async () => {
+  test("labels organizer-managed rows and never shows the organizer's address as theirs", async () => {
     fetchRoster.mockResolvedValue(
       rosterResponse([
         participant({
@@ -1688,21 +1713,22 @@ describe("RosterPanel organizer-managed people", () => {
     const table = await screen.findByRole("region", {
       name: "Roster participants",
     });
+    const rowFor = (name) =>
+      within(table).getByRole("rowheader", { name }).closest("tr");
+    const managedRow = rowFor(/Managed Person/);
+    expect(managedRow).not.toHaveTextContent("organizer@example.com");
+    expect(within(managedRow).getByText("No email")).toBeInTheDocument();
+    expect(within(managedRow).getByText("+1 555 010 0199")).toBeInTheDocument();
     expect(
-      within(table).getByText(
-        "organizer@example.com · +1 555 010 0199 · Organizer-managed",
-      ),
+      within(managedRow).getByText("Organizer-managed"),
     ).toBeInTheDocument();
-    expect(
-      within(table).getByText("temp@example.com · Temporary"),
-    ).toBeInTheDocument();
-    expect(
-      within(table).getByText("No email · Full account"),
-    ).toBeInTheDocument();
+    const plainRow = rowFor(/Plain Person/);
+    expect(within(plainRow).getByText("temp@example.com")).toBeInTheDocument();
+    expect(within(plainRow).getByText("Temporary")).toBeInTheDocument();
+    const fullRow = rowFor(/Full Person/);
+    expect(within(fullRow).getByText("No email")).toBeInTheDocument();
+    expect(within(fullRow).getByText("Full account")).toBeInTheDocument();
     // The organizer enters a managed person's schedule.
-    const managedRow = within(table)
-      .getByRole("rowheader", { name: /Managed Person/ })
-      .closest("tr");
     expect(
       within(managedRow).getByRole("button", { name: "Edit schedule" }),
     ).toBeEnabled();
@@ -1743,7 +1769,9 @@ describe("RosterPanel organizer-managed people", () => {
     );
     expect(phone).toHaveValue("+1 555 010 0199");
     expect(
-      screen.getByText("temp@example.com · +1 555 010 0199 · Temporary"),
+      within(phone.closest("tr")).getByText("+1 555 010 0199", {
+        selector: "small",
+      }),
     ).toBeInTheDocument();
 
     // The next patch carries the version the server returned; an identical
@@ -2323,9 +2351,25 @@ describe("RosterPanel groups", () => {
   const teachersGroup = { ...facultyGroup, name: "Teachers" };
   const renamedRoster = rosterResponse(
     [
-      participant({ id: "p-1", name: "Ada", group: "Teachers" }),
-      participant({ id: "p-2", name: "Ben", group: "Teachers" }),
-      participant({ id: "p-3", name: "Cara", group: "", weight: 0.5 }),
+      participant({
+        id: "p-1",
+        name: "Ada",
+        group: "Teachers",
+        groups: [{ id: 11, name: "Teachers" }],
+      }),
+      participant({
+        id: "p-2",
+        name: "Ben",
+        group: "Teachers",
+        groups: [{ id: 11, name: "Teachers" }],
+      }),
+      participant({
+        id: "p-3",
+        name: "Cara",
+        group: "",
+        groups: [],
+        weight: 0.5,
+      }),
     ],
     { stats: { ...stats, groups: [teachersGroup, ungrouped] } },
   );
@@ -2365,9 +2409,25 @@ describe("RosterPanel groups", () => {
     fetchRoster.mockResolvedValue(
       rosterResponse(
         [
-          participant({ id: "p-1", name: "Ada", group: "Faculty" }),
-          participant({ id: "p-2", name: "Ben", group: "Faculty" }),
-          participant({ id: "p-3", name: "Cara", group: "", weight: 0.5 }),
+          participant({
+            id: "p-1",
+            name: "Ada",
+            group: "Faculty",
+            groups: [{ id: 11, name: "Faculty" }],
+          }),
+          participant({
+            id: "p-2",
+            name: "Ben",
+            group: "Faculty",
+            groups: [{ id: 11, name: "Faculty" }],
+          }),
+          participant({
+            id: "p-3",
+            name: "Cara",
+            group: "",
+            groups: [],
+            weight: 0.5,
+          }),
         ],
         { stats },
       ),
@@ -2386,13 +2446,9 @@ describe("RosterPanel groups", () => {
     const groupsRegion = screen.getByRole("region", { name: "Roster groups" });
     expect(groupsRegion).toHaveTextContent("Faculty");
     expect(groupsRegion).toHaveTextContent("2 people");
-    // Existing names complete the per-person group inputs.
-    expect(screen.getByLabelText("Groups for Ada")).toHaveAttribute("list");
-    expect(
-      document.querySelector(
-        `#${CSS.escape(screen.getByLabelText("Groups for Ada").getAttribute("list"))} option[value="Faculty"]`,
-      ),
-    ).not.toBeNull();
+    // Each group heads a checkbox column in the roster.
+    expect(screen.getByLabelText("Ada in Faculty")).toBeChecked();
+    expect(screen.getByLabelText("Cara in Faculty")).not.toBeChecked();
 
     const weight = screen.getByLabelText("Weight for group Faculty");
     fireEvent.change(weight, { target: { value: "0.5" } });
@@ -2442,9 +2498,8 @@ describe("RosterPanel groups", () => {
       expect.objectContaining({ group: "" }),
       "token",
     );
-    expect(await screen.findByLabelText("Groups for Ada")).toHaveValue(
-      "Teachers",
-    );
+    expect(await screen.findByLabelText("Ada in Teachers")).toBeChecked();
+    expect(screen.queryByLabelText("Ada in Faculty")).not.toBeInTheDocument();
   });
 
   test("keeps the group filter on a renamed group and reports rename failures", async () => {
@@ -2704,7 +2759,9 @@ describe("RosterPanel groups", () => {
         screen.queryByLabelText("Weight for group Faculty"),
       ).not.toBeInTheDocument(),
     );
-    expect(screen.getByLabelText("Groups for Ada")).toHaveValue("");
+    // The deleted group's column goes with it; All stays.
+    expect(screen.queryByLabelText("Ada in Faculty")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("All groups for Ada")).toBeInTheDocument();
     expect(screen.getByText(/No groups yet/)).toBeInTheDocument();
   });
 
@@ -2764,12 +2821,26 @@ describe("RosterPanel groups", () => {
     );
   });
 
-  test("edits a person's memberships and every-group flag from the row", async () => {
+  test("ticks a person's group columns and the All flag from the row", async () => {
+    const boardGroup = { id: 12, name: "Board", count: 0, weight: null };
+    fetchRoster.mockResolvedValue(
+      rosterResponse(
+        [
+          participant({
+            id: "p-1",
+            name: "Ada",
+            group: "Faculty",
+            groups: [{ id: 11, name: "Faculty" }],
+          }),
+        ],
+        { stats: { ...stats, groups: [boardGroup, facultyGroup] } },
+      ),
+    );
+    const ada = (overrides) =>
+      participant({ id: "p-1", name: "Ada", ...overrides });
     patchRosterParticipant
       .mockResolvedValueOnce({
-        participant: participant({
-          id: "p-1",
-          name: "Ada",
+        participant: ada({
           group: "Board; Faculty",
           groups: [
             { id: 12, name: "Board" },
@@ -2777,48 +2848,72 @@ describe("RosterPanel groups", () => {
           ],
           version: 5,
         }),
-        groups: [
-          { id: 12, name: "Board", count: 1, weight: 1 },
-          facultyGroup,
-          { id: null, name: "", count: 1, weight: null },
-        ],
+        groups: [{ ...boardGroup, count: 1, weight: 1 }, facultyGroup],
       })
       .mockResolvedValueOnce({
-        participant: participant({
-          id: "p-1",
-          name: "Ada",
+        participant: ada({
           group: "ALL; Board; Faculty",
+          groups: [
+            { id: 12, name: "Board" },
+            { id: 11, name: "Faculty" },
+          ],
           allGroups: true,
           version: 6,
         }),
+      })
+      .mockResolvedValueOnce({
+        participant: ada({
+          group: "Board; Faculty",
+          groups: [
+            { id: 12, name: "Board" },
+            { id: 11, name: "Faculty" },
+          ],
+          allGroups: false,
+          version: 7,
+        }),
+      })
+      .mockResolvedValueOnce({
+        participant: ada({
+          group: "Board",
+          groups: [{ id: 12, name: "Board" }],
+          allGroups: false,
+          version: 8,
+        }),
       });
     await renderPanel();
-    const groupsInput = await screen.findByLabelText("Groups for Ada");
-    expect(groupsInput).toHaveAccessibleDescription(
-      "Separate names with ; or type ALL",
-    );
-    fireEvent.change(groupsInput, { target: { value: "Faculty; Board" } });
-    fireEvent.blur(groupsInput);
+    const board = await screen.findByLabelText("Ada in Board");
+    const faculty = screen.getByLabelText("Ada in Faculty");
+    const all = screen.getByLabelText("All groups for Ada");
+    expect(board).not.toBeChecked();
+    expect(faculty).toBeChecked();
+    expect(all).not.toBeChecked();
+
+    // Ticking a second group adds it without touching the first.
+    fireEvent.click(board);
+    expect(board).toBeChecked();
     await waitFor(() =>
       expect(patchRosterParticipant).toHaveBeenCalledWith(
         "ROSTER1",
         "p-1",
-        { group: "Faculty; Board", expectedVersion: 4 },
+        { addGroupIds: [12], expectedVersion: 4 },
         "token",
       ),
     );
-    // The server-normalized spelling replaces the draft and the group table
-    // picks up the new group without a reload.
-    await waitFor(() =>
-      expect(screen.getByLabelText("Groups for Ada")).toHaveValue(
-        "Board; Faculty",
-      ),
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Ada was updated.",
     );
-    expect(screen.getByLabelText("Weight for group Board")).toBeInTheDocument();
+    expect(board).toBeChecked();
+    expect(faculty).toBeChecked();
+    // The recounted groups arrive with the patch; no reload is needed.
+    expect(
+      within(screen.getByRole("region", { name: "Roster groups" })).getByText(
+        "1 person",
+      ),
+    ).toBeInTheDocument();
     expect(fetchRoster).toHaveBeenCalledTimes(1);
 
-    expect(screen.getByLabelText("All groups for Ada")).not.toBeChecked();
-    fireEvent.click(screen.getByLabelText("All groups for Ada"));
+    // All covers every group, so each column shows ticked and locked.
+    fireEvent.click(all);
     await waitFor(() =>
       expect(patchRosterParticipant).toHaveBeenLastCalledWith(
         "ROSTER1",
@@ -2827,15 +2922,111 @@ describe("RosterPanel groups", () => {
         "token",
       ),
     );
+    await waitFor(() => expect(all).toBeChecked());
+    for (const box of [board, faculty]) {
+      expect(box).toBeChecked();
+      expect(box).toBeDisabled();
+    }
+
+    // Clearing All brings back the explicit memberships underneath.
+    fireEvent.click(all);
     await waitFor(() =>
-      expect(screen.getByLabelText("All groups for Ada")).toBeChecked(),
+      expect(patchRosterParticipant).toHaveBeenLastCalledWith(
+        "ROSTER1",
+        "p-1",
+        { allGroups: false, expectedVersion: 6 },
+        "token",
+      ),
     );
-    expect(screen.getByLabelText("Groups for Ada")).toHaveValue(
-      "ALL; Board; Faculty",
+    await waitFor(() => expect(faculty).toBeEnabled());
+    expect(all).not.toBeChecked();
+    expect(board).toBeChecked();
+    expect(faculty).toBeChecked();
+
+    fireEvent.click(faculty);
+    await waitFor(() =>
+      expect(patchRosterParticipant).toHaveBeenLastCalledWith(
+        "ROSTER1",
+        "p-1",
+        { removeGroupIds: [11], expectedVersion: 7 },
+        "token",
+      ),
     );
-    expect(await screen.findByRole("status")).toHaveTextContent(
-      "Ada was updated.",
+    await waitFor(() => expect(faculty).not.toBeChecked());
+    expect(board).toBeChecked();
+    expect(patchRosterParticipant).toHaveBeenCalledTimes(4);
+  });
+
+  test("reloads the roster when a ticked group was deleted in another session", async () => {
+    patchRosterParticipant.mockRejectedValueOnce(
+      Object.assign(new Error("This group was deleted in another session."), {
+        status: 409,
+      }),
     );
+    await renderPanel();
+    const cara = await screen.findByLabelText("Cara in Faculty");
+    fetchRoster.mockResolvedValue(
+      rosterResponse(
+        [participant({ id: "p-3", name: "Cara", group: "", groups: [] })],
+        { stats: { ...stats, groups: [ungrouped] } },
+      ),
+    );
+
+    fireEvent.click(cara);
+    await waitFor(() =>
+      expect(patchRosterParticipant).toHaveBeenCalledWith(
+        "ROSTER1",
+        "p-3",
+        { addGroupIds: [11], expectedVersion: 4 },
+        "token",
+      ),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "This group was deleted in another session.",
+    );
+    await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(
+        screen.queryByLabelText("Cara in Faculty"),
+      ).not.toBeInTheDocument(),
+    );
+    // A refused click is not a conflict: the row stays editable.
+    expect(screen.getByLabelText("All groups for Cara")).toBeEnabled();
+  });
+
+  test("keeps a conflicting membership click on screen until the row is reloaded", async () => {
+    const latest = participant({
+      id: "p-3",
+      name: "Cara",
+      group: "",
+      groups: [],
+      version: 9,
+    });
+    patchRosterParticipant.mockRejectedValueOnce(
+      Object.assign(new Error("The participant changed in another session."), {
+        status: 409,
+        participant: latest,
+      }),
+    );
+    await renderPanel();
+    const cara = await screen.findByLabelText("Cara in Faculty");
+    fireEvent.click(cara);
+    expect(
+      await screen.findByRole("button", { name: "Reload latest participant" }),
+    ).toBeInTheDocument();
+    expect(cara).toBeChecked();
+    expect(cara).toBeDisabled();
+
+    fetchRoster.mockResolvedValueOnce(
+      rosterResponse([latest], { stats: { ...stats } }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Reload latest participant" }),
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText("Cara in Faculty")).not.toBeChecked(),
+    );
+    expect(screen.getByLabelText("Cara in Faculty")).toBeEnabled();
   });
 
   test("applies the group stats returned by a per-person patch", async () => {

@@ -24,6 +24,7 @@ from apps.scheduling.models import (
     Weight,
 )
 from apps.scheduling.permissions import organizer_may_edit_response
+from apps.scheduling.services.availability import default_availability
 from apps.scheduling.services.invitations import mark_invitation_for_member
 
 OWNED_CODE = "organizer_edit_participant_owned"
@@ -430,18 +431,22 @@ class ResponseOwnershipTests(TestCase):
         self.assertEqual(denied["denial_reason"], "participant_owns_response")
 
     def test_organizer_own_row_is_never_organizer_editable(self):
-        preview = self.organizer_client.post(
-            f"/events/roster-imports?code={self.event.code}",
-            {"sourceType": "paste", "pastedText": "name,email\nOwner Row,owner@example.com\n"},
-            format="json",
+        # Imports used to bind a row carrying the organizer's own address to the
+        # organizer (they now add an organizer-managed person), which left an
+        # unclaimed row like this one on older rosters.
+        Participant.objects.create(
+            event=self.event,
+            member=self.organizer,
+            participant_name="Owner Row",
+            availability_inperson=default_availability(self.event),
+            availability_virtual=default_availability(self.event),
         )
-        self.assertEqual(preview.status_code, 201, preview.data)
-        committed = self.organizer_client.post(
-            f"/events/roster-imports/{preview.data['import']['id']}/commit?code={self.event.code}",
-            {"mode": "merge", "idempotencyKey": str(uuid.uuid4())},
-            format="json",
+        EventInvitation.objects.create(
+            event=self.event,
+            email="owner@example.com",
+            member=self.organizer,
+            invited_by=self.organizer,
         )
-        self.assertEqual(committed.status_code, 201, committed.data)
         own = self.row(self.organizer)
         self.assertIsNone(own.response_claimed_at)
         self.assertFalse(self.roster_row(self.organizer)["canOrganizerEditAvailability"])

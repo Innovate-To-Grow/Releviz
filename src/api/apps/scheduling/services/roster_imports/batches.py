@@ -21,6 +21,7 @@ from .normalization import (
     active_rows,
     apply_account_rules,
     apply_duplicate_rules,
+    batch_organizer_addresses,
     normalize_group_cell,
     normalize_import_batch,
     rows_summary,
@@ -159,6 +160,7 @@ def _apply_row_updates(batch: RosterImportBatch, updates) -> None:
         raise RosterImportError("Each rowUpdates entry must have a unique id.")
     all_rows = active_rows(batch)
     rows = {str(row.pk): row for row in all_rows if str(row.pk) in set(identifiers)}
+    addresses = batch_organizer_addresses(batch)
     if len(rows) != len(updates):
         raise RosterImportError("A rowUpdates id does not belong to this preview.")
 
@@ -176,7 +178,7 @@ def _apply_row_updates(batch: RosterImportBatch, updates) -> None:
             phone = str(item.get("phone") or "").strip()
         if "group" in item or "groupName" in item:
             group_name = normalize_group_cell(item.get("group", item.get("groupName")) or "")
-        identity_errors = validate_identity_fields(name, email, group_name)
+        identity_errors = validate_identity_fields(name, email, group_name, addresses=addresses)
         identity_errors.extend(validate_phone(phone))
         row.name = name[:100]
         row.email = email[:254]
@@ -197,8 +199,8 @@ def _apply_row_updates(batch: RosterImportBatch, updates) -> None:
         row.validation_errors = identity_errors
         row.duplicate_status = RosterImportRow.DuplicateStatus.UNIQUE
 
-    apply_duplicate_rules(all_rows)
-    apply_account_rules(all_rows)
+    apply_duplicate_rules(all_rows, addresses)
+    apply_account_rules(all_rows, addresses)
     if rows_summary(all_rows)["valid"] > MAX_ROSTER_ROWS:
         raise RosterImportError(
             f"An import may contain at most {MAX_ROSTER_ROWS} valid participants."

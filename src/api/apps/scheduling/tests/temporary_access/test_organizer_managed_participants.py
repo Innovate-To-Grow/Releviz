@@ -200,6 +200,43 @@ class OrganizerManagedParticipantTests(TestCase):
                 self.assertNotIn("errorCode", conflict.data)
         self.assertEqual(Participant.objects.filter(event=self.event).count(), 1)
 
+    def test_a_blank_email_files_the_person_under_the_organizer_primary_address(self):
+        ContactEmail.objects.create(
+            member=self.organizer,
+            email_address="alias@example.com",
+            email_type="secondary",
+            verified=True,
+        )
+        created = self.add_managed("Grandma Ruth", email="")
+        self.assertEqual(created.status_code, 201, created.data)
+        self.assert_managed_row(created.data["participant"], name="Grandma Ruth")
+        self.assertEqual(created.data["autoInvitedCount"], 0)
+        participant = Participant.objects.get(event=self.event, organizer_managed=True)
+        self.assertEqual(participant.contact_email, ORGANIZER_EMAIL)
+        self.assertFalse(EventInvitation.objects.filter(event=self.event).exists())
+
+        # Typing the primary address (or leaving the key out) finds the same person.
+        for label, fields in (("typed", {}), ("missing", {"email": None})):
+            with self.subTest(label=label):
+                again = self.add_managed("grandma ruth", **fields)
+                self.assertEqual(again.status_code, 200, again.data)
+                self.assertEqual(again.data["participant"]["id"], created.data["participant"]["id"])
+        # The secondary address files a separate person of the same name.
+        alias = self.add_managed("Grandma Ruth", email="alias@example.com")
+        self.assertEqual(alias.status_code, 201, alias.data)
+        self.assertEqual(Participant.objects.filter(event=self.event).count(), 2)
+
+        # Without the flag a blank email is still refused.
+        refused = self.add_person("Cousin", email="")
+        self.assertEqual(refused.status_code, 400, refused.data)
+        self.assertEqual(refused.data["error"], "Enter a valid email address.")
+        # With no verified address of their own there is nowhere to file them.
+        ContactEmail.objects.filter(member=self.organizer).update(verified=False)
+        orphaned = self.add_managed("Uncle Bob", email="")
+        self.assertEqual(orphaned.status_code, 400, orphaned.data)
+        self.assertEqual(orphaned.data["error"], NOT_OWNED_MESSAGE)
+        self.assertEqual(Participant.objects.filter(event=self.event).count(), 2)
+
     def test_managed_person_requests_are_validated(self):
         ContactEmail.objects.create(
             member=self.organizer,

@@ -13,7 +13,7 @@ from apps.scheduling.models import Event, EventInvitation, Participant, UserEven
 from apps.scheduling.services.availability import default_availability
 from apps.scheduling.services.events.lifecycle import response_write_error
 
-from .addresses import normalize_phone
+from .addresses import normalize_phone, organizer_addresses
 from .errors import (
     INACTIVE_ACCOUNT_MESSAGE,
     UNVERIFIED_FULL_ACCOUNT_MESSAGE,
@@ -36,10 +36,13 @@ def _create_or_reuse_organizer_managed_participant(
     The address stays the organizer's identity: the person is backed by a fresh
     temporary member with no ``ContactEmail`` and an empty ``Member.email``, so
     nothing resolves the shared address to them, and no invitation is ever
-    created for them. The reuse key is (event, address, name) under the event lock.
+    created for them. A blank ``email`` files them under the organizer's primary
+    verified address. The reuse key is (event, address, name) under the event lock.
     """
 
-    if not organizer.contact_emails.filter(email_address__iexact=email, verified=True).exists():
+    addresses = organizer_addresses(organizer.pk)
+    email = addresses.contact_for(email)
+    if email not in addresses.verified:
         raise ManagedParticipantError(
             "Use one of your own verified email addresses for a person you manage."
         )
@@ -141,8 +144,8 @@ def create_or_reuse_managed_participant(
 
     Email is the global identity key. Existing members are reused, while a new
     identity is created as a passwordless, unverified temporary member. With
-    ``organizer_managed`` the address is one of the organizer's own and never
-    becomes an identity for the person.
+    ``organizer_managed`` the address is one of the organizer's own (blank means
+    their primary one) and never becomes an identity for the person.
     """
 
     event = Event.objects.select_for_update().get(pk=event.pk)
@@ -163,10 +166,11 @@ def create_or_reuse_managed_participant(
         raise ManagedParticipantError("Name is too long (max 100).")
     if len(normalized_email) > 254:
         raise ManagedParticipantError("Email is too long (max 254).")
-    try:
-        validate_email(normalized_email)
-    except ValidationError as exc:
-        raise ManagedParticipantError("Enter a valid email address.") from exc
+    if normalized_email or not organizer_managed:
+        try:
+            validate_email(normalized_email)
+        except ValidationError as exc:
+            raise ManagedParticipantError("Enter a valid email address.") from exc
     normalized_phone = normalize_phone(phone)
 
     if organizer_managed:

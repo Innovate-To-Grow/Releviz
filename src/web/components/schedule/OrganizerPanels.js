@@ -22,7 +22,8 @@ function formatClockTime(value) {
 /**
  * The live-sync line under the event name: whether new responses are being
  * picked up on their own, and when the workspace last changed because of it.
- * `live` is null when the workspace is not syncing (the event is not active).
+ * Live sync is always on while the event is active; `live` is null when the
+ * workspace is not syncing (the event is not active).
  */
 export function LiveSyncStatus({ live }) {
   if (!live) return null;
