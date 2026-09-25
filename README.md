@@ -26,13 +26,14 @@ on first use) or with email + password for accounts that set one through Forgot 
 (`/recover`). New events are active immediately and can accept responses as soon as participants
 join; creating an event by itself does not send email.
 
-**Blocked times.** The organizer workspace opens on the **Blocked times** editor right after the
-event is created. Paint the parts of each day that are not available (a lunch break on Mondays, a
-late start on Fridays) and save; the event keeps one start/end/days configuration while every day
-gets its own usable window. Blocked slots stay in the schedule grid but are greyed out and cannot be
-painted, count as 0 in the results, never appear in ranked windows, and cannot be finalized into.
-Blocked times can be changed at any time from the Overview panel without resetting responses;
-after finalization the event must be reactivated first.
+**Blocked times.** The organizer workspace opens with the **Blocked times** step, at the bottom of
+the Time Table section, expanded right after the event is created. Paint the parts of each day that
+are not available (a lunch break on Mondays, a late start on Fridays) and save; the event keeps one
+start/end/days configuration while every day gets its own usable window. Blocked slots stay in the
+schedule grid but are greyed out and cannot be painted, count as 0 in the results, never appear in
+ranked windows, and cannot be finalized into. Blocked times can be changed at any time from
+**Blocked times** at the bottom of the Time Table without resetting responses; after finalization
+the event must be reactivated first.
 
 ### 2. Build the Roster
 
@@ -160,15 +161,17 @@ the selected level; the invitation-link page reads **Apply to all**) skips them,
 marked there before the block was added is ignored.
 
 Group availability is the organizer's view only: participants submit their own calendar and never
-see anyone else's. While a newer response is being calculated, the organizer's Results section
+see anyone else's. While a newer response is being calculated, the organizer's Time Table section
 says the results are updating for that revision and keeps showing the last successful snapshot
 meanwhile; once current, it reports the revision and the time the snapshot was generated.
 
 ### 4. Organizer Dashboard
 
 Access the organizer view from the account that created the event. It is one page with three
-anchored sections — Overview, Results, and Roster — and Finalize is a step inside Results. The
-organizer can:
+anchored sections — Overview, Time Table, and Roster. The Time Table shows the meeting-time
+calendar; **Ranked windows**, **Finalize**, and **Blocked times** are collapsible steps at the
+bottom of it, closed by default: the calendar draws the ranked windows only while Ranked windows is
+open, and picking a window opens Finalize. The organizer can:
 
 - search/filter a server-paginated roster (50 rows by default, 100 maximum);
 - load one person's schedule only when its edit drawer opens;
@@ -203,7 +206,7 @@ On the meeting-time calendar the organizer's blocked times are hatched, show no 
 cannot be picked; an open slot whose meeting window would run into a block keeps its percentage but
 cannot start a meeting either. Blocked times are excluded from the results (their availability is
 reported as 0), never form part of a ranked window, and cannot be finalized into; edit them from
-**Blocked times** on the Overview panel.
+**Blocked times** at the bottom of the Time Table.
 
 While the event is active, the workspace keeps itself current on its own; there is no switch to
 turn this off. Only while the tab is visible, it reads a small activity digest (`GET /events/activity`)

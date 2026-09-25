@@ -117,6 +117,7 @@ import {
   fetchEventResults,
   previewFinalMeeting,
   sendReminders,
+  updateEvent,
   updateEventLifecycle,
 } from "@/lib/api/events";
 import { createManagedParticipant } from "@/lib/api/participants";
@@ -352,11 +353,11 @@ function mockCalendarWindowFlow() {
   });
 }
 
-// The Overview's blocked-times editor also renders `data-cell-idx` cells, so
-// calendar cells are looked up inside the results section.
+// The Time Table's blocked-times editor also renders `data-cell-idx` cells,
+// so calendar cells are looked up inside the meeting calendar's grid.
 function calendarCell(index) {
-  return document
-    .getElementById("organizer-results")
+  return screen
+    .getByRole("grid", { name: /^Meeting time calendar/ })
     .querySelector(`[data-cell-idx="${index}"]`);
 }
 
@@ -536,7 +537,7 @@ describe("scaled organizer workspace", () => {
       "organizer-results",
       "organizer-roster",
     ];
-    const labels = ["Overview", "Results", "Roster"];
+    const labels = ["Overview", "Time Table", "Roster"];
 
     labels.forEach((label, index) => {
       expect(document.getElementById(sectionIds[index])).toHaveAccessibleName(
@@ -587,7 +588,8 @@ describe("scaled organizer workspace", () => {
     expect(screen.getAllByRole("button", { name: /refresh/i })).toEqual([
       within(workspaceActions).getByRole("button", { name: "Refresh" }),
     ]);
-    // Finalize lives inside the results section, beside the calendar.
+    // Finalize lives inside the Time Table section, as a step under the
+    // calendar that stays closed until a time is picked.
     const resultsSection = document.getElementById("organizer-results");
     expect(resultsSection).toContainElement(
       document.getElementById("organizer-finalize"),
@@ -598,6 +600,9 @@ describe("scaled organizer workspace", () => {
         name: "Finalize",
       }),
     ).toBeInTheDocument();
+    expect(document.getElementById("organizer-finalize")).not.toHaveAttribute(
+      "open",
+    );
 
     const overviewSection = document.getElementById("organizer-overview");
     expect(overviewSection).toHaveAccessibleName("Overview");
@@ -613,18 +618,27 @@ describe("scaled organizer workspace", () => {
     expect(
       within(overviewSection).queryByRole("link", { name: "Edit event" }),
     ).not.toBeInTheDocument();
-    // The blocked-times editor lives in the Overview, open while the event
-    // has no blocks, with its own grid name beside the meeting calendar.
+    // The blocked-times editor is a step of the Time Table, not of the
+    // Overview: open while the event has no blocks, with its own grid name
+    // beside the meeting calendar.
     expect(
-      within(overviewSection)
+      within(resultsSection)
         .getByRole("grid", { name: "Blocked times" })
         .closest("details"),
     ).toHaveAttribute("open");
     expect(
-      within(overviewSection).getByRole("button", {
+      within(resultsSection).getByRole("button", {
         name: "Save blocked times",
       }),
     ).toBeInTheDocument();
+    expect(
+      within(overviewSection).queryByRole("grid", { name: "Blocked times" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(overviewSection).queryByRole("heading", {
+        name: "Blocked times",
+      }),
+    ).not.toBeInTheDocument();
     expect(
       within(overviewSection).getByRole("button", {
         name: "Show all details",
@@ -2009,6 +2023,10 @@ describe("scaled organizer workspace", () => {
     expect(document.getElementById("organizer-finalize")).toHaveTextContent(
       "Thursday 9:00 AM",
     );
+    // The pick opens the Finalize step and hands it focus.
+    expect(document.getElementById("organizer-finalize")).toHaveAttribute(
+      "open",
+    );
     expect(screen.getByRole("heading", { name: "Finalize" })).toHaveFocus();
     await userEvent.click(
       screen.getByRole("button", { name: "Review attendance" }),
@@ -2065,21 +2083,26 @@ describe("scaled organizer workspace", () => {
 
     // Playwright's getByRole("heading", { name }) is a substring match, so
     // only the panel title and the Finalize step may mention them.
-    expect(screen.getAllByRole("heading", { name: /results/i })).toEqual([
-      screen.getByRole("heading", { level: 3, name: "Results" }),
+    expect(screen.getAllByRole("heading", { name: /time table/i })).toEqual([
+      screen.getByRole("heading", { level: 3, name: "Time Table" }),
     ]);
+    expect(screen.queryAllByRole("heading", { name: /results/i })).toEqual([]);
     expect(screen.getAllByRole("heading", { name: /finali[sz]/i })).toEqual([
       screen.getByRole("heading", { level: 4, name: "Finalize" }),
     ]);
     expect(
-      screen.getByText("Top continuous windows for a 60-minute meeting.", {
+      screen.getByText("Group availability for a 60-minute meeting.", {
         exact: false,
       }),
     ).toBeInTheDocument();
 
-    // The pick buttons live in the ranked rail only; the calendar itself
-    // exposes exactly one tab stop and no buttons.
-    const rail = screen.getByRole("complementary", { name: "Ranked windows" });
+    // The pick buttons live in the ranked list only (a step under the
+    // calendar, no landmark of its own); the calendar itself exposes exactly
+    // one tab stop and no buttons.
+    const rail = document.querySelector("details.organizer-ranked-windows");
+    expect(
+      screen.queryByRole("complementary", { name: "Ranked windows" }),
+    ).not.toBeInTheDocument();
     const chooseButtons = screen.getAllByRole("button", {
       name: "Choose this time",
     });
@@ -2124,9 +2147,9 @@ describe("scaled organizer workspace", () => {
         .getByRole("rowheader", { name: "Grace Faculty" })
         .closest("tr"),
     ).toHaveTextContent("Fully available · 100%");
-    expect(screen.getAllByRole("heading", { name: /results/i })).toHaveLength(
-      1,
-    );
+    expect(
+      screen.getAllByRole("heading", { name: /time table/i }),
+    ).toHaveLength(1);
     expect(
       screen.getAllByRole("heading", { name: /finali[sz]/i }),
     ).toHaveLength(1);
@@ -2158,7 +2181,7 @@ describe("scaled organizer workspace", () => {
     await waitFor(() => expect(fetchEventResults).toHaveBeenCalledTimes(1));
   });
 
-  test("keeps the empty Finalize step beside the calendar with no jump button", async () => {
+  test("keeps the ranked list and the empty Finalize step collapsed under the calendar", async () => {
     renderView();
     await screen.findByText("Ada Faculty");
     await screen.findByText(/Results are current at revision 3/);
@@ -2170,10 +2193,111 @@ describe("scaled organizer workspace", () => {
         name: "Browse results",
       }),
     ).not.toBeInTheDocument();
-    expect(finalizeSection.closest(".meeting-results__side")).not.toBeNull();
-    // The ranked list beside it starts collapsed.
-    const rail = screen.getByRole("complementary", { name: "Ranked windows" });
-    expect(rail.querySelector("details")).not.toHaveAttribute("open");
+    // The three steps stack under the calendar: the ranked list, then
+    // Finalize (both closed), then Blocked times (open: no blocks yet).
+    const stack = finalizeSection.closest(".time-table__sections");
+    expect(stack).not.toBeNull();
+    expect(Array.from(stack.children).map((step) => step.id)).toEqual([
+      "organizer-ranked-windows",
+      "organizer-finalize",
+      "organizer-blocked-times",
+    ]);
+    expect(
+      document
+        .getElementById("organizer-results")
+        .querySelector(".meeting-calendar + .time-table__sections"),
+    ).toBe(stack);
+    const rail = document.querySelector("details.organizer-ranked-windows");
+    expect(rail).not.toHaveAttribute("open");
+    expect(finalizeSection).not.toHaveAttribute("open");
+    expect(
+      document.querySelector("details.organizer-blocked-times"),
+    ).toHaveAttribute("open");
+    // While the ranked list is closed the calendar draws no ranked window
+    // and its legend does not mention one.
+    expect(document.querySelector(".meeting-calendar__block--rank")).toBeNull();
+    expect(screen.queryByText("Ranked window")).not.toBeInTheDocument();
+
+    await userEvent.click(within(rail).getByText("Ranked windows"));
+    expect(rail).toHaveAttribute("open");
+    expect(screen.getByText("Ranked window")).toBeInTheDocument();
+    expect(finalizeSection).not.toHaveAttribute("open");
+
+    await userEvent.click(within(rail).getByText("Ranked windows"));
+    expect(rail).not.toHaveAttribute("open");
+    expect(screen.queryByText("Ranked window")).not.toBeInTheDocument();
+  });
+
+  test("saving blocked times from the Time Table re-reads the results and clears the pick", async () => {
+    mockCalendarWindowFlow();
+    const nowSpy = jest
+      .spyOn(Date, "now")
+      .mockReturnValue(Date.parse("2026-08-01T00:00:00Z"));
+    const savedEvent = {
+      ...calendarEvent,
+      version: 3,
+      blockedSlots: { "date:2026-08-20": [3] },
+      slotGroups: calendarEvent.slotGroups.map((group) => ({
+        ...group,
+        slots: group.slots.map((slot) => ({
+          ...slot,
+          blocked: slot.index === 3,
+        })),
+      })),
+    };
+    updateEvent.mockResolvedValue({ event: savedEvent, responsesReset: 0 });
+
+    try {
+      render(<StatefulWorkspace initialEvent={calendarEvent} />);
+      await screen.findByText(/Results are current/);
+      fetchEventResults.mockClear();
+      const finalizeSection = () =>
+        document.getElementById("organizer-finalize");
+
+      await userEvent.click(calendarCell(1));
+      expect(finalizeSection()).toHaveTextContent("Custom window");
+      expect(finalizeSection()).toHaveAttribute("open");
+
+      const blockedTimes = document
+        .getElementById("organizer-results")
+        .querySelector("details.organizer-blocked-times");
+      expect(blockedTimes).toHaveAttribute("open");
+      expect(blockedTimes).toHaveTextContent("0 slots blocked");
+      const editorGrid = within(blockedTimes).getByRole("grid", {
+        name: "Blocked times",
+      });
+      fireEvent.pointerDown(editorGrid.querySelector('[data-cell-idx="3"]'), {
+        button: 0,
+        pointerId: 1,
+        pointerType: "mouse",
+      });
+      await userEvent.click(
+        within(blockedTimes).getByRole("button", {
+          name: "Save blocked times",
+        }),
+      );
+
+      await waitFor(() =>
+        expect(updateEvent).toHaveBeenCalledWith(
+          event.code,
+          { blockedSlots: { "date:2026-08-20": [3] }, expectedVersion: 2 },
+          "token",
+        ),
+      );
+      expect(
+        await within(blockedTimes).findByText("Blocked times saved."),
+      ).toBeInTheDocument();
+      // The workspace stored the event (the calendar greys the block), re-read
+      // the results, and dropped the pick; the step stays open.
+      await waitFor(() => expect(fetchEventResults).toHaveBeenCalledTimes(1));
+      expect(calendarCell(3)).toHaveAttribute("data-blocked-slot", "true");
+      expect(finalizeSection()).toHaveTextContent("No time selected yet");
+      expect(finalizeSection()).toHaveAttribute("open");
+      expect(blockedTimes).toHaveTextContent("1 slots blocked");
+      expect(blockedTimes).toHaveAttribute("open");
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   test("the header refresh also re-reads visible delivery progress", async () => {
@@ -2235,6 +2359,7 @@ describe("scaled organizer workspace", () => {
       expect(finalizeSection()).toHaveTextContent(
         "At least 50% weighted · 60% unweighted across this window (lowest slot). Exact attendance counts appear after Review attendance.",
       );
+      expect(finalizeSection()).toHaveAttribute("open");
       expect(screen.getByRole("heading", { name: "Finalize" })).toHaveFocus();
       expect(cell).toHaveAttribute("aria-selected", "true");
       expect(calendarCell(2)).toHaveAttribute("aria-selected", "true");
@@ -2336,8 +2461,10 @@ describe("scaled organizer workspace", () => {
         ),
       );
       await waitFor(() => expect(headerStatus()).toHaveTextContent("active"));
-      // The old pick is gone: the step is back to its empty state.
+      // The old pick is gone: the step is back to its empty state, and stays
+      // open rather than folding away under the organizer.
       expect(finalizeSection()).toHaveTextContent("No time selected yet");
+      expect(finalizeSection()).toHaveAttribute("open");
       expect(finalizeSection()).toHaveTextContent(
         "Pick a window on the calendar or choose a ranked one.",
       );
@@ -2402,6 +2529,7 @@ describe("scaled organizer workspace", () => {
       screen.getByRole("button", { name: "Selected time" }),
     ).toHaveAttribute("aria-pressed", "true");
     const finalizeSection = document.getElementById("organizer-finalize");
+    expect(finalizeSection).toHaveAttribute("open");
     expect(finalizeSection).toHaveTextContent("Thursday 9:00 AM online");
     expect(finalizeSection).toHaveTextContent("Virtual");
     expect(finalizeSection).toHaveTextContent("Ranked #1");

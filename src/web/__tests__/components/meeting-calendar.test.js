@@ -578,6 +578,54 @@ describe("MeetingCalendar", () => {
     expect(rankBlock().style.getPropertyValue("--rv-cal-span")).toBe("2");
   });
 
+  test("hides the ranked windows while the ranked list is collapsed", async () => {
+    const { onSelect, rerender } = renderCalendar({
+      showRankedWindows: false,
+    });
+
+    // No outline, badge, legend entry, or rank in the cell descriptions...
+    expect(document.querySelector(".meeting-calendar__block--rank")).toBeNull();
+    expect(screen.queryByText("Ranked window")).not.toBeInTheDocument();
+    expect(screen.getByText("Selected window")).toBeInTheDocument();
+    expect(cell(1).getAttribute("aria-label")).not.toContain(
+      "Inside ranked window",
+    );
+    expect(cell(1).getAttribute("title")).not.toContain("Inside ranked window");
+    // ...the week is still the top recommendation's, and the first startable
+    // cell takes the tab stop instead of the hidden best window.
+    expect(screen.getByRole("grid")).toHaveAccessibleName(
+      "Meeting time calendar, Sep 13 – 19, 2026",
+    );
+    expect(tabbableCells().map((c) => c.dataset.cellIdx)).toEqual(["0"]);
+    // ...but picking inside the hidden window still yields the ranked window.
+    await userEvent.click(cell(1));
+    expect(onSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recommendation,
+        metrics: expect.objectContaining({ exact: true, rank: 1 }),
+      }),
+    );
+
+    rerender(
+      <MeetingCalendar
+        event={weeklyEvent}
+        results={results}
+        channel="inperson"
+        onSelect={onSelect}
+        onChannelChange={jest.fn()}
+        now={NOW}
+        showRankedWindows
+      />,
+    );
+    expect(
+      document.querySelector(".meeting-calendar__block--rank"),
+    ).toHaveAttribute("data-rank", "1");
+    expect(screen.getByText("Ranked window")).toBeInTheDocument();
+    expect(cell(1).getAttribute("aria-label")).toContain(
+      "Inside ranked window #1.",
+    );
+  });
+
   test("marks the selected window and moves the tab stop to it", () => {
     const selection = selectionFromRecommendation(recommendation, weeklyEvent, {
       now: NOW,

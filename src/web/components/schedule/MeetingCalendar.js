@@ -53,6 +53,9 @@ const METRICS = [
   { key: "unweighted", label: "Unweighted" },
 ];
 
+// What the calendar draws while the ranked list is collapsed: nothing.
+const NO_RECOMMENDATIONS = [];
+
 function percent(value) {
   return value === null || value === undefined
     ? null
@@ -199,12 +202,14 @@ function EmptyCell({ columnIndex, headerLabel }) {
  * Columns are real dates (the enabled weekdays of one week for weekly events,
  * or up to seven configured dates). Cells are shaded by weighted or
  * unweighted availability; ranked recommendations are drawn as outlined
- * blocks. Clicking (or pressing Enter/Space on) any startable cell selects a
+ * blocks while `showRankedWindows` is true (the Time Table's ranked list is
+ * open), and picking a cell inside one still yields that ranked window either
+ * way. Clicking (or pressing Enter/Space on) any startable cell selects a
  * window of the event's meeting duration beginning there. Only a slot the
  * organizer blocked (`data-blocked-slot`) is neutral: no share, no tone. An
  * open slot whose window would run into a block is unpickable too
  * (`data-state="blocked"`) but keeps its share, like a tail cell. Blocks are
- * edited from the Overview panel, never from here.
+ * edited from the Time Table's Blocked times step, never from here.
  */
 const MeetingCalendar = forwardRef(function MeetingCalendar(
   {
@@ -216,6 +221,7 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
     onSelect,
     now = null,
     defaultMetric = "weighted",
+    showRankedWindows = true,
   },
   ref,
 ) {
@@ -277,12 +283,16 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
     columns,
   });
 
-  // Ranked windows are only drawn where they can still be picked: an
-  // occurrence that has passed, or one a daylight-saving change breaks (the
-  // API never suggests those), would put a badge on a hatched block.
+  // Ranked windows are drawn only while the ranked list is open, and only
+  // where they can still be picked: an occurrence that has passed, or one a
+  // daylight-saving change breaks (the API never suggests those), would put
+  // a badge on a hatched block.
+  const drawnRecommendations = showRankedWindows
+    ? recommendations
+    : NO_RECOMMENDATIONS;
   const blocks = useMemo(
     () =>
-      recommendationBlocks(recommendations, columns, channel).filter(
+      recommendationBlocks(drawnRecommendations, columns, channel).filter(
         (block) =>
           cellState({
             column: columns[block.columnIndex],
@@ -291,7 +301,7 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
             now,
           }) === "startable",
       ),
-    [recommendations, columns, channel, k, now],
+    [drawnRecommendations, columns, channel, k, now],
   );
   const selected = useMemo(
     () =>
@@ -934,13 +944,15 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
           />
           <span>0% → 100% of responses free ({metric})</span>
         </li>
-        <li className="meeting-calendar__legend-item">
-          <span
-            className="meeting-calendar__legend-swatch meeting-calendar__legend-swatch--rank"
-            aria-hidden="true"
-          />
-          <span>Ranked window</span>
-        </li>
+        {showRankedWindows && (
+          <li className="meeting-calendar__legend-item">
+            <span
+              className="meeting-calendar__legend-swatch meeting-calendar__legend-swatch--rank"
+              aria-hidden="true"
+            />
+            <span>Ranked window</span>
+          </li>
+        )}
         <li className="meeting-calendar__legend-item">
           <span
             className="meeting-calendar__legend-swatch meeting-calendar__legend-swatch--selected"

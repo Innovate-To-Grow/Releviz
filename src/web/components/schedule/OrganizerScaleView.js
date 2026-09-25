@@ -13,16 +13,18 @@ import {
 import RosterPanel from "@/components/schedule/RosterPanel";
 import Alert from "@/components/ui/Alert";
 import LoadingState from "@/components/ui/LoadingState";
-import { CalendarIcon, ResultsIcon, RosterIcon } from "@/components/ui/icons";
+import { CalendarIcon, RosterIcon, TimeTableIcon } from "@/components/ui/icons";
 import { fetchEvent, fetchEventActivity } from "@/lib/api/events";
 import { createLiveRefreshScheduler } from "@/lib/liveRefresh";
 import { selectionFromRecommendation } from "@/lib/meetingWindows";
 
-// Workspace order: event facts, then the meeting-time calendar with its
-// ranked windows and confirmation step, then the roster that feeds them.
+// Workspace order: event facts, then the time table (the meeting-time
+// calendar with its ranked windows, confirmation step, and blocked times
+// tucked under it), then the roster that feeds them. The anchor keeps its
+// original id so existing links to it still work.
 const SECTION_LINKS = [
   { id: "overview", label: "Overview", Icon: CalendarIcon },
-  { id: "results", label: "Results", Icon: ResultsIcon },
+  { id: "results", label: "Time Table", Icon: TimeTableIcon },
   { id: "roster", label: "Roster", Icon: RosterIcon },
 ];
 const SECTION_IDS = SECTION_LINKS.map((section) => section.id);
@@ -68,8 +70,9 @@ function readStoredDeliveryRequest(eventCode) {
   }
 }
 
-// Brings the Finalize step into view (only as far as needed: it sits beside
-// the calendar, so a pick usually leaves it already visible) and focuses it.
+// Brings the Finalize step into view (only as far as needed: it sits right
+// under the calendar and has just opened itself on the pick) and focuses
+// its heading.
 function focusFinalizeStep(headingRef) {
   const reducedMotion =
     typeof window !== "undefined" &&
@@ -146,7 +149,7 @@ export default function OrganizerScaleView() {
   }, [event.code]);
 
   // Picking a window (from the calendar or the ranked list) hands the
-  // organizer straight to the confirmation step.
+  // organizer straight to the confirmation step, which opens on the pick.
   useEffect(() => {
     if (!selection) return;
     focusFinalizeStep(finalizeHeadingRef);
@@ -448,6 +451,7 @@ export default function OrganizerScaleView() {
             onDeliveryRequest={setDeliveryRequest}
             onChoose={handleChoose}
             onSelect={setSelection}
+            onEventSaved={handleEventSaved}
           />
         </section>
 

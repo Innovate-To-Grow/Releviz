@@ -334,11 +334,10 @@ async function refreshWorkspace(page) {
   await expect(page.getByText("Workspace updated.")).toBeVisible();
 }
 
-// The ranked list beside the calendar starts collapsed; open it on demand.
+// The ranked list is a collapsed step under the calendar; open it on demand
+// (the calendar draws the ranked windows only while it is open).
 async function openRankedWindows(page) {
-  const details = page
-    .getByRole("complementary", { name: "Ranked windows" })
-    .locator("details");
+  const details = page.locator("details.organizer-ranked-windows");
   if ((await details.getAttribute("open")) === null) {
     await details.locator("summary").click();
   }

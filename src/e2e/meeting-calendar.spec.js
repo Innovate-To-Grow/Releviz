@@ -260,16 +260,22 @@ test.describe("Organizer meeting-time calendar", () => {
     await expect(grid.getByRole("columnheader")).toHaveCount(6);
     await expect(grid.getByRole("columnheader").nth(1)).toContainText("Mon");
     await expect(grid.getByRole("columnheader").nth(5)).toContainText("Fri");
-    const rail = page.getByRole("complementary", { name: "Ranked windows" });
-    // The list starts collapsed with a one-line summary of the best window.
-    await expect(rail.locator("details")).not.toHaveAttribute("open", "");
+    const rail = page.locator("details.organizer-ranked-windows");
+    // The list starts collapsed with a one-line summary of the best window,
+    // and the calendar draws no ranked window until it is opened.
+    await expect(rail).not.toHaveAttribute("open", "");
     await expect(rail).toContainText(/\d+ candidates · best /);
     await expect(
       rail.getByRole("button", { name: "Choose this time" }).first(),
     ).toBeHidden();
+    await expect(page.locator(".meeting-calendar__block--rank")).toHaveCount(0);
+    await expect(page.getByText("Ranked window", { exact: true })).toBeHidden();
     await openRankedWindows(page);
     await expect(
       rail.getByRole("button", { name: "Choose this time" }).first(),
+    ).toBeVisible();
+    await expect(
+      page.getByText("Ranked window", { exact: true }),
     ).toBeVisible();
     expect(
       await rail.getByRole("button", { name: "Choose this time" }).count(),
@@ -362,7 +368,16 @@ test.describe("Organizer meeting-time calendar", () => {
     const wednesday14 = cellAt(grid, 10, 2);
     await expect(wednesday14).toHaveAttribute("data-state", "startable");
     await pickCell(page, wednesday14, "Wed 14:00–15:00");
+    // The pick opens the Finalize step (collapsed until now) and focuses it.
+    await expect(page.locator("#organizer-finalize")).toHaveAttribute(
+      "open",
+      "",
+    );
     await expect(page.getByRole("heading", { name: "Finalize" })).toBeFocused();
+    await expect(
+      page.getByRole("button", { name: "Review attendance" }),
+    ).toBeVisible();
+    await expectAccessible(page, "organizer finalize step");
     const candidate = page.locator(".final-candidate");
     await expect(candidate).toContainText("Wed 14:00–15:00");
     await expect(candidate).toContainText("Custom window");
@@ -568,7 +583,7 @@ test.describe("Organizer meeting-time calendar", () => {
       page.getByText("Dates 1–7 of 9", { exact: false }),
     ).toBeVisible();
     await expect(grid.getByRole("columnheader")).toHaveCount(8);
-    const rail = page.getByRole("complementary", { name: "Ranked windows" });
+    const rail = page.locator("details.organizer-ranked-windows");
     await openRankedWindows(page);
     const channelGroup = page.getByRole("group", { name: "Meeting channel" });
     const inPerson = channelGroup.getByRole("button", { name: "In person" });
@@ -764,6 +779,8 @@ test.describe("Organizer meeting-time calendar", () => {
     // though everyone was free on Monday, and no rank badge covers a block.
     // The run before the block still ranks (every other window scores 0, so
     // the earliest one, Monday 09:00–10:00, is #2) and ends right at it.
+    // The calendar shows them once the ranked list is open.
+    await openRankedWindows(page);
     const tuesday11 = cellAt(grid, 4, 1);
     await expect(tuesday11).toHaveAttribute("data-state", "startable");
     await expect(tuesday11).toHaveAttribute(
@@ -787,8 +804,7 @@ test.describe("Organizer meeting-time calendar", () => {
       "aria-label",
       /Inside ranked window #2/,
     );
-    const rail = page.getByRole("complementary", { name: "Ranked windows" });
-    await openRankedWindows(page);
+    const rail = page.locator("details.organizer-ranked-windows");
     const titles = rail.locator(".result-option__title");
     await expect(titles.first()).toHaveText("Tue 11:00–12:00");
     await expect(titles.nth(1)).toHaveText("Mon 09:00–10:00");
@@ -870,9 +886,7 @@ test.describe("Organizer meeting-time calendar", () => {
     await expect(
       drawer.getByRole("list", { name: "Availability legend" }),
     ).toContainText("Blocked");
-    await drawer
-      .getByRole("button", { name: "Close schedule editor" })
-      .click();
+    await drawer.getByRole("button", { name: "Close schedule editor" }).click();
     await expect(page.getByRole("dialog")).toHaveCount(0);
 
     // A brand-new event lands on its organizer page with the empty editor

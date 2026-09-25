@@ -621,27 +621,10 @@
   gap: 0.5rem;
 }
 
-/* Finalize step: lives beside the calendar in the results panel */
-.finalize-block {
-  border: 1px solid var(--bs-border-color);
-  border-radius: var(--bs-border-radius-lg);
-  background: var(--rv-surface-raised);
-  padding: 1rem;
-  scroll-margin-top: 4.5rem;
-}
-
-.finalize-block__header {
-  margin-bottom: 0.75rem;
-}
-
-.finalize-block__title {
-  margin: 0;
-  font-size: 1rem;
-  font-weight: 600;
-}
-
+/* Finalize step: one collapsible step under the Time Table calendar (the
+   disclosure draws its frame; these rules lay out its body) */
 .finalize-block__description {
-  margin: 0.125rem 0 0;
+  margin: 0 0 0.75rem;
   color: var(--bs-secondary-color);
   font-size: 0.875rem;
 }
@@ -658,8 +641,8 @@
   grid-template-columns: repeat(auto-fit, minmax(5.5rem, 1fr));
 }
 
-/* The attendance table has no height cap: the results side panel already
-   scrolls, and a third scroll area inside it was hard to use. */
+/* The attendance table has no height cap: a scroll area inside the step was
+   hard to use, and the page scrolls anyway. */
 
 .finalize-block .attendance-table__table {
   margin-bottom: 0;
@@ -954,63 +937,52 @@
 }
 
 /* ---------------------------------------------------------------------------
- * Meeting time calendar (organizer results + picker)
+ * Time Table (organizer meeting-time calendar + picker, with its steps)
  * ------------------------------------------------------------------------- */
 
+/* The calendar takes the full width; the Ranked windows, Finalize, and
+   Blocked times steps stack under it as collapsed disclosures. */
 .meeting-results {
-  display: grid;
-  gap: 1rem;
-  align-items: start;
-}
-
-/* Side column: the collapsed ranked list and the Finalize step stay in view
-   next to the calendar, so a pick and its confirmation share one screen. */
-@media (min-width: 992px) {
-  .meeting-results {
-    grid-template-columns: minmax(0, 1fr) minmax(19rem, 23rem);
-  }
-
-  .meeting-results__side {
-    position: sticky;
-    top: 4rem;
-    max-height: calc(100vh - 5rem);
-    overflow: auto;
-    scrollbar-gutter: stable;
-  }
-}
-
-.meeting-results__side {
   display: flex;
   flex-direction: column;
   gap: 1rem;
   min-width: 0;
 }
 
-.meeting-results__rail {
+.time-table__sections {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
   min-width: 0;
 }
 
-.meeting-results__rail-disclosure > summary {
+/* The section nav is sticky, so a step scrolled into view (Finalize, after
+   a pick) must land below it rather than underneath it. */
+.time-table__section {
+  scroll-margin-top: 4.5rem;
+}
+
+.time-table__summary {
   padding: 0.75rem 1rem;
   align-items: flex-start;
 }
 
-.meeting-results__rail-content {
-  padding: 0.75rem 1rem 1rem;
-}
-
-.meeting-results__rail-title {
+.time-table__section-title {
   margin: 0;
   font-size: 1rem;
   font-weight: 600;
 }
 
-.meeting-results__rail-hint {
+.time-table__section-hint {
   display: block;
   margin-top: 0.125rem;
   color: var(--bs-secondary-color);
   font-size: 0.8125rem;
   overflow-wrap: anywhere;
+}
+
+.time-table__section-content {
+  padding: 0.75rem 1rem 1rem;
 }
 
 .meeting-calendar {
@@ -1484,35 +1456,6 @@
   margin: 0;
   color: var(--bs-secondary-color);
   font-size: 0.875rem;
-}
-
-/* Compact ranked list in the rail */
-.results-list--compact {
-  gap: 0.5rem;
-}
-
-.results-list--compact .result-option {
-  padding: 0.625rem 0.75rem;
-  gap: 0.5rem 0.75rem;
-}
-
-.results-list--compact .result-option__content {
-  flex: 1 1 100%;
-  gap: 0.25rem;
-}
-
-.results-list--compact .result-option__metrics {
-  font-size: 0.8125rem;
-  gap: 0.25rem 0.75rem;
-}
-
-.results-list--compact .result-option__actions {
-  flex: 1 1 100%;
-}
-
-.results-list--compact .result-option__actions .btn {
-  width: 100%;
-  min-height: 2.5rem;
 }
 
 @media (prefers-reduced-motion: reduce) {

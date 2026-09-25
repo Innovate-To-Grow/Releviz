@@ -96,6 +96,79 @@ function countBlockedSlots(blockedSlots) {
   );
 }
 
+// "Edit event" and the Blocked times editor follow one rule: a finalized or
+// archived event, or one with a confirmed meeting, is reactivated first.
+function editLockOf(event) {
+  return {
+    locked:
+      ["finalized", "archived"].includes(event.status) ||
+      Boolean(event.finalMeeting),
+    reason: event.finalMeeting
+      ? "Reactivate the event before editing a confirmed meeting."
+      : `Reactivate this ${event.status} event before editing it.`,
+  };
+}
+
+// A confirmed meeting that still stands (not cancelled by a reactivation).
+function isFinalized(event) {
+  const meeting = event.finalMeeting;
+  return (
+    ["finalized", "archived"].includes(event.status) &&
+    Boolean(meeting) &&
+    meeting.active !== false
+  );
+}
+
+/**
+ * One collapsible step under the Time Table calendar (Ranked windows,
+ * Finalize, Blocked times). The heading sits in the summary, so the step
+ * keeps its name while closed; with `focusable` it takes programmatic focus
+ * (Finalize is focused after a pick), and the summary is always rendered, so
+ * that focus can land even before the step is open.
+ */
+function TimeTableSection({
+  id,
+  className = "",
+  headingId,
+  title,
+  hint,
+  open,
+  onToggle,
+  headingRef,
+  focusable = false,
+  children,
+}) {
+  return (
+    <details
+      id={id}
+      className={`disclosure time-table__section ${className}`.trim()}
+      aria-labelledby={headingId}
+      open={open}
+      onToggle={(toggleEvent) => onToggle(toggleEvent.currentTarget.open)}
+    >
+      <summary className="time-table__summary">
+        <span className="disclosure__summary-copy">
+          <h4
+            id={headingId}
+            ref={headingRef}
+            tabIndex={focusable ? -1 : undefined}
+            className="time-table__section-title"
+          >
+            {title}
+          </h4>
+          <small className="time-table__section-hint">{hint}</small>
+        </span>
+        <span className="disclosure__chevron" aria-hidden="true">
+          <ChevronDownIcon />
+        </span>
+      </summary>
+      <div className="disclosure__content time-table__section-content d-flex flex-column gap-3">
+        {children}
+      </div>
+    </details>
+  );
+}
+
 function ChannelBadge({ channel, className = "" }) {
   const isVirtual = channel === "virtual";
   const Icon = isVirtual ? VirtualIcon : GroupIcon;
@@ -409,20 +482,9 @@ export function OverviewPanel({ event, onEventSaved }) {
   const [editing, setEditing] = useState(false);
   const [editingEvent, setEditingEvent] = useState(null);
   const [saveStatus, setSaveStatus] = useState("");
-  const blockedCount = countBlockedSlots(event.blockedSlots);
-  // Open on the page the organizer lands on right after creating the event
-  // (no blocks yet); decided once, so saving blocks does not collapse it.
-  const [blockedTimesOpen, setBlockedTimesOpen] = useState(
-    () => blockedCount === 0,
-  );
   const panelRef = useRef(null);
   const editorHeadingRef = useRef(null);
-  const editLocked =
-    ["finalized", "archived"].includes(event.status) ||
-    Boolean(event.finalMeeting);
-  const editLockReason = event.finalMeeting
-    ? "Reactivate the event before editing a confirmed meeting."
-    : `Reactivate this ${event.status} event before editing it.`;
+  const { locked: editLocked, reason: editLockReason } = editLockOf(event);
 
   const focusEditButton = () => {
     window.setTimeout(
@@ -545,44 +607,41 @@ export function OverviewPanel({ event, onEventSaved }) {
           />
         </div>
       )}
-      <details
-        className="disclosure organizer-blocked-times mt-3"
-        aria-labelledby="organizer-blocked-times-heading"
-        open={blockedTimesOpen}
-        onToggle={(toggleEvent) =>
-          setBlockedTimesOpen(toggleEvent.currentTarget.open)
-        }
-      >
-        <summary className="organizer-blocked-times__summary">
-          <span className="disclosure__summary-copy">
-            <h4
-              id="organizer-blocked-times-heading"
-              className="h6 fw-semibold mb-0"
-            >
-              Blocked times
-            </h4>
-            <small className="text-secondary d-block">
-              {blockedCount} slots blocked
-            </small>
-          </span>
-          <span className="disclosure__chevron" aria-hidden="true">
-            <ChevronDownIcon />
-          </span>
-        </summary>
-        <div className="disclosure__content d-flex flex-column gap-3">
-          <p className="text-secondary mb-0">
-            Mark the parts of each day that are not available for this event.
-            Participants see these times greyed out.
-          </p>
-          <BlockedSlotsEditor
-            event={event}
-            onEventSaved={onEventSaved}
-            locked={editLocked}
-            lockReason={editLockReason}
-          />
-        </div>
-      </details>
     </Panel>
+  );
+}
+
+/**
+ * Blocked times: the editor for the slots this event blocks, one step of the
+ * Time Table. It opens itself on an event without blocks (the page the
+ * organizer lands on right after creating the event); decided once, so
+ * saving blocks does not collapse it.
+ */
+export function BlockedTimesSection({ event, onEventSaved }) {
+  const blockedCount = countBlockedSlots(event.blockedSlots);
+  const [open, setOpen] = useState(() => blockedCount === 0);
+  const { locked, reason } = editLockOf(event);
+  return (
+    <TimeTableSection
+      id="organizer-blocked-times"
+      className="organizer-blocked-times"
+      headingId="organizer-blocked-times-heading"
+      title="Blocked times"
+      hint={`${blockedCount} slots blocked`}
+      open={open}
+      onToggle={setOpen}
+    >
+      <p className="text-secondary mb-0">
+        Mark the parts of each day that are not available for this event.
+        Participants see these times greyed out.
+      </p>
+      <BlockedSlotsEditor
+        event={event}
+        onEventSaved={onEventSaved}
+        locked={locked}
+        lockReason={reason}
+      />
+    </TimeTableSection>
   );
 }
 
@@ -614,14 +673,8 @@ function defaultChannel(event) {
   return event?.mode === "virtual" ? "virtual" : "inperson";
 }
 
-function RankedWindowsRail({
-  event,
-  recommendations,
-  selection,
-  loading,
-  refreshing,
-  onChoose,
-}) {
+// The one-line state of the ranked list, shown while it is collapsed.
+function rankedWindowsHint({ event, recommendations, loading, refreshing }) {
   const count = recommendations.length;
   const best = recommendations[0];
   const bestLabel = best
@@ -633,155 +686,158 @@ function RankedWindowsRail({
           )
         : "")
     : "";
-  const hint =
-    count > 0
-      ? `${count} candidate${count === 1 ? "" : "s"}${bestLabel ? ` · best ${bestLabel}` : ""}`
-      : loading || refreshing
-        ? "Calculating the best options"
-        : "No recommendation yet";
+  if (count > 0) {
+    return `${count} candidate${count === 1 ? "" : "s"}${bestLabel ? ` · best ${bestLabel}` : ""}`;
+  }
+  return loading || refreshing
+    ? "Calculating the best options"
+    : "No recommendation yet";
+}
 
+/**
+ * Ranked windows: the top candidates, one step of the Time Table. Collapsed
+ * by default; while it is open the calendar draws the ranked windows too
+ * (`open` is owned by the panel for that reason).
+ */
+function RankedWindowsSection({
+  event,
+  recommendations,
+  selection,
+  loading,
+  refreshing,
+  open,
+  onToggle,
+  onChoose,
+}) {
+  const count = recommendations.length;
   return (
-    <aside
-      className="meeting-results__rail"
-      aria-labelledby="organizer-ranked-windows-heading"
+    <TimeTableSection
+      id="organizer-ranked-windows"
+      className="organizer-ranked-windows"
+      headingId="organizer-ranked-windows-heading"
+      title="Ranked windows"
+      hint={rankedWindowsHint({ event, recommendations, loading, refreshing })}
+      open={open}
+      onToggle={onToggle}
     >
-      {/* Collapsed by default: the calendar already draws every ranked
-          window, so the list is a detail the organizer opens on demand. */}
-      <details className="disclosure meeting-results__rail-disclosure">
-        <summary className="meeting-results__rail-summary">
-          <span className="disclosure__summary-copy">
-            <h4
-              id="organizer-ranked-windows-heading"
-              className="meeting-results__rail-title"
-            >
-              Ranked windows
-            </h4>
-            <small className="meeting-results__rail-hint">{hint}</small>
-          </span>
-          <span className="disclosure__chevron" aria-hidden="true">
-            <ChevronDownIcon />
-          </span>
-        </summary>
-        <div className="disclosure__content meeting-results__rail-content">
-          {count > 0 ? (
-            <ol className="results-list results-list--compact">
-              {recommendations.map((recommendation, index) => {
-                const key = recommendationKey(recommendation, index);
-                const selected = selectionMatchesRecommendation(
-                  selection,
-                  recommendation,
-                );
-                const weighted =
-                  recommendation.weightedAvailability ??
-                  recommendation.weightedScore ??
-                  0;
-                const unweighted =
-                  recommendation.unweightedAvailability ??
-                  recommendation.unweightedScore ??
-                  0;
-                const startsAt =
-                  recommendation.suggestedStartsAt || recommendation.startsAt;
-                const endsAt =
-                  recommendation.suggestedEndsAt || recommendation.endsAt;
-                const isBest = index === 0;
-                return (
-                  <li
-                    key={key}
-                    className={`result-option result-option--compact${isBest ? " result-option--best" : ""}${selected ? " result-option--selected" : ""}`}
-                  >
-                    <div className="result-option__content">
-                      <div className="result-option__heading">
-                        <span className="result-option__rank">
-                          #{recommendation.rank || index + 1}
+      {count > 0 ? (
+        <ol className="results-list">
+          {recommendations.map((recommendation, index) => {
+            const key = recommendationKey(recommendation, index);
+            const selected = selectionMatchesRecommendation(
+              selection,
+              recommendation,
+            );
+            const weighted =
+              recommendation.weightedAvailability ??
+              recommendation.weightedScore ??
+              0;
+            const unweighted =
+              recommendation.unweightedAvailability ??
+              recommendation.unweightedScore ??
+              0;
+            const startsAt =
+              recommendation.suggestedStartsAt || recommendation.startsAt;
+            const endsAt =
+              recommendation.suggestedEndsAt || recommendation.endsAt;
+            const isBest = index === 0;
+            return (
+              <li
+                key={key}
+                className={`result-option${isBest ? " result-option--best" : ""}${selected ? " result-option--selected" : ""}`}
+              >
+                <div className="result-option__content">
+                  <div className="result-option__heading">
+                    <span className="result-option__rank">
+                      #{recommendation.rank || index + 1}
+                    </span>
+                    <strong className="result-option__title">
+                      {recommendation.label ||
+                        (startsAt
+                          ? formatInTimezone(startsAt, event.timezone)
+                          : "Candidate window")}
+                    </strong>
+                    <ChannelBadge channel={recommendation.channel} />
+                    {isBest && (
+                      <StatusBadge status="primary" dot={false}>
+                        <span className="icon-inline" aria-hidden="true">
+                          <BestIcon />
                         </span>
-                        <strong className="result-option__title">
-                          {recommendation.label ||
-                            (startsAt
-                              ? formatInTimezone(startsAt, event.timezone)
-                              : "Candidate window")}
-                        </strong>
-                        <ChannelBadge channel={recommendation.channel} />
-                        {isBest && (
-                          <StatusBadge status="primary" dot={false}>
-                            <span className="icon-inline" aria-hidden="true">
-                              <BestIcon />
-                            </span>
-                            Best match
-                          </StatusBadge>
-                        )}
-                      </div>
-                      {startsAt && endsAt && (
-                        <small className="result-option__time">
-                          {formatInTimezone(startsAt, event.timezone)} –{" "}
-                          {formatInTimezone(endsAt, event.timezone)}
-                        </small>
-                      )}
-                      <dl className="result-option__metrics">
-                        <div className="result-option__metric">
-                          <dt>Weighted</dt>
-                          <dd>{`${percentOf(weighted)}% weighted`}</dd>
-                        </div>
-                        <div className="result-option__metric">
-                          <dt>Unweighted</dt>
-                          <dd>{`${percentOf(unweighted)}% unweighted`}</dd>
-                        </div>
-                        <div className="result-option__metric">
-                          <dt>Participants</dt>
-                          <dd>{`${recommendation.fullyAvailableParticipantTotal || 0} fully available`}</dd>
-                        </div>
-                      </dl>
+                        Best match
+                      </StatusBadge>
+                    )}
+                  </div>
+                  {startsAt && endsAt && (
+                    <small className="result-option__time">
+                      {formatInTimezone(startsAt, event.timezone)} –{" "}
+                      {formatInTimezone(endsAt, event.timezone)}
+                    </small>
+                  )}
+                  <dl className="result-option__metrics">
+                    <div className="result-option__metric">
+                      <dt>Weighted</dt>
+                      <dd>{`${percentOf(weighted)}% weighted`}</dd>
                     </div>
-                    <div className="result-option__actions">
-                      <AppButton
-                        variant={selected ? "filled" : "outlined"}
-                        icon={selected ? <CheckIcon /> : null}
-                        aria-pressed={selected}
-                        onClick={() => onChoose(recommendation)}
-                      >
-                        {selected ? "Selected time" : "Choose this time"}
-                      </AppButton>
+                    <div className="result-option__metric">
+                      <dt>Unweighted</dt>
+                      <dd>{`${percentOf(unweighted)}% unweighted`}</dd>
                     </div>
-                  </li>
-                );
-              })}
-            </ol>
-          ) : loading || refreshing ? (
-            <EmptyState
-              headingLevel={5}
-              className="organizer-empty-state organizer-empty-state--loading"
-              icon={
-                <span
-                  className="spinner-border spinner-border-sm"
-                  aria-hidden="true"
-                />
-              }
-              title="Calculating the best options"
-            >
-              <p className="mb-0">
-                Recommendations will appear here as responses arrive.
-              </p>
-            </EmptyState>
-          ) : (
-            <EmptyState
-              headingLevel={5}
-              className="organizer-empty-state"
-              icon={<ResultsIcon />}
-              title="No recommendation yet"
-            >
-              <p className="mb-0">No valid meeting window is available yet.</p>
-            </EmptyState>
-          )}
-        </div>
-      </details>
-    </aside>
+                    <div className="result-option__metric">
+                      <dt>Participants</dt>
+                      <dd>{`${recommendation.fullyAvailableParticipantTotal || 0} fully available`}</dd>
+                    </div>
+                  </dl>
+                </div>
+                <div className="result-option__actions">
+                  <AppButton
+                    variant={selected ? "filled" : "outlined"}
+                    icon={selected ? <CheckIcon /> : null}
+                    aria-pressed={selected}
+                    onClick={() => onChoose(recommendation)}
+                  >
+                    {selected ? "Selected time" : "Choose this time"}
+                  </AppButton>
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+      ) : loading || refreshing ? (
+        <EmptyState
+          headingLevel={5}
+          className="organizer-empty-state organizer-empty-state--loading"
+          icon={
+            <span
+              className="spinner-border spinner-border-sm"
+              aria-hidden="true"
+            />
+          }
+          title="Calculating the best options"
+        >
+          <p className="mb-0">
+            Recommendations will appear here as responses arrive.
+          </p>
+        </EmptyState>
+      ) : (
+        <EmptyState
+          headingLevel={5}
+          className="organizer-empty-state"
+          icon={<ResultsIcon />}
+          title="No recommendation yet"
+        >
+          <p className="mb-0">No valid meeting window is available yet.</p>
+        </EmptyState>
+      )}
+    </TimeTableSection>
   );
 }
 
 /**
- * Results: the meeting-time calendar (group availability heatmap with the
- * ranked windows drawn on it, any startable cell pickable) beside a side
- * column holding the collapsible ranked list and the Finalize step, so a
- * pick and its confirmation stay on one screen.
+ * Time Table: the meeting-time calendar (group availability heatmap, any
+ * startable cell pickable) with three collapsed steps under it: the ranked
+ * list (which also switches the ranked outlines on the calendar on), the
+ * Finalize step (which opens itself on a pick), and the Blocked times editor
+ * (open only while the event has no blocks yet).
  */
 export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
   {
@@ -791,6 +847,7 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
     invalidationKey,
     onChoose,
     onSelect,
+    onEventSaved,
     selection = null,
     headingRef,
     finalizeHeadingRef,
@@ -811,6 +868,9 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
   );
   const [channel, setChannel] = useState(() => defaultChannel(event));
   const [now, setNow] = useState(() => Date.now());
+  // The ranked list is collapsed by default; the calendar draws the ranked
+  // windows only while it is open.
+  const [rankedOpen, setRankedOpen] = useState(false);
   const sectionRef = useRef(null);
   const calendarRef = useRef(null);
   // The freshness of the snapshot on screen, for the workspace's live sync to
@@ -934,8 +994,8 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
       headingRef={headingRef}
       headingProps={{ tabIndex: -1 }}
       titleId="organizer-results-heading"
-      title="Results"
-      description={`Top continuous windows for a ${meetingMinutes}-minute meeting. Pick any window on the calendar or choose a ranked one, then confirm it in Finalize.`}
+      title="Time Table"
+      description={`Group availability for a ${meetingMinutes}-minute meeting. Pick a window on the calendar or from the ranked list below, then confirm it in Finalize.`}
     >
       <div className="d-flex flex-column gap-3">
         {snapshot.status === "refreshing" && (
@@ -991,15 +1051,18 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
             selection={selection}
             onSelect={onSelect}
             now={now}
+            showRankedWindows={rankedOpen}
           />
 
-          <div className="meeting-results__side">
-            <RankedWindowsRail
+          <div className="time-table__sections">
+            <RankedWindowsSection
               event={event}
               recommendations={recommendations}
               selection={selection}
               loading={loading}
               refreshing={snapshot.status === "refreshing"}
+              open={rankedOpen}
+              onToggle={setRankedOpen}
               onChoose={handleChoose}
             />
             <FinalizeScalePanel
@@ -1010,6 +1073,7 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
               headingRef={finalizeHeadingRef}
               onDeliveryRequest={onDeliveryRequest}
             />
+            <BlockedTimesSection event={event} onEventSaved={onEventSaved} />
           </div>
         </div>
 
@@ -1032,14 +1096,52 @@ function normalizeSelection(value, event) {
   return selectionFromRecommendation(value, event);
 }
 
+// The one-line state of the Finalize step, shown while it is collapsed.
+function finalizeHint(event, selection) {
+  if (isFinalized(event)) {
+    return `Finalized · ${formatInTimezone(event.finalMeeting.startsAt, event.timezone)}`;
+  }
+  if (selection) {
+    return `Selected · ${formatInTimezone(selection.startsAt, event.timezone)}`;
+  }
+  return "No time selected yet";
+}
+
+/**
+ * Finalize: the confirmation step, collapsed until a time is picked. A new
+ * pick (the workspace hands over a new selection object) opens the step in
+ * the same render, so the focus that follows a pick lands on content that
+ * is showing; clearing the pick leaves the step as the organizer left it.
+ * The disclosure lives outside the keyed content, so a re-pick resets the
+ * step's own state without closing it.
+ */
 export function FinalizeScalePanel(props) {
-  const selection = normalizeSelection(props.selection, props.event);
+  const { event, headingRef } = props;
+  const selection = normalizeSelection(props.selection, event);
+  const [open, setOpen] = useState(() => Boolean(selection));
+  const [seen, setSeen] = useState(props.selection);
+  if (props.selection !== seen) {
+    setSeen(props.selection);
+    if (props.selection) setOpen(true);
+  }
   return (
-    <FinalizeScalePanelContent
-      key={selectionKey(selection) || "no-selection"}
-      {...props}
-      selection={selection}
-    />
+    <TimeTableSection
+      id="organizer-finalize"
+      className="finalize-block"
+      headingId="organizer-finalize-heading"
+      title="Finalize"
+      hint={finalizeHint(event, selection)}
+      open={open}
+      onToggle={setOpen}
+      headingRef={headingRef}
+      focusable
+    >
+      <FinalizeScalePanelContent
+        key={selectionKey(selection) || "no-selection"}
+        {...props}
+        selection={selection}
+      />
+    </TimeTableSection>
   );
 }
 
@@ -1183,7 +1285,6 @@ function FinalizeScalePanelContent({
   setEvent,
   getToken,
   selection,
-  headingRef,
   onDeliveryRequest,
 }) {
   const [location, setLocation] = useState(event.location || "");
@@ -1287,30 +1388,13 @@ function FinalizeScalePanelContent({
 
   const meeting = event.finalMeeting;
   const canFinalize = ["active", "closed"].includes(event.status);
-  const finalized =
-    ["finalized", "archived"].includes(event.status) &&
-    Boolean(meeting) &&
-    meeting.active !== false;
+  const finalized = isFinalized(event);
 
   return (
-    <section
-      id="organizer-finalize"
-      className="finalize-block"
-      aria-labelledby="organizer-finalize-heading"
-    >
-      <div className="finalize-block__header">
-        <h4
-          id="organizer-finalize-heading"
-          ref={headingRef}
-          tabIndex={-1}
-          className="finalize-block__title"
-        >
-          Finalize
-        </h4>
-        <p className="finalize-block__description">
-          Confirm the selected window and email calendar invitations.
-        </p>
-      </div>
+    <div className="finalize-block__body">
+      <p className="finalize-block__description">
+        Confirm the selected window and email calendar invitations.
+      </p>
       <FinalizeStepIndicator
         selection={selection}
         review={review}
@@ -1465,6 +1549,6 @@ function FinalizeScalePanelContent({
           )}
         </div>
       )}
-    </section>
+    </div>
   );
 }

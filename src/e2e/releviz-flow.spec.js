@@ -2250,9 +2250,11 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(
       page.getByRole("heading", { level: 2, name: eventName }),
     ).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Results" })).toBeVisible();
     await expect(
-      page.getByText("Top continuous windows for a 60-minute meeting."),
+      page.getByRole("heading", { name: "Time Table" }),
+    ).toBeVisible();
+    await expect(
+      page.getByText("Group availability for a 60-minute meeting."),
     ).toBeVisible();
     await expect(
       page.getByText(/Results are current at revision/),
@@ -2346,9 +2348,7 @@ test.describe("Releviz account and scheduling flow", () => {
     // ignores selections while the meeting is finalized, so re-establish a
     // live one through the ranked rail before reactivating.
     await openRankedWindows(page);
-    const rankedRail = page.getByRole("complementary", {
-      name: "Ranked windows",
-    });
+    const rankedRail = page.locator("details.organizer-ranked-windows");
     // The rail re-renders as the ranked windows load, and a click that lands
     // mid-render is dropped on slower engines (WebKit), so the pick is retried
     // until one window reports itself selected.
