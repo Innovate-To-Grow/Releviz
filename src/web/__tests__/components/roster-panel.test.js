@@ -2665,6 +2665,74 @@ describe("RosterPanel groups", () => {
     );
   });
 
+  test("keeps a group created while a quiet reload was in flight", async () => {
+    const panel = createRef();
+    createRosterGroup.mockResolvedValue({
+      group: { id: 12, name: "Board", count: 0, weight: null },
+      groups: [
+        { id: 12, name: "Board", count: 0, weight: null },
+        facultyGroup,
+        ungrouped,
+      ],
+    });
+    await renderPanel({ ref: panel });
+    await screen.findByText("Ada");
+    const staleListing = fetchRoster.mock.results[0].value;
+    let finishStaleReload;
+    fetchRoster.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishStaleReload = () => staleListing.then(resolve);
+        }),
+    );
+    // The live sync starts a quiet reload; its listing predates the group.
+    let staleReload;
+    act(() => {
+      staleReload = panel.current.refresh("token", { silent: true });
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "New group" }));
+    fireEvent.change(screen.getByLabelText("New group name"), {
+      target: { value: "Board" },
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Create group" }));
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Created Board.",
+    );
+    expect(screen.getByLabelText("Weight for group Board")).toBeInTheDocument();
+
+    await act(async () => {
+      finishStaleReload();
+      await staleReload;
+    });
+    // The older listing does not take the new group away again.
+    expect(screen.getByLabelText("Weight for group Board")).toBeInTheDocument();
+    expect(screen.getByLabelText("Roster summary")).toHaveTextContent(
+      "2 groups",
+    );
+
+    // A listing that starts after the change is taken as it is.
+    fetchRoster.mockResolvedValueOnce(
+      rosterResponse([participant({ id: "p-1", name: "Ada" })], {
+        stats: {
+          ...stats,
+          groups: [
+            { id: 12, name: "Board", count: 1, weight: 1 },
+            facultyGroup,
+          ],
+        },
+      }),
+    );
+    await act(async () => {
+      await panel.current.refresh("token", { silent: true });
+    });
+    expect(
+      within(screen.getByRole("region", { name: "Roster groups" })).getByText(
+        "1 person",
+      ),
+    ).toBeInTheDocument();
+  });
+
   test("reloads the roster when a created group carries no stats and reports failures", async () => {
     createRosterGroup
       .mockRejectedValueOnce(

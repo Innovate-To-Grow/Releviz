@@ -302,11 +302,23 @@ const RosterPanel = forwardRef(function RosterPanel(
   const rowConflictsRef = useRef(rowConflicts);
   const rowMutationQueuesRef = useRef(new Map());
   const lastRowError = useRef("");
+  // Counts the group stats this session took from its own changes. A
+  // listing requested before one of them carries older groups (an empty
+  // group's creation moves nothing the live sync watches), so it keeps the
+  // groups on screen, as a reload never moves a row backwards either.
+  const groupsEpochRef = useRef(0);
   const controlIds = useId();
 
   useEffect(() => {
     participantsRef.current = participants;
   }, [participants]);
+
+  // Group stats a change of this session returned: newer than any listing
+  // already in flight.
+  const applyGroupStats = useCallback((groups) => {
+    groupsEpochRef.current += 1;
+    setStats((current) => ({ ...current, groups }));
+  }, []);
 
   const updateSelected = useCallback((updater) => {
     const next =
@@ -339,6 +351,7 @@ const RosterPanel = forwardRef(function RosterPanel(
   const loadRoster = useCallback(
     async (providedToken, { throwOnError = false, silent = false } = {}) => {
       const currentRequest = ++requestNumber.current;
+      const groupsEpoch = groupsEpochRef.current;
       if (!silent) {
         setLoading(true);
         setError("");
@@ -401,8 +414,16 @@ const RosterPanel = forwardRef(function RosterPanel(
         setPagination(
           data.pagination || { page, pageSize, total: 0, pages: 1 },
         );
+        const loadedStats = data.stats || {
+          total: 0,
+          submitted: 0,
+          notSubmitted: 0,
+          groups: [],
+        };
         setStats(
-          data.stats || { total: 0, submitted: 0, notSubmitted: 0, groups: [] },
+          groupsEpoch === groupsEpochRef.current
+            ? loadedStats
+            : (current) => ({ ...loadedStats, groups: current.groups }),
         );
         if (typeof data.organizerOnRoster === "boolean")
           setOrganizerOnRoster(data.organizerOnRoster);
@@ -715,8 +736,7 @@ const RosterPanel = forwardRef(function RosterPanel(
             onResultsInvalidated?.(data.resultsRevision);
           // The server recounts the groups so their shared weights stay true
           // without reloading the whole page of people.
-          if (Array.isArray(data.groups))
-            setStats((current) => ({ ...current, groups: data.groups }));
+          if (Array.isArray(data.groups)) applyGroupStats(data.groups);
           return "saved";
         } catch (requestError) {
           if (requestError.status === 409 && requestError.participant) {
@@ -1059,8 +1079,7 @@ const RosterPanel = forwardRef(function RosterPanel(
         delete next[target.id];
         return next;
       });
-      if (Array.isArray(data?.groups))
-        setStats((current) => ({ ...current, groups: data.groups }));
+      if (Array.isArray(data?.groups)) applyGroupStats(data.groups);
       onResultsInvalidated?.(data?.resultsRevision);
       await loadRoster();
       setStatus(`${target.name} was removed from the roster.`);
@@ -1088,8 +1107,7 @@ const RosterPanel = forwardRef(function RosterPanel(
       const token = await getToken();
       const data = await request(token);
       setStatus(describe);
-      if (Array.isArray(data?.groups))
-        setStats((current) => ({ ...current, groups: data.groups }));
+      if (Array.isArray(data?.groups)) applyGroupStats(data.groups);
       await onSuccess?.(data);
       return true;
     } catch (requestError) {
