@@ -1,6 +1,8 @@
 """Admin for participants, invitations, weights, and memberships."""
 
+from django import forms
 from django.contrib import admin
+from django.core.exceptions import ValidationError
 from unfold.admin import ModelAdmin
 
 from apps.scheduling.models import (
@@ -11,10 +13,27 @@ from apps.scheduling.models import (
     UserEvent,
     Weight,
 )
+from apps.scheduling.services.roster_groups import validate_group_name
+from apps.scheduling.services.roster_imports.errors import RosterImportError
+
+
+class ParticipantGroupAdminForm(forms.ModelForm):
+    """Staff edits obey the cell grammar: a name holds no separator and is never ALL."""
+
+    class Meta:
+        model = ParticipantGroup
+        fields = ("event", "name")
+
+    def clean_name(self):
+        try:
+            return validate_group_name(self.cleaned_data.get("name"))
+        except RosterImportError as exc:
+            raise ValidationError(str(exc)) from exc
 
 
 @admin.register(ParticipantGroup)
 class ParticipantGroupAdmin(ModelAdmin):
+    form = ParticipantGroupAdminForm
     list_display = ("name", "event", "member_count", "created_at")
     search_fields = ("name", "event__code", "event__name")
 

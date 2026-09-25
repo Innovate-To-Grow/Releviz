@@ -42,20 +42,23 @@ same), and **Add and send invitation** also emails their secure link right away.
 already belongs to a Releviz account, that account is added; until the person responds themselves
 you can still enter their schedule with **Edit schedule**.
 
-The Roster tab also accepts `.xlsx`, `.csv`, or pasted CSV/TSV. Map the required `name` and `email`
-columns and optional `group`, `weight`, `included`, and `phone` columns, preview and correct rows,
-then commit as one of the modes below. In the `group` column, blank means unassigned, `ALL` means
-every group (including groups created later), and several names are separated by `;` (for example
-`Faculty; Team 3`). A row whose email is blank, or is one of your own addresses, adds a person with no
-email of their own (see below); the preview marks those rows.
+**Import roster** in the Roster section accepts `.xlsx`, `.csv`, or pasted CSV/TSV. Map the
+required `name` and `email` columns and optional `group`, `weight`, `included`, and `phone` columns,
+preview and correct rows, then commit as one of the modes below. In the `group` column, blank means
+unassigned, `ALL` means every group (including groups created later), and several names are
+separated by `;` or `,` (for example `Faculty; Team 3` or `Faculty, Team 3`); a group name itself
+cannot contain either character. A row whose email is blank, or is one of your own addresses, adds a
+person with no email of their own (see below); the preview marks those rows.
 
-- **Merge** — add/update people while preserving existing schedules and delivery history.
+- **Merge** — add/update people while preserving existing schedules and delivery history. The
+  groups in a row are added to the person's existing groups; an import never removes anyone from a
+  group (untick their box in the roster table, use the bulk **Change groups** editor, or Rebuild).
 - **Rebuild** — type the event code to destructively replace the roster, schedules, invitations,
   temporary sessions, and pending deliveries.
 
 Tick **Send invitations to newly added people** before committing to email everyone the import adds
 (on a rebuild, everyone re-imported); leave it unticked to add them as **Not sent** and invite them
-later. Existing participants are updated without another email either way.
+later. People already on the roster are updated without another email either way.
 
 To invite later, check people in the roster table and use **Send invitation** (shown above and below
 the table). It skips anyone whose invitation was already sent or is still queued unless **Resend to
@@ -69,8 +72,9 @@ skip anyone whose response is submitted, including one you submitted for them.
 
 Only three actions send invitations: **Add and send invitation**, an import committed with the
 checkbox ticked, and **Send invitation**. Each commits its roster changes and durable invitation
-jobs atomically. The HTTP request returns as soon as those jobs are committed; the Roster tab shows
-provider-handoff progress and allows retrying failed recipients. Closed, finalized, and archived
+jobs atomically. The HTTP request returns as soon as those jobs are committed; a delivery progress
+card at the top of the organizer workspace, above the sections, counts the recipients that are
+sent, queued, or failed and offers **Retry failed recipients**. Closed, finalized, and archived
 events must be reactivated before their roster can change.
 
 The `phone` column (also recognized as `phone number`, `mobile`, `cell`, or `telephone`) accepts
@@ -91,9 +95,10 @@ existing row. Typing your own address without the checkbox is refused with a hin
 A roster import adds the same kind of person for a row with a blank email or one of your own
 addresses (it never makes you a participant of your own event), matched by name under that address
 exactly as above, so re-importing the sheet updates them instead of adding duplicates. Two rows for
-the same name without an email are merged when identical and flagged as a conflicting duplicate
-name otherwise. Your address must be verified; a blank email is only accepted while your account
-has a verified address to file it under.
+the same person (the same email, or the same name without an email) are combined into one row when
+they are identical or differ only in their `group` cells — the combined row carries all of those
+groups — and flagged as a conflicting duplicate otherwise. Your address must be verified; a blank
+email is only accepted while your account has a verified address to file it under.
 
 Invite-only links are visible only to the organizer, existing participants, temporary recipients
 using their event-scoped code flow, or full accounts whose verified email matches an invitation.
@@ -105,14 +110,15 @@ organizer enters their schedule. Open-link events retain code-based joining, sub
 
 Each participant:
 
-1. Signs in and clicks **Join**
+1. Signs in and clicks **Join as** (the button carries their display name)
 2. Chooses a level with the **Busy / If needed / Available** control (0, 0.5, 1)
 3. Clicks, drags, touches, or uses the keyboard on the **schedule grid** to paint 15- or 30-minute
    slots with that availability level
-4. Clicks **Submit Schedule** when done
+4. Clicks **Submit Availability** when done (**Submit availability** on the invitation-link page
+   used by people without an account)
 
-If the organizer already added them, they skip **Join** and see any schedule the organizer entered;
-their first save or submit makes the response theirs.
+If the organizer already added them, they skip **Join as** and see any schedule the organizer
+entered; their first save or submit makes the response theirs.
 
 By default every slot starts **Available** (all green in person, all blue virtual), so a
 participant paints **Busy** over the times that do not work rather than hunting for the times that
@@ -125,17 +131,20 @@ painted or submitted keeps their response.
 
 The grid uses color coding plus text cues: hatched red (busy) -> yellow ◐ (if needed) -> green ✓
 (available). Virtual channels use a red -> purple -> blue scale. Grey striped cells are times the
-organizer blocked for the event: they cannot be painted, "Apply to all" skips them, and anything
+organizer blocked for the event: they cannot be painted, **Apply Busy to all** (the button names
+the selected level; the invitation-link page reads **Apply to all**) skips them, and anything
 marked there before the block was added is ignored.
 
-Depending on the event's visibility setting, participants can see the latest published group
-snapshot. While a newer response is being calculated, the UI labels the result as refreshing and
-shows the previous snapshot's generation time.
+Group availability is the organizer's view only: participants submit their own calendar and never
+see anyone else's. While a newer response is being calculated, the organizer's Results section
+says the results are updating for that revision and keeps showing the last successful snapshot
+meanwhile; once current, it reports the revision and the time the snapshot was generated.
 
 ### 4. Organizer Dashboard
 
-Access the organizer view from the account that created the event. It is split into Overview,
-Roster, Results, and Finalize. The organizer can:
+Access the organizer view from the account that created the event. It is one page with three
+anchored sections — Overview, Results, and Roster — and Finalize is a step inside Results. The
+organizer can:
 
 - search/filter a server-paginated roster (50 rows by default, 100 maximum);
 - load one person's schedule only when its edit drawer opens;
@@ -145,7 +154,8 @@ Roster, Results, and Finalize. The organizer can:
   submit their own response, or upgrade a temporary identity to a full account). After that the
   row shows **Self-managed** and only they can change their answers; a version conflict is never
   silently overwritten;
-- create groups (empty at first) and fill them from the roster, which lists each person's name and
+- create groups (empty at first, and before anyone is on the roster — the Groups panel is shown on
+  an empty roster too) and fill them from the roster, which lists each person's name and
   email followed by an **All** column and one checkbox column per group: tick a person's box in a
   column to add them to that group, so one person can sit in several groups, and tick **All** to
   place them in every group, including groups created later (their group boxes then show ticked

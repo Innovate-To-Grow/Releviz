@@ -1064,11 +1064,12 @@ class RosterImportDatabaseEdgeTests(TestCase):
         invitation.refresh_from_db()
         self.assertEqual(participant.participant_name, "Renamed")
         self.assertFalse(participant.hidden)
-        # A non-blank cell replaces the memberships; the emptied group stays a row.
-        self.assertEqual(list(participant.groups.values_list("name", flat=True)), ["New group"])
+        # A merge adds the cell's groups to the memberships already on file.
+        self.assertEqual(
+            list(participant.groups.values_list("name", flat=True)), ["New group", "Old group"]
+        )
         self.assertFalse(participant.all_groups)
-        self.assertTrue(ParticipantGroup.objects.filter(pk=old_group.pk).exists())
-        self.assertEqual(old_group.participants.count(), 0)
+        self.assertEqual(old_group.participants.count(), 1)
         self.assertEqual(invitation.member, member)
         self.assertEqual(invitation.invited_by, self.organizer)
         weight = Weight.objects.get(participant=participant)
@@ -1084,7 +1085,7 @@ class RosterImportDatabaseEdgeTests(TestCase):
         self.assertEqual(repeated_merge.data["receipt"]["updatedCount"], 1)
         self.assertEqual(
             list(participant.groups.values_list("name", flat=True)),
-            ["New group"],
+            ["New group", "Old group"],
         )
 
         # A blank cell on merge leaves the existing memberships alone, while a
@@ -1093,7 +1094,9 @@ class RosterImportDatabaseEdgeTests(TestCase):
         blank_cell = self.preview("name,email,group\nRenamed,existing-roster-edge@example.com,")
         self.assertEqual(self.commit(blank_cell).status_code, 201)
         participant.refresh_from_db()
-        self.assertEqual(list(participant.groups.values_list("name", flat=True)), ["New group"])
+        self.assertEqual(
+            list(participant.groups.values_list("name", flat=True)), ["New group", "Old group"]
+        )
         self.assertEqual(participant.version, version_before)
         regrouped = self.preview(
             "name,email,group\nRenamed,existing-roster-edge@example.com,ALL; old GROUP"
@@ -1102,8 +1105,11 @@ class RosterImportDatabaseEdgeTests(TestCase):
         participant.refresh_from_db()
         self.assertEqual(participant.version, version_before + 1)
         self.assertTrue(participant.all_groups)
-        # The existing spelling is reused for a case variant.
-        self.assertEqual(list(participant.groups.values_list("name", flat=True)), ["Old group"])
+        # The existing spelling is reused for a case variant, and the flag
+        # does not take the explicit memberships away.
+        self.assertEqual(
+            list(participant.groups.values_list("name", flat=True)), ["New group", "Old group"]
+        )
         self.assertEqual(
             ParticipantGroup.objects.filter(event=self.event, name__iexact="old group").count(),
             1,
@@ -1158,12 +1164,12 @@ class RosterImportDatabaseEdgeTests(TestCase):
         self.assertEqual(committed.data["receipt"]["createdCount"], 3)
         self.assertEqual(committed.data["receipt"]["updatedCount"], 1)
 
-        # An ALL-only cell on an existing person drops their explicit
-        # memberships and sets the flag; a new person with ALL only carries
-        # the flag without membership rows.
+        # An ALL-only cell on an existing person sets the flag and keeps their
+        # explicit memberships; a new person with ALL only carries the flag
+        # without membership rows.
         existing.refresh_from_db()
         self.assertTrue(existing.all_groups)
-        self.assertEqual(existing.groups.count(), 0)
+        self.assertEqual(list(existing.groups.values_list("name", flat=True)), ["Faculty"])
         self.assertEqual(existing.version, 2)
         everyone = self.event.participants.get(participant_name="Everyone")
         self.assertTrue(everyone.all_groups)
@@ -1198,8 +1204,8 @@ class RosterImportDatabaseEdgeTests(TestCase):
             ],
         )
         by_name = {row["name"]: row for row in roster.data["participants"]}
-        self.assertEqual(by_name["Existing"]["group"], "ALL")
-        self.assertEqual(by_name["Existing"]["groups"], [])
+        self.assertEqual(by_name["Existing"]["group"], "ALL; Faculty")
+        self.assertEqual(by_name["Existing"]["groups"], [{"id": faculty.pk, "name": "Faculty"}])
         self.assertTrue(by_name["Existing"]["allGroups"])
         self.assertEqual(by_name["Mixed"]["group"], "ALL; Faculty; Students")
         self.assertEqual(
@@ -1595,7 +1601,7 @@ class RosterImportDatabaseEdgeTests(TestCase):
             ),
             (
                 {"expectedVersion": ada.version, "groups": ["a;b"]},
-                "Group names cannot contain ;.",
+                "Group names cannot contain ; or ,.",
             ),
             (
                 {"expectedVersion": ada.version, "groups": ["x" * 101]},

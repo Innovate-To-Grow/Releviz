@@ -540,3 +540,153 @@ class LegacyGroupNameTests(SimpleTestCase):
         self.assertEqual(legacy_group_name("aLL"), "aLL (group)")
         self.assertEqual(legacy_group_name(" all "), "all (group)")
         self.assertEqual(legacy_group_name("Allies"), "Allies")
+
+
+class CommaFreeGroupNameTests(SimpleTestCase):
+    """The pure rewrite 0010 applies to a group name that contains a comma."""
+
+    def test_commas_become_single_spaces(self):
+        migration = import_module(
+            "apps.scheduling.migrations.0010_participantgroup_comma_free_names"
+        )
+        comma_free_group_name = migration.comma_free_group_name
+
+        self.assertEqual(comma_free_group_name(""), "")
+        self.assertEqual(comma_free_group_name(None), "")
+        self.assertEqual(comma_free_group_name(","), "")
+        self.assertEqual(comma_free_group_name("Alpha,Beta"), "Alpha Beta")
+        self.assertEqual(comma_free_group_name("x , y"), "x y")
+        self.assertEqual(comma_free_group_name("  Team,, 3 ,"), "Team 3")
+        self.assertEqual(comma_free_group_name("Plain name"), "Plain name")
+        # Only commas are rewritten; other whitespace is merely tidied.
+        self.assertEqual(comma_free_group_name("a\t,\nb"), "a b")
+
+
+class CommaFreeGroupNameMigrationTests(TransactionTestCase):
+    """0010 strips commas from group names, keeping names unique per event."""
+
+    migrate_from = ("scheduling", "0009_backfill_participant_response_claims")
+    migrate_to = ("scheduling", "0010_participantgroup_comma_free_names")
+
+    @staticmethod
+    def targets(executor, scheduling_node):
+        """Pin every other app at its leaf so historical models match the real tables."""
+        return [node for node in executor.loader.graph.leaf_nodes() if node[0] != "scheduling"] + [
+            scheduling_node
+        ]
+
+    def setUp(self):
+        super().setUp()
+        self.executor = MigrationExecutor(connection)
+        from_targets = self.targets(self.executor, self.migrate_from)
+        self.executor.migrate(from_targets)
+        old_apps = self.executor.loader.project_state(from_targets).apps
+        Member = old_apps.get_model("authn", "Member")
+        Event = old_apps.get_model("scheduling", "Event")
+        Participant = old_apps.get_model("scheduling", "Participant")
+        ParticipantGroup = old_apps.get_model("scheduling", "ParticipantGroup")
+
+        organizer = Member.objects.create(email="comma-organizer@example.com", password="!")
+
+        def event(code):
+            return Event.objects.create(
+                code=code,
+                name=code,
+                organizer=organizer,
+                days=[1],
+                start_minutes=9 * 60,
+                end_minutes=10 * 60,
+            )
+
+        self.event_id = event("MIGCOMMA").pk
+        self.other_event_id = event("MIGOTHER").pk
+        self.long_base = "z" * 98
+        self.group_ids = {}
+        # The first event holds every collision case; the second shows the
+        # same comma name renaming freely when nothing on its event clashes.
+        for label, name, event_id in [
+            ("plain", "Plain name", self.event_id),
+            ("pair", "Alpha,Beta", self.event_id),
+            ("pair_taken", "alpha BETA", self.event_id),
+            ("pair_spaced", "Alpha , Beta", self.event_id),
+            ("pair_again", "Alpha,,Beta", self.event_id),
+            ("team", "Team, 3", self.event_id),
+            ("reserved", "all,", self.event_id),
+            ("empty", ",", self.event_id),
+            ("long", f"{self.long_base},z", self.event_id),
+            ("long_taken", f"{self.long_base.upper()} Z", self.event_id),
+            ("elsewhere", "Alpha,Beta", self.other_event_id),
+        ]:
+            group = ParticipantGroup.objects.create(event_id=event_id, name=name)
+            self.group_ids[label] = group.pk
+
+        member = Member.objects.create(email="comma-member@example.com", password="!")
+        participant = Participant.objects.create(
+            event_id=self.event_id,
+            member=member,
+            participant_name="Member",
+            availability_inperson=[0, 0],
+            availability_virtual=[0, 0],
+        )
+        participant.groups.add(self.group_ids["pair"], self.group_ids["plain"])
+        self.participant_id = participant.pk
+
+        self.executor = MigrationExecutor(connection)
+        self.to_targets = self.targets(self.executor, self.migrate_to)
+        self.executor.migrate(self.to_targets)
+
+    def tearDown(self):
+        executor = MigrationExecutor(connection)
+        executor.migrate(executor.loader.graph.leaf_nodes())
+        super().tearDown()
+
+    def names(self, apps):
+        ParticipantGroup = apps.get_model("scheduling", "ParticipantGroup")
+        return {
+            label: ParticipantGroup.objects.get(pk=group_id).name
+            for label, group_id in self.group_ids.items()
+        }
+
+    def test_comma_names_are_rewritten_uniquely_and_memberships_survive(self):
+        migrated_apps = self.executor.loader.project_state(self.to_targets).apps
+        Participant = migrated_apps.get_model("scheduling", "Participant")
+        ParticipantGroup = migrated_apps.get_model("scheduling", "ParticipantGroup")
+
+        self.assertEqual(
+            self.names(migrated_apps),
+            {
+                "plain": "Plain name",
+                # The name already held (ignoring case) wins; the rewrites
+                # then take the first free suffix in id order.
+                "pair": "Alpha Beta (2)",
+                "pair_taken": "alpha BETA",
+                "pair_spaced": "Alpha Beta (3)",
+                "pair_again": "Alpha Beta (4)",
+                "team": "Team 3",
+                # A rewrite may not produce the reserved cell token.
+                "reserved": "all (2)",
+                "empty": "Group",
+                # The suffix fits inside the column by trimming the name.
+                "long": f"{self.long_base[:96]} (2)",
+                "long_taken": f"{self.long_base.upper()} Z",
+                "elsewhere": "Alpha Beta",
+            },
+        )
+        self.assertFalse(ParticipantGroup.objects.filter(name__contains=",").exists())
+        self.assertEqual(ParticipantGroup.objects.count(), 11)
+        self.assertEqual(
+            sorted(
+                Participant.objects.get(pk=self.participant_id).groups.values_list("pk", flat=True)
+            ),
+            sorted([self.group_ids["pair"], self.group_ids["plain"]]),
+        )
+
+    def test_reversing_keeps_the_rewritten_names(self):
+        executor = MigrationExecutor(connection)
+        from_targets = self.targets(executor, self.migrate_from)
+        executor.migrate(from_targets)
+        old_apps = executor.loader.project_state(from_targets).apps
+        names = self.names(old_apps)
+        self.assertEqual(names["pair"], "Alpha Beta (2)")
+        self.assertEqual(names["elsewhere"], "Alpha Beta")
+        self.assertEqual(names["plain"], "Plain name")

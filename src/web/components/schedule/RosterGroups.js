@@ -64,7 +64,8 @@ function groupNameError(value) {
   const name = String(value || "").trim();
   if (!name) return "Enter a group name.";
   if (name.length > 100) return "Group names must be 100 characters or fewer.";
-  if (name.includes(";")) return "Group names cannot contain ;.";
+  if (name.includes(";") || name.includes(","))
+    return "Group names cannot contain ; or ,.";
   if (name.toUpperCase() === "ALL") return "ALL is reserved for every group.";
   return "";
 }
@@ -514,8 +515,9 @@ export default function RosterGroups({
 
       {namedGroups.length === 0 && (
         <p className="roster-groups__empty small text-secondary mb-0">
-          No groups yet. Create a group, then tick its column for each person in
-          the roster below.
+          {readOnly
+            ? "No groups yet."
+            : "No groups yet. Create a group, then tick its column for each person once they are on the roster."}
         </p>
       )}
 

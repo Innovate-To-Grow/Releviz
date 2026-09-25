@@ -19,7 +19,11 @@ from apps.scheduling.services.invitations.errors import (
     SHARED_ACCOUNT_MESSAGE,
     UNVERIFIED_FULL_ACCOUNT_MESSAGE,
 )
-from apps.scheduling.services.roster_groups import format_group_cell, parse_group_cell
+from apps.scheduling.services.roster_groups import (
+    MAX_GROUPS_PER_CELL,
+    format_group_cell,
+    parse_group_cell,
+)
 
 from .errors import RosterImportError
 from .limits import MAX_ROSTER_ROWS
@@ -194,10 +198,47 @@ def _identity_key(row: RosterImportRow, addresses: OrganizerAddresses):
     return ("email", row.email) if row.email else None
 
 
+def _merged_group_cell(rows: list[RosterImportRow]) -> str | None:
+    """The union of the rows' group cells in canonical form.
+
+    ``None`` when a cell does not parse or the union outgrows one cell: the
+    rows then cannot collapse into one and are left for the organizer.
+    """
+
+    if len({row.group_name for row in rows}) == 1:
+        # Byte-identical cells need no parsing: an invalid one keeps its own
+        # row error and the copies still collapse into the first row.
+        return rows[0].group_name
+    all_groups = False
+    names = []
+    seen = set()
+    for row in rows:
+        try:
+            cell_all_groups, cell_names = parse_group_cell(row.group_name)
+        except RosterImportError:
+            return None
+        all_groups = all_groups or cell_all_groups
+        for name in cell_names:
+            key = name.lower()
+            if key not in seen:
+                seen.add(key)
+                names.append(name)
+    if len(names) > MAX_GROUPS_PER_CELL:
+        return None
+    return format_group_cell(all_groups, names)
+
+
 def apply_duplicate_rules(
     rows: list[RosterImportRow],
     addresses: OrganizerAddresses = NO_ORGANIZER_ADDRESSES,
 ) -> None:
+    """Collapse identical rows for one person and flag the ones that differ.
+
+    Rows that agree on everything but the group cell are the same person
+    listed under several groups: the first row survives with the union of
+    every cell and the rest are deselected as identical.
+    """
+
     by_identity = defaultdict(list)
     for row in rows:
         row.validation_errors = _remove_duplicate_error(row.validation_errors or [])
@@ -213,17 +254,12 @@ def apply_duplicate_rules(
         if len(duplicates) < 2:
             continue
         signatures = {
-            (
-                row.name,
-                address,
-                row.group_name,
-                row.phone,
-                float(row.weight),
-                bool(row.included),
-            )
+            (row.name, address, row.phone, float(row.weight), bool(row.included))
             for row in duplicates
         }
-        if len(signatures) == 1:
+        merged = _merged_group_cell(duplicates) if len(signatures) == 1 else None
+        if merged is not None:
+            duplicates[0].group_name = merged
             for duplicate in duplicates[1:]:
                 duplicate.selected = False
                 duplicate.duplicate_status = RosterImportRow.DuplicateStatus.IDENTICAL

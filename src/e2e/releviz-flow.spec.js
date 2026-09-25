@@ -1230,6 +1230,32 @@ test.describe("Releviz account and scheduling flow", () => {
     ).toBeVisible();
     await expectAccessible(page, "organizer event");
 
+    // Groups can be set up before anyone is on the roster. This one is
+    // deleted again straight away so the group checks further down still see
+    // only the groups the roster import and the organizer create later.
+    await expect(page.getByText("No participants yet")).toBeVisible();
+    await page.getByRole("button", { name: "New group", exact: true }).click();
+    await page.getByLabel("New group name").fill("E2E Early");
+    await page
+      .getByRole("button", { name: "Create group", exact: true })
+      .click();
+    await expect(page.getByText("Created E2E Early.")).toBeVisible();
+    const earlyGroupRow = page
+      .getByRole("region", { name: "Roster groups" })
+      .locator('[data-roster-group="E2E Early"]');
+    await expect(earlyGroupRow).toContainText("0 people");
+    await earlyGroupRow.getByRole("button", { name: "Delete group" }).click();
+    const earlyGroupDialog = page.getByRole("dialog", {
+      name: "Delete group E2E Early?",
+    });
+    await earlyGroupDialog
+      .getByRole("button", { name: "Delete group" })
+      .click();
+    await expect(page.getByText("Deleted E2E Early.")).toBeVisible();
+    await expect(earlyGroupDialog).toHaveCount(0);
+    await expect(earlyGroupRow).toHaveCount(0);
+    await expect(page.getByText(/No groups yet/)).toBeVisible();
+
     const organizerSession = await readSession(page);
     const eventDefinitionResponse = await apiJson(
       request,

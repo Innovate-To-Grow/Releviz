@@ -3416,6 +3416,106 @@ describe("RosterPanel groups", () => {
     ).not.toBeChecked();
   });
 
+  test("creates groups on an empty roster before anyone is added", async () => {
+    fetchRoster.mockResolvedValue(
+      rosterResponse([], {
+        stats: { total: 0, submitted: 0, notSubmitted: 0, groups: [] },
+      }),
+    );
+    createRosterGroup.mockResolvedValue({
+      groups: [{ id: 21, name: "Faculty", count: 0, weight: null }],
+    });
+    await renderPanel();
+    expect(
+      await screen.findByText(
+        "Add someone or import a roster to start collecting availability.",
+      ),
+    ).toBeVisible();
+    // Nothing to filter or bulk-edit yet, but groups can be set up ahead of
+    // the import.
+    expect(
+      screen.queryByRole("search", { name: "Roster filters" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Bulk actions")).not.toBeInTheDocument();
+    expect(screen.getByText(/No groups yet/)).toHaveTextContent(
+      "once they are on the roster",
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "New group" }));
+    fireEvent.change(screen.getByLabelText("New group name"), {
+      target: { value: "Faculty" },
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Create group" }));
+    await waitFor(() =>
+      expect(createRosterGroup).toHaveBeenCalledWith(
+        "ROSTER1",
+        { name: "Faculty" },
+        "token",
+      ),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Created Faculty.",
+    );
+    const groupsRegion = await screen.findByRole("region", {
+      name: "Roster groups",
+    });
+    expect(
+      within(groupsRegion).getByLabelText("Weight for group Faculty"),
+    ).toBeDisabled();
+    expect(groupsRegion).toHaveTextContent("0 people");
+    expect(screen.queryByText(/No groups yet/)).not.toBeInTheDocument();
+    expect(fetchRoster).toHaveBeenCalledTimes(1);
+  });
+
+  test("keeps the group section read-only on a closed empty roster", async () => {
+    fetchRoster.mockResolvedValue(
+      rosterResponse([], {
+        stats: { total: 0, submitted: 0, notSubmitted: 0, groups: [] },
+      }),
+    );
+    await renderPanel({ event: { ...event, status: "closed" } });
+    expect(await screen.findByText("No groups yet.")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "New group" }),
+    ).not.toBeInTheDocument();
+  });
+
+  test("hides the group section until the roster loads and while it fails", async () => {
+    fetchRoster.mockRejectedValueOnce(new Error("Roster unavailable"));
+    await renderPanel();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Roster unavailable",
+    );
+    expect(
+      screen.queryByRole("heading", { name: "Groups" }),
+    ).not.toBeInTheDocument();
+  });
+
+  test("keeps the group section and its form when creating a group fails", async () => {
+    fetchRoster.mockResolvedValue(
+      rosterResponse([], {
+        stats: { total: 0, submitted: 0, notSubmitted: 0, groups: [] },
+      }),
+    );
+    createRosterGroup.mockRejectedValueOnce(
+      new Error("A group named Faculty already exists."),
+    );
+    await renderPanel();
+    await userEvent.click(
+      await screen.findByRole("button", { name: "New group" }),
+    );
+    fireEvent.change(screen.getByLabelText("New group name"), {
+      target: { value: "Faculty" },
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Create group" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "A group named Faculty already exists.",
+    );
+    // The failure is reported next to a form the organizer can correct.
+    expect(screen.getByRole("heading", { name: "Groups" })).toBeInTheDocument();
+    expect(screen.getByLabelText("New group name")).toHaveValue("Faculty");
+  });
+
   test("offers the group section on a roster without groups", async () => {
     fetchRoster.mockResolvedValue(
       rosterResponse(
