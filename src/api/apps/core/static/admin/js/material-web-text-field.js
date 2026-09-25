@@ -1,6 +1,6 @@
 (function () {
-    if (window.I2GMaterialWebAdminInitialized) return;
-    window.I2GMaterialWebAdminInitialized = true;
+    if (window.RelevizMaterialWebAdminInitialized) return;
+    window.RelevizMaterialWebAdminInitialized = true;
 
     var modules = [
         "https://cdn.jsdelivr.net/npm/@material/web@2.4.1/textfield/outlined-text-field.js/+esm",
@@ -16,9 +16,9 @@
     }
 
     function shouldSkipField(field) {
-        if (!field || field.dataset.i2gMdSkip === "1") return true;
-        if (field.closest("[data-i2g-md-skip]")) return true;
-        if (field.closest(".i2g-md-field--enhanced")) return true;
+        if (!field || field.dataset.relevizMdSkip === "1") return true;
+        if (field.closest("[data-releviz-md-skip]")) return true;
+        if (field.closest(".releviz-md-field--enhanced")) return true;
         if (field.classList.contains("select2-hidden-accessible")) return true;
         if (field.classList.contains("admin-autocomplete")) return true;
         if (field.classList.contains("vForeignKeyRawIdAdminField")) return true;
@@ -36,23 +36,23 @@
     }
 
     function ensureWrapper(field) {
-        if (field.parentElement && field.parentElement.matches("[data-i2g-md-field]")) {
+        if (field.parentElement && field.parentElement.matches("[data-releviz-md-field]")) {
             return field.parentElement;
         }
 
         var wrapper = document.createElement("span");
-        wrapper.className = "i2g-md-field";
-        wrapper.dataset.i2gMdField = "1";
+        wrapper.className = "releviz-md-field";
+        wrapper.dataset.relevizMdField = "1";
         field.parentNode.insertBefore(wrapper, field);
         wrapper.appendChild(field);
         return wrapper;
     }
 
     function hideNativeField(field) {
-        field.classList.add("i2g-md-field__native");
+        field.classList.add("releviz-md-field__native");
         field.tabIndex = -1;
         if (field.required) {
-            field.dataset.i2gMdRequired = "1";
+            field.dataset.relevizMdRequired = "1";
             field.required = false;
         }
     }
@@ -77,7 +77,7 @@
 
         if (!materialField) {
             materialField = document.createElement("md-outlined-text-field");
-            materialField.className = "i2g-md-field__component";
+            materialField.className = "releviz-md-field__component";
             wrapper.appendChild(materialField);
         }
 
@@ -107,13 +107,13 @@
         });
         syncFormSubmit(nativeField, syncToNative);
         hideNativeField(nativeField);
-        wrapper.classList.add("i2g-md-field--enhanced");
+        wrapper.classList.add("releviz-md-field--enhanced");
     }
 
     function enhanceSelect(nativeField) {
         var wrapper = ensureWrapper(nativeField);
         var materialField = document.createElement("md-outlined-select");
-        materialField.className = "i2g-md-field__component";
+        materialField.className = "releviz-md-field__component";
         materialField.value = nativeField.value || "";
         materialField.disabled = nativeField.disabled;
         materialField.required = nativeField.required;
@@ -144,14 +144,14 @@
         syncFormSubmit(nativeField, syncToNative);
         wrapper.appendChild(materialField);
         hideNativeField(nativeField);
-        wrapper.classList.add("i2g-md-field--enhanced");
+        wrapper.classList.add("releviz-md-field--enhanced");
     }
 
     function enhanceToggle(nativeField) {
         var wrapper = ensureWrapper(nativeField);
         var isSwitch = nativeField.classList.contains("appearance-none") && nativeField.classList.contains("w-8");
         var materialField = document.createElement(isSwitch ? "md-switch" : "md-checkbox");
-        materialField.className = "i2g-md-toggle__component";
+        materialField.className = "releviz-md-toggle__component";
         materialField.selected = nativeField.checked;
         materialField.checked = nativeField.checked;
         materialField.disabled = nativeField.disabled;
@@ -168,13 +168,13 @@
         });
         wrapper.appendChild(materialField);
         hideNativeField(nativeField);
-        wrapper.classList.add("i2g-md-field--enhanced", "i2g-md-toggle");
+        wrapper.classList.add("releviz-md-field--enhanced", "releviz-md-toggle");
     }
 
     function enhanceRadio(nativeField) {
         var wrapper = ensureWrapper(nativeField);
         var materialField = document.createElement("md-radio");
-        materialField.className = "i2g-md-toggle__component";
+        materialField.className = "releviz-md-toggle__component";
         materialField.checked = nativeField.checked;
         materialField.disabled = nativeField.disabled;
         materialField.name = nativeField.name + "__material";
@@ -185,7 +185,7 @@
                 var root = nativeField.form || document;
                 root.querySelectorAll('input[type="radio"][name="' + CSS.escape(nativeField.name) + '"]').forEach(function (radio) {
                     if (radio !== nativeField) radio.checked = false;
-                    var wrapper = radio.closest("[data-i2g-md-field]");
+                    var wrapper = radio.closest("[data-releviz-md-field]");
                     var materialRadio = wrapper && wrapper.querySelector("md-radio");
                     if (materialRadio && radio !== nativeField) materialRadio.checked = false;
                 });
@@ -199,7 +199,7 @@
         });
         wrapper.appendChild(materialField);
         hideNativeField(nativeField);
-        wrapper.classList.add("i2g-md-field--enhanced", "i2g-md-toggle");
+        wrapper.classList.add("releviz-md-field--enhanced", "releviz-md-toggle");
     }
 
     function enhanceField(field) {
@@ -218,7 +218,7 @@
 
     function enhanceAllFields() {
         document.querySelectorAll("#main input, #main textarea, #main select").forEach(enhanceField);
-        document.querySelectorAll("[data-i2g-md-field]").forEach(function (wrapper) {
+        document.querySelectorAll("[data-releviz-md-field]").forEach(function (wrapper) {
             var field = wrapper.querySelector("input, textarea, select");
             if (field) enhanceField(field);
         });

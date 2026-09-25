@@ -30,7 +30,7 @@
             try {
                 return normalizeTheme(JSON.parse(storedTheme));
             } catch (error) {
-                // Legacy I2G runtime builds wrote raw strings; normalize and migrate them.
+                // Earlier admin runtime builds wrote raw strings; normalize and migrate them.
                 return normalizeTheme(storedTheme);
             }
         } catch (error) {
@@ -82,7 +82,7 @@
 
     function dispatchThemeChange(themeName, systemDark) {
         window.dispatchEvent(
-            new CustomEvent("i2g-admin-theme-change", {
+            new CustomEvent("releviz-admin-theme-change", {
                 detail: {
                     theme: normalizeTheme(themeName),
                     systemDark: Boolean(systemDark),
@@ -112,11 +112,11 @@
     }
 
     function installThemeChoiceClickHandler() {
-        if (window.__i2gAdminThemeChoiceHandlerInstalled) {
+        if (window.__relevizAdminThemeChoiceHandlerInstalled) {
             return;
         }
 
-        window.__i2gAdminThemeChoiceHandlerInstalled = true;
+        window.__relevizAdminThemeChoiceHandlerInstalled = true;
         var handleThemeChoice = function (event) {
             var target = event.target;
 
@@ -175,7 +175,7 @@
             init: function () {
                 var component = this;
                 watchBodyLocks(component);
-                window.addEventListener("i2g-admin-theme-change", function (event) {
+                window.addEventListener("releviz-admin-theme-change", function (event) {
                     component.adminTheme = normalizeTheme(event.detail && event.detail.theme);
                     component.systemDark = Boolean(event.detail && event.detail.systemDark);
                 });

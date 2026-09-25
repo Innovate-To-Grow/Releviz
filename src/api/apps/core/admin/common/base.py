@@ -20,7 +20,7 @@ class BaseModelAdmin(ConfirmOnSaveMixin, DataExportMixin, TimestampedAdminMixin,
     - Standard list display configuration
     - Per-Django-app access control (see apps.core.utils.access.user_can_access_app):
       a staff member may manage this model only if their ``admin_apps`` includes
-      this model's app label; superusers (I2G Master) are always granted.
+      this model's app label; superusers (Releviz Master) are always granted.
     """
 
     # Common readonly fields for ProjectControlModel

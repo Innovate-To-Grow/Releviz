@@ -116,7 +116,7 @@ class AcceptInvitationViewTests(TestCase):
         member = ContactEmail.objects.get(email_address="invite@example.com").member
         self.assertTrue(member.is_staff)
         self.assertTrue(member.is_active)
-        # No app grant is handed out at acceptance time; the I2G Master grants
+        # No app grant is handed out at acceptance time; the Releviz Master grants
         # apps later via the Member admin (see apps.core.utils.access).
         self.assertEqual(member.admin_apps, [])
 

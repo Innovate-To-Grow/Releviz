@@ -20,7 +20,7 @@ class Member(AbstractUser, ProjectControlModel):
     objects = MemberManager()
 
     # Per-Django-app admin access. A staff member may manage every model in any app
-    # listed here (e.g. ["cms", "event"]). Superusers (I2G Master) ignore this list.
+    # listed here (e.g. ["cms", "event"]). Superusers (Releviz Master) ignore this list.
     # See apps.core.utils.access.user_can_access_app — the single enforcement predicate.
     admin_apps = models.JSONField(
         default=list,

@@ -3,10 +3,10 @@
 
     // Same-origin srcdoc previews inherit the parent policy. Their generated
     // style elements must therefore carry this response's nonce as well.
-    window.I2G_CSP_NONCE = (document.currentScript && document.currentScript.nonce) || "";
+    window.RELEVIZ_CSP_NONCE = (document.currentScript && document.currentScript.nonce) || "";
     // Lit/Material Web copies this value to fallback <style> elements on
     // browsers without constructable stylesheet support.
-    window.litNonce = window.I2G_CSP_NONCE;
+    window.litNonce = window.RELEVIZ_CSP_NONCE;
 
     // Source-owned admin editors use declarative action attributes instead of
     // executable on* attributes. Keep this allowlist explicit: data from a

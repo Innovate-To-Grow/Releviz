@@ -246,7 +246,7 @@ class CSPHeaderTests(TestCase):
         )
         self.assertNotRegex(html, r"\son[a-z]+\s*=\s*[\"']")
         self.assertNotIn("'unsafe-eval'", header)
-        self.assertIn("/static/admin/js/i2g-admin-theme-runtime.js", html)
+        self.assertIn("/static/admin/js/releviz-admin-theme-runtime.js", html)
         self.assertLess(
             html.index("/static/unfold/js/htmx/htmx.js"),
             html.index("/static/unfold/js/app.js"),
