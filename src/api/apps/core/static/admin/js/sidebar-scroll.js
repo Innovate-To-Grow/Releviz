@@ -1,7 +1,7 @@
 (function () {
     "use strict";
 
-    var STORAGE_KEY = "i2g_admin_sidebar_scroll_top";
+    var STORAGE_KEY = "releviz_admin_sidebar_scroll_top";
     var RESTORE_ATTEMPTS = 20;
 
     function getScrollEl() {

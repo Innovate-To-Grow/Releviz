@@ -164,7 +164,7 @@ class MemberAdmin(BaseModelAdmin, UserAdmin):
         frontend_url = (getattr(settings, "FRONTEND_URL", "") or "").strip().rstrip("/")
         return redirect(f"{frontend_url}/impersonate-login#token={token}")
 
-    # Granting admin-app access or staff status is an I2G Master (superuser)
+    # Granting admin-app access or staff status is a Releviz Master (superuser)
     # responsibility. A non-superuser admin must not be able to widen their own
     # (or anyone's) privileges by editing these fields, so they are read-only for
     # non-superusers — Django drops any submitted value for read-only fields, so

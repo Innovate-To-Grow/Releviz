@@ -2,7 +2,7 @@
 
 Drives real admin URLs through the full request stack to confirm BaseModelAdmin's
 per-app gate: a staff member sees only the apps in their ``admin_apps`` grant, a
-superuser (I2G Master) sees everything, and a grant-less staff member can still load
+superuser (Releviz Master) sees everything, and a grant-less staff member can still load
 the (empty) admin index but is forbidden every model.
 """
 

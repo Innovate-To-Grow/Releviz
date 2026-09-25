@@ -8,6 +8,8 @@ from django.core.management.commands.migrate import Command as MigrateCommand
 from django.db import connections
 
 # Stable, repository-specific 56-bit key derived from ASCII "I2GMIGR".
+# Kept unchanged across the Releviz rebrand: old and new ECS tasks must contend for the
+# same lock during a rolling deploy, otherwise they could migrate concurrently.
 # PostgreSQL advisory locks are cluster-local and released with the session.
 MIGRATION_LOCK_ID = int.from_bytes(b"I2GMIGR", byteorder="big", signed=False)
 DEFAULT_LOCK_TIMEOUT_SECONDS = 600
@@ -15,7 +17,7 @@ LOCK_POLL_SECONDS = 2
 
 
 class Command(MigrateCommand):
-    help = "Run migrate after acquiring the Innovate-To-Grow PostgreSQL advisory lock."
+    help = "Run migrate after acquiring the Releviz PostgreSQL advisory lock."
 
     def add_arguments(self, parser):
         super().add_arguments(parser)

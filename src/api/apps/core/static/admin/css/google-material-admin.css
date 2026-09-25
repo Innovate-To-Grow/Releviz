@@ -387,22 +387,22 @@ input[type="checkbox"].appearance-none.w-8:disabled {
     opacity: 0.5;
 }
 
-.i2g-md-field {
+.releviz-md-field {
     display: block;
     max-width: 42rem;
     position: relative;
     width: 100%;
 }
 
-.i2g-md-field__component {
+.releviz-md-field__component {
     display: none;
     width: 100%;
 }
 
-.i2g-md-field--enhanced .i2g-md-field__native,
-.i2g-md-field--enhanced > input,
-.i2g-md-field--enhanced > select,
-.i2g-md-field--enhanced > textarea {
+.releviz-md-field--enhanced .releviz-md-field__native,
+.releviz-md-field--enhanced > input,
+.releviz-md-field--enhanced > select,
+.releviz-md-field--enhanced > textarea {
     height: 1px !important;
     margin: 0 !important;
     opacity: 0 !important;
@@ -411,12 +411,12 @@ input[type="checkbox"].appearance-none.w-8:disabled {
     width: 1px !important;
 }
 
-.i2g-md-field--enhanced .i2g-md-field__component {
+.releviz-md-field--enhanced .releviz-md-field__component {
     display: block;
 }
 
-md-outlined-text-field.i2g-md-field__component,
-md-outlined-select.i2g-md-field__component {
+md-outlined-text-field.releviz-md-field__component,
+md-outlined-select.releviz-md-field__component {
     --md-outlined-text-field-container-shape: var(--md-sys-shape-corner-medium);
     --md-outlined-text-field-container-height: 44px;
     --md-outlined-text-field-caret-color: var(--md-sys-color-primary);
@@ -437,9 +437,9 @@ md-outlined-select.i2g-md-field__component {
     --md-outlined-select-text-field-outline-color: var(--md-sys-color-outline-variant);
 }
 
-md-checkbox.i2g-md-toggle__component,
-md-radio.i2g-md-toggle__component,
-md-switch.i2g-md-toggle__component {
+md-checkbox.releviz-md-toggle__component,
+md-radio.releviz-md-toggle__component,
+md-switch.releviz-md-toggle__component {
     --md-checkbox-selected-container-color: var(--md-sys-color-primary);
     --md-checkbox-selected-icon-color: var(--md-sys-color-on-primary);
     --md-checkbox-selected-focus-container-color: var(--md-sys-color-primary);
@@ -455,47 +455,47 @@ md-switch.i2g-md-toggle__component {
     --md-switch-unselected-track-color: var(--md-sys-color-surface-container-highest);
 }
 
-.i2g-md-toggle {
+.releviz-md-toggle {
     display: inline-flex;
     max-width: max-content;
 }
 
-.i2g-admin-object-tools {
+.releviz-admin-object-tools {
     align-items: center;
     display: flex;
     flex-direction: row;
     gap: 0;
 }
 
-.i2g-admin-object-tools > * {
+.releviz-admin-object-tools > * {
     display: inline-flex;
     position: relative;
 }
 
-.i2g-admin-object-tools > * + * {
+.releviz-admin-object-tools > * + * {
     margin-left: -1px;
 }
 
-.i2g-admin-object-tools > *:hover,
-.i2g-admin-object-tools > *:focus-within {
+.releviz-admin-object-tools > *:hover,
+.releviz-admin-object-tools > *:focus-within {
     z-index: 1;
 }
 
-.i2g-admin-object-tools--separated {
+.releviz-admin-object-tools--separated {
     gap: 0.5rem;
 }
 
-.i2g-admin-object-tools--separated > * + * {
+.releviz-admin-object-tools--separated > * + * {
     margin-left: 0;
 }
 
-.i2g-admin-object-tools form {
+.releviz-admin-object-tools form {
     display: inline-flex;
     margin: 0;
 }
 
-.i2g-admin-action,
-.i2g-admin-object-tools .addlink {
+.releviz-admin-action,
+.releviz-admin-object-tools .addlink {
     align-items: center;
     background-color: var(--md-sys-color-surface-container-lowest) !important;
     border: 1px solid var(--md-sys-color-outline-variant) !important;
@@ -515,7 +515,7 @@ md-switch.i2g-md-toggle__component {
     white-space: nowrap;
 }
 
-.i2g-admin-object-tools .addlink {
+.releviz-admin-object-tools .addlink {
     background-color: var(--md-sys-color-primary) !important;
     border-color: var(--md-sys-color-primary) !important;
     color: var(--md-sys-color-on-primary) !important;
@@ -524,51 +524,51 @@ md-switch.i2g-md-toggle__component {
     width: 38px;
 }
 
-.i2g-admin-action:hover {
+.releviz-admin-action:hover {
     background-color: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent) !important;
     border-color: var(--md-sys-color-primary) !important;
     color: var(--md-sys-color-primary) !important;
 }
 
-.i2g-admin-action--primary {
+.releviz-admin-action--primary {
     background-color: var(--md-sys-color-primary) !important;
     border-color: var(--md-sys-color-primary) !important;
     color: var(--md-sys-color-on-primary) !important;
 }
 
-.i2g-admin-action--primary:hover {
+.releviz-admin-action--primary:hover {
     background-color: color-mix(in srgb, var(--md-sys-color-primary) 88%, #000) !important;
     border-color: color-mix(in srgb, var(--md-sys-color-primary) 88%, #000) !important;
     color: var(--md-sys-color-on-primary) !important;
 }
 
-.i2g-admin-object-tools .addlink:hover {
+.releviz-admin-object-tools .addlink:hover {
     background-color: color-mix(in srgb, var(--md-sys-color-primary) 88%, #000) !important;
     border-color: color-mix(in srgb, var(--md-sys-color-primary) 88%, #000) !important;
     color: var(--md-sys-color-on-primary) !important;
 }
 
-.i2g-admin-object-tools > .i2g-admin-action:first-child,
-.i2g-admin-object-tools > form:first-child > .i2g-admin-action,
-.i2g-admin-object-tools > div:first-child > .addlink {
+.releviz-admin-object-tools > .releviz-admin-action:first-child,
+.releviz-admin-object-tools > form:first-child > .releviz-admin-action,
+.releviz-admin-object-tools > div:first-child > .addlink {
     border-bottom-left-radius: var(--md-sys-shape-corner-extra-large) !important;
     border-top-left-radius: var(--md-sys-shape-corner-extra-large) !important;
 }
 
-.i2g-admin-object-tools > .i2g-admin-action:last-child,
-.i2g-admin-object-tools > form:last-child > .i2g-admin-action,
-.i2g-admin-object-tools > div:last-child > .addlink {
+.releviz-admin-object-tools > .releviz-admin-action:last-child,
+.releviz-admin-object-tools > form:last-child > .releviz-admin-action,
+.releviz-admin-object-tools > div:last-child > .addlink {
     border-bottom-right-radius: var(--md-sys-shape-corner-extra-large) !important;
     border-top-right-radius: var(--md-sys-shape-corner-extra-large) !important;
 }
 
-.i2g-admin-object-tools--separated .i2g-admin-action,
-.i2g-admin-object-tools--separated .addlink {
+.releviz-admin-object-tools--separated .releviz-admin-action,
+.releviz-admin-object-tools--separated .addlink {
     border-radius: var(--md-sys-shape-corner-extra-large) !important;
 }
 
-.i2g-admin-action .material-symbols-outlined,
-.i2g-admin-object-tools .addlink .material-symbols-outlined {
+.releviz-admin-action .material-symbols-outlined,
+.releviz-admin-object-tools .addlink .material-symbols-outlined {
     font-size: 18px !important;
 }
 
