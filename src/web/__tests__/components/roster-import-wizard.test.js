@@ -973,12 +973,12 @@ test("maps a phone column, shows it in the review table, and saves phone edits",
     screen.getByRole("button", { name: "Continue to mapping" }),
   );
 
-  // Phone is optional (no asterisk, "Use default" placeholder) and the
+  // Phone is optional (no asterisk; without a column it stays blank) and the
   // "Mobile" header is suggested for it.
   const phoneSelect = await screen.findByLabelText("Phone");
   expect(screen.queryByLabelText("Phone *")).not.toBeInTheDocument();
   expect(within(phoneSelect).getAllByRole("option")[0]).toHaveTextContent(
-    "Use default",
+    "No column (left blank)",
   );
   expect(phoneSelect).toHaveValue("3");
 
@@ -1111,4 +1111,100 @@ test("marks rows without an email of their own as people the organizer manages",
   ).toHaveTextContent(
     "A blank email, or one of your own addresses, adds someone with no email of their own: they are never emailed, and you enter their schedule.",
   );
+});
+
+test("maps plural headers and spells out what an unmapped field gets", async () => {
+  const record = {
+    id: "import-10",
+    worksheets: [
+      {
+        name: "Pasted data",
+        rowCount: 1,
+        defaultHeaderRow: 1,
+        headers: ["Names", "Emails", "Groups", "Priority notes"],
+      },
+    ],
+    selectedWorksheet: "Pasted data",
+    headerRow: 1,
+    headers: ["Names", "Emails", "Groups", "Priority notes"],
+    columnMapping: {},
+    defaults: { group: "", weight: 1, included: true },
+    summary: {},
+  };
+  createRosterImport.mockResolvedValue({ import: record });
+  renderWizard();
+  await userEvent.click(screen.getByRole("tab", { name: "Paste spreadsheet" }));
+  fireEvent.change(screen.getByLabelText("Pasted roster rows"), {
+    target: { value: "Names\tEmails\tGroups\nAda\tada@example.com\tA, B" },
+  });
+  await userEvent.click(
+    screen.getByRole("button", { name: "Continue to mapping" }),
+  );
+
+  // "Groups" is the group column, just like "Group" would be.
+  expect(await screen.findByLabelText("Name *")).toHaveValue("0");
+  expect(screen.getByLabelText("Email *")).toHaveValue("1");
+  const group = screen.getByLabelText("Group");
+  expect(group).toHaveValue("2");
+  const weight = screen.getByLabelText("Weight");
+  const included = screen.getByLabelText("Included");
+  expect(weight).toHaveValue("");
+  expect(
+    screen.getByText(/Columns are matched by their header/),
+  ).toBeInTheDocument();
+
+  // Each unmapped option names the default it falls back to, and follows
+  // the Defaults below as they change.
+  const firstOption = (select) => within(select).getAllByRole("option")[0];
+  expect(firstOption(group)).toHaveTextContent("No column (no group)");
+  expect(firstOption(weight)).toHaveTextContent("No column (weight 1)");
+  expect(firstOption(included)).toHaveTextContent(
+    "No column (everyone included)",
+  );
+  fireEvent.change(screen.getByLabelText("Default group"), {
+    target: { value: "Guests" },
+  });
+  fireEvent.change(screen.getByLabelText("Default weight"), {
+    target: { value: "0.5" },
+  });
+  fireEvent.click(screen.getByLabelText("Include by default"));
+  expect(firstOption(group)).toHaveTextContent(
+    "No column (everyone in Guests)",
+  );
+  expect(firstOption(weight)).toHaveTextContent("No column (weight 0.5)");
+  expect(firstOption(included)).toHaveTextContent(
+    "No column (everyone left out)",
+  );
+});
+
+test("never suggests a column the server already mapped to another field", async () => {
+  const record = {
+    id: "import-11",
+    worksheets: [
+      {
+        name: "Pasted data",
+        rowCount: 1,
+        defaultHeaderRow: 1,
+        headers: ["name", "email", "Teams"],
+      },
+    ],
+    selectedWorksheet: "Pasted data",
+    headerRow: 1,
+    headers: ["name", "email", "Teams"],
+    // The organizer's earlier choice put "Teams" in the phone field.
+    columnMapping: { name: 0, email: 1, phone: 2 },
+    defaults: { group: "", weight: 1, included: true },
+    summary: {},
+  };
+  createRosterImport.mockResolvedValue({ import: record });
+  renderWizard();
+  await userEvent.click(screen.getByRole("tab", { name: "Paste spreadsheet" }));
+  fireEvent.change(screen.getByLabelText("Pasted roster rows"), {
+    target: { value: "name\temail\tTeams\nAda\tada@example.com\tA" },
+  });
+  await userEvent.click(
+    screen.getByRole("button", { name: "Continue to mapping" }),
+  );
+  expect(await screen.findByLabelText("Phone")).toHaveValue("2");
+  expect(screen.getByLabelText("Group")).toHaveValue("");
 });

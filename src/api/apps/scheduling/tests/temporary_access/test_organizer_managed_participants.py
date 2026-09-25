@@ -35,7 +35,8 @@ from apps.scheduling.services.temporary_access import request_temporary_access_c
 ORGANIZER_EMAIL = "organizer@example.com"
 NOT_OWNED_MESSAGE = "Use one of your own verified email addresses for a person you manage."
 OWN_EMAIL_MESSAGE = (
-    'That is one of your own addresses. Check "No email of their own" to add a person you manage.'
+    "That is one of your own addresses. Use Add myself to put yourself on the roster, "
+    'or check "No email of their own" to add a person you manage.'
 )
 
 

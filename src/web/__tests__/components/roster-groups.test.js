@@ -31,18 +31,22 @@ const pressEnter = (element) =>
   });
 
 // Alumni is a real group with nobody in it yet; Students members carry
-// different weights; the trailing entry is the ungrouped row.
+// different weights and are only partly included; the trailing entry is the
+// ungrouped row, left out of the results.
 const groups = [
-  { id: 3, name: "Alumni", count: 0, weight: null },
-  { id: 1, name: "Faculty", count: 2, weight: 1 },
-  { id: 2, name: "Students", count: 3, weight: null },
-  { id: null, name: "", count: 1, weight: 0.5 },
+  { id: 3, name: "Alumni", count: 0, weight: null, included: null },
+  { id: 1, name: "Faculty", count: 2, weight: 1, included: true },
+  { id: 2, name: "Students", count: 3, weight: null, included: null },
+  { id: null, name: "", count: 1, weight: 0.5, included: false },
 ];
 
 function makeHandlers() {
   return {
     onShowGroup: jest.fn(),
     onSetWeight: jest.fn().mockResolvedValue(true),
+    onSetIncluded: jest.fn().mockResolvedValue(true),
+    onIncludeOnly: jest.fn().mockResolvedValue(true),
+    onIncludeEveryone: jest.fn().mockResolvedValue(true),
     onRename: jest.fn().mockResolvedValue(true),
     onDelete: jest.fn().mockResolvedValue(true),
     onAddSelected: jest.fn().mockResolvedValue(true),
@@ -84,29 +88,29 @@ describe("summarizeGroups", () => {
   test("normalizes every stats shape, keeps ids, and sorts ungrouped people last", () => {
     expect(
       summarizeGroups([
-        { name: "", count: 1, weight: 0.5 },
-        { id: 2, name: "Zeta", count: 2, weight: 1 },
+        { name: "", count: 1, weight: 0.5, included: false },
+        { id: 2, name: "Zeta", count: 2, weight: 1, included: true },
         "Alpha",
-        { id: 3, name: "Mixed", count: 4, weight: null },
+        { id: 3, name: "Mixed", count: 4, weight: null, included: null },
         { id: 5, name: "Empty", count: 0, weight: null },
         null,
         7,
-        { id: 9, count: "2" },
+        { id: 9, count: "2", included: "yes" },
       ]),
     ).toEqual([
-      { id: null, name: "Alpha", count: null, weight: null },
-      { id: 5, name: "Empty", count: 0, weight: null },
-      { id: 3, name: "Mixed", count: 4, weight: null },
-      { id: 2, name: "Zeta", count: 2, weight: 1 },
-      { id: null, name: "", count: 1, weight: 0.5 },
-      { id: 9, name: "", count: 2, weight: null },
+      { id: null, name: "Alpha", count: null, weight: null, included: null },
+      { id: 5, name: "Empty", count: 0, weight: null, included: null },
+      { id: 3, name: "Mixed", count: 4, weight: null, included: null },
+      { id: 2, name: "Zeta", count: 2, weight: 1, included: true },
+      { id: null, name: "", count: 1, weight: 0.5, included: false },
+      { id: 9, name: "", count: 2, weight: null, included: null },
     ]);
     expect(
       summarizeGroups({ Faculty: 1, Staff: { count: 2 }, Guests: null }),
     ).toEqual([
-      { id: null, name: "Faculty", count: 1, weight: null },
-      { id: null, name: "Guests", count: null, weight: null },
-      { id: null, name: "Staff", count: 2, weight: null },
+      { id: null, name: "Faculty", count: 1, weight: null, included: null },
+      { id: null, name: "Guests", count: null, weight: null, included: null },
+      { id: null, name: "Staff", count: 2, weight: null, included: null },
     ]);
     // Numbered names sort by value, not character by character.
     expect(
@@ -131,7 +135,7 @@ describe("RosterGroups", () => {
     renderGroups();
     expect(
       screen.getByText(
-        "People can belong to several groups: tick a group's column in the roster below, or All for every group. Setting a group's weight applies it to everyone currently in that group, including people who are also in other groups.",
+        "People can belong to several groups: tick a group's column in the roster below, or All for every group, then save the changes. A group's weight and Included box apply to everyone currently in that group, including people who are also in other groups. Use Only this group to see one group's best meeting times in the results.",
       ),
     ).toBeInTheDocument();
     const table = screen.getByRole("region", { name: "Roster groups" });
@@ -236,7 +240,7 @@ describe("RosterGroups", () => {
     await pressEnter(input);
     // The summarized group (with its id) goes back to the parent.
     expect(onRename).toHaveBeenCalledWith(
-      { id: 1, name: "Faculty", count: 2, weight: 1 },
+      { id: 1, name: "Faculty", count: 2, weight: 1, included: true },
       "Teachers",
     );
     await waitFor(() =>
@@ -277,7 +281,7 @@ describe("RosterGroups", () => {
     });
     await click(screen.getByRole("button", { name: "Save name" }));
     expect(onRename).toHaveBeenLastCalledWith(
-      { id: 2, name: "Students", count: 3, weight: null },
+      { id: 2, name: "Students", count: 3, weight: null, included: null },
       "students",
     );
     await waitFor(() =>
@@ -314,6 +318,7 @@ describe("RosterGroups", () => {
   test("adds or removes the selected people from a group, or ungroups them", async () => {
     const { onAddSelected, onRemoveSelected, onMoveSelected } = renderGroups();
     expect(buttonNames(row("Students"))).toEqual([
+      "Only this group",
       "Add selected",
       "Remove selected",
       "Rename",
@@ -345,6 +350,89 @@ describe("RosterGroups", () => {
         within(row("")).getByRole("button", { name: "Ungroup selected" }),
       ).not.toHaveAttribute("aria-busy"),
     );
+  });
+
+  test("includes or leaves out a whole group from its Included box", async () => {
+    const { onSetIncluded } = renderGroups();
+    const faculty = screen.getByLabelText("Include group Faculty");
+    const students = screen.getByLabelText("Include group Students");
+    const ungrouped = screen.getByLabelText("Include ungrouped people");
+    const alumni = screen.getByLabelText("Include group Alumni");
+    expect(faculty).toBeChecked();
+    expect(faculty.indeterminate).toBe(false);
+    // Only some of the Students are included: the box shows a mixed state.
+    expect(students).not.toBeChecked();
+    expect(students.indeterminate).toBe(true);
+    expect(students).toHaveAttribute(
+      "title",
+      "Some people in this group are left out",
+    );
+    expect(row("Students")).toHaveTextContent("Some");
+    expect(ungrouped).not.toBeChecked();
+    expect(ungrouped.indeterminate).toBe(false);
+    expect(ungrouped).not.toHaveAttribute("title");
+    // Nobody is in Alumni, so there is nothing to include.
+    expect(alumni).toBeDisabled();
+    expect(alumni.indeterminate).toBe(false);
+
+    await click(faculty);
+    expect(onSetIncluded).toHaveBeenLastCalledWith("Faculty", false);
+    // A mixed group is ticked for everyone in it.
+    await click(students);
+    expect(onSetIncluded).toHaveBeenLastCalledWith("Students", true);
+    await click(ungrouped);
+    expect(onSetIncluded).toHaveBeenLastCalledWith("", true);
+  });
+
+  test("counts one group alone, or everyone again", async () => {
+    const { onIncludeOnly, onIncludeEveryone, rerender, handlers } =
+      renderGroups({ excludedCount: 2 });
+    // The ungrouped row is no group of its own to single out.
+    expect(
+      within(row("")).queryByRole("button", { name: "Only this group" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(row("Alumni")).getByRole("button", { name: "Only this group" }),
+    ).toBeDisabled();
+
+    await click(
+      within(row("Faculty")).getByRole("button", { name: "Only this group" }),
+    );
+    expect(onIncludeOnly).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 1, name: "Faculty" }),
+    );
+    await click(screen.getByRole("button", { name: "Include everyone" }));
+    expect(onIncludeEveryone).toHaveBeenCalledTimes(1);
+
+    // With everyone included there is nothing to bring back.
+    rerender(
+      <RosterGroups
+        groups={groups}
+        selectedCount={2}
+        excludedCount={0}
+        {...handlers}
+      />,
+    );
+    expect(
+      screen.queryByRole("button", { name: "Include everyone" }),
+    ).not.toBeInTheDocument();
+    // A read-only roster keeps the boxes but offers no changes.
+    rerender(
+      <RosterGroups
+        groups={groups}
+        selectedCount={2}
+        excludedCount={2}
+        readOnly
+        {...handlers}
+      />,
+    );
+    expect(screen.getByLabelText("Include group Faculty")).toBeDisabled();
+    expect(
+      screen.queryByRole("button", { name: "Include everyone" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Only this group" }),
+    ).not.toBeInTheDocument();
   });
 
   test("disables selection actions when nobody is selected", () => {
@@ -402,6 +490,7 @@ describe("RosterGroups", () => {
       name: "Faculty",
       count: 2,
       weight: 1,
+      included: true,
     });
     await waitFor(() => expect(remove).not.toHaveAttribute("aria-busy"));
     await waitFor(() =>

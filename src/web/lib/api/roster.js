@@ -233,3 +233,25 @@ export async function deleteRosterGroup(code, groupId, token) {
   );
   return jsonOrError(res);
 }
+
+export async function deleteRosterParticipant(code, participantId, token) {
+  const res = await apiFetch(
+    `${API_BASE}/events/roster/${encodeURIComponent(participantId)}?code=${encodeURIComponent(code)}`,
+    { method: "DELETE" },
+    token,
+  );
+  return jsonOrError(res);
+}
+
+export async function includeOnlyRosterGroup(code, groupId, token) {
+  const res = await apiFetch(
+    `${API_BASE}/events/roster/groups/${encodeURIComponent(groupId)}/include-only?code=${encodeURIComponent(code)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    },
+    token,
+  );
+  return jsonOrError(res);
+}

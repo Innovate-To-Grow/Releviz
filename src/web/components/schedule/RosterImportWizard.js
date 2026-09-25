@@ -57,15 +57,32 @@ function normalizedHeader(value) {
     .replace(/[^a-z0-9]+/g, "");
 }
 
+const HEADER_ALIASES = {
+  name: ["name", "fullname", "participant", "participantname"],
+  email: ["email", "emailaddress", "mail"],
+  group: [
+    "group",
+    "groupname",
+    "team",
+    "teamname",
+    "department",
+    "organization",
+  ],
+  phone: ["phone", "phonenumber", "mobile", "cell", "tel", "telephone"],
+  weight: ["weight", "priority"],
+  included: ["included", "include", "counted"],
+};
+
+// "Groups", "Teams" or "Emails" name the same column as the singular alias.
+function headerMatches(header, aliases) {
+  const normalized = normalizedHeader(header);
+  return (
+    aliases.includes(normalized) ||
+    (normalized.endsWith("s") && aliases.includes(normalized.slice(0, -1)))
+  );
+}
+
 function suggestedMapping(headers = [], current = {}) {
-  const aliases = {
-    name: ["name", "fullname", "participant", "participantname"],
-    email: ["email", "emailaddress", "mail"],
-    group: ["group", "team", "department", "organization"],
-    phone: ["phone", "phonenumber", "mobile", "cell", "tel", "telephone"],
-    weight: ["weight", "priority"],
-    included: ["included", "include", "counted"],
-  };
   const result = Object.fromEntries(
     Object.entries(current).map(([field, value]) => [
       field,
@@ -74,14 +91,36 @@ function suggestedMapping(headers = [], current = {}) {
         : "",
     ]),
   );
+  // A column already mapped to one field is not offered to another.
+  const used = new Set(Object.values(result).filter(Boolean));
   FIELD_OPTIONS.forEach(([field]) => {
     if (result[field] !== undefined && result[field] !== "") return;
-    const match = headers.findIndex((header) =>
-      aliases[field].includes(normalizedHeader(header)),
+    const match = headers.findIndex(
+      (header, index) =>
+        !used.has(String(index)) &&
+        headerMatches(header, HEADER_ALIASES[field]),
     );
-    if (match >= 0) result[field] = String(match);
+    if (match >= 0) {
+      result[field] = String(match);
+      used.add(String(match));
+    }
   });
   return result;
+}
+
+// What an optional field gets when no column is mapped to it, spelled out so
+// the choice never reads as an opaque "Use default".
+function unmappedLabel(field, defaults) {
+  if (field === "group") {
+    const group = String(defaults.group || "").trim();
+    return group ? `No column (everyone in ${group})` : "No column (no group)";
+  }
+  if (field === "weight") return `No column (weight ${defaults.weight})`;
+  if (field === "included")
+    return defaults.included
+      ? "No column (everyone included)"
+      : "No column (everyone left out)";
+  return "No column (left blank)";
 }
 
 function importFrom(data) {
@@ -653,6 +692,11 @@ export default function RosterImportWizard({
 
           <fieldset className="roster-import__mapping-grid">
             <legend className="fs-6 fw-semibold mb-2">Column mapping</legend>
+            <p className="small text-secondary mb-3">
+              Columns are matched by their header (for example Group, Groups or
+              Team). Check each field: one without a column uses the default
+              shown, which you can change under Defaults.
+            </p>
             <div className="row g-3">
               {FIELD_OPTIONS.map(([field, label, mandatory]) => (
                 <div className="col-12 col-md-4" key={field}>
@@ -668,7 +712,9 @@ export default function RosterImportWizard({
                       }
                     >
                       <option value="">
-                        {mandatory ? "Select a column" : "Use default"}
+                        {mandatory
+                          ? "Select a column"
+                          : unmappedLabel(field, defaults)}
                       </option>
                       {headers.map((header, index) => (
                         <option

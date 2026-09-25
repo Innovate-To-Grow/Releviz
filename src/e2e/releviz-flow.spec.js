@@ -572,7 +572,9 @@ test.describe("Releviz account and scheduling flow", () => {
       temporaryPage.getByText("You are responding as Temporary Taylor"),
     ).toBeVisible();
 
-    await expect(page.getByLabel("Roster summary")).toContainText("0 submitted");
+    await expect(page.getByLabel("Roster summary")).toContainText(
+      "0 submitted",
+    );
     let revisionBeforeResponse = -1;
     await expect
       .poll(
@@ -603,14 +605,19 @@ test.describe("Releviz account and scheduling flow", () => {
     // sync checks every 3 s while things change and eases off to every 15 s
     // while nothing does): the roster counts it and the results move on to a
     // newer revision, with no Refresh press.
-    await expect(page.getByLabel("Roster summary")).toContainText("1 submitted", {
-      timeout: 20_000,
-    });
+    await expect(page.getByLabel("Roster summary")).toContainText(
+      "1 submitted",
+      {
+        timeout: 20_000,
+      },
+    );
     await expect(participantCard).toContainText(/Response\s*Submitted/);
     await expect
       .poll(() => currentResultsRevision(page), { timeout: 20_000 })
       .toBeGreaterThan(revisionBeforeResponse);
-    await expect(page.getByText("New responses load automatically.")).toBeVisible();
+    await expect(
+      page.getByText("New responses load automatically."),
+    ).toBeVisible();
     // Live sync cannot be switched off: the header offers no rate control.
     await expect(page.getByLabel("Check for new responses")).toHaveCount(0);
 
@@ -1019,7 +1026,9 @@ test.describe("Releviz account and scheduling flow", () => {
       hasText: "Sam No Email",
     });
     await expect(samRow).toContainText("No email", { timeout: 20_000 });
-    await expect(samRow.getByLabel("All groups for Sam No Email")).toBeChecked();
+    await expect(
+      samRow.getByLabel("All groups for Sam No Email"),
+    ).toBeChecked();
     await expect(
       samRow.getByRole("button", { name: "Edit schedule" }),
     ).toBeVisible();
@@ -1175,6 +1184,134 @@ test.describe("Releviz account and scheduling flow", () => {
     );
 
     await participantContext.close();
+  });
+
+  test("lets the organizer add themselves, fix a mistyped email, count one group alone, and remove someone", async ({
+    page,
+    request,
+  }) => {
+    const runId = `${Date.now()}-${Math.round(Math.random() * 100_000)}`;
+    const organizerEmail = `self-organizer-${runId}@example.com`;
+    const typoEmail = `ada-${runId}@exmaple.com`;
+    const fixedEmail = `ada-${runId}@example.com`;
+
+    await registerAccount(page, organizerEmail, "Owen", "Organizer");
+    await page.getByRole("link", { name: "Create New Event" }).click();
+    await fillTextbox(page, "Event Name", `Roster corrections ${runId}`);
+    await page.getByRole("button", { name: "Create Event" }).click();
+    await page.waitForURL(/\/event\?code=/);
+    const eventCode = new URL(page.url()).searchParams.get("code");
+    const organizerSession = await readSession(page);
+
+    for (const [name, email] of [
+      ["Ada Typo", typoEmail],
+      ["Ben Leaving", `ben-${runId}@example.com`],
+    ]) {
+      await page
+        .getByRole("button", { name: "Add person", exact: true })
+        .click();
+      await fillTextbox(page, "Full name", name);
+      await fillTextbox(page, "Email address", email);
+      await page.getByRole("button", { name: "Add only" }).click();
+      await expect(
+        page.getByText(`${name} was added. No invitation was sent.`),
+      ).toBeVisible();
+    }
+
+    // The organizer answers too, under their own account, and is never
+    // invited.
+    await page.getByRole("button", { name: "Add myself" }).click();
+    const ownDrawer = page.getByRole("dialog", { name: "Edit my schedule" });
+    await expect(ownDrawer).toBeVisible();
+    await expect(ownDrawer.getByText("Your own response")).toBeVisible();
+    await ownDrawer
+      .getByRole("button", { name: "Submit", exact: true })
+      .click();
+    await expect(ownDrawer.getByText("Schedule submitted.")).toBeVisible();
+    await ownDrawer.locator(".managed-drawer__close").click();
+    await expect(ownDrawer).toHaveCount(0);
+    const ownRow = page.locator("tr.roster-table__row", {
+      hasText: "Owen Organizer",
+    });
+    await expect(ownRow).toContainText("You (organizer)");
+    await expect(page.getByRole("button", { name: "Add myself" })).toHaveCount(
+      0,
+    );
+
+    // A mistyped address is fixed in place; the row keeps its name.
+    await page
+      .getByRole("button", { name: "Edit name and email for Ada Typo" })
+      .click();
+    const details = page.getByRole("dialog", { name: "Edit Ada Typo" });
+    await details.getByLabel(/Email address/).fill(fixedEmail);
+    await details.getByRole("button", { name: "Save details" }).click();
+    await expect(details).toHaveCount(0);
+    await expect(
+      page.getByText(
+        `Ada Typo now uses ${fixedEmail}. Their invitation has not been sent to this address yet.`,
+      ),
+    ).toBeVisible();
+    const adaRow = page.locator("tr.roster-table__row", {
+      hasText: "Ada Typo",
+    });
+    await expect(adaRow).toContainText(fixedEmail);
+    await expect(adaRow).toContainText("Not sent");
+
+    // One group alone counts in the results; Include everyone undoes it.
+    await page.getByRole("button", { name: "New group", exact: true }).click();
+    await page.getByLabel("New group name").fill("Team A");
+    await page
+      .getByRole("button", { name: "Create group", exact: true })
+      .click();
+    await expect(page.getByText("Created Team A.")).toBeVisible();
+    await page.getByLabel("Ada Typo in Team A").check();
+    await page.getByRole("button", { name: "Save group changes" }).click();
+    const teamRow = page
+      .getByRole("region", { name: "Roster groups" })
+      .locator('[data-roster-group="Team A"]');
+    await expect(teamRow).toContainText("1 person");
+    await teamRow.getByRole("button", { name: "Only this group" }).click();
+    await expect(
+      page.getByText(
+        "Only Team A counts in the results now. Use Include everyone to bring the others back.",
+      ),
+    ).toBeVisible();
+    await expect(page.getByLabel("Include Ada Typo")).toBeChecked();
+    await expect(page.getByLabel("Include Ben Leaving")).not.toBeChecked();
+    await expect(page.getByLabel("Include Owen Organizer")).not.toBeChecked();
+    await page.getByRole("button", { name: "Include everyone" }).click();
+    await expect(page.getByLabel("Include Ben Leaving")).toBeChecked();
+    await expect(page.getByLabel("Include Owen Organizer")).toBeChecked();
+
+    // Removing asks first, then deletes the row and its invitation.
+    await page.getByRole("button", { name: "Remove Ben Leaving" }).click();
+    const removeDialog = page.getByRole("dialog", {
+      name: "Remove Ben Leaving from the roster?",
+    });
+    await expect(
+      removeDialog.getByRole("button", { name: "Cancel" }),
+    ).toBeFocused();
+    await removeDialog.getByRole("button", { name: "Remove person" }).click();
+    await expect(
+      page.getByText("Ben Leaving was removed from the roster."),
+    ).toBeVisible();
+    await expect(
+      page.locator("tr.roster-table__row", { hasText: "Ben Leaving" }),
+    ).toHaveCount(0);
+
+    const roster = await apiJson(
+      request,
+      "GET",
+      `/events/roster?code=${eventCode}`,
+      organizerSession.access,
+    );
+    expect(roster.response.status()).toBe(200);
+    expect(roster.payload.organizerOnRoster).toBe(true);
+    expect(
+      roster.payload.participants
+        .map((participant) => participant.email)
+        .sort(),
+    ).toEqual([fixedEmail, organizerEmail].sort());
   });
 
   test("runs the scaled roster-to-calendar workflow and persists it to Postgres", async ({
@@ -1915,7 +2052,9 @@ test.describe("Releviz account and scheduling flow", () => {
     // then add one selected person to it without leaving E2E Group.
     await page.getByRole("button", { name: "New group", exact: true }).click();
     await page.getByLabel("New group name").fill("E2E Second");
-    await page.getByRole("button", { name: "Create group", exact: true }).click();
+    await page
+      .getByRole("button", { name: "Create group", exact: true })
+      .click();
     await expect(page.getByText("Created E2E Second.")).toBeVisible();
     const secondGroupRow = groupsTable.locator(
       '[data-roster-group="E2E Second"]',
@@ -1929,22 +2068,42 @@ test.describe("Releviz account and scheduling flow", () => {
     await page.getByLabel("Select Manual Participant").uncheck();
 
     // Every group is also a checkbox column on the roster rows: ticking one
-    // adds that single membership, and All puts the person in every group.
+    // stages that single membership until Save group changes, and All puts
+    // the person in every group.
     const patInSecond = page.getByLabel("Pat Participant in E2E Second");
-    await expect(page.getByLabel("Manual Participant in E2E Second")).toBeChecked();
+    const unsavedGroups = page.getByRole("region", {
+      name: "Unsaved group changes",
+    });
+    const saveGroups = page.getByRole("button", { name: "Save group changes" });
+    await expect(
+      page.getByLabel("Manual Participant in E2E Second"),
+    ).toBeChecked();
     await expect(patInSecond).not.toBeChecked();
     await patInSecond.check();
+    await expect(unsavedGroups).toContainText(
+      "1 unsaved group change for 1 person.",
+    );
+    // Nothing is saved until the organizer says so.
+    await expect(secondGroupRow).toContainText("1 person");
+    await saveGroups.click();
+    await expect(unsavedGroups).toHaveCount(0);
     await expect(secondGroupRow).toContainText("2 people");
     await patInSecond.uncheck();
+    await saveGroups.click();
+    await expect(unsavedGroups).toHaveCount(0);
     await expect(secondGroupRow).toContainText("1 person");
     const patInAll = page.getByLabel("All groups for Pat Participant");
     await patInAll.check();
     await expect(patInSecond).toBeChecked();
     await expect(patInSecond).toBeDisabled();
+    await saveGroups.click();
+    await expect(unsavedGroups).toHaveCount(0);
     await expect(secondGroupRow).toContainText("2 people");
     await patInAll.uncheck();
     await expect(patInSecond).toBeEnabled();
     await expect(patInSecond).not.toBeChecked();
+    await saveGroups.click();
+    await expect(unsavedGroups).toHaveCount(0);
     await expect(secondGroupRow).toContainText("1 person");
     await expect(groupRow).toContainText("2 people");
 

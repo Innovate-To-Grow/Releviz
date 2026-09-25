@@ -130,75 +130,14 @@ def _create_or_reuse_organizer_managed_participant(
     }
 
 
-@transaction.atomic
-def create_or_reuse_managed_participant(
-    *,
-    event: Event,
-    organizer,
-    name: str,
-    email: str,
-    phone: str = "",
-    organizer_managed: bool = False,
-):
-    """Create an event participant without sending an invitation.
+def resolve_roster_member(normalized_email: str, normalized_name: str):
+    """The member behind a roster address, as ``(member, contact, member_created)``.
 
-    Email is the global identity key. Existing members are reused, while a new
-    identity is created as a passwordless, unverified temporary member. With
-    ``organizer_managed`` the address is one of the organizer's own (blank means
-    their primary one) and never becomes an identity for the person.
+    Email is the global identity key: the account that owns the address is
+    reused, and an unknown (or orphaned) address gets a fresh passwordless,
+    unverified temporary member named ``normalized_name``. The contact row is
+    locked.
     """
-
-    event = Event.objects.select_for_update().get(pk=event.pk)
-    if event.organizer_id != organizer.pk:
-        raise ManagedParticipantError(
-            "Only the organizer can create managed participants.",
-            status_code=403,
-        )
-    write_error = response_write_error(event)
-    if write_error:
-        raise ManagedParticipantError(write_error, status_code=409)
-
-    normalized_name = str(name or "").strip()
-    normalized_email = str(email or "").strip().lower()
-    if not normalized_name:
-        raise ManagedParticipantError("Name is required.")
-    if len(normalized_name) > 100:
-        raise ManagedParticipantError("Name is too long (max 100).")
-    if len(normalized_email) > 254:
-        raise ManagedParticipantError("Email is too long (max 254).")
-    if normalized_email or not organizer_managed:
-        try:
-            validate_email(normalized_email)
-        except ValidationError as exc:
-            raise ManagedParticipantError("Enter a valid email address.") from exc
-    normalized_phone = normalize_phone(phone)
-
-    if organizer_managed:
-        return _create_or_reuse_organizer_managed_participant(
-            event=event,
-            organizer=organizer,
-            name=normalized_name,
-            email=normalized_email,
-            phone=normalized_phone,
-        )
-    if organizer.contact_emails.filter(email_address__iexact=normalized_email).exists():
-        raise ManagedParticipantError(
-            'That is one of your own addresses. Check "No email of their own" to add a person '
-            "you manage.",
-            status_code=409,
-            error_code="organizer_own_email",
-        )
-
-    invitation_exists = event.invitations.filter(email__iexact=normalized_email).exists()
-    if (
-        not invitation_exists
-        and event.invitations.count() >= settings.INVITATION_MAX_EVENT_RECIPIENTS
-    ):
-        raise ManagedParticipantError(
-            f"An event can have at most {settings.INVITATION_MAX_EVENT_RECIPIENTS} "
-            "invitation recipients.",
-            status_code=409,
-        )
 
     contact = (
         ContactEmail.objects.select_for_update(of=("self",))
@@ -252,14 +191,11 @@ def create_or_reuse_managed_participant(
         member_created = True
     else:
         member = contact.member
+    return member, contact, member_created
 
-    participant_exists = event.participants.filter(member=member).exists()
-    participant_limit = getattr(settings, "EVENT_MAX_PARTICIPANTS", 1000)
-    if not participant_exists and event.participants.count() >= participant_limit:
-        raise ManagedParticipantError(
-            f"An event can have at most {participant_limit} participants.",
-            status_code=409,
-        )
+
+def check_roster_member_usable(member, contact) -> None:
+    """Refuse addresses whose account cannot take part in an event."""
 
     if not member.is_active:
         raise ManagedParticipantError(INACTIVE_ACCOUNT_MESSAGE, status_code=409)
@@ -270,6 +206,89 @@ def create_or_reuse_managed_participant(
         and not contact.verified
     ):
         raise ManagedParticipantError(UNVERIFIED_FULL_ACCOUNT_MESSAGE, status_code=409)
+
+
+@transaction.atomic
+def create_or_reuse_managed_participant(
+    *,
+    event: Event,
+    organizer,
+    name: str,
+    email: str,
+    phone: str = "",
+    organizer_managed: bool = False,
+):
+    """Create an event participant without sending an invitation.
+
+    Email is the global identity key. Existing members are reused, while a new
+    identity is created as a passwordless, unverified temporary member. With
+    ``organizer_managed`` the address is one of the organizer's own (blank means
+    their primary one) and never becomes an identity for the person.
+    """
+
+    event = Event.objects.select_for_update().get(pk=event.pk)
+    if event.organizer_id != organizer.pk:
+        raise ManagedParticipantError(
+            "Only the organizer can create managed participants.",
+            status_code=403,
+        )
+    write_error = response_write_error(event)
+    if write_error:
+        raise ManagedParticipantError(write_error, status_code=409)
+
+    normalized_name = str(name or "").strip()
+    normalized_email = str(email or "").strip().lower()
+    if not normalized_name:
+        raise ManagedParticipantError("Name is required.")
+    if len(normalized_name) > 100:
+        raise ManagedParticipantError("Name is too long (max 100).")
+    if len(normalized_email) > 254:
+        raise ManagedParticipantError("Email is too long (max 254).")
+    if normalized_email or not organizer_managed:
+        try:
+            validate_email(normalized_email)
+        except ValidationError as exc:
+            raise ManagedParticipantError("Enter a valid email address.") from exc
+    normalized_phone = normalize_phone(phone)
+
+    if organizer_managed:
+        return _create_or_reuse_organizer_managed_participant(
+            event=event,
+            organizer=organizer,
+            name=normalized_name,
+            email=normalized_email,
+            phone=normalized_phone,
+        )
+    if organizer.contact_emails.filter(email_address__iexact=normalized_email).exists():
+        raise ManagedParticipantError(
+            "That is one of your own addresses. Use Add myself to put yourself on the roster, "
+            'or check "No email of their own" to add a person you manage.',
+            status_code=409,
+            error_code="organizer_own_email",
+        )
+
+    invitation_exists = event.invitations.filter(email__iexact=normalized_email).exists()
+    if (
+        not invitation_exists
+        and event.invitations.count() >= settings.INVITATION_MAX_EVENT_RECIPIENTS
+    ):
+        raise ManagedParticipantError(
+            f"An event can have at most {settings.INVITATION_MAX_EVENT_RECIPIENTS} "
+            "invitation recipients.",
+            status_code=409,
+        )
+
+    member, contact, member_created = resolve_roster_member(normalized_email, normalized_name)
+
+    participant_exists = event.participants.filter(member=member).exists()
+    participant_limit = getattr(settings, "EVENT_MAX_PARTICIPANTS", 1000)
+    if not participant_exists and event.participants.count() >= participant_limit:
+        raise ManagedParticipantError(
+            f"An event can have at most {participant_limit} participants.",
+            status_code=409,
+        )
+
+    check_roster_member_usable(member, contact)
 
     participant, participant_created = Participant.objects.get_or_create(
         event=event,

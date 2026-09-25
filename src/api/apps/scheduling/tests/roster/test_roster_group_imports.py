@@ -408,9 +408,9 @@ class RosterImportGroupCommitTests(RosterGroupImportTestCase):
         self.assertEqual(
             roster.data["stats"]["groups"],
             [
-                {"id": faculty.pk, "name": "Faculty", "count": 4, "weight": 1.0},
-                {"id": team.pk, "name": "Team 3", "count": 3, "weight": 1.0},
-                {"id": None, "name": "", "count": 1, "weight": 1.0},
+                {"id": faculty.pk, "name": "Faculty", "count": 4, "weight": 1.0, "included": True},
+                {"id": team.pk, "name": "Team 3", "count": 3, "weight": 1.0, "included": True},
+                {"id": None, "name": "", "count": 1, "weight": 1.0, "included": True},
             ],
         )
         memberships = {
@@ -549,7 +549,7 @@ class RosterImportGroupCommitTests(RosterGroupImportTestCase):
         self.assertEqual(roster.status_code, 200, roster.data)
         self.assertEqual(
             roster.data["stats"]["groups"],
-            [{"id": group.pk, "name": "D", "count": 2, "weight": 1.0}],
+            [{"id": group.pk, "name": "D", "count": 2, "weight": 1.0, "included": True}],
         )
 
 

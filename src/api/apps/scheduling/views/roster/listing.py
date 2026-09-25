@@ -54,6 +54,10 @@ class RosterView(PrivateAPIView):
                 "stats": stats,
                 "activity": activity,
                 "latestDeliveryRequest": latest_delivery_request(event),
+                # Whether the organizer answers as a participant themselves.
+                "organizerOnRoster": event.participants.filter(
+                    member_id=event.organizer_id
+                ).exists(),
             }
         )
 

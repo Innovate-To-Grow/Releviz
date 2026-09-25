@@ -420,6 +420,9 @@ def send_roster_invitations(
 
     emails = []
     for participant in participants:
+        # The organizer's own row answers for itself and is never invited.
+        if participant.member_id == event.organizer_id:
+            continue
         invitation = latest_invitations.get(participant.member_id)
         if invitation is not None:
             email = invitation.email

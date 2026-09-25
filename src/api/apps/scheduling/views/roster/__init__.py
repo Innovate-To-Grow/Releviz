@@ -1,7 +1,7 @@
 """Roster and roster-import endpoints."""
 
 from .bulk import RosterBulkView
-from .groups import RosterGroupsView, RosterGroupView
+from .groups import RosterGroupIncludeOnlyView, RosterGroupsView, RosterGroupView
 from .imports import (
     RosterImportCollectionView,
     RosterImportCommitView,
@@ -14,6 +14,7 @@ from .participants import RosterParticipantView
 
 __all__ = [
     "RosterBulkView",
+    "RosterGroupIncludeOnlyView",
     "RosterGroupView",
     "RosterGroupsView",
     "RosterImportCollectionView",
