@@ -52,7 +52,7 @@ jest.mock("@/components/event/CreateEventClient", () => ({
   ),
 }));
 jest.mock("@/components/schedule/OrganizerPanels", () => ({
-  OrganizerHeader: ({ event, onRefresh, refreshing, controls, live }) => (
+  OrganizerHeader: ({ event, controls, live }) => (
     <header>
       <h2>{event.name}</h2>
       <span data-testid="organizer-header-event-status">{event.status}</span>
@@ -63,9 +63,6 @@ jest.mock("@/components/schedule/OrganizerPanels", () => ({
       )}
       <div role="group" aria-label="Workspace actions">
         {controls}
-        <button onClick={onRefresh} disabled={refreshing}>
-          {refreshing ? "Refreshing…" : "Refresh"}
-        </button>
       </div>
     </header>
   ),
@@ -108,7 +105,10 @@ jest.mock("@/lib/api/roster", () => ({
 import { useAuth } from "@/components/auth/AuthContext";
 import EventContext from "@/components/event/EventContext";
 import OrganizerScaleView from "@/components/schedule/OrganizerScaleView";
-import { LIVE_REFRESH_FASTEST_MS } from "@/lib/liveRefresh";
+import {
+  LIVE_REFRESH_FASTEST_MS,
+  LIVE_REFRESH_IDLE_PACE,
+} from "@/lib/liveRefresh";
 import {
   confirmFinalMeeting,
   fetchDeliveryRequest,
@@ -580,13 +580,11 @@ describe("scaled organizer workspace", () => {
         name: "Event controls",
       }),
     ).toBeInTheDocument();
+    // The workspace keeps itself current: nothing on the page refreshes it
+    // by hand.
     expect(
-      within(workspaceActions).getByRole("button", { name: "Refresh" }),
-    ).toBeInTheDocument();
-    // The header's Refresh is the only refresh control on the page.
-    expect(screen.getAllByRole("button", { name: /refresh/i })).toEqual([
-      within(workspaceActions).getByRole("button", { name: "Refresh" }),
-    ]);
+      screen.queryByRole("button", { name: /refresh/i }),
+    ).not.toBeInTheDocument();
     // Finalize lives inside the results section, beside the calendar.
     const resultsSection = document.getElementById("organizer-results");
     expect(resultsSection).toContainElement(
@@ -727,59 +725,6 @@ describe("scaled organizer workspace", () => {
     ).toBeDisabled();
   });
 
-  test("refreshes the event, roster, and results as one workspace", async () => {
-    const setEvent = jest.fn();
-    renderView(setEvent);
-    await screen.findByText("Ada Faculty");
-    await screen.findByText(/Results are current at revision 3/);
-    fetchEvent.mockClear();
-    fetchRoster.mockClear();
-    fetchEventResults.mockClear();
-
-    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
-
-    expect(await screen.findByText("Workspace updated.")).toHaveAttribute(
-      "role",
-      "status",
-    );
-    expect(fetchEvent).toHaveBeenCalledWith(event.code, "token");
-    expect(fetchRoster).toHaveBeenCalledTimes(1);
-    expect(fetchEventResults).toHaveBeenCalledTimes(1);
-    expect(setEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ code: event.code, version: 3 }),
-    );
-  });
-
-  test("ignores a second refresh while one is in flight and tolerates an event-less reply", async () => {
-    const setEvent = jest.fn();
-    let releaseEvent;
-    fetchEvent.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          releaseEvent = resolve;
-        }),
-    );
-    renderView(setEvent);
-    await screen.findByText("Ada Faculty");
-    await screen.findByText(/Results are current at revision 3/);
-    fetchEvent.mockClear();
-    fetchRoster.mockClear();
-
-    const refresh = screen.getByRole("button", { name: "Refresh" });
-    await userEvent.click(refresh);
-    expect(refresh).toBeDisabled();
-    await waitFor(() => expect(releaseEvent).toBeDefined());
-    // A second press during the first run is a no-op.
-    fireEvent.click(refresh);
-    expect(fetchEvent).toHaveBeenCalledTimes(1);
-    await act(async () => {
-      releaseEvent({});
-    });
-    expect(await screen.findByText("Workspace updated.")).toBeInTheDocument();
-    expect(setEvent).not.toHaveBeenCalled();
-    expect(fetchRoster).toHaveBeenCalledTimes(1);
-  });
-
   test("reports when the roster cannot be re-read after a reset", async () => {
     renderView();
     await screen.findByText("Ada Faculty");
@@ -800,36 +745,6 @@ describe("scaled organizer workspace", () => {
       await screen.findByText(
         "The event was saved, but the roster could not be refreshed.",
       ),
-    ).toHaveAttribute("role", "alert");
-  });
-
-  test("reports a partial workspace refresh without discarding successful data", async () => {
-    renderView();
-    await screen.findByText("Ada Faculty");
-    await screen.findByText(/Results are current at revision 3/);
-    fetchEventResults.mockRejectedValueOnce(new Error("results unavailable"));
-
-    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
-
-    expect(
-      await screen.findByText(
-        "Unable to refresh results. Other workspace sections were updated.",
-      ),
-    ).toHaveAttribute("role", "alert");
-  });
-
-  test("reports a workspace refresh when authentication fails", async () => {
-    const getToken = jest.fn().mockResolvedValue("token");
-    useAuth.mockReturnValue({ user: organizer, loading: false, getToken });
-    renderView();
-    await screen.findByText("Ada Faculty");
-    await screen.findByText(/Results are current at revision 3/);
-    getToken.mockRejectedValueOnce(new Error(""));
-
-    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
-
-    expect(
-      await screen.findByText("Unable to refresh this workspace."),
     ).toHaveAttribute("role", "alert");
   });
 
@@ -1295,7 +1210,9 @@ describe("scaled organizer workspace", () => {
     window.sessionStorage.setItem(key, "not-json");
     renderView();
     await waitFor(() => expect(window.sessionStorage.getItem(key)).toBeNull());
-    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(
+      screen.queryByLabelText("Event delivery progress"),
+    ).not.toBeInTheDocument();
   });
 
   test("clears persisted delivery progress when a request queues no recipients", async () => {
@@ -2176,36 +2093,6 @@ describe("scaled organizer workspace", () => {
     expect(rail.querySelector("details")).not.toHaveAttribute("open");
   });
 
-  test("the header refresh also re-reads visible delivery progress", async () => {
-    const key = `releviz.delivery-request.${event.code}`;
-    window.sessionStorage.setItem(
-      key,
-      JSON.stringify({
-        id: "delivery-9",
-        operation: "reminder",
-        delivery: { total: 3, sent: 3 },
-      }),
-    );
-    fetchDeliveryRequest.mockResolvedValue({
-      id: "delivery-9",
-      operation: "reminder",
-      delivery: { total: 3, sent: 2, permanentFailure: 1 },
-    });
-    renderView();
-    await screen.findByText("Ada Faculty");
-    const progress = await screen.findByLabelText("Event delivery progress");
-    expect(progress).toHaveTextContent("Complete");
-    expect(
-      within(progress).queryByRole("button", { name: /refresh/i }),
-    ).not.toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
-    await waitFor(() =>
-      expect(fetchDeliveryRequest).toHaveBeenCalledWith("delivery-9", "token"),
-    );
-    expect(await screen.findByText("Needs attention")).toBeInTheDocument();
-  });
-
   test("picks a custom window on the calendar and finalizes it", async () => {
     mockCalendarWindowFlow();
     const nowSpy = jest
@@ -2488,7 +2375,7 @@ describe("scaled organizer workspace", () => {
       });
     }
 
-    test("loads a new response into every section without Refresh and keeps the pick", async () => {
+    test("loads a new response into every section on its own and keeps the pick", async () => {
       const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTime });
       const { setEvent } = await renderLiveWorkspace();
       await user.click(
@@ -2584,7 +2471,6 @@ describe("scaled organizer workspace", () => {
       expect(setEvent).toHaveBeenCalledWith({ ...event, resultsRevision: 4 });
       // The organizer's pick and the silent nature of the pass both hold.
       expect(finalize).toHaveTextContent("Thursday 9:00 AM");
-      expect(screen.queryByText("Workspace updated.")).not.toBeInTheDocument();
       expect(screen.queryByText("Loading roster…")).not.toBeInTheDocument();
       await waitFor(() =>
         expect(screen.getByTestId("live-sync")).toHaveAttribute(
@@ -2706,28 +2592,8 @@ describe("scaled organizer workspace", () => {
       );
     });
 
-    test("waits for a manual refresh and never overlaps its own passes", async () => {
-      const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTime });
+    test("never overlaps its own passes", async () => {
       await renderLiveWorkspace();
-      let releaseEvent;
-      fetchEvent.mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            releaseEvent = resolve;
-          }),
-      );
-      await act(async () => {
-        await user.click(screen.getByRole("button", { name: "Refresh" }));
-      });
-      await waitFor(() => expect(releaseEvent).toBeDefined());
-      await tick();
-      expect(fetchEventActivity).not.toHaveBeenCalled();
-      await act(async () => {
-        releaseEvent({ event: { ...event, version: 2 } });
-      });
-      expect(await screen.findByText("Workspace updated.")).toBeInTheDocument();
-      fetchRoster.mockClear();
-
       // A pass still waiting on the digest is not doubled by a catch-up.
       let releaseActivity;
       fetchEventActivity.mockImplementationOnce(
@@ -2886,13 +2752,68 @@ describe("scaled organizer workspace", () => {
       await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(5));
     });
 
-    test("does not poll while responses are closed", async () => {
+    test("polls a closed event at the idle pace, with no live line", async () => {
+      fetchEventActivity.mockResolvedValue(
+        activityWith({ event: { status: "closed" } }),
+      );
       renderView(jest.fn(), { ...event, status: "closed" });
       await screen.findByText("Ada Faculty");
       fetchEventActivity.mockClear();
+      fetchEvent.mockClear();
       expect(screen.queryByTestId("live-sync")).not.toBeInTheDocument();
+      // Responses cannot arrive, so the first check waits 15 s rather than
+      // 3 s, and each quiet one waits half again as long, up to a minute.
+      const { fastestMs } = LIVE_REFRESH_IDLE_PACE;
       await tick(FASTEST * 2);
       expect(fetchEventActivity).not.toHaveBeenCalled();
+      await tick(fastestMs - FASTEST * 2);
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(1));
+      await tick(fastestMs * 1.5 - 1);
+      expect(fetchEventActivity).toHaveBeenCalledTimes(1);
+      await tick(1);
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(2));
+      expect(fetchEvent).not.toHaveBeenCalled();
+      expect(screen.queryByTestId("live-sync")).not.toBeInTheDocument();
+    });
+
+    test("notices a reactivation made in another session and switches to the live pace", async () => {
+      // The first idle pass fails: a closed event shows no live line, so the
+      // paused notice stays out of sight until a clean pass clears it.
+      fetchEventActivity
+        .mockRejectedValueOnce(new Error("offline"))
+        .mockResolvedValue(activityWith({ event: { version: 3 } }));
+      render(
+        <StatefulWorkspace initialEvent={{ ...event, status: "closed" }} />,
+      );
+      await screen.findByText("Ada Faculty");
+      fetchEventActivity.mockClear();
+      fetchEvent.mockClear();
+      const { fastestMs } = LIVE_REFRESH_IDLE_PACE;
+      await tick(fastestMs);
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(1));
+      expect(screen.queryByTestId("live-sync")).not.toBeInTheDocument();
+      // The failed pass eases off, so the next one is 22.5 s out. It finds
+      // the event at a newer version and re-reads it: the event is active.
+      await tick(fastestMs * 1.5);
+      await waitFor(() =>
+        expect(fetchEvent).toHaveBeenCalledWith(event.code, "token"),
+      );
+      await waitFor(() =>
+        expect(
+          screen.getByTestId("organizer-header-event-status"),
+        ).toHaveTextContent("active"),
+      );
+      // The live line is back and clean, and the next check is 3 s out.
+      await waitFor(() =>
+        expect(screen.getByTestId("live-sync")).toHaveTextContent("Live"),
+      );
+      expect(screen.getByTestId("live-sync")).toHaveAttribute(
+        "data-updated",
+        "yes",
+      );
+      fetchEventActivity.mockClear();
+      await tick(FASTEST);
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(1));
     });
   });
 

@@ -173,99 +173,207 @@ beforeEach(() => {
   });
 });
 
-test("delivery progress refreshes, retries permanent failures, and reports canceled jobs", async () => {
-  const onChange = jest.fn();
-  fetchDeliveryRequest.mockResolvedValue({
-    request: {
+// The delivery card paces its own reads with fake timers; user events must
+// advance them too, or they never settle.
+function withFakeTimers(run) {
+  return async () => {
+    jest.useFakeTimers();
+    try {
+      await run(userEvent.setup({ advanceTimers: jest.advanceTimersByTime }));
+    } finally {
+      delete document.visibilityState;
+      jest.useRealTimers();
+    }
+  };
+}
+
+async function tick(ms) {
+  await act(async () => {
+    jest.advanceTimersByTime(ms);
+  });
+}
+
+function setTabVisibility(state) {
+  Object.defineProperty(document, "visibilityState", {
+    configurable: true,
+    get: () => state,
+  });
+}
+
+test(
+  "delivery progress polls a waiting run on the live pace, eases off while it stalls, and stops once it settles",
+  withFakeTimers(async (user) => {
+    const onChange = jest.fn();
+    retryDeliveryRequest.mockResolvedValue({
       id: "delivery-1",
       operation: "reminder",
-      delivery: { total: 5, sent: 3, permanentFailure: 2, canceled: 1 },
-    },
-  });
-  retryDeliveryRequest.mockResolvedValue({
-    id: "delivery-1",
-    operation: "reminder",
-    summary: { recipientTotal: 5, pending: 2, sent: 3 },
-  });
-  const { rerender } = render(
-    <DeliveryRequestProgress
-      initialRequest={{
-        id: "delivery-1",
-        summary: { recipientTotal: 5, permanentFailure: 2, canceled: 1 },
-      }}
-      getToken={getToken}
-      onChange={onChange}
-      refreshKey={0}
-    />,
-  );
+      summary: { recipientTotal: 5, pending: 2, sent: 3 },
+    });
+    fetchDeliveryRequest
+      .mockResolvedValueOnce({
+        request: {
+          id: "delivery-1",
+          operation: "reminder",
+          delivery: { total: 5, pending: 2, sent: 3 },
+        },
+      })
+      .mockResolvedValueOnce({
+        deliveryRequest: {
+          id: "delivery-1",
+          operation: "reminder",
+          delivery: { total: 5, sent: 5, canceled: 1 },
+        },
+      });
+    render(
+      <DeliveryRequestProgress
+        initialRequest={{
+          id: "delivery-1",
+          summary: { recipientTotal: 5, permanentFailure: 2, canceled: 1 },
+        }}
+        getToken={getToken}
+        onChange={onChange}
+      />,
+    );
+    const card = screen.getByLabelText("Delivery progress");
+    expect(card).toHaveTextContent("Needs attention");
+    expect(card).toHaveTextContent("1 canceled");
+    // A settled run is never re-read, and the card has no refresh button:
+    // it keeps itself current on its own while recipients are waiting.
+    expect(
+      screen.queryByRole("button", { name: /refresh/i }),
+    ).not.toBeInTheDocument();
+    await tick(15000);
+    expect(fetchDeliveryRequest).not.toHaveBeenCalled();
 
-  expect(screen.getByLabelText("Delivery progress")).toHaveTextContent(
-    "Needs attention",
-  );
-  expect(screen.getByLabelText("Delivery progress")).toHaveTextContent(
-    "1 canceled",
-  );
-  // The card has no refresh button of its own: the workspace's single
-  // Refresh bumps `refreshKey`, and mounting with 0 does not fetch.
-  expect(
-    screen.queryByRole("button", { name: /refresh/i }),
-  ).not.toBeInTheDocument();
-  expect(fetchDeliveryRequest).not.toHaveBeenCalled();
-  rerender(
-    <DeliveryRequestProgress
-      initialRequest={{
-        id: "delivery-1",
-        summary: { recipientTotal: 5, permanentFailure: 2, canceled: 1 },
-      }}
-      getToken={getToken}
-      onChange={onChange}
-      refreshKey={1}
-    />,
-  );
-  await waitFor(() =>
-    expect(fetchDeliveryRequest).toHaveBeenCalledWith("delivery-1", "token"),
-  );
-  await userEvent.click(
-    screen.getByRole("button", { name: "Retry failed recipients" }),
-  );
-  await waitFor(() =>
-    expect(retryDeliveryRequest).toHaveBeenCalledWith("delivery-1", "token"),
-  );
-  expect(onChange).toHaveBeenCalledTimes(2);
-  await waitFor(() =>
-    expect(screen.getByLabelText("Delivery progress")).toHaveTextContent(
-      "2 queued",
-    ),
-  );
-});
+    await user.click(
+      screen.getByRole("button", { name: "Retry failed recipients" }),
+    );
+    await waitFor(() =>
+      expect(retryDeliveryRequest).toHaveBeenCalledWith("delivery-1", "token"),
+    );
+    await waitFor(() => expect(card).toHaveTextContent("2 queued"));
+    expect(onChange).toHaveBeenCalledTimes(1);
 
-test("delivery progress exposes refresh and retry errors", async () => {
-  fetchDeliveryRequest.mockRejectedValueOnce(new Error("progress unavailable"));
-  retryDeliveryRequest.mockRejectedValueOnce(new Error("retry unavailable"));
+    // Recipients are waiting again: the first read comes 3 s on and finds
+    // the same counts, so the next one waits 4.5 s ...
+    await tick(3000);
+    await waitFor(() =>
+      expect(fetchDeliveryRequest).toHaveBeenCalledWith("delivery-1", "token"),
+    );
+    expect(onChange).toHaveBeenCalledTimes(2);
+    await tick(4499);
+    expect(fetchDeliveryRequest).toHaveBeenCalledTimes(1);
+    await tick(1);
+    await waitFor(() => expect(fetchDeliveryRequest).toHaveBeenCalledTimes(2));
+    // ... and that one finds everyone sent, so the reads stop.
+    await waitFor(() => expect(card).toHaveTextContent("Complete"));
+    expect(card).toHaveTextContent("5 sent");
+    expect(card).toHaveTextContent("0 queued");
+    expect(card).toHaveTextContent("1 canceled");
+    expect(onChange).toHaveBeenCalledTimes(3);
+    await tick(60000);
+    expect(fetchDeliveryRequest).toHaveBeenCalledTimes(2);
+  }),
+);
+
+test(
+  "delivery progress exposes refresh and retry errors",
+  withFakeTimers(async (user) => {
+    fetchDeliveryRequest.mockRejectedValueOnce(
+      new Error("progress unavailable"),
+    );
+    retryDeliveryRequest.mockRejectedValueOnce(new Error("retry unavailable"));
+    render(
+      <DeliveryRequestProgress
+        initialRequest={{
+          id: "delivery-2",
+          delivery: { pending: 1, permanentFailure: 1 },
+        }}
+        getToken={getToken}
+      />,
+    );
+    await tick(3000);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "progress unavailable",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Retry failed recipients" }),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "retry unavailable",
+    );
+  }),
+);
+
+test(
+  "delivery progress skips a hidden tab and catches up the moment it is shown",
+  withFakeTimers(async () => {
+    fetchDeliveryRequest.mockResolvedValue({
+      id: "delivery-3",
+      operation: "invitation",
+      delivery: { total: 2, pending: 1, sent: 1 },
+    });
+    setTabVisibility("hidden");
+    render(
+      <DeliveryRequestProgress
+        initialRequest={{
+          id: "delivery-3",
+          delivery: { total: 2, pending: 2 },
+        }}
+        getToken={getToken}
+      />,
+    );
+    await tick(30000);
+    expect(fetchDeliveryRequest).not.toHaveBeenCalled();
+    setTabVisibility("visible");
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await waitFor(() => expect(fetchDeliveryRequest).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Delivery progress")).toHaveTextContent(
+        "1 sent",
+      ),
+    );
+  }),
+);
+
+test(
+  "delivery progress keeps its pace while the organizer works in the page",
+  withFakeTimers(async () => {
+    // Email is not sent any faster for a click, so activity does not pull
+    // the next read in the way it does for the workspace's live sync.
+    fetchDeliveryRequest.mockResolvedValue({
+      id: "delivery-4",
+      delivery: { total: 3, pending: 3 },
+    });
+    render(
+      <DeliveryRequestProgress
+        initialRequest={{
+          id: "delivery-4",
+          delivery: { total: 3, pending: 3 },
+        }}
+        getToken={getToken}
+      />,
+    );
+    await tick(3000);
+    await waitFor(() => expect(fetchDeliveryRequest).toHaveBeenCalledTimes(1));
+    // Nothing moved: the next read is 4.5 s out, and stays there.
+    await tick(1000);
+    await act(async () => {
+      document.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    });
+    await tick(3499);
+    expect(fetchDeliveryRequest).toHaveBeenCalledTimes(1);
+    await tick(1);
+    await waitFor(() => expect(fetchDeliveryRequest).toHaveBeenCalledTimes(2));
+  }),
+);
+
+test("organizer header has no refresh control and keeps lifecycle controls", () => {
   render(
-    <DeliveryRequestProgress
-      initialRequest={{ id: "delivery-2", delivery: { permanentFailure: 1 } }}
-      getToken={getToken}
-      refreshKey={3}
-    />,
-  );
-  expect(await screen.findByRole("alert")).toHaveTextContent(
-    "progress unavailable",
-  );
-  await userEvent.click(
-    screen.getByRole("button", { name: "Retry failed recipients" }),
-  );
-  expect(await screen.findByRole("alert")).toHaveTextContent(
-    "retry unavailable",
-  );
-});
-
-test("organizer header keeps lifecycle controls beside the workspace refresh action", async () => {
-  const onRefresh = jest.fn();
-  const { rerender } = render(
     <OrganizerHeader
       event={baseEvent}
-      onRefresh={onRefresh}
       controls={<button type="button">Lifecycle action</button>}
     />,
   );
@@ -285,45 +393,25 @@ test("organizer header keeps lifecycle controls beside the workspace refresh act
   expect(screen.queryByText("UTC timezone")).not.toBeInTheDocument();
   expect(screen.queryByText("60-minute meeting")).not.toBeInTheDocument();
 
+  // The workspace keeps itself current, so the only actions are the
+  // lifecycle controls it is handed.
   const actions = screen.getByRole("group", { name: "Workspace actions" });
-  expect(
+  expect(within(actions).getAllByRole("button")).toEqual([
     within(actions).getByRole("button", { name: "Lifecycle action" }),
-  ).toBeInTheDocument();
-  await userEvent.click(
-    within(actions).getByRole("button", { name: "Refresh" }),
-  );
-  expect(onRefresh).toHaveBeenCalledTimes(1);
-
-  rerender(
-    <OrganizerHeader
-      event={baseEvent}
-      onRefresh={onRefresh}
-      refreshing
-      controls={<button type="button">Lifecycle action</button>}
-    />,
-  );
+  ]);
   expect(
-    within(actions).getByRole("button", { name: "Refreshing…" }),
-  ).toBeDisabled();
-  expect(
-    within(actions).getByRole("button", { name: "Refreshing…" }),
-  ).toHaveAttribute("aria-busy", "true");
+    screen.queryByRole("button", { name: /refresh/i }),
+  ).not.toBeInTheDocument();
 });
 
 test("organizer header states whether new responses are loading on their own", () => {
-  const { rerender } = render(
-    <OrganizerHeader event={baseEvent} onRefresh={jest.fn()} />,
-  );
+  const { rerender } = render(<OrganizerHeader event={baseEvent} />);
   // Not syncing (the event is not active): no live line at all.
   expect(screen.queryByRole("status")).not.toBeInTheDocument();
   expect(screen.queryByText("Live")).not.toBeInTheDocument();
 
   rerender(
-    <OrganizerHeader
-      event={baseEvent}
-      onRefresh={jest.fn()}
-      live={{ error: "", updatedAt: null }}
-    />,
+    <OrganizerHeader event={baseEvent} live={{ error: "", updatedAt: null }} />,
   );
   expect(screen.getByText("Live")).toBeInTheDocument();
   expect(screen.getByRole("status")).toHaveTextContent(
@@ -335,11 +423,7 @@ test("organizer header states whether new responses are loading on their own", (
   // announced status text, as a machine-readable time.
   const updatedAt = Date.parse("2026-08-20T08:05:00Z");
   rerender(
-    <OrganizerHeader
-      event={baseEvent}
-      onRefresh={jest.fn()}
-      live={{ error: "", updatedAt }}
-    />,
+    <OrganizerHeader event={baseEvent} live={{ error: "", updatedAt }} />,
   );
   const stamp = screen.getByText(/^Updated /);
   expect(stamp.tagName).toBe("TIME");
@@ -355,7 +439,6 @@ test("organizer header states whether new responses are loading on their own", (
   rerender(
     <OrganizerHeader
       event={baseEvent}
-      onRefresh={jest.fn()}
       live={{
         error: "New responses could not be loaded automatically (offline).",
         updatedAt,
@@ -364,7 +447,7 @@ test("organizer header states whether new responses are loading on their own", (
   );
   expect(screen.getByText("Live updates paused")).toBeInTheDocument();
   expect(screen.getByRole("status")).toHaveTextContent(
-    "New responses could not be loaded automatically (offline). Use Refresh to load new responses.",
+    "New responses could not be loaded automatically (offline). Retrying automatically.",
   );
   expect(screen.getByText(/^Updated /)).toBeInTheDocument();
 
@@ -375,11 +458,7 @@ test("organizer header states whether new responses are loading on their own", (
 
 test("organizer header keeps live sync on with nothing to switch it off", () => {
   render(
-    <OrganizerHeader
-      event={baseEvent}
-      onRefresh={jest.fn()}
-      live={{ error: "", updatedAt: null }}
-    />,
+    <OrganizerHeader event={baseEvent} live={{ error: "", updatedAt: null }} />,
   );
   expect(screen.getByText("Live")).toBeInTheDocument();
   expect(screen.getByRole("status")).toHaveTextContent(

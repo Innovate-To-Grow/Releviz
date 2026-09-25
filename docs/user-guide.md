@@ -145,7 +145,8 @@ Reminders skip anyone whose response is submitted, including a response you subm
 
 Sending returns as soon as the invitation jobs are queued. A delivery progress card at the top of
 the organizer workspace counts recipients that are sent, queued, or failed, and offers **Retry
-failed recipients**.
+failed recipients**. The card keeps itself current while recipients are queued (only while the tab
+is visible) and stops once everyone is sent or failed.
 
 ### Who can open an event
 
@@ -238,9 +239,11 @@ completed results; once current, it shows when they were generated.
 
 ### Live updates
 
-While the event is active and the tab is visible, the workspace updates itself: new responses,
-invitation opens, and edits made elsewhere appear without clicking Refresh, and without disturbing
-a selected time, an unsaved row, or an open drawer. It checks about every 3 seconds while things are
-changing, slows to every 15 seconds when idle, and checks immediately when you return to the tab or
-reconnect. The header shows a **Live** badge with the last update time, or **Live updates paused**
-with the reason if a check fails. **Refresh** reloads everything at once.
+The workspace updates itself; there is no Refresh button. While the tab is visible, new responses,
+invitation opens, and edits made elsewhere appear without disturbing a selected time, an unsaved
+row, or an open drawer. While the event is active it checks about every 3 seconds while things are
+changing and slows to every 15 seconds when idle. While the event is closed, finalized, or archived
+it checks every 15 seconds, slowing to once a minute, which is enough to notice a reactivation made
+elsewhere. It checks immediately when you return to the tab, the window regains focus, or you
+reconnect. While the event is active the header shows a **Live** badge with the last update time,
+or **Live updates paused** with the reason if a check fails; checking continues on its own.

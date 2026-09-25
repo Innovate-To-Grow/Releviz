@@ -15,7 +15,12 @@ import Alert from "@/components/ui/Alert";
 import LoadingState from "@/components/ui/LoadingState";
 import { CalendarIcon, ResultsIcon, RosterIcon } from "@/components/ui/icons";
 import { fetchEvent, fetchEventActivity } from "@/lib/api/events";
-import { createLiveRefreshScheduler } from "@/lib/liveRefresh";
+import {
+  LIVE_REFRESH_ACTIVE_PACE,
+  LIVE_REFRESH_IDLE_PACE,
+  attachLiveRefreshTriggers,
+  createLiveRefreshScheduler,
+} from "@/lib/liveRefresh";
 import { selectionFromRecommendation } from "@/lib/meetingWindows";
 
 // Workspace order: event facts, then the meeting-time calendar with its
@@ -30,13 +35,15 @@ const SECTION_IDS = SECTION_LINKS.map((section) => section.id);
 // view below it rather than underneath it.
 const SECTION_SCROLL_STYLE = { scrollMarginTop: "4rem" };
 
-// Live sync: while the event is active and this tab is visible, the
-// workspace polls a small activity digest and silently re-reads only the
-// sections whose digest moved, so new responses, invitation opens, and edits
-// from another session appear without pressing Refresh and without touching
-// what the organizer is doing (a pick, a row draft, an open drawer). It is
-// always on; only its pace adapts (see lib/liveRefresh): quick while things
-// change or the organizer is active, easing off while the workspace is quiet.
+// Live sync: while this tab is visible, the workspace polls a small activity
+// digest and silently re-reads only the sections whose digest moved, so new
+// responses, invitation opens, and edits from another session appear on their
+// own, without touching what the organizer is doing (a pick, a row draft, an
+// open drawer). There is nothing to press and nothing to switch off; only the
+// pace adapts (see lib/liveRefresh): quick while things change or the
+// organizer is active, easing off while the workspace is quiet, and slower
+// still while the event is not collecting responses, when the only thing left
+// to notice is a lifecycle change made in another session.
 const EVENT_DIGEST_KEYS = ["version", "status"];
 const RESULTS_DIGEST_KEYS = [
   "status",
@@ -109,15 +116,11 @@ export default function OrganizerScaleView() {
   const [deliveryRequest, setDeliveryRequestState] = useState(null);
   const [selection, setSelection] = useState(null);
   const [resultsInvalidationKey, setResultsInvalidationKey] = useState(0);
-  const [refreshing, setRefreshing] = useState(false);
-  const [refreshCount, setRefreshCount] = useState(0);
-  const [refreshStatus, setRefreshStatus] = useState("");
-  const [refreshError, setRefreshError] = useState("");
+  const [workspaceError, setWorkspaceError] = useState("");
   const [liveSync, setLiveSync] = useState({ error: "", updatedAt: null });
-  const refreshInFlight = useRef(false);
   const syncInFlight = useRef(false);
-  // The live-sync scheduler while the event is active, so the organizer's
-  // own actions can keep its pace up.
+  // The live-sync scheduler, so the organizer's own actions can keep its
+  // pace up.
   const paceRef = useRef(null);
   const eventRef = useRef(event);
   const rosterRef = useRef(null);
@@ -167,63 +170,15 @@ export default function OrganizerScaleView() {
     return () => window.removeEventListener("hashchange", syncSectionFromHash);
   }, []);
 
-  // The header's Refresh is the only manual refresh control on the page: it
-  // re-reads the event, roster, results, and any delivery progress that is
-  // showing, and clears the current pick.
-  const refreshWorkspace = useCallback(async () => {
-    if (refreshInFlight.current) return;
-    refreshInFlight.current = true;
-    setRefreshing(true);
-    setRefreshStatus("");
-    setRefreshError("");
-    setSelection(null);
-    setRefreshCount((current) => current + 1);
-    paceRef.current?.hurry();
-
-    try {
-      const token = await getToken();
-      const tasks = [
-        fetchEvent(event.code, token),
-        rosterRef.current?.refresh(token) || Promise.resolve(null),
-        resultsRef.current?.refresh(token) || Promise.resolve(null),
-      ];
-      const [eventResult, rosterResult, resultsResult] =
-        await Promise.allSettled(tasks);
-      if (eventResult.status === "fulfilled" && eventResult.value?.event) {
-        setEvent(eventResult.value.event);
-      }
-
-      const failed = [
-        ["event", eventResult],
-        ["roster", rosterResult],
-        ["results", resultsResult],
-      ].filter(([, result]) => result.status === "rejected");
-      if (failed.length) {
-        setRefreshError(
-          `Unable to refresh ${failed.map(([name]) => name).join(", ")}. Other workspace sections were updated.`,
-        );
-      } else {
-        setRefreshStatus("Workspace updated.");
-      }
-    } catch (requestError) {
-      setRefreshError(
-        requestError.message || "Unable to refresh this workspace.",
-      );
-    } finally {
-      refreshInFlight.current = false;
-      setRefreshing(false);
-    }
-  }, [event.code, getToken, setEvent]);
-
   useEffect(() => {
     eventRef.current = event;
   }, [event]);
 
   // One live-sync pass: compare the server's digest with what each section
-  // shows and re-read only what moved. The manual Refresh wins over it.
+  // shows and re-read only what moved. A pass still running is never doubled.
   // Resolves to the pass's outcome, which sets the pace of the next one.
   const syncWorkspace = useCallback(async () => {
-    if (refreshInFlight.current || syncInFlight.current) return "skipped";
+    if (syncInFlight.current) return "skipped";
     syncInFlight.current = true;
     try {
       const token = await getToken();
@@ -294,39 +249,30 @@ export default function OrganizerScaleView() {
     syncRef.current = syncWorkspace;
   }, [syncWorkspace]);
 
-  // Responses are only collected while the event is active, so that is the
-  // only time the digest is polled. A hidden tab skips its turns and catches
-  // up the moment it is shown again; the window regaining focus and the
-  // network returning check at once too, and working in the page keeps the
-  // pace up (so does an edit of the organizer's own, through ``paceRef``).
-  const live = event.status === "active";
+  // The digest is polled in every lifecycle state. While the event is active
+  // it is polled at the live pace, since a response can arrive at any moment;
+  // otherwise at the idle pace, since only a lifecycle change made in another
+  // session (a reactivation, say) is left to notice. A hidden tab skips its
+  // turns and catches up the moment it is shown again; the window regaining
+  // focus and the network returning check at once too, and working in the
+  // page keeps the pace up (so does an edit of the organizer's own, through
+  // ``paceRef``). A paused notice left by a failed pass at one pace clears
+  // with the first clean pass at the other.
+  const active = event.status === "active";
   useEffect(() => {
-    if (!live) return undefined;
     const scheduler = createLiveRefreshScheduler({
       check: () => syncRef.current(),
+      pace: active ? LIVE_REFRESH_ACTIVE_PACE : LIVE_REFRESH_IDLE_PACE,
     });
     paceRef.current = scheduler;
-    const wake = () => scheduler.wake();
-    const hurry = () => scheduler.hurry();
-    const handleVisibility = () => {
-      if (document.visibilityState === "visible") wake();
-    };
-    document.addEventListener("visibilitychange", handleVisibility);
-    window.addEventListener("focus", wake);
-    window.addEventListener("online", wake);
-    document.addEventListener("pointerdown", hurry, { passive: true });
-    document.addEventListener("keydown", hurry, { passive: true });
+    const detach = attachLiveRefreshTriggers(scheduler);
     scheduler.start();
     return () => {
+      detach();
       scheduler.stop();
       paceRef.current = null;
-      document.removeEventListener("visibilitychange", handleVisibility);
-      window.removeEventListener("focus", wake);
-      window.removeEventListener("online", wake);
-      document.removeEventListener("pointerdown", hurry);
-      document.removeEventListener("keydown", hurry);
     };
-  }, [event.code, live]);
+  }, [event.code, active]);
 
   const handleChoose = useCallback(
     (recommendation) => {
@@ -356,7 +302,7 @@ export default function OrganizerScaleView() {
           const token = await getToken();
           await rosterRef.current?.refresh(token);
         } catch (requestError) {
-          setRefreshError(
+          setWorkspaceError(
             requestError.message ||
               "The event was saved, but the roster could not be refreshed.",
           );
@@ -378,9 +324,7 @@ export default function OrganizerScaleView() {
     <main className="page-shell page-shell--wide organizer-workspace">
       <OrganizerHeader
         event={event}
-        onRefresh={refreshWorkspace}
-        refreshing={refreshing}
-        live={live ? liveSync : null}
+        live={active ? liveSync : null}
         controls={
           <EventControls
             event={event}
@@ -392,15 +336,15 @@ export default function OrganizerScaleView() {
         }
       />
 
-      {(refreshStatus || refreshError) && (
+      {workspaceError && (
         <Alert
-          variant={refreshError ? "danger" : "success"}
+          variant="danger"
           role={null}
-          className="organizer-workspace__refresh-feedback mb-4"
+          className="organizer-workspace__feedback mb-4"
         >
           {/* The live-region role stays on the message element itself. */}
-          <p className="mb-0" role={refreshError ? "alert" : "status"}>
-            {refreshError || refreshStatus}
+          <p className="mb-0" role="alert">
+            {workspaceError}
           </p>
         </Alert>
       )}
@@ -413,7 +357,6 @@ export default function OrganizerScaleView() {
             getToken={getToken}
             onChange={setDeliveryRequest}
             ariaLabel="Event delivery progress"
-            refreshKey={refreshCount}
           />
         </div>
       )}

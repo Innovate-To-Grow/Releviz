@@ -35,6 +35,10 @@ import EventDetailsGrid from "@/components/event/EventDetailsGrid";
 import BlockedSlotsEditor from "@/components/schedule/BlockedSlotsEditor";
 import MeetingCalendar from "@/components/schedule/MeetingCalendar";
 import {
+  attachLiveRefreshTriggers,
+  createLiveRefreshScheduler,
+} from "@/lib/liveRefresh";
+import {
   selectionFromRecommendation,
   selectionKey,
   selectionMatchesRecommendation,
@@ -66,6 +70,20 @@ function deliveryWaiting(delivery) {
     Number(delivery.processing || 0) +
     Number(delivery.retry || 0)
   );
+}
+
+// The numbers the delivery card shows for a run, which are also what two
+// reads of the same run are compared on to tell whether anything moved.
+function deliveryCounts(request) {
+  const delivery = deliveryFrom(request);
+  return {
+    total:
+      delivery.total ?? delivery.recipientTotal ?? request.recipientCount ?? 0,
+    sent: Number(delivery.sent || 0),
+    waiting: deliveryWaiting(delivery),
+    failed: Number(delivery.permanentFailure || 0),
+    canceled: Number(delivery.canceled || 0),
+  };
 }
 
 // Weekday + date + time without seconds, e.g. "Mon, Sep 14, 2026, 9:00 AM".
@@ -123,52 +141,68 @@ export function DeliveryRequestProgress({
   getToken,
   onChange,
   ariaLabel = "Delivery progress",
-  refreshKey = 0,
 }) {
   const [request, setRequest] = useState(initialRequest || null);
   const [error, setError] = useState("");
   const [retrying, setRetrying] = useState(false);
   const requestId = request?.id;
-  const loadRef = useRef(null);
+  const waiting = deliveryWaiting(deliveryFrom(request)) > 0;
+  // The run as shown, for a check to compare its read against, and the check
+  // itself, both reached through refs so the scheduler outlives re-renders.
+  const requestRef = useRef(request);
+  const checkRef = useRef(null);
 
-  const load = useCallback(async () => {
-    if (!requestId) return;
+  useEffect(() => {
+    requestRef.current = request;
+  }, [request]);
+
+  // One check of the run on the shared live-refresh pace: re-read it and
+  // report whether any count moved.
+  const check = useCallback(async () => {
     try {
       const token = await getToken();
       const data = await fetchDeliveryRequest(requestId, token);
       const updated = data.deliveryRequest || data.request || data;
+      const moved =
+        JSON.stringify(deliveryCounts(updated)) !==
+        JSON.stringify(deliveryCounts(requestRef.current));
       setRequest(updated);
       onChange?.(updated);
       setError("");
+      return moved ? "changed" : "quiet";
     } catch (requestError) {
       setError(requestError.message || "Unable to refresh delivery progress.");
+      return "failed";
     }
   }, [getToken, onChange, requestId]);
 
   useEffect(() => {
-    loadRef.current = load;
-  }, [load]);
+    checkRef.current = check;
+  }, [check]);
 
-  // The workspace's single Refresh button re-reads delivery progress too.
+  // While recipients are still waiting, the card keeps itself current: quick
+  // while the counts move, easing off while they stall, never while the tab
+  // is hidden, and at once when the tab is shown again, the window regains
+  // focus, or the network returns. Once everyone is sent or failed there is
+  // nothing left to read.
   useEffect(() => {
-    if (refreshKey) loadRef.current?.();
-  }, [refreshKey]);
-
-  useEffect(() => {
-    if (!request?.id || deliveryWaiting(deliveryFrom(request)) === 0)
-      return undefined;
-    const timer = setInterval(load, 3000);
-    return () => clearInterval(timer);
-  }, [load, request]);
+    if (!requestId || !waiting) return undefined;
+    const scheduler = createLiveRefreshScheduler({
+      check: () => checkRef.current(),
+    });
+    const detach = attachLiveRefreshTriggers(scheduler, { activity: false });
+    scheduler.start();
+    return () => {
+      detach();
+      scheduler.stop();
+    };
+  }, [requestId, waiting]);
 
   if (!request) return null;
-  const delivery = deliveryFrom(request);
-  const waiting = deliveryWaiting(delivery);
-  const failed = Number(delivery.permanentFailure || 0);
-  const total =
-    delivery.total ?? delivery.recipientTotal ?? request.recipientCount ?? 0;
+  const counts = deliveryCounts(request);
+  const failed = counts.failed;
   const state =
-    waiting > 0
+    counts.waiting > 0
       ? { status: "info", label: "In progress" }
       : failed > 0
         ? { status: "warning", label: "Needs attention" }
@@ -201,12 +235,12 @@ export function DeliveryRequestProgress({
         <StatusBadge status={state.status}>{state.label}</StatusBadge>
       </div>
       <ul className="metric-list delivery-progress__metrics">
-        <MetricListItem value={total} label="total" />
-        <MetricListItem value={delivery.sent || 0} label="sent" />
-        <MetricListItem value={waiting} label="queued" />
-        <MetricListItem value={failed} label="failed" />
-        {Number(delivery.canceled || 0) > 0 && (
-          <MetricListItem value={delivery.canceled} label="canceled" />
+        <MetricListItem value={counts.total} label="total" />
+        <MetricListItem value={counts.sent} label="sent" />
+        <MetricListItem value={counts.waiting} label="queued" />
+        <MetricListItem value={counts.failed} label="failed" />
+        {counts.canceled > 0 && (
+          <MetricListItem value={counts.canceled} label="canceled" />
         )}
       </ul>
       {failed > 0 && (
