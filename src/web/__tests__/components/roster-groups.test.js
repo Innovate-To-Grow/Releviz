@@ -220,7 +220,7 @@ describe("RosterGroups", () => {
     fireEvent.change(input, { target: { value: "Teachers; Staff" } });
     await click(screen.getByRole("button", { name: "Save name" }));
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "Group names cannot contain ;.",
+      "Group names cannot contain ; or ,.",
     );
 
     fireEvent.change(input, { target: { value: " all " } });
@@ -542,10 +542,16 @@ describe("RosterGroups", () => {
     expect(within(form).getByRole("alert")).toHaveTextContent(
       "Group names must be 100 characters or fewer.",
     );
+    // Both list separators are refused inside a name, as on the server.
     fireEvent.change(input, { target: { value: "Board; Staff" } });
     await click(create);
     expect(within(form).getByRole("alert")).toHaveTextContent(
-      "Group names cannot contain ;.",
+      "Group names cannot contain ; or ,.",
+    );
+    fireEvent.change(input, { target: { value: "Board, Staff" } });
+    await click(create);
+    expect(within(form).getByRole("alert")).toHaveTextContent(
+      "Group names cannot contain ; or ,.",
     );
     fireEvent.change(input, { target: { value: "ALL" } });
     await click(create);
@@ -701,7 +707,7 @@ describe("RosterGroups", () => {
     });
     expect(
       screen.getByText(
-        "No groups yet. Create a group, then tick its column for each person in the roster below.",
+        "No groups yet. Create a group, then tick its column for each person once they are on the roster.",
       ),
     ).toBeInTheDocument();
     // An unknown head count renders as nothing rather than "null people".
@@ -713,5 +719,11 @@ describe("RosterGroups", () => {
       screen.queryByRole("region", { name: "Roster groups" }),
     ).not.toBeInTheDocument();
     expect(screen.getByText(/No groups yet/)).toBeInTheDocument();
+    // A locked roster cannot create one, so the hint stops at the fact.
+    rerender(
+      <RosterGroups groups={[]} selectedCount={0} readOnly {...handlers} />,
+    );
+    expect(screen.getByText("No groups yet.")).toBeInTheDocument();
+    expect(screen.queryByText(/Create a group/)).not.toBeInTheDocument();
   });
 });

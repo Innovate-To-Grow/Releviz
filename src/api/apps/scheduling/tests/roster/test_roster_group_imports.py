@@ -203,6 +203,27 @@ class RosterImportGroupPreviewTests(RosterGroupImportTestCase):
         self.assertEqual(alice["name"], "Alice Renamed")
         self.assertEqual(alice["group"], "b; a")
 
+    def test_mapped_group_cells_split_on_commas_as_well_as_semicolons(self):
+        preview = self.paste(
+            "name\temail\tgroup\n"
+            "Alice\talice@example.com\tFaculty, Team 3\n"
+            "Bob\tbob@example.com\tA; B, c ,all\n"
+            "Cara\tcara@example.com\t , ; \n"
+        )
+        self.assertEqual(preview.data["import"]["summary"]["valid"], 3)
+        by_email = {row["email"]: row for row in self.rows(preview.data["import"]["id"])}
+        self.assertEqual(by_email["alice@example.com"]["group"], "Faculty; Team 3")
+        self.assertEqual(by_email["bob@example.com"]["group"], "ALL; A; B; c")
+        self.assertEqual(by_email["cara@example.com"]["group"], "")
+
+        committed = self.commit(preview.data["import"]["id"])
+        self.assertEqual(committed.status_code, 201, committed.data)
+        self.assertEqual(event_group_names(self.event), ["A", "B", "c", "Faculty", "Team 3"])
+        self.assertEqual(group_names(self.participant("alice@example.com")), ["Faculty", "Team 3"])
+        bob = self.participant("bob@example.com")
+        self.assertTrue(bob.all_groups)
+        self.assertEqual(group_names(bob), ["A", "B", "c"])
+
     def test_mapped_group_formula_cell_is_reported(self):
         preview = self.paste("name,email,group\nFormula,formula@example.com,=SUM(A1)\n")
         self.assertEqual(preview.data["import"]["summary"]["invalid"], 1)
@@ -212,7 +233,7 @@ class RosterImportGroupPreviewTests(RosterGroupImportTestCase):
 
 
 class RosterImportGroupDuplicateTests(RosterGroupImportTestCase):
-    def test_duplicate_rows_are_identical_only_when_the_normalized_cell_matches(self):
+    def test_duplicate_rows_are_identical_and_union_their_group_cells(self):
         preview = self.paste(
             "name\temail\tgroup\n"
             "Dup\tdup@example.com\tA; B\n"
@@ -221,26 +242,127 @@ class RosterImportGroupDuplicateTests(RosterGroupImportTestCase):
             "Same\tsame@example.com\tA; B\n"
             "Twin\ttwin@example.com\tA; B\n"
             "Twin\ttwin@example.com\tA; B\n"
+            "Many\tmany@example.com\tFaculty\n"
+            "Many\tmany@example.com\tTeam 3, all\n"
+            "Many\tmany@example.com\t\n"
+            "Many\tmany@example.com\tfaculty; Guests\n"
+            "Other\tother@example.com\tA\n"
+            "Other Renamed\tother@example.com\tB\n"
         )
         self.assertEqual(
             preview.data["import"]["summary"],
-            {"total": 6, "selected": 5, "valid": 1, "invalid": 4, "conflicts": 4},
+            {"total": 12, "selected": 6, "valid": 4, "invalid": 2, "conflicts": 2},
         )
         rows = self.rows(preview.data["import"]["id"])
-        # Order matters in the signature: "A; B" and "B; A" conflict.
-        self.assertEqual([row["duplicate"] for row in rows[:2]], ["conflict", "conflict"])
-        self.assertEqual([row["group"] for row in rows[:2]], ["A; B", "B; A"])
-        # So does case: "a; b" and "A; B" are different normalized cells.
-        self.assertEqual([row["duplicate"] for row in rows[2:4]], ["conflict", "conflict"])
-        self.assertEqual([row["group"] for row in rows[2:4]], ["a; b", "A; B"])
-        for row in rows[:4]:
+        # The same person listed under several groups is one row in every
+        # group: the first row keeps the union in first-seen order and case,
+        # the rest are deselected as identical.
+        for first, second, merged in ((0, 2, "A; B"), (2, 4, "a; b"), (4, 6, "A; B")):
+            with self.subTest(rows=(first, second)):
+                self.assertEqual(
+                    [row["duplicate"] for row in rows[first:second]], ["unique", "identical"]
+                )
+                self.assertEqual(rows[first]["group"], merged)
+                self.assertTrue(rows[first]["selected"])
+                self.assertFalse(rows[first + 1]["selected"])
+                self.assertEqual([row["errors"] for row in rows[first:second]], [[], []])
+        # A deselected row keeps the cell it was pasted with.
+        self.assertEqual([row["group"] for row in rows[1:6:2]], ["B; A", "A; B", "A; B"])
+        self.assertEqual(rows[6]["group"], "ALL; Faculty; Team 3; Guests")
+        self.assertEqual(
+            [(row["selected"], row["duplicate"]) for row in rows[6:10]],
+            [(True, "unique"), (False, "identical"), (False, "identical"), (False, "identical")],
+        )
+        self.assertEqual(
+            [row["group"] for row in rows[7:10]], ["ALL; Team 3", "", "faculty; Guests"]
+        )
+        # Rows that differ in anything else are still a conflict to resolve.
+        self.assertEqual([row["duplicate"] for row in rows[10:]], ["conflict", "conflict"])
+        self.assertEqual([row["group"] for row in rows[10:]], ["A", "B"])
+        for row in rows[10:]:
             self.assertTrue(row["selected"])
             self.assertEqual(row["errors"], ["Conflicting duplicate email."])
-        # Only a byte-identical normalized cell makes the second row identical.
-        self.assertEqual([row["duplicate"] for row in rows[4:]], ["unique", "identical"])
-        self.assertTrue(rows[4]["selected"])
-        self.assertFalse(rows[5]["selected"])
-        self.assertEqual(rows[5]["errors"], [])
+
+        committed = self.commit(preview.data["import"]["id"])
+        self.assertEqual(committed.status_code, 409, committed.data)
+        resolved = self.update(
+            preview.data["import"]["id"],
+            {"rowUpdates": [{"id": rows[11]["id"], "selected": False}]},
+        )
+        self.assertEqual(resolved.status_code, 200, resolved.data)
+        committed = self.commit(preview.data["import"]["id"])
+        self.assertEqual(committed.status_code, 201, committed.data)
+        self.assertEqual(committed.data["receipt"]["createdCount"], 5)
+        many = self.participant("many@example.com")
+        self.assertTrue(many.all_groups)
+        self.assertEqual(group_names(many), ["Faculty", "Guests", "Team 3"])
+        # The earlier rows created "A" and "B", which "a; b" reuses.
+        self.assertEqual(group_names(self.participant("same@example.com")), ["A", "B"])
+
+    def test_editing_the_surviving_row_is_not_undone_by_its_deselected_duplicates(self):
+        preview = self.paste(
+            "name\temail\tgroup\nDup\tdup@example.com\tA\nDup\tdup@example.com\tB\n"
+        )
+        import_id = preview.data["import"]["id"]
+        first, second = self.rows(import_id)
+        self.assertEqual((first["group"], second["group"]), ("A; B", "B"))
+        self.assertEqual((first["selected"], second["selected"]), (True, False))
+
+        # Only selected rows take part in the union, so the edit stands.
+        edited = self.update(import_id, {"rowUpdates": [{"id": first["id"], "group": "C"}]})
+        self.assertEqual(edited.status_code, 200, edited.data)
+        first, second = self.rows(import_id)
+        self.assertEqual((first["group"], second["group"]), ("C", "B"))
+        self.assertEqual([row["duplicate"] for row in (first, second)], ["unique", "identical"])
+
+        # Selecting the duplicate again folds its cell back into the survivor.
+        reselected = self.update(
+            import_id, {"rowUpdates": [{"id": second["id"], "selected": True}]}
+        )
+        self.assertEqual(reselected.status_code, 200, reselected.data)
+        first, second = self.rows(import_id)
+        self.assertEqual((first["group"], second["group"]), ("C; B", "B"))
+        self.assertEqual((first["selected"], second["selected"]), (True, False))
+
+    def test_duplicates_whose_cells_cannot_merge_stay_conflicts(self):
+        half = "; ".join(f"g{index:03d}" for index in range(1, 61))
+        other_half = "; ".join(f"g{index:03d}" for index in range(41, 101))
+        preview = self.paste(
+            "name\temail\tgroup\n"
+            f"Long\tlong@example.com\t{LONG_TOKEN}\n"
+            f"Long\tlong@example.com\t{LONG_TOKEN}\n"
+            f"Wide\twide@example.com\t{half}\n"
+            f"Wide\twide@example.com\t{other_half}\n"
+            f"Wider\twider@example.com\t{half}\n"
+            f"Wider\twider@example.com\t{other_half}; g101\n"
+            f"Bad\tbad@example.com\t{LONG_TOKEN}\n"
+            "Bad\tbad@example.com\tFaculty\n"
+        )
+        self.assertEqual(
+            preview.data["import"]["summary"],
+            {"total": 8, "selected": 6, "valid": 1, "invalid": 5, "conflicts": 4},
+        )
+        rows = self.rows(preview.data["import"]["id"])
+        # Byte-identical cells collapse without being parsed, so a cell that
+        # does not parse still leaves one selected row carrying its own error.
+        self.assertEqual([row["duplicate"] for row in rows[:2]], ["unique", "identical"])
+        self.assertEqual([row["group"] for row in rows[:2]], [LONG_TOKEN] * 2)
+        self.assertEqual([row["selected"] for row in rows[:2]], [True, False])
+        for row in rows[:2]:
+            self.assertEqual(row["errors"], [GROUP_TOO_LONG])
+        # A union that fits one cell merges; one that would not fit conflicts.
+        self.assertEqual([row["duplicate"] for row in rows[2:4]], ["unique", "identical"])
+        self.assertEqual(rows[2]["group"], "; ".join(f"g{index:03d}" for index in range(1, 101)))
+        self.assertEqual([row["duplicate"] for row in rows[4:6]], ["conflict", "conflict"])
+        self.assertEqual([row["group"] for row in rows[4:6]], [half, f"{other_half}; g101"])
+        for row in rows[4:6]:
+            self.assertEqual(row["errors"], ["Conflicting duplicate email."])
+        # Differing cells of which one does not parse cannot be merged either;
+        # each row keeps its own error next to the typed cell.
+        self.assertEqual([row["duplicate"] for row in rows[6:]], ["conflict", "conflict"])
+        self.assertEqual([row["group"] for row in rows[6:]], [LONG_TOKEN, "Faculty"])
+        self.assertEqual(rows[6]["errors"], [GROUP_TOO_LONG, "Conflicting duplicate email."])
+        self.assertEqual(rows[7]["errors"], ["Conflicting duplicate email."])
 
 
 class RosterImportGroupCommitTests(RosterGroupImportTestCase):
@@ -308,13 +430,13 @@ class RosterImportGroupCommitTests(RosterGroupImportTestCase):
             },
         )
 
-    def test_merge_onto_an_existing_person_replaces_only_when_the_cell_is_set(self):
-        first = self.import_rows("name\temail\tgroup\nX\tx@example.com\tA\n")
+    def test_merge_onto_an_existing_person_adds_the_cell_to_their_groups(self):
+        first = self.import_rows("name\temail\tgroup\nX\tx@example.com\tFaculty\n")
         self.assertEqual(first.data["receipt"]["createdCount"], 1)
         self.assertEqual(first.data["receipt"]["updatedCount"], 0)
         person = self.participant("x@example.com")
         self.assertEqual(person.version, 1)
-        self.assertEqual(group_names(person), ["A"])
+        self.assertEqual(group_names(person), ["Faculty"])
         self.assertFalse(person.all_groups)
 
         # A blank cell leaves the memberships, the flag, and the version alone.
@@ -323,40 +445,64 @@ class RosterImportGroupCommitTests(RosterGroupImportTestCase):
         self.assertEqual(blank.data["receipt"]["updatedCount"], 1)
         person.refresh_from_db()
         self.assertEqual(person.version, 1)
-        self.assertEqual(group_names(person), ["A"])
+        self.assertEqual(group_names(person), ["Faculty"])
         self.assertFalse(person.all_groups)
 
-        # A new cell replaces the memberships; the old group row survives.
-        replaced = self.import_rows("name\temail\tgroup\nX\tx@example.com\tB\n")
-        self.assertEqual(replaced.data["receipt"]["updatedCount"], 1)
+        # A new cell adds to the memberships; nothing is taken away.
+        added = self.import_rows("name\temail\tgroup\nX\tx@example.com\tTeam 3\n")
+        self.assertEqual(added.data["receipt"]["updatedCount"], 1)
         person.refresh_from_db()
         self.assertEqual(person.version, 2)
         self.assertEqual(person.participant_name, "X")
-        self.assertEqual(group_names(person), ["B"])
-        self.assertEqual(event_group_names(self.event), ["A", "B"])
+        self.assertEqual(group_names(person), ["Faculty", "Team 3"])
+        self.assertFalse(person.all_groups)
+        self.assertEqual(event_group_names(self.event), ["Faculty", "Team 3"])
 
-        # A rename plus a membership change bumps the version exactly once.
+        # A rename plus ALL bumps the version exactly once; ALL sets the flag
+        # and keeps the explicit memberships.
         everywhere = self.import_rows("name\temail\tgroup\nX Renamed\tx@example.com\tALL\n")
         self.assertEqual(everywhere.data["receipt"]["updatedCount"], 1)
         person.refresh_from_db()
         self.assertEqual(person.version, 3)
         self.assertEqual(person.participant_name, "X Renamed")
         self.assertTrue(person.all_groups)
-        self.assertEqual(group_names(person), [])
-        self.assertEqual(
-            Participant.groups.through.objects.filter(participant_id=person.pk).count(), 0
-        )
+        self.assertEqual(group_names(person), ["Faculty", "Team 3"])
 
-        # The identical cell again counts as an update but changes nothing.
-        again = self.import_rows("name\temail\tgroup\nX Renamed\tx@example.com\tALL\n")
-        self.assertEqual(again.data["receipt"]["createdCount"], 0)
-        self.assertEqual(again.data["receipt"]["updatedCount"], 1)
-        person.refresh_from_db()
-        self.assertEqual(person.version, 3)
-        self.assertTrue(person.all_groups)
-        self.assertEqual(group_names(person), [])
-        self.assertEqual(event_group_names(self.event), ["A", "B"])
+        # A cell already covered counts as an update but changes nothing, and
+        # a plain name never clears the flag.
+        for cell in ("ALL", "faculty, TEAM 3", ""):
+            with self.subTest(cell=cell):
+                again = self.import_rows(f"name\temail\tgroup\nX Renamed\tx@example.com\t{cell}\n")
+                self.assertEqual(again.data["receipt"]["createdCount"], 0)
+                self.assertEqual(again.data["receipt"]["updatedCount"], 1)
+                person.refresh_from_db()
+                self.assertEqual(person.version, 3)
+                self.assertTrue(person.all_groups)
+                self.assertEqual(group_names(person), ["Faculty", "Team 3"])
+        self.assertEqual(event_group_names(self.event), ["Faculty", "Team 3"])
         self.assertEqual(Participant.objects.filter(event=self.event).count(), 1)
+
+    def test_importing_one_sheet_per_group_puts_the_same_person_in_every_group(self):
+        faculty = self.import_rows(
+            "name\temail\tgroup\nAnn\tann@example.com\tFaculty\nBen\tben@example.com\tFaculty\n"
+        )
+        self.assertEqual(faculty.data["receipt"]["createdCount"], 2)
+        team = self.import_rows(
+            "name\temail\tgroup\nAnn\tann@example.com\tTeam 3\nCid\tcid@example.com\tTeam 3\n"
+        )
+        self.assertEqual(team.data["receipt"]["createdCount"], 1)
+        self.assertEqual(team.data["receipt"]["updatedCount"], 1)
+
+        self.assertEqual(event_group_names(self.event), ["Faculty", "Team 3"])
+        self.assertEqual(group_names(self.participant("ann@example.com")), ["Faculty", "Team 3"])
+        self.assertEqual(group_names(self.participant("ben@example.com")), ["Faculty"])
+        self.assertEqual(group_names(self.participant("cid@example.com")), ["Team 3"])
+        roster = self.client.get(f"/events/roster?code={self.event.code}")
+        self.assertEqual(roster.status_code, 200, roster.data)
+        self.assertEqual(
+            [(group["name"], group["count"]) for group in roster.data["stats"]["groups"]],
+            [("Faculty", 2), ("Team 3", 2)],
+        )
 
     def test_rebuild_drops_every_group_and_rebuilds_memberships_from_the_rows(self):
         self.import_rows("name\temail\tgroup\nP1\tp1@example.com\tA; B\nP2\tp2@example.com\tC\n")

@@ -204,6 +204,9 @@ const RosterPanel = forwardRef(function RosterPanel(
   const [invitationStatus, setInvitationStatus] = useState("");
   const [selected, setSelected] = useState(() => new Set());
   const [loading, setLoading] = useState(true);
+  // Whether any listing has arrived; the Groups section waits for it rather
+  // than for `loading`, so a reload never unmounts it (and its create form).
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
   const [showImport, setShowImport] = useState(false);
@@ -360,6 +363,7 @@ const RosterPanel = forwardRef(function RosterPanel(
         setStats(
           data.stats || { total: 0, submitted: 0, notSubmitted: 0, groups: [] },
         );
+        setLoaded(true);
         const recoveredDelivery =
           data.latestDeliveryRequest ||
           data.deliveryRequest ||
@@ -1578,9 +1582,13 @@ const RosterPanel = forwardRef(function RosterPanel(
             </div>
           )}
 
-          {/* Groups can exist before anyone joins them, so the section shows
-              whenever the roster has people (to create one) or groups. */}
-          {(showRosterTools || groupSummaries.length > 0) && (
+          {/* Groups can exist before anyone joins them (organizers set up
+              Faculty / TAs before importing), so the section shows as soon as
+              a listing has arrived, however empty, and then stays put: a
+              failed action or reload reports through the panel alert without
+              unmounting the create form. Read-only events keep it to show
+              what is there. */}
+          {loaded && (
             <RosterGroups
               groups={groupSummaries}
               selectedCount={selected.size}

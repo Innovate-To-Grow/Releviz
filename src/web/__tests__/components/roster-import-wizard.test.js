@@ -176,10 +176,10 @@ test("supports multi-sheet headers, editable preview rows, pagination, and cance
   await userEvent.click(screen.getByRole("button", { name: "Preview rows" }));
   expect(await screen.findByRole("status")).toHaveTextContent("Columns loaded");
 
-  // The default group cell accepts the same "ALL"/";" syntax as a column.
+  // The default group cell accepts the same "ALL"/";"/"," syntax as a column.
   const defaultGroup = screen.getByLabelText("Default group");
   expect(defaultGroup).toHaveAccessibleDescription(
-    "Blank = unassigned, ALL = every group, separate several names with ;",
+    "Blank = unassigned, ALL = every group, separate several names with ; or ,",
   );
   expect(defaultGroup).not.toHaveAttribute("maxlength");
   fireEvent.change(defaultGroup, {

@@ -29,7 +29,7 @@ from apps.scheduling.services.invitations.addresses import organizer_addresses
 from apps.scheduling.services.invitations.delivery import upsert_and_send_invitations
 from apps.scheduling.services.invitations.errors import EventEmailRequestError
 from apps.scheduling.services.managed_members import delete_organizer_managed_members
-from apps.scheduling.services.roster_groups import assign_memberships, parse_group_cell
+from apps.scheduling.services.roster_groups import add_memberships, parse_group_cell
 
 from .batches import require_preview, scrub_batch
 from .errors import RosterImportError
@@ -314,8 +314,10 @@ def _write_roster(
     invitation_emails = []
     # The roster entry behind each row, in row order.
     row_participants = []
-    # (participant, (all_groups, names)) for every row whose cell sets memberships.
-    # A blank cell leaves an existing person's groups alone on merge.
+    # (participant, (all_groups, names)) for every row whose cell names groups.
+    # On merge a cell adds to what an existing person is already in and never
+    # removes a membership, so a blank cell leaves them alone; rebuild deleted
+    # every group first, so there the cell is the whole membership.
     assignments = []
     for sort_order, row in enumerate(rows, 1):
         organizer_managed = addresses.manages(row.email)
@@ -381,7 +383,7 @@ def _write_roster(
         existing_by_pk = {
             participant.pk: participant for participant in [*existing.values(), *managed.values()]
         }
-        for participant_id in assign_memberships(event=event, assignments=assignments):
+        for participant_id in add_memberships(event=event, assignments=assignments):
             participant = existing_by_pk.get(participant_id)
             if participant is not None and participant.pk not in bumped:
                 participant.version += 1

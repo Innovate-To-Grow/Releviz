@@ -691,7 +691,7 @@ export default function RosterImportWizard({
               <div className="col-12 col-md-4">
                 <FormField
                   label="Default group"
-                  help="Blank = unassigned, ALL = every group, separate several names with ;"
+                  help="Blank = unassigned, ALL = every group, separate several names with ; or ,"
                 >
                   <input
                     className="form-control"

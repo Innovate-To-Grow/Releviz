@@ -13,7 +13,11 @@ from unfold.admin import ModelAdmin as UnfoldModelAdmin
 
 from apps.authn.models import Member
 from apps.authn.tests.helpers import create_member, token_for
-from apps.scheduling.admin.participants import ParticipantAdmin, ParticipantGroupAdmin
+from apps.scheduling.admin.participants import (
+    ParticipantAdmin,
+    ParticipantGroupAdmin,
+    ParticipantGroupAdminForm,
+)
 from apps.scheduling.models import (
     Event,
     EventResultSnapshot,
@@ -25,8 +29,8 @@ from apps.scheduling.models import (
 from apps.scheduling.services.roster_groups import (
     MAX_GROUPS_PER_CELL,
     _create_group,
+    add_memberships,
     add_participant_groups,
-    assign_memberships,
     create_group,
     delete_group,
     ensure_groups,
@@ -227,7 +231,8 @@ class RosterGroupEndpointTests(RosterGroupTestCase):
             ({"name": "ALL"}, "ALL is reserved for every group."),
             ({"name": "all"}, "ALL is reserved for every group."),
             ({"name": " aLl "}, "ALL is reserved for every group."),
-            ({"name": "A;B"}, "Group names cannot contain ;."),
+            ({"name": "A;B"}, "Group names cannot contain ; or ,."),
+            ({"name": "A,B"}, "Group names cannot contain ; or ,."),
             ({"name": ""}, "Group name is required."),
             ({"name": "   "}, "Group name is required."),
             ({"name": None}, "Group name is required."),
@@ -324,7 +329,8 @@ class RosterGroupEndpointTests(RosterGroupTestCase):
             ({"name": ""}, "Group name is required."),
             ({}, "Group name is required."),
             ({"name": "ALL"}, "ALL is reserved for every group."),
-            ({"name": "a;b"}, "Group names cannot contain ;."),
+            ({"name": "a;b"}, "Group names cannot contain ; or ,."),
+            ({"name": "a,b"}, "Group names cannot contain ; or ,."),
             ({"name": "z" * 101}, "group is too long (max 100)."),
         ]
         for payload, message in cases:
@@ -472,6 +478,11 @@ class RosterGroupServiceTests(RosterGroupTestCase):
             ("a; A; b", (False, ["a", "b"])),
             ("ALL; a", (True, ["a"])),
             (" a ;; ALL ; b ; All ", (True, ["a", "b"])),
+            # A comma separates names just like a semicolon, in any mix.
+            ("Faculty, Team 3", (False, ["Faculty", "Team 3"])),
+            ("A; B, C", (False, ["A", "B", "C"])),
+            (" , ", (False, [])),
+            ("all, a,; A ,b", (True, ["a", "b"])),
         ]
         for cell, expected in cases:
             with self.subTest(cell=cell):
@@ -528,8 +539,10 @@ class RosterGroupServiceTests(RosterGroupTestCase):
             ("   ", "Group name is required."),
             ("ALL", "ALL is reserved for every group."),
             ("all", "ALL is reserved for every group."),
-            ("a;b", "Group names cannot contain ;."),
-            (";", "Group names cannot contain ;."),
+            ("a;b", "Group names cannot contain ; or ,."),
+            (";", "Group names cannot contain ; or ,."),
+            ("a,b", "Group names cannot contain ; or ,."),
+            (",", "Group names cannot contain ; or ,."),
             ("x" * 101, "group is too long (max 100)."),
         ]
         for name, message in cases:
@@ -647,44 +660,60 @@ class RosterGroupServiceTests(RosterGroupTestCase):
             set(),
         )
 
-    def test_assign_memberships(self):
-        self.assertEqual(assign_memberships(event=self.event, assignments=[]), set())
-        self.assertEqual(assign_memberships(event=self.event, assignments=iter(())), set())
+    def test_add_memberships(self):
+        self.assertEqual(add_memberships(event=self.event, assignments=[]), set())
+        self.assertEqual(add_memberships(event=self.event, assignments=iter(())), set())
         self.assertFalse(ParticipantGroup.objects.filter(event=self.event).exists())
 
         one = self.add_participant("One", groups=["Alpha"])
         two = self.add_participant("Two")
         three = self.add_participant("Three", all_groups=True)
+        four = self.add_participant("Four", groups=["Alpha"])
 
-        changed = assign_memberships(
+        changed = add_memberships(
             event=self.event,
             assignments=[
                 (one, (False, ["alpha"])),
                 (two, (True, ["Beta", "Alpha"])),
                 (three, (False, [])),
+                (four, (True, ["Gamma"])),
             ],
         )
 
-        self.assertEqual(changed, {two.pk, three.pk})
+        # A cell only widens: a name already held and an empty cell change
+        # nothing, and neither clears a flag that is already set.
+        self.assertEqual(changed, {two.pk, four.pk})
         self.assertEqual(self.group_names(one), ["Alpha"])
         self.assertEqual(self.group_names(two), ["Alpha", "Beta"])
+        self.assertEqual(self.group_names(three), [])
+        self.assertEqual(self.group_names(four), ["Alpha", "Gamma"])
         two.refresh_from_db()
         three.refresh_from_db()
+        four.refresh_from_db()
         self.assertTrue(two.all_groups)
-        self.assertFalse(three.all_groups)
+        self.assertTrue(three.all_groups)
+        self.assertTrue(four.all_groups)
         self.assertEqual(
             sorted(
                 ParticipantGroup.objects.filter(event=self.event).values_list("name", flat=True)
             ),
-            ["Alpha", "Beta"],
+            ["Alpha", "Beta", "Gamma"],
         )
         self.assertEqual(
-            assign_memberships(
+            add_memberships(
                 event=self.event,
-                assignments=[(one, (False, ["Alpha"])), (two, (True, ["Alpha", "Beta"]))],
+                assignments=[
+                    (one, (False, ["Alpha"])),
+                    (two, (False, ["Alpha"])),
+                    (three, (True, [])),
+                    (four, (False, [])),
+                ],
             ),
             set(),
         )
+        self.assertEqual(self.group_names(two), ["Alpha", "Beta"])
+        two.refresh_from_db()
+        self.assertTrue(two.all_groups)
 
     def test_rename_group_with_the_identical_name_leaves_the_row_alone(self):
         staff = ParticipantGroup.objects.create(event=self.event, name="Staff")
@@ -888,7 +917,7 @@ class RosterGroupServiceTests(RosterGroupTestCase):
             (["A", "ALL"], "ALL is reserved for every group."),
             (["A", ""], "Group name is required."),
             (["A", None], "Group name is required."),
-            (["a;b"], "Group names cannot contain ;."),
+            (["a;b"], "Group names cannot contain ; or ,."),
             (["A", "x" * 101], "group is too long (max 100)."),
         ]:
             with self.subTest(names=names):
@@ -1098,6 +1127,27 @@ class RosterParticipantGroupPatchTests(RosterGroupTestCase):
         self.assertEqual(self.event.results_revision, 1)
         self.assertFalse(EventResultSnapshot.objects.filter(event=self.event).exists())
 
+    def test_group_cell_accepts_commas_and_is_served_with_semicolons(self):
+        one = self.add_participant("One")
+
+        response = self.patch_participant(one, {"group": "Faculty, Team 3; all"})
+
+        self.assertEqual(response.status_code, 200, response.data)
+        participant = response.data["participant"]
+        self.assertEqual(participant["group"], "ALL; Faculty; Team 3")
+        self.assertEqual([group["name"] for group in participant["groups"]], ["Faculty", "Team 3"])
+        self.assertTrue(participant["allGroups"])
+        self.assertEqual(self.group_names(one), ["Faculty", "Team 3"])
+        # The bulk cell splits the same way.
+        two = self.add_participant("Two")
+        bulk = self.bulk({"participantIds": [two.pk]}, {"group": "Guests,Faculty"})
+        self.assertEqual(bulk.status_code, 200, bulk.data)
+        self.assertEqual(self.group_names(two), ["Faculty", "Guests"])
+        self.assertEqual(
+            list(self.event.participant_groups.values_list("name", flat=True)),
+            ["Faculty", "Guests", "Team 3"],
+        )
+
     def test_groups_array_and_all_groups_flag(self):
         one = self.add_participant("One", groups=["Old"])
 
@@ -1132,7 +1182,7 @@ class RosterParticipantGroupPatchTests(RosterGroupTestCase):
             ({"groups": None}, "groups must be an array of group names."),
             ({"groups": ["ALL"]}, "ALL is reserved for every group."),
             ({"groups": [""]}, "Group name is required."),
-            ({"groups": ["a;b"]}, "Group names cannot contain ;."),
+            ({"groups": ["a;b"]}, "Group names cannot contain ; or ,."),
             ({"groups": ["x" * 101]}, "group is too long (max 100)."),
             ({"group": "B; " + "x" * 101}, "group is too long (max 100)."),
             ({"allGroups": "maybe"}, "allGroups must be true or false."),
@@ -1425,7 +1475,7 @@ class RosterBulkGroupTests(RosterGroupTestCase):
             ({"addGroups": None}, "addGroups must be an array of group names."),
             ({"addGroups": ["ALL"]}, "ALL is reserved for every group."),
             ({"addGroups": [""]}, "Group name is required."),
-            ({"addGroups": ["a;b"]}, "Group names cannot contain ;."),
+            ({"addGroups": ["a;b"]}, "Group names cannot contain ; or ,."),
             ({"removeGroups": "A"}, "removeGroups must be an array of group names."),
             ({"removeGroups": [1]}, "removeGroups must be an array of group names."),
             ({"allGroups": "maybe"}, "allGroups must be true or false."),
@@ -1688,6 +1738,23 @@ class ParticipantGroupAdminTests(RosterGroupTestCase):
         self.assertEqual(group_admin.member_count(alpha), 2)
         self.assertEqual(group_admin.member_count(beta), 1)
         self.assertEqual(group_admin.member_count(empty), 0)
+
+    def test_admin_form_applies_the_cell_grammar(self):
+        group_admin = admin.site._registry[ParticipantGroup]
+        self.assertIs(group_admin.form, ParticipantGroupAdminForm)
+
+        for name, message in [
+            ("Faculty, Staff", "Group names cannot contain ; or ,."),
+            ("Faculty; Staff", "Group names cannot contain ; or ,."),
+            ("all", "ALL is reserved for every group."),
+        ]:
+            form = ParticipantGroupAdminForm(data={"event": self.event.pk, "name": name})
+            self.assertFalse(form.is_valid(), name)
+            self.assertEqual(form.errors["name"], [message])
+
+        form = ParticipantGroupAdminForm(data={"event": self.event.pk, "name": "  Faculty "})
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data["name"], "Faculty")
 
     def test_get_queryset_prefetches_groups(self):
         participant_admin = ParticipantAdmin(Participant, admin.site)

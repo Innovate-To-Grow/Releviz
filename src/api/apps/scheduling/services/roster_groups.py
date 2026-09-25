@@ -1,10 +1,13 @@
 """Participant groups: the group cell grammar and membership writes.
 
 A group cell (an import column, a row input, or a ``group`` payload key)
-holds zero or more names separated by ``;``. The reserved token ``ALL``
-marks a person as a member of every group, including groups created later.
+holds zero or more names separated by ``;`` or ``,``, so a name can contain
+neither. Stored and served cells always use ``; ``. The reserved token
+``ALL`` marks a person as a member of every group, including groups created
+later.
 """
 
+import re
 from collections import defaultdict
 
 from django.db import IntegrityError, transaction
@@ -18,6 +21,8 @@ from .roster_imports.errors import RosterImportError
 
 ALL_GROUPS_TOKEN = "ALL"
 GROUP_SEPARATOR = ";"
+GROUP_SEPARATORS = (GROUP_SEPARATOR, ",")
+_SPLIT_GROUP_CELL = re.compile("[" + re.escape("".join(GROUP_SEPARATORS)) + "]")
 MAX_GROUP_NAME_LENGTH = 100
 MAX_GROUPS_PER_CELL = 100
 GROUP_TOO_LONG_MESSAGE = f"group is too long (max {MAX_GROUP_NAME_LENGTH})."
@@ -32,8 +37,8 @@ def validate_group_name(name) -> str:
         raise RosterImportError("Group name is required.")
     if normalized.upper() == ALL_GROUPS_TOKEN:
         raise RosterImportError(f"{ALL_GROUPS_TOKEN} is reserved for every group.")
-    if GROUP_SEPARATOR in normalized:
-        raise RosterImportError(f"Group names cannot contain {GROUP_SEPARATOR}.")
+    if any(separator in normalized for separator in GROUP_SEPARATORS):
+        raise RosterImportError(f"Group names cannot contain {' or '.join(GROUP_SEPARATORS)}.")
     if len(normalized) > MAX_GROUP_NAME_LENGTH:
         raise RosterImportError(GROUP_TOO_LONG_MESSAGE)
     return normalized
@@ -70,7 +75,7 @@ def parse_group_cell(value) -> tuple[bool, list[str]]:
     all_groups = False
     names = []
     seen = set()
-    for token in cell.split(GROUP_SEPARATOR):
+    for token in _SPLIT_GROUP_CELL.split(cell):
         name = token.strip()
         if not name:
             continue
@@ -216,8 +221,12 @@ def memberships_differ(*, participant: Participant, all_groups: bool, names) -> 
     return {str(name).strip().lower() for name in names} != current
 
 
-def _write_memberships(plans) -> set[int]:
-    """Apply ``(participant, target_group_ids, all_groups)`` plans; returns changed ids."""
+def _write_memberships(plans, *, widen: bool = False) -> set[int]:
+    """Apply ``(participant, target_group_ids, all_groups)`` plans; returns changed ids.
+
+    With ``widen`` a plan only ever adds: its ids join the current memberships
+    and its flag cannot clear one that is already set.
+    """
 
     through = Participant.groups.through
     current = defaultdict(set)
@@ -234,6 +243,9 @@ def _write_memberships(plans) -> set[int]:
     dropped_rows = []
     flag_updates = {True: [], False: []}
     for participant, target, flag in plans:
+        if widen:
+            target = target | current[participant.pk]
+            flag = flag or participant.all_groups
         added = target - current[participant.pk]
         dropped = current[participant.pk] - target
         if added or dropped or flag != participant.all_groups:
@@ -314,11 +326,14 @@ def update_memberships(
 
 
 @transaction.atomic
-def assign_memberships(*, event: Event, assignments) -> set[int]:
-    """Replace each person's memberships from ``(participant, (all_groups, names))`` pairs.
+def add_memberships(*, event: Event, assignments) -> set[int]:
+    """Add each cell to the person's memberships from ``(participant, (all_groups, names))``.
 
-    Used by the roster import, where every row carries its own cell. Missing
-    groups are created once for the whole batch; returns the changed ids.
+    Used by the roster import, where every row carries its own cell. A cell
+    only widens what a person is in: its names join the current memberships
+    and ``ALL`` sets the flag without clearing explicit ones, so importing a
+    second sheet never removes what an earlier one set. Missing groups are
+    created once for the whole batch; returns the changed ids.
     """
 
     assignments = list(assignments)
@@ -331,7 +346,7 @@ def assign_memberships(*, event: Event, assignments) -> set[int]:
         (participant, {next(resolved).pk for _name in names}, bool(flag))
         for participant, (flag, names) in assignments
     ]
-    return _write_memberships(plans)
+    return _write_memberships(plans, widen=True)
 
 
 def set_participant_groups(*, participant: Participant, all_groups: bool, names) -> bool:
