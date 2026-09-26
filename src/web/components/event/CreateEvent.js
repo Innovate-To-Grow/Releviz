@@ -921,7 +921,7 @@ function CreateEvent({
           <FormField
             id="event-access"
             label="Event Access"
-            help="Invite-only events restrict access to roster members and the organizer."
+            help="Invite-only events restrict access to participants and the organizer."
           >
             <select
               className="form-select"

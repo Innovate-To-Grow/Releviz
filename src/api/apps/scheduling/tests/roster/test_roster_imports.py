@@ -407,7 +407,7 @@ class RosterImportApiTests(TestCase):
         self.assertEqual(blocked.status_code, 409)
         self.assertEqual(
             blocked.data["error"],
-            "Resolve or deselect invalid roster rows before committing.",
+            "Resolve or deselect invalid rows before committing.",
         )
         self.assertEqual(blocked.data["invalidRowCount"], 2)
 

@@ -479,10 +479,10 @@ test.describe("Releviz account and scheduling flow", () => {
     expect(activeEvent.response.status()).toBe(200);
     expect(activeEvent.payload.event.status).toBe("active");
 
-    await page.getByRole("button", { name: "Import roster" }).click();
+    await page.getByRole("button", { name: "Import participants" }).click();
     await page.getByRole("tab", { name: "Paste spreadsheet" }).click();
     await page
-      .getByLabel("Pasted roster rows")
+      .getByLabel("Pasted participant rows")
       .fill(
         "name\temail\tgroup\tweight\tincluded\n" +
           `Temporary Taylor\t${temporaryEmail}\tE2E Group\t0.5\ttrue`,
@@ -498,7 +498,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(page.getByText("Ready", { exact: true })).toBeVisible();
     await page.getByLabel("Send invitations to newly added people").check();
     const invitationStartedAt = Date.now() - 1000;
-    await page.getByRole("button", { name: "Merge roster" }).click();
+    await page.getByRole("button", { name: "Merge participants" }).click();
     await expect(
       page.getByText(
         "Imported 1 people: 1 added, 0 updated. 1 invitation queued.",
@@ -605,7 +605,7 @@ test.describe("Releviz account and scheduling flow", () => {
       temporaryPage.getByText("You are responding as Temporary Taylor"),
     ).toBeVisible();
 
-    await expect(page.getByLabel("Roster summary")).toContainText(
+    await expect(page.getByLabel("Participant summary")).toContainText(
       "0 submitted",
     );
     let revisionBeforeResponse = -1;
@@ -638,7 +638,7 @@ test.describe("Releviz account and scheduling flow", () => {
     // sync checks every 3 s while things change and eases off to every 15 s
     // while nothing does): the roster counts it and the results move on to a
     // newer revision, with no Refresh press.
-    await expect(page.getByLabel("Roster summary")).toContainText(
+    await expect(page.getByLabel("Participant summary")).toContainText(
       "1 submitted",
       {
         timeout: 20_000,
@@ -1308,7 +1308,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await page.getByLabel("Ada Typo in Team A").check();
     await page.getByRole("button", { name: "Save group changes" }).click();
     const teamRow = page
-      .getByRole("region", { name: "Roster groups" })
+      .getByRole("region", { name: "Participant groups" })
       .locator('[data-roster-group="Team A"]');
     await expect(teamRow).toContainText("1 person");
     await teamRow.getByRole("button", { name: "Only this group" }).click();
@@ -1327,14 +1327,14 @@ test.describe("Releviz account and scheduling flow", () => {
     // Removing asks first, then deletes the row and its invitation.
     await page.getByRole("button", { name: "Remove Ben Leaving" }).click();
     const removeDialog = page.getByRole("dialog", {
-      name: "Remove Ben Leaving from the roster?",
+      name: "Remove Ben Leaving from the event?",
     });
     await expect(
       removeDialog.getByRole("button", { name: "Cancel" }),
     ).toBeFocused();
     await removeDialog.getByRole("button", { name: "Remove person" }).click();
     await expect(
-      page.getByText("Ben Leaving was removed from the roster."),
+      page.getByText("Ben Leaving was removed from the event."),
     ).toBeVisible();
     await expect(
       page.locator("tr.roster-table__row", { hasText: "Ben Leaving" }),
@@ -1419,7 +1419,7 @@ test.describe("Releviz account and scheduling flow", () => {
       .click();
     await expect(page.getByText("Created E2E Early.")).toBeVisible();
     const earlyGroupRow = page
-      .getByRole("region", { name: "Roster groups" })
+      .getByRole("region", { name: "Participant groups" })
       .locator('[data-roster-group="E2E Early"]');
     await expect(earlyGroupRow).toContainText("0 people");
     await earlyGroupRow.getByRole("button", { name: "Delete group" }).click();
@@ -2023,7 +2023,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(registeredParticipantCard).toContainText("Submitted");
 
     const bulkControls = page.locator(
-      'details[aria-label="Bulk roster actions"]',
+      'details[aria-label="Bulk participant actions"]',
     );
     await bulkControls.locator("summary").click();
     await bulkControls.getByLabel("Bulk update scope").selectOption("group");
@@ -2035,7 +2035,7 @@ test.describe("Releviz account and scheduling flow", () => {
       .getByRole("spinbutton", { name: "Bulk weight", exact: true })
       .fill("0.75");
     await bulkControls.getByRole("button", { name: "Apply update" }).click();
-    await expect(page.getByText("Updated 2 roster entries.")).toBeVisible();
+    await expect(page.getByText("Updated 2 participants.")).toBeVisible();
 
     const participantWeight = registeredParticipantCard.getByLabel(
       "Weight for Pat Participant",
@@ -2046,7 +2046,9 @@ test.describe("Releviz account and scheduling flow", () => {
 
     // The Groups table manages a whole group at once: its shared weight is
     // now mixed, and setting it re-applies one weight to every member.
-    const groupsTable = page.getByRole("region", { name: "Roster groups" });
+    const groupsTable = page.getByRole("region", {
+      name: "Participant groups",
+    });
     const groupRow = groupsTable.locator('[data-roster-group="E2E Group"]');
     await expect(groupRow).toContainText("2 people");
     await expect(groupRow).toContainText("Mixed");
@@ -2175,7 +2177,9 @@ test.describe("Releviz account and scheduling flow", () => {
     const deleteGroupDialog = page.getByRole("dialog", {
       name: "Delete group E2E Throwaway?",
     });
-    await expect(deleteGroupDialog).toContainText("People stay on the roster.");
+    await expect(deleteGroupDialog).toContainText(
+      "People stay on the participant list.",
+    );
     await expect(
       deleteGroupDialog.getByRole("button", { name: "Cancel" }),
     ).toBeFocused();

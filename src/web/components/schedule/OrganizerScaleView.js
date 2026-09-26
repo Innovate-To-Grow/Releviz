@@ -34,7 +34,7 @@ import { selectionFromRecommendation } from "@/lib/meetingWindows";
 const SECTION_LINKS = [
   { id: "overview", label: "Overview", Icon: CalendarIcon },
   { id: "results", label: "Results", Icon: ResultsIcon },
-  { id: "roster", label: "Roster", Icon: RosterIcon },
+  { id: "roster", label: "Participants", Icon: RosterIcon },
 ];
 const SECTION_IDS = SECTION_LINKS.map((section) => section.id);
 // The section navigation is sticky, so anchored sections must scroll into
@@ -400,7 +400,7 @@ export default function OrganizerScaleView() {
         } catch (requestError) {
           setWorkspaceError(
             requestError.message ||
-              "The event was saved, but the roster could not be refreshed.",
+              "The event was saved, but the participant list could not be refreshed.",
           );
         }
       }

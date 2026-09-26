@@ -61,7 +61,7 @@ class RosterImportDetailView(PrivateAPIView):
             return write_error
         batch = batch_for_event(event, import_id)
         if batch is None:
-            return Response({"error": "Roster import not found"}, status=404)
+            return Response({"error": "Participant import not found"}, status=404)
         try:
             batch = update_roster_import(batch=batch, data=request.data)
         except RosterImportError as exc:
@@ -74,7 +74,7 @@ class RosterImportDetailView(PrivateAPIView):
             return error
         batch = batch_for_event(event, import_id)
         if batch is None:
-            return Response({"error": "Roster import not found"}, status=404)
+            return Response({"error": "Participant import not found"}, status=404)
         if expire_roster_import_preview(batch):
             return Response({"error": "This import preview has expired."}, status=410)
         try:
@@ -91,7 +91,7 @@ class RosterImportRowsView(PrivateAPIView):
             return error
         batch = batch_for_event(event, import_id)
         if batch is None:
-            return Response({"error": "Roster import not found"}, status=404)
+            return Response({"error": "Participant import not found"}, status=404)
         if expire_roster_import_preview(batch):
             return Response({"error": "This import preview has expired."}, status=410)
         try:

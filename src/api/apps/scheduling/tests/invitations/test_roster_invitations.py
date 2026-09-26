@@ -374,7 +374,7 @@ class RosterInvitationApiTests(TestCase):
         self.authenticate(self.outsider)
         forbidden = self.send([ada.pk])
         self.assertEqual(forbidden.status_code, 403)
-        self.assertEqual(forbidden.data["error"], "Only the organizer can manage the roster")
+        self.assertEqual(forbidden.data["error"], "Only the organizer can manage participants")
         self.authenticate(self.organizer)
 
         self.event.status = Event.Status.CLOSED

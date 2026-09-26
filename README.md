@@ -1,9 +1,9 @@
 # Releviz
 
-A meeting planner for large groups. Organizers import a roster, invite people, and collect weighted
-availability for in-person and virtual meetings. Releviz then ranks the best continuous meeting
-windows and sends calendar invitations for the one the organizer picks. One event supports up to
-1,000 people and 1,000 time slots.
+A meeting planner for large groups. Organizers import a participant list, invite people, and collect
+weighted availability for in-person and virtual meetings. Releviz then ranks the best continuous
+meeting windows and sends calendar invitations for the one the organizer picks. One event supports
+up to 1,000 people and 1,000 time slots.
 
 ![Releviz Screenshot](Screenshoot.png)
 
@@ -11,7 +11,7 @@ windows and sends calendar invitations for the one the organizer picks. One even
 
 1. **Create an event.** Sign in, then set the meeting type, the daily time range and slot size, the
    meeting length, the days, and who can join. Block out any times that are never available.
-2. **Build the roster.** Add people one at a time or import `.xlsx`/`.csv`, organize them into
+2. **Add participants.** Enter people one at a time or import `.xlsx`/`.csv`, organize them into
    groups, and send invitations when you are ready.
 3. **Collect availability.** Each participant paints Busy / If needed / Available on a schedule
    grid. The organizer can also enter a schedule for anyone who has not responded themselves.

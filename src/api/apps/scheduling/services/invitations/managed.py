@@ -261,7 +261,7 @@ def create_or_reuse_managed_participant(
         )
     if organizer.contact_emails.filter(email_address__iexact=normalized_email).exists():
         raise ManagedParticipantError(
-            "That is one of your own addresses. Use Add myself to put yourself on the roster, "
+            "That is one of your own addresses. Use Add myself to add yourself as a participant, "
             'or check "No email of their own" to add a person you manage.',
             status_code=409,
             error_code="organizer_own_email",

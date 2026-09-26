@@ -249,9 +249,11 @@ function mockRosterImportPreview() {
 }
 
 async function openPastedRosterPreview() {
-  await userEvent.click(screen.getByRole("button", { name: "Import roster" }));
+  await userEvent.click(
+    screen.getByRole("button", { name: "Import participants" }),
+  );
   await userEvent.click(screen.getByRole("tab", { name: "Paste spreadsheet" }));
-  fireEvent.change(screen.getByLabelText("Pasted roster rows"), {
+  fireEvent.change(screen.getByLabelText("Pasted participant rows"), {
     target: { value: "name\temail\nAda\tada@example.com" },
   });
   await userEvent.click(
@@ -554,7 +556,7 @@ describe("scaled organizer workspace", () => {
       "organizer-results",
       "organizer-roster",
     ];
-    const labels = ["Overview", "Results", "Roster"];
+    const labels = ["Overview", "Results", "Participants"];
 
     labels.forEach((label, index) => {
       expect(document.getElementById(sectionIds[index])).toHaveAccessibleName(
@@ -761,7 +763,7 @@ describe("scaled organizer workspace", () => {
 
     expect(
       await screen.findByText(
-        "The event was saved, but the roster could not be refreshed.",
+        "The event was saved, but the participant list could not be refreshed.",
       ),
     ).toHaveAttribute("role", "alert");
   });
@@ -925,7 +927,7 @@ describe("scaled organizer workspace", () => {
     await userEvent.click(invite.submit);
 
     expect(await within(invite.section).findByRole("status")).toHaveTextContent(
-      /^Manual Person is already on this roster\. No new invitation was sent\.$/,
+      /^Manual Person is already a participant\. No new invitation was sent\.$/,
     );
     expect(
       within(invite.section).queryByRole("heading", { name: "Add a person" }),
@@ -1249,21 +1251,21 @@ describe("scaled organizer workspace", () => {
     await screen.findByText("Ada Faculty");
 
     expect(screen.getByRole("note")).toHaveTextContent(
-      "This roster is read-only while responses are closed",
+      "The participant list is read-only while responses are closed",
     );
     expect(
       screen.queryByRole("button", { name: "Add person" }),
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "Import roster" }),
+      screen.queryByRole("button", { name: "Import participants" }),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Send invitation" }),
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByLabelText("Bulk roster actions"),
+      screen.queryByLabelText("Bulk participant actions"),
     ).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Search roster")).toBeEnabled();
+    expect(screen.getByLabelText("Search participants")).toBeEnabled();
     expect(screen.getByLabelText("Filter by group")).toBeEnabled();
     expect(screen.getByLabelText("Select all on page")).toBeDisabled();
     expect(screen.getByLabelText("Select Ada Faculty")).toBeDisabled();
@@ -1291,18 +1293,20 @@ describe("scaled organizer workspace", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Add someone or import a roster to start collecting availability.",
+        "Add someone or import a participant list to start collecting availability.",
       ),
     ).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Add person" })).toHaveLength(
       1,
     );
     expect(
-      screen.getAllByRole("button", { name: "Import roster" }),
+      screen.getAllByRole("button", { name: "Import participants" }),
     ).toHaveLength(1);
-    expect(screen.queryByLabelText("Search roster")).not.toBeInTheDocument();
     expect(
-      screen.queryByLabelText("Bulk roster actions"),
+      screen.queryByLabelText("Search participants"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByLabelText("Bulk participant actions"),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Send invitation" }),
@@ -1368,14 +1372,17 @@ describe("scaled organizer workspace", () => {
     renderView();
     expect(await screen.findByText("Ada Faculty")).toBeInTheDocument();
 
-    await userEvent.type(screen.getByLabelText("Search roster"), "nobody");
+    await userEvent.type(
+      screen.getByLabelText("Search participants"),
+      "nobody",
+    );
     expect(
       await screen.findByRole("heading", { name: "No matching participants" }),
     ).toBeInTheDocument();
-    expect(screen.getByLabelText("Search roster")).toBeEnabled();
+    expect(screen.getByLabelText("Search participants")).toBeEnabled();
     expect(screen.getByLabelText("Filter by group")).toBeEnabled();
     expect(
-      screen.queryByLabelText("Bulk roster actions"),
+      screen.queryByLabelText("Bulk participant actions"),
     ).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Rows per page")).not.toBeInTheDocument();
 
@@ -1383,7 +1390,7 @@ describe("scaled organizer workspace", () => {
       screen.getByRole("button", { name: "Clear filters" }),
     );
     expect(await screen.findByText("Ada Faculty")).toBeInTheDocument();
-    expect(screen.getByLabelText("Search roster")).toHaveValue("");
+    expect(screen.getByLabelText("Search participants")).toHaveValue("");
     expect(screen.getByLabelText("Filter by group")).toHaveValue("");
     expect(screen.getByLabelText("Filter by response")).toHaveValue("");
     expect(screen.getByLabelText("Filter by invitation")).toHaveValue("");
@@ -1414,10 +1421,10 @@ describe("scaled organizer workspace", () => {
     );
     const rosterSection = document.getElementById("organizer-roster");
     expect(
-      within(rosterSection).getByRole("group", { name: "Roster actions" }),
+      within(rosterSection).getByRole("group", { name: "Participant actions" }),
     ).toBeInTheDocument();
     const table = within(rosterSection).getByRole("table", {
-      name: "Roster participants",
+      name: "Participants",
     });
     expect(
       within(table).getByRole("columnheader", { name: "Settings" }),
@@ -1443,7 +1450,7 @@ describe("scaled organizer workspace", () => {
     );
 
     await userEvent.type(
-      screen.getByLabelText("Search roster"),
+      screen.getByLabelText("Search participants"),
       "ada@example.com",
     );
     await waitFor(() =>
@@ -1474,7 +1481,7 @@ describe("scaled organizer workspace", () => {
     renderView();
     expect(await screen.findByText("Ada Faculty")).toBeInTheDocument();
 
-    const bulk = screen.getByLabelText("Bulk roster actions");
+    const bulk = screen.getByLabelText("Bulk participant actions");
     fireEvent.click(within(bulk).getByText("Bulk actions"));
     await userEvent.selectOptions(
       within(bulk).getByLabelText("Bulk update scope"),
@@ -1512,7 +1519,7 @@ describe("scaled organizer workspace", () => {
   test("bulk updates require an explicit field and omit fields the organizer did not choose", async () => {
     renderView();
     expect(await screen.findByText("Ada Faculty")).toBeInTheDocument();
-    const bulk = screen.getByLabelText("Bulk roster actions");
+    const bulk = screen.getByLabelText("Bulk participant actions");
     fireEvent.click(within(bulk).getByText("Bulk actions"));
     await userEvent.click(screen.getByLabelText("Select Ada Faculty"));
 
@@ -1547,7 +1554,7 @@ describe("scaled organizer workspace", () => {
   test("uses an explicit all selector for an unfiltered bulk update", async () => {
     renderView();
     expect(await screen.findByText("Ada Faculty")).toBeInTheDocument();
-    const bulk = screen.getByLabelText("Bulk roster actions");
+    const bulk = screen.getByLabelText("Bulk participant actions");
     fireEvent.click(within(bulk).getByText("Bulk actions"));
     await userEvent.selectOptions(
       within(bulk).getByLabelText("Bulk update scope"),
@@ -1639,7 +1646,7 @@ describe("scaled organizer workspace", () => {
     renderView();
     const phone = await screen.findByLabelText("Phone for Ada Faculty");
     expect(phone).toHaveValue("");
-    expect(screen.getByLabelText("Search roster")).toHaveAttribute(
+    expect(screen.getByLabelText("Search participants")).toHaveAttribute(
       "placeholder",
       "Search name, email or phone",
     );
@@ -1805,12 +1812,12 @@ describe("scaled organizer workspace", () => {
     );
     expect(sendBox).not.toBeChecked();
     expect(
-      screen.getByRole("button", { name: "Merge roster" }),
+      screen.getByRole("button", { name: "Merge participants" }),
     ).toBeInTheDocument();
     await userEvent.click(sendBox);
     await userEvent.click(
       screen.getByRole("button", {
-        name: "Merge roster and invite new people",
+        name: "Merge participants and invite new people",
       }),
     );
 
@@ -1823,7 +1830,7 @@ describe("scaled organizer workspace", () => {
       ),
     );
     expect(
-      await screen.findByRole("button", { name: "Import roster" }),
+      await screen.findByRole("button", { name: "Import participants" }),
     ).toBeInTheDocument();
     expect(
       await screen.findByLabelText("Event delivery progress"),
@@ -1858,11 +1865,11 @@ describe("scaled organizer workspace", () => {
     await screen.findByText("Ada Faculty");
     await openPastedRosterPreview();
     await userEvent.click(
-      screen.getByRole("radio", { name: /Rebuild the roster/ }),
+      screen.getByRole("radio", { name: /Rebuild the participant list/ }),
     );
 
     const rebuildButton = screen.getByRole("button", {
-      name: "Rebuild roster",
+      name: "Rebuild participant list",
     });
     expect(screen.getByRole("note")).toHaveTextContent(
       "Rebuilding clears schedules, invitations, and pending delivery. With invitations enabled below it sends a new invitation to every imported participant; otherwise everyone starts as Not sent and gets no reminders until you send invitations.",
@@ -2492,7 +2499,7 @@ describe("scaled organizer workspace", () => {
       expect(
         await screen.findByText(/Results are updating for revision 4/),
       ).toBeInTheDocument();
-      expect(screen.getByLabelText("Roster summary")).toHaveTextContent(
+      expect(screen.getByLabelText("Participant summary")).toHaveTextContent(
         "1 submitted",
       );
       // Only the revision moved, so the event is patched rather than re-read.
@@ -2500,7 +2507,9 @@ describe("scaled organizer workspace", () => {
       expect(setEvent).toHaveBeenCalledWith({ ...event, resultsRevision: 4 });
       // The organizer's pick and the silent nature of the pass both hold.
       expect(finalize).toHaveTextContent("Thursday 9:00 AM");
-      expect(screen.queryByText("Loading roster…")).not.toBeInTheDocument();
+      expect(
+        screen.queryByText("Loading participants…"),
+      ).not.toBeInTheDocument();
       await waitFor(() =>
         expect(screen.getByTestId("live-sync")).toHaveAttribute(
           "data-updated",

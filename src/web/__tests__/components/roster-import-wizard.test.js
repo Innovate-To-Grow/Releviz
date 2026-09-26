@@ -324,7 +324,7 @@ test("surfaces preview-row, commit, and cancel failures", async () => {
   cancelRosterImport.mockRejectedValueOnce(new Error("cancel failed"));
   renderWizard();
   await userEvent.click(screen.getByRole("tab", { name: "Paste spreadsheet" }));
-  fireEvent.change(screen.getByLabelText("Pasted roster rows"), {
+  fireEvent.change(screen.getByLabelText("Pasted participant rows"), {
     target: { value: "name\temail\nAda\tada@example.com" },
   });
   await userEvent.click(
@@ -340,7 +340,9 @@ test("surfaces preview-row, commit, and cancel failures", async () => {
   fireEvent.blur(rowName);
   expect(await screen.findByRole("alert")).toHaveTextContent("row failed");
   await waitFor(() => expect(rowName).toHaveValue("Ada"));
-  await userEvent.click(screen.getByRole("button", { name: "Merge roster" }));
+  await userEvent.click(
+    screen.getByRole("button", { name: "Merge participants" }),
+  );
   expect(await screen.findByRole("alert")).toHaveTextContent("commit failed");
   await userEvent.click(screen.getByRole("button", { name: "Close" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("cancel failed");
@@ -425,7 +427,7 @@ test("moves between sources with the keyboard, edits every preview column, and g
     "Paste rows copied from Google Sheets or Excel first.",
   );
   // The paste example shows the multi-group cell syntax.
-  const pasteArea = screen.getByLabelText("Pasted roster rows");
+  const pasteArea = screen.getByLabelText("Pasted participant rows");
   expect(pasteArea).toHaveAttribute(
     "placeholder",
     "name\temail\tgroup\nAda\tada@example.com\tFaculty; Team 3",
@@ -501,7 +503,7 @@ test("moves between sources with the keyboard, edits every preview column, and g
   // Invitations are off by default, and the hint says so.
   const behavior = screen.getByRole("group", { name: "Import behavior" });
   expect(behavior).toHaveTextContent(
-    "Existing participants are updated without another email. New people are emailed only if you tick the box; you can also send invitations later from the roster.",
+    "Existing participants are updated without another email. New people are emailed only if you tick the box; you can also send invitations later from the participant list.",
   );
   expect(
     within(behavior).getByLabelText("Send invitations to newly added people"),
@@ -509,8 +511,10 @@ test("moves between sources with the keyboard, edits every preview column, and g
   expect(screen.queryByRole("note")).not.toBeInTheDocument();
 
   // A rebuild needs the exact event code before it can be committed.
-  await userEvent.click(screen.getByLabelText(/Rebuild the roster/));
-  const commit = screen.getByRole("button", { name: "Rebuild roster" });
+  await userEvent.click(screen.getByLabelText(/Rebuild the participant list/));
+  const commit = screen.getByRole("button", {
+    name: "Rebuild participant list",
+  });
   expect(screen.getByRole("note")).toHaveTextContent(
     "Rebuilding clears schedules, invitations, and pending delivery. With invitations enabled below it sends a new invitation to every imported participant; otherwise everyone starts as Not sent and gets no reminders until you send invitations.",
   );
@@ -615,7 +619,7 @@ test("emails newly added people only when the invitation box is ticked", async (
   const onCommitted = jest.fn();
   renderWizard({ onCommitted });
   await userEvent.click(screen.getByRole("tab", { name: "Paste spreadsheet" }));
-  fireEvent.change(screen.getByLabelText("Pasted roster rows"), {
+  fireEvent.change(screen.getByLabelText("Pasted participant rows"), {
     target: {
       value: "name\temail\nAda\tada@example.com\nGrace\tgrace@example.com",
     },
@@ -633,27 +637,35 @@ test("emails newly added people only when the invitation box is ticked", async (
   );
   expect(sendBox).not.toBeChecked();
   expect(
-    screen.getByRole("button", { name: "Merge roster" }),
+    screen.getByRole("button", { name: "Merge participants" }),
   ).toBeInTheDocument();
   await userEvent.click(sendBox);
   expect(sendBox).toBeChecked();
   expect(
-    screen.getByRole("button", { name: "Merge roster and invite new people" }),
+    screen.getByRole("button", {
+      name: "Merge participants and invite new people",
+    }),
   ).toBeInTheDocument();
 
   // The same box governs a rebuild.
-  await userEvent.click(screen.getByLabelText(/Rebuild the roster/));
+  await userEvent.click(screen.getByLabelText(/Rebuild the participant list/));
   expect(
-    screen.getByRole("button", { name: "Rebuild roster and send invitations" }),
+    screen.getByRole("button", {
+      name: "Rebuild participant list and send invitations",
+    }),
   ).toBeDisabled();
   expect(screen.getByLabelText("Send invitations to newly added people")).toBe(
     sendBox,
   );
   expect(sendBox).toBeChecked();
-  await userEvent.click(screen.getByLabelText(/Merge with the current roster/));
+  await userEvent.click(
+    screen.getByLabelText(/Merge with the current participants/),
+  );
 
   await userEvent.click(
-    screen.getByRole("button", { name: "Merge roster and invite new people" }),
+    screen.getByRole("button", {
+      name: "Merge participants and invite new people",
+    }),
   );
   await waitFor(() =>
     expect(commitRosterImport).toHaveBeenCalledWith(
@@ -717,7 +729,7 @@ test("reports that nothing was emailed when a ticked merge adds nobody new", asy
   });
   renderWizard();
   await userEvent.click(screen.getByRole("tab", { name: "Paste spreadsheet" }));
-  fireEvent.change(screen.getByLabelText("Pasted roster rows"), {
+  fireEvent.change(screen.getByLabelText("Pasted participant rows"), {
     target: { value: "name\temail\nAda\tada@example.com" },
   });
   await userEvent.click(
@@ -731,7 +743,9 @@ test("reports that nothing was emailed when a ticked merge adds nobody new", asy
     screen.getByLabelText("Send invitations to newly added people"),
   );
   await userEvent.click(
-    screen.getByRole("button", { name: "Merge roster and invite new people" }),
+    screen.getByRole("button", {
+      name: "Merge participants and invite new people",
+    }),
   );
   expect(await screen.findByRole("status")).toHaveTextContent(
     "Imported 1 people: no new participants were added, so no invitations were sent.",
@@ -792,7 +806,7 @@ test("explains a closed event on commit and reports paging failures", async () =
   const onEventChange = jest.fn();
   renderWizard({ onEventChange });
   await userEvent.click(screen.getByRole("tab", { name: "Paste spreadsheet" }));
-  fireEvent.change(screen.getByLabelText("Pasted roster rows"), {
+  fireEvent.change(screen.getByLabelText("Pasted participant rows"), {
     target: { value: "name\temail\nAda\tada@example.com" },
   });
   await userEvent.click(
@@ -805,9 +819,11 @@ test("explains a closed event on commit and reports paging failures", async () =
   expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
   await userEvent.click(screen.getByRole("button", { name: "Previous" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("page failed");
-  await userEvent.click(screen.getByRole("button", { name: "Merge roster" }));
+  await userEvent.click(
+    screen.getByRole("button", { name: "Merge participants" }),
+  );
   expect(await screen.findByRole("alert")).toHaveTextContent(
-    "This event is closed. Reactivate it before committing this roster.",
+    "This event is closed. Reactivate it before committing this import.",
   );
   expect(onEventChange).toHaveBeenCalledWith(closedError.event);
 });
@@ -865,7 +881,7 @@ test("flags rows bound to blocked accounts and lets them be deselected", async (
   });
   renderWizard();
   await userEvent.click(screen.getByRole("tab", { name: "Paste spreadsheet" }));
-  fireEvent.change(screen.getByLabelText("Pasted roster rows"), {
+  fireEvent.change(screen.getByLabelText("Pasted participant rows"), {
     target: {
       value:
         "name\temail\nAda\tada@example.com\nInactive\tinactive@example.com",
@@ -963,7 +979,7 @@ test("maps a phone column, shows it in the review table, and saves phone edits",
   });
   renderWizard();
   await userEvent.click(screen.getByRole("tab", { name: "Paste spreadsheet" }));
-  fireEvent.change(screen.getByLabelText("Pasted roster rows"), {
+  fireEvent.change(screen.getByLabelText("Pasted participant rows"), {
     target: {
       value:
         "Full Name\tE-mail\tTeam\tMobile\nAda\tada@example.com\tFaculty\t+1 (555) 010-2000\nGrace\tgrace@example.com\t\t",
@@ -1082,7 +1098,7 @@ test("marks rows without an email of their own as people the organizer manages",
   });
   renderWizard();
   await userEvent.click(screen.getByRole("tab", { name: "Paste spreadsheet" }));
-  fireEvent.change(screen.getByLabelText("Pasted roster rows"), {
+  fireEvent.change(screen.getByLabelText("Pasted participant rows"), {
     target: {
       value: "name\temail\tgroup\nGuy No Email\t\tALL\nAda\tada@example.com\t",
     },
@@ -1134,7 +1150,7 @@ test("maps plural headers and spells out what an unmapped field gets", async () 
   createRosterImport.mockResolvedValue({ import: record });
   renderWizard();
   await userEvent.click(screen.getByRole("tab", { name: "Paste spreadsheet" }));
-  fireEvent.change(screen.getByLabelText("Pasted roster rows"), {
+  fireEvent.change(screen.getByLabelText("Pasted participant rows"), {
     target: { value: "Names\tEmails\tGroups\nAda\tada@example.com\tA, B" },
   });
   await userEvent.click(
@@ -1199,7 +1215,7 @@ test("never suggests a column the server already mapped to another field", async
   createRosterImport.mockResolvedValue({ import: record });
   renderWizard();
   await userEvent.click(screen.getByRole("tab", { name: "Paste spreadsheet" }));
-  fireEvent.change(screen.getByLabelText("Pasted roster rows"), {
+  fireEvent.change(screen.getByLabelText("Pasted participant rows"), {
     target: { value: "name\temail\tTeams\nAda\tada@example.com\tA" },
   });
   await userEvent.click(
