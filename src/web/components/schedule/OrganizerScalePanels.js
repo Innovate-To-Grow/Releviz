@@ -35,6 +35,12 @@ import EventDetailsGrid from "@/components/event/EventDetailsGrid";
 import BlockedSlotsEditor from "@/components/schedule/BlockedSlotsEditor";
 import MeetingCalendar from "@/components/schedule/MeetingCalendar";
 import {
+  LIVE_REFRESH_ACTIVE_PACE,
+  LIVE_REFRESH_BACKSTOP_PACE,
+  attachLiveRefreshTriggers,
+  createLiveRefreshScheduler,
+} from "@/lib/liveRefresh";
+import {
   selectionFromRecommendation,
   selectionKey,
   selectionMatchesRecommendation,
@@ -66,6 +72,20 @@ function deliveryWaiting(delivery) {
     Number(delivery.processing || 0) +
     Number(delivery.retry || 0)
   );
+}
+
+// The numbers the delivery card shows for a run, which are also what two
+// reads of the same run are compared on to tell whether anything moved.
+function deliveryCounts(request) {
+  const delivery = deliveryFrom(request);
+  return {
+    total:
+      delivery.total ?? delivery.recipientTotal ?? request.recipientCount ?? 0,
+    sent: Number(delivery.sent || 0),
+    waiting: deliveryWaiting(delivery),
+    failed: Number(delivery.permanentFailure || 0),
+    canceled: Number(delivery.canceled || 0),
+  };
 }
 
 // Weekday + date + time without seconds, e.g. "Mon, Sep 14, 2026, 9:00 AM".
@@ -118,57 +138,101 @@ function MetricListItem({ value, label }) {
   );
 }
 
+// `pushed` says the workspace is being told of changes by the server, and
+// `liveVersion` counts the times it has been told to look again: each
+// change, and each time the stream opens, since the run may have moved while
+// it was down. While pushed, the card re-reads the run on each one instead
+// of polling for it.
 export function DeliveryRequestProgress({
   initialRequest,
   getToken,
   onChange,
+  pushed = false,
+  liveVersion = 0,
   ariaLabel = "Delivery progress",
-  refreshKey = 0,
 }) {
   const [request, setRequest] = useState(initialRequest || null);
   const [error, setError] = useState("");
   const [retrying, setRetrying] = useState(false);
   const requestId = request?.id;
-  const loadRef = useRef(null);
+  const waiting = deliveryWaiting(deliveryFrom(request)) > 0;
+  // The run as shown, for a check to compare its read against, and the check
+  // itself, both reached through refs so the scheduler outlives re-renders.
+  const requestRef = useRef(request);
+  const checkRef = useRef(null);
+  // The scheduler while one runs, for a pushed change to wake, and the last
+  // `liveVersion` the card acted on: a card mounted mid-session starts from
+  // the count it was given rather than reading for changes it never saw.
+  const schedulerRef = useRef(null);
+  const seenVersionRef = useRef(liveVersion);
 
-  const load = useCallback(async () => {
-    if (!requestId) return;
+  useEffect(() => {
+    requestRef.current = request;
+  }, [request]);
+
+  // One check of the run on the shared live-refresh pace: re-read it and
+  // report whether any count moved.
+  const check = useCallback(async () => {
     try {
       const token = await getToken();
       const data = await fetchDeliveryRequest(requestId, token);
       const updated = data.deliveryRequest || data.request || data;
+      const moved =
+        JSON.stringify(deliveryCounts(updated)) !==
+        JSON.stringify(deliveryCounts(requestRef.current));
       setRequest(updated);
       onChange?.(updated);
       setError("");
+      return moved ? "changed" : "quiet";
     } catch (requestError) {
       setError(requestError.message || "Unable to refresh delivery progress.");
+      return "failed";
     }
   }, [getToken, onChange, requestId]);
 
   useEffect(() => {
-    loadRef.current = load;
-  }, [load]);
+    checkRef.current = check;
+  }, [check]);
 
-  // The workspace's single Refresh button re-reads delivery progress too.
+  // While recipients are still waiting, the card keeps itself current. With
+  // the server pushing changes it re-reads on each one and only checks once
+  // a minute as a backstop; otherwise it polls, quick while the counts move
+  // and easing off while they stall. Either way never while the tab is
+  // hidden, and at once when the tab is shown again, the window regains
+  // focus, or the network returns. Once everyone is sent or failed there is
+  // nothing left to read.
   useEffect(() => {
-    if (refreshKey) loadRef.current?.();
-  }, [refreshKey]);
+    if (!requestId || !waiting) return undefined;
+    const scheduler = createLiveRefreshScheduler({
+      check: () => checkRef.current(),
+      pace: pushed ? LIVE_REFRESH_BACKSTOP_PACE : LIVE_REFRESH_ACTIVE_PACE,
+    });
+    schedulerRef.current = scheduler;
+    const detach = attachLiveRefreshTriggers(scheduler, { activity: false });
+    scheduler.start();
+    return () => {
+      detach();
+      scheduler.stop();
+      schedulerRef.current = null;
+    };
+  }, [requestId, waiting, pushed]);
 
+  // This effect comes after the scheduler's on purpose. When the stream
+  // opens, `pushed` and `liveVersion` change in the same render, and effects
+  // run in the order they are declared, so the scheduler at the backstop
+  // pace is already in place when this wakes it; the wake then reads the run
+  // at once rather than a minute on.
   useEffect(() => {
-    if (!request?.id || deliveryWaiting(deliveryFrom(request)) === 0)
-      return undefined;
-    const timer = setInterval(load, 3000);
-    return () => clearInterval(timer);
-  }, [load, request]);
+    if (liveVersion === seenVersionRef.current) return;
+    seenVersionRef.current = liveVersion;
+    schedulerRef.current?.wake();
+  }, [liveVersion]);
 
   if (!request) return null;
-  const delivery = deliveryFrom(request);
-  const waiting = deliveryWaiting(delivery);
-  const failed = Number(delivery.permanentFailure || 0);
-  const total =
-    delivery.total ?? delivery.recipientTotal ?? request.recipientCount ?? 0;
+  const counts = deliveryCounts(request);
+  const failed = counts.failed;
   const state =
-    waiting > 0
+    counts.waiting > 0
       ? { status: "info", label: "In progress" }
       : failed > 0
         ? { status: "warning", label: "Needs attention" }
@@ -201,12 +265,12 @@ export function DeliveryRequestProgress({
         <StatusBadge status={state.status}>{state.label}</StatusBadge>
       </div>
       <ul className="metric-list delivery-progress__metrics">
-        <MetricListItem value={total} label="total" />
-        <MetricListItem value={delivery.sent || 0} label="sent" />
-        <MetricListItem value={waiting} label="queued" />
-        <MetricListItem value={failed} label="failed" />
-        {Number(delivery.canceled || 0) > 0 && (
-          <MetricListItem value={delivery.canceled} label="canceled" />
+        <MetricListItem value={counts.total} label="total" />
+        <MetricListItem value={counts.sent} label="sent" />
+        <MetricListItem value={counts.waiting} label="queued" />
+        <MetricListItem value={counts.failed} label="failed" />
+        {counts.canceled > 0 && (
+          <MetricListItem value={counts.canceled} label="canceled" />
         )}
       </ul>
       {failed > 0 && (
@@ -791,6 +855,7 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
     invalidationKey,
     onChoose,
     onSelect,
+    pushed = false,
     selection = null,
     headingRef,
     finalizeHeadingRef,
@@ -888,12 +953,23 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
       document.removeEventListener("visibilitychange", updateVisibility);
   }, []);
 
+  // A snapshot still being computed is re-read every couple of seconds
+  // while it is in view, unless the server pushes changes to the workspace
+  // (`pushed`): its digest pass then reloads the snapshot the moment the
+  // worker publishes it. A panel whose last load failed polls as before
+  // until one succeeds, though: the digest pass skips a panel that has never
+  // shown a snapshot, and reloads one only once the snapshot moves again.
   useEffect(() => {
-    if (snapshot.status !== "refreshing" || !sectionVisible || !documentVisible)
+    if (
+      (pushed && !error) ||
+      snapshot.status !== "refreshing" ||
+      !sectionVisible ||
+      !documentVisible
+    )
       return undefined;
     const timer = setInterval(load, 2000);
     return () => clearInterval(timer);
-  }, [documentVisible, load, sectionVisible, snapshot.status]);
+  }, [documentVisible, error, load, pushed, sectionVisible, snapshot.status]);
 
   const results = snapshot.results || null;
   const recommendations = (results?.recommendations || []).slice(0, 10);

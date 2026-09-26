@@ -326,14 +326,6 @@ function recomputeEventResults(eventCode) {
   runBackendCommand("recompute_event_results", `--event-code=${eventCode}`);
 }
 
-// The header's Refresh is the workspace's only refresh control; it re-reads
-// the event, roster, results, and any delivery progress that is showing.
-async function refreshWorkspace(page) {
-  await page.getByRole("button", { name: "Refresh", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Refreshing…" })).toBeHidden();
-  await expect(page.getByText("Workspace updated.")).toBeVisible();
-}
-
 // The ranked list beside the calendar starts collapsed; open it on demand.
 async function openRankedWindows(page) {
   const details = page
@@ -347,7 +339,6 @@ async function openRankedWindows(page) {
 
 module.exports = {
   openRankedWindows,
-  refreshWorkspace,
   ADMIN_EMAIL,
   ADMIN_PASSWORD,
   BACKEND_URL,

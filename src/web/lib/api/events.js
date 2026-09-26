@@ -193,6 +193,18 @@ export async function fetchEventActivity(code, token) {
   return res.json();
 }
 
+// The organizer workspace's change stream (Server-Sent Events, see
+// lib/liveStream.js). The stream is read incrementally, so the response is
+// handed back unread: the caller checks the status and reads the body.
+// `apiFetch` still adds the bearer token and refreshes it once after a 401,
+// which is how a stream reopened after a `reconnect` frame gets a fresh one.
+export function openEventStream(code, { signal } = {}) {
+  return apiFetch(
+    `${API_BASE}/events/stream?code=${encodeURIComponent(code)}`,
+    { signal, headers: { Accept: "text/event-stream" } },
+  );
+}
+
 export async function previewFinalMeeting(code, payload, token) {
   const res = await apiFetch(
     `${API_BASE}/events/finalization/preview?code=${encodeURIComponent(code)}`,
