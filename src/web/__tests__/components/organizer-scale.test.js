@@ -2657,6 +2657,44 @@ describe("scaled organizer workspace", () => {
     }
   });
 
+  test("with the calendar pinned, a calendar pick focuses Finalize without a manual scroll", async () => {
+    mockCalendarWindowFlow();
+    const nowSpy = jest
+      .spyOn(Date, "now")
+      .mockReturnValue(Date.parse("2026-08-01T00:00:00Z"));
+    const originalStyle = window.getComputedStyle;
+    // Stylesheets do not load in jsdom: report the pinned calendar sticky.
+    const styleSpy = jest
+      .spyOn(window, "getComputedStyle")
+      .mockImplementation((element, ...rest) => {
+        const style = originalStyle(element, ...rest);
+        return element.matches?.(".meeting-results--pinned > .meeting-calendar")
+          ? { ...style, position: "sticky" }
+          : style;
+      });
+    try {
+      renderView(jest.fn(), calendarEvent);
+      await screen.findByText(/Results are current/);
+      const finalize = document.getElementById("organizer-finalize");
+      await userEvent.click(finalize.querySelector(":scope > summary"));
+      const other = document.getElementById("organizer-other-times");
+      await userEvent.click(other.querySelector(":scope > summary"));
+      expect(document.querySelector(".meeting-results")).toHaveClass(
+        "meeting-results--picking",
+      );
+
+      await userEvent.click(calendarCell(1));
+      expect(finalize).toHaveTextContent("Custom window");
+      // The page's scroll-padding keeps clear of the pinned calendar, so a
+      // plain focus does the scrolling.
+      expect(screen.getByRole("heading", { name: "Finalize" })).toHaveFocus();
+      expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled();
+    } finally {
+      styleSpy.mockRestore();
+      nowSpy.mockRestore();
+    }
+  });
+
   test("a calendar pick brings Finalize into view, honoring reduced motion", async () => {
     window.matchMedia = jest.fn().mockReturnValue({ matches: true });
     mockCalendarWindowFlow();

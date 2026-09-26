@@ -82,6 +82,19 @@ async function pickCell(page, cell, expectedText) {
     .toContain(expectedText);
 }
 
+// Whether `locator` is the topmost element at its own centre, i.e. not
+// hidden under something pinned over it (the calendar while picking).
+async function isUncovered(locator) {
+  return locator.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const hit = document.elementFromPoint(
+      box.left + box.width / 2,
+      box.top + Math.min(box.height / 2, 12),
+    );
+    return element.contains(hit);
+  });
+}
+
 // Adds a managed participant and submits the given availability. `inperson`
 // and `virtual` list the slot indices the person is free for.
 async function submitResponse(
@@ -507,6 +520,11 @@ test.describe("Organizer meeting-time calendar", () => {
     const otherTimes = page.locator("details#organizer-other-times");
     await otherTimes.locator("> summary").click();
     await expect(otherTimes).toHaveAttribute("open", "");
+    // The summary just clicked is brought out from under the calendar as it
+    // pins.
+    await expect
+      .poll(() => isUncovered(otherTimes.locator("> summary")))
+      .toBe(true);
     const laterDays = otherTimes.getByRole("button", { name: "Later days" });
     await expect(laterDays).toBeVisible();
     // The arrows stay focusable at the ends and say so with aria-disabled.
@@ -535,15 +553,19 @@ test.describe("Organizer meeting-time calendar", () => {
     // while a picker is open), moves to the day listed and highlights it,
     // and draws the time under the pointer.
     await expect(
-      page.locator(".meeting-results--picking > .meeting-calendar"),
+      page.locator(".meeting-results--pinned > .meeting-calendar"),
     ).toHaveCSS("position", "sticky");
     await expect(
       grid.locator(".meeting-calendar__column-header--focus"),
     ).toContainText(lastDayName);
     await timeChip.hover();
-    await expect(
-      page.locator(".meeting-calendar__block--candidate"),
-    ).toContainText(chipTimes);
+    const candidateBlock = page.locator(".meeting-calendar__block--candidate");
+    await expect(candidateBlock).toContainText(chipTimes);
+    // Drawn where it can be seen: the pinned grid scrolls to it.
+    await expect(candidateBlock).toBeInViewport();
+    // Keyboard focus on a chip is never hidden under the pinned calendar.
+    await timeChip.focus();
+    await expect.poll(() => isUncovered(timeChip)).toBe(true);
     await expectAccessible(page, "organizer other times");
     await timeChip.click();
     await expect(candidate).toContainText(chipTimes);

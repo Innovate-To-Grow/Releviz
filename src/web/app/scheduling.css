@@ -1088,11 +1088,17 @@
 }
 
 /* While a picker in Finalize is open (Recommended or Other times), the
-   calendar stays pinned under the section nav with a shorter grid, so what
-   is pointed at or chosen below shows on it; only where the screen has
-   room for both. */
-@media (min-width: 768px) and (min-height: 700px) {
-  .meeting-results--picking > .meeting-calendar {
+   grid takes only what the screen can spare, leaving about 16rem for the
+   lists, and the calendar stays pinned under the section nav while the
+   lists are in view (scrolled past them, it goes with the page), so what
+   is pointed at or chosen there shows on it. The page's scroll-padding
+   (the pinned height, measured) keeps focus and scrolling clear of it. */
+@media (min-width: 768px) and (min-height: 560px) {
+  .meeting-results--picking .meeting-calendar__scroll {
+    max-height: clamp(10rem, 100vh - 28rem, 26rem);
+  }
+
+  .meeting-results--pinned > .meeting-calendar {
     position: sticky;
     top: 3.75rem;
     z-index: 4;
@@ -1101,8 +1107,10 @@
     box-shadow: 0 12px 12px -14px rgba(33, 37, 41, 0.45);
   }
 
-  .meeting-results--picking .meeting-calendar__scroll {
-    max-height: min(42vh, 420px);
+  html:has(.meeting-results--pinned) {
+    scroll-padding-top: calc(
+      3.75rem + var(--rv-pinned-calendar-h, 0px) + 0.5rem
+    );
   }
 }
 

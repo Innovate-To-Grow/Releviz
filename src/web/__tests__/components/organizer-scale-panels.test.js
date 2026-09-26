@@ -3189,10 +3189,11 @@ async function openOtherTimes() {
 }
 
 // Keeps the pick like the workspace does, so chips can show it pressed.
-function PickingTimeTable({ onSelect, ...props }) {
+function PickingTimeTable({ onSelect, panelRef, ...props }) {
   const [selection, setSelection] = useState(null);
   return (
     <ResultsSnapshotPanel
+      ref={panelRef}
       {...props}
       selection={selection}
       onSelect={(picked) => {
@@ -3542,7 +3543,7 @@ test("choosing a time shows on the time table: the day, the time pointed at, and
     // The time under the pointer (or focus) is drawn on the calendar.
     const chips = otherChips(other);
     await userEvent.hover(chips[2]);
-    expect(candidate()).toHaveTextContent("10:00–11:00 · up to 40%");
+    expect(candidate()).toHaveTextContent("10:00 · 40%");
     expect(candidate()).toHaveStyle({
       "--rv-cal-row": "2",
       "--rv-cal-span": "2",
@@ -3550,9 +3551,20 @@ test("choosing a time shows on the time table: the day, the time pointed at, and
     await userEvent.unhover(chips[2]);
     expect(candidate()).toBeNull();
     act(() => chips[0].focus());
-    expect(candidate()).toHaveTextContent("09:00–10:00 · up to 50%");
+    expect(candidate()).toHaveTextContent("09:00 · 50%");
     act(() => chips[0].blur());
     expect(candidate()).toBeNull();
+
+    // Once picked, the time is the Selected block, not a second preview.
+    await userEvent.click(chips[2]);
+    await userEvent.hover(otherChips(other)[2]);
+    expect(candidate()).toBeNull();
+    expect(
+      document.querySelector(".meeting-calendar__block--selected"),
+    ).not.toBeNull();
+    await userEvent.hover(otherChips(other)[1]);
+    expect(candidate()).toHaveTextContent("09:30 · 90%");
+    await userEvent.unhover(otherChips(other)[1]);
 
     // Closing it takes the highlight away; Recommended times alone also
     // keeps the calendar in view, but not while painting blocked times.
@@ -3574,6 +3586,159 @@ test("choosing a time shows on the time table: the day, the time pointed at, and
       document.getElementById("organizer-recommended-times"),
     ).not.toHaveAttribute("open");
     expect(results).not.toHaveClass("meeting-results--picking");
+  } finally {
+    nowSpy.mockRestore();
+  }
+});
+
+test("the calendar stays where the organizer puts it; only Other times' own browsing moves it", async () => {
+  const nowSpy = jest
+    .spyOn(Date, "now")
+    .mockReturnValue(Date.parse("2026-08-03T08:50:00Z"));
+  try {
+    mockEmptySnapshot();
+    const panelRef = createRef();
+    render(
+      <PickingTimeTable panelRef={panelRef} {...timeTableProps(weeklyEvent)} />,
+    );
+    await screen.findByText(/Results are current/);
+    const shownWeek = () =>
+      within(calendarGrid())
+        .getAllByRole("columnheader")
+        .slice(1)
+        .map((header) => header.textContent.trim());
+    const other = await openOtherTimes();
+    // Opening takes the calendar to the day listed: Monday 3 August.
+    await waitFor(() => expect(shownWeek()[0]).toMatch(/Aug 3/));
+
+    // The organizer moves the calendar on by hand...
+    await userEvent.click(screen.getByRole("button", { name: "Next week" }));
+    await waitFor(() => expect(shownWeek()[0]).toMatch(/Aug 10/));
+    // ...and a reload after 09:00 (the listed day's first time passes)
+    // leaves it there.
+    nowSpy.mockReturnValue(Date.parse("2026-08-03T09:35:00Z"));
+    await act(async () => {
+      await panelRef.current.refresh("token", { silent: true });
+    });
+    expect(shownWeek()[0]).toMatch(/Aug 10/);
+
+    // A pick on the calendar (Wednesday 12 August, 10:00): the list follows
+    // it, the calendar stays, and the picked cell keeps the tab stop.
+    await userEvent.click(calendarGrid().querySelector('[data-cell-idx="6"]'));
+    const pressedDay = () =>
+      within(within(other).getByRole("group", { name: "Day" }))
+        .getAllByRole("button")
+        .find((button) => button.getAttribute("aria-pressed") === "true");
+    await waitFor(() => expect(pressedDay()).toHaveTextContent(/Wed\s*Aug 12/));
+    expect(shownWeek()[0]).toMatch(/Aug 10/);
+    expect(calendarGrid().querySelector('[data-cell-idx="6"]').tabIndex).toBe(
+      0,
+    );
+
+    // Browsing in Other times moves the calendar, not the tab stop.
+    await userEvent.click(
+      within(
+        within(other).getByRole("group", { name: "Week shown" }),
+      ).getByRole("button", { name: "Later days" }),
+    );
+    await waitFor(() => expect(shownWeek()[0]).toMatch(/Aug 17/));
+    expect(pressedDay()).toHaveTextContent(/Mon\s*Aug 17/);
+  } finally {
+    nowSpy.mockRestore();
+  }
+});
+
+test("the pinned calendar's height keeps focus and scrolling clear of it", async () => {
+  const nowSpy = jest.spyOn(Date, "now").mockReturnValue(DATED_NOW);
+  const observers = [];
+  const originalObserver = global.ResizeObserver;
+  global.ResizeObserver = class {
+    constructor(callback) {
+      this.callback = callback;
+      observers.push(this);
+    }
+
+    observe(element) {
+      this.element = element;
+      this.callback([]);
+    }
+
+    disconnect() {
+      this.disconnected = true;
+    }
+  };
+  const originalScroll = HTMLElement.prototype.scrollIntoView;
+  HTMLElement.prototype.scrollIntoView = jest.fn();
+  try {
+    mockDatedSnapshot();
+    render(<PickingTimeTable {...timeTableProps(datedEvent)} />);
+    await screen.findByText(/Results are current at revision 7/);
+    const root = document.documentElement;
+    expect(root.style.getPropertyValue("--rv-pinned-calendar-h")).toBe("");
+    const other = await openOtherTimes();
+    // Picking: the calendar's height is measured for scroll-padding-top,
+    // and the summary just activated is scrolled out from under it.
+    expect(observers).toHaveLength(1);
+    expect(observers[0].element).toHaveClass("meeting-calendar");
+    expect(root.style.getPropertyValue("--rv-pinned-calendar-h")).toBe("0px");
+    expect(HTMLElement.prototype.scrollIntoView.mock.contexts).toContain(
+      other.querySelector(":scope > summary"),
+    );
+    // Later resizes only update the height.
+    HTMLElement.prototype.scrollIntoView.mockClear();
+    observers[0].callback([]);
+    expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled();
+
+    await userEvent.click(other.querySelector(":scope > summary"));
+    expect(observers[0].disconnected).toBe(true);
+    expect(root.style.getPropertyValue("--rv-pinned-calendar-h")).toBe("");
+  } finally {
+    global.ResizeObserver = originalObserver;
+    HTMLElement.prototype.scrollIntoView = originalScroll;
+    nowSpy.mockRestore();
+  }
+});
+
+test("the calendar pins while the lists are in view and lets go once they are scrolled past", async () => {
+  const nowSpy = jest.spyOn(Date, "now").mockReturnValue(DATED_NOW);
+  try {
+    mockDatedSnapshot();
+    render(<PickingTimeTable {...timeTableProps(datedEvent)} />);
+    await screen.findByText(/Results are current at revision 7/);
+    const other = document.getElementById("organizer-other-times");
+    let listsBottom = 700;
+    other.getBoundingClientRect = () => ({
+      top: listsBottom - 300,
+      bottom: listsBottom,
+      height: 300,
+      left: 0,
+      right: 800,
+      width: 800,
+    });
+    await openOtherTimes();
+    const results = document.querySelector(".meeting-results");
+    expect(results).toHaveClass("meeting-results--picking");
+    expect(results).toHaveClass("meeting-results--pinned");
+
+    // Scrolled on to Review attendance: the lists end above the pinned
+    // calendar's bottom edge, so it lets go (the shorter grid stays, so
+    // nothing below moves).
+    listsBottom = 40;
+    fireEvent.scroll(window);
+    await waitFor(() =>
+      expect(results).not.toHaveClass("meeting-results--pinned"),
+    );
+    expect(results).toHaveClass("meeting-results--picking");
+
+    // Back up to the lists: pinned again.
+    listsBottom = 700;
+    fireEvent.scroll(window);
+    await waitFor(() => expect(results).toHaveClass("meeting-results--pinned"));
+
+    // Closing the lists ends picking altogether.
+    await userEvent.click(other.querySelector(":scope > summary"));
+    expect(results).not.toHaveClass("meeting-results--picking");
+    expect(results).not.toHaveClass("meeting-results--pinned");
   } finally {
     nowSpy.mockRestore();
   }

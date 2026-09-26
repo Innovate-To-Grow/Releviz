@@ -544,13 +544,23 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
   else if (firstStartable) rovingIndex = firstStartable.index;
 
   // What the Other times picker is pointing at, and the day it lists.
-  const candidateBlock = useMemo(
-    () =>
-      painting || !previewWindow
-        ? null
-        : selectionBlock(previewWindow, columns),
-    [painting, previewWindow, columns],
-  );
+  const candidateBlock = useMemo(() => {
+    if (painting || !previewWindow) return null;
+    const block = selectionBlock(previewWindow, columns);
+    if (!block) return null;
+    // Only a time that can still be picked, and not the pick itself (its
+    // own block and label already show it).
+    const index = columns[block.columnIndex].slots[block.row]?.index;
+    if (cellModels.get(index)?.state !== "startable") return null;
+    if (
+      selected &&
+      selected.columnIndex === block.columnIndex &&
+      selected.row === block.row &&
+      selected.span === block.span
+    )
+      return null;
+    return block;
+  }, [painting, previewWindow, columns, cellModels, selected]);
   const focusColumnIndex =
     painting || !focusColumn
       ? -1
@@ -601,6 +611,20 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
     }, 0);
   }, []);
 
+  // What a picker points at (an Other time, or a recommended chip's
+  // outline): the grid scrolls, inside itself, to show it.
+  const highlightedBlock =
+    highlightRank == null
+      ? null
+      : blocks.find((block) => block.rank === highlightRank) || null;
+  const emphasis = candidateBlock || highlightedBlock;
+  const emphasisIndex = emphasis
+    ? (columns[emphasis.columnIndex].slots[emphasis.row]?.index ?? null)
+    : null;
+  useEffect(() => {
+    if (emphasisIndex != null) scrollCellIntoView(emphasisIndex);
+  }, [emphasisIndex, scrollCellIntoView]);
+
   // After PageUp/PageDown the focused cell may have unmounted (specific-date
   // pages render different slots); put focus back on the grid's tab stop.
   useEffect(() => {
@@ -650,6 +674,25 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
           setActiveCellIndex(first);
           scrollCellIntoView(first);
         }
+      },
+      // Moves the calendar to show `target` (its week or page, and the grid
+      // scrolled to it) without moving the grid's tab stop: for a picker
+      // browsing days, not for a pick.
+      showWindow(target) {
+        if (!target) return;
+        setView(
+          defaultView({
+            groups,
+            selection: target,
+            recommendations: [],
+            now,
+            timeZone,
+          }),
+        );
+        const first = Array.isArray(target.slotIndices)
+          ? target.slotIndices[0]
+          : null;
+        if (first != null) scrollCellIntoView(first);
       },
     }),
     [groups, now, timeZone, scrollCellIntoView],

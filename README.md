@@ -180,9 +180,10 @@ Finalize without leaving the list. **Other times**, collapsed under it, picks an
 recommended or not, the same way: click a day (weekly events offer the next four weeks, a week at a
 time), then click one of its times, shown as chips with the lowest slot's share and the rank when
 the time is also recommended. Choosing shows on the calendar as it happens: while either list is
-open the calendar stays in view (pinned under the section nav on screens with room for it),
-Other times takes it to the day listed and highlights that column, and the time under the pointer
-or focus is drawn on it before it is picked.
+open and in view, the calendar stays pinned under the section nav (on screens with room for it,
+with a shorter grid; scrolled on past the lists it goes with the page). Opening Other times or
+browsing its days takes the calendar to that day and highlights its column, and the time under
+the pointer or focus is drawn on it, scrolled into view in the grid, before it is picked.
 The organizer can:
 
 - search/filter a server-paginated roster (50 rows by default, 100 maximum);

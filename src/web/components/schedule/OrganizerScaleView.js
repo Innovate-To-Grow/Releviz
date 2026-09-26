@@ -76,6 +76,16 @@ function readStoredDeliveryRequest(eventCode) {
 // whole step: with the Recommended times open above it, the step is taller
 // than a phone screen and its top would leave the pick below the fold.
 function focusFinalizeStep(headingRef) {
+  // With a picker open the calendar is pinned above the step: the page's
+  // scroll-padding keeps clear of it, so a plain focus scroll lands the
+  // heading in view below it.
+  const pinned = document.querySelector(
+    ".meeting-results--pinned > .meeting-calendar",
+  );
+  if (pinned && window.getComputedStyle(pinned).position === "sticky") {
+    headingRef.current?.focus();
+    return;
+  }
   const reducedMotion =
     typeof window !== "undefined" &&
     window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;

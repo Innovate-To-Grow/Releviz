@@ -1213,9 +1213,10 @@ const TIME_CHIP_KEYS = {
  * (`pickable` comes from useStartableDays). A click selects the time like a
  * calendar pick and shows it on the calendar; the chip turns pressed, keeps
  * focus, and the pick is announced. While it is open the calendar shows
- * what it is choosing: `onShowDay(columnKey, revealTarget)` takes the
- * calendar to the day listed (null when closed), and `onPreview(window)`
- * draws the time under the pointer or focus (null when none).
+ * what it is choosing: `onDayShown(columnKey)` highlights the day listed
+ * (null when closed), `onBrowse(target)` takes the calendar to a day the
+ * organizer opens here (their own actions only, never a data change), and
+ * `onPreview(window)` draws the time under the pointer or focus.
  */
 function OtherTimesSection({
   event,
@@ -1230,7 +1231,8 @@ function OtherTimesSection({
   onToggle,
   onPick,
   onPreview,
-  onShowDay,
+  onDayShown,
+  onBrowse,
 }) {
   const [dayKey, setDayKey] = useState(null);
   const [focusKey, setFocusKey] = useState(null);
@@ -1328,50 +1330,72 @@ function OtherTimesSection({
     target?.focus();
   }, [entryKeys]);
 
-  // The calendar follows the day listed: it moves to that day's week and
-  // highlights its column. Only plain values reach the effect, so it runs
-  // when the day shown changes, not on every clock tick.
+  // The calendar highlights the day listed (a passive mark, no navigation).
   const shownDay = open && day ? day.column.key : null;
-  const firstWindow = shownDay ? windowAt(day.column, day.rows[0], k) : null;
-  const revealStartsAt = firstWindow?.startsAt ?? null;
-  const revealSlots = firstWindow?.slotIndices?.join(",") ?? "";
-  const revealOffset = shownDay
-    ? day.column.slots[day.rows[0]].startDayOffset
-    : 0;
-  const revealGroup = shownDay ? day.column.groupKey : null;
   useEffect(() => {
-    onShowDay?.(
-      shownDay,
-      shownDay
+    onDayShown?.(shownDay);
+  }, [shownDay, onDayShown]);
+
+  // The time under the pointer or focus, drawn on the calendar. Worked out
+  // from the current chips, so it follows a new share and goes away with a
+  // chip a clock tick removes; only plain values reach the effect.
+  const previewEntry = entries.find((entry) => entry.key === focusKey);
+  const previewStartsAt = previewEntry?.startsAt ?? null;
+  const previewSlots = previewEntry
+    ? windowAt(day.column, previewEntry.row, k).slotIndices.join(",")
+    : "";
+  const previewGroup = previewEntry ? day.column.groupKey : null;
+  const previewLabel = previewEntry
+    ? `${previewEntry.start}${previewEntry.chipShare != null ? ` · ${previewEntry.chipShare}%` : ""}`
+    : "";
+  useEffect(() => {
+    onPreview?.(
+      previewStartsAt
         ? {
-            startsAt: revealStartsAt,
-            slotIndices: revealSlots.split(",").map(Number),
-            startDayOffset: revealOffset,
-            groupKey: revealGroup,
+            startsAt: previewStartsAt,
+            slotIndices: previewSlots.split(",").map(Number),
+            groupKey: previewGroup,
+            label: previewLabel,
           }
         : null,
     );
-  }, [
-    shownDay,
-    revealStartsAt,
-    revealSlots,
-    revealOffset,
-    revealGroup,
-    onShowDay,
-  ]);
+  }, [previewStartsAt, previewSlots, previewGroup, previewLabel, onPreview]);
 
-  const previewOf = (entry) => ({
-    startsAt: entry.startsAt,
-    slotIndices: windowAt(day.column, entry.row, k).slotIndices,
-    groupKey: day.column.groupKey,
-    label: entry.share ? `${entry.times} · ${entry.share}` : entry.times,
-  });
+  // Takes the calendar to a day the organizer opens here.
+  const browseTo = (target) => {
+    if (!target) return;
+    const window = windowAt(target.column, target.rows[0], k);
+    onBrowse?.({
+      startsAt: window.startsAt,
+      slotIndices: window.slotIndices,
+      startDayOffset: target.column.slots[target.rows[0]].startDayOffset,
+      groupKey: target.column.groupKey,
+    });
+  };
+
+  // The day the list opens on: the pick's (in this format), else the first.
+  const openingDay = () => {
+    if (selectedKey) {
+      const start = Date.parse(selection.startsAt);
+      const hit = days.find((entry) =>
+        entry.rows.some(
+          (row) =>
+            Date.parse(windowAt(entry.column, row, k).startsAt) === start,
+        ),
+      );
+      if (hit) return hit;
+    }
+    return days[0];
+  };
 
   const toggle = (next) => {
     onToggle(next);
-    // Reopening starts from the day of the pick again.
-    if (next) setDayKey(null);
-    else onPreview?.(null);
+    if (!next) return;
+    // Reopening starts from the day of the pick again, and the calendar
+    // goes there too.
+    setDayKey(null);
+    setFocusKey(null);
+    browseTo(openingDay());
   };
 
   const choose = (entry) => {
@@ -1418,6 +1442,7 @@ function OtherTimesSection({
   const showDaysOf = (index) => {
     if (index < 0 || index >= groups.length) return;
     setDayKey(groups[index].days[0].column.key);
+    browseTo(groups[index].days[0]);
   };
 
   let body = null;
@@ -1472,10 +1497,8 @@ function OtherTimesSection({
                     <ChevronLeftIcon />
                   </span>
                 </button>
-                <span
-                  className="meeting-calendar__range-label"
-                  aria-live="polite"
-                >
+                {/* The calendar moves with it and announces its own range. */}
+                <span className="meeting-calendar__range-label">
                   {group.label}
                 </span>
                 <button
@@ -1533,6 +1556,7 @@ function OtherTimesSection({
                 onClick={() => {
                   setDayKey(entry.column.key);
                   setFocusKey(null);
+                  browseTo(entry);
                 }}
               >
                 <span className="day-chip__weekday">
@@ -1577,26 +1601,18 @@ function OtherTimesSection({
                 onKeyDown={(keyDownEvent) =>
                   moveBetweenTimes(keyDownEvent, entry)
                 }
-                onPointerEnter={() => {
-                  setFocusKey(entry.key);
-                  onPreview?.(previewOf(entry));
-                }}
-                onPointerLeave={() => {
-                  setFocusKey(null);
-                  onPreview?.(null);
-                }}
+                onPointerEnter={() => setFocusKey(entry.key)}
+                onPointerLeave={() => setFocusKey(null)}
                 onFocus={() => {
                   focusedTime.current = { key: entry.key, index: entry.index };
                   setFocusKey(entry.key);
                   setTabKey(entry.key);
-                  onPreview?.(previewOf(entry));
                 }}
                 onBlur={(blurEvent) => {
                   // Removed by a re-render: the effect above moves focus.
                   if (!blurEvent.currentTarget.isConnected) return;
                   focusedTime.current = null;
                   setFocusKey(null);
-                  onPreview?.(null);
                 }}
               >
                 {entry.rank != null && (
@@ -1884,10 +1900,86 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
     setPickerPreview(null);
   }, []);
 
-  // Other times shows a day: the calendar goes to its week and highlights it.
-  const handleShowDay = useCallback((columnKey, revealTarget) => {
-    setPickerDay(columnKey);
-    if (revealTarget) calendarRef.current?.reveal(revealTarget);
+  // A picker in Finalize is open (and blocked times are not being painted):
+  // the calendar stays in view, pinned under the section nav where the
+  // screen has room. Its height feeds the page's scroll-padding-top, so
+  // focus and scrolling land clear of it; the element that opened the
+  // picker is brought out from under it as it pins.
+  const picking = (rankedOpen || otherOpen) && !blockedOpen;
+  // Pinned only while the lists are in view below it: scrolled past them
+  // (to Review attendance and the table), the calendar goes with the page.
+  // It keeps its place in the flow either way, so nothing below moves.
+  const [pastLists, setPastLists] = useState(false);
+  const pinnedHeight = useRef(0);
+  useEffect(() => {
+    if (!picking) return undefined;
+    let frame = null;
+    const check = () => {
+      frame = null;
+      const lists = document.getElementById("organizer-other-times");
+      if (!lists) return;
+      const box = lists.getBoundingClientRect();
+      // Without layout (nothing measured) the lists count as in view.
+      if (!box.height) {
+        setPastLists(false);
+        return;
+      }
+      const rem = parseFloat(
+        window.getComputedStyle(document.documentElement).fontSize || "16",
+      );
+      // The pinned calendar's bottom edge: the section nav (3.75rem) plus
+      // its measured height.
+      setPastLists(box.bottom < rem * 3.75 + pinnedHeight.current);
+    };
+    const schedule = () => {
+      if (frame == null) frame = window.requestAnimationFrame(check);
+    };
+    check();
+    window.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("resize", schedule);
+    return () => {
+      window.removeEventListener("scroll", schedule);
+      window.removeEventListener("resize", schedule);
+      if (frame != null) window.cancelAnimationFrame(frame);
+      setPastLists(false);
+    };
+  }, [picking]);
+  const pinned = picking && !pastLists;
+  useEffect(() => {
+    if (!pinned || typeof ResizeObserver === "undefined") return undefined;
+    const calendar = sectionRef.current?.querySelector(
+      ".meeting-results > .meeting-calendar",
+    );
+    if (!calendar) return undefined;
+    const root = document.documentElement;
+    let first = true;
+    const observer = new ResizeObserver(() => {
+      pinnedHeight.current = calendar.offsetHeight;
+      root.style.setProperty(
+        "--rv-pinned-calendar-h",
+        `${calendar.offsetHeight}px`,
+      );
+      if (!first) return;
+      first = false;
+      const active = document.activeElement;
+      if (
+        active &&
+        calendar.parentElement.contains(active) &&
+        !calendar.contains(active)
+      )
+        active.scrollIntoView?.({ block: "nearest" });
+    });
+    observer.observe(calendar);
+    return () => {
+      observer.disconnect();
+      root.style.removeProperty("--rv-pinned-calendar-h");
+    };
+  }, [pinned]);
+
+  // Other times browses to a day: the calendar shows its week (or page)
+  // without moving the grid's tab stop.
+  const handleBrowse = useCallback((target) => {
+    calendarRef.current?.showWindow(target);
   }, []);
 
   // A time chosen under Other times: selected like a calendar pick and
@@ -1993,7 +2085,7 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
             (pinned under the section nav where the screen has room), so
             what is pointed at or chosen below shows on it. */}
         <div
-          className={`meeting-results${(rankedOpen || otherOpen) && !blockedOpen ? " meeting-results--picking" : ""}`}
+          className={`meeting-results${picking ? " meeting-results--picking" : ""}${pinned ? " meeting-results--pinned" : ""}`}
         >
           <MeetingCalendar
             ref={calendarRef}
@@ -2077,7 +2169,8 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
                     onToggle={setOtherOpen}
                     onPick={handlePick}
                     onPreview={setPickerPreview}
-                    onShowDay={handleShowDay}
+                    onDayShown={setPickerDay}
+                    onBrowse={handleBrowse}
                   />
                 </>
               }

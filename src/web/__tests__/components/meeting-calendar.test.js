@@ -15,7 +15,13 @@ import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 
 import MeetingCalendar from "@/components/schedule/MeetingCalendar";
-import { selectionFromRecommendation } from "@/lib/meetingWindows";
+import {
+  buildColumns,
+  normalizeSlotGroups,
+  selectionFromRecommendation,
+  selectionFromWindow,
+} from "@/lib/meetingWindows";
+import { createLocalDateTimeResolver } from "@/lib/time";
 
 // Thursday 10 September 2026: the week of Sep 6 – 12.
 const NOW = Date.parse("2026-09-10T00:00:00Z");
@@ -705,6 +711,91 @@ describe("MeetingCalendar", () => {
     expect(
       document.querySelector(".meeting-calendar__column-header--focus"),
     ).toBeNull();
+  });
+
+  test("leaves out a preview that is the pick or can no longer start, and scrolls the grid to what is pointed at", async () => {
+    const preview = {
+      startsAt: "2026-09-16T10:00:00Z",
+      slotIndices: [6, 7],
+      groupKey: "weekday:3",
+      label: "10:00 · 20%",
+    };
+    const candidate = () =>
+      document.querySelector(".meeting-calendar__block--candidate");
+    const picked = selectionFromWindow({
+      column: buildColumns({
+        groups: normalizeSlotGroups(weeklyEvent),
+        view: { weekStart: "2026-09-13" },
+        resolver: createLocalDateTimeResolver("UTC"),
+      })[1],
+      row: 2,
+      k: 2,
+      channel: "inperson",
+      results,
+      event: weeklyEvent,
+    });
+    const props = {
+      event: weeklyEvent,
+      results,
+      channel: "inperson",
+      onSelect: jest.fn(),
+      onChannelChange: jest.fn(),
+      now: NOW,
+    };
+    const { rerender } = renderCalendar({ previewWindow: preview });
+    expect(candidate()).not.toBeNull();
+    // The grid (never the page) scrolls to it.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(HTMLElement.prototype.scrollTo).toHaveBeenCalled();
+    expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled();
+
+    // The same window as the pick: only the Selected block shows.
+    rerender(
+      <MeetingCalendar {...props} previewWindow={preview} selection={picked} />,
+    );
+    expect(candidate()).toBeNull();
+    expect(
+      document.querySelector(".meeting-calendar__block--selected"),
+    ).not.toBeNull();
+
+    // A time that has started is not previewed.
+    rerender(
+      <MeetingCalendar
+        {...props}
+        previewWindow={preview}
+        now={Date.parse("2026-09-16T10:05:00Z")}
+      />,
+    );
+    expect(candidate()).toBeNull();
+  });
+
+  test("showWindow moves to a week without moving the grid's tab stop", async () => {
+    const calendar = createRef();
+    render(
+      <MeetingCalendar
+        ref={calendar}
+        event={weeklyEvent}
+        results={results}
+        channel="inperson"
+        onSelect={jest.fn()}
+        onChannelChange={jest.fn()}
+        now={NOW}
+      />,
+    );
+    const stop = tabbableCells()[0];
+    act(() =>
+      calendar.current.showWindow({
+        startsAt: "2026-09-23T10:00:00Z",
+        slotIndices: [6, 7],
+        groupKey: "weekday:3",
+      }),
+    );
+    expect(columnHeaders()[0]).toMatch(/Sep 21/);
+    expect(tabbableCells()[0].dataset.cellIdx).toBe(stop.dataset.cellIdx);
+    act(() => calendar.current.showWindow(null));
+    expect(columnHeaders()[0]).toMatch(/Sep 21/);
   });
 
   test("hides the ranked windows while the ranked list is collapsed", async () => {
