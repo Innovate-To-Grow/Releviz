@@ -1843,6 +1843,52 @@ describe("app pages", () => {
     ).toBeInTheDocument();
   });
 
+  test("Account recovery returns to login with only a safe next destination", async () => {
+    requestPasswordResetCode.mockResolvedValue({ message: "sent" });
+    confirmPasswordReset.mockResolvedValue({ message: "reset" });
+    const resetFrom = async (url) => {
+      window.history.replaceState({}, "", url);
+      navigateTo.mockClear();
+      const recovery = render(<RecoverAccountPage />);
+      await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
+      await userEvent.click(
+        screen.getByRole("button", { name: "Send reset code" }),
+      );
+      await userEvent.type(
+        await screen.findByLabelText("Reset code"),
+        "123456",
+      );
+      await userEvent.type(
+        screen.getByLabelText("New password"),
+        "password456",
+      );
+      await userEvent.type(
+        screen.getByLabelText("Confirm new password"),
+        "password456",
+      );
+      await userEvent.click(
+        screen.getByRole("button", { name: "Reset password" }),
+      );
+      await waitFor(() => expect(navigateTo).toHaveBeenCalledTimes(1));
+      recovery.unmount();
+      return navigateTo.mock.calls[0][0];
+    };
+
+    expect(await resetFrom("/recover?next=%2Fsettings")).toBe(
+      "/login?status=password-reset&next=%2Fsettings",
+    );
+    expect(await resetFrom("/recover?next=https%3A%2F%2Fevil.example")).toBe(
+      "/login?status=password-reset",
+    );
+    expect(await resetFrom("/recover?next=%2F%2Fevil.example")).toBe(
+      "/login?status=password-reset",
+    );
+    expect(await resetFrom("/recover?next=%2Fdashboard")).toBe(
+      "/login?status=password-reset",
+    );
+    window.history.replaceState({}, "", "/");
+  });
+
   test("Signup route uses the same passwordless email flow", async () => {
     const requestEmailAuthCode = jest.fn().mockResolvedValue({});
     const verifyEmailAuthCode = jest.fn().mockResolvedValue({});

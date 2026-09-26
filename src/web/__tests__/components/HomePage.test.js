@@ -140,4 +140,21 @@ describe("HomePage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open event" }));
     expect(push).toHaveBeenCalledWith("/event?code=EVENT9");
   });
+
+  test("uppercases a lowercase event code before opening the event", () => {
+    const push = jest.fn();
+    jest
+      .spyOn(require("next/navigation"), "useRouter")
+      .mockReturnValue({ push });
+    useAuth.mockReturnValue({
+      user: { id: "user-1", displayName: "Prachi", email: "prachi@test.com" },
+      loading: false,
+    });
+    render(<HomePage />);
+    fireEvent.change(screen.getByLabelText("Event code"), {
+      target: { value: " event9 " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Open event" }));
+    expect(push).toHaveBeenCalledWith("/event?code=EVENT9");
+  });
 });

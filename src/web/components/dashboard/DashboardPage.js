@@ -312,7 +312,8 @@ function DashboardPage() {
   }
 
   const handleGoToEvent = () => {
-    const code = eventCode.trim();
+    // Codes are uppercase and looked up exactly, so accept lowercase typing.
+    const code = eventCode.trim().toUpperCase();
     if (code) navigateTo(`/event?code=${encodeURIComponent(code)}`);
   };
 

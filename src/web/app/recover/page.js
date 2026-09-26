@@ -9,7 +9,19 @@ import FormField from "@/components/ui/FormField";
 import { LockIcon, SendIcon } from "@/components/ui/icons";
 import { confirmPasswordReset, requestPasswordResetCode } from "@/lib/api/auth";
 import { EMAIL_PATTERN } from "@/lib/email";
-import { navigateTo } from "@/lib/navigation";
+import { navigateTo, safeNextPath } from "@/lib/navigation";
+
+// Carries the sign-in panel's destination through the reset. Read at submit
+// time rather than via useSearchParams, which would need a Suspense boundary in
+// the static export.
+function loginAfterReset() {
+  const next = safeNextPath(
+    new URLSearchParams(window.location.search).get("next"),
+  );
+  return next !== "/dashboard"
+    ? `/login?status=password-reset&next=${encodeURIComponent(next)}`
+    : "/login?status=password-reset";
+}
 
 export default function RecoverAccountPage() {
   const [step, setStep] = useState("request");
@@ -56,7 +68,7 @@ export default function RecoverAccountPage() {
         password,
         passwordConfirm,
       });
-      navigateTo("/login?status=password-reset");
+      navigateTo(loginAfterReset());
     } catch (err) {
       setError(err.message || "Unable to reset your password.");
     } finally {
