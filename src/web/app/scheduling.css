@@ -1087,6 +1087,25 @@
   }
 }
 
+/* While a picker in Finalize is open (Recommended or Other times), the
+   calendar stays pinned under the section nav with a shorter grid, so what
+   is pointed at or chosen below shows on it; only where the screen has
+   room for both. */
+@media (min-width: 768px) and (min-height: 700px) {
+  .meeting-results--picking > .meeting-calendar {
+    position: sticky;
+    top: 3.75rem;
+    z-index: 4;
+    padding-block: 0.5rem;
+    background: var(--rv-surface-raised);
+    box-shadow: 0 12px 12px -14px rgba(33, 37, 41, 0.45);
+  }
+
+  .meeting-results--picking .meeting-calendar__scroll {
+    max-height: min(42vh, 420px);
+  }
+}
+
 /* Blocked-times tools: a bar right under the calendar that stays pinned to
    the bottom of the screen while the calendar above it is taller than the
    viewport (the same treatment as the roster's unsaved group changes). */
@@ -1590,6 +1609,41 @@
 .meeting-calendar__block--preview {
   border: 2px dashed var(--bs-primary);
   background: rgba(13, 110, 253, 0.08);
+}
+
+/* The time pointed at in Other times: the hover preview, over the ranked
+   outlines, named with its times and share. */
+.meeting-calendar__block--candidate {
+  z-index: 1;
+  background: rgba(13, 110, 253, 0.14);
+}
+
+.meeting-calendar__block-label--candidate {
+  max-width: calc(100% - 4px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The day Other times lists: a tinted column under the overlays. */
+.meeting-calendar__column-focus {
+  position: absolute;
+  box-sizing: border-box;
+  left: calc(
+    var(--rv-cal-time-w) + (100% - var(--rv-cal-time-w)) * var(--rv-cal-col) /
+      var(--rv-cal-columns)
+  );
+  width: calc((100% - var(--rv-cal-time-w)) / var(--rv-cal-columns));
+  top: var(--rv-cal-header-h);
+  height: calc(var(--rv-cal-span) * var(--rv-cal-row-h));
+  border-inline: 2px solid
+    color-mix(in srgb, var(--bs-primary) 45%, transparent);
+  background: color-mix(in srgb, var(--bs-primary) 6%, transparent);
+}
+
+.meeting-calendar__column-header--focus {
+  box-shadow: inset 0 -3px 0 var(--bs-primary);
+  color: var(--bs-primary-text-emphasis);
 }
 
 .meeting-calendar__block--selected {

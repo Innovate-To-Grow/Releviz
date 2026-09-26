@@ -531,6 +531,19 @@ test.describe("Organizer meeting-time calendar", () => {
     const chipTimes = await timeChip
       .locator(".ranked-chip__title")
       .textContent();
+    // Choosing shows on the time table: the calendar stays in view (pinned
+    // while a picker is open), moves to the day listed and highlights it,
+    // and draws the time under the pointer.
+    await expect(
+      page.locator(".meeting-results--picking > .meeting-calendar"),
+    ).toHaveCSS("position", "sticky");
+    await expect(
+      grid.locator(".meeting-calendar__column-header--focus"),
+    ).toContainText(lastDayName);
+    await timeChip.hover();
+    await expect(
+      page.locator(".meeting-calendar__block--candidate"),
+    ).toContainText(chipTimes);
     await expectAccessible(page, "organizer other times");
     await timeChip.click();
     await expect(candidate).toContainText(chipTimes);

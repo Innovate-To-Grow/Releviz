@@ -3499,12 +3499,81 @@ test("Other times reopens on the day of the pick, and follows a pick made elsewh
     expect(pressedDay()).toHaveTextContent(/Wed\s*Aug 19/);
     expect(otherChips(other)[1]).toHaveAttribute("aria-pressed", "true");
 
-    // A pick on the calendar (Monday 17 August, 09:00) takes the list there.
+    // Stepping back a week takes the calendar there too, with the listed day
+    // highlighted; a pick on the calendar (Monday 10 August, 09:00) is
+    // then the list's day and time.
     await step("Earlier days");
+    expect(stepper()).toHaveTextContent(formatWeekLabel("2026-08-09"));
+    const focused = () =>
+      calendarGrid().querySelector(".meeting-calendar__column-header--focus");
+    await waitFor(() => expect(focused()).toHaveTextContent(/Mon\s*Aug 10/));
     await userEvent.click(calendarGrid().querySelector('[data-cell-idx="0"]'));
-    await waitFor(() => expect(pressedDay()).toHaveTextContent(/Mon\s*Aug 17/));
-    expect(stepper()).toHaveTextContent(formatWeekLabel("2026-08-16"));
-    expect(otherChips(other)[0]).toHaveAttribute("aria-pressed", "true");
+    await waitFor(() =>
+      expect(otherChips(other)[0]).toHaveAttribute("aria-pressed", "true"),
+    );
+    expect(pressedDay()).toHaveTextContent(/Mon\s*Aug 10/);
+  } finally {
+    nowSpy.mockRestore();
+  }
+});
+
+test("choosing a time shows on the time table: the day, the time pointed at, and the calendar kept in view", async () => {
+  const nowSpy = jest.spyOn(Date, "now").mockReturnValue(DATED_NOW);
+  try {
+    mockDatedSnapshot();
+    render(<PickingTimeTable {...timeTableProps(datedEvent)} />);
+    await screen.findByText(/Results are current at revision 7/);
+    const results = document.querySelector(".meeting-results");
+    const candidate = () =>
+      document.querySelector(".meeting-calendar__block--candidate");
+    const focusedHeader = () =>
+      calendarGrid().querySelector(".meeting-calendar__column-header--focus");
+    expect(results).not.toHaveClass("meeting-results--picking");
+    expect(focusedHeader()).toBeNull();
+
+    // Other times open: the calendar keeps in view and highlights its day.
+    const other = await openOtherTimes();
+    expect(results).toHaveClass("meeting-results--picking");
+    await waitFor(() => expect(focusedHeader()).toHaveTextContent(/Aug 20/));
+    expect(
+      document.querySelector(".meeting-calendar__column-focus"),
+    ).not.toBeNull();
+
+    // The time under the pointer (or focus) is drawn on the calendar.
+    const chips = otherChips(other);
+    await userEvent.hover(chips[2]);
+    expect(candidate()).toHaveTextContent("10:00–11:00 · up to 40%");
+    expect(candidate()).toHaveStyle({
+      "--rv-cal-row": "2",
+      "--rv-cal-span": "2",
+    });
+    await userEvent.unhover(chips[2]);
+    expect(candidate()).toBeNull();
+    act(() => chips[0].focus());
+    expect(candidate()).toHaveTextContent("09:00–10:00 · up to 50%");
+    act(() => chips[0].blur());
+    expect(candidate()).toBeNull();
+
+    // Closing it takes the highlight away; Recommended times alone also
+    // keeps the calendar in view, but not while painting blocked times.
+    await userEvent.click(other.querySelector(":scope > summary"));
+    expect(focusedHeader()).toBeNull();
+    expect(results).not.toHaveClass("meeting-results--picking");
+    await toggleRecommendedTimes();
+    expect(results).toHaveClass("meeting-results--picking");
+    await openBlockedTimes();
+    expect(results).not.toHaveClass("meeting-results--picking");
+    await userEvent.click(blockedTimesSummary());
+
+    // Closing Finalize closes both lists.
+    await openOtherTimes();
+    const finalize = document.getElementById("organizer-finalize");
+    await userEvent.click(finalize.querySelector(":scope > summary"));
+    expect(other).not.toHaveAttribute("open");
+    expect(
+      document.getElementById("organizer-recommended-times"),
+    ).not.toHaveAttribute("open");
+    expect(results).not.toHaveClass("meeting-results--picking");
   } finally {
     nowSpy.mockRestore();
   }

@@ -179,7 +179,10 @@ while the list is open (pointing at a chip highlights its time), and choosing on
 Finalize without leaving the list. **Other times**, collapsed under it, picks any open time,
 recommended or not, the same way: click a day (weekly events offer the next four weeks, a week at a
 time), then click one of its times, shown as chips with the lowest slot's share and the rank when
-the time is also recommended. The pick shows on the calendar too.
+the time is also recommended. Choosing shows on the calendar as it happens: while either list is
+open the calendar stays in view (pinned under the section nav on screens with room for it),
+Other times takes it to the day listed and highlights that column, and the time under the pointer
+or focus is drawn on it before it is picked.
 The organizer can:
 
 - search/filter a server-paginated roster (50 rows by default, 100 maximum);

@@ -242,7 +242,10 @@ function EmptyCell({ columnIndex, headerLabel }) {
  * (`data-state="blocked"`) but keeps its share, like a tail cell.
  *
  * `highlightRank` emphasizes one recommended time's outline (the chip the
- * organizer points at).
+ * organizer points at). The Finalize step's Other times picker shows what
+ * it is choosing here too: `focusColumn` (a column key) highlights the day
+ * it lists, and `previewWindow` (`{ startsAt, slotIndices, groupKey, label }`)
+ * draws the time under the pointer or focus, when it is on screen.
  *
  * With `blockedEditing` set (the Time Table's Blocked times step is open) the
  * calendar is the block editor: every slot cell paints the draft with the
@@ -262,6 +265,8 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
     defaultMetric = "weighted",
     showRankedWindows = true,
     highlightRank = null,
+    previewWindow = null,
+    focusColumn = null,
     blockedEditing = null,
   },
   ref,
@@ -537,6 +542,19 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
   else if (bestBlock)
     rovingIndex = columns[bestBlock.columnIndex].slots[bestBlock.row]?.index;
   else if (firstStartable) rovingIndex = firstStartable.index;
+
+  // What the Other times picker is pointing at, and the day it lists.
+  const candidateBlock = useMemo(
+    () =>
+      painting || !previewWindow
+        ? null
+        : selectionBlock(previewWindow, columns),
+    [painting, previewWindow, columns],
+  );
+  const focusColumnIndex =
+    painting || !focusColumn
+      ? -1
+      : columns.findIndex((column) => column.key === focusColumn);
 
   const previewBlock = useMemo(() => {
     if (painting) return null;
@@ -981,7 +999,7 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
               {columns.map((column, columnIndex) => (
                 <div
                   key={column.key}
-                  className="meeting-calendar__column-header"
+                  className={`meeting-calendar__column-header${columnIndex === focusColumnIndex ? " meeting-calendar__column-header--focus" : ""}`}
                   role="columnheader"
                   aria-colindex={columnIndex + 2}
                   title={`${column.headerLabel}, ${column.subLabel}`}
@@ -1051,6 +1069,15 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
           </div>
 
           <div className="meeting-calendar__overlays" aria-hidden="true">
+            {focusColumnIndex >= 0 && (
+              <div
+                className="meeting-calendar__column-focus"
+                style={{
+                  "--rv-cal-col": focusColumnIndex,
+                  "--rv-cal-span": maxRows,
+                }}
+              />
+            )}
             {blocks.map((block) => (
               <div
                 key={block.key}
@@ -1090,6 +1117,22 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
                   "--rv-cal-span": previewBlock.span,
                 }}
               />
+            )}
+            {candidateBlock && (
+              <div
+                className="meeting-calendar__block meeting-calendar__block--preview meeting-calendar__block--candidate"
+                style={{
+                  "--rv-cal-col": candidateBlock.columnIndex,
+                  "--rv-cal-row": candidateBlock.row,
+                  "--rv-cal-span": candidateBlock.span,
+                }}
+              >
+                {previewWindow.label && (
+                  <span className="meeting-calendar__block-label meeting-calendar__block-label--candidate">
+                    {previewWindow.label}
+                  </span>
+                )}
+              </div>
             )}
             {selected && (
               <div

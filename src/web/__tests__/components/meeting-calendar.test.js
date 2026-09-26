@@ -621,6 +621,92 @@ describe("MeetingCalendar", () => {
     expect(block(2)).toHaveClass("meeting-calendar__block--highlight");
   });
 
+  test("draws what the Other times picker points at and the day it lists", () => {
+    const candidate = () =>
+      document.querySelector(".meeting-calendar__block--candidate");
+    const focusStripe = () =>
+      document.querySelector(".meeting-calendar__column-focus");
+    const headers = () =>
+      within(screen.getByRole("grid")).getAllByRole("columnheader").slice(1);
+    const preview = {
+      startsAt: "2026-09-16T10:00:00Z",
+      slotIndices: [6, 7],
+      groupKey: "weekday:3",
+      label: "10:00–11:00 · up to 20%",
+    };
+    const props = {
+      event: weeklyEvent,
+      results,
+      channel: "inperson",
+      onSelect: jest.fn(),
+      onChannelChange: jest.fn(),
+      now: NOW,
+    };
+    const { rerender } = renderCalendar({
+      previewWindow: preview,
+      focusColumn: "weekday:3:2026-09-16",
+    });
+    // Wednesday 10:00–11:00: column 1, rows 2 and 3, named.
+    expect(candidate()).toHaveStyle({
+      "--rv-cal-col": "1",
+      "--rv-cal-row": "2",
+      "--rv-cal-span": "2",
+    });
+    expect(candidate()).toHaveClass("meeting-calendar__block--preview");
+    expect(candidate()).toHaveTextContent("10:00–11:00 · up to 20%");
+    expect(headers()[1]).toHaveClass("meeting-calendar__column-header--focus");
+    expect(headers()[0]).not.toHaveClass(
+      "meeting-calendar__column-header--focus",
+    );
+    expect(focusStripe()).toHaveStyle({
+      "--rv-cal-col": "1",
+      "--rv-cal-span": "4",
+    });
+
+    // Unnamed, it is drawn without a label; another week's time and day are
+    // not on screen, so nothing is drawn for them.
+    rerender(
+      <MeetingCalendar
+        {...props}
+        previewWindow={{ ...preview, label: "" }}
+        focusColumn="weekday:3:2026-09-23"
+      />,
+    );
+    expect(candidate()).not.toBeNull();
+    expect(
+      candidate().querySelector(".meeting-calendar__block-label"),
+    ).toBeNull();
+    expect(focusStripe()).toBeNull();
+    rerender(
+      <MeetingCalendar
+        {...props}
+        previewWindow={{ ...preview, startsAt: "2026-09-23T10:00:00Z" }}
+        focusColumn="weekday:3:2026-09-16"
+      />,
+    );
+    expect(candidate()).toBeNull();
+    expect(focusStripe()).not.toBeNull();
+
+    // The paint surface shows neither.
+    rerender(
+      <MeetingCalendar
+        {...props}
+        previewWindow={preview}
+        focusColumn="weekday:3:2026-09-16"
+        blockedEditing={{
+          marks: Array(8).fill(0),
+          onPaint: jest.fn(),
+          readOnly: false,
+        }}
+      />,
+    );
+    expect(candidate()).toBeNull();
+    expect(focusStripe()).toBeNull();
+    expect(
+      document.querySelector(".meeting-calendar__column-header--focus"),
+    ).toBeNull();
+  });
+
   test("hides the ranked windows while the ranked list is collapsed", async () => {
     const { onSelect, rerender } = renderCalendar({
       showRankedWindows: false,

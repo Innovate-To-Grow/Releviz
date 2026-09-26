@@ -1212,7 +1212,10 @@ const TIME_CHIP_KEYS = {
  * chip. The times are the windows the calendar lets the organizer pick
  * (`pickable` comes from useStartableDays). A click selects the time like a
  * calendar pick and shows it on the calendar; the chip turns pressed, keeps
- * focus, and the pick is announced.
+ * focus, and the pick is announced. While it is open the calendar shows
+ * what it is choosing: `onShowDay(columnKey, revealTarget)` takes the
+ * calendar to the day listed (null when closed), and `onPreview(window)`
+ * draws the time under the pointer or focus (null when none).
  */
 function OtherTimesSection({
   event,
@@ -1223,9 +1226,12 @@ function OtherTimesSection({
   pickable,
   meetingMinutes,
   selection,
+  open,
+  onToggle,
   onPick,
+  onPreview,
+  onShowDay,
 }) {
-  const [open, setOpen] = useState(false);
   const [dayKey, setDayKey] = useState(null);
   const [focusKey, setFocusKey] = useState(null);
   const [tabKey, setTabKey] = useState(null);
@@ -1322,10 +1328,50 @@ function OtherTimesSection({
     target?.focus();
   }, [entryKeys]);
 
+  // The calendar follows the day listed: it moves to that day's week and
+  // highlights its column. Only plain values reach the effect, so it runs
+  // when the day shown changes, not on every clock tick.
+  const shownDay = open && day ? day.column.key : null;
+  const firstWindow = shownDay ? windowAt(day.column, day.rows[0], k) : null;
+  const revealStartsAt = firstWindow?.startsAt ?? null;
+  const revealSlots = firstWindow?.slotIndices?.join(",") ?? "";
+  const revealOffset = shownDay
+    ? day.column.slots[day.rows[0]].startDayOffset
+    : 0;
+  const revealGroup = shownDay ? day.column.groupKey : null;
+  useEffect(() => {
+    onShowDay?.(
+      shownDay,
+      shownDay
+        ? {
+            startsAt: revealStartsAt,
+            slotIndices: revealSlots.split(",").map(Number),
+            startDayOffset: revealOffset,
+            groupKey: revealGroup,
+          }
+        : null,
+    );
+  }, [
+    shownDay,
+    revealStartsAt,
+    revealSlots,
+    revealOffset,
+    revealGroup,
+    onShowDay,
+  ]);
+
+  const previewOf = (entry) => ({
+    startsAt: entry.startsAt,
+    slotIndices: windowAt(day.column, entry.row, k).slotIndices,
+    groupKey: day.column.groupKey,
+    label: entry.share ? `${entry.times} · ${entry.share}` : entry.times,
+  });
+
   const toggle = (next) => {
-    setOpen(next);
+    onToggle(next);
     // Reopening starts from the day of the pick again.
     if (next) setDayKey(null);
+    else onPreview?.(null);
   };
 
   const choose = (entry) => {
@@ -1531,18 +1577,26 @@ function OtherTimesSection({
                 onKeyDown={(keyDownEvent) =>
                   moveBetweenTimes(keyDownEvent, entry)
                 }
-                onPointerEnter={() => setFocusKey(entry.key)}
-                onPointerLeave={() => setFocusKey(null)}
+                onPointerEnter={() => {
+                  setFocusKey(entry.key);
+                  onPreview?.(previewOf(entry));
+                }}
+                onPointerLeave={() => {
+                  setFocusKey(null);
+                  onPreview?.(null);
+                }}
                 onFocus={() => {
                   focusedTime.current = { key: entry.key, index: entry.index };
                   setFocusKey(entry.key);
                   setTabKey(entry.key);
+                  onPreview?.(previewOf(entry));
                 }}
                 onBlur={(blurEvent) => {
                   // Removed by a re-render: the effect above moves focus.
                   if (!blurEvent.currentTarget.isConnected) return;
                   focusedTime.current = null;
                   setFocusKey(null);
+                  onPreview?.(null);
                 }}
               >
                 {entry.rank != null && (
@@ -1681,6 +1735,11 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
   // The recommended chip under the pointer (or focus), by key, so a live
   // re-rank keeps emphasizing the same time's outline on the calendar.
   const [highlightKey, setHighlightKey] = useState(null);
+  // Other times (inside Finalize) is closed by default; while it is open the
+  // calendar highlights the day it lists and previews the time pointed at.
+  const [otherOpen, setOtherOpen] = useState(false);
+  const [pickerDay, setPickerDay] = useState(null);
+  const [pickerPreview, setPickerPreview] = useState(null);
   const { locked: editLocked, reason: editLockReason } = editLockOf(event);
   const blockedDraft = useBlockedSlotsDraft(event, {
     getToken,
@@ -1819,7 +1878,16 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
   // The recommended times live inside Finalize, so closing Finalize hides
   // them, and their outlines leave the calendar with them.
   const closeRecommendedWithFinalize = useCallback((finalizeOpen) => {
-    if (!finalizeOpen) setRankedOpen(false);
+    if (finalizeOpen) return;
+    setRankedOpen(false);
+    setOtherOpen(false);
+    setPickerPreview(null);
+  }, []);
+
+  // Other times shows a day: the calendar goes to its week and highlights it.
+  const handleShowDay = useCallback((columnKey, revealTarget) => {
+    setPickerDay(columnKey);
+    if (revealTarget) calendarRef.current?.reveal(revealTarget);
   }, []);
 
   // A time chosen under Other times: selected like a calendar pick and
@@ -1921,7 +1989,12 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
           </p>
         )}
 
-        <div className="meeting-results">
+        {/* While a picker in Finalize is open, the calendar stays in view
+            (pinned under the section nav where the screen has room), so
+            what is pointed at or chosen below shows on it. */}
+        <div
+          className={`meeting-results${(rankedOpen || otherOpen) && !blockedOpen ? " meeting-results--picking" : ""}`}
+        >
           <MeetingCalendar
             ref={calendarRef}
             event={event}
@@ -1933,6 +2006,8 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
             now={now}
             showRankedWindows={rankedOpen}
             highlightRank={rankedOpen ? highlightRank : null}
+            previewWindow={otherOpen ? pickerPreview : null}
+            focusColumn={otherOpen ? pickerDay : null}
             blockedEditing={blockedOpen ? blockedDraft.surface : null}
           />
 
@@ -1998,7 +2073,11 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
                     pickable={pickable}
                     meetingMinutes={meetingMinutes}
                     selection={selection}
+                    open={otherOpen}
+                    onToggle={setOtherOpen}
                     onPick={handlePick}
+                    onPreview={setPickerPreview}
+                    onShowDay={handleShowDay}
                   />
                 </>
               }
