@@ -70,17 +70,21 @@ function readStoredDeliveryRequest(eventCode) {
   }
 }
 
-// Brings the Finalize step into view (only as far as needed: it sits right
-// under the calendar and has just opened itself on the pick) and focuses
-// its heading.
+// Brings the pick into view (only as far as needed: the Finalize step sits
+// right under the calendar and has just opened itself on the pick) and
+// focuses the step's heading. It scrolls to the pick's own content, not the
+// whole step: with the Recommended times open above it, the step is taller
+// than a phone screen and its top would leave the pick below the fold.
 function focusFinalizeStep(headingRef) {
   const reducedMotion =
     typeof window !== "undefined" &&
     window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-  document.getElementById("organizer-finalize")?.scrollIntoView({
-    behavior: reducedMotion ? "auto" : "smooth",
-    block: "nearest",
-  });
+  document
+    .querySelector("#organizer-finalize .finalize-block__body")
+    ?.scrollIntoView({
+      behavior: reducedMotion ? "auto" : "smooth",
+      block: "nearest",
+    });
   headingRef.current?.focus({ preventScroll: true });
 }
 

@@ -396,17 +396,21 @@ test.describe("Organizer meeting-time calendar", () => {
       grid.getByRole("columnheader", { name: shortDate(nextMonday) }),
     ).toBeVisible();
 
+    // Closing Finalize closes the recommended times inside it, and their
+    // outlines leave the calendar.
+    const finalizeStep = page.locator("#organizer-finalize");
+    await finalizeStep.locator("> summary").click();
+    await expect(finalizeStep).not.toHaveAttribute("open", "");
+    await expect(rail).not.toHaveAttribute("open", "");
+    await expect(page.locator(".meeting-calendar__block--rank")).toHaveCount(0);
+
     // Pointer pick: Wednesday 14:00 starts a 60-minute custom window.
     await gotoWeekWith(page, grid, customWednesday);
     const wednesday14 = cellAt(grid, 10, 2);
     await expect(wednesday14).toHaveAttribute("data-state", "startable");
     await pickCell(page, wednesday14, "Wed 14:00–15:00");
-    // A calendar pick opens the Finalize step (already open here, for the
-    // recommended times) and focuses it.
-    await expect(page.locator("#organizer-finalize")).toHaveAttribute(
-      "open",
-      "",
-    );
+    // A calendar pick opens the collapsed Finalize step and focuses it.
+    await expect(finalizeStep).toHaveAttribute("open", "");
     await expect(page.getByRole("heading", { name: "Finalize" })).toBeFocused();
     await expect(
       page.getByRole("button", { name: "Review attendance" }),
@@ -464,6 +468,7 @@ test.describe("Organizer meeting-time calendar", () => {
     // Choosing a recommended time reveals it on the calendar and keeps focus
     // on its chip (the list lives inside Finalize, next to the result), and
     // clicking the first cell of a recommended time yields that exact result.
+    await openRecommendedTimes(page);
     const secondChoice = rail
       .getByRole("button", { name: "Choose this time" })
       .nth(1);

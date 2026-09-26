@@ -839,10 +839,31 @@ function RecommendedTimesSection({
   onToggle,
   onChoose,
   onHighlight,
-  highlightRank = null,
+  highlightKey = null,
 }) {
   const count = recommendations.length;
   const mixed = event.mode === "mixed";
+  // The chip with keyboard focus, by key. Choosing a time keeps focus on its
+  // chip; React keeps it there when a live update only re-ranks the list,
+  // but a chip that leaves the list takes focus with it, so focus goes to
+  // the list's summary instead of the page.
+  const focusedKey = useRef(null);
+  useEffect(() => {
+    const key = focusedKey.current;
+    if (!key) return;
+    if (
+      recommendations.some(
+        (recommendation, index) =>
+          recommendationKey(recommendation, index) === key,
+      )
+    )
+      return;
+    focusedKey.current = null;
+    onHighlight?.(null);
+    const active = document.activeElement;
+    if (!active || active === document.body)
+      document.querySelector("#organizer-recommended-times > summary")?.focus();
+  }, [recommendations, onHighlight]);
   // One entry per candidate; the chips show rank, window and weighted
   // share, and the detail line under them spells out the rest for the chip
   // under the pointer or focus, else the selected one, else the best.
@@ -870,7 +891,7 @@ function RecommendedTimesSection({
         recommendation.label ||
         (startsAt
           ? formatInTimezone(startsAt, event.timezone)
-          : "Candidate window"),
+          : "Recommended time"),
       timeRange:
         startsAt && endsAt
           ? `${formatInTimezone(startsAt, event.timezone)} – ${formatInTimezone(endsAt, event.timezone)}`
@@ -888,7 +909,7 @@ function RecommendedTimesSection({
     slotMinutes: event.slotMinutes,
   });
   const detailed =
-    entries.find((entry) => entry.rank === highlightRank) ||
+    entries.find((entry) => entry.key === highlightKey) ||
     entries.find((entry) => entry.selected) ||
     entries[0];
   return (
@@ -926,10 +947,19 @@ function RecommendedTimesSection({
                     className={`ranked-chip${entry.isBest ? " ranked-chip--best" : ""}${entry.selected ? " ranked-chip--selected" : ""}`}
                     aria-pressed={entry.selected}
                     onClick={() => onChoose(entry.recommendation)}
-                    onPointerEnter={() => onHighlight?.(entry.rank)}
+                    onPointerEnter={() => onHighlight?.(entry.key)}
                     onPointerLeave={() => onHighlight?.(null)}
-                    onFocus={() => onHighlight?.(entry.rank)}
-                    onBlur={() => onHighlight?.(null)}
+                    onFocus={() => {
+                      focusedKey.current = entry.key;
+                      onHighlight?.(entry.key);
+                    }}
+                    onBlur={(blurEvent) => {
+                      // A chip removed by a re-render blurs while detached;
+                      // the effect above moves its focus.
+                      if (!blurEvent.currentTarget.isConnected) return;
+                      focusedKey.current = null;
+                      onHighlight?.(null);
+                    }}
                   >
                     <span className="ranked-chip__rank">#{entry.rank}</span>{" "}
                     {entry.isBest && (
@@ -1022,11 +1052,11 @@ function RecommendedTimesSection({
 
 /**
  * Time Table: the meeting-time calendar (group availability heatmap, any
- * startable cell pickable) with three collapsed steps under it: Blocked
- * times (while it is open the calendar paints blocked times instead of
- * picking, with the tools in a bar pinned under the calendar), the ranked
- * list (which also switches the ranked outlines on the calendar on), and
- * the Finalize step (which opens itself on a pick).
+ * startable cell pickable) with two collapsed steps under it: Blocked times
+ * (while it is open the calendar paints blocked times instead of picking,
+ * with the tools in a bar pinned under the calendar) and Finalize (which
+ * opens itself on a pick). Finalize holds the Recommended times, which also
+ * switch the recommended outlines on the calendar on while they are open.
  */
 export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
   {
@@ -1064,9 +1094,9 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
   // paints the draft instead of picking, so the draft lives here, next to
   // the calendar, and survives the step closing.
   const [blockedOpen, setBlockedOpen] = useState(false);
-  // The recommended chip under the pointer (or focus): the calendar
-  // emphasizes that time's outline.
-  const [highlightRank, setHighlightRank] = useState(null);
+  // The recommended chip under the pointer (or focus), by key, so a live
+  // re-rank keeps emphasizing the same time's outline on the calendar.
+  const [highlightKey, setHighlightKey] = useState(null);
   const { locked: editLocked, reason: editLockReason } = editLockOf(event);
   const blockedDraft = useBlockedSlotsDraft(event, {
     getToken,
@@ -1164,6 +1194,13 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
     () => rankedRecommendations(results),
     [results],
   );
+  const highlightRank = useMemo(() => {
+    const index = recommendations.findIndex(
+      (recommendation, position) =>
+        recommendationKey(recommendation, position) === highlightKey,
+    );
+    return index < 0 ? null : recommendations[index].rank || index + 1;
+  }, [recommendations, highlightKey]);
   // Snapshots computed before blocking shipped lack the key; the calendar
   // greys cells from `event.slotGroups` either way, so this is only a note.
   const blockedSlotIndices = Array.isArray(results?.blockedSlotIndices)
@@ -1332,8 +1369,8 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
                   open={rankedOpen}
                   onToggle={setRankedOpen}
                   onChoose={handleChoose}
-                  onHighlight={setHighlightRank}
-                  highlightRank={highlightRank}
+                  onHighlight={setHighlightKey}
+                  highlightKey={highlightKey}
                 />
               }
             />
@@ -1562,6 +1599,7 @@ function FinalizeScalePanelContent({
   getToken,
   selection,
   onDeliveryRequest,
+  recommendedCount = 0,
 }) {
   const [location, setLocation] = useState(event.location || "");
   const [review, setReview] = useState(null);
@@ -1778,8 +1816,9 @@ function FinalizeScalePanelContent({
           title="No time selected yet"
         >
           <p className="mb-0">
-            Pick a time on the calendar or choose one of the recommended times
-            above.
+            {recommendedCount > 0
+              ? "Pick a time on the calendar or choose one of the recommended times above."
+              : "Pick a time on the calendar."}
           </p>
         </EmptyState>
       )}

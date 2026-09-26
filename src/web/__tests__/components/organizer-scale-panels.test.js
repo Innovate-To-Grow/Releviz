@@ -1201,9 +1201,10 @@ test("finalize empty and inactive states point at the calendar and block review"
     screen.getByRole("heading", { level: 4, name: "Finalize" }),
   );
   expect(block).toHaveTextContent("No time selected yet");
-  expect(block).toHaveTextContent(
-    "Pick a time on the calendar or choose one of the recommended times above.",
-  );
+  // Nothing is recommended here, so the empty state points at the calendar
+  // only.
+  expect(block).toHaveTextContent("Pick a time on the calendar.");
+  expect(block).not.toHaveTextContent("recommended times above");
   expect(within(block).queryAllByRole("button")).toHaveLength(0);
 
   rerender(
@@ -2124,6 +2125,111 @@ test("an older snapshot's 0% padding is neither listed nor outlined", async () =
     );
     expect(outlines).toHaveLength(1);
     expect(outlines[0]).toHaveAttribute("data-rank", "1");
+  } finally {
+    nowSpy.mockRestore();
+  }
+});
+
+// Two disjoint hour-long recommended times on `datedEvent`, ranked by the
+// current rule; `order` lists them best first.
+function reRankedSnapshot(order) {
+  const byStart = {
+    "09:00": {
+      channel: "inperson",
+      groupKey: "date:2026-08-20",
+      slotIndices: [0, 1],
+      suggestedStartsAt: "2026-08-20T09:00:00Z",
+      suggestedEndsAt: "2026-08-20T10:00:00Z",
+      label: "Thu 09:00–10:00",
+      fullyAvailableParticipantTotal: 2,
+    },
+    "10:00": {
+      channel: "inperson",
+      groupKey: "date:2026-08-20",
+      slotIndices: [2, 3],
+      suggestedStartsAt: "2026-08-20T10:00:00Z",
+      suggestedEndsAt: "2026-08-20T11:00:00Z",
+      label: "Thu 10:00–11:00",
+      fullyAvailableParticipantTotal: 2,
+    },
+  };
+  return {
+    status: "fresh",
+    requestedRevision: 7,
+    computedRevision: 7,
+    results: {
+      countedResponseTotal: 3,
+      channels: {
+        inperson: {
+          weighted: [0.9, 0.9, 0.8, 0.8],
+          unweighted: [0.9, 0.9, 0.8, 0.8],
+        },
+      },
+      recommendations: order.map((start, index) => ({
+        ...byStart[start],
+        rank: index + 1,
+        weightedAvailability: index === 0 ? 0.9 : 0.8,
+        unweightedAvailability: index === 0 ? 0.9 : 0.8,
+      })),
+      recommendationBasis: {
+        ruleVersion: 2,
+        status: "ready",
+        listEnd: "noMoreWindows",
+        bestWeightedAvailability: 0.9,
+      },
+    },
+  };
+}
+
+test("a focused recommended time keeps its highlight and focus when a live update re-ranks it", async () => {
+  const nowSpy = jest.spyOn(Date, "now").mockReturnValue(DATED_NOW);
+  try {
+    fetchEventResults.mockResolvedValueOnce(
+      reRankedSnapshot(["09:00", "10:00"]),
+    );
+    const panel = createRef();
+    render(
+      <ResultsSnapshotPanel ref={panel} {...timeTableProps(datedEvent)} />,
+    );
+    await screen.findByText(/Results are current at revision 7/);
+    await toggleRecommendedTimes();
+    const rail = document.querySelector("details.organizer-recommended-times");
+    const chipFor = (label) =>
+      within(rail).getByRole("button", { name: new RegExp(label) });
+    const highlighted = () =>
+      document.querySelector(".meeting-calendar__block--highlight");
+
+    act(() => chipFor("Thu 10:00–11:00").focus());
+    expect(highlighted()).toHaveAttribute("data-rank", "2");
+    expect(rail.querySelector(".ranked-chips__detail")).toHaveTextContent(
+      "#2 Thu 10:00–11:00",
+    );
+
+    // The same time becomes #1: the highlight and the detail line follow
+    // it, and focus stays on its chip.
+    fetchEventResults.mockResolvedValueOnce(
+      reRankedSnapshot(["10:00", "09:00"]),
+    );
+    await act(async () => {
+      await panel.current.refresh("token", { silent: true });
+    });
+    expect(chipFor("Thu 10:00–11:00")).toHaveFocus();
+    expect(highlighted()).toHaveAttribute("data-rank", "1");
+    expect(rail.querySelector(".ranked-chips__detail")).toHaveTextContent(
+      "#1 Thu 10:00–11:00",
+    );
+
+    // Dropped from the list: focus moves to the list's summary and the
+    // calendar emphasizes nothing.
+    fetchEventResults.mockResolvedValueOnce(reRankedSnapshot(["09:00"]));
+    await act(async () => {
+      await panel.current.refresh("token", { silent: true });
+    });
+    expect(rail.querySelector(":scope > summary")).toHaveFocus();
+    expect(highlighted()).toBeNull();
+    expect(rail.querySelector(".ranked-chips__detail")).toHaveTextContent(
+      "#1 Thu 09:00–10:00",
+    );
   } finally {
     nowSpy.mockRestore();
   }
@@ -3305,6 +3411,20 @@ test("finalize stays collapsed until a pick opens it and sums up its state", asy
   );
   expect(step()).toHaveAttribute("open");
   expect(summary()).toHaveTextContent("No time selected yet");
+  expect(step()).toHaveTextContent("Pick a time on the calendar.");
+
+  // With recommendations to choose from, both the summary and the empty
+  // state say so.
+  rerender(
+    <FinalizeScalePanel
+      event={baseEvent}
+      setEvent={jest.fn()}
+      getToken={getToken}
+      selection={null}
+      recommendedCount={3}
+    />,
+  );
+  expect(summary()).toHaveTextContent("No time selected yet · 3 recommended");
   expect(step()).toHaveTextContent(
     "Pick a time on the calendar or choose one of the recommended times above.",
   );

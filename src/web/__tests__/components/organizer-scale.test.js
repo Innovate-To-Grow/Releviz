@@ -2030,20 +2030,24 @@ describe("scaled organizer workspace", () => {
     expect(
       await screen.findByText(/Results are current at revision 3/),
     ).toBeInTheDocument();
+    await toggleRecommendedTimes();
     await userEvent.click(
       screen.getByRole("button", { name: /choose this time/i }),
     );
     expect(document.getElementById("organizer-finalize")).toHaveTextContent(
       "Thursday 9:00 AM",
     );
-    // The pick opens the Finalize step; the chosen recommendation lives in
-    // that step, so it keeps focus.
+    // The chosen recommendation lives in the Finalize step: the step and
+    // the list stay open, and the chip keeps focus.
     expect(document.getElementById("organizer-finalize")).toHaveAttribute(
       "open",
     );
     expect(
-      screen.getByRole("button", { name: /selected time/i }),
-    ).toHaveFocus();
+      document.getElementById("organizer-recommended-times"),
+    ).toHaveAttribute("open");
+    const chosen = screen.getByRole("button", { name: /selected time/i });
+    expect(chosen).toBeVisible();
+    expect(chosen).toHaveFocus();
     await userEvent.click(
       screen.getByRole("button", { name: "Review attendance" }),
     );
@@ -2133,9 +2137,12 @@ describe("scaled organizer workspace", () => {
     ).toHaveLength(1);
     expect(screen.queryByText("Available", { exact: true })).toBeNull();
 
+    await toggleRecommendedTimes();
     await userEvent.click(chooseButtons[0]);
     const chosen = screen.getByRole("button", { name: /selected time/i });
     expect(chosen).toHaveAttribute("aria-pressed", "true");
+    expect(rail).toHaveAttribute("open");
+    expect(chosen).toBeVisible();
     // The chip keeps focus, and revealing the chosen window scrolls the
     // calendar, never the page: the organizer is already in Finalize.
     expect(chosen).toHaveFocus();
@@ -2506,8 +2513,10 @@ describe("scaled organizer workspace", () => {
       // open rather than folding away under the organizer.
       expect(finalizeSection()).toHaveTextContent("No time selected yet");
       expect(finalizeSection()).toHaveAttribute("open");
+      // Nothing is recommended in this snapshot, so the prompt points at the
+      // calendar only.
       expect(finalizeSection()).toHaveTextContent(
-        "Pick a time on the calendar or choose one of the recommended times above.",
+        "Pick a time on the calendar.",
       );
       expect(screen.queryByText("Custom window")).not.toBeInTheDocument();
       expect(screen.queryByText(/Recommended #/)).not.toBeInTheDocument();
@@ -2556,6 +2565,7 @@ describe("scaled organizer workspace", () => {
       within(channelGroup).getByRole("button", { name: "Virtual" }),
     ).toHaveAttribute("aria-pressed", "false");
 
+    await toggleRecommendedTimes();
     await userEvent.click(
       screen.getByRole("button", { name: /choose this time/i }),
     );
@@ -2575,6 +2585,9 @@ describe("scaled organizer workspace", () => {
     expect(finalizeSection).toHaveTextContent("Virtual");
     expect(finalizeSection).toHaveTextContent("Recommended #1");
     expect(finalizeSection).not.toHaveTextContent("In person");
+    expect(
+      document.getElementById("organizer-recommended-times"),
+    ).toHaveAttribute("open");
     expect(
       screen.getByRole("button", { name: /selected time/i }),
     ).toHaveFocus();
@@ -2603,6 +2616,7 @@ describe("scaled organizer workspace", () => {
     renderView();
 
     await screen.findByText("Legacy result");
+    await toggleRecommendedTimes();
     await userEvent.click(
       screen.getByRole("button", { name: /choose this time/i }),
     );
@@ -2628,8 +2642,10 @@ describe("scaled organizer workspace", () => {
         behavior: "auto",
         block: "nearest",
       });
+      // The pick's own content, not the whole step (the Recommended times
+      // above it can make the step taller than the screen).
       expect(HTMLElement.prototype.scrollIntoView.mock.contexts).toContain(
-        document.getElementById("organizer-finalize"),
+        document.querySelector("#organizer-finalize .finalize-block__body"),
       );
       expect(screen.getByRole("heading", { name: "Finalize" })).toHaveFocus();
     } finally {

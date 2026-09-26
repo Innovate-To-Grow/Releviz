@@ -478,8 +478,8 @@
  * Ranked recommendations (organizer results)
  * ------------------------------------------------------------------------- */
 
-/* Ranked windows: one chip per candidate under the calendar (the calendar
-   itself outlines every window; pointing at a chip emphasizes its outline). */
+/* Recommended times (inside Finalize): one chip per recommended time (the
+   calendar outlines each one; pointing at a chip emphasizes its outline). */
 .ranked-chips {
   display: flex;
   flex-wrap: wrap;
@@ -886,8 +886,9 @@
  * Time Table (organizer meeting-time calendar + picker, with its steps)
  * ------------------------------------------------------------------------- */
 
-/* The calendar takes the full width; the Ranked windows, Finalize, and
-   Blocked times steps stack under it as collapsed disclosures. */
+/* The calendar takes the full width; the Blocked times and Finalize steps
+   stack under it as collapsed disclosures (Recommended times nest in
+   Finalize). */
 .meeting-results {
   display: flex;
   flex-direction: column;
