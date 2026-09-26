@@ -26,14 +26,15 @@ on first use) or with email + password for accounts that set one through Forgot 
 (`/recover`). New events are active immediately and can accept responses as soon as participants
 join; creating an event by itself does not send email.
 
-**Blocked times.** The organizer workspace opens with the **Blocked times** step, at the bottom of
-the Time Table section, expanded right after the event is created. Paint the parts of each day that
-are not available (a lunch break on Mondays, a late start on Fridays) and save; the event keeps one
-start/end/days configuration while every day gets its own usable window. Blocked slots stay in the
-schedule grid but are greyed out and cannot be painted, count as 0 in the results, never appear in
-ranked windows, and cannot be finalized into. Blocked times can be changed at any time from
-**Blocked times** at the bottom of the Time Table without resetting responses; after finalization
-the event must be reactivated first.
+**Blocked times.** The **Blocked times** step at the bottom of the Time Table turns the meeting-time
+calendar into a paint surface while it is open: mark the parts of each day that are not available
+(a lunch break on Mondays, a late start on Fridays) with the Blocked or Open brush, by clicking,
+dragging, or with Enter/Space from the keyboard, then save. A mark on a weekday applies to that
+weekday in every week. The event keeps one start/end/days configuration while every day gets its own
+usable window. Blocked slots stay in the schedule grid but are greyed out and cannot be painted by
+participants, count as 0 in the results, never appear in ranked windows, and cannot be finalized
+into. Blocked times can be changed at any time without resetting responses; after finalization the
+event must be reactivated first.
 
 ### 2. Build the Roster
 
@@ -171,7 +172,8 @@ Access the organizer view from the account that created the event. It is one pag
 anchored sections — Overview, Time Table, and Roster. The Time Table shows the meeting-time
 calendar; **Ranked windows**, **Finalize**, and **Blocked times** are collapsible steps at the
 bottom of it, closed by default: the calendar draws the ranked windows only while Ranked windows is
-open, and picking a window opens Finalize. The organizer can:
+open, picking a window opens Finalize, and while Blocked times is open the calendar paints blocked
+times instead of picking a window. The organizer can:
 
 - search/filter a server-paginated roster (50 rows by default, 100 maximum);
 - load one person's schedule only when its edit drawer opens;
@@ -206,7 +208,7 @@ On the meeting-time calendar the organizer's blocked times are hatched, show no 
 cannot be picked; an open slot whose meeting window would run into a block keeps its percentage but
 cannot start a meeting either. Blocked times are excluded from the results (their availability is
 reported as 0), never form part of a ranked window, and cannot be finalized into; edit them from
-**Blocked times** at the bottom of the Time Table.
+**Blocked times** at the bottom of the Time Table, which paints directly on this calendar.
 
 While the event is active, the workspace keeps itself current on its own; there is no switch to
 turn this off. Only while the tab is visible, it reads a small activity digest (`GET /events/activity`)

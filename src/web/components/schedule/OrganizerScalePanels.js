@@ -32,7 +32,9 @@ import {
 } from "@/components/ui/icons";
 import CreateEventClient from "@/components/event/CreateEventClient";
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
-import BlockedSlotsEditor from "@/components/schedule/BlockedSlotsEditor";
+import BlockedSlotsControls, {
+  useBlockedSlotsDraft,
+} from "@/components/schedule/BlockedSlotsEditor";
 import MeetingCalendar from "@/components/schedule/MeetingCalendar";
 import {
   selectionFromRecommendation,
@@ -612,35 +614,34 @@ export function OverviewPanel({ event, onEventSaved }) {
 }
 
 /**
- * Blocked times: the editor for the slots this event blocks, one step of the
- * Time Table. It opens itself on an event without blocks (the page the
- * organizer lands on right after creating the event); decided once, so
- * saving blocks does not collapse it.
+ * Blocked times: one step of the Time Table. While it is open the calendar
+ * above is the paint surface for `draft` (see `useBlockedSlotsDraft`); the
+ * step itself holds the brush, the feedback and Save. The panel owns `open`
+ * because the calendar's mode follows it.
  */
-export function BlockedTimesSection({ event, onEventSaved }) {
+export function BlockedTimesSection({ event, draft, open, onToggle }) {
   const blockedCount = countBlockedSlots(event.blockedSlots);
-  const [open, setOpen] = useState(() => blockedCount === 0);
-  const { locked, reason } = editLockOf(event);
   return (
     <TimeTableSection
       id="organizer-blocked-times"
       className="organizer-blocked-times"
       headingId="organizer-blocked-times-heading"
       title="Blocked times"
-      hint={`${blockedCount} slots blocked`}
+      hint={
+        <>
+          {blockedCount} slots blocked
+          {draft.dirty && <span> · unsaved changes</span>}
+        </>
+      }
       open={open}
-      onToggle={setOpen}
+      onToggle={onToggle}
     >
       <p className="text-secondary mb-0">
-        Mark the parts of each day that are not available for this event.
-        Participants see these times greyed out.
+        While this step is open, paint on the calendar above to mark the parts
+        of each day that are not available for this event. Participants see
+        these times greyed out.
       </p>
-      <BlockedSlotsEditor
-        event={event}
-        onEventSaved={onEventSaved}
-        locked={locked}
-        lockReason={reason}
-      />
+      <BlockedSlotsControls draft={draft} />
     </TimeTableSection>
   );
 }
@@ -836,8 +837,8 @@ function RankedWindowsSection({
  * Time Table: the meeting-time calendar (group availability heatmap, any
  * startable cell pickable) with three collapsed steps under it: the ranked
  * list (which also switches the ranked outlines on the calendar on), the
- * Finalize step (which opens itself on a pick), and the Blocked times editor
- * (open only while the event has no blocks yet).
+ * Finalize step (which opens itself on a pick), and the Blocked times step
+ * (while it is open the calendar paints blocked times instead of picking).
  */
 export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
   {
@@ -871,6 +872,17 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
   // The ranked list is collapsed by default; the calendar draws the ranked
   // windows only while it is open.
   const [rankedOpen, setRankedOpen] = useState(false);
+  // Blocked times is closed by default too; while it is open the calendar
+  // paints the draft instead of picking, so the draft lives here, next to
+  // the calendar, and survives the step closing.
+  const [blockedOpen, setBlockedOpen] = useState(false);
+  const { locked: editLocked, reason: editLockReason } = editLockOf(event);
+  const blockedDraft = useBlockedSlotsDraft(event, {
+    getToken,
+    onEventSaved,
+    locked: editLocked,
+    lockReason: editLockReason,
+  });
   const sectionRef = useRef(null);
   const calendarRef = useRef(null);
   // The freshness of the snapshot on screen, for the workspace's live sync to
@@ -968,6 +980,8 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
 
   const handleChoose = useCallback(
     (recommendation) => {
+      // A revealed pick is invisible on the paint surface: leave painting.
+      setBlockedOpen(false);
       if (mixed && recommendation.channel) setChannel(recommendation.channel);
       // Reveal the occurrence the workspace will actually select: a stale
       // weekly suggestion moves to its next occurrence, not the suggested
@@ -995,7 +1009,11 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
       headingProps={{ tabIndex: -1 }}
       titleId="organizer-results-heading"
       title="Time Table"
-      description={`Group availability for a ${meetingMinutes}-minute meeting. Pick a window on the calendar or from the ranked list below, then confirm it in Finalize.`}
+      description={
+        blockedOpen
+          ? "Marking blocked times: click or drag on the calendar to block or open times, then save them in the Blocked times step below."
+          : `Group availability for a ${meetingMinutes}-minute meeting. Pick a window on the calendar or from the ranked list below, then confirm it in Finalize.`
+      }
     >
       <div className="d-flex flex-column gap-3">
         {snapshot.status === "refreshing" && (
@@ -1052,6 +1070,7 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
             onSelect={onSelect}
             now={now}
             showRankedWindows={rankedOpen}
+            blockedEditing={blockedOpen ? blockedDraft.surface : null}
           />
 
           <div className="time-table__sections">
@@ -1073,7 +1092,12 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
               headingRef={finalizeHeadingRef}
               onDeliveryRequest={onDeliveryRequest}
             />
-            <BlockedTimesSection event={event} onEventSaved={onEventSaved} />
+            <BlockedTimesSection
+              event={event}
+              draft={blockedDraft}
+              open={blockedOpen}
+              onToggle={setBlockedOpen}
+            />
           </div>
         </div>
 

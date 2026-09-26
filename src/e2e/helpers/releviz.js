@@ -344,7 +344,27 @@ async function openRankedWindows(page) {
   await expect(details).toHaveAttribute("open", "");
 }
 
+// The Blocked times step under the calendar starts closed; while it is open
+// the meeting calendar is the paint surface for blocked times.
+async function openBlockedTimes(page) {
+  const details = page.locator("details.organizer-blocked-times");
+  if ((await details.getAttribute("open")) === null) {
+    await details.locator("summary").click();
+  }
+  await expect(details).toHaveAttribute("open", "");
+}
+
+async function closeBlockedTimes(page) {
+  const details = page.locator("details.organizer-blocked-times");
+  if ((await details.getAttribute("open")) !== null) {
+    await details.locator("summary").click();
+  }
+  await expect(details).not.toHaveAttribute("open", "");
+}
+
 module.exports = {
+  closeBlockedTimes,
+  openBlockedTimes,
   openRankedWindows,
   refreshWorkspace,
   ADMIN_EMAIL,

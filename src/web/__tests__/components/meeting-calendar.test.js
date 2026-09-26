@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 
-import { createRef } from "react";
+import { createRef, useState } from "react";
 import {
   act,
   fireEvent,
@@ -624,6 +624,467 @@ describe("MeetingCalendar", () => {
     expect(cell(1).getAttribute("aria-label")).toContain(
       "Inside ranked window #1.",
     );
+  });
+
+  describe("blocked-times painting", () => {
+    const marks = [1, 0, 0, 0, 0, 0, 0, 0];
+
+    function renderPainting({
+      onPaint = jest.fn(),
+      readOnly = false,
+      paintMarks = marks,
+      ...props
+    } = {}) {
+      const utils = renderCalendar({
+        blockedEditing: { marks: paintMarks, onPaint, readOnly },
+        ...props,
+      });
+      return { ...utils, onPaint };
+    }
+
+    const gridElement = () =>
+      screen.getByRole("grid", { name: /^Meeting time calendar/ });
+    const down = (target, overrides = {}) =>
+      fireEvent.pointerDown(target, {
+        button: 0,
+        pointerId: 1,
+        pointerType: "mouse",
+        ...overrides,
+      });
+    const move = (target, overrides = {}) =>
+      fireEvent.pointerMove(target, {
+        clientX: 5,
+        clientY: 5,
+        pointerId: 1,
+        pointerType: "mouse",
+        ...overrides,
+      });
+
+    // jsdom has no PointerEvent, so Testing Library would dispatch a bare
+    // Event without `button` or `pointerId`; a MouseEvent-based stand-in
+    // carries both, the way a browser does.
+    class PointerEventStandIn extends window.MouseEvent {
+      constructor(type, init = {}) {
+        super(type, init);
+        this.pointerId = init.pointerId ?? 0;
+        this.pointerType = init.pointerType ?? "";
+        this.isPrimary = init.isPrimary ?? true;
+      }
+    }
+
+    let setPointerCapture;
+    beforeEach(() => {
+      window.PointerEvent = PointerEventStandIn;
+      setPointerCapture = jest.fn();
+      Element.prototype.setPointerCapture = setPointerCapture;
+      document.elementFromPoint = jest.fn().mockReturnValue(null);
+    });
+
+    afterEach(() => {
+      delete window.PointerEvent;
+      delete Element.prototype.setPointerCapture;
+      delete document.elementFromPoint;
+    });
+
+    test("paints every cell from the marks and hides the picker chrome", () => {
+      const selection = selectionFromRecommendation(
+        recommendation,
+        weeklyEvent,
+        { now: NOW },
+      );
+      renderPainting({
+        showRankedWindows: true,
+        selection,
+        event: {
+          ...weeklyEvent,
+          finalMeeting: {
+            startsAt: "2026-09-14T09:30:00Z",
+            endsAt: "2026-09-14T10:30:00Z",
+            channel: "inperson",
+            active: true,
+          },
+        },
+      });
+
+      // Every slot cell is a paint target; the marks say which are blocked.
+      expect(document.querySelectorAll("[data-cell-idx]")).toHaveLength(8);
+      expect(document.querySelectorAll("[data-blocked-paint]")).toHaveLength(8);
+      expect(cell(0)).toHaveAttribute("data-blocked-paint", "true");
+      expect(cell(0)).toHaveAttribute("aria-selected", "true");
+      expect(cell(0)).toHaveAttribute(
+        "aria-label",
+        "Mon (every week), 9:00 AM – 9:30 AM, blocked",
+      );
+      expect(cell(0)).toHaveAttribute(
+        "title",
+        "Mon (every week), 9:00 AM – 9:30 AM, blocked",
+      );
+      expect(
+        cell(0).querySelector(".meeting-calendar__cell-value"),
+      ).toHaveTextContent("✕");
+      expect(cell(1)).toHaveAttribute("data-blocked-paint", "false");
+      expect(cell(1)).toHaveAttribute("aria-selected", "false");
+      expect(cell(1)).toHaveAttribute(
+        "aria-label",
+        "Mon (every week), 9:30 AM – 10:00 AM, open",
+      );
+      expect(
+        cell(1).querySelector(".meeting-calendar__cell-value"),
+      ).toHaveTextContent("");
+      // No pick state, tone or figure survives on the paint surface.
+      for (const index of [0, 1, 2, 3, 4, 5, 6, 7]) {
+        expect(cell(index)).toHaveClass("meeting-calendar__cell--paint");
+        expect(cell(index)).not.toHaveAttribute("data-state");
+        expect(cell(index)).not.toHaveAttribute("data-level");
+        expect(cell(index)).not.toHaveAttribute("data-blocked-slot");
+        expect(cell(index)).not.toHaveAttribute("aria-disabled");
+        expect(cell(index)).not.toHaveAttribute("aria-readonly");
+        expect(cell(index).style.backgroundColor).toBe("");
+      }
+      // The overlays (ranked, selected, confirmed, preview) are all off.
+      expect(
+        document.querySelectorAll(".meeting-calendar__block"),
+      ).toHaveLength(0);
+      // The legend, the toolbar and the notes speak painting.
+      const legend = screen.getByRole("list", { name: "Calendar legend" });
+      expect(within(legend).getAllByRole("listitem")).toHaveLength(2);
+      expect(legend).toHaveTextContent("Blocked");
+      expect(legend).toHaveTextContent("Open");
+      expect(screen.queryByText("Ranked window")).not.toBeInTheDocument();
+      expect(screen.queryByText("Selected window")).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("group", { name: "Shading" }),
+      ).not.toBeInTheDocument();
+      expect(screen.getByText("Marking blocked times")).toBeInTheDocument();
+      expect(
+        screen.getByText("Blocked times repeat every week."),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText(/Availability shading appears/),
+      ).not.toBeInTheDocument();
+      // The grid names its mode, is multi-selectable, and describes the
+      // keys; the root flags the mode for styling.
+      const grid = gridElement();
+      expect(grid).toHaveAccessibleName(
+        "Meeting time calendar, Sep 13 – 19, 2026, marking blocked times",
+      );
+      expect(grid).toHaveAttribute("aria-multiselectable", "true");
+      expect(grid).not.toHaveAttribute("aria-readonly");
+      const help = document.getElementById(
+        grid.getAttribute("aria-describedby"),
+      );
+      expect(help).toHaveTextContent(
+        "Press Enter or Space to mark the focused time with the selected brush. Drag with a pointer to paint several times. A mark applies to that weekday every week.",
+      );
+      expect(help).toHaveClass("visually-hidden");
+      const root = document.querySelector(".meeting-calendar");
+      expect(root).toHaveClass("meeting-calendar--painting");
+      expect(root).toHaveAttribute("data-mode", "blocked-editing");
+      // One tab stop, the first cell (no best window to prefer).
+      expect(tabbableCells().map((c) => c.dataset.cellIdx)).toEqual(["0"]);
+    });
+
+    test("names dated cells by their date and skips the weekly note", () => {
+      renderPainting({
+        event: dateEvent,
+        results: null,
+        now: DATE_NOW,
+        paintMarks: Array.from({ length: 36 }, () => 0),
+      });
+
+      expect(cell(0)).toHaveAttribute(
+        "aria-label",
+        "Thu, Aug 20, 9:00 AM – 9:30 AM, open",
+      );
+      expect(cell(0).getAttribute("aria-label")).not.toContain("every week");
+      expect(
+        screen.queryByText("Blocked times repeat every week."),
+      ).not.toBeInTheDocument();
+      const help = document.getElementById(
+        gridElement().getAttribute("aria-describedby"),
+      );
+      expect(help).not.toHaveTextContent("every week");
+    });
+
+    test("a pointer stroke paints each cell once and follows the pointer", async () => {
+      const { onPaint, onSelect } = renderPainting();
+
+      down(cell(0));
+      expect(onPaint).toHaveBeenCalledTimes(1);
+      expect(onPaint).toHaveBeenLastCalledWith(0);
+      expect(setPointerCapture).toHaveBeenCalledWith(1);
+      // Tab returns to the last painted cell.
+      expect(tabbableCells().map((c) => c.dataset.cellIdx)).toEqual(["0"]);
+
+      // The stroke follows the pointer through hit-testing...
+      document.elementFromPoint.mockReturnValue(cell(2));
+      move(gridElement());
+      expect(onPaint).toHaveBeenLastCalledWith(2);
+      expect(onPaint).toHaveBeenCalledTimes(2);
+      // ...paints a cell once per stroke...
+      move(gridElement());
+      expect(onPaint).toHaveBeenCalledTimes(2);
+      // ...ignores empty space and cells outside this calendar...
+      document.elementFromPoint.mockReturnValue(null);
+      move(gridElement());
+      const foreign = document.createElement("div");
+      foreign.dataset.cellIdx = "3";
+      document.elementFromPoint.mockReturnValue(foreign);
+      move(gridElement());
+      expect(onPaint).toHaveBeenCalledTimes(2);
+      // ...and another pointer.
+      document.elementFromPoint.mockReturnValue(cell(3));
+      move(gridElement(), { pointerId: 9 });
+      expect(onPaint).toHaveBeenCalledTimes(2);
+
+      // Releasing ends the stroke: moving paints nothing more.
+      fireEvent.pointerUp(gridElement(), { pointerId: 1 });
+      move(gridElement());
+      expect(onPaint).toHaveBeenCalledTimes(2);
+
+      // A click is a stroke of one cell, never a pick.
+      await userEvent.click(cell(1));
+      expect(onPaint).toHaveBeenLastCalledWith(1);
+      expect(onPaint).toHaveBeenCalledTimes(3);
+      expect(onSelect).not.toHaveBeenCalled();
+    });
+
+    test("a stroke survives the re-render that its own paint causes", () => {
+      // The real draft hands the calendar a new marks array on every paint;
+      // the stroke must carry on across that re-render.
+      const painted = jest.fn();
+      function Harness() {
+        const [draftMarks, setDraftMarks] = useState(marks);
+        const onPaint = (index) => {
+          painted(index);
+          setDraftMarks((current) =>
+            current.map((value, at) => (at === index ? 1 : value)),
+          );
+        };
+        return (
+          <MeetingCalendar
+            event={weeklyEvent}
+            results={results}
+            channel="inperson"
+            onSelect={jest.fn()}
+            onChannelChange={jest.fn()}
+            now={NOW}
+            blockedEditing={{ marks: draftMarks, onPaint, readOnly: false }}
+          />
+        );
+      }
+      render(<Harness />);
+
+      down(cell(1));
+      expect(cell(1)).toHaveAttribute("data-blocked-paint", "true");
+      document.elementFromPoint.mockReturnValue(cell(2));
+      move(gridElement());
+      expect(painted).toHaveBeenNthCalledWith(1, 1);
+      expect(painted).toHaveBeenNthCalledWith(2, 2);
+      expect(cell(2)).toHaveAttribute("data-blocked-paint", "true");
+      document.elementFromPoint.mockReturnValue(cell(3));
+      move(gridElement());
+      expect(cell(3)).toHaveAttribute("data-blocked-paint", "true");
+      expect(painted).toHaveBeenCalledTimes(3);
+    });
+
+    test("a stroke ends on cancel, lost capture and window blur", () => {
+      const { onPaint } = renderPainting();
+      const resume = () => {
+        document.elementFromPoint.mockReturnValue(cell(2));
+        move(gridElement());
+      };
+
+      down(cell(0));
+      fireEvent.pointerCancel(gridElement(), { pointerId: 1 });
+      resume();
+      expect(onPaint).toHaveBeenCalledTimes(1);
+
+      down(cell(0));
+      fireEvent.lostPointerCapture(gridElement(), { pointerId: 1 });
+      resume();
+      expect(onPaint).toHaveBeenCalledTimes(2);
+
+      down(cell(0));
+      fireEvent.blur(window);
+      resume();
+      expect(onPaint).toHaveBeenCalledTimes(3);
+    });
+
+    test("paints without pointer capture support", () => {
+      delete Element.prototype.setPointerCapture;
+      const { onPaint } = renderPainting();
+
+      down(cell(3));
+      expect(onPaint).toHaveBeenCalledWith(3);
+    });
+
+    test("the right button, a non-cell, and a read-only surface paint nothing", () => {
+      const { onPaint, onSelect, unmount } = renderPainting();
+      down(cell(0), { button: 2 });
+      // Headers and the time column are not paint targets.
+      down(gridElement().querySelector('[role="columnheader"]'));
+      down(gridElement().querySelector('[role="rowheader"]'));
+      expect(onPaint).not.toHaveBeenCalled();
+      unmount();
+
+      const readOnly = renderPainting({
+        readOnly: true,
+        event: {
+          ...weeklyEvent,
+          finalMeeting: {
+            startsAt: "2026-09-14T09:30:00Z",
+            endsAt: "2026-09-14T10:30:00Z",
+            channel: "inperson",
+            active: true,
+          },
+        },
+      });
+      expect(gridElement()).toHaveAttribute("aria-readonly", "true");
+      // A read-only surface names itself, keeps the confirmed meeting in
+      // view, and its instructions say painting is off.
+      expect(screen.getByText("Blocked times (read-only)")).toBeInTheDocument();
+      expect(
+        document.querySelector(".meeting-calendar__block--confirmed"),
+      ).not.toBeNull();
+      expect(
+        document.getElementById(gridElement().getAttribute("aria-describedby")),
+      ).toHaveTextContent(/read-only for this event/);
+      expect(cell(0)).toHaveAttribute("aria-readonly", "true");
+      expect(cell(0)).toHaveAttribute("data-blocked-paint", "true");
+      // Still reachable from the keyboard.
+      expect(tabbableCells().map((c) => c.dataset.cellIdx)).toEqual(["0"]);
+      down(cell(1));
+      fireEvent.keyDown(cell(1), { key: "Enter" });
+      expect(readOnly.onPaint).not.toHaveBeenCalled();
+      expect(readOnly.onSelect).not.toHaveBeenCalled();
+      expect(onSelect).not.toHaveBeenCalled();
+    });
+
+    test("Enter and Space paint the focused cell while arrows and paging still move", () => {
+      const { onPaint, onSelect } = renderPainting();
+
+      act(() => cell(0).focus());
+      fireEvent.keyDown(cell(0), { key: "Enter" });
+      expect(onPaint).toHaveBeenLastCalledWith(0);
+      fireEvent.keyDown(cell(0), { key: "ArrowDown" });
+      expect(document.activeElement).toBe(cell(1));
+      fireEvent.keyDown(cell(1), { key: " " });
+      expect(onPaint).toHaveBeenLastCalledWith(1);
+      expect(onPaint).toHaveBeenCalledTimes(2);
+      expect(onSelect).not.toHaveBeenCalled();
+
+      fireEvent.keyDown(cell(1), { key: "PageDown" });
+      expect(gridElement()).toHaveAccessibleName(
+        "Meeting time calendar, Sep 20 – 26, 2026, marking blocked times",
+      );
+      expect(document.activeElement).toBe(cell(1));
+    });
+
+    test("past cells take paint too, and weekly marks repeat in every week", async () => {
+      // Now sits after the first Monday slot: cell 0 would be `past`.
+      const { onPaint } = renderPainting({
+        now: Date.parse("2026-09-14T09:15:00Z"),
+      });
+      expect(cell(0)).not.toHaveAttribute("data-state");
+      down(cell(0));
+      expect(onPaint).toHaveBeenCalledWith(0);
+
+      expect(cell(0)).toHaveAttribute("data-blocked-paint", "true");
+      await userEvent.click(screen.getByRole("button", { name: "Next week" }));
+      expect(columnHeaders()).toEqual(["Mon, Sep 21", "Wed, Sep 23"]);
+      expect(cell(0)).toHaveAttribute("data-blocked-paint", "true");
+    });
+
+    test("hover shows no preview while painting", () => {
+      renderPainting();
+      fireEvent.pointerOver(cell(1));
+      expect(
+        document.querySelector(".meeting-calendar__block--preview"),
+      ).toBeNull();
+    });
+
+    test("the paint surface is the same on either channel", async () => {
+      const mixedEvent = { ...weeklyEvent, mode: "mixed" };
+      const { onChannelChange, onPaint, rerender } = renderPainting({
+        event: mixedEvent,
+      });
+      await userEvent.click(screen.getByRole("button", { name: "Virtual" }));
+      expect(onChannelChange).toHaveBeenCalledWith("virtual");
+
+      // The workspace switches the channel; blocks are per slot, not per
+      // channel, so the marks stay and painting carries on.
+      rerender(
+        <MeetingCalendar
+          event={mixedEvent}
+          results={results}
+          channel="virtual"
+          onSelect={jest.fn()}
+          onChannelChange={onChannelChange}
+          now={NOW}
+          blockedEditing={{ marks, onPaint, readOnly: false }}
+        />,
+      );
+      expect(screen.getByRole("button", { name: "Virtual" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+      expect(cell(0)).toHaveAttribute("data-blocked-paint", "true");
+      expect(cell(0)).toHaveAttribute(
+        "aria-label",
+        expect.stringContaining("blocked"),
+      );
+      down(cell(1));
+      expect(onPaint).toHaveBeenCalledWith(1);
+    });
+
+    test("leaving painting restores the picker", async () => {
+      const { onSelect, onPaint, rerender } = renderPainting({
+        showRankedWindows: true,
+      });
+      expect(document.querySelector("[data-blocked-paint]")).not.toBeNull();
+
+      rerender(
+        <MeetingCalendar
+          event={weeklyEvent}
+          results={results}
+          channel="inperson"
+          onSelect={onSelect}
+          onChannelChange={jest.fn()}
+          now={NOW}
+          showRankedWindows
+          blockedEditing={null}
+        />,
+      );
+      expect(document.querySelector("[data-blocked-paint]")).toBeNull();
+      expect(cell(0)).toHaveAttribute("data-state", "startable");
+      expect(
+        screen.getByRole("group", { name: "Shading" }),
+      ).toBeInTheDocument();
+      expect(screen.getByText("Selected window")).toBeInTheDocument();
+      expect(
+        document.querySelector(".meeting-calendar__block--rank"),
+      ).not.toBeNull();
+      expect(document.querySelector(".meeting-calendar")).not.toHaveClass(
+        "meeting-calendar--painting",
+      );
+      await userEvent.click(cell(1));
+      expect(onSelect).toHaveBeenCalledTimes(1);
+      expect(onPaint).not.toHaveBeenCalled();
+    });
+
+    test("an event without slots shows the empty state while painting", () => {
+      renderPainting({
+        event: { ...weeklyEvent, slotGroups: [] },
+        paintMarks: [],
+      });
+      expect(
+        screen.getByRole("heading", {
+          name: "No schedule slots are configured.",
+        }),
+      ).toBeInTheDocument();
+      expect(screen.queryByRole("grid")).not.toBeInTheDocument();
+    });
   });
 
   test("marks the selected window and moves the tab stop to it", () => {

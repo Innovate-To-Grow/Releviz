@@ -2,8 +2,10 @@ const { expect, test } = require("@playwright/test");
 const { expectAccessible } = require("./helpers/accessibility");
 const {
   apiJson,
+  closeBlockedTimes,
   createEvent,
   fillTextbox,
+  openBlockedTimes,
   openRankedWindows,
   readSession,
   recomputeEventResults,
@@ -815,39 +817,78 @@ test.describe("Organizer meeting-time calendar", () => {
       ),
     ).toEqual([]);
 
-    // Painting one more block (Tuesday 09:00) and saving updates the
-    // summary, the API and the calendar in place, with no reload.
-    await blockedTimes.locator("summary").click();
-    await expect(blockedTimes).toHaveAttribute("open", "");
+    // Painting one more block (Tuesday 09:00) happens on the calendar
+    // itself: opening the step turns it into the paint surface, and saving
+    // updates the summary, the API and the calendar in place, with no reload.
+    await openBlockedTimes(page);
+    await expect(grid).toHaveAccessibleName(/, marking blocked times$/);
+    await expect(
+      page.getByRole("grid", { name: "Blocked times", exact: true }),
+    ).toHaveCount(0);
+    await expect(page.locator(".meeting-calendar__block--rank")).toHaveCount(0);
     await expect(
       blockedTimes.getByText(
-        "Mark the parts of each day that are not available for this event. Participants see these times greyed out.",
+        "While this step is open, paint on the calendar above to mark the parts of each day that are not available for this event. Participants see these times greyed out.",
       ),
     ).toBeVisible();
     const brushes = page.getByRole("group", { name: "Mark times as" });
     await expect(
       brushes.getByRole("button", { name: "Blocked", exact: true }),
     ).toHaveAttribute("aria-pressed", "true");
-    const blockedGrid = page.getByRole("grid", { name: "Blocked times" });
-    await expect(blockedGrid).toBeVisible();
-    await expect(
-      blockedGrid.locator(`[data-cell-idx="${mon10}"]`),
-    ).toHaveAttribute("data-blocked-paint", "true");
+    const mondayMark = grid.locator(`[data-cell-idx="${mon10}"]`);
+    await expect(mondayMark).toHaveAttribute("data-blocked-paint", "true");
+    await expect(mondayMark).toHaveAttribute("aria-selected", "true");
     const saveBlocked = page.getByRole("button", {
       name: "Save blocked times",
     });
     await expect(saveBlocked).toBeDisabled();
-    await expectAccessible(page, "organizer blocked times editor");
-    const tuesday9Mark = blockedGrid.locator(`[data-cell-idx="${tue9}"]`);
+    await expectAccessible(page, "organizer blocked times painting");
+    const tuesday9Mark = grid.locator(`[data-cell-idx="${tue9}"]`);
     await expect(tuesday9Mark).toHaveAttribute("data-blocked-paint", "false");
     await tuesday9Mark.click();
     await expect(tuesday9Mark).toHaveAttribute("data-blocked-paint", "true");
     await expect(tuesday9Mark).toHaveAttribute("aria-selected", "true");
+    // A drag paints every cell it crosses...
+    const tuesday10Mark = grid.locator(`[data-cell-idx="${tue9 + 2}"]`);
+    const tuesday1030Mark = grid.locator(`[data-cell-idx="${tue9 + 3}"]`);
+    await tuesday10Mark.scrollIntoViewIfNeeded();
+    await tuesday1030Mark.scrollIntoViewIfNeeded();
+    const dragFrom = await tuesday10Mark.boundingBox();
+    const dragTo = await tuesday1030Mark.boundingBox();
+    await page.mouse.move(
+      dragFrom.x + dragFrom.width / 2,
+      dragFrom.y + dragFrom.height / 2,
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      dragTo.x + dragTo.width / 2,
+      dragTo.y + dragTo.height / 2,
+      { steps: 4 },
+    );
+    await page.mouse.up();
+    await expect(tuesday10Mark).toHaveAttribute("data-blocked-paint", "true");
+    await expect(tuesday1030Mark).toHaveAttribute("data-blocked-paint", "true");
+    // ...and the Open brush takes them back, so only one new block is saved.
+    await brushes.getByRole("button", { name: "Open" }).click();
+    await tuesday10Mark.click();
+    await tuesday1030Mark.click();
+    await expect(tuesday10Mark).toHaveAttribute("data-blocked-paint", "false");
+    await expect(tuesday1030Mark).toHaveAttribute(
+      "data-blocked-paint",
+      "false",
+    );
+    await brushes.getByRole("button", { name: "Blocked", exact: true }).click();
+    await expect(blockedTimes.locator("summary")).toContainText(
+      "unsaved changes",
+    );
     await expect(saveBlocked).toBeEnabled();
     await saveBlocked.click();
-    await expect(page.getByText("Blocked times saved.")).toBeVisible();
+    await expect(blockedTimes.getByText("Blocked times saved.")).toBeVisible();
     await expect(blockedTimes.locator("summary")).toContainText(
       "3 slots blocked",
+    );
+    await expect(blockedTimes.locator("summary")).not.toContainText(
+      "unsaved changes",
     );
     // The stored event now matches the marks, so there is nothing to save.
     await expect(saveBlocked).toBeDisabled();
@@ -862,10 +903,17 @@ test.describe("Organizer meeting-time calendar", () => {
       "weekday:1": [2, 3],
       "weekday:2": [0],
     });
+    // Closing the step hands the calendar back to the picker: the new block
+    // is greyed out and the ranked outlines return (the list is still open).
+    await closeBlockedTimes(page);
+    await expect(grid).not.toHaveAccessibleName(/marking blocked times/);
     const tuesday9 = cellAt(grid, 0, 1);
     await expect(tuesday9).toHaveAttribute("data-state", "blocked");
     await expect(tuesday9).toHaveAttribute("data-blocked-slot", "true");
     await expect(tuesday9).toHaveAttribute("aria-disabled", "true");
+    await expect(
+      page.locator(".meeting-calendar__block--rank").first(),
+    ).toBeVisible();
 
     // A participant's grid (here the managed drawer) shows all three blocks
     // greyed out and unpaintable, with the legend explaining the stripes.
@@ -898,16 +946,22 @@ test.describe("Organizer meeting-time calendar", () => {
     await selectOption(page, "Event timezone", "UTC");
     await page.getByRole("button", { name: "Create Event" }).click();
     await page.waitForURL(/\/event\?code=/);
-    const freshBlockedTimes = page.locator(
-      "details.organizer-blocked-times[open]",
-    );
+    // A fresh event starts with the step closed; opening it paints on the
+    // calendar itself (there is no second grid).
+    const freshBlockedTimes = page.locator("details.organizer-blocked-times");
     await expect(freshBlockedTimes).toBeVisible();
+    await expect(freshBlockedTimes).not.toHaveAttribute("open", "");
     await expect(freshBlockedTimes.locator("summary")).toContainText(
       "0 slots blocked",
     );
+    await openBlockedTimes(page);
     await expect(
-      freshBlockedTimes.getByRole("grid", { name: "Blocked times" }),
+      page.getByRole("grid", { name: /marking blocked times$/ }),
     ).toBeVisible();
+    await expect(page.locator("[data-blocked-paint]").first()).toBeVisible();
+    await expect(
+      page.getByRole("grid", { name: "Blocked times", exact: true }),
+    ).toHaveCount(0);
     await expect(
       page.getByText("This event is active and accepting responses."),
     ).toBeVisible();

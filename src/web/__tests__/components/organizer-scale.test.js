@@ -618,22 +618,22 @@ describe("scaled organizer workspace", () => {
     expect(
       within(overviewSection).queryByRole("link", { name: "Edit event" }),
     ).not.toBeInTheDocument();
-    // The blocked-times editor is a step of the Time Table, not of the
-    // Overview: open while the event has no blocks, with its own grid name
-    // beside the meeting calendar.
+    // The blocked-times step belongs to the Time Table, not the Overview. It
+    // starts closed, and its paint surface is the meeting calendar itself:
+    // one grid, no second "Blocked times" grid.
+    const blockedTimes = resultsSection.querySelector(
+      "details.organizer-blocked-times",
+    );
+    expect(blockedTimes).not.toHaveAttribute("open");
+    expect(within(resultsSection).getAllByRole("grid")).toHaveLength(1);
     expect(
-      within(resultsSection)
-        .getByRole("grid", { name: "Blocked times" })
-        .closest("details"),
-    ).toHaveAttribute("open");
+      screen.queryByRole("grid", { name: "Blocked times" }),
+    ).not.toBeInTheDocument();
     expect(
       within(resultsSection).getByRole("button", {
         name: "Save blocked times",
       }),
     ).toBeInTheDocument();
-    expect(
-      within(overviewSection).queryByRole("grid", { name: "Blocked times" }),
-    ).not.toBeInTheDocument();
     expect(
       within(overviewSection).queryByRole("heading", {
         name: "Blocked times",
@@ -2193,8 +2193,8 @@ describe("scaled organizer workspace", () => {
         name: "Browse results",
       }),
     ).not.toBeInTheDocument();
-    // The three steps stack under the calendar: the ranked list, then
-    // Finalize (both closed), then Blocked times (open: no blocks yet).
+    // The three steps stack under the calendar, all closed: the ranked list,
+    // then Finalize, then Blocked times.
     const stack = finalizeSection.closest(".time-table__sections");
     expect(stack).not.toBeNull();
     expect(Array.from(stack.children).map((step) => step.id)).toEqual([
@@ -2212,7 +2212,7 @@ describe("scaled organizer workspace", () => {
     expect(finalizeSection).not.toHaveAttribute("open");
     expect(
       document.querySelector("details.organizer-blocked-times"),
-    ).toHaveAttribute("open");
+    ).not.toHaveAttribute("open");
     // While the ranked list is closed the calendar draws no ranked window
     // and its legend does not mention one.
     expect(document.querySelector(".meeting-calendar__block--rank")).toBeNull();
@@ -2228,7 +2228,7 @@ describe("scaled organizer workspace", () => {
     expect(screen.queryByText("Ranked window")).not.toBeInTheDocument();
   });
 
-  test("saving blocked times from the Time Table re-reads the results and clears the pick", async () => {
+  test("saving blocked times painted on the Time Table re-reads the results and clears the pick", async () => {
     mockCalendarWindowFlow();
     const nowSpy = jest
       .spyOn(Date, "now")
@@ -2253,24 +2253,36 @@ describe("scaled organizer workspace", () => {
       fetchEventResults.mockClear();
       const finalizeSection = () =>
         document.getElementById("organizer-finalize");
+      const grid = () =>
+        screen.getByRole("grid", { name: /^Meeting time calendar/ });
+      const selectedBlock = () =>
+        document.querySelector(".meeting-calendar__block--selected");
 
       await userEvent.click(calendarCell(1));
       expect(finalizeSection()).toHaveTextContent("Custom window");
       expect(finalizeSection()).toHaveAttribute("open");
+      expect(selectedBlock()).not.toBeNull();
 
+      // Opening Blocked times turns the calendar into the paint surface: the
+      // pick's outline steps aside while the pick itself stays.
       const blockedTimes = document
         .getElementById("organizer-results")
         .querySelector("details.organizer-blocked-times");
-      expect(blockedTimes).toHaveAttribute("open");
+      expect(blockedTimes).not.toHaveAttribute("open");
       expect(blockedTimes).toHaveTextContent("0 slots blocked");
-      const editorGrid = within(blockedTimes).getByRole("grid", {
-        name: "Blocked times",
-      });
-      fireEvent.pointerDown(editorGrid.querySelector('[data-cell-idx="3"]'), {
+      await userEvent.click(blockedTimes.querySelector("summary"));
+      expect(blockedTimes).toHaveAttribute("open");
+      expect(grid()).toHaveAccessibleName(/, marking blocked times$/);
+      expect(selectedBlock()).toBeNull();
+      expect(finalizeSection()).toHaveTextContent("Custom window");
+
+      fireEvent.pointerDown(calendarCell(3), {
         button: 0,
         pointerId: 1,
         pointerType: "mouse",
       });
+      expect(calendarCell(3)).toHaveAttribute("data-blocked-paint", "true");
+      expect(finalizeSection()).toHaveTextContent("Custom window");
       await userEvent.click(
         within(blockedTimes).getByRole("button", {
           name: "Save blocked times",
@@ -2287,14 +2299,24 @@ describe("scaled organizer workspace", () => {
       expect(
         await within(blockedTimes).findByText("Blocked times saved."),
       ).toBeInTheDocument();
-      // The workspace stored the event (the calendar greys the block), re-read
-      // the results, and dropped the pick; the step stays open.
+      // The workspace stored the event, re-read the results, and dropped the
+      // pick; the step stays open and keeps painting.
       await waitFor(() => expect(fetchEventResults).toHaveBeenCalledTimes(1));
-      expect(calendarCell(3)).toHaveAttribute("data-blocked-slot", "true");
+      expect(calendarCell(3)).toHaveAttribute("data-blocked-paint", "true");
       expect(finalizeSection()).toHaveTextContent("No time selected yet");
       expect(finalizeSection()).toHaveAttribute("open");
       expect(blockedTimes).toHaveTextContent("1 slots blocked");
       expect(blockedTimes).toHaveAttribute("open");
+
+      // Closing the step hands the calendar back: the saved block is greyed.
+      await userEvent.click(blockedTimes.querySelector("summary"));
+      expect(blockedTimes).not.toHaveAttribute("open");
+      expect(grid().getAttribute("aria-label")).not.toMatch(
+        /marking blocked times/,
+      );
+      expect(grid().querySelector("[data-blocked-paint]")).toBeNull();
+      expect(calendarCell(3)).toHaveAttribute("data-blocked-slot", "true");
+      expect(calendarCell(3)).toHaveAttribute("aria-disabled", "true");
     } finally {
       nowSpy.mockRestore();
     }

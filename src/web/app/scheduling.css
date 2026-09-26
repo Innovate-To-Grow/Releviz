@@ -330,21 +330,6 @@
   box-shadow: none;
 }
 
-/* Blocked-times editor (organizer): painted cells are red with a ✕ glyph,
-   open cells sit on the raised surface, which is dark in dark mode, so their
-   grid lines follow the theme border token (as .meeting-calendar__cell--neutral
-   does) instead of the fixed tint chosen for the pastel availability fills. */
-.schedule-grid-cell[data-blocked-paint="false"] {
-  background-color: var(--rv-surface-raised);
-  color: var(--bs-secondary-color);
-  border-color: var(--bs-border-color);
-}
-
-.schedule-grid-cell[data-blocked-paint="true"] {
-  background-color: var(--rv-avail-blocked);
-  color: var(--rv-avail-blocked-text);
-}
-
 @media (prefers-reduced-motion: reduce) {
   .schedule-grid-cell {
     transition: none;
@@ -1276,6 +1261,59 @@
 
 .meeting-calendar__cell-value {
   pointer-events: none;
+}
+
+/* Blocked-times painting (the Time Table's Blocked times step is open):
+   every slot cell is a paint target on the raised surface, and a mark is the
+   red ✕ cell the brush swatch shows. Only this mode disables touch scrolling
+   over cells, so a touch drag paints; headers and the page still scroll. */
+.meeting-calendar__cell--paint {
+  --rv-cal-line: var(--bs-border-color);
+  background: var(--rv-surface-raised);
+  color: var(--bs-secondary-color);
+  cursor: pointer;
+  touch-action: none;
+}
+
+.meeting-calendar__cell--paint[data-blocked-paint="true"] {
+  --rv-cal-line: rgba(255, 255, 255, 0.35);
+  background: var(--rv-avail-blocked);
+  color: var(--rv-avail-blocked-text);
+}
+
+.meeting-calendar__cell--paint .meeting-calendar__cell-value {
+  font-size: 0.875rem;
+  opacity: 1;
+}
+
+.meeting-calendar__cell--paint:not([aria-readonly="true"]):hover:not(
+    :focus-visible
+  ) {
+  box-shadow: inset 0 0 0 2px rgba(13, 110, 253, 0.45);
+}
+
+/* On a marked (red) cell the blue hover ring would be near invisible. */
+.meeting-calendar__cell--paint[data-blocked-paint="true"]:not(
+    [aria-readonly="true"]
+  ):hover:not(:focus-visible) {
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.8);
+}
+
+.meeting-calendar__cell--paint[aria-readonly="true"] {
+  cursor: default;
+}
+
+/* Toolbar pill that names the mode while painting (the shading toggle is
+   away meanwhile). */
+.meeting-calendar__mode {
+  align-self: center;
+  padding: 0.25rem 0.625rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--rv-avail-blocked) 12%, transparent);
+  color: var(--bs-body-color);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 /* Overlays: ranked windows, hover preview, selection, confirmed meeting.

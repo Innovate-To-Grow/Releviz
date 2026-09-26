@@ -1,12 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { useAuth } from "@/components/auth/AuthContext";
+import { useCallback, useMemo, useState } from "react";
 import Alert from "@/components/ui/Alert";
 import AppButton from "@/components/ui/AppButton";
 import { AvailabilitySwatch } from "@/components/ui/Availability";
 import { RefreshIcon, SaveIcon } from "@/components/ui/icons";
-import ScheduleGrid from "@/components/schedule/ScheduleGrid";
 import { updateEvent } from "@/lib/api/events";
 import { reloadPage } from "@/lib/navigation";
 
@@ -79,20 +77,19 @@ function marksMatch(first, second) {
 }
 
 /**
- * Organizer editor for the slots an event blocks. Paints on a `ScheduleGrid`
- * in `blockedEditing` mode and saves the block map through `updateEvent`;
- * the parent stores the returned event, whose blocks then match the marks.
+ * The organizer's draft of the slots an event blocks. The Time Table's
+ * calendar is the paint surface (it takes `surface` while the Blocked times
+ * step is open); this hook owns the marks and saves them through
+ * `updateEvent`, and the parent stores the returned event, whose blocks then
+ * match the marks.
  *
  * `locked` follows the same rule as "Edit event": a finalized or archived
  * event must be reactivated before its blocks change.
  */
-export default function BlockedSlotsEditor({
+export function useBlockedSlotsDraft(
   event,
-  onEventSaved,
-  locked = false,
-  lockReason = "",
-}) {
-  const { getToken } = useAuth();
+  { getToken, onEventSaved, locked = false, lockReason = "" } = {},
+) {
   const groups = groupsOf(event);
   const { savedMarks, key: hydrationKey } = useMemo(
     () => hydrationOf(event),
@@ -113,7 +110,7 @@ export default function BlockedSlotsEditor({
   const [marks, setMarks] = useState(savedMarks);
   const [notice, setNotice] = useState("");
   if (hydrated.key !== hydrationKey || hydrated.reloadCount !== reloadCount) {
-    // A conflict reload is the organizer's own choice, and the editor's own
+    // A conflict reload is the organizer's own choice, and the draft's own
     // save stores exactly what was painted; any other change that overwrites
     // marks not yet saved is announced so the loss is not silent.
     const overwritesUnsaved =
@@ -134,26 +131,31 @@ export default function BlockedSlotsEditor({
   const busy = locked || saving;
   const lockTitle = locked ? lockReason : undefined;
 
-  const clearFeedback = () => {
+  const clearFeedback = useCallback(() => {
     setStatus("");
     setFailure(null);
     setNotice("");
-  };
+  }, []);
 
-  const paint = (index) => {
-    clearFeedback();
-    setMarks((current) => {
-      if (Number(current[index]) === markValue) return current;
-      const next = [...current];
-      next[index] = markValue;
-      return next;
-    });
-  };
+  // Set-to-brush, never toggle: a stroke that crosses a cell twice, or a
+  // click that follows the pointerdown, cannot flip it back.
+  const paint = useCallback(
+    (index) => {
+      clearFeedback();
+      setMarks((current) => {
+        if (Number(current[index]) === markValue) return current;
+        const next = [...current];
+        next[index] = markValue;
+        return next;
+      });
+    },
+    [clearFeedback, markValue],
+  );
 
-  const clearAll = () => {
+  const clearAll = useCallback(() => {
     clearFeedback();
     setMarks((current) => current.map(() => 0));
-  };
+  }, [clearFeedback]);
 
   const save = async () => {
     setSaving(true);
@@ -204,6 +206,58 @@ export default function BlockedSlotsEditor({
     await onEventSaved?.({ event: conflictEvent });
   };
 
+  // What the calendar needs to be the paint surface; one object per change
+  // of marks, brush or lock, so the calendar's cells re-render only then.
+  const surface = useMemo(
+    () => ({ marks, onPaint: paint, readOnly: busy }),
+    [marks, paint, busy],
+  );
+
+  return {
+    marks,
+    markValue,
+    setMarkValue,
+    paint,
+    clearAll,
+    save,
+    reloadLatest,
+    dirty,
+    markedCount,
+    saving,
+    busy,
+    locked,
+    lockReason,
+    lockTitle,
+    status,
+    failure,
+    notice,
+    surface,
+  };
+}
+
+/**
+ * The controls under the Time Table for a blocked-times draft: the brush,
+ * Clear all, the feedback, and Save. Painting itself happens on the calendar.
+ */
+export default function BlockedSlotsControls({ draft }) {
+  const {
+    markValue,
+    setMarkValue,
+    clearAll,
+    save,
+    reloadLatest,
+    dirty,
+    markedCount,
+    saving,
+    busy,
+    locked,
+    lockReason,
+    lockTitle,
+    status,
+    failure,
+    notice,
+  } = draft;
+
   return (
     <div className="blocked-slots-editor d-flex flex-column gap-3">
       <div className="schedule-toolbar mb-0">
@@ -245,15 +299,9 @@ export default function BlockedSlotsEditor({
         </div>
       </div>
 
-      <ScheduleGrid
-        blockedEditing
-        schedule={marks}
-        slotGroups={groups}
-        readOnly={busy}
-        onCellPaint={paint}
-        ariaLabel="Blocked times"
-      />
-
+      {locked && lockReason && (
+        <p className="text-secondary small mb-0">{lockReason}</p>
+      )}
       {notice && (
         <Alert variant="warning" role="status">
           {notice}

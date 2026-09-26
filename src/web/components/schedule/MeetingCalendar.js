@@ -5,13 +5,17 @@ import {
   memo,
   useCallback,
   useEffect,
+  useId,
   useImperativeHandle,
   useMemo,
   useRef,
   useState,
 } from "react";
 import EmptyState from "@/components/ui/EmptyState";
-import { availabilityKey } from "@/components/ui/Availability";
+import {
+  AvailabilitySwatch,
+  availabilityKey,
+} from "@/components/ui/Availability";
 import { lerpColor, lerpVirtualColor } from "@/components/ui/ColorUtils";
 import {
   CalendarCheckIcon,
@@ -155,8 +159,34 @@ const CalendarCell = memo(function CalendarCell({
   tabIndex,
   selected,
   columnIndex,
+  mark,
+  readOnly,
 }) {
   if (!model) return null;
+  // Blocked-times painting: the cell is a paint target on a neutral surface,
+  // a red ✕ when marked; no availability tone, figure or pick state.
+  if (mark !== undefined) {
+    const label = `${model.editLabel}, ${mark ? "blocked" : "open"}`;
+    return (
+      <div
+        role="gridcell"
+        className="meeting-calendar__cell meeting-calendar__cell--paint"
+        data-cell-idx={model.index}
+        data-row={model.row}
+        data-blocked-paint={mark ? "true" : "false"}
+        aria-colindex={columnIndex + 2}
+        aria-selected={mark ? "true" : "false"}
+        aria-readonly={readOnly ? "true" : undefined}
+        aria-label={label}
+        title={label}
+        tabIndex={tabIndex}
+      >
+        <span className="meeting-calendar__cell-value" aria-hidden="true">
+          {mark ? "✕" : ""}
+        </span>
+      </div>
+    );
+  }
   const startable = model.state === "startable";
   return (
     <div
@@ -208,8 +238,13 @@ function EmptyCell({ columnIndex, headerLabel }) {
  * window of the event's meeting duration beginning there. Only a slot the
  * organizer blocked (`data-blocked-slot`) is neutral: no share, no tone. An
  * open slot whose window would run into a block is unpickable too
- * (`data-state="blocked"`) but keeps its share, like a tail cell. Blocks are
- * edited from the Time Table's Blocked times step, never from here.
+ * (`data-state="blocked"`) but keeps its share, like a tail cell.
+ *
+ * With `blockedEditing` set (the Time Table's Blocked times step is open) the
+ * calendar is the block editor: every slot cell paints the draft with the
+ * step's brush (a stroke by pointer, Enter/Space by keyboard), and picking,
+ * the overlays, the shading and the percentages are off until the step
+ * closes. `blockedEditing` is `{ marks, onPaint(index), readOnly }`.
  */
 const MeetingCalendar = forwardRef(function MeetingCalendar(
   {
@@ -222,6 +257,7 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
     now = null,
     defaultMetric = "weighted",
     showRankedWindows = true,
+    blockedEditing = null,
   },
   ref,
 ) {
@@ -236,6 +272,15 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
   // Set by keyboard paging so focus follows the grid into the new range
   // instead of dropping to the document when the old cells unmount.
   const refocusAfterViewChange = useRef(false);
+  // The blocked-times stroke in progress (see the paint handlers below).
+  const strokeRef = useRef({
+    active: false,
+    pointerId: null,
+    visited: new Set(),
+  });
+  const finishStroke = useCallback(() => {
+    strokeRef.current = { active: false, pointerId: null, visited: new Set() };
+  }, []);
 
   const resolver = useMemo(() => {
     try {
@@ -254,6 +299,9 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
     () => results?.recommendations || [],
     [results],
   );
+  const painting = Boolean(blockedEditing);
+  const paintReadOnly = painting && Boolean(blockedEditing.readOnly);
+  const paintHelpId = useId();
 
   const finalMeeting = event?.finalMeeting || null;
   const autoView = useMemo(
@@ -287,9 +335,8 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
   // where they can still be picked: an occurrence that has passed, or one a
   // daylight-saving change breaks (the API never suggests those), would put
   // a badge on a hatched block.
-  const drawnRecommendations = showRankedWindows
-    ? recommendations
-    : NO_RECOMMENDATIONS;
+  const drawnRecommendations =
+    showRankedWindows && !painting ? recommendations : NO_RECOMMENDATIONS;
   const blocks = useMemo(
     () =>
       recommendationBlocks(drawnRecommendations, columns, channel).filter(
@@ -303,19 +350,24 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
       ),
     [drawnRecommendations, columns, channel, k, now],
   );
+  // The pick, the confirmed meeting and the hover preview are picker chrome:
+  // none of them shows on the paint surface.
   const selected = useMemo(
     () =>
-      selection?.channel === channel
+      !painting && selection?.channel === channel
         ? selectionBlock(selection, columns)
         : null,
-    [selection, columns, channel],
+    [painting, selection, columns, channel],
   );
   const confirmed = useMemo(() => {
+    // A read-only paint surface (finalized event) keeps the confirmed
+    // meeting in view; an editable one clears the surface for painting.
+    if (painting && !paintReadOnly) return null;
     const block = confirmedBlock(finalMeeting, columns);
     if (!block) return null;
     if (block.channel && block.channel !== channel) return null;
     return block;
-  }, [finalMeeting, columns, channel]);
+  }, [painting, paintReadOnly, finalMeeting, columns, channel]);
 
   const maxRows = columns.reduce(
     (largest, column) => Math.max(largest, column.slots.length),
@@ -413,6 +465,12 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
               : lerpColor(shown),
           ariaLabel: `${when}. ${description.join(" ")}${rankText}`,
           title: `${when}\n${description.join("\n")}${rankText ? `\n${rankText.trim()}` : ""}`,
+          // While painting blocked times: a weekday mark applies to every
+          // week, so the label names the weekday, not this week's date.
+          editLabel:
+            kind === "weekday"
+              ? `${column.headerLabel} (every week), ${slotTimeLabel(slot, mixedOffsets)}`
+              : `${when}`,
         });
       });
     });
@@ -425,6 +483,7 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
     channel,
     metric,
     k,
+    kind,
     now,
     neutral,
     counted,
@@ -462,9 +521,11 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
   );
   const bestBlock = blocks.find((block) => block.best) || null;
   // One tab stop: the focused cell, else the selected window, else the best
-  // ranked window, else the first startable cell.
+  // ranked window, else the first startable cell. While painting every cell
+  // is a target, so the focused cell or the first one.
   let rovingIndex = positions[0]?.index;
   if (positionByIndex.has(activeCellIndex)) rovingIndex = activeCellIndex;
+  else if (painting) rovingIndex = positions[0]?.index;
   else if (selected)
     rovingIndex = columns[selected.columnIndex].slots[selected.row]?.index;
   else if (bestBlock)
@@ -472,6 +533,7 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
   else if (firstStartable) rovingIndex = firstStartable.index;
 
   const previewBlock = useMemo(() => {
+    if (painting) return null;
     const index = hoverIndex ?? null;
     if (index === null) return null;
     const model = cellModels.get(index);
@@ -479,7 +541,7 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
     if (selectedIndices.has(index) && selected && selected.row === model.row)
       return null;
     return { columnIndex: model.columnIndex, row: model.row, span: k };
-  }, [hoverIndex, cellModels, selectedIndices, selected, k]);
+  }, [painting, hoverIndex, cellModels, selectedIndices, selected, k]);
 
   const navigate = useCallback(
     (direction) => {
@@ -525,6 +587,24 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
     );
     if (active && active !== document.activeElement) active.focus();
   }, [effectiveView]);
+
+  // A stroke that leaves the grid still ends when the pointer is released
+  // anywhere, or when the window loses focus mid-stroke. Keyed on the mode,
+  // not on `blockedEditing` itself: every paint hands the calendar a new
+  // marks array, and re-running this effect then would cut the stroke short
+  // after its first cell.
+  useEffect(() => {
+    if (!painting) return undefined;
+    window.addEventListener("pointerup", finishStroke);
+    window.addEventListener("pointercancel", finishStroke);
+    window.addEventListener("blur", finishStroke);
+    return () => {
+      finishStroke();
+      window.removeEventListener("pointerup", finishStroke);
+      window.removeEventListener("pointercancel", finishStroke);
+      window.removeEventListener("blur", finishStroke);
+    };
+  }, [painting, finishStroke]);
 
   useImperativeHandle(
     ref,
@@ -642,12 +722,53 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
     return true;
   };
 
+  // Blocked-times painting. A stroke starts on pointerdown, paints each cell
+  // it crosses once (pointer capture keeps the events coming while the
+  // pointer leaves the grid, so the cell under it is hit-tested), and ends
+  // on pointerup, cancel, lost capture, or the window losing focus. Enter
+  // and Space paint the focused cell. Painting never picks a window.
+  const paintIndex = (index) => {
+    if (!painting || paintReadOnly || !positionByIndex.has(index)) return;
+    blockedEditing.onPaint(index);
+  };
+
+  const handlePointerDown = (domEvent) => {
+    if (paintReadOnly || domEvent.button > 0) return;
+    const index = cellIndexFromEvent(domEvent);
+    if (index === null) return;
+    domEvent.preventDefault();
+    strokeRef.current = {
+      active: true,
+      pointerId: domEvent.pointerId,
+      visited: new Set([index]),
+    };
+    domEvent.currentTarget.setPointerCapture?.(domEvent.pointerId);
+    // Tab returns to the last painted cell.
+    setActiveCellIndex(index);
+    paintIndex(index);
+  };
+
+  const handlePointerMove = (domEvent) => {
+    const stroke = strokeRef.current;
+    if (!stroke.active || stroke.pointerId !== domEvent.pointerId) return;
+    domEvent.preventDefault();
+    const hit = document
+      .elementFromPoint?.(domEvent.clientX, domEvent.clientY)
+      ?.closest?.("[data-cell-idx]");
+    if (!hit || !scrollRef.current?.contains(hit)) return;
+    const index = Number(hit.dataset.cellIdx);
+    if (stroke.visited.has(index)) return;
+    stroke.visited.add(index);
+    paintIndex(index);
+  };
+
   const handleKeyDown = (domEvent) => {
     const index = cellIndexFromEvent(domEvent);
     if (index === null) return;
     if (domEvent.key === "Enter" || domEvent.key === " ") {
       domEvent.preventDefault();
-      selectCell(index);
+      if (painting) paintIndex(index);
+      else selectCell(index);
       return;
     }
     if (domEvent.key === "PageDown" || domEvent.key === "PageUp") {
@@ -661,6 +782,8 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
   };
 
   const handleClick = (domEvent) => {
+    // The stroke already painted on pointerdown; a click must never pick.
+    if (painting) return;
     const index = cellIndexFromEvent(domEvent);
     if (index !== null) selectCell(index);
   };
@@ -705,9 +828,10 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
 
   return (
     <div
-      className={`meeting-calendar${overnight ? " meeting-calendar--overnight" : ""}${finalized ? " meeting-calendar--finalized" : ""}`}
+      className={`meeting-calendar${overnight ? " meeting-calendar--overnight" : ""}${finalized ? " meeting-calendar--finalized" : ""}${painting ? " meeting-calendar--painting" : ""}`}
       data-channel={channel}
       data-metric={metric}
+      data-mode={painting ? "blocked-editing" : undefined}
       style={{ "--rv-cal-columns": columns.length }}
     >
       <div className="meeting-calendar__toolbar">
@@ -729,19 +853,27 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
             ))}
           </div>
         )}
-        <div role="group" aria-label="Shading" className="btn-group">
-          {METRICS.map(({ key, label }) => (
-            <button
-              key={key}
-              type="button"
-              className={`btn ${metric === key ? "btn-primary" : "btn-outline-secondary"}`}
-              aria-pressed={metric === key}
-              onClick={() => setMetric(key)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        {painting ? (
+          <span className="meeting-calendar__mode">
+            {paintReadOnly
+              ? "Blocked times (read-only)"
+              : "Marking blocked times"}
+          </span>
+        ) : (
+          <div role="group" aria-label="Shading" className="btn-group">
+            {METRICS.map(({ key, label }) => (
+              <button
+                key={key}
+                type="button"
+                className={`btn ${metric === key ? "btn-primary" : "btn-outline-secondary"}`}
+                aria-pressed={metric === key}
+                onClick={() => setMetric(key)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
         <div
           role="group"
           aria-label="Calendar range"
@@ -786,12 +918,28 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
         </div>
       </div>
 
+      {painting && (
+        <p id={paintHelpId} className="visually-hidden">
+          {paintReadOnly
+            ? "Blocked times are read-only for this event: the marks show what is blocked, and painting is off until the event is reactivated."
+            : "Press Enter or Space to mark the focused time with the selected brush. Drag with a pointer to paint several times."}
+          {kind === "weekday"
+            ? " A mark applies to that weekday every week."
+            : ""}
+        </p>
+      )}
+
       <div className="meeting-calendar__scroll" ref={scrollRef}>
         <div className="meeting-calendar__canvas">
           <div
             className="meeting-calendar__grid"
             role="grid"
-            aria-label={gridLabel}
+            aria-label={
+              painting ? `${gridLabel}, marking blocked times` : gridLabel
+            }
+            aria-multiselectable={painting ? "true" : undefined}
+            aria-readonly={paintReadOnly ? "true" : undefined}
+            aria-describedby={painting ? paintHelpId : undefined}
             aria-colcount={columns.length + 1}
             aria-rowcount={maxRows + 1}
             onKeyDown={handleKeyDown}
@@ -799,6 +947,11 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
             onFocus={handleFocus}
             onPointerOver={handlePointerOver}
             onPointerLeave={handlePointerLeave}
+            onPointerDown={painting ? handlePointerDown : undefined}
+            onPointerMove={painting ? handlePointerMove : undefined}
+            onPointerUp={painting ? finishStroke : undefined}
+            onPointerCancel={painting ? finishStroke : undefined}
+            onLostPointerCapture={painting ? finishStroke : undefined}
           >
             <div
               className="meeting-calendar__header"
@@ -870,6 +1023,12 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
                           columnIndex={columnIndex}
                           tabIndex={slot.index === rovingIndex ? 0 : -1}
                           selected={selectedIndices.has(slot.index)}
+                          mark={
+                            painting
+                              ? Number(blockedEditing.marks[slot.index]) > 0
+                              : undefined
+                          }
+                          readOnly={paintReadOnly}
                         />
                       );
                     })}
@@ -937,58 +1096,82 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
       </div>
 
       <ul className="meeting-calendar__legend" aria-label="Calendar legend">
-        <li className="meeting-calendar__legend-item">
-          <span
-            className="meeting-calendar__legend-gradient"
-            aria-hidden="true"
-          />
-          <span>0% → 100% of responses free ({metric})</span>
-        </li>
-        {showRankedWindows && (
-          <li className="meeting-calendar__legend-item">
-            <span
-              className="meeting-calendar__legend-swatch meeting-calendar__legend-swatch--rank"
-              aria-hidden="true"
-            />
-            <span>Ranked window</span>
-          </li>
-        )}
-        <li className="meeting-calendar__legend-item">
-          <span
-            className="meeting-calendar__legend-swatch meeting-calendar__legend-swatch--selected"
-            aria-hidden="true"
-          />
-          <span>Selected window</span>
-        </li>
-        {event?.finalMeeting && (
-          <li className="meeting-calendar__legend-item">
-            <span
-              className="meeting-calendar__legend-swatch meeting-calendar__legend-swatch--confirmed"
-              aria-hidden="true"
-            />
-            <span>Confirmed meeting</span>
-          </li>
+        {painting ? (
+          <>
+            <li className="meeting-calendar__legend-item">
+              <AvailabilitySwatch level="blocked-paint" />
+              <span>Blocked</span>
+            </li>
+            <li className="meeting-calendar__legend-item">
+              <AvailabilitySwatch level="open" />
+              <span>Open</span>
+            </li>
+          </>
+        ) : (
+          <>
+            <li className="meeting-calendar__legend-item">
+              <span
+                className="meeting-calendar__legend-gradient"
+                aria-hidden="true"
+              />
+              <span>0% → 100% of responses free ({metric})</span>
+            </li>
+            {showRankedWindows && (
+              <li className="meeting-calendar__legend-item">
+                <span
+                  className="meeting-calendar__legend-swatch meeting-calendar__legend-swatch--rank"
+                  aria-hidden="true"
+                />
+                <span>Ranked window</span>
+              </li>
+            )}
+            <li className="meeting-calendar__legend-item">
+              <span
+                className="meeting-calendar__legend-swatch meeting-calendar__legend-swatch--selected"
+                aria-hidden="true"
+              />
+              <span>Selected window</span>
+            </li>
+            {event?.finalMeeting && (
+              <li className="meeting-calendar__legend-item">
+                <span
+                  className="meeting-calendar__legend-swatch meeting-calendar__legend-swatch--confirmed"
+                  aria-hidden="true"
+                />
+                <span>Confirmed meeting</span>
+              </li>
+            )}
+          </>
         )}
       </ul>
 
-      {k < 1 && (
+      {painting && kind === "weekday" && (
+        <p className="meeting-calendar__note">
+          Blocked times repeat every week.
+        </p>
+      )}
+      {!painting && k < 1 && (
         <p className="meeting-calendar__note">
           The meeting duration does not divide into the slot length, so no
           window can be picked. Edit the event to fix the duration.
         </p>
       )}
-      {k >= 1 && neutral && (
+      {!painting && k >= 1 && neutral && (
         <p className="meeting-calendar__note">
           Availability shading appears once the first results snapshot is ready.
           You can already pick any window.
         </p>
       )}
-      {k >= 1 && !neutral && !firstStartable && columns.length > 0 && (
-        <p className="meeting-calendar__note">
-          No window can start in this range. Move to another{" "}
-          {kind === "weekday" ? "week" : "page"} or edit the event schedule.
-        </p>
-      )}
+      {!painting &&
+        k >= 1 &&
+        !neutral &&
+        !firstStartable &&
+        columns.length > 0 && (
+          <p className="meeting-calendar__note">
+            No window can start in this range. Move to another{" "}
+            {kind === "weekday" ? "week" : "page"} or edit the event schedule.
+          </p>
+        )}
     </div>
   );
 });
