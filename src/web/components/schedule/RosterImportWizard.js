@@ -46,8 +46,8 @@ const PHASE_STEP = { source: 1, mapping: 2, preview: 3, complete: 4 };
 const PHASE_DESCRIPTION = {
   source: "Upload a CSV/XLSX file or paste cells from a spreadsheet.",
   mapping: "Choose a worksheet and map its columns.",
-  preview: "Review validation issues before changing the event roster.",
-  complete: "The roster import was committed successfully.",
+  preview: "Review validation issues before changing the event's participants.",
+  complete: "The participant import was committed successfully.",
 };
 
 function normalizedHeader(value) {
@@ -319,7 +319,7 @@ export default function RosterImportWizard({
       });
       setPhase("mapping");
     } catch (requestError) {
-      setError(requestError.message || "Unable to read this roster source.");
+      setError(requestError.message || "Unable to read this import source.");
     } finally {
       setBusy(false);
     }
@@ -383,7 +383,7 @@ export default function RosterImportWizard({
       setPhase("preview");
     } catch (requestError) {
       setError(
-        requestError.message || "Unable to validate the roster mapping.",
+        requestError.message || "Unable to validate the column mapping.",
       );
     } finally {
       setBusy(false);
@@ -473,7 +473,7 @@ export default function RosterImportWizard({
     setError("");
     setStatus("");
     if (mode === "rebuild" && confirmationCode !== event.code) {
-      setError("Enter the event code exactly to confirm a roster rebuild.");
+      setError("Enter the event code exactly to confirm a rebuild.");
       return;
     }
     if (!idempotencyKey.current) idempotencyKey.current = crypto.randomUUID();
@@ -505,8 +505,8 @@ export default function RosterImportWizard({
       setError(
         requestError.code === "event_not_active" ||
           requestError.event?.status === "closed"
-          ? "This event is closed. Reactivate it before committing this roster."
-          : requestError.message || "Unable to commit this roster.",
+          ? "This event is closed. Reactivate it before committing this import."
+          : requestError.message || "Unable to commit this import.",
       );
     } finally {
       setBusy(false);
@@ -542,7 +542,7 @@ export default function RosterImportWizard({
       className="roster-import"
       headingLevel={3}
       titleId="roster-import-heading"
-      title="Import roster"
+      title="Import participants"
       description={PHASE_DESCRIPTION[phase]}
       actions={
         onClose ? (
@@ -565,7 +565,7 @@ export default function RosterImportWizard({
           <ul
             className="nav nav-pills roster-import__source-switcher"
             role="tablist"
-            aria-label="Roster source"
+            aria-label="Import source"
           >
             {SOURCE_TABS.map(({ key, label, Icon }) => (
               <li className="nav-item" role="presentation" key={key}>
@@ -614,7 +614,7 @@ export default function RosterImportWizard({
               <FormField label="Rows copied from Google Sheets or Excel">
                 <textarea
                   className="form-control font-monospace"
-                  aria-label="Pasted roster rows"
+                  aria-label="Pasted participant rows"
                   rows={9}
                   value={pastedText}
                   onChange={(event) => setPastedText(event.target.value)}
@@ -1055,9 +1055,9 @@ export default function RosterImportWizard({
             <p className="roster-import__hint form-text mt-0 mb-3">
               Existing participants are updated without another email. New
               people are emailed only if you tick the box; you can also send
-              invitations later from the roster. A blank email, or one of your
-              own addresses, adds someone with no email of their own: they are
-              never emailed, and you enter their schedule.
+              invitations later from the participant list. A blank email, or one
+              of your own addresses, adds someone with no email of their own:
+              they are never emailed, and you enter their schedule.
             </p>
             <div className="form-check">
               <input
@@ -1070,7 +1070,7 @@ export default function RosterImportWizard({
                 onChange={() => setMode("merge")}
               />
               <label className="form-check-label" htmlFor={mergeModeId}>
-                Merge with the current roster and preserve schedules
+                Merge with the current participants and preserve schedules
               </label>
             </div>
             <div className="form-check">
@@ -1084,8 +1084,8 @@ export default function RosterImportWizard({
                 onChange={() => setMode("rebuild")}
               />
               <label className="form-check-label" htmlFor={rebuildModeId}>
-                Rebuild the roster and clear schedules, invitations, and pending
-                delivery
+                Rebuild the participant list and clear schedules, invitations,
+                and pending delivery
               </label>
             </div>
             {mode === "rebuild" && (
@@ -1155,11 +1155,11 @@ export default function RosterImportWizard({
                 ? "Importing…"
                 : mode === "rebuild"
                   ? sendInvitations
-                    ? "Rebuild roster and send invitations"
-                    : "Rebuild roster"
+                    ? "Rebuild participant list and send invitations"
+                    : "Rebuild participant list"
                   : sendInvitations
-                    ? "Merge roster and invite new people"
-                    : "Merge roster"}
+                    ? "Merge participants and invite new people"
+                    : "Merge participants"}
             </AppButton>
           </div>
         </div>
@@ -1176,7 +1176,7 @@ export default function RosterImportWizard({
           </Alert>
           <div className="d-flex flex-wrap gap-2">
             <AppButton icon={<ArrowRightIcon />} onClick={onClose}>
-              Return to roster
+              Return to participants
             </AppButton>
           </div>
         </div>

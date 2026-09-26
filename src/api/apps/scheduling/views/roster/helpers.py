@@ -30,7 +30,7 @@ def event_for_organizer(request, *, lock=False):
         return None, Response({"error": "Event not found"}, status=404)
     if event.organizer_id != request.user.pk:
         return None, Response(
-            {"error": "Only the organizer can manage the roster"},
+            {"error": "Only the organizer can manage participants"},
             status=403,
         )
     return event, None

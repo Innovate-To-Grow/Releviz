@@ -3,7 +3,7 @@
 How organizers and participants use Releviz, from creating an event to finalizing a meeting.
 
 - [Create an event](#create-an-event)
-- [Build the roster](#build-the-roster)
+- [Participants](#participants)
 - [Fill in availability](#fill-in-availability)
 - [Organizer dashboard](#organizer-dashboard)
 
@@ -38,27 +38,28 @@ count as 0 in the results, never appear in ranked windows, and cannot be finaliz
 change blocked times at any time from the Overview panel without resetting responses; after
 finalization, reactivate the event first.
 
-## Build the roster
+## Participants
 
 Adding people and sending invitations are separate steps. Only three actions send invitations:
 **Add and send invitation**, an import committed with **Send invitations to newly added people**
 ticked, and **Send invitation**. Closed, finalized, and archived events must be reactivated before
-their roster can change.
+their participants can change.
 
 ### Add people
 
 **Add person** opens a form with two actions:
 
-- **Add only** puts the person on the roster without sending email (pressing Enter does the same).
+- **Add only** puts the person on the participant list without sending email (pressing Enter does
+  the same).
 - **Add and send invitation** also emails their secure link right away.
 
 If the email already belongs to a Releviz account, that account is added. Until the person responds
 themselves, you can still enter their schedule with **Edit schedule**.
 
-**Add myself** puts you, the organizer, on your own roster under your account's name and address,
-and opens your schedule. Your row reads **You (organizer)**, and **Edit my schedule** enters or
-changes your answers, which count in the results like everyone else's. You are never sent an
-invitation, reminder, or final notification for your own row.
+**Add myself** puts you, the organizer, on your own participant list under your account's name and
+address, and opens your schedule. Your row reads **You (organizer)**, and **Edit my schedule**
+enters or changes your answers, which count in the results like everyone else's. You are never sent
+an invitation, reminder, or final notification for your own row.
 
 ### People without an email
 
@@ -93,9 +94,9 @@ memberships, and invitation (a link already sent stops working). It waits if an 
 being handed to the provider at that moment. To keep someone's answers but leave them out of the
 results, untick **Included** instead.
 
-### Import a roster
+### Import participants
 
-**Import roster** accepts `.xlsx`, `.csv`, or pasted CSV/TSV.
+**Import participants** accepts `.xlsx`, `.csv`, or pasted CSV/TSV.
 
 1. Map the required `name` and `email` columns and the optional `group`, `weight`, `included`, and
    `phone` columns. Columns are matched by header, singular or plural (`Group`, `Groups`, `Team`,
@@ -105,12 +106,12 @@ results, untick **Included** instead.
 3. Commit as **Merge** or **Rebuild**:
    - **Merge** adds or updates people and keeps existing schedules and delivery history. A row's
      groups are added to the person's existing groups; an import never removes anyone from a group.
-   - **Rebuild** destructively replaces the roster, schedules, invitations, temporary sessions, and
-     pending deliveries. You must type the event code to confirm.
+   - **Rebuild** destructively replaces the participant list, schedules, invitations, temporary
+     sessions, and pending deliveries. You must type the event code to confirm.
 
 Tick **Send invitations to newly added people** before committing to email everyone the import adds
 (on a rebuild, everyone). Leave it unticked to add them as **Not sent** and invite them later.
-People already on the roster are never emailed again by an import.
+People already on the participant list are never emailed again by an import.
 
 Column rules:
 
@@ -121,8 +122,8 @@ Column rules:
   above), matched by name so re-importing the sheet updates them instead of adding duplicates. The
   preview marks these rows. A blank email needs a verified address on your account to file it under.
 - **phone** (also `phone number`, `mobile`, `cell`, or `telephone`): digits, spaces, and
-  `+ - ( ) .`, with at least 7 digits and at most 32 characters. Phones are shown and editable on
-  the roster; Releviz never uses them to send anything.
+  `+ - ( ) .`, with at least 7 digits and at most 32 characters. Phones are shown and editable in
+  the participant table; Releviz never uses them to send anything.
 
 Two rows for the same person (the same email, or the same name without an email) are combined when
 they are identical or differ only in their groups; the combined row gets all of those groups.
@@ -130,9 +131,9 @@ Otherwise they are flagged as a conflicting duplicate.
 
 ### Send invitations
 
-Check people in the roster table and click **Send invitation** (above or below the table). It skips
-anyone already sent or still queued, unless **Resend to people already invited** is ticked; a resend
-keeps any custom message.
+Check people in the participant table and click **Send invitation** (above or below the table). It
+skips anyone already sent or still queued, unless **Resend to people already invited** is ticked; a
+resend keeps any custom message.
 
 The **Invitation** badge on each row, which **Filter by invitation** also uses, shows:
 
@@ -182,11 +183,11 @@ Participants only ever see their own schedule; group availability is visible to 
 ## Organizer dashboard
 
 Open the organizer view from the account that created the event. It is one page with three
-sections, **Overview**, **Results**, and **Roster**; finalizing is a step inside Results.
+sections, **Overview**, **Results**, and **Participants**; finalizing is a step inside Results.
 
-### Roster and schedules
+### Participants and schedules
 
-- Search and filter the roster (50 rows per page by default, up to 100).
+- Search and filter the participant list (50 rows per page by default, up to 100).
 - Enter, save, or submit anyone's schedule with **Edit schedule** while the event is active. For
   organizer-managed and temporary people this is always possible. For someone with a full account,
   it is possible until they respond themselves (join, save or submit their own response, or upgrade
@@ -195,8 +196,8 @@ sections, **Overview**, **Results**, and **Roster**; finalizing is a step inside
 
 ### Groups
 
-Create groups from the Groups panel, even before anyone is on the roster. The roster table has an
-**All** column and one checkbox column per group:
+Create groups from the Groups panel, even before anyone is on the participant list. The participant
+table has an **All** column and one checkbox column per group:
 
 - Tick a person's box in a group column to add them to that group; one person can be in several
   groups.
@@ -205,7 +206,7 @@ Create groups from the Groups panel, even before anyone is on the roster. The ro
   the screen counts unsaved changes, and leaving the page with unsaved changes asks first.
 
 The Groups panel can also add or remove everyone checked in the list at once. **Delete group** asks
-for confirmation; the group's people stay on the roster.
+for confirmation; the group's people stay on the participant list.
 
 ### Weights and inclusion
 

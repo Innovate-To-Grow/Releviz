@@ -220,10 +220,10 @@ describe("RosterPersonDialog", () => {
   test("shows the save error and locks the form while saving", () => {
     const { onClose } = renderDialog(person(), {
       busy: true,
-      error: "ada@example.com is already on this roster.",
+      error: "ada@example.com is already a participant.",
     });
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "ada@example.com is already on this roster.",
+      "ada@example.com is already a participant.",
     );
     expect(nameInput()).toBeDisabled();
     expect(emailInput()).toBeDisabled();

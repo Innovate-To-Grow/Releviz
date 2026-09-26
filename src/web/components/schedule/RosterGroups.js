@@ -238,11 +238,11 @@ export default function RosterGroups({
           </h4>
           <p className="roster-groups__description">
             People can belong to several groups: tick a group&apos;s column in
-            the roster below, or All for every group, then save the changes. A
-            group&apos;s weight and Included box apply to everyone currently in
-            that group, including people who are also in other groups. Use Only
-            this group to see one group&apos;s best meeting times in the
-            results.
+            the participant table below, or All for every group, then save the
+            changes. A group&apos;s weight and Included box apply to everyone
+            currently in that group, including people who are also in other
+            groups. Use Only this group to see one group&apos;s best meeting
+            times in the results.
           </p>
         </div>
         {!readOnly && (
@@ -328,11 +328,11 @@ export default function RosterGroups({
           <div
             className="table-responsive"
             role="region"
-            aria-label="Roster groups"
+            aria-label="Participant groups"
             tabIndex={0}
           >
             <table className="table align-middle roster-groups__table">
-              <caption className="visually-hidden">Roster groups</caption>
+              <caption className="visually-hidden">Participant groups</caption>
               <thead>
                 <tr>
                   <th scope="col">Group</th>
@@ -600,7 +600,7 @@ export default function RosterGroups({
         <p className="roster-groups__empty small text-secondary mb-0">
           {readOnly
             ? "No groups yet."
-            : "No groups yet. Create a group, then tick its column for each person once they are on the roster."}
+            : "No groups yet. Create a group, then tick its column for each person once they are on the participant list."}
         </p>
       )}
 
@@ -614,7 +614,7 @@ export default function RosterGroups({
           onConfirm={() => void confirmDelete()}
           onClose={() => setPendingDelete(null)}
         >
-          <p className="mb-0">People stay on the roster.</p>
+          <p className="mb-0">People stay on the participant list.</p>
         </ConfirmDialog>
       )}
     </section>
