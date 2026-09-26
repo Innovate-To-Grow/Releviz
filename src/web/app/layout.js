@@ -1,6 +1,8 @@
 import "./theme.scss";
 import "./globals.css";
 import "./scheduling.css";
+import "./participants.css";
+import "./import-sheet.css";
 import { AuthProvider } from "@/components/auth/AuthContext";
 import SiteFooter from "@/components/ui/SiteFooter";
 
