@@ -500,6 +500,29 @@ test.describe("Organizer meeting-time calendar", () => {
       "true",
     );
 
+    // Other times, inside Finalize, picks any open time without the
+    // calendar: the pick lands in Finalize and on the calendar, and focus
+    // stays on the button.
+    const otherTimes = page.locator("details#organizer-other-times");
+    await otherTimes.locator("> summary").click();
+    await expect(otherTimes).toHaveAttribute("open", "");
+    const otherDay = otherTimes.getByLabel("Day");
+    const otherStart = otherTimes.getByLabel("Start");
+    await otherDay.selectOption({ index: 1 });
+    await otherStart.selectOption({ index: 1 });
+    const otherLabel = await otherStart.evaluate(
+      (select) => select.selectedOptions[0].textContent,
+    );
+    const otherTimesRange = otherLabel.split(" · ")[0];
+    await expectAccessible(page, "organizer other times");
+    const selectOther = otherTimes.getByRole("button", {
+      name: "Select this time",
+    });
+    await selectOther.click();
+    await expect(candidate).toContainText(otherTimesRange);
+    await expect(selectOther).toBeFocused();
+    await expect(grid.locator('[aria-selected="true"]')).toHaveCount(2);
+
     // Finalize a custom window and confirm the API stored the cell's instant.
     await gotoWeekWith(page, grid, customWednesday);
     await pickCell(page, cellAt(grid, 10, 2), "Custom window");

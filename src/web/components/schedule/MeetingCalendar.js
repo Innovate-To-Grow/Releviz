@@ -885,39 +885,45 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
           aria-label="Calendar range"
           className="meeting-calendar__range"
         >
-          <button
-            type="button"
-            className="btn btn-outline-secondary app-btn"
-            aria-label={previousLabel}
-            onClick={() => navigate(-1)}
-            disabled={kind === "date" && (effectiveView.page || 0) <= 0}
-          >
-            <span className="app-btn-icon" aria-hidden="true">
-              <ChevronLeftIcon />
+          {/* One boxed control: previous, the range shown, next. */}
+          <div className="meeting-calendar__stepper">
+            <button
+              type="button"
+              className="btn btn-outline-secondary app-btn"
+              aria-label={previousLabel}
+              onClick={() => navigate(-1)}
+              disabled={kind === "date" && (effectiveView.page || 0) <= 0}
+            >
+              <span className="app-btn-icon" aria-hidden="true">
+                <ChevronLeftIcon />
+              </span>
+            </button>
+            <span className="meeting-calendar__range-label" aria-live="polite">
+              {rangeLabel}
             </span>
-          </button>
-          <span className="meeting-calendar__range-label" aria-live="polite">
-            {rangeLabel}
-          </span>
-          <button
-            type="button"
-            className="btn btn-outline-secondary app-btn"
-            aria-label={nextLabel}
-            onClick={() => navigate(1)}
-            disabled={
-              kind === "date" && (effectiveView.page || 0) >= totalPages - 1
-            }
-          >
-            <span className="app-btn-icon" aria-hidden="true">
-              <ChevronRightIcon />
-            </span>
-          </button>
+            <button
+              type="button"
+              className="btn btn-outline-secondary app-btn"
+              aria-label={nextLabel}
+              onClick={() => navigate(1)}
+              disabled={
+                kind === "date" && (effectiveView.page || 0) >= totalPages - 1
+              }
+            >
+              <span className="app-btn-icon" aria-hidden="true">
+                <ChevronRightIcon />
+              </span>
+            </button>
+          </div>
           {kind === "weekday" && (
             <button
               type="button"
-              className="btn btn-link"
+              className="btn btn-outline-secondary app-btn meeting-calendar__today"
               onClick={goToThisWeek}
             >
+              <span className="app-btn-icon" aria-hidden="true">
+                <CalendarIcon />
+              </span>
               This week
             </button>
           )}

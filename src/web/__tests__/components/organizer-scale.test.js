@@ -2514,9 +2514,9 @@ describe("scaled organizer workspace", () => {
       expect(finalizeSection()).toHaveTextContent("No time selected yet");
       expect(finalizeSection()).toHaveAttribute("open");
       // Nothing is recommended in this snapshot, so the prompt points at the
-      // calendar only.
+      // calendar and Other times only.
       expect(finalizeSection()).toHaveTextContent(
-        "Pick a time on the calendar.",
+        "Pick a time on the calendar, or choose one under Other times above.",
       );
       expect(screen.queryByText("Custom window")).not.toBeInTheDocument();
       expect(screen.queryByText(/Recommended #/)).not.toBeInTheDocument();
@@ -2625,6 +2625,34 @@ describe("scaled organizer workspace", () => {
     expect(document.getElementById("organizer-finalize")).toHaveTextContent(
       "Legacy result",
     );
+  });
+
+  test("a time chosen under Other times is selected without moving focus or the page", async () => {
+    mockCalendarWindowFlow();
+    const nowSpy = jest
+      .spyOn(Date, "now")
+      .mockReturnValue(Date.parse("2026-08-01T00:00:00Z"));
+    try {
+      renderView(jest.fn(), calendarEvent);
+      await screen.findByText(/Results are current/);
+      const finalize = document.getElementById("organizer-finalize");
+      await userEvent.click(finalize.querySelector(":scope > summary"));
+      const other = document.getElementById("organizer-other-times");
+      await userEvent.click(other.querySelector(":scope > summary"));
+      const select = within(other).getByRole("button", {
+        name: "Select this time",
+      });
+      await userEvent.click(select);
+
+      expect(finalize).toHaveTextContent("Custom window");
+      expect(select).toHaveFocus();
+      expect(other).toHaveAttribute("open");
+      expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled();
+      // The calendar shows the pick too.
+      expect(calendarCell(0)).toHaveAttribute("aria-selected", "true");
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   test("a calendar pick brings Finalize into view, honoring reduced motion", async () => {

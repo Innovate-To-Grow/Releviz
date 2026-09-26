@@ -950,6 +950,25 @@
   padding: 0.75rem 0.875rem 0.875rem;
 }
 
+/* Other times: format, day and start side by side when they fit. */
+.other-times__fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.75rem;
+}
+
+.other-times__field {
+  margin-bottom: 0;
+  min-width: 0;
+}
+
+.other-times__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+}
+
 /* Blocked-times tools: a bar right under the calendar that stays pinned to
    the bottom of the screen while the calendar above it is taller than the
    viewport (the same treatment as the roster's unsaved group changes). */
@@ -1086,16 +1105,52 @@
 .meeting-calendar__range {
   display: inline-flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 0.375rem;
+  align-items: stretch;
+  gap: 0.5rem;
   margin-left: auto;
 }
 
+/* Previous, the range shown, next: one boxed control, joined like the
+   shading toggle, with the range in a field between the arrows. */
+.meeting-calendar__stepper {
+  display: inline-flex;
+  align-items: stretch;
+  min-width: 0;
+}
+
+.meeting-calendar__stepper > .btn:first-child {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.meeting-calendar__stepper > .btn:last-child {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
 .meeting-calendar__range-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 11rem;
+  min-height: 2.5rem;
+  padding: 0 0.875rem;
+  border-block: var(--bs-border-width) solid var(--bs-secondary-border-subtle);
+  background: var(--rv-surface-raised);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-  min-width: 9rem;
   text-align: center;
+}
+
+@media (max-width: 575.98px) {
+  .meeting-calendar__range {
+    margin-left: 0;
+  }
+
+  .meeting-calendar__range-label {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
 }
 
 .meeting-calendar__scroll {
@@ -1474,14 +1529,18 @@
   background: var(--bs-success);
 }
 
+/* The key sits in a box of its own under the calendar, framed like it. */
 .meeting-calendar__legend {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem 1.25rem;
   margin: 0;
-  padding: 0;
+  padding: 0.5rem 0.875rem;
   list-style: none;
+  border: var(--bs-border-width) solid var(--bs-border-color);
+  border-radius: var(--bs-border-radius-lg);
+  background: var(--rv-surface-raised);
   font-size: 0.8125rem;
   color: var(--bs-secondary-color);
 }

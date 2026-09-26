@@ -2399,7 +2399,7 @@ test.describe("Releviz account and scheduling flow", () => {
     const finalizeStep = page.locator("#organizer-finalize");
     await expect(finalizeStep).toContainText("No time selected yet");
     await expect(finalizeStep).toContainText(
-      "Pick a time on the calendar or choose one of the recommended times above.",
+      "Pick a time on the calendar, or choose a recommended or other time above.",
     );
     await expect(finalizeStep).not.toContainText("Recommended #");
     await expect(finalizeStep).not.toContainText("The meeting is finalized");

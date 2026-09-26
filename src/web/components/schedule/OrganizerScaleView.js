@@ -153,10 +153,15 @@ export default function OrganizerScaleView() {
   }, [event.code]);
 
   // A calendar pick hands the organizer straight to the confirmation step,
-  // which opens on the pick. A recommended time is chosen from inside that
-  // step already, so focus stays on its chip for comparing the others.
+  // which opens on the pick. A recommended or other time is chosen from
+  // inside that step already, so focus stays where the organizer chose it.
   useEffect(() => {
-    if (!selection || selection.source === "recommendation") return;
+    if (
+      !selection ||
+      selection.source === "recommendation" ||
+      selection.source === "picker"
+    )
+      return;
     focusFinalizeStep(finalizeHeadingRef);
   }, [selection]);
 

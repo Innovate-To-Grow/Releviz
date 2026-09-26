@@ -176,7 +176,10 @@ while Blocked times is open the calendar paints blocked times instead of picking
 picking a window on the calendar opens Finalize. Inside Finalize, **Recommended times** is a
 collapsed list of the recommended meeting times as compact chips; the calendar outlines them only
 while the list is open (pointing at a chip highlights its time), and choosing one selects it in
-Finalize without leaving the list.
+Finalize without leaving the list. **Other times**, collapsed under it, picks any open time,
+recommended or not, from a day and a start (each start shows its lowest slot's share, and its rank
+when it is also recommended; weekly events offer the next four weeks); the pick shows on the
+calendar too.
 The organizer can:
 
 - search/filter a server-paginated roster (50 rows by default, 100 maximum);

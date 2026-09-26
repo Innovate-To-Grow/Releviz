@@ -12,10 +12,12 @@ import {
   formatRangeLabel,
   formatWeekLabel,
   formatWindowLabel,
+  formatWindowTimes,
   groupKind,
   localDateOf,
   normalizeSlotGroups,
   rankedRecommendations,
+  recommendationForWindow,
   pageCount,
   recommendationBlocks,
   selectionBlock,
@@ -24,6 +26,7 @@ import {
   selectionKey,
   selectionMatchesRecommendation,
   slotByIndex,
+  startableDays,
   weekStartOf,
   weekdayOf,
   windowAt,
@@ -1593,6 +1596,115 @@ describe("selectionFromWindow", () => {
 });
 
 // --- blocks -----------------------------------------------------------------
+
+describe("startableDays", () => {
+  const days = (event, options) =>
+    startableDays({
+      groups: normalizeSlotGroups(event),
+      k: 2,
+      resolver: utcResolver,
+      ...options,
+    }).map((day) => [day.column.key, day.rows]);
+
+  test("lists each enabled weekday over the coming weeks, from today on", () => {
+    // Wednesday 09:45: Monday has passed, and on Wednesday only 10:00 can
+    // still start an hour (10:30 would run past the column's end).
+    expect(
+      days(weeklyEvent, {
+        now: Date.parse("2026-09-16T09:45:00Z"),
+        today: "2026-09-16",
+        weeks: 2,
+      }),
+    ).toEqual([
+      ["weekday:3:2026-09-16", [2]],
+      ["weekday:6:2026-09-19", [0, 1, 2]],
+      ["weekday:1:2026-09-21", [0, 1, 2]],
+      ["weekday:3:2026-09-23", [0, 1, 2]],
+      ["weekday:6:2026-09-26", [0, 1, 2]],
+    ]);
+    // Four weeks by default; nothing without a local today.
+    expect(
+      days(weeklyEvent, {
+        now: Date.parse("2026-09-13T00:00:00Z"),
+        today: "2026-09-13",
+      }),
+    ).toHaveLength(12);
+    expect(days(weeklyEvent, { now: 0, today: null })).toEqual([]);
+  });
+
+  test("skips blocked windows and covers every page of dates", () => {
+    const blocked = blockedWeeklyEvent({ "weekday:1": [1] });
+    expect(
+      days(blocked, {
+        now: Date.parse("2026-09-13T00:00:00Z"),
+        today: "2026-09-13",
+        weeks: 1,
+      })[0],
+    ).toEqual(["weekday:1:2026-09-14", [2]]);
+
+    const allDates = days(nineDateEvent, {
+      now: Date.parse("2026-08-01T00:00:00Z"),
+    });
+    expect(allDates).toHaveLength(9);
+    expect(allDates[8]).toEqual(["date:2026-08-28", [0, 1, 2]]);
+    expect(
+      days(nineDateEvent, { now: Date.parse("2026-08-28T09:15:00Z") }),
+    ).toEqual([["date:2026-08-28", [1, 2]]]);
+    // A duration that does not fit the slots starts nowhere.
+    expect(
+      startableDays({
+        groups: normalizeSlotGroups(nineDateEvent),
+        k: 0,
+        now: 0,
+        resolver: utcResolver,
+      }),
+    ).toEqual([]);
+  });
+});
+
+describe("formatWindowTimes and recommendationForWindow", () => {
+  test("names a window by its local times, day offsets included", () => {
+    expect(
+      formatWindowTimes([
+        slot(9, "23:30", "00:00", 0, 1),
+        slot(10, "00:00", "00:30", 1, 1),
+      ]),
+    ).toBe("23:30–00:30 +1d");
+    expect(formatWindowTimes([slot(0, "09:00", "09:30")])).toBe("09:00–09:30");
+    expect(formatWindowTimes([])).toBe("");
+  });
+
+  test("finds the recommendation that is exactly the window", () => {
+    const recommended = {
+      rank: 1,
+      channel: "inperson",
+      slotIndices: [1, 2],
+      suggestedStartsAt: "2026-08-20T09:30:00Z",
+    };
+    const window = {
+      slotIndices: [1, 2],
+      startsAt: "2026-08-20T09:30:00.000Z",
+    };
+    expect(recommendationForWindow([recommended], "inperson", window)).toBe(
+      recommended,
+    );
+    expect(
+      recommendationForWindow([recommended], "virtual", window),
+    ).toBeNull();
+    expect(
+      recommendationForWindow([recommended], "inperson", {
+        ...window,
+        startsAt: "2026-08-27T09:30:00.000Z",
+      }),
+    ).toBeNull();
+    expect(
+      recommendationForWindow([recommended], "inperson", {
+        slotIndices: null,
+      }),
+    ).toBeNull();
+    expect(recommendationForWindow(null, "inperson", window)).toBeNull();
+  });
+});
 
 describe("rankedRecommendations", () => {
   const listed = (weightedAvailability, rank) => ({
