@@ -76,7 +76,9 @@ def _bulk_selector(queryset, data):
         if unknown_filters:
             raise RosterImportError(f"Unknown participant filter: {sorted(unknown_filters)[0]}.")
         if not filter_data:
-            raise RosterImportError("filter must contain a participant filter or explicit all=true.")
+            raise RosterImportError(
+                "filter must contain a participant filter or explicit all=true."
+            )
         if "all" in filter_data and filter_data.get("all") is not True:
             raise RosterImportError("filter.all must be true when provided.")
         queryset = apply_roster_filters(queryset, filter_data)
