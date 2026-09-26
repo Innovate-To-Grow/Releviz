@@ -508,7 +508,11 @@ test.describe("Organizer meeting-time calendar", () => {
     await expect(otherTimes).toHaveAttribute("open", "");
     const otherDay = otherTimes.getByLabel("Day");
     const otherStart = otherTimes.getByLabel("Start");
-    await otherDay.selectOption({ index: 1 });
+    // The last day offered is weeks ahead of the week on screen, so the
+    // calendar has to move to show the pick.
+    const lastDay = otherDay.locator("option").last();
+    const lastDayValue = await lastDay.getAttribute("value");
+    await otherDay.selectOption(lastDayValue);
     await otherStart.selectOption({ index: 1 });
     const otherLabel = await otherStart.evaluate(
       (select) => select.selectedOptions[0].textContent,
@@ -521,6 +525,11 @@ test.describe("Organizer meeting-time calendar", () => {
     await selectOther.click();
     await expect(candidate).toContainText(otherTimesRange);
     await expect(selectOther).toBeFocused();
+    await expect(
+      grid.getByRole("columnheader", {
+        name: shortDate(lastDayValue.split(":").pop()),
+      }),
+    ).toBeVisible();
     await expect(grid.locator('[aria-selected="true"]')).toHaveCount(2);
 
     // Finalize a custom window and confirm the API stored the cell's instant.

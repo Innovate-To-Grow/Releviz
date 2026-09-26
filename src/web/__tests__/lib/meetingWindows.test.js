@@ -1621,14 +1621,26 @@ describe("startableDays", () => {
       ["weekday:1:2026-09-21", [0, 1, 2]],
       ["weekday:3:2026-09-23", [0, 1, 2]],
       ["weekday:6:2026-09-26", [0, 1, 2]],
+      // Two weeks from Wednesday reach into the Monday after.
+      ["weekday:1:2026-09-28", [0, 1, 2]],
     ]);
-    // Four weeks by default; nothing without a local today.
+    // Four weeks from today by default: on a Saturday that runs to the
+    // Wednesday four weeks on, not to the end of the fourth calendar week.
+    const fromSaturday = days(weeklyEvent, {
+      now: Date.parse("2026-09-19T12:00:00Z"),
+      today: "2026-09-19",
+    });
+    expect(fromSaturday).toHaveLength(12);
+    expect(fromSaturday[0][0]).toBe("weekday:6:2026-09-19");
+    expect(fromSaturday[11][0]).toBe("weekday:3:2026-10-14");
+    // Yesterday's column counts too: Saturday's after-midnight slots are
+    // still ahead early on Sunday.
     expect(
       days(weeklyEvent, {
         now: Date.parse("2026-09-13T00:00:00Z"),
         today: "2026-09-13",
-      }),
-    ).toHaveLength(12);
+      })[0],
+    ).toEqual(["weekday:6:2026-09-12", [2]]);
     expect(days(weeklyEvent, { now: 0, today: null })).toEqual([]);
   });
 
@@ -1639,7 +1651,7 @@ describe("startableDays", () => {
         now: Date.parse("2026-09-13T00:00:00Z"),
         today: "2026-09-13",
         weeks: 1,
-      })[0],
+      }).find(([key]) => key.startsWith("weekday:1:")),
     ).toEqual(["weekday:1:2026-09-14", [2]]);
 
     const allDates = days(nineDateEvent, {

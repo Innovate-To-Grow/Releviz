@@ -49,7 +49,8 @@ import {
   selectionFromWindow,
   selectionKey,
   selectionMatchesRecommendation,
-  startableDays,
+  startableRows,
+  upcomingColumns,
   windowAt,
   windowMetrics,
   windowSlotCount,
@@ -1066,6 +1067,43 @@ function RecommendedTimesSection({
 // Weekly events list their enabled weekdays over this many weeks.
 const OTHER_TIMES_WEEKS = 4;
 
+/**
+ * The days on which a meeting can still start, for Other times and the
+ * Finalize prompt: `{ k, weekly, days }`. Weekly events look ahead
+ * OTHER_TIMES_WEEKS weeks from the event-local today.
+ */
+function useStartableDays(event, now) {
+  const timeZone = event.timezone || "UTC";
+  const groups = useMemo(() => normalizeSlotGroups(event), [event]);
+  const k = windowSlotCount(event);
+  const resolver = useMemo(() => {
+    try {
+      return createLocalDateTimeResolver(timeZone);
+    } catch (error) {
+      return () => {
+        throw error;
+      };
+    }
+  }, [timeZone]);
+  let today;
+  try {
+    today = localDateOf(new Date(now).toISOString(), timeZone);
+  } catch {
+    today = dateFromMs(now);
+  }
+  // The columns change with the day; which rows can start, with the minute.
+  const columns = useMemo(
+    () =>
+      upcomingColumns({ groups, resolver, today, weeks: OTHER_TIMES_WEEKS }),
+    [groups, resolver, today],
+  );
+  const days = useMemo(
+    () => (k < 1 ? [] : startableRows(columns, k, now)),
+    [columns, k, now],
+  );
+  return { k, weekly: groupKind(groups) === "weekday", days };
+}
+
 // One start the Other times picker offers: its local times, the lowest
 // slot's weighted share (an upper bound, as in Finalize), and its rank when
 // the same time is also recommended.
@@ -1079,18 +1117,31 @@ function otherTimeLabel({ column, row, k, channel, results, recommendations }) {
   );
   return [
     formatWindowTimes(column.slots.slice(row, row + k)),
-    share == null ? null : share > 0 ? `up to ${shareOf(share)}%` : "0%",
+    share == null
+      ? null
+      : share > 0
+        ? `up to ${shareOf(share)}% weighted`
+        : "0% weighted",
     recommendation ? `Recommended #${recommendation.rank}` : null,
   ]
     .filter(Boolean)
     .join(" · ");
 }
 
+function dayLabel(column) {
+  return formatDate(column.date, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+}
+
 /**
  * Other times: any open meeting time, recommended or not, chosen from a day
  * and a start inside Finalize (the same windows the calendar lets the
- * organizer pick). Choosing one selects it exactly like a calendar pick and
- * shows it on the calendar, while focus stays here.
+ * organizer pick; `pickable` comes from useStartableDays). Choosing one
+ * selects it exactly like a calendar pick and shows it on the calendar,
+ * while focus stays on the button and a status message confirms it.
  */
 function OtherTimesSection({
   event,
@@ -1098,50 +1149,29 @@ function OtherTimesSection({
   recommendations,
   channel,
   onChannelChange,
-  now,
+  pickable,
   meetingMinutes,
   onPick,
+  onExpired,
 }) {
   const [open, setOpen] = useState(false);
   const [dayKey, setDayKey] = useState(null);
   const [startRow, setStartRow] = useState(null);
+  const [announcement, setAnnouncement] = useState("");
   const timeZone = event.timezone || "UTC";
   const mixed = event.mode === "mixed";
-  const groups = useMemo(() => normalizeSlotGroups(event), [event]);
-  const weekly = groupKind(groups) === "weekday";
-  const k = windowSlotCount(event);
-  const resolver = useMemo(() => {
-    try {
-      return createLocalDateTimeResolver(timeZone);
-    } catch (error) {
-      return () => {
-        throw error;
-      };
-    }
-  }, [timeZone]);
-  // Worked out only while the list is open; closed, it costs nothing.
-  const days = useMemo(() => {
-    if (!open || k < 1) return [];
-    let today;
-    try {
-      today = localDateOf(new Date(now).toISOString(), timeZone);
-    } catch {
-      today = dateFromMs(now);
-    }
-    return startableDays({
-      groups,
-      k,
-      now,
-      resolver,
-      today,
-      weeks: OTHER_TIMES_WEEKS,
-    });
-  }, [open, groups, k, now, resolver, timeZone]);
+  const { k, weekly, days } = pickable;
   const day = days.find((entry) => entry.column.key === dayKey) || days[0];
   const row =
     day && day.rows.includes(startRow) ? startRow : (day?.rows[0] ?? null);
 
   const choose = () => {
+    // The minute may have moved past the start since the list was built.
+    if (Date.parse(windowAt(day.column, row, k).startsAt) < Date.now()) {
+      onExpired();
+      setAnnouncement("That time has just started. Pick another one.");
+      return;
+    }
     const picked = selectionFromWindow({
       column: day.column,
       row,
@@ -1151,7 +1181,6 @@ function OtherTimesSection({
       event,
       recommendations,
     });
-    if (!picked) return;
     onPick(
       { ...picked, source: "picker" },
       {
@@ -1161,10 +1190,15 @@ function OtherTimesSection({
         groupKey: day.column.groupKey,
       },
     );
+    setAnnouncement(
+      `Selected ${dayLabel(day.column)}, ${formatWindowTimes(day.column.slots.slice(row, row + k))}.`,
+    );
   };
 
-  let body;
-  if (k < 1) {
+  let body = null;
+  if (!open) {
+    // Nothing until it opens, so no stale message shows while it opens.
+  } else if (k < 1) {
     body = (
       <p className="text-secondary small mb-0">
         The meeting length does not divide into the slot length, so no time can
@@ -1208,16 +1242,16 @@ function OtherTimesSection({
             >
               {days.map((entry) => (
                 <option key={entry.column.key} value={entry.column.key}>
-                  {formatDate(entry.column.date, {
-                    weekday: "short",
-                    month: "short",
-                    day: "numeric",
-                  })}
+                  {dayLabel(entry.column)}
                 </option>
               ))}
             </select>
           </FormField>
-          <FormField label="Start" className="other-times__field">
+          <FormField
+            label="Start"
+            className="other-times__field"
+            help={`Times are in ${timeZone}. Shares are weighted, from each time's lowest slot; Review attendance gives exact counts.`}
+          >
             <select
               className="form-select"
               value={row}
@@ -1244,10 +1278,6 @@ function OtherTimesSection({
           <AppButton variant="outlined" onClick={choose}>
             Select this time
           </AppButton>
-          <small className="text-secondary">
-            Times are in {timeZone}. Shares are each time&apos;s lowest slot;
-            Review attendance gives exact counts.
-          </small>
         </div>
       </>
     );
@@ -1260,13 +1290,32 @@ function OtherTimesSection({
       headingId="organizer-other-times-heading"
       headingLevel={5}
       title="Other times"
-      hint={`Any open ${meetingMinutes}-minute time, recommended or not`}
+      hint={
+        weekly
+          ? `Any open ${meetingMinutes}-minute time in the next ${OTHER_TIMES_WEEKS} weeks, recommended or not`
+          : `Any open ${meetingMinutes}-minute time, recommended or not`
+      }
       open={open}
       onToggle={setOpen}
     >
       {body}
+      <p className="visually-hidden" role="status">
+        {announcement}
+      </p>
     </TimeTableSection>
   );
+}
+
+// What Finalize's empty state asks for: where a time can come from, or why
+// none can.
+function finalizePrompt({ pickable, recommendedCount }) {
+  if (pickable.k < 1)
+    return "No time can be picked until the meeting length divides into the slot length. Edit the event to fix it.";
+  if (pickable.days.length === 0)
+    return "No upcoming time can start. Edit the event's schedule or unblock times to add one.";
+  return recommendedCount > 0
+    ? "Pick a time on the calendar, or choose a recommended or other time above."
+    : "Pick a time on the calendar, or choose one under Other times above.";
 }
 
 /**
@@ -1376,6 +1425,15 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
     return () => clearTimeout(timer);
   }, [invalidationKey, load]);
 
+  // The calendar and Other times judge which times have passed by `now`:
+  // keep it current, once a minute, while the Time Table is on screen.
+  const refreshClock = useCallback(() => setNow(Date.now()), []);
+  useEffect(() => {
+    if (!sectionVisible || !documentVisible) return undefined;
+    const timer = setInterval(refreshClock, 60_000);
+    return () => clearInterval(timer);
+  }, [documentVisible, refreshClock, sectionVisible]);
+
   useEffect(() => {
     const section = sectionRef.current;
     if (!section || typeof IntersectionObserver === "undefined") {
@@ -1428,6 +1486,7 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
   const meetingMinutes = event.meetingDurationMinutes || event.slotMinutes;
   const mixed = event.mode === "mixed";
   const activeChannel = mixed ? channel : defaultChannel(event);
+  const pickable = useStartableDays(event, now);
 
   // Close unmounts the bar (and the button that had focus), so focus moves
   // to the step's summary, right under the calendar.
@@ -1492,7 +1551,7 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
       description={
         blockedOpen
           ? "Marking blocked times: click or drag on the calendar to block or open times, then save with the bar under the calendar."
-          : `Group availability for a ${meetingMinutes}-minute meeting. Pick a time on the calendar or from the recommended times in Finalize, then confirm it there.`
+          : `Group availability for a ${meetingMinutes}-minute meeting. Pick a time on the calendar, or from Recommended times or Other times in Finalize, then confirm it there.`
       }
     >
       <div className="d-flex flex-column gap-3">
@@ -1586,6 +1645,10 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
               headingRef={finalizeHeadingRef}
               onDeliveryRequest={onDeliveryRequest}
               recommendedCount={recommendations.length}
+              emptyPrompt={finalizePrompt({
+                pickable,
+                recommendedCount: recommendations.length,
+              })}
               onOpenChange={closeRecommendedWithFinalize}
               picker={
                 <>
@@ -1609,9 +1672,10 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
                     recommendations={recommendations}
                     channel={activeChannel}
                     onChannelChange={setChannel}
-                    now={now}
+                    pickable={pickable}
                     meetingMinutes={meetingMinutes}
                     onPick={handlePick}
+                    onExpired={refreshClock}
                   />
                 </>
               }
@@ -1693,7 +1757,6 @@ export function FinalizeScalePanel(props) {
       <FinalizeScalePanelContent
         key={selectionKey(selection) || "no-selection"}
         {...props}
-        pickerShown={Boolean(picker)}
         selection={selection}
       />
     </TimeTableSection>
@@ -1842,8 +1905,7 @@ function FinalizeScalePanelContent({
   getToken,
   selection,
   onDeliveryRequest,
-  recommendedCount = 0,
-  pickerShown = false,
+  emptyPrompt = "Pick a time on the calendar.",
 }) {
   const [location, setLocation] = useState(event.location || "");
   const [review, setReview] = useState(null);
@@ -2059,13 +2121,7 @@ function FinalizeScalePanelContent({
           icon={<CalendarIcon />}
           title="No time selected yet"
         >
-          <p className="mb-0">
-            {!pickerShown
-              ? "Pick a time on the calendar."
-              : recommendedCount > 0
-                ? "Pick a time on the calendar, or choose a recommended or other time above."
-                : "Pick a time on the calendar, or choose one under Other times above."}
-          </p>
+          <p className="mb-0">{emptyPrompt}</p>
         </EmptyState>
       )}
 

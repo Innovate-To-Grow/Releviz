@@ -953,7 +953,7 @@
 /* Other times: format, day and start side by side when they fit. */
 .other-times__fields {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(11rem, 100%), 1fr));
   gap: 0.75rem;
 }
 
@@ -1116,6 +1116,17 @@
   display: inline-flex;
   align-items: stretch;
   min-width: 0;
+}
+
+/* As in .btn-group: a hovered or focused arrow paints over the label, so
+   its focus ring shows on every side. */
+.meeting-calendar__stepper > .btn {
+  position: relative;
+}
+
+.meeting-calendar__stepper > .btn:hover,
+.meeting-calendar__stepper > .btn:focus-visible {
+  z-index: 1;
 }
 
 .meeting-calendar__stepper > .btn:first-child {

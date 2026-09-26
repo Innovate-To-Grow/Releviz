@@ -1811,8 +1811,10 @@ test("the ranked list is collapsed by default and summarizes the best window", a
     "finalize-block__body",
   );
   expect(finalize).toHaveTextContent("No time selected yet");
+  // This event has no slots at all, so the prompt says why nothing can be
+  // picked rather than pointing at the pickers.
   expect(finalize).toHaveTextContent(
-    "Pick a time on the calendar, or choose a recommended or other time above.",
+    "No upcoming time can start. Edit the event's schedule or unblock times to add one.",
   );
 
   // Closing Finalize closes the list with it, so reopening Finalize shows
@@ -3220,11 +3222,18 @@ test("Other times picks any open time inside Finalize, recommended or not", asyn
     expect(
       Array.from(start.options).map((option) => option.textContent),
     ).toEqual([
-      "09:00–10:00 · up to 50% · Recommended #2",
-      "09:30–10:30 · up to 90% · Recommended #1",
-      "10:00–11:00 · up to 40%",
+      "09:00–10:00 · up to 50% weighted · Recommended #2",
+      "09:30–10:30 · up to 90% weighted · Recommended #1",
+      "10:00–11:00 · up to 40% weighted",
     ]);
-    expect(within(other).getByText(/Times are in UTC\./)).toBeInTheDocument();
+    // The time zone and what the share means are the Start field's help.
+    expect(within(other).getByLabelText("Start")).toHaveAccessibleDescription(
+      "Times are in UTC. Shares are weighted, from each time's lowest slot; Review attendance gives exact counts.",
+    );
+    // With recommendations and open times, Finalize points at both.
+    expect(finalize).toHaveTextContent(
+      "Pick a time on the calendar, or choose a recommended or other time above.",
+    );
 
     // A time nobody recommended: selected like a calendar pick, and focus
     // stays on the button.
@@ -3243,6 +3252,9 @@ test("Other times picks any open time inside Finalize, recommended or not", asyn
       }),
     );
     expect(select).toHaveFocus();
+    expect(within(other).getByRole("status")).toHaveTextContent(
+      /^Selected .*, 10:00–11:00\.$/,
+    );
 
     // A recommended time picked here is still that recommendation.
     await userEvent.selectOptions(start, "0");
@@ -3254,6 +3266,91 @@ test("Other times picks any open time inside Finalize, recommended or not", asyn
         metrics: expect.objectContaining({ exact: true, rank: 2 }),
       }),
     );
+  } finally {
+    nowSpy.mockRestore();
+  }
+});
+
+test("Other times lists a weekly event's days in its own time zone and resets the start per day", async () => {
+  // Wednesday 23:30 in Los Angeles is already Thursday in UTC. Four weeks
+  // from the event-local Wednesday end on Monday 19 October; counted from
+  // the UTC Thursday they would reach Wednesday 21 October.
+  const nowSpy = jest
+    .spyOn(Date, "now")
+    .mockReturnValue(Date.parse("2026-09-24T06:30:00Z"));
+  try {
+    fetchEventResults.mockResolvedValue({
+      status: "fresh",
+      requestedRevision: 1,
+      computedRevision: 1,
+      results: {
+        countedResponseTotal: 2,
+        channels: {
+          inperson: {
+            weighted: [0.5, 0.5, 0, 1, 1, 1, 1, 1],
+            unweighted: [0.5, 0.5, 0, 1, 1, 1, 1, 1],
+          },
+        },
+        recommendations: [],
+        recommendationBasis: { ruleVersion: 2, status: "no_viable_windows" },
+      },
+    });
+    const onSelect = jest.fn();
+    render(
+      <ResultsSnapshotPanel
+        {...timeTableProps(
+          { ...weeklyEvent, timezone: "America/Los_Angeles" },
+          { onSelect },
+        )}
+      />,
+    );
+    await screen.findByText(/Results are current at revision 1/);
+    const other = await openOtherTimes();
+    const day = () => within(other).getByLabelText("Day");
+    const start = () => within(other).getByLabelText("Start");
+    const values = Array.from(day().options).map((option) => option.value);
+    expect(values[0]).toBe("weekday:1:2026-09-28");
+    expect(values[values.length - 1]).toBe("weekday:1:2026-10-19");
+    expect(values).toHaveLength(7);
+    // Monday's later windows run into a 0% slot.
+    expect(
+      Array.from(start().options).map((option) => option.textContent),
+    ).toEqual([
+      "09:00–10:00 · up to 50% weighted",
+      "09:30–10:30 · 0% weighted",
+      "10:00–11:00 · 0% weighted",
+    ]);
+    await userEvent.selectOptions(start(), "2");
+    expect(start()).toHaveValue("2");
+    // A new day starts over at its first start.
+    await userEvent.selectOptions(day(), "weekday:3:2026-09-30");
+    expect(start()).toHaveValue("0");
+    expect(start().options[0]).toHaveTextContent(
+      "09:00–10:00 · up to 100% weighted",
+    );
+    // Nothing recommended, so Finalize points at Other times only.
+    expect(document.getElementById("organizer-finalize")).toHaveTextContent(
+      "Pick a time on the calendar, or choose one under Other times above.",
+    );
+
+    // A start that passed since the list was built is refused, and the list
+    // catches up with the clock.
+    await userEvent.selectOptions(day(), "weekday:1:2026-09-28");
+    // Monday 09:15 in Los Angeles.
+    nowSpy.mockReturnValue(Date.parse("2026-09-28T16:15:00Z"));
+    await userEvent.click(
+      within(other).getByRole("button", { name: "Select this time" }),
+    );
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(within(other).getByRole("status")).toHaveTextContent(
+      "That time has just started. Pick another one.",
+    );
+    await waitFor(() =>
+      expect(Array.from(start().options).map((option) => option.value)).toEqual(
+        ["1", "2"],
+      ),
+    );
+    expect(day().options[0]).toHaveValue("weekday:1:2026-09-28");
   } finally {
     nowSpy.mockRestore();
   }
@@ -3294,6 +3391,9 @@ test("Other times follows the calendar's format and explains when nothing can st
     other = await openOtherTimes();
     expect(other).toHaveTextContent("No upcoming 60-minute time can start.");
     expect(within(other).queryByRole("button")).toBeNull();
+    expect(document.getElementById("organizer-finalize")).toHaveTextContent(
+      "No upcoming time can start. Edit the event's schedule or unblock times to add one.",
+    );
     passed.unmount();
 
     // A weekly event with every slot blocked.
@@ -3309,6 +3409,15 @@ test("Other times follows the calendar's format and explains when nothing can st
       />,
     );
     await screen.findByText(/Results are current/);
+    // Closed, the list renders nothing but its (empty) status line: no
+    // controls and no stale "nothing can start" note.
+    other = document.getElementById("organizer-other-times");
+    const closedContent = other.querySelector(".time-table__section-content");
+    expect(closedContent.textContent).toBe("");
+    expect(closedContent.querySelectorAll("select, button")).toHaveLength(0);
+    expect(other.querySelector("summary")).toHaveTextContent(
+      "Any open 60-minute time in the next 4 weeks, recommended or not",
+    );
     other = await openOtherTimes();
     expect(other).toHaveTextContent(
       "No 60-minute time can start in the next 4 weeks.",
@@ -3326,6 +3435,9 @@ test("Other times follows the calendar's format and explains when nothing can st
     other = await openOtherTimes();
     expect(other).toHaveTextContent(
       "The meeting length does not divide into the slot length",
+    );
+    expect(document.getElementById("organizer-finalize")).toHaveTextContent(
+      "No time can be picked until the meeting length divides into the slot length. Edit the event to fix it.",
     );
   } finally {
     nowSpy.mockRestore();
@@ -3577,8 +3689,8 @@ test("finalize stays collapsed until a pick opens it and sums up its state", asy
   expect(summary()).toHaveTextContent("No time selected yet");
   expect(step()).toHaveTextContent("Pick a time on the calendar.");
 
-  // With the pickers and recommendations to choose from, both the summary
-  // and the empty state say so.
+  // The summary counts the recommendations, and the empty state says what
+  // the Time Table hands it to say.
   rerender(
     <FinalizeScalePanel
       event={baseEvent}
@@ -3586,25 +3698,13 @@ test("finalize stays collapsed until a pick opens it and sums up its state", asy
       getToken={getToken}
       selection={null}
       recommendedCount={3}
+      emptyPrompt="Pick one of three."
       picker={<p>Pickers</p>}
     />,
   );
   expect(summary()).toHaveTextContent("No time selected yet · 3 recommended");
-  expect(step()).toHaveTextContent(
-    "Pick a time on the calendar, or choose a recommended or other time above.",
-  );
-  rerender(
-    <FinalizeScalePanel
-      event={baseEvent}
-      setEvent={jest.fn()}
-      getToken={getToken}
-      selection={null}
-      picker={<p>Pickers</p>}
-    />,
-  );
-  expect(step()).toHaveTextContent(
-    "Pick a time on the calendar, or choose one under Other times above.",
-  );
+  expect(step()).toHaveTextContent("Pickers");
+  expect(step()).toHaveTextContent("Pick one of three.");
 
   // A confirmed meeting is summed up too, collapsed on a fresh mount.
   const finalized = {

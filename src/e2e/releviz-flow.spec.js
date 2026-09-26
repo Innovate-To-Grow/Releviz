@@ -2401,7 +2401,10 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(finalizeStep).toContainText(
       "Pick a time on the calendar, or choose a recommended or other time above.",
     );
-    await expect(finalizeStep).not.toContainText("Recommended #");
+    // Only the pick area: an open Other times list names recommended ranks.
+    await expect(
+      finalizeStep.locator(".finalize-block__body"),
+    ).not.toContainText("Recommended #");
     await expect(finalizeStep).not.toContainText("The meeting is finalized");
     await expect(
       rankedRail.getByRole("button", { name: "Selected time" }),

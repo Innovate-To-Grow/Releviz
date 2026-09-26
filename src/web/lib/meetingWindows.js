@@ -272,30 +272,40 @@ export function buildColumns({ groups, view, resolver }) {
 }
 
 /**
- * Every day on which a `k`-slot meeting can still start, for choosing a time
- * without the calendar: each configured date, or each enabled weekday over
- * `weeks` weeks from the week of `today` (the event-local "YYYY-MM-DD").
- * Each day is a calendar column with the rows where a window is startable.
+ * The calendar columns a time can still be picked from without the calendar:
+ * each configured date, or each enabled weekday from yesterday (whose
+ * after-midnight slots can still be ahead) until `weeks` weeks from `today`
+ * (the event-local "YYYY-MM-DD"). Resolving boundaries is the costly part,
+ * and it depends on the day only, not on the minute.
  */
-export function startableDays({ groups, k, now, resolver, today, weeks = 4 }) {
-  const columns = [];
-  if (groupKind(groups) === "weekday") {
-    if (!today) return [];
-    const firstWeek = weekStartOf(today);
-    for (let week = 0; week < weeks; week += 1) {
-      columns.push(
-        ...buildColumns({
-          groups,
-          view: { weekStart: addDays(firstWeek, week * 7) },
-          resolver,
-        }),
-      );
-    }
-  } else {
+export function upcomingColumns({ groups, resolver, today, weeks = 4 }) {
+  if (groupKind(groups) !== "weekday") {
+    const columns = [];
     for (let page = 0; page < pageCount(groups); page += 1) {
       columns.push(...buildColumns({ groups, view: { page }, resolver }));
     }
+    return columns;
   }
+  if (!today) return [];
+  const from = addDays(today, -1);
+  const end = addDays(today, weeks * 7);
+  const columns = [];
+  for (
+    let weekStart = weekStartOf(from);
+    weekStart < end;
+    weekStart = addDays(weekStart, 7)
+  ) {
+    columns.push(
+      ...buildColumns({ groups, view: { weekStart }, resolver }).filter(
+        (column) => column.date >= from && column.date < end,
+      ),
+    );
+  }
+  return columns;
+}
+
+/** Of `columns`, the days with rows where a `k`-slot window can start. */
+export function startableRows(columns, k, now) {
   return columns
     .map((column) => ({
       column,
@@ -304,6 +314,15 @@ export function startableDays({ groups, k, now, resolver, today, weeks = 4 }) {
         .filter((row) => cellState({ column, row, k, now }) === "startable"),
     }))
     .filter((day) => day.rows.length > 0);
+}
+
+/** Every day on which a `k`-slot meeting can still start (see above). */
+export function startableDays({ groups, k, now, resolver, today, weeks = 4 }) {
+  return startableRows(
+    upcomingColumns({ groups, resolver, today, weeks }),
+    k,
+    now,
+  );
 }
 
 export function pageCount(groups) {
