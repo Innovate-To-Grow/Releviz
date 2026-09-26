@@ -58,7 +58,7 @@ const METRICS = [
   { key: "unweighted", label: "Unweighted" },
 ];
 
-// What the calendar draws while the ranked list is collapsed: nothing.
+// What the calendar draws while the recommended times are collapsed: nothing.
 const NO_RECOMMENDATIONS = [];
 
 function percent(value) {
@@ -233,15 +233,15 @@ function EmptyCell({ columnIndex, headerLabel }) {
  * Columns are real dates (the enabled weekdays of one week for weekly events,
  * or up to seven configured dates). Cells are shaded by weighted or
  * unweighted availability; ranked recommendations are drawn as outlined
- * blocks while `showRankedWindows` is true (the Time Table's ranked list is
- * open), and picking a cell inside one still yields that ranked window either
- * way. Clicking (or pressing Enter/Space on) any startable cell selects a
+ * blocks while `showRankedWindows` is true (the recommended times in the
+ * Time Table's Finalize step are open), and picking a cell inside one still
+ * yields that recommended time either way. Clicking (or pressing Enter/Space on) any startable cell selects a
  * window of the event's meeting duration beginning there. Only a slot the
  * organizer blocked (`data-blocked-slot`) is neutral: no share, no tone. An
  * open slot whose window would run into a block is unpickable too
  * (`data-state="blocked"`) but keeps its share, like a tail cell.
  *
- * `highlightRank` emphasizes one ranked window's outline (the ranked chip the
+ * `highlightRank` emphasizes one recommended time's outline (the chip the
  * organizer points at).
  *
  * With `blockedEditing` set (the Time Table's Blocked times step is open) the
@@ -337,7 +337,7 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
     columns,
   });
 
-  // Ranked windows are drawn only while the ranked list is open, and only
+  // Ranked windows are drawn only while the recommended list is open, and only
   // where they can still be picked: an occurrence that has passed, or one a
   // daylight-saving change breaks (the API never suggests those), would put
   // a badge on a hatched block.
@@ -441,7 +441,7 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
                 Number.isFinite(counted) ? ` of ${counted} responses` : ""
               }.`;
         const rank = blockRankByIndex.get(slot.index);
-        const rankText = `${rank != null ? ` Inside ranked window #${rank}.` : ""}${
+        const rankText = `${rank != null ? ` Inside recommended time #${rank}.` : ""}${
           confirmedIndices.has(slot.index)
             ? " Inside the confirmed meeting."
             : ""
@@ -1128,7 +1128,7 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
                   className="meeting-calendar__legend-swatch meeting-calendar__legend-swatch--rank"
                   aria-hidden="true"
                 />
-                <span>Ranked window</span>
+                <span>Recommended time</span>
               </li>
             )}
             <li className="meeting-calendar__legend-item">

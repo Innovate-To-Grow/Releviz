@@ -33,7 +33,7 @@ dragging, or with Enter/Space from the keyboard, then save; the brush and Save s
 calendar that stays on screen while you paint. A mark on a weekday applies to that
 weekday in every week. The event keeps one start/end/days configuration while every day gets its own
 usable window. Blocked slots stay in the schedule grid but are greyed out and cannot be painted by
-participants, count as 0 in the results, never appear in ranked windows, and cannot be finalized
+participants, count as 0 in the results, are never recommended, and cannot be finalized
 into. Blocked times can be changed at any time without resetting responses; after finalization the
 event must be reactivated first.
 
@@ -171,10 +171,12 @@ meanwhile; once current, it reports the revision and the time the snapshot was g
 
 Access the organizer view from the account that created the event. It is one page with three
 anchored sections — Overview, Time Table, and Roster. The Time Table shows the meeting-time
-calendar; **Blocked times**, **Ranked windows**, and **Finalize** are collapsible steps under it,
-closed by default: while Blocked times is open the calendar paints blocked times instead of picking
-a window, Ranked windows lists the candidates as compact chips and draws them on the calendar only
-while it is open (pointing at a chip highlights its window), and picking a window opens Finalize.
+calendar; **Blocked times** and **Finalize** are collapsible steps under it, closed by default:
+while Blocked times is open the calendar paints blocked times instead of picking a window, and
+picking a window on the calendar opens Finalize. Inside Finalize, **Recommended times** is a
+collapsed list of the recommended meeting times as compact chips; the calendar outlines them only
+while the list is open (pointing at a chip highlights its time), and choosing one selects it in
+Finalize without leaving the list.
 The organizer can:
 
 - search/filter a server-paginated roster (50 rows by default, 100 maximum);
@@ -201,7 +203,7 @@ The organizer can:
   see that group's best meeting times, and bring everyone back with **Include everyone**. People
   in several groups follow the last change, exactly as with a group's weight;
 - apply group/filter/selection weight and included changes, then override an individual;
-- view the meeting-duration windows worth offering, ranked by weighted availability, unweighted
+- view the recommended meeting-duration times, ranked by weighted availability, unweighted
   availability, fully available count, and configured-time order. The list is as long as the good
   options are, at most ten: a window is listed only if someone with a weight above 0 can attend all
   of it, it scores at least half of the best window, and it shares no slot with a better listed
@@ -215,7 +217,7 @@ The organizer can:
 On the meeting-time calendar the organizer's blocked times are hatched, show no percentage, and
 cannot be picked; an open slot whose meeting window would run into a block keeps its percentage but
 cannot start a meeting either. Blocked times are excluded from the results (their availability is
-reported as 0), never form part of a ranked window, and cannot be finalized into; edit them from
+reported as 0), never form part of a recommended time, and cannot be finalized into; edit them from
 **Blocked times** under the Time Table calendar, which paints directly on this calendar.
 
 While the event is active, the workspace keeps itself current on its own; there is no switch to

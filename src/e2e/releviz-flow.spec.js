@@ -19,7 +19,7 @@ const {
   latestVerificationCode,
   loginWithEmailCode,
   nextWeekdayDate,
-  openRankedWindows,
+  openRecommendedTimes,
   readSession,
   recomputeEventResults,
   refreshWorkspace,
@@ -2259,12 +2259,19 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(
       page.getByText(/Results are current at revision/),
     ).toBeVisible();
-    await openRankedWindows(page);
+    await openRecommendedTimes(page);
     await page
       .getByRole("button", { name: "Choose this time" })
       .first()
       .click();
-    await expect(page.getByRole("heading", { name: "Finalize" })).toBeFocused();
+    // The recommended times sit inside Finalize: the chosen chip keeps focus
+    // and the step below it shows the pick.
+    await expect(
+      page.locator("details.organizer-recommended-times .ranked-chip").first(),
+    ).toBeFocused();
+    await expect(page.locator(".final-candidate")).toContainText(
+      "Recommended #1",
+    );
     await reviewAttendance(page);
     await expect(page.getByText("Available", { exact: true })).toBeVisible();
     // The count tiles are backed by a per-person breakdown: a header row plus
@@ -2347,8 +2354,8 @@ test.describe("Releviz account and scheduling flow", () => {
     // The refresh above already cleared the pick, and the Finalize step
     // ignores selections while the meeting is finalized, so re-establish a
     // live one through the ranked rail before reactivating.
-    await openRankedWindows(page);
-    const rankedRail = page.locator("details.organizer-ranked-windows");
+    await openRecommendedTimes(page);
+    const rankedRail = page.locator("details.organizer-recommended-times");
     // The rail re-renders as the ranked windows load, and a click that lands
     // mid-render is dropped on slower engines (WebKit), so the pick is retried
     // until one window reports itself selected.
@@ -2392,9 +2399,9 @@ test.describe("Releviz account and scheduling flow", () => {
     const finalizeStep = page.locator("#organizer-finalize");
     await expect(finalizeStep).toContainText("No time selected yet");
     await expect(finalizeStep).toContainText(
-      "Pick a window on the calendar or choose a ranked one.",
+      "Pick a time on the calendar or choose one of the recommended times above.",
     );
-    await expect(finalizeStep).not.toContainText("Ranked #");
+    await expect(finalizeStep).not.toContainText("Recommended #");
     await expect(finalizeStep).not.toContainText("The meeting is finalized");
     await expect(
       rankedRail.getByRole("button", { name: "Selected time" }),
@@ -2423,7 +2430,7 @@ test.describe("Releviz account and scheduling flow", () => {
     expect(cancellation).toContain("SEQUENCE:1");
 
     recomputeEventResults(eventCode);
-    await openRankedWindows(page);
+    await openRecommendedTimes(page);
     const candidateButtons = page.getByRole("button", {
       name: "Choose this time",
     });
@@ -2433,10 +2440,12 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(candidateButtons).toHaveCount(2);
     await candidateButtons.nth(1).click();
     // The Finalize step re-keys on a new selection: wait for the new pick to
-    // land before driving its buttons.
-    await expect(page.getByRole("heading", { name: "Finalize" })).toBeFocused();
+    // land before driving its buttons. The chosen chip keeps focus.
+    await expect(
+      page.locator("details.organizer-recommended-times .ranked-chip").nth(1),
+    ).toBeFocused();
     await expect(page.locator("#organizer-finalize")).toContainText(
-      "Ranked #2",
+      "Recommended #2",
     );
     await reviewAttendance(page);
     const secondFinalStartedAt = Date.now() - 1000;

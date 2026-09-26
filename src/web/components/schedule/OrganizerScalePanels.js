@@ -123,16 +123,18 @@ function isFinalized(event) {
 }
 
 /**
- * One collapsible step under the Time Table calendar (Ranked windows,
- * Finalize, Blocked times). The heading sits in the summary, so the step
- * keeps its name while closed; with `focusable` it takes programmatic focus
- * (Finalize is focused after a pick), and the summary is always rendered, so
- * that focus can land even before the step is open.
+ * One collapsible step under the Time Table calendar (Blocked times,
+ * Finalize), or one nested in a step (Recommended times, inside Finalize).
+ * The heading sits in the summary, so the step keeps its name while closed;
+ * with `focusable` it takes programmatic focus (Finalize is focused after a
+ * calendar pick), and the summary is always rendered, so that focus can land
+ * even before the step is open.
  */
 function TimeTableSection({
   id,
   className = "",
   headingId,
+  headingLevel = 4,
   title,
   hint,
   open,
@@ -141,24 +143,29 @@ function TimeTableSection({
   focusable = false,
   children,
 }) {
+  const Heading = `h${headingLevel}`;
   return (
     <details
       id={id}
       className={`disclosure time-table__section ${className}`.trim()}
       aria-labelledby={headingId}
       open={open}
-      onToggle={(toggleEvent) => onToggle(toggleEvent.currentTarget.open)}
+      onToggle={(toggleEvent) => {
+        // A nested step's toggle is its own business, not this step's.
+        if (toggleEvent.target !== toggleEvent.currentTarget) return;
+        onToggle(toggleEvent.currentTarget.open);
+      }}
     >
       <summary className="time-table__summary">
         <span className="disclosure__summary-copy">
-          <h4
+          <Heading
             id={headingId}
             ref={headingRef}
             tabIndex={focusable ? -1 : undefined}
             className="time-table__section-title"
           >
             {title}
-          </h4>
+          </Heading>
           <small className="time-table__section-hint">{hint}</small>
         </span>
         <span className="disclosure__chevron" aria-hidden="true">
@@ -701,7 +708,7 @@ function emptyRankingCopy({ basis, meetingMinutes, slotMinutes }) {
         title: "No time works yet",
         body: `${
           basis.zeroWeightOnlyAvailability
-            ? `No upcoming ${meetingMinutes}-minute window has anyone with a weight above 0 free for all of it. Some times suit only people weighted 0, who don't count toward the ranking.`
+            ? `No upcoming ${meetingMinutes}-minute window has anyone with a weight above 0 free for all of it. Some times suit only people weighted 0, who don't count toward the recommendations.`
             : `No upcoming ${meetingMinutes}-minute window has anyone free for all of it.`
         } Ask for more availability, unblock times, or shorten the meeting.`,
       };
@@ -709,7 +716,7 @@ function emptyRankingCopy({ basis, meetingMinutes, slotMinutes }) {
       return {
         hint: "No weighted responses yet",
         title: "No one who counts has responded",
-        body: "Everyone counted in the results so far has weight 0, so their times aren't ranked. Ranked windows appear once someone with a weight above 0 is counted.",
+        body: "Everyone counted in the results so far has weight 0, so no time is recommended. Recommendations appear once someone with a weight above 0 is counted.",
       };
     case "no_future_slots":
       return {
@@ -727,7 +734,7 @@ function emptyRankingCopy({ basis, meetingMinutes, slotMinutes }) {
       return {
         hint: "Waiting for responses",
         title: "Waiting for responses",
-        body: "Ranked windows appear once someone included in the results submits availability.",
+        body: "Recommendations appear once someone included in the results submits availability.",
       };
     default:
       return {
@@ -744,8 +751,8 @@ function qualifyingTotal(basis, count) {
   return Number.isFinite(total) && total > count ? total : count;
 }
 
-// The one-line state of the ranked list, shown while it is collapsed.
-function rankedWindowsHint({
+// The one-line state of the recommended times, shown while collapsed.
+function recommendedTimesHint({
   event,
   recommendations,
   basis,
@@ -766,10 +773,10 @@ function rankedWindowsHint({
     : "";
   if (count > 0) {
     const total = qualifyingTotal(basis, count);
-    return `${count}${total > count ? ` of ${total}` : ""} candidate${total === 1 ? "" : "s"}${bestLabel ? ` · best ${bestLabel}` : ""}`;
+    return `${count}${total > count ? ` of ${total}` : ""} recommended${bestLabel ? ` · best ${bestLabel}` : ""}`;
   }
   return loading || refreshing
-    ? "Calculating the best options"
+    ? "Calculating recommendations"
     : emptyRankingCopy({
         basis,
         meetingMinutes,
@@ -779,13 +786,13 @@ function rankedWindowsHint({
 
 // What the list holds and why it ends where it does (v2 snapshots only;
 // an older snapshot is on screen just until its recompute lands).
-function rankedWindowsIntro({ basis, count, meetingMinutes, mixed }) {
+function recommendedTimesIntro({ basis, count, meetingMinutes, mixed }) {
   const pointer =
     "Point at one to find it on the calendar; click one to select it.";
   if (!(Number(basis?.ruleVersion) >= 2))
-    return `The calendar outlines every ranked window. ${pointer}`;
+    return `The calendar outlines every recommended time. ${pointer}`;
   const sentences = [
-    `Times someone can attend for the whole ${meetingMinutes} minutes, at least half as available as the best, never overlapping${mixed ? " in the same format" : ""}.`,
+    `We recommend times someone can attend for the whole ${meetingMinutes} minutes, at least half as available as the best, never overlapping${mixed ? " in the same format" : ""}.`,
   ];
   const total = qualifyingTotal(basis, count);
   if (basis.listEnd === "limit")
@@ -815,11 +822,12 @@ function rankedWindowsIntro({ basis, count, meetingMinutes, mixed }) {
 }
 
 /**
- * Ranked windows: the top candidates, one step of the Time Table. Collapsed
- * by default; while it is open the calendar draws the ranked windows too
- * (`open` is owned by the panel for that reason).
+ * Recommended times: the API's ranked windows, nested in the Finalize step
+ * as the quick way to pick. Collapsed by default; while it is open the
+ * calendar outlines the recommended times too (`open` is owned by the panel
+ * for that reason, and closing Finalize closes it).
  */
-function RankedWindowsSection({
+function RecommendedTimesSection({
   event,
   recommendations,
   basis = null,
@@ -885,11 +893,12 @@ function RankedWindowsSection({
     entries[0];
   return (
     <TimeTableSection
-      id="organizer-ranked-windows"
-      className="organizer-ranked-windows"
-      headingId="organizer-ranked-windows-heading"
-      title="Ranked windows"
-      hint={rankedWindowsHint({
+      id="organizer-recommended-times"
+      className="organizer-recommended-times time-table__section--nested"
+      headingId="organizer-recommended-times-heading"
+      headingLevel={5}
+      title="Recommended times"
+      hint={recommendedTimesHint({
         event,
         recommendations,
         basis,
@@ -903,7 +912,7 @@ function RankedWindowsSection({
       {count > 0 ? (
         <>
           <p className="ranked-chips__intro text-secondary small mb-0">
-            {rankedWindowsIntro({ basis, count, meetingMinutes, mixed })}
+            {recommendedTimesIntro({ basis, count, meetingMinutes, mixed })}
           </p>
           <ol className="ranked-chips">
             {entries.map((entry) => {
@@ -983,7 +992,7 @@ function RankedWindowsSection({
         </>
       ) : loading || refreshing ? (
         <EmptyState
-          headingLevel={5}
+          headingLevel={6}
           className="organizer-empty-state organizer-empty-state--loading"
           icon={
             <span
@@ -991,7 +1000,7 @@ function RankedWindowsSection({
               aria-hidden="true"
             />
           }
-          title="Calculating the best options"
+          title="Calculating recommendations"
         >
           <p className="mb-0">
             Recommendations will appear here as responses arrive.
@@ -999,7 +1008,7 @@ function RankedWindowsSection({
         </EmptyState>
       ) : (
         <EmptyState
-          headingLevel={5}
+          headingLevel={6}
           className="organizer-empty-state"
           icon={<ResultsIcon />}
           title={empty.title}
@@ -1048,15 +1057,15 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
   );
   const [channel, setChannel] = useState(() => defaultChannel(event));
   const [now, setNow] = useState(() => Date.now());
-  // The ranked list is collapsed by default; the calendar draws the ranked
-  // windows only while it is open.
+  // Recommended times (inside Finalize) are collapsed by default; the
+  // calendar outlines them only while the list is open.
   const [rankedOpen, setRankedOpen] = useState(false);
   // Blocked times is closed by default too; while it is open the calendar
   // paints the draft instead of picking, so the draft lives here, next to
   // the calendar, and survives the step closing.
   const [blockedOpen, setBlockedOpen] = useState(false);
-  // The ranked chip under the pointer (or focus): the calendar emphasizes
-  // that window's outline.
+  // The recommended chip under the pointer (or focus): the calendar
+  // emphasizes that time's outline.
   const [highlightRank, setHighlightRank] = useState(null);
   const { locked: editLocked, reason: editLockReason } = editLockOf(event);
   const blockedDraft = useBlockedSlotsDraft(event, {
@@ -1176,6 +1185,12 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
     }, 0);
   }, []);
 
+  // The recommended times live inside Finalize, so closing Finalize hides
+  // them, and their outlines leave the calendar with them.
+  const closeRecommendedWithFinalize = useCallback((finalizeOpen) => {
+    if (!finalizeOpen) setRankedOpen(false);
+  }, []);
+
   const handleChoose = useCallback(
     (recommendation) => {
       // A revealed pick is invisible on the paint surface: leave painting.
@@ -1210,7 +1225,7 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
       description={
         blockedOpen
           ? "Marking blocked times: click or drag on the calendar to block or open times, then save with the bar under the calendar."
-          : `Group availability for a ${meetingMinutes}-minute meeting. Pick a window on the calendar or from the ranked list below, then confirm it in Finalize.`
+          : `Group availability for a ${meetingMinutes}-minute meeting. Pick a time on the calendar or from the recommended times in Finalize, then confirm it there.`
       }
     >
       <div className="d-flex flex-column gap-3">
@@ -1296,20 +1311,6 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
               open={blockedOpen}
               onToggle={setBlockedOpen}
             />
-            <RankedWindowsSection
-              event={event}
-              recommendations={recommendations}
-              basis={results?.recommendationBasis || null}
-              meetingMinutes={meetingMinutes}
-              selection={selection}
-              loading={loading}
-              refreshing={snapshot.status === "refreshing"}
-              open={rankedOpen}
-              onToggle={setRankedOpen}
-              onChoose={handleChoose}
-              onHighlight={setHighlightRank}
-              highlightRank={highlightRank}
-            />
             <FinalizeScalePanel
               event={event}
               setEvent={setEvent}
@@ -1317,6 +1318,24 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
               selection={selection}
               headingRef={finalizeHeadingRef}
               onDeliveryRequest={onDeliveryRequest}
+              recommendedCount={recommendations.length}
+              onOpenChange={closeRecommendedWithFinalize}
+              picker={
+                <RecommendedTimesSection
+                  event={event}
+                  recommendations={recommendations}
+                  basis={results?.recommendationBasis || null}
+                  meetingMinutes={meetingMinutes}
+                  selection={selection}
+                  loading={loading}
+                  refreshing={snapshot.status === "refreshing"}
+                  open={rankedOpen}
+                  onToggle={setRankedOpen}
+                  onChoose={handleChoose}
+                  onHighlight={setHighlightRank}
+                  highlightRank={highlightRank}
+                />
+              }
             />
           </div>
         </div>
@@ -1341,14 +1360,16 @@ function normalizeSelection(value, event) {
 }
 
 // The one-line state of the Finalize step, shown while it is collapsed.
-function finalizeHint(event, selection) {
+function finalizeHint(event, selection, recommendedCount = 0) {
   if (isFinalized(event)) {
     return `Finalized · ${formatInTimezone(event.finalMeeting.startsAt, event.timezone)}`;
   }
   if (selection) {
     return `Selected · ${formatInTimezone(selection.startsAt, event.timezone)}`;
   }
-  return "No time selected yet";
+  return recommendedCount > 0
+    ? `No time selected yet · ${recommendedCount} recommended`
+    : "No time selected yet";
 }
 
 /**
@@ -1357,10 +1378,12 @@ function finalizeHint(event, selection) {
  * the same render, so the focus that follows a pick lands on content that
  * is showing; clearing the pick leaves the step as the organizer left it.
  * The disclosure lives outside the keyed content, so a re-pick resets the
- * step's own state without closing it.
+ * step's own state without closing it. `picker` (the Recommended times)
+ * sits outside the keyed content too: choosing one of them re-keys the
+ * content but keeps the list open and the chosen chip focused.
  */
 export function FinalizeScalePanel(props) {
-  const { event, headingRef } = props;
+  const { event, headingRef, picker = null, onOpenChange } = props;
   const selection = normalizeSelection(props.selection, event);
   const [open, setOpen] = useState(() => Boolean(selection));
   const [seen, setSeen] = useState(props.selection);
@@ -1368,18 +1391,26 @@ export function FinalizeScalePanel(props) {
     setSeen(props.selection);
     if (props.selection) setOpen(true);
   }
+  const toggle = (next) => {
+    setOpen(next);
+    onOpenChange?.(next);
+  };
   return (
     <TimeTableSection
       id="organizer-finalize"
       className="finalize-block"
       headingId="organizer-finalize-heading"
       title="Finalize"
-      hint={finalizeHint(event, selection)}
+      hint={finalizeHint(event, selection, props.recommendedCount)}
       open={open}
-      onToggle={setOpen}
+      onToggle={toggle}
       headingRef={headingRef}
       focusable
     >
+      <p className="finalize-block__description">
+        Confirm the selected time and email calendar invitations.
+      </p>
+      {picker}
       <FinalizeScalePanelContent
         key={selectionKey(selection) || "no-selection"}
         {...props}
@@ -1637,9 +1668,6 @@ function FinalizeScalePanelContent({
 
   return (
     <div className="finalize-block__body">
-      <p className="finalize-block__description">
-        Confirm the selected window and email calendar invitations.
-      </p>
       <FinalizeStepIndicator
         selection={selection}
         review={review}
@@ -1684,7 +1712,7 @@ function FinalizeScalePanelContent({
               />
               {selection.metrics?.rank != null ? (
                 <StatusBadge status="primary" dot={false}>
-                  Ranked #{selection.metrics.rank}
+                  Recommended #{selection.metrics.rank}
                 </StatusBadge>
               ) : (
                 <StatusBadge status="neutral" dot={false}>
@@ -1750,7 +1778,8 @@ function FinalizeScalePanelContent({
           title="No time selected yet"
         >
           <p className="mb-0">
-            Pick a window on the calendar or choose a ranked one.
+            Pick a time on the calendar or choose one of the recommended times
+            above.
           </p>
         </EmptyState>
       )}

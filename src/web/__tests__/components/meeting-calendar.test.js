@@ -356,7 +356,7 @@ describe("MeetingCalendar", () => {
     );
     expect(cell(1)).toHaveAttribute(
       "aria-label",
-      expect.stringContaining("Inside ranked window #1."),
+      expect.stringContaining("Inside recommended time #1."),
     );
   });
 
@@ -561,7 +561,7 @@ describe("MeetingCalendar", () => {
     expect(
       document.querySelector(".meeting-calendar__overlays"),
     ).toHaveAttribute("aria-hidden", "true");
-    expect(screen.getByText("Ranked window")).toBeInTheDocument();
+    expect(screen.getByText("Recommended time")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Next week" }));
 
@@ -628,12 +628,14 @@ describe("MeetingCalendar", () => {
 
     // No outline, badge, legend entry, or rank in the cell descriptions...
     expect(document.querySelector(".meeting-calendar__block--rank")).toBeNull();
-    expect(screen.queryByText("Ranked window")).not.toBeInTheDocument();
+    expect(screen.queryByText("Recommended time")).not.toBeInTheDocument();
     expect(screen.getByText("Selected window")).toBeInTheDocument();
     expect(cell(1).getAttribute("aria-label")).not.toContain(
-      "Inside ranked window",
+      "Inside recommended time",
     );
-    expect(cell(1).getAttribute("title")).not.toContain("Inside ranked window");
+    expect(cell(1).getAttribute("title")).not.toContain(
+      "Inside recommended time",
+    );
     // ...the week is still the top recommendation's, and the first startable
     // cell takes the tab stop instead of the hidden best window.
     expect(screen.getByRole("grid")).toHaveAccessibleName(
@@ -663,9 +665,9 @@ describe("MeetingCalendar", () => {
     expect(
       document.querySelector(".meeting-calendar__block--rank"),
     ).toHaveAttribute("data-rank", "1");
-    expect(screen.getByText("Ranked window")).toBeInTheDocument();
+    expect(screen.getByText("Recommended time")).toBeInTheDocument();
     expect(cell(1).getAttribute("aria-label")).toContain(
-      "Inside ranked window #1.",
+      "Inside recommended time #1.",
     );
   });
 
@@ -793,7 +795,7 @@ describe("MeetingCalendar", () => {
       expect(within(legend).getAllByRole("listitem")).toHaveLength(2);
       expect(legend).toHaveTextContent("Blocked");
       expect(legend).toHaveTextContent("Open");
-      expect(screen.queryByText("Ranked window")).not.toBeInTheDocument();
+      expect(screen.queryByText("Recommended time")).not.toBeInTheDocument();
       expect(screen.queryByText("Selected window")).not.toBeInTheDocument();
       expect(
         screen.queryByRole("group", { name: "Shading" }),
@@ -1752,7 +1754,7 @@ describe("MeetingCalendar", () => {
     expect(cell(0).getAttribute("aria-label")).not.toContain("confirmed");
     expect(cell(3).getAttribute("aria-label")).not.toContain("confirmed");
     expect(cell(1).getAttribute("aria-label")).toContain(
-      "Inside ranked window #1.",
+      "Inside recommended time #1.",
     );
   });
 
@@ -1803,7 +1805,9 @@ describe("MeetingCalendar", () => {
     expect(columnHeaders()).toEqual(["Sun, Mar 8"]);
     expect(cell(0)).toHaveAttribute("data-state", "dst");
     expect(document.querySelector(".meeting-calendar__block--rank")).toBeNull();
-    expect(cell(0).getAttribute("title")).not.toContain("Inside ranked window");
+    expect(cell(0).getAttribute("title")).not.toContain(
+      "Inside recommended time",
+    );
     // Nothing is tabbable-by-rank on this week either: the first startable
     // cell takes the tab stop instead.
     expect(tabbableCells().map((c) => c.dataset.cellIdx)).toEqual(["4"]);
@@ -1814,7 +1818,9 @@ describe("MeetingCalendar", () => {
     expect(block).toHaveAttribute("data-rank", "1");
     expect(block.style.getPropertyValue("--rv-cal-row")).toBe("0");
     expect(cell(0)).toHaveAttribute("data-state", "startable");
-    expect(cell(0).getAttribute("title")).toContain("Inside ranked window #1.");
+    expect(cell(0).getAttribute("title")).toContain(
+      "Inside recommended time #1.",
+    );
     expect(tabbableCells().map((c) => c.dataset.cellIdx)).toEqual(["0"]);
   });
 
@@ -1842,7 +1848,7 @@ describe("MeetingCalendar", () => {
       expect(cell(index)).toHaveAttribute("data-state", "blocked");
       expect(cell(index)).toHaveAttribute("aria-disabled", "true");
       expect(cell(index).getAttribute("aria-label")).not.toContain(
-        "Inside ranked window",
+        "Inside recommended time",
       );
     });
     // Only the slot the organizer blocked is neutral: no share, no tone.
@@ -1949,14 +1955,14 @@ describe("MeetingCalendar", () => {
       expect.stringMatching(/^Mon, Sep 14, /),
       "Weighted 83%, unweighted 80% of 12 responses.",
       "A 60-minute meeting starting here would overlap a blocked time.",
-      "Inside ranked window #1.",
+      "Inside recommended time #1.",
     ]);
     expect(cell(1).getAttribute("aria-label")).not.toContain(
       "This time is blocked",
     );
     expect(cell(2)).toHaveAttribute("data-blocked-slot", "true");
     expect(cell(2).getAttribute("aria-label")).not.toContain(
-      "Inside ranked window",
+      "Inside recommended time",
     );
   });
 

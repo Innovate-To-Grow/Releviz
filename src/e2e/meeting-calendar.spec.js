@@ -6,7 +6,7 @@ const {
   createEvent,
   fillTextbox,
   openBlockedTimes,
-  openRankedWindows,
+  openRecommendedTimes,
   readSession,
   recomputeEventResults,
   registerAccount,
@@ -262,22 +262,32 @@ test.describe("Organizer meeting-time calendar", () => {
     await expect(grid.getByRole("columnheader")).toHaveCount(6);
     await expect(grid.getByRole("columnheader").nth(1)).toContainText("Mon");
     await expect(grid.getByRole("columnheader").nth(5)).toContainText("Fri");
-    const rail = page.locator("details.organizer-ranked-windows");
-    // The list starts collapsed with a one-line summary of the best window,
-    // and the calendar draws no ranked window until it is opened.
+    const rail = page.locator("details.organizer-recommended-times");
+    // The recommended times sit collapsed inside the (collapsed) Finalize
+    // step with a one-line summary of the best one, which Finalize's own
+    // summary counts; the calendar outlines none until the list is opened.
     await expect(rail).not.toHaveAttribute("open", "");
-    await expect(rail).toContainText(/\d+ candidates · best /);
+    await expect(page.locator("#organizer-finalize")).not.toHaveAttribute(
+      "open",
+      "",
+    );
+    await expect(page.locator("#organizer-finalize > summary")).toContainText(
+      "No time selected yet · 3 recommended",
+    );
+    await expect(rail).toContainText(/\d+ recommended · best /);
     await expect(
       rail.getByRole("button", { name: "Choose this time" }).first(),
     ).toBeHidden();
     await expect(page.locator(".meeting-calendar__block--rank")).toHaveCount(0);
-    await expect(page.getByText("Ranked window", { exact: true })).toBeHidden();
-    await openRankedWindows(page);
+    await expect(
+      page.getByText("Recommended time", { exact: true }),
+    ).toBeHidden();
+    await openRecommendedTimes(page);
     await expect(
       rail.getByRole("button", { name: "Choose this time" }).first(),
     ).toBeVisible();
     await expect(
-      page.getByText("Ranked window", { exact: true }),
+      page.getByText("Recommended time", { exact: true }),
     ).toBeVisible();
     // Only windows someone can attend in full, at least half as good as the
     // best: Thursday 09:00 (Ada and Dev, 43% weighted) is under half of
@@ -297,7 +307,7 @@ test.describe("Organizer meeting-time calendar", () => {
       "The next option drops to 43% weighted, under half of the best.",
     );
     await expect(rail.locator("summary")).toContainText(
-      "3 candidates · best Mon 10:00–11:00",
+      "3 recommended · best Mon 10:00–11:00",
     );
     await expect(rail.locator(".ranked-chip__rank").first()).toHaveText("#1");
     await expect(rail.locator(".ranked-chip--best")).toHaveCount(1);
@@ -334,7 +344,7 @@ test.describe("Organizer meeting-time calendar", () => {
     );
     await expect(monday10).toHaveAttribute(
       "aria-label",
-      /Inside ranked window #1/,
+      /Inside recommended time #1/,
     );
     const thursday9 = cellAt(grid, 0, 3);
     await expect(thursday9).toHaveAttribute(
@@ -391,7 +401,8 @@ test.describe("Organizer meeting-time calendar", () => {
     const wednesday14 = cellAt(grid, 10, 2);
     await expect(wednesday14).toHaveAttribute("data-state", "startable");
     await pickCell(page, wednesday14, "Wed 14:00–15:00");
-    // The pick opens the Finalize step (collapsed until now) and focuses it.
+    // A calendar pick opens the Finalize step (already open here, for the
+    // recommended times) and focuses it.
     await expect(page.locator("#organizer-finalize")).toHaveAttribute(
       "open",
       "",
@@ -450,8 +461,9 @@ test.describe("Organizer meeting-time calendar", () => {
       grid.getByRole("columnheader", { name: shortDate(customMonday) }),
     ).toBeVisible();
 
-    // Choosing a ranked window from the rail reveals it on the calendar, and
-    // clicking the first cell of a ranked window yields that exact result.
+    // Choosing a recommended time reveals it on the calendar and keeps focus
+    // on its chip (the list lives inside Finalize, next to the result), and
+    // clicking the first cell of a recommended time yields that exact result.
     const secondChoice = rail
       .getByRole("button", { name: "Choose this time" })
       .nth(1);
@@ -459,7 +471,8 @@ test.describe("Organizer meeting-time calendar", () => {
     await expect(
       rail.getByRole("button", { name: "Selected time" }),
     ).toHaveCount(1);
-    await expect(candidate).toContainText("Ranked #2");
+    await expect(rail.locator(".ranked-chip").nth(1)).toBeFocused();
+    await expect(candidate).toContainText("Recommended #2");
     await expect(candidate).toContainText("Tue 11:00–12:00");
     await expect(candidate).toContainText(
       "86% weighted · 75% unweighted · 3 fully available",
@@ -470,9 +483,9 @@ test.describe("Organizer meeting-time calendar", () => {
     const bestCell = cellAt(grid, 2, 0);
     await expect(bestCell).toHaveAttribute(
       "aria-label",
-      /Inside ranked window #1/,
+      /Inside recommended time #1/,
     );
-    await pickCell(page, bestCell, "Ranked #1");
+    await pickCell(page, bestCell, "Recommended #1");
     await expect(candidate).toContainText("Mon 10:00–11:00");
     await expect(candidate).toContainText(
       "100% weighted · 100% unweighted · 4 fully available",
@@ -607,8 +620,8 @@ test.describe("Organizer meeting-time calendar", () => {
       page.getByText("Dates 1–7 of 9", { exact: false }),
     ).toBeVisible();
     await expect(grid.getByRole("columnheader")).toHaveCount(8);
-    const rail = page.locator("details.organizer-ranked-windows");
-    await openRankedWindows(page);
+    const rail = page.locator("details.organizer-recommended-times");
+    await openRecommendedTimes(page);
     const channelGroup = page.getByRole("group", { name: "Meeting channel" });
     const inPerson = channelGroup.getByRole("button", { name: "In person" });
     const virtual = channelGroup.getByRole("button", { name: "Virtual" });
@@ -644,7 +657,7 @@ test.describe("Organizer meeting-time calendar", () => {
     );
     await expect(cellAt(grid, 0, 0)).not.toHaveAttribute(
       "aria-label",
-      /Inside ranked window/,
+      /Inside recommended time/,
     );
     await expect(rail.locator(".ranked-chip")).toHaveCount(2);
     await page.getByRole("button", { name: "Previous dates" }).click();
@@ -668,11 +681,11 @@ test.describe("Organizer meeting-time calendar", () => {
     const lastDay10 = cellAt(grid, 2, 1);
     await expect(lastDay10).toHaveAttribute(
       "aria-label",
-      /Weighted 67%, unweighted 67% of 3 responses.*Inside ranked window #2/,
+      /Weighted 67%, unweighted 67% of 3 responses.*Inside recommended time #2/,
     );
     await lastDay10.click();
     const candidate = page.locator(".final-candidate");
-    await expect(candidate).toContainText("Ranked #2");
+    await expect(candidate).toContainText("Recommended #2");
     await expect(candidate).toContainText("Virtual");
     await expect(
       rail.getByRole("button", { name: "Selected time" }),
@@ -810,31 +823,31 @@ test.describe("Organizer meeting-time calendar", () => {
     // though everyone was free on Monday, and no rank badge covers a block.
     // Every other window scores 0 (nobody can attend all of it), so Tuesday
     // is the only one listed. The calendar shows it once the list is open.
-    await openRankedWindows(page);
+    await openRecommendedTimes(page);
     const tuesday11 = cellAt(grid, 4, 1);
     await expect(tuesday11).toHaveAttribute("data-state", "startable");
     await expect(tuesday11).toHaveAttribute(
       "aria-label",
-      /Weighted 67%, unweighted 67% of 3 responses.*Inside ranked window #1/,
+      /Weighted 67%, unweighted 67% of 3 responses.*Inside recommended time #1/,
     );
     await expect(monday10).not.toHaveAttribute(
       "aria-label",
-      /Inside ranked window/,
+      /Inside recommended time/,
     );
     await expect(
       grid.locator(
-        '[data-blocked-slot="true"][aria-label*="Inside ranked window"]',
+        '[data-blocked-slot="true"][aria-label*="Inside recommended time"]',
       ),
     ).toHaveCount(0);
     await expect(cellAt(grid, 0, 0)).not.toHaveAttribute(
       "aria-label",
-      /Inside ranked window/,
+      /Inside recommended time/,
     );
     await expect(monday930).not.toHaveAttribute(
       "aria-label",
-      /Inside ranked window/,
+      /Inside recommended time/,
     );
-    const rail = page.locator("details.organizer-ranked-windows");
+    const rail = page.locator("details.organizer-recommended-times");
     await expect(rail.locator(".ranked-chip__title")).toHaveText([
       "Tue 11:00–12:00",
     ]);

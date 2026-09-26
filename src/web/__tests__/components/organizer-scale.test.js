@@ -355,6 +355,17 @@ function mockCalendarWindowFlow() {
 
 // The Time Table's blocked-times editor also renders `data-cell-idx` cells,
 // so calendar cells are looked up inside the meeting calendar's grid.
+// The recommended times sit inside the Finalize step: open Finalize first
+// when it is closed, then toggle the list through its own summary.
+async function toggleRecommendedTimes() {
+  const finalize = document.getElementById("organizer-finalize");
+  if (!finalize.open)
+    await userEvent.click(finalize.querySelector(":scope > summary"));
+  await userEvent.click(
+    document.querySelector("#organizer-recommended-times > summary"),
+  );
+}
+
 function calendarCell(index) {
   return screen
     .getByRole("grid", { name: /^Meeting time calendar/ })
@@ -2025,11 +2036,14 @@ describe("scaled organizer workspace", () => {
     expect(document.getElementById("organizer-finalize")).toHaveTextContent(
       "Thursday 9:00 AM",
     );
-    // The pick opens the Finalize step and hands it focus.
+    // The pick opens the Finalize step; the chosen recommendation lives in
+    // that step, so it keeps focus.
     expect(document.getElementById("organizer-finalize")).toHaveAttribute(
       "open",
     );
-    expect(screen.getByRole("heading", { name: "Finalize" })).toHaveFocus();
+    expect(
+      screen.getByRole("button", { name: /selected time/i }),
+    ).toHaveFocus();
     await userEvent.click(
       screen.getByRole("button", { name: "Review attendance" }),
     );
@@ -2098,12 +2112,12 @@ describe("scaled organizer workspace", () => {
       }),
     ).toBeInTheDocument();
 
-    // The pick buttons live in the ranked list only (a step under the
-    // calendar, no landmark of its own); the calendar itself exposes exactly
-    // one tab stop and no buttons.
-    const rail = document.querySelector("details.organizer-ranked-windows");
+    // The pick buttons live in the recommended times only (inside Finalize,
+    // no landmark of their own); the calendar itself exposes exactly one tab
+    // stop and no buttons.
+    const rail = document.querySelector("details.organizer-recommended-times");
     expect(
-      screen.queryByRole("complementary", { name: "Ranked windows" }),
+      screen.queryByRole("complementary", { name: "Recommended times" }),
     ).not.toBeInTheDocument();
     const chooseButtons = screen.getAllByRole("button", {
       name: /choose this time/i,
@@ -2120,22 +2134,15 @@ describe("scaled organizer workspace", () => {
     expect(screen.queryByText("Available", { exact: true })).toBeNull();
 
     await userEvent.click(chooseButtons[0]);
-    expect(screen.getByRole("heading", { name: "Finalize" })).toHaveFocus();
-    expect(
-      screen.getByRole("button", { name: /selected time/i }),
-    ).toHaveAttribute("aria-pressed", "true");
-    // Revealing the chosen window scrolls the calendar, never the page:
-    // the only page scroll nudges the Finalize step into view if needed.
-    await waitFor(() =>
-      expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledTimes(1),
-    );
-    expect(HTMLElement.prototype.scrollIntoView.mock.contexts).toEqual([
-      document.getElementById("organizer-finalize"),
-    ]);
-    expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledWith({
-      behavior: "smooth",
-      block: "nearest",
+    const chosen = screen.getByRole("button", { name: /selected time/i });
+    expect(chosen).toHaveAttribute("aria-pressed", "true");
+    // The chip keeps focus, and revealing the chosen window scrolls the
+    // calendar, never the page: the organizer is already in Finalize.
+    expect(chosen).toHaveFocus();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
     });
+    expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled();
 
     await userEvent.click(
       screen.getByRole("button", { name: "Review attendance" }),
@@ -2195,13 +2202,13 @@ describe("scaled organizer workspace", () => {
         name: "Browse results",
       }),
     ).not.toBeInTheDocument();
-    // The three steps stack under the calendar, all closed: Blocked times
-    // (nearest the surface it paints), then the ranked list, then Finalize.
+    // Two steps stack under the calendar, both closed: Blocked times
+    // (nearest the surface it paints), then Finalize, which holds the
+    // recommended times.
     const stack = finalizeSection.closest(".time-table__sections");
     expect(stack).not.toBeNull();
     expect(Array.from(stack.children).map((step) => step.id)).toEqual([
       "organizer-blocked-times",
-      "organizer-ranked-windows",
       "organizer-finalize",
     ]);
     expect(
@@ -2209,25 +2216,28 @@ describe("scaled organizer workspace", () => {
         .getElementById("organizer-results")
         .querySelector(".meeting-calendar + .time-table__sections"),
     ).toBe(stack);
-    const rail = document.querySelector("details.organizer-ranked-windows");
+    const rail = document.querySelector("details.organizer-recommended-times");
+    expect(finalizeSection).toContainElement(rail);
     expect(rail).not.toHaveAttribute("open");
     expect(finalizeSection).not.toHaveAttribute("open");
     expect(
       document.querySelector("details.organizer-blocked-times"),
     ).not.toHaveAttribute("open");
-    // While the ranked list is closed the calendar draws no ranked window
-    // and its legend does not mention one.
+    // While the recommended times are closed the calendar outlines none and
+    // its legend does not mention them.
     expect(document.querySelector(".meeting-calendar__block--rank")).toBeNull();
-    expect(screen.queryByText("Ranked window")).not.toBeInTheDocument();
+    expect(screen.queryByText("Recommended time")).not.toBeInTheDocument();
 
-    await userEvent.click(within(rail).getByText("Ranked windows"));
+    // Opening them means opening Finalize first.
+    await toggleRecommendedTimes();
+    expect(finalizeSection).toHaveAttribute("open");
     expect(rail).toHaveAttribute("open");
-    expect(screen.getByText("Ranked window")).toBeInTheDocument();
-    expect(finalizeSection).not.toHaveAttribute("open");
+    expect(screen.getByText("Recommended time")).toBeInTheDocument();
 
-    await userEvent.click(within(rail).getByText("Ranked windows"));
+    await toggleRecommendedTimes();
     expect(rail).not.toHaveAttribute("open");
-    expect(screen.queryByText("Ranked window")).not.toBeInTheDocument();
+    expect(finalizeSection).toHaveAttribute("open");
+    expect(screen.queryByText("Recommended time")).not.toBeInTheDocument();
   });
 
   test("saving blocked times painted on the Time Table re-reads the results and clears the pick", async () => {
@@ -2388,6 +2398,10 @@ describe("scaled organizer workspace", () => {
       );
       expect(finalizeSection()).toHaveAttribute("open");
       expect(screen.getByRole("heading", { name: "Finalize" })).toHaveFocus();
+      expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledWith({
+        behavior: "smooth",
+        block: "nearest",
+      });
       expect(cell).toHaveAttribute("aria-selected", "true");
       expect(calendarCell(2)).toHaveAttribute("aria-selected", "true");
       expect(calendarCell(0)).not.toHaveAttribute("aria-selected");
@@ -2493,10 +2507,10 @@ describe("scaled organizer workspace", () => {
       expect(finalizeSection()).toHaveTextContent("No time selected yet");
       expect(finalizeSection()).toHaveAttribute("open");
       expect(finalizeSection()).toHaveTextContent(
-        "Pick a window on the calendar or choose a ranked one.",
+        "Pick a time on the calendar or choose one of the recommended times above.",
       );
       expect(screen.queryByText("Custom window")).not.toBeInTheDocument();
-      expect(screen.queryByText(/Ranked #/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Recommended #/)).not.toBeInTheDocument();
       expect(calendarCell(1)).not.toHaveAttribute("aria-selected");
       expect(
         screen.getAllByText("This event is active and accepting responses."),
@@ -2559,13 +2573,14 @@ describe("scaled organizer workspace", () => {
     expect(finalizeSection).toHaveAttribute("open");
     expect(finalizeSection).toHaveTextContent("Thursday 9:00 AM online");
     expect(finalizeSection).toHaveTextContent("Virtual");
-    expect(finalizeSection).toHaveTextContent("Ranked #1");
+    expect(finalizeSection).toHaveTextContent("Recommended #1");
     expect(finalizeSection).not.toHaveTextContent("In person");
-    expect(screen.getByRole("heading", { name: "Finalize" })).toHaveFocus();
+    expect(
+      screen.getByRole("button", { name: /selected time/i }),
+    ).toHaveFocus();
   });
 
-  test("selects a legacy recommendation and honors reduced motion", async () => {
-    window.matchMedia = jest.fn().mockReturnValue({ matches: true });
+  test("selects a legacy recommendation without moving the page", async () => {
     fetchEventResults.mockResolvedValueOnce({
       status: "fresh",
       requestedRevision: 3,
@@ -2592,13 +2607,34 @@ describe("scaled organizer workspace", () => {
       screen.getByRole("button", { name: /choose this time/i }),
     );
 
-    expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledWith({
-      behavior: "auto",
-      block: "nearest",
-    });
+    expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled();
     expect(document.getElementById("organizer-finalize")).toHaveTextContent(
       "Legacy result",
     );
+  });
+
+  test("a calendar pick brings Finalize into view, honoring reduced motion", async () => {
+    window.matchMedia = jest.fn().mockReturnValue({ matches: true });
+    mockCalendarWindowFlow();
+    const nowSpy = jest
+      .spyOn(Date, "now")
+      .mockReturnValue(Date.parse("2026-08-01T00:00:00Z"));
+    try {
+      renderView(jest.fn(), calendarEvent);
+      await screen.findByText(/Results are current/);
+      await userEvent.click(calendarCell(1));
+
+      expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledWith({
+        behavior: "auto",
+        block: "nearest",
+      });
+      expect(HTMLElement.prototype.scrollIntoView.mock.contexts).toContain(
+        document.getElementById("organizer-finalize"),
+      );
+      expect(screen.getByRole("heading", { name: "Finalize" })).toHaveFocus();
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   describe("live sync", () => {

@@ -19,8 +19,8 @@ import { createLiveRefreshScheduler } from "@/lib/liveRefresh";
 import { selectionFromRecommendation } from "@/lib/meetingWindows";
 
 // Workspace order: event facts, then the time table (the meeting-time
-// calendar with its ranked windows, confirmation step, and blocked times
-// tucked under it), then the roster that feeds them. The anchor keeps its
+// calendar with its blocked times and confirmation step, which holds the
+// recommended times, tucked under it), then the roster that feeds them. The anchor keeps its
 // original id so existing links to it still work.
 const SECTION_LINKS = [
   { id: "overview", label: "Overview", Icon: CalendarIcon },
@@ -148,10 +148,11 @@ export default function OrganizerScaleView() {
     return () => clearTimeout(timer);
   }, [event.code]);
 
-  // Picking a window (from the calendar or the ranked list) hands the
-  // organizer straight to the confirmation step, which opens on the pick.
+  // A calendar pick hands the organizer straight to the confirmation step,
+  // which opens on the pick. A recommended time is chosen from inside that
+  // step already, so focus stays on its chip for comparing the others.
   useEffect(() => {
-    if (!selection) return;
+    if (!selection || selection.source === "recommendation") return;
     focusFinalizeStep(finalizeHeadingRef);
   }, [selection]);
 

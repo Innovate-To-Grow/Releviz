@@ -1036,7 +1036,7 @@ test("results support the legacy envelope and failed or empty snapshots", async 
     screen.queryByRole("grid", { name: /Meeting time calendar/ }),
   ).not.toBeInTheDocument();
   expect(
-    screen.getByRole("heading", { name: "Ranked windows" }),
+    screen.getByRole("heading", { level: 5, name: "Recommended times" }),
   ).toBeInTheDocument();
   await userEvent.click(
     screen.getByRole("button", { name: /choose this time/i }),
@@ -1202,7 +1202,7 @@ test("finalize empty and inactive states point at the calendar and block review"
   );
   expect(block).toHaveTextContent("No time selected yet");
   expect(block).toHaveTextContent(
-    "Pick a window on the calendar or choose a ranked one.",
+    "Pick a time on the calendar or choose one of the recommended times above.",
   );
   expect(within(block).queryAllByRole("button")).toHaveLength(0);
 
@@ -1254,7 +1254,7 @@ test("finalize describes a custom calendar window with its estimated availabilit
 
   expect(screen.getByText("2026-09-01 09:00–10:00")).toBeInTheDocument();
   expect(screen.getByText("Custom window")).toBeInTheDocument();
-  expect(screen.queryByText(/Ranked #/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/Recommended #/)).not.toBeInTheDocument();
   expect(screen.getByText("In person")).toBeInTheDocument();
   expect(
     screen.getByText(
@@ -1399,7 +1399,7 @@ test("finalize shows exact ranked metrics and the rescheduled note", () => {
     },
   });
 
-  expect(screen.getByText("Ranked #2")).toBeInTheDocument();
+  expect(screen.getByText("Recommended #2")).toBeInTheDocument();
   expect(screen.queryByText("Custom window")).not.toBeInTheDocument();
   expect(
     screen.getByText("75% weighted · 70% unweighted · 5 fully available"),
@@ -1681,7 +1681,7 @@ test("results hand the workspace their freshness and reload silently for it", as
   });
   expect(screen.getAllByText("No recommendation yet")).toHaveLength(2);
   expect(
-    screen.queryByText("Calculating the best options"),
+    screen.queryByText("Calculating recommendations"),
   ).not.toBeInTheDocument();
   await act(async () => {
     release({
@@ -1756,25 +1756,33 @@ test("the ranked list is collapsed by default and summarizes the best window", a
       onSelect={jest.fn()}
     />,
   );
-  // The list is a named, collapsed step under the calendar, not a landmark.
-  const rail = document.querySelector("details.organizer-ranked-windows");
-  expect(rail).toHaveAttribute("id", "organizer-ranked-windows");
+  // The list is a named, collapsed disclosure inside the (collapsed)
+  // Finalize step, not a landmark and not a step of its own.
+  const rail = document.querySelector("details.organizer-recommended-times");
+  const finalize = document.getElementById("organizer-finalize");
+  expect(finalize).toContainElement(rail);
+  expect(rail).toHaveAttribute("id", "organizer-recommended-times");
   expect(rail).toHaveAttribute(
     "aria-labelledby",
-    "organizer-ranked-windows-heading",
+    "organizer-recommended-times-heading",
   );
   expect(
     within(rail.querySelector("summary")).getByRole("heading", {
-      level: 4,
-      name: "Ranked windows",
+      level: 5,
+      name: "Recommended times",
     }),
-  ).toHaveAttribute("id", "organizer-ranked-windows-heading");
+  ).toHaveAttribute("id", "organizer-recommended-times-heading");
   expect(
-    screen.queryByRole("complementary", { name: "Ranked windows" }),
+    screen.queryByRole("complementary", { name: "Recommended times" }),
   ).not.toBeInTheDocument();
   expect(rail).not.toHaveAttribute("open");
+  expect(finalize).not.toHaveAttribute("open");
   await waitFor(() =>
-    expect(rail).toHaveTextContent("2 candidates · best Tue 09:00–10:00"),
+    expect(rail).toHaveTextContent("2 recommended · best Tue 09:00–10:00"),
+  );
+  // Finalize's own summary says there is something to choose from.
+  expect(finalize.querySelector(":scope > summary")).toHaveTextContent(
+    "No time selected yet · 2 recommended",
   );
   // Buttons exist for tests and assistive tech, but are hidden until opened.
   expect(
@@ -1783,18 +1791,30 @@ test("the ranked list is collapsed by default and summarizes the best window", a
   expect(
     within(rail).getAllByRole("button", { name: /choose this time/i })[0],
   ).not.toBeVisible();
-  await userEvent.click(within(rail).getByText("Ranked windows"));
+  await toggleRecommendedTimes();
+  expect(finalize).toHaveAttribute("open");
   expect(rail).toHaveAttribute("open");
   expect(
     within(rail).getAllByRole("button", { name: /choose this time/i })[0],
   ).toBeVisible();
-  // The Finalize step renders under it in the same panel, collapsed too.
-  expect(
-    screen.getByRole("heading", { level: 4, name: "Finalize" }),
-  ).toBeInTheDocument();
-  const finalize = document.getElementById("organizer-finalize");
-  expect(finalize).not.toHaveAttribute("open");
+  // The list comes right after the step's description, before its content.
+  expect(rail.previousElementSibling).toHaveClass(
+    "finalize-block__description",
+  );
+  expect(rail.nextElementSibling).toHaveClass("finalize-block__body");
   expect(finalize).toHaveTextContent("No time selected yet");
+  expect(finalize).toHaveTextContent(
+    "Pick a time on the calendar or choose one of the recommended times above.",
+  );
+
+  // Closing Finalize closes the list with it, so reopening Finalize shows
+  // the list collapsed again.
+  await userEvent.click(finalize.querySelector(":scope > summary"));
+  expect(finalize).not.toHaveAttribute("open");
+  await waitFor(() => expect(rail).not.toHaveAttribute("open"));
+  await userEvent.click(finalize.querySelector(":scope > summary"));
+  expect(finalize).toHaveAttribute("open");
+  expect(rail).not.toHaveAttribute("open");
 });
 
 test("the ranked list explains an empty or still-computing snapshot", async () => {
@@ -1813,9 +1833,9 @@ test("the ranked list explains an empty or still-computing snapshot", async () =
       onSelect={jest.fn()}
     />,
   );
-  const rail = document.querySelector("details.organizer-ranked-windows");
+  const rail = document.querySelector("details.organizer-recommended-times");
   await waitFor(() =>
-    expect(rail).toHaveTextContent("Calculating the best options"),
+    expect(rail).toHaveTextContent("Calculating recommendations"),
   );
   unmount();
 
@@ -1836,7 +1856,7 @@ test("the ranked list explains an empty or still-computing snapshot", async () =
   );
   await waitFor(() =>
     expect(
-      document.querySelector("details.organizer-ranked-windows"),
+      document.querySelector("details.organizer-recommended-times"),
     ).toHaveTextContent("No recommendation yet"),
   );
 });
@@ -1882,12 +1902,12 @@ async function renderRanking(recommendations, basis) {
     />,
   );
   await screen.findByText(/Results are current at revision 2/);
-  const rail = document.querySelector("details.organizer-ranked-windows");
+  const rail = document.querySelector("details.organizer-recommended-times");
   return { ...view, rail, intro: rail.querySelector(".ranked-chips__intro") };
 }
 
 const RANKING_RULE =
-  "Times someone can attend for the whole 60 minutes, at least half as available as the best, never overlapping in the same format.";
+  "We recommend times someone can attend for the whole 60 minutes, at least half as available as the best, never overlapping in the same format.";
 const RANKING_POINTER =
   "Point at one to find it on the calendar; click one to select it.";
 
@@ -1955,7 +1975,7 @@ test.each([
       within(rail).getAllByRole("button", { name: /choose this time/i }),
     ).toHaveLength(recommendations.length);
     expect(rail.querySelector("summary")).toHaveTextContent(
-      `${recommendations.length} candidate${recommendations.length === 1 ? "" : "s"} · best Tue 09:00–10:00`,
+      `${recommendations.length} recommended · best Tue 09:00–10:00`,
     );
   },
 );
@@ -1970,7 +1990,7 @@ test("a full ranked list reports how many more windows qualified", async () => {
     bestWeightedAvailability: 1,
   });
   expect(rail.querySelector("summary")).toHaveTextContent(
-    "10 of 12 candidates · best Tue 09:00–10:00",
+    "10 of 12 recommended · best Tue 09:00–10:00",
   );
   expect(intro).toHaveTextContent("Showing the top 10 of 12.");
   expect(rail.querySelectorAll(".ranked-chip")).toHaveLength(10);
@@ -1988,7 +2008,7 @@ test("the ranked list never slices what the API listed", async () => {
   });
   expect(rail.querySelectorAll(".ranked-chip")).toHaveLength(12);
   expect(rail.querySelector("summary")).toHaveTextContent(
-    "12 candidates · best Tue 09:00–10:00",
+    "12 recommended · best Tue 09:00–10:00",
   );
 });
 
@@ -2020,14 +2040,14 @@ test.each([
     { zeroWeightOnlyAvailability: true },
     "No time works yet",
     "No time works yet",
-    "No upcoming 60-minute window has anyone with a weight above 0 free for all of it. Some times suit only people weighted 0, who don't count toward the ranking. Ask for more availability, unblock times, or shorten the meeting.",
+    "No upcoming 60-minute window has anyone with a weight above 0 free for all of it. Some times suit only people weighted 0, who don't count toward the recommendations. Ask for more availability, unblock times, or shorten the meeting.",
   ],
   [
     "no_weighted_responses",
     {},
     "No weighted responses yet",
     "No one who counts has responded",
-    "Everyone counted in the results so far has weight 0, so their times aren't ranked. Ranked windows appear once someone with a weight above 0 is counted.",
+    "Everyone counted in the results so far has weight 0, so no time is recommended. Recommendations appear once someone with a weight above 0 is counted.",
   ],
   [
     "no_future_slots",
@@ -2048,7 +2068,7 @@ test.each([
     {},
     "Waiting for responses",
     "Waiting for responses",
-    "Ranked windows appear once someone included in the results submits availability.",
+    "Recommendations appear once someone included in the results submits availability.",
   ],
 ])(
   "an empty ranked list names its reason: %s",
@@ -2058,7 +2078,7 @@ test.each([
       hint,
     );
     expect(
-      within(rail).getByRole("heading", { level: 5, name: title }),
+      within(rail).getByRole("heading", { level: 6, name: title }),
     ).toBeInTheDocument();
     expect(within(rail).getByText(body)).toBeInTheDocument();
   },
@@ -2090,14 +2110,14 @@ test("an older snapshot's 0% padding is neither listed nor outlined", async () =
     });
     render(<ResultsSnapshotPanel {...timeTableProps(datedEvent)} />);
     await screen.findByText(/Results are updating for revision 7/);
-    const rail = document.querySelector("details.organizer-ranked-windows");
-    await userEvent.click(within(rail).getByText("Ranked windows"));
+    const rail = document.querySelector("details.organizer-recommended-times");
+    await toggleRecommendedTimes();
     expect(rail.querySelectorAll(".ranked-chip")).toHaveLength(1);
     expect(rail.querySelector("summary")).toHaveTextContent(
-      "1 candidate · best Thu 09:30–10:30",
+      "1 recommended · best Thu 09:30–10:30",
     );
     expect(rail.querySelector(".ranked-chips__intro")).toHaveTextContent(
-      "The calendar outlines every ranked window. Point at one to find it on the calendar; click one to select it.",
+      "The calendar outlines every recommended time. Point at one to find it on the calendar; click one to select it.",
     );
     const outlines = document.querySelectorAll(
       ".meeting-calendar__block--rank",
@@ -2183,6 +2203,17 @@ function renderStatefulTimeTable(initialEvent, onEventSaved) {
       initialEvent={initialEvent}
       onEventSaved={onEventSaved}
     />,
+  );
+}
+
+// The recommended times sit inside the Finalize step: open Finalize first
+// when it is closed, then toggle the list through its own summary.
+async function toggleRecommendedTimes() {
+  const finalize = document.getElementById("organizer-finalize");
+  if (!finalize.open)
+    await userEvent.click(finalize.querySelector(":scope > summary"));
+  await userEvent.click(
+    document.querySelector("#organizer-recommended-times > summary"),
   );
 }
 
@@ -3046,23 +3077,23 @@ test("opening Blocked times hides the ranked outlines and the pick until it clos
       document.querySelector(".meeting-calendar__block--rank");
     const selectedBlock = () =>
       document.querySelector(".meeting-calendar__block--selected");
-    const rail = document.querySelector("details.organizer-ranked-windows");
+    const rail = document.querySelector("details.organizer-recommended-times");
 
     expect(selectedBlock()).not.toBeNull();
-    await userEvent.click(within(rail).getByText("Ranked windows"));
+    await toggleRecommendedTimes();
     expect(rankBlock()).not.toBeNull();
 
     await openBlockedTimes();
     expect(rankBlock()).toBeNull();
     expect(selectedBlock()).toBeNull();
-    expect(screen.queryByText("Ranked window")).not.toBeInTheDocument();
+    expect(screen.queryByText("Recommended time")).not.toBeInTheDocument();
     expect(rail).toHaveAttribute("open");
 
     await userEvent.click(blockedTimesSummary());
     expect(blockedTimesDetails()).not.toHaveAttribute("open");
     expect(rankBlock()).not.toBeNull();
     expect(selectedBlock()).not.toBeNull();
-    expect(screen.getByText("Ranked window")).toBeInTheDocument();
+    expect(screen.getByText("Recommended time")).toBeInTheDocument();
   } finally {
     nowSpy.mockRestore();
   }
@@ -3074,8 +3105,8 @@ test("ranked windows are compact chips that highlight their window on the calend
     mockDatedSnapshot();
     render(<ResultsSnapshotPanel {...timeTableProps(datedEvent)} />);
     await screen.findByText(/Results are current at revision 7/);
-    const rail = document.querySelector("details.organizer-ranked-windows");
-    await userEvent.click(within(rail).getByText("Ranked windows"));
+    const rail = document.querySelector("details.organizer-recommended-times");
+    await toggleRecommendedTimes();
 
     // One chip per candidate: rank, window, weighted share; the rest of the
     // figures are in the accessible name and in the detail line below.
@@ -3144,8 +3175,8 @@ test("choosing a ranked window leaves painting mode and keeps the draft", async 
     await openBlockedTimes();
     paintCell(0);
     expect(editorCell(0)).toHaveAttribute("data-blocked-paint", "true");
-    const rail = document.querySelector("details.organizer-ranked-windows");
-    await userEvent.click(within(rail).getByText("Ranked windows"));
+    const rail = document.querySelector("details.organizer-recommended-times");
+    await toggleRecommendedTimes();
     await userEvent.click(
       screen.getAllByRole("button", { name: /choose this time/i })[0],
     );
@@ -3182,12 +3213,12 @@ test("the calendar draws the ranked windows only while the ranked list is open",
 
     // Closed list: no outline, no badge, no legend entry, no rank in the
     // cell's description...
-    const rail = document.querySelector("details.organizer-ranked-windows");
+    const rail = document.querySelector("details.organizer-recommended-times");
     expect(rail).not.toHaveAttribute("open");
     expect(rankBlock()).toBeNull();
-    expect(screen.queryByText("Ranked window")).not.toBeInTheDocument();
+    expect(screen.queryByText("Recommended time")).not.toBeInTheDocument();
     expect(cell(1).getAttribute("aria-label")).not.toContain(
-      "Inside ranked window",
+      "Inside recommended time",
     );
     // ...but a pick inside the window is still the ranked window.
     await userEvent.click(cell(1));
@@ -3198,21 +3229,30 @@ test("the calendar draws the ranked windows only while the ranked list is open",
       }),
     );
 
-    await userEvent.click(within(rail).getByText("Ranked windows"));
+    await toggleRecommendedTimes();
     expect(rail).toHaveAttribute("open");
     expect(rankBlock()).toHaveAttribute("data-rank", "1");
     expect(
       rankBlock().querySelector(".meeting-calendar__rank"),
     ).toHaveTextContent("#1");
-    expect(screen.getByText("Ranked window")).toBeInTheDocument();
+    expect(screen.getByText("Recommended time")).toBeInTheDocument();
     expect(cell(1).getAttribute("aria-label")).toContain(
-      "Inside ranked window #1.",
+      "Inside recommended time #1.",
     );
 
-    await userEvent.click(within(rail).getByText("Ranked windows"));
+    await toggleRecommendedTimes();
     expect(rail).not.toHaveAttribute("open");
     expect(rankBlock()).toBeNull();
-    expect(screen.queryByText("Ranked window")).not.toBeInTheDocument();
+    expect(screen.queryByText("Recommended time")).not.toBeInTheDocument();
+
+    // Closing Finalize with the list open takes the outlines away too.
+    await toggleRecommendedTimes();
+    expect(rankBlock()).not.toBeNull();
+    const finalize = document.getElementById("organizer-finalize");
+    await userEvent.click(finalize.querySelector(":scope > summary"));
+    expect(finalize).not.toHaveAttribute("open");
+    await waitFor(() => expect(rankBlock()).toBeNull());
+    expect(rail).not.toHaveAttribute("open");
   } finally {
     nowSpy.mockRestore();
   }
@@ -3266,7 +3306,7 @@ test("finalize stays collapsed until a pick opens it and sums up its state", asy
   expect(step()).toHaveAttribute("open");
   expect(summary()).toHaveTextContent("No time selected yet");
   expect(step()).toHaveTextContent(
-    "Pick a window on the calendar or choose a ranked one.",
+    "Pick a time on the calendar or choose one of the recommended times above.",
   );
 
   // A confirmed meeting is summed up too, collapsed on a fresh mount.
@@ -3301,9 +3341,12 @@ test("the blocked-times step sits first under the calendar and saves through the
   const stack = document.querySelector(".time-table__sections");
   expect(Array.from(stack.children).map((step) => step.id)).toEqual([
     "organizer-blocked-times",
-    "organizer-ranked-windows",
     "organizer-finalize",
   ]);
+  // The recommended times are inside Finalize, not a step of their own.
+  expect(document.getElementById("organizer-finalize")).toContainElement(
+    document.getElementById("organizer-recommended-times"),
+  );
   expect(stack.previousElementSibling).toHaveClass("meeting-calendar");
   // One time table: the calendar is the only grid, before and after opening.
   expect(screen.getAllByRole("grid")).toHaveLength(1);

@@ -570,7 +570,7 @@
 /* Finalize step: one collapsible step under the Time Table calendar (the
    disclosure draws its frame; these rules lay out its body) */
 .finalize-block__description {
-  margin: 0 0 0.75rem;
+  margin: 0;
   color: var(--bs-secondary-color);
   font-size: 0.875rem;
 }
@@ -929,6 +929,24 @@
 
 .time-table__section-content {
   padding: 0.75rem 1rem 1rem;
+}
+
+/* Recommended times, nested in Finalize: a lighter, tighter frame than the
+   steps it sits in. */
+.time-table__section--nested {
+  background: var(--bs-body-bg);
+}
+
+.time-table__section--nested > .time-table__summary {
+  padding: 0.625rem 0.875rem;
+}
+
+.time-table__section--nested .time-table__section-title {
+  font-size: 0.9375rem;
+}
+
+.time-table__section--nested > .time-table__section-content {
+  padding: 0.75rem 0.875rem 0.875rem;
 }
 
 /* Blocked-times tools: a bar right under the calendar that stays pinned to
