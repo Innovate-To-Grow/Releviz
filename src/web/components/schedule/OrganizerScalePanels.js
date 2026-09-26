@@ -1074,7 +1074,7 @@ const OTHER_TIMES_WEEKS = 4;
 
 /**
  * The days on which a meeting can still start, for Other times and the
- * Finalize prompt: `{ k, weekly, days }`. Weekly events look ahead
+ * Finalize prompt: `{ k, weekly, days, today }`. Weekly events look ahead
  * OTHER_TIMES_WEEKS weeks from the event-local today.
  */
 function useStartableDays(event, now) {
@@ -1106,12 +1106,13 @@ function useStartableDays(event, now) {
     () => (k < 1 ? [] : startableRows(columns, k, now)),
     [columns, k, now],
   );
-  return { k, weekly: groupKind(groups) === "weekday", days };
+  return { k, weekly: groupKind(groups) === "weekday", days, today };
 }
 
-// One open time as a chip: its local times, the lowest slot's weighted share
-// (an upper bound, as in Finalize), its rank when the same time is also
-// recommended, and whether it is the current pick.
+// One open time as a chip: its start (the chip's visible name), its full
+// local times, the lowest slot's weighted share (an upper bound, as in
+// Finalize), its rank when the same time is also recommended, and whether
+// it is the current pick.
 function otherTimeEntries({
   day,
   k,
@@ -1120,7 +1121,7 @@ function otherTimeEntries({
   recommendations,
   selectedKey,
 }) {
-  return day.rows.map((row) => {
+  return day.rows.map((row, index) => {
     const window = windowAt(day.column, row, k);
     const share = windowMetrics(results, channel, window.slotIndices).weighted;
     const recommendation = recommendationForWindow(
@@ -1128,11 +1129,16 @@ function otherTimeEntries({
       channel,
       window,
     );
+    const times = formatWindowTimes(day.column.slots.slice(row, row + k));
+    const [start, end] = times.split("–");
     return {
       row,
+      index,
       key: `${day.column.key}:${row}`,
       startsAt: window.startsAt,
-      times: formatWindowTimes(day.column.slots.slice(row, row + k)),
+      times,
+      start,
+      end,
       share:
         share == null ? null : share > 0 ? `up to ${shareOf(share)}%` : "0%",
       chipShare: share == null ? null : share > 0 ? shareOf(share) : "0",
@@ -1156,13 +1162,18 @@ function dayLabel(column) {
   });
 }
 
-// The days shown together: a week of a weekly event, or up to seven dates.
-function dayGroups(days, weekly) {
+// The days shown together: a week of a weekly event (yesterday's
+// after-midnight times join this week), or one of the calendar's pages of
+// seven dates, so the groups match the calendar and stay put as dates pass.
+function dayGroups(days, { weekly, today, datePositions }) {
   const groups = [];
   days.forEach((day, index) => {
+    const date = day.column.date;
     const key = weekly
-      ? weekStartOf(day.column.date)
-      : Math.floor(index / COLUMNS_PER_PAGE);
+      ? weekStartOf(today && date < today ? today : date)
+      : Math.floor(
+          (datePositions.get(day.column.key) ?? index) / COLUMNS_PER_PAGE,
+        );
     const last = groups[groups.length - 1];
     if (last && last.key === key) last.days.push(day);
     else groups.push({ key, days: [day] });
@@ -1185,14 +1196,23 @@ function dayGroups(days, weekly) {
   });
 }
 
+// Arrow keys, Home and End move between the time chips, which share one
+// Tab stop (as the calendar grid's cells do).
+const TIME_CHIP_KEYS = {
+  ArrowRight: 1,
+  ArrowDown: 1,
+  ArrowLeft: -1,
+  ArrowUp: -1,
+};
+
 /**
  * Other times: any open meeting time, recommended or not, picked by clicking
- * inside Finalize, the same way as Recommended times: a day (grouped by
- * week, like the calendar), then one of its times as a chip. The times are
- * the windows the calendar lets the organizer pick (`pickable` comes from
- * useStartableDays). A click selects the time exactly like a calendar pick
- * and shows it on the calendar; focus stays on the chip, which turns
- * pressed.
+ * inside Finalize, the same way as Recommended times: a day (a week, or a
+ * calendar page of dates, at a time), then one of its start times as a
+ * chip. The times are the windows the calendar lets the organizer pick
+ * (`pickable` comes from useStartableDays). A click selects the time like a
+ * calendar pick and shows it on the calendar; the chip turns pressed, keeps
+ * focus, and the pick is announced.
  */
 function OtherTimesSection({
   event,
@@ -1208,19 +1228,48 @@ function OtherTimesSection({
   const [open, setOpen] = useState(false);
   const [dayKey, setDayKey] = useState(null);
   const [focusKey, setFocusKey] = useState(null);
-  const [announcement, setAnnouncement] = useState("");
+  const [tabKey, setTabKey] = useState(null);
+  // What the status line says, and how many times it has spoken: a repeat
+  // of the same words must still change the text to be announced again.
+  const [announcement, setAnnouncement] = useState({ text: "", count: 0 });
+  const announce = (text) =>
+    setAnnouncement((previous) => ({ text, count: previous.count + 1 }));
+  const pickKey = selectionKey(selection);
+  const [seenPick, setSeenPick] = useState(pickKey);
+  if (pickKey !== seenPick) {
+    setSeenPick(pickKey);
+    // A pick made elsewhere (the calendar, Recommended times) brings the
+    // list to its day; one made here leaves the list where it is.
+    if (selection?.source !== "picker") setDayKey(null);
+  }
+  const listRef = useRef(null);
+  const dayGroupRef = useRef(null);
+  // The time chip with keyboard focus, so focus can move to its neighbour
+  // when a clock tick or a refused pick removes it.
+  const focusedTime = useRef(null);
   const timeZone = event.timezone || "UTC";
   const mixed = event.mode === "mixed";
-  const { k, weekly, days } = pickable;
+  const { k, weekly, days, today } = pickable;
   const total = days.reduce((sum, day) => sum + day.rows.length, 0);
-  const groups = useMemo(() => dayGroups(days, weekly), [days, weekly]);
+  const slotGroups = useMemo(() => normalizeSlotGroups(event), [event]);
+  const datePositions = useMemo(
+    () =>
+      new Map(
+        slotGroups
+          .filter((group) => group.kind === "date")
+          .map((group, position) => [group.key, position]),
+      ),
+    [slotGroups],
+  );
+  const groups = useMemo(
+    () => dayGroups(days, { weekly, today, datePositions }),
+    [days, weekly, today, datePositions],
+  );
+  // The pick counts here only in the format shown.
   const selectedKey =
-    selection?.startsAt && selection.channel === channel
-      ? selectionKey(selection)
-      : null;
-  // Opening on the day of the pick, when it is one of these days.
+    selection?.startsAt && selection.channel === channel ? pickKey : null;
   const pickedDayKey = useMemo(() => {
-    if (!open || !selection?.startsAt) return null;
+    if (!open || !selectedKey) return null;
     const start = Date.parse(selection.startsAt);
     const hit = days.find((day) =>
       day.rows.some(
@@ -1228,7 +1277,7 @@ function OtherTimesSection({
       ),
     );
     return hit ? hit.column.key : null;
-  }, [open, selection, days, k]);
+  }, [open, selectedKey, selection, days, k]);
   const day =
     days.find((entry) => entry.column.key === dayKey) ||
     days.find((entry) => entry.column.key === pickedDayKey) ||
@@ -1248,10 +1297,36 @@ function OtherTimesSection({
           selectedKey,
         })
       : [];
+  const tabStop =
+    entries.find((entry) => entry.key === tabKey) ||
+    entries.find((entry) => entry.selected) ||
+    entries[0];
   const detailed =
     entries.find((entry) => entry.key === focusKey) ||
     entries.find((entry) => entry.selected) ||
     entries[0];
+  const entryKeys = entries.map((entry) => entry.key).join("|");
+
+  useEffect(() => {
+    const focused = focusedTime.current;
+    if (!focused) return;
+    if (entryKeys.split("|").includes(focused.key)) return;
+    focusedTime.current = null;
+    const active = document.activeElement;
+    if (active && active !== document.body) return;
+    const chips = listRef.current?.querySelectorAll("button") || [];
+    const target =
+      chips[Math.min(focused.index, chips.length - 1)] ||
+      dayGroupRef.current?.querySelector('[aria-pressed="true"]') ||
+      document.querySelector("#organizer-other-times > summary");
+    target?.focus();
+  }, [entryKeys]);
+
+  const toggle = (next) => {
+    setOpen(next);
+    // Reopening starts from the day of the pick again.
+    if (next) setDayKey(null);
+  };
 
   const choose = (entry) => {
     const picked = selectionFromWindow({
@@ -1273,12 +1348,31 @@ function OtherTimesSection({
         groupKey: day.column.groupKey,
       },
     );
-    setAnnouncement(
-      accepted ? "" : "That time has just started. Pick another one.",
+    setTabKey(entry.key);
+    announce(
+      accepted
+        ? `Selected ${dayLabel(day.column)}, ${entry.times}.`
+        : "That time has just started. Pick another one.",
     );
   };
 
-  const showDaysOf = (index) => setDayKey(groups[index].days[0].column.key);
+  const moveBetweenTimes = (keyDownEvent, entry) => {
+    let index = null;
+    if (keyDownEvent.key in TIME_CHIP_KEYS)
+      index = entry.index + TIME_CHIP_KEYS[keyDownEvent.key];
+    else if (keyDownEvent.key === "Home") index = 0;
+    else if (keyDownEvent.key === "End") index = entries.length - 1;
+    if (index == null) return;
+    keyDownEvent.preventDefault();
+    const next = entries[Math.max(0, Math.min(entries.length - 1, index))];
+    setTabKey(next.key);
+    listRef.current?.querySelectorAll("button")[next.index]?.focus();
+  };
+
+  const showDaysOf = (index) => {
+    if (index < 0 || index >= groups.length) return;
+    setDayKey(groups[index].days[0].column.key);
+  };
 
   let body = null;
   if (!open) {
@@ -1299,12 +1393,17 @@ function OtherTimesSection({
       </p>
     );
   } else {
+    const atFirst = groupIndex <= 0;
+    const atLast = groupIndex >= groups.length - 1;
     body = (
       <>
         <p className="ranked-chips__intro text-secondary small mb-0">
-          Any time the calendar lets you pick, recommended or not. Choose a day,
-          then click a time to select it. Shares are weighted, from each
-          time&apos;s lowest slot; times are in {timeZone}.
+          {weekly
+            ? `Any open time in the next ${OTHER_TIMES_WEEKS} weeks, recommended or not (the calendar reaches further).`
+            : "Any open time the calendar lets you pick, recommended or not."}{" "}
+          Choose a day, then click a start time: each starts a {meetingMinutes}
+          -minute meeting. Shares are weighted, from each time&apos;s lowest
+          slot; times are in {timeZone}.
         </p>
         {(mixed || groups.length > 1) && (
           <div className="other-times__controls">
@@ -1314,11 +1413,13 @@ function OtherTimesSection({
                 aria-label={weekly ? "Week shown" : "Dates shown"}
                 className="meeting-calendar__stepper other-times__stepper"
               >
+                {/* Ends stay focusable (aria-disabled), so a keyboard user
+                    reaching the first or last group keeps their place. */}
                 <button
                   type="button"
-                  className="btn btn-outline-secondary app-btn"
+                  className={`btn btn-outline-secondary app-btn${atFirst ? " other-times__step--end" : ""}`}
                   aria-label="Earlier days"
-                  disabled={groupIndex <= 0}
+                  aria-disabled={atFirst}
                   onClick={() => showDaysOf(groupIndex - 1)}
                 >
                   <span className="app-btn-icon" aria-hidden="true">
@@ -1333,9 +1434,9 @@ function OtherTimesSection({
                 </span>
                 <button
                   type="button"
-                  className="btn btn-outline-secondary app-btn"
+                  className={`btn btn-outline-secondary app-btn${atLast ? " other-times__step--end" : ""}`}
                   aria-label="Later days"
-                  disabled={groupIndex >= groups.length - 1}
+                  aria-disabled={atLast}
                   onClick={() => showDaysOf(groupIndex + 1)}
                 >
                   <span className="app-btn-icon" aria-hidden="true">
@@ -1368,14 +1469,20 @@ function OtherTimesSection({
             )}
           </div>
         )}
-        <div role="group" aria-label="Day" className="day-chips">
+        <div
+          ref={dayGroupRef}
+          role="group"
+          aria-label="Day"
+          className="day-chips"
+        >
           {group.days.map((entry) => {
             const active = entry === day;
+            const picked = entry.column.key === pickedDayKey;
             return (
               <button
                 key={entry.column.key}
                 type="button"
-                className={`day-chip${active ? " day-chip--active" : ""}${entry.column.key === pickedDayKey ? " day-chip--picked" : ""}`}
+                className={`day-chip${active ? " day-chip--active" : ""}${picked ? " day-chip--picked" : ""}`}
                 aria-pressed={active}
                 onClick={() => {
                   setDayKey(entry.column.key);
@@ -1391,34 +1498,64 @@ function OtherTimesSection({
                     day: "numeric",
                   })}
                 </span>
+                {picked && (
+                  <>
+                    <span className="day-chip__pick" aria-hidden="true">
+                      <CheckIcon />
+                    </span>
+                    <span className="visually-hidden">
+                      , has the selected time
+                    </span>
+                  </>
+                )}
               </button>
             );
           })}
         </div>
         <ol
-          className="ranked-chips"
-          aria-label={`Open times on ${dayLabel(day.column)}`}
+          ref={listRef}
+          role="list"
+          className="ranked-chips other-times__chips"
+          aria-label={`Start times on ${dayLabel(day.column)}`}
         >
           {entries.map((entry) => (
             <li key={entry.key} className="ranked-chips__item">
+              {/* The visible start, then (for screen readers) the rest of
+                  the name: its end, the day, the rank, the action. */}
               <button
                 type="button"
-                className={`ranked-chip other-time-chip${entry.rank == null ? " ranked-chip--plain" : ""}${entry.selected ? " ranked-chip--selected" : ""}`}
+                className={`ranked-chip other-time-chip${entry.rank == null ? " ranked-chip--plain" : ""}${entry.chipShare === "0" ? " ranked-chip--nobody" : ""}${entry.selected ? " ranked-chip--selected" : ""}`}
                 aria-pressed={entry.selected}
+                tabIndex={entry === tabStop ? 0 : -1}
                 onClick={() => choose(entry)}
+                onKeyDown={(keyDownEvent) =>
+                  moveBetweenTimes(keyDownEvent, entry)
+                }
                 onPointerEnter={() => setFocusKey(entry.key)}
                 onPointerLeave={() => setFocusKey(null)}
-                onFocus={() => setFocusKey(entry.key)}
-                onBlur={() => setFocusKey(null)}
+                onFocus={() => {
+                  focusedTime.current = { key: entry.key, index: entry.index };
+                  setFocusKey(entry.key);
+                  setTabKey(entry.key);
+                }}
+                onBlur={(blurEvent) => {
+                  // Removed by a re-render: the effect above moves focus.
+                  if (!blurEvent.currentTarget.isConnected) return;
+                  focusedTime.current = null;
+                  setFocusKey(null);
+                }}
               >
                 {entry.rank != null && (
                   <>
-                    <span className="ranked-chip__rank">
+                    <span className="ranked-chip__rank" aria-hidden="true">
                       #{entry.rank}
                     </span>{" "}
                   </>
                 )}
-                <span className="ranked-chip__title">{entry.times}</span>{" "}
+                <span className="ranked-chip__title">{entry.start}</span>
+                {entry.end && (
+                  <span className="visually-hidden">{`–${entry.end}`}</span>
+                )}{" "}
                 {entry.chipShare != null && (
                   <span className="ranked-chip__share">
                     {entry.chipShare}%
@@ -1434,7 +1571,7 @@ function OtherTimesSection({
                   </span>
                 )}
                 <span className="visually-hidden">
-                  {`${entry.rank != null ? `, recommended #${entry.rank}` : ""}${entry.selected ? ", selected time" : ", select this time"}`}
+                  {`, ${dayLabel(day.column)}${entry.rank != null ? `, recommended #${entry.rank}` : ""}${entry.selected ? ", selected time" : ", select this time"}`}
                 </span>
               </button>
             </li>
@@ -1475,11 +1612,11 @@ function OtherTimesSection({
             : `${total} open time${total === 1 ? "" : "s"}${weekly ? ` in the next ${OTHER_TIMES_WEEKS} weeks` : ""} · recommended or not`
       }
       open={open}
-      onToggle={setOpen}
+      onToggle={toggle}
     >
       {body}
       <p className="visually-hidden" role="status">
-        {announcement}
+        {`${announcement.text}${announcement.count % 2 ? "\u00a0" : ""}`}
       </p>
     </TimeTableSection>
   );

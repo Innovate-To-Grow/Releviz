@@ -508,17 +508,25 @@ test.describe("Organizer meeting-time calendar", () => {
     await otherTimes.locator("> summary").click();
     await expect(otherTimes).toHaveAttribute("open", "");
     const laterDays = otherTimes.getByRole("button", { name: "Later days" });
-    while (await laterDays.isEnabled()) await laterDays.click();
+    await expect(laterDays).toBeVisible();
+    // The arrows stay focusable at the ends and say so with aria-disabled.
+    for (
+      let step = 0;
+      step < 8 && (await laterDays.getAttribute("aria-disabled")) !== "true";
+      step += 1
+    ) {
+      await laterDays.click();
+    }
+    await expect(laterDays).toHaveAttribute("aria-disabled", "true");
     const dayChips = otherTimes
       .getByRole("group", { name: "Day", exact: true })
       .getByRole("button");
     const lastDayChip = dayChips.last();
     await lastDayChip.click();
     await expect(lastDayChip).toHaveAttribute("aria-pressed", "true");
-    const lastDayName = (await lastDayChip.textContent()).replace(
-      /^\S+\s*/,
-      "",
-    );
+    const lastDayName = (
+      await lastDayChip.locator(".day-chip__date").textContent()
+    ).trim();
     const timeChip = otherTimes.locator(".ranked-chips .ranked-chip").nth(1);
     const chipTimes = await timeChip
       .locator(".ranked-chip__title")
@@ -526,6 +534,7 @@ test.describe("Organizer meeting-time calendar", () => {
     await expectAccessible(page, "organizer other times");
     await timeChip.click();
     await expect(candidate).toContainText(chipTimes);
+    await expect(candidate).toContainText(lastDayName);
     await expect(timeChip).toHaveAttribute("aria-pressed", "true");
     await expect(timeChip).toBeFocused();
     await expect(

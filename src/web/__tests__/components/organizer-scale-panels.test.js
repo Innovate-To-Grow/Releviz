@@ -3232,7 +3232,7 @@ test("Other times picks any open time with one click, like Recommended times", a
 
     await openOtherTimes();
     expect(other).toHaveTextContent(
-      "Any time the calendar lets you pick, recommended or not. Choose a day, then click a time to select it. Shares are weighted, from each time's lowest slot; times are in UTC.",
+      "Any open time the calendar lets you pick, recommended or not. Choose a day, then click a start time: each starts a 60-minute meeting. Shares are weighted, from each time's lowest slot; times are in UTC.",
     );
     // One date: no week stepper, one day, already open.
     expect(
@@ -3246,12 +3246,14 @@ test("Other times picks any open time with one click, like Recommended times", a
 
     // Every start the calendar would accept, as chips: times, the lowest
     // slot's share, and the rank when it is also recommended.
-    const list = within(other).getByRole("list", { name: /^Open times on / });
+    const list = within(other).getByRole("list", {
+      name: /^Start times on /,
+    });
     expect(list).toHaveClass("ranked-chips");
     let chips = otherChips(other);
     expect(
       textsOf(chips.map((chip) => chip.querySelector(".ranked-chip__title"))),
-    ).toEqual(["09:00–10:00", "09:30–10:30", "10:00–11:00"]);
+    ).toEqual(["09:00", "09:30", "10:00"]);
     expect(
       textsOf(chips.map((chip) => chip.querySelector(".ranked-chip__share"))),
     ).toEqual(["50% weighted", "90% weighted", "40% weighted"]);
@@ -3263,7 +3265,12 @@ test("Other times picks any open time with one click, like Recommended times", a
     );
     expect(chips[2].querySelector(".ranked-chip__rank")).toBeNull();
     expect(chips[2]).toHaveClass("ranked-chip--plain");
-    expect(chips[0]).toHaveAccessibleName(/recommended #2, select this time$/);
+    // The name carries the whole window and its day; the rank is read once.
+    expect(chips[0]).toHaveAccessibleName(
+      /^09:00\s*–10:00 50% weighted\s*, Thu, Aug 20, recommended #2, select this time$/,
+    );
+    // One Tab stop for the list.
+    expect(chips.map((chip) => chip.tabIndex)).toEqual([0, -1, -1]);
     const detail = () => other.querySelector(".ranked-chips__detail");
     expect(detail()).toHaveTextContent(
       /09:00–10:00 · up to 50% weighted · recommended #2$/,
@@ -3292,7 +3299,10 @@ test("Other times picks any open time with one click, like Recommended times", a
     expect(chips[2]).toHaveAccessibleName(/selected time$/);
     expect(chips[2].querySelector(".ranked-chip__check")).not.toBeNull();
     expect(chips[2]).toHaveFocus();
-    expect(within(other).getByRole("status")).toHaveTextContent("");
+    expect(chips.map((chip) => chip.tabIndex)).toEqual([-1, -1, 0]);
+    expect(within(other).getByRole("status")).toHaveTextContent(
+      "Selected Thu, Aug 20, 10:00–11:00.",
+    );
 
     // A recommended time picked here is that recommendation, and the chip
     // under Recommended times shows it too.
@@ -3380,11 +3390,19 @@ test("Other times pages a weekly event by week in its own time zone", async () =
 
     // The first week is the event-local one, starting on Monday the 28th.
     expect(stepper).toHaveTextContent(formatWeekLabel("2026-09-27"));
-    expect(earlier).toBeDisabled();
+    // The ends stay focusable and say they are inactive.
+    expect(earlier).toHaveAttribute("aria-disabled", "true");
+    expect(later).toHaveAttribute("aria-disabled", "false");
     expect(dayButtons()).toHaveLength(2);
     expect(pressedDay()).toHaveTextContent(/Mon\s*Sep 28/);
-    // Monday's later windows run into a 0% slot.
+    // Monday's later windows run into a 0% slot: nobody can attend them in
+    // full, so their chips read as the weak options they are.
     expect(shares()).toEqual(["50% weighted", "0% weighted", "0% weighted"]);
+    expect(
+      otherChips(other).map((chip) =>
+        chip.classList.contains("ranked-chip--nobody"),
+      ),
+    ).toEqual([false, true, true]);
     // Nothing recommended, so Finalize points at Other times only.
     expect(document.getElementById("organizer-finalize")).toHaveTextContent(
       "Pick a time on the calendar, or choose one under Other times above.",
@@ -3395,7 +3413,10 @@ test("Other times pages a weekly event by week in its own time zone", async () =
     await userEvent.click(later);
     await userEvent.click(later);
     expect(stepper).toHaveTextContent(formatWeekLabel("2026-10-18"));
-    expect(later).toBeDisabled();
+    expect(later).toHaveAttribute("aria-disabled", "true");
+    expect(later).toHaveFocus();
+    await userEvent.click(later);
+    expect(stepper).toHaveTextContent(formatWeekLabel("2026-10-18"));
     expect(dayButtons()).toHaveLength(1);
     expect(pressedDay()).toHaveTextContent(/Mon\s*Oct 19/);
 
@@ -3423,6 +3444,163 @@ test("Other times pages a weekly event by week in its own time zone", async () =
     );
     await waitFor(() => expect(otherChips(other)).toHaveLength(2));
     expect(pressedDay()).toHaveTextContent(/Mon\s*Sep 28/);
+    // The refused chip is gone; focus moves to the one now in its place.
+    await waitFor(() => expect(otherChips(other)[0]).toHaveFocus());
+
+    // Arrow keys, Home and End move between the start times.
+    await userEvent.keyboard("{ArrowRight}");
+    expect(otherChips(other)[1]).toHaveFocus();
+    await userEvent.keyboard("{Home}");
+    expect(otherChips(other)[0]).toHaveFocus();
+    await userEvent.keyboard("{End}");
+    expect(otherChips(other)[1]).toHaveFocus();
+    expect(otherChips(other).map((chip) => chip.tabIndex)).toEqual([-1, 0]);
+  } finally {
+    nowSpy.mockRestore();
+  }
+});
+
+test("Other times reopens on the day of the pick, and follows a pick made elsewhere", async () => {
+  const nowSpy = jest.spyOn(Date, "now").mockReturnValue(DATED_NOW);
+  try {
+    mockEmptySnapshot();
+    render(<PickingTimeTable {...timeTableProps(weeklyEvent)} />);
+    await screen.findByText(/Results are current/);
+    let other = await openOtherTimes();
+    const stepper = () =>
+      within(other).getByRole("group", { name: "Week shown" });
+    const step = (name) =>
+      userEvent.click(within(stepper()).getByRole("button", { name }));
+    const dayButtons = () =>
+      within(within(other).getByRole("group", { name: "Day" })).getAllByRole(
+        "button",
+      );
+    const pressedDay = () =>
+      dayButtons().find(
+        (button) => button.getAttribute("aria-pressed") === "true",
+      );
+
+    // Pick Wednesday 19 August, 09:30, two weeks on.
+    await step("Later days");
+    await step("Later days");
+    await userEvent.click(dayButtons()[1]);
+    await userEvent.click(otherChips(other)[1]);
+    expect(pressedDay()).toHaveAccessibleName(
+      /Wed\s*Aug 19\s*, has the selected time$/,
+    );
+
+    // Browse elsewhere, close, reopen: back on the pick's week and day.
+    await step("Earlier days");
+    await step("Earlier days");
+    expect(stepper()).toHaveTextContent(formatWeekLabel("2026-08-02"));
+    await userEvent.click(other.querySelector(":scope > summary"));
+    other = await openOtherTimes();
+    expect(stepper()).toHaveTextContent(formatWeekLabel("2026-08-16"));
+    expect(pressedDay()).toHaveTextContent(/Wed\s*Aug 19/);
+    expect(otherChips(other)[1]).toHaveAttribute("aria-pressed", "true");
+
+    // A pick on the calendar (Monday 17 August, 09:00) takes the list there.
+    await step("Earlier days");
+    await userEvent.click(calendarGrid().querySelector('[data-cell-idx="0"]'));
+    await waitFor(() => expect(pressedDay()).toHaveTextContent(/Mon\s*Aug 17/));
+    expect(stepper()).toHaveTextContent(formatWeekLabel("2026-08-16"));
+    expect(otherChips(other)[0]).toHaveAttribute("aria-pressed", "true");
+  } finally {
+    nowSpy.mockRestore();
+  }
+});
+
+test("Other times marks a pick only in its own format", async () => {
+  const nowSpy = jest.spyOn(Date, "now").mockReturnValue(DATED_NOW);
+  try {
+    mockDatedSnapshot();
+    render(
+      <PickingTimeTable
+        {...timeTableProps({ ...datedEvent, mode: "mixed" })}
+      />,
+    );
+    await screen.findByText(/Results are current at revision 7/);
+    const other = await openOtherTimes();
+    await userEvent.click(otherChips(other)[0]);
+    expect(otherChips(other)[0]).toHaveAttribute("aria-pressed", "true");
+    expect(other.querySelector(".day-chip__pick")).not.toBeNull();
+
+    // The same window in the other format is not the pick.
+    await userEvent.click(
+      within(within(other).getByRole("group", { name: "Format" })).getByRole(
+        "button",
+        { name: "Virtual" },
+      ),
+    );
+    expect(
+      otherChips(other).map((chip) => chip.getAttribute("aria-pressed")),
+    ).toEqual(["false", "false", "false"]);
+    expect(other.querySelector(".day-chip__pick")).toBeNull();
+  } finally {
+    nowSpy.mockRestore();
+  }
+});
+
+// Nine dates (two calendar pages) of four half-hour slots each.
+const NINE_DATES = Array.from(
+  { length: 9 },
+  (_, offset) => `2026-08-${String(20 + offset).padStart(2, "0")}`,
+);
+const nineDateEvent = {
+  ...datedEvent,
+  slotCount: 36,
+  slotGroups: NINE_DATES.map((date, position) => ({
+    key: `date:${date}`,
+    label: date,
+    date,
+    slots: [
+      ["09:00", "09:30"],
+      ["09:30", "10:00"],
+      ["10:00", "10:30"],
+      ["10:30", "11:00"],
+    ].map(([localStart, localEnd], row) => ({
+      index: position * 4 + row,
+      localStart,
+      localEnd,
+      startDayOffset: 0,
+      endDayOffset: 0,
+      startsAt: `${date}T${localStart}:00Z`,
+      endsAt: `${date}T${localEnd}:00Z`,
+    })),
+  })),
+};
+
+test("Other times pages dates like the calendar, and the pages stay put as dates pass", async () => {
+  const nowSpy = jest.spyOn(Date, "now").mockReturnValue(DATED_NOW);
+  try {
+    mockEmptySnapshot();
+    const { unmount } = render(
+      <ResultsSnapshotPanel {...timeTableProps(nineDateEvent)} />,
+    );
+    await screen.findByText(/Results are current/);
+    let other = await openOtherTimes();
+    let stepper = within(other).getByRole("group", { name: "Dates shown" });
+    expect(stepper).toHaveTextContent("Aug 20 – Aug 26, 2026");
+    await userEvent.click(
+      within(stepper).getByRole("button", { name: "Later days" }),
+    );
+    expect(stepper).toHaveTextContent("Aug 27 – Aug 28, 2026");
+    expect(
+      within(within(other).getByRole("group", { name: "Day" })).getAllByRole(
+        "button",
+      ),
+    ).toHaveLength(2);
+    unmount();
+
+    // With 20 August over, the first page is still the calendar's first
+    // (dates 1–7), now showing six of them.
+    nowSpy.mockReturnValue(Date.parse("2026-08-21T00:00:00Z"));
+    mockEmptySnapshot();
+    render(<ResultsSnapshotPanel {...timeTableProps(nineDateEvent)} />);
+    await screen.findByText(/Results are current/);
+    other = await openOtherTimes();
+    stepper = within(other).getByRole("group", { name: "Dates shown" });
+    expect(stepper).toHaveTextContent("Aug 21 – Aug 26, 2026");
   } finally {
     nowSpy.mockRestore();
   }
