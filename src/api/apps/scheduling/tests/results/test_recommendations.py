@@ -187,11 +187,11 @@ class RecommendationDomainTests(TestCase):
     def test_the_list_stops_at_the_ceiling_and_reports_how_many_qualified(self):
         event = self.event(
             "CEILING",
-            end_minutes=12 * 60,
+            end_minutes=12 * 60 + 15,
             day_selection_type="specific_dates",
             specific_dates=["2026-07-20"],
         )
-        self.respond(event, "Ada", inperson=[1] * 12)
+        self.respond(event, "Ada", inperson=[1] * 12 + [0.25])
 
         results = build_event_results(event, now=BEFORE_THE_DATES)
 
@@ -206,6 +206,27 @@ class RecommendationDomainTests(TestCase):
         basis = results["recommendationBasis"]
         self.assertEqual(basis["qualifyingWindowTotal"], 12)
         self.assertEqual(basis["listEnd"], "limit")
+        # The next option is #11 (100%), not the 25% slot under the floor.
+        self.assertIsNone(basis["nextWeightedAvailability"])
+
+    def test_exact_ties_fall_to_the_earlier_time_whatever_the_float_noise(self):
+        event = self.dated_event("FLOATTIE", ["2026-07-20"], end_minutes=11 * 60)
+        # 0.1 + 0.2 of the weight is 0.30000000000000004 in floating point,
+        # a hair above Ada's 0.3, yet both windows are exactly 50%.
+        self.respond(event, "Ada", inperson=[1, 1, 0, 0], weight=0.3)
+        self.respond(event, "Zoe", inperson=[1, 1, 0, 0], weight=0)
+        self.respond(event, "Quinn", inperson=[0, 1, 1, 0], weight=0.1)
+        self.respond(event, "Quincy", inperson=[0, 1, 1, 0], weight=0.2)
+
+        results = build_event_results(event, now=BEFORE_THE_DATES)
+
+        self.assertEqual(
+            [
+                (recommendation["label"], recommendation["weightedAvailability"])
+                for recommendation in results["recommendations"]
+            ],
+            [("2026-07-20 09:00–10:00", 0.5)],
+        )
 
     def test_the_same_time_is_listed_once_per_channel_in_mixed_mode(self):
         event = self.event(

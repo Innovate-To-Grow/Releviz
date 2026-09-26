@@ -20,6 +20,9 @@ MAX_RECOMMENDATIONS = 10
 RELATIVE_SCORE_FLOOR = 0.5
 # Absorbs float noise in the floor test, so an exact half is always kept.
 SCORE_EPSILON = 1e-9
+# Scores are sorted at this many decimals, so windows that tie exactly
+# (0.1 + 0.2 against 0.3 of the weight, say) fall through to the tie-breaks.
+SORT_PRECISION = 9
 # Stamped on every basis; a cached snapshot with another stamp is recomputed.
 RECOMMENDATION_RULE_VERSION = 2
 
@@ -294,8 +297,8 @@ def build_ranked_recommendations(
                 viable.append(
                     (
                         (
-                            -raw_weighted_score,
-                            -raw_unweighted_score,
+                            -round(raw_weighted_score, SORT_PRECISION),
+                            -round(raw_unweighted_score, SORT_PRECISION),
                             -metric["fullyAvailable"],
                             slots[0].index,
                             channel_positions[channel],
@@ -335,8 +338,8 @@ def build_ranked_recommendations(
     for position, candidate in enumerate(viable):
         channel, slots, weighted = candidate[1], candidate[3], candidate[5]
         if weighted < floor - SCORE_EPSILON:
-            # Everything from here on scores no higher; report the first one
-            # that is a new time rather than a shift of a listed window.
+            # Everything from here on scores no higher; note the first one
+            # that shares no slot with a claimed window (a genuinely new time).
             next_score = next(
                 (
                     rest[5]
@@ -347,8 +350,9 @@ def build_ranked_recommendations(
             )
             break
         indices = {slot.index for slot in slots}
-        # A window shifted by a slot or two from a better one is the same
-        # option; only the same time in the other channel is a distinct one.
+        # A window that shares any slot with a better one in its channel is
+        # not listed, so outlines never overlap on the calendar; the same
+        # time in the other channel is a distinct option.
         if not claimed[channel].isdisjoint(indices):
             continue
         claimed[channel].update(indices)
@@ -364,12 +368,12 @@ def build_ranked_recommendations(
     basis["qualifyingWindowTotal"] = qualifying
     basis["bestWeightedAvailability"] = round(best, 4)
     basis["weightedAvailabilityFloor"] = round(floor, 4)
-    if next_score is not None:
-        basis["nextWeightedAvailability"] = round(next_score, 4)
     if qualifying > len(selected):
         basis["listEnd"] = "limit"
     elif next_score is not None:
+        # Only when the floor ended the list: the best time left out.
         basis["listEnd"] = "belowFloor"
+        basis["nextWeightedAvailability"] = round(next_score, 4)
     else:
         basis["listEnd"] = "noMoreWindows"
     return recommendations, basis

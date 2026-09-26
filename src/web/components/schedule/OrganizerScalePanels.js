@@ -679,6 +679,14 @@ function shareOf(value) {
   return percent === 0 && Number(value) > 0 ? "<1" : String(percent);
 }
 
+// A share the API found below `limit` (the floor). Whole percents can round
+// it up to the floor's own figure, and so to a listed chip's; one decimal,
+// rounded down, keeps it visibly under.
+function shareBelow(value, limit) {
+  if (percentOf(value) < percentOf(limit)) return shareOf(value);
+  return (Math.floor(Number(value) * 1000) / 10).toFixed(1);
+}
+
 function defaultChannel(event) {
   return event?.mode === "virtual" ? "virtual" : "inperson";
 }
@@ -691,19 +699,23 @@ function emptyRankingCopy({ basis, meetingMinutes, slotMinutes }) {
       return {
         hint: "No time works yet",
         title: "No time works yet",
-        body: `No upcoming ${meetingMinutes}-minute window has anyone free for all of it.${basis.zeroWeightOnlyAvailability ? " Some times suit only people weighted 0, who don't count toward the ranking." : ""} Ask for more availability, unblock times, or shorten the meeting.`,
+        body: `${
+          basis.zeroWeightOnlyAvailability
+            ? `No upcoming ${meetingMinutes}-minute window has anyone with a weight above 0 free for all of it. Some times suit only people weighted 0, who don't count toward the ranking.`
+            : `No upcoming ${meetingMinutes}-minute window has anyone free for all of it.`
+        } Ask for more availability, unblock times, or shorten the meeting.`,
       };
     case "no_weighted_responses":
       return {
         hint: "No weighted responses yet",
         title: "No one who counts has responded",
-        body: "Everyone who has responded so far has weight 0, so their times aren't ranked. Ranked windows appear once someone with a weight above 0 responds.",
+        body: "Everyone counted in the results so far has weight 0, so their times aren't ranked. Ranked windows appear once someone with a weight above 0 is counted.",
       };
     case "no_future_slots":
       return {
         hint: "No upcoming times",
         title: "No upcoming times",
-        body: "Every configured time has passed or is blocked, so there is nothing left to rank.",
+        body: `No upcoming open stretch fits a ${meetingMinutes}-minute meeting: the configured times have passed, are blocked, or leave gaps that are too short.`,
       };
     case "invalid_duration":
       return {
@@ -715,7 +727,7 @@ function emptyRankingCopy({ basis, meetingMinutes, slotMinutes }) {
       return {
         hint: "Waiting for responses",
         title: "Waiting for responses",
-        body: "Ranked windows appear once someone submits availability.",
+        body: "Ranked windows appear once someone included in the results submits availability.",
       };
     default:
       return {
@@ -777,25 +789,26 @@ function rankedWindowsIntro({ basis, count, meetingMinutes, mixed }) {
   ];
   const total = qualifyingTotal(basis, count);
   if (basis.listEnd === "limit")
-    sentences.push(
-      `Showing the top ${count} of ${total}; ties go to the earlier time.`,
-    );
+    sentences.push(`Showing the top ${count} of ${total}.`);
   else if (
     basis.listEnd === "belowFloor" &&
     basis.nextWeightedAvailability != null
   )
     sentences.push(
-      `The next option drops to ${shareOf(basis.nextWeightedAvailability)}% weighted, under half of the best.`,
+      `The next option drops to ${shareBelow(basis.nextWeightedAvailability, basis.weightedAvailabilityFloor)}% weighted, under half of the best.`,
     );
   else if (basis.listEnd === "noMoreWindows")
     sentences.push(
       count === 1
-        ? "Every other time overlaps this one or has nobody free for all of it."
-        : "Every other time overlaps one of these or has nobody free for all of it.",
+        ? "Every other upcoming time overlaps this one or scores 0% weighted."
+        : "Every other upcoming time overlaps one of these or scores 0% weighted.",
     );
-  if (Number(basis.bestWeightedAvailability) < 0.5)
+  // Judged on the share the best chip prints, so the two never disagree.
+  if (percentOf(basis.bestWeightedAvailability) < 50)
     sentences.push(
-      "No time suits even half of the weighted group; these are the closest.",
+      count === 1
+        ? "No time suits even half of the weighted group; this is the closest."
+        : "No time suits even half of the weighted group; these are the closest.",
     );
   sentences.push(pointer);
   return sentences.join(" ");

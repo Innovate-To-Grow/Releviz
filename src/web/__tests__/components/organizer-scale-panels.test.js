@@ -1896,13 +1896,13 @@ test.each([
     "every other time overlaps or suits nobody",
     [rankedAt(1, 1), rankedAt(2, 0.75)],
     { listEnd: "noMoreWindows", bestWeightedAvailability: 1 },
-    "Every other time overlaps one of these or has nobody free for all of it.",
+    "Every other upcoming time overlaps one of these or scores 0% weighted.",
   ],
   [
     "a single window",
     [rankedAt(1, 1)],
     { listEnd: "noMoreWindows", bestWeightedAvailability: 1 },
-    "Every other time overlaps this one or has nobody free for all of it.",
+    "Every other upcoming time overlaps this one or scores 0% weighted.",
   ],
   [
     "the next option falls under half of the best",
@@ -1910,9 +1910,21 @@ test.each([
     {
       listEnd: "belowFloor",
       bestWeightedAvailability: 1,
+      weightedAvailabilityFloor: 0.5,
       nextWeightedAvailability: 0.4286,
     },
     "The next option drops to 43% weighted, under half of the best.",
+  ],
+  [
+    "the next option rounds to the floor",
+    [rankedAt(1, 1), rankedAt(2, 0.5025)],
+    {
+      listEnd: "belowFloor",
+      bestWeightedAvailability: 1,
+      weightedAvailabilityFloor: 0.5,
+      nextWeightedAvailability: 0.4975,
+    },
+    "The next option drops to 49.7% weighted, under half of the best.",
   ],
   [
     "a best window under half of the group",
@@ -1920,9 +1932,16 @@ test.each([
     {
       listEnd: "belowFloor",
       bestWeightedAvailability: 0.4,
+      weightedAvailabilityFloor: 0.2,
       nextWeightedAvailability: 0.1,
     },
     "The next option drops to 10% weighted, under half of the best. No time suits even half of the weighted group; these are the closest.",
+  ],
+  [
+    "a lone window under half of the group",
+    [rankedAt(1, 0.4)],
+    { listEnd: "noMoreWindows", bestWeightedAvailability: 0.4 },
+    "Every other upcoming time overlaps this one or scores 0% weighted. No time suits even half of the weighted group; this is the closest.",
   ],
 ])(
   "the ranked list says why it ends where it does: %s",
@@ -1953,9 +1972,7 @@ test("a full ranked list reports how many more windows qualified", async () => {
   expect(rail.querySelector("summary")).toHaveTextContent(
     "10 of 12 candidates · best Tue 09:00–10:00",
   );
-  expect(intro).toHaveTextContent(
-    "Showing the top 10 of 12; ties go to the earlier time.",
-  );
+  expect(intro).toHaveTextContent("Showing the top 10 of 12.");
   expect(rail.querySelectorAll(".ranked-chip")).toHaveLength(10);
 });
 
@@ -2003,21 +2020,21 @@ test.each([
     { zeroWeightOnlyAvailability: true },
     "No time works yet",
     "No time works yet",
-    "No upcoming 60-minute window has anyone free for all of it. Some times suit only people weighted 0, who don't count toward the ranking. Ask for more availability, unblock times, or shorten the meeting.",
+    "No upcoming 60-minute window has anyone with a weight above 0 free for all of it. Some times suit only people weighted 0, who don't count toward the ranking. Ask for more availability, unblock times, or shorten the meeting.",
   ],
   [
     "no_weighted_responses",
     {},
     "No weighted responses yet",
     "No one who counts has responded",
-    "Everyone who has responded so far has weight 0, so their times aren't ranked. Ranked windows appear once someone with a weight above 0 responds.",
+    "Everyone counted in the results so far has weight 0, so their times aren't ranked. Ranked windows appear once someone with a weight above 0 is counted.",
   ],
   [
     "no_future_slots",
     {},
     "No upcoming times",
     "No upcoming times",
-    "Every configured time has passed or is blocked, so there is nothing left to rank.",
+    "No upcoming open stretch fits a 60-minute meeting: the configured times have passed, are blocked, or leave gaps that are too short.",
   ],
   [
     "invalid_duration",
@@ -2031,7 +2048,7 @@ test.each([
     {},
     "Waiting for responses",
     "Waiting for responses",
-    "Ranked windows appear once someone submits availability.",
+    "Ranked windows appear once someone included in the results submits availability.",
   ],
 ])(
   "an empty ranked list names its reason: %s",

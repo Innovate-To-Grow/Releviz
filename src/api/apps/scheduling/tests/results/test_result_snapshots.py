@@ -127,6 +127,51 @@ class EventResultSnapshotTests(TestCase):
             RECOMMENDATION_RULE_VERSION,
         )
 
+    def test_a_failed_recompute_for_a_newer_rule_is_retried(self):
+        self.publish_with_basis({"status": "ready"})
+        self.assertEqual(serialize_result_snapshot(self.event)["status"], "refreshing")
+        with patch(
+            "apps.scheduling.services.results.snapshots.build_event_results",
+            side_effect=RuntimeError("calculation failed"),
+        ):
+            failed = recompute_due_event_results(limit=10)
+        self.assertEqual(failed["failed"], 1)
+        snapshot = EventResultSnapshot.objects.get(event=self.event)
+        self.assertEqual(snapshot.status, EventResultSnapshot.Status.FAILED)
+        self.assertEqual(snapshot.computed_revision, self.event.results_revision)
+
+        # Throttled like any failure, then retried at the same revision.
+        self.assertEqual(recompute_due_event_results(limit=10)["attempted"], 0)
+        retried = recompute_due_event_results(
+            limit=10,
+            now=snapshot.started_at + timedelta(seconds=31),
+        )
+        self.assertEqual(retried["published"], 1)
+        snapshot.refresh_from_db()
+        self.assertEqual(snapshot.status, EventResultSnapshot.Status.FRESH)
+        self.assertEqual(
+            snapshot.payload["recommendationBasis"]["ruleVersion"],
+            RECOMMENDATION_RULE_VERSION,
+        )
+
+    def test_only_an_older_rule_is_outdated(self):
+        # A worker deployed ahead of the web may publish a newer rule; the
+        # web never sends it back for recomputing.
+        self.publish_with_basis({"status": "ready", "ruleVersion": RECOMMENDATION_RULE_VERSION + 1})
+        self.assertEqual(serialize_result_snapshot(self.event)["status"], "fresh")
+        self.assertEqual(recompute_event_results(self.event.pk)["attempted"], False)
+
+        for stamp in (True, "2", None):
+            with self.subTest(stamp=stamp):
+                snapshot = EventResultSnapshot.objects.get(event=self.event)
+                snapshot.payload = {
+                    **snapshot.payload,
+                    "recommendationBasis": {"ruleVersion": stamp},
+                }
+                snapshot.status = EventResultSnapshot.Status.FRESH
+                snapshot.save(update_fields=["payload", "status", "updated_at"])
+                self.assertEqual(serialize_result_snapshot(self.event)["status"], "refreshing")
+
     def test_payloads_without_a_ranking_and_failed_snapshots_keep_their_status(self):
         self.assertTrue(recompute_event_results(self.event.pk)["published"])
         snapshot = EventResultSnapshot.objects.get(event=self.event)
