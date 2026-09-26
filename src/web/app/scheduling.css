@@ -1094,21 +1094,31 @@
    is pointed at or chosen there shows on it. The page's scroll-padding
    (the pinned height, measured) keeps focus and scrolling clear of it. */
 @media (min-width: 768px) and (min-height: 560px) {
+  /* The same box pinned or not, so nothing below moves as it pins. */
+  .meeting-results--picking > .meeting-calendar {
+    padding-block: 0.5rem;
+    background: var(--rv-surface-raised);
+  }
+
   .meeting-results--picking .meeting-calendar__scroll {
     max-height: clamp(10rem, 100vh - 28rem, 26rem);
   }
 
+  /* Pinned under the nav; the end of the lists pushes it up and out. */
   .meeting-results--pinned > .meeting-calendar {
     position: sticky;
-    top: 3.75rem;
+    top: var(--rv-pinned-top, 3.75rem);
     z-index: 4;
-    padding-block: 0.5rem;
-    background: var(--rv-surface-raised);
     box-shadow: 0 12px 12px -14px rgba(33, 37, 41, 0.45);
   }
 
-  html:has(.meeting-results--pinned) {
-    scroll-padding-top: calc(
+  /* Focus and scrolling into view land clear of the pinned calendar: only
+     the controls that can pass under it, so page anchors and the
+     calendar's own controls are unaffected. */
+  .meeting-results--pinned
+    > .time-table__sections
+    :is(summary, button, a, input, select, textarea, [tabindex]) {
+    scroll-margin-top: calc(
       3.75rem + var(--rv-pinned-calendar-h, 0px) + 0.5rem
     );
   }

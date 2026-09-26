@@ -677,25 +677,29 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
       },
       // Moves the calendar to show `target` (its week or page, and the grid
       // scrolled to it) without moving the grid's tab stop: for a picker
-      // browsing days, not for a pick.
+      // browsing days, not for a pick. Returns whether the week or page
+      // changed (its range label then announces the move).
       showWindow(target) {
-        if (!target) return;
-        setView(
-          defaultView({
-            groups,
-            selection: target,
-            recommendations: [],
-            now,
-            timeZone,
-          }),
-        );
+        if (!target) return false;
+        const next = defaultView({
+          groups,
+          selection: target,
+          recommendations: [],
+          now,
+          timeZone,
+        });
+        setView(next);
         const first = Array.isArray(target.slotIndices)
           ? target.slotIndices[0]
           : null;
         if (first != null) scrollCellIntoView(first);
+        return (
+          next.weekStart !== effectiveView.weekStart ||
+          (next.page ?? 0) !== (effectiveView.page ?? 0)
+        );
       },
     }),
-    [groups, now, timeZone, scrollCellIntoView],
+    [groups, now, timeZone, scrollCellIntoView, effectiveView],
   );
 
   const selectCell = useCallback(

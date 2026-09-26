@@ -1361,31 +1361,34 @@ function OtherTimesSection({
     );
   }, [previewStartsAt, previewSlots, previewGroup, previewLabel, onPreview]);
 
-  // Takes the calendar to a day the organizer opens here.
-  const browseTo = (target) => {
-    if (!target) return;
-    const window = windowAt(target.column, target.rows[0], k);
-    onBrowse?.({
-      startsAt: window.startsAt,
-      slotIndices: window.slotIndices,
-      startDayOffset: target.column.slots[target.rows[0]].startDayOffset,
-      groupKey: target.column.groupKey,
-    });
+  // Takes the calendar to a day the organizer opens here, at `row` (else
+  // its first open time); says whether the calendar's week or page moved.
+  const browseTo = (target, row = target?.rows[0]) => {
+    if (!target) return false;
+    const window = windowAt(target.column, row, k);
+    return Boolean(
+      onBrowse?.({
+        startsAt: window.startsAt,
+        slotIndices: window.slotIndices,
+        startDayOffset: target.column.slots[row].startDayOffset,
+        groupKey: target.column.groupKey,
+      }),
+    );
   };
 
-  // The day the list opens on: the pick's (in this format), else the first.
-  const openingDay = () => {
+  // Where the list opens: at the pick (in this format), else the first day.
+  const openingPlace = () => {
     if (selectedKey) {
       const start = Date.parse(selection.startsAt);
-      const hit = days.find((entry) =>
-        entry.rows.some(
-          (row) =>
-            Date.parse(windowAt(entry.column, row, k).startsAt) === start,
-        ),
-      );
-      if (hit) return hit;
+      for (const entry of days) {
+        const row = entry.rows.find(
+          (candidate) =>
+            Date.parse(windowAt(entry.column, candidate, k).startsAt) === start,
+        );
+        if (row != null) return { day: entry, row };
+      }
     }
-    return days[0];
+    return { day: days[0], row: days[0]?.rows[0] };
   };
 
   const toggle = (next) => {
@@ -1395,7 +1398,8 @@ function OtherTimesSection({
     // goes there too.
     setDayKey(null);
     setFocusKey(null);
-    browseTo(openingDay());
+    const place = openingPlace();
+    browseTo(place.day, place.row);
   };
 
   const choose = (entry) => {
@@ -1442,7 +1446,9 @@ function OtherTimesSection({
   const showDaysOf = (index) => {
     if (index < 0 || index >= groups.length) return;
     setDayKey(groups[index].days[0].column.key);
-    browseTo(groups[index].days[0]);
+    // The calendar announces its own move; if it stayed put, say it here.
+    if (!browseTo(groups[index].days[0]))
+      announce(`Showing ${groups[index].label}.`);
   };
 
   let body = null;
@@ -1529,7 +1535,11 @@ function OtherTimesSection({
                     type="button"
                     className={`btn ${channel === key ? "btn-primary" : "btn-outline-secondary"}`}
                     aria-pressed={channel === key}
-                    onClick={() => onChannelChange(key)}
+                    onClick={() => {
+                      // Stay on the day shown (the calendar is there too).
+                      setDayKey(day.column.key);
+                      onChannelChange(key);
+                    }}
                   >
                     {label}
                   </button>
@@ -1901,86 +1911,93 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
   }, []);
 
   // A picker in Finalize is open (and blocked times are not being painted):
-  // the calendar stays in view, pinned under the section nav where the
-  // screen has room. Its height feeds the page's scroll-padding-top, so
-  // focus and scrolling land clear of it; the element that opened the
-  // picker is brought out from under it as it pins.
+  // the grid shortens and the calendar pins under the section nav where the
+  // screen has room, so what is pointed at or chosen shows on it.
   const picking = (rankedOpen || otherOpen) && !blockedOpen;
-  // Pinned only while the lists are in view below it: scrolled past them
-  // (to Review attendance and the table), the calendar goes with the page.
-  // It keeps its place in the flow either way, so nothing below moves.
+  // While picking, one rAF-throttled check (on scroll, resize and the
+  // calendar resizing) keeps three things current: the calendar's height
+  // (the scroll margin that keeps focused controls clear of it), its sticky
+  // top (pinned under the nav until the end of the lists reaches its bottom
+  // edge, then pushed up and out by them, so it never pops away), and
+  // whether the lists are wholly scrolled past (then it unpins, already out
+  // of sight). Its box is the same pinned or not, so nothing below moves.
   const [pastLists, setPastLists] = useState(false);
-  const pinnedHeight = useRef(0);
   useEffect(() => {
     if (!picking) return undefined;
+    const calendar = sectionRef.current?.querySelector(
+      ".meeting-results > .meeting-calendar",
+    );
+    const lists = document.getElementById("organizer-other-times");
+    if (!calendar || !lists) return undefined;
+    const root = document.documentElement;
     let frame = null;
     const check = () => {
       frame = null;
-      const lists = document.getElementById("organizer-other-times");
-      if (!lists) return;
-      const box = lists.getBoundingClientRect();
+      const listsBox = lists.getBoundingClientRect();
       // Without layout (nothing measured) the lists count as in view.
-      if (!box.height) {
+      if (!listsBox.height) {
         setPastLists(false);
         return;
       }
-      const rem = parseFloat(
-        window.getComputedStyle(document.documentElement).fontSize || "16",
+      const rem = parseFloat(window.getComputedStyle(root).fontSize) || 16;
+      const height = calendar.getBoundingClientRect().height;
+      root.style.setProperty("--rv-pinned-calendar-h", `${height}px`);
+      calendar.style.setProperty(
+        "--rv-pinned-top",
+        `${Math.min(rem * 3.75, listsBox.bottom - height)}px`,
       );
-      // The pinned calendar's bottom edge: the section nav (3.75rem) plus
-      // its measured height.
-      setPastLists(box.bottom < rem * 3.75 + pinnedHeight.current);
+      setPastLists(listsBox.bottom < 0);
     };
     const schedule = () => {
       if (frame == null) frame = window.requestAnimationFrame(check);
     };
-    check();
+    // As it pins, the control that opened the picker may sit under the
+    // calendar: bring it out, once, and only if it is actually covered.
+    const opening = window.requestAnimationFrame(() => {
+      check();
+      const active = document.activeElement;
+      if (
+        !active ||
+        !calendar.parentElement.contains(active) ||
+        calendar.contains(active)
+      )
+        return;
+      const activeBox = active.getBoundingClientRect();
+      const calendarBox = calendar.getBoundingClientRect();
+      if (
+        activeBox.top < calendarBox.bottom &&
+        activeBox.bottom > calendarBox.top
+      )
+        active.scrollIntoView?.({ block: "nearest" });
+    });
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(schedule);
+    observer?.observe(calendar);
     window.addEventListener("scroll", schedule, { passive: true });
     window.addEventListener("resize", schedule);
     return () => {
+      window.cancelAnimationFrame(opening);
+      if (frame != null) window.cancelAnimationFrame(frame);
+      observer?.disconnect();
       window.removeEventListener("scroll", schedule);
       window.removeEventListener("resize", schedule);
-      if (frame != null) window.cancelAnimationFrame(frame);
+      root.style.removeProperty("--rv-pinned-calendar-h");
+      calendar.style.removeProperty("--rv-pinned-top");
       setPastLists(false);
     };
   }, [picking]);
   const pinned = picking && !pastLists;
-  useEffect(() => {
-    if (!pinned || typeof ResizeObserver === "undefined") return undefined;
-    const calendar = sectionRef.current?.querySelector(
-      ".meeting-results > .meeting-calendar",
-    );
-    if (!calendar) return undefined;
-    const root = document.documentElement;
-    let first = true;
-    const observer = new ResizeObserver(() => {
-      pinnedHeight.current = calendar.offsetHeight;
-      root.style.setProperty(
-        "--rv-pinned-calendar-h",
-        `${calendar.offsetHeight}px`,
-      );
-      if (!first) return;
-      first = false;
-      const active = document.activeElement;
-      if (
-        active &&
-        calendar.parentElement.contains(active) &&
-        !calendar.contains(active)
-      )
-        active.scrollIntoView?.({ block: "nearest" });
-    });
-    observer.observe(calendar);
-    return () => {
-      observer.disconnect();
-      root.style.removeProperty("--rv-pinned-calendar-h");
-    };
-  }, [pinned]);
 
   // Other times browses to a day: the calendar shows its week (or page)
-  // without moving the grid's tab stop.
-  const handleBrowse = useCallback((target) => {
-    calendarRef.current?.showWindow(target);
-  }, []);
+  // without moving the grid's tab stop, and says whether it moved. Not while
+  // painting: the paint surface stays where the organizer is painting.
+  const handleBrowse = useCallback(
+    (target) =>
+      blockedOpen ? false : Boolean(calendarRef.current?.showWindow(target)),
+    [blockedOpen],
+  );
 
   // A time chosen under Other times: selected like a calendar pick and
   // revealed on the calendar (painting would hide it, so painting stops),

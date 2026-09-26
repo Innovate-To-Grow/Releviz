@@ -3643,12 +3643,40 @@ test("the calendar stays where the organizer puts it; only Other times' own brow
     );
     await waitFor(() => expect(shownWeek()[0]).toMatch(/Aug 17/));
     expect(pressedDay()).toHaveTextContent(/Mon\s*Aug 17/);
+    expect(
+      calendarGrid().querySelector('[role="gridcell"][tabindex="0"]').dataset
+        .cellIdx,
+    ).toBe("6");
+    expect(within(other).getByRole("status")).toHaveTextContent("");
+
+    // When the calendar is already on that week, the list announces the
+    // step itself (the calendar's range label does not change).
+    await userEvent.click(screen.getByRole("button", { name: "Next week" }));
+    await waitFor(() => expect(shownWeek()[0]).toMatch(/Aug 24/));
+    await userEvent.click(
+      within(
+        within(other).getByRole("group", { name: "Week shown" }),
+      ).getByRole("button", { name: "Later days" }),
+    );
+    expect(within(other).getByRole("status")).toHaveTextContent(
+      `Showing ${formatWeekLabel("2026-08-23")}.`,
+    );
+
+    // While blocked times are painted, browsing here leaves the paint
+    // surface where it is.
+    await openBlockedTimes();
+    await userEvent.click(
+      within(
+        within(other).getByRole("group", { name: "Week shown" }),
+      ).getByRole("button", { name: "Earlier days" }),
+    );
+    expect(shownWeek()[0]).toMatch(/Aug 24/);
   } finally {
     nowSpy.mockRestore();
   }
 });
 
-test("the pinned calendar's height keeps focus and scrolling clear of it", async () => {
+test("the pinned calendar follows the lists: pinned, pushed out by their end, let go, and focus kept clear", async () => {
   const nowSpy = jest.spyOn(Date, "now").mockReturnValue(DATED_NOW);
   const observers = [];
   const originalObserver = global.ResizeObserver;
@@ -3660,7 +3688,6 @@ test("the pinned calendar's height keeps focus and scrolling clear of it", async
 
     observe(element) {
       this.element = element;
-      this.callback([]);
     }
 
     disconnect() {
@@ -3669,77 +3696,98 @@ test("the pinned calendar's height keeps focus and scrolling clear of it", async
   };
   const originalScroll = HTMLElement.prototype.scrollIntoView;
   HTMLElement.prototype.scrollIntoView = jest.fn();
+  const box = (top, height) => ({
+    top,
+    bottom: top + height,
+    height,
+    left: 0,
+    right: 800,
+    width: 800,
+  });
   try {
     mockDatedSnapshot();
     render(<PickingTimeTable {...timeTableProps(datedEvent)} />);
     await screen.findByText(/Results are current at revision 7/);
     const root = document.documentElement;
-    expect(root.style.getPropertyValue("--rv-pinned-calendar-h")).toBe("");
-    const other = await openOtherTimes();
-    // Picking: the calendar's height is measured for scroll-padding-top,
-    // and the summary just activated is scrolled out from under it.
-    expect(observers).toHaveLength(1);
-    expect(observers[0].element).toHaveClass("meeting-calendar");
-    expect(root.style.getPropertyValue("--rv-pinned-calendar-h")).toBe("0px");
-    expect(HTMLElement.prototype.scrollIntoView.mock.contexts).toContain(
-      other.querySelector(":scope > summary"),
-    );
-    // Later resizes only update the height.
-    HTMLElement.prototype.scrollIntoView.mockClear();
-    observers[0].callback([]);
-    expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled();
-
-    await userEvent.click(other.querySelector(":scope > summary"));
-    expect(observers[0].disconnected).toBe(true);
-    expect(root.style.getPropertyValue("--rv-pinned-calendar-h")).toBe("");
-  } finally {
-    global.ResizeObserver = originalObserver;
-    HTMLElement.prototype.scrollIntoView = originalScroll;
-    nowSpy.mockRestore();
-  }
-});
-
-test("the calendar pins while the lists are in view and lets go once they are scrolled past", async () => {
-  const nowSpy = jest.spyOn(Date, "now").mockReturnValue(DATED_NOW);
-  try {
-    mockDatedSnapshot();
-    render(<PickingTimeTable {...timeTableProps(datedEvent)} />);
-    await screen.findByText(/Results are current at revision 7/);
-    const other = document.getElementById("organizer-other-times");
-    let listsBottom = 700;
-    other.getBoundingClientRect = () => ({
-      top: listsBottom - 300,
-      bottom: listsBottom,
-      height: 300,
-      left: 0,
-      right: 800,
-      width: 800,
-    });
-    await openOtherTimes();
     const results = document.querySelector(".meeting-results");
-    expect(results).toHaveClass("meeting-results--picking");
-    expect(results).toHaveClass("meeting-results--pinned");
+    const calendar = results.querySelector(":scope > .meeting-calendar");
+    let calendarHeight = 400;
+    calendar.getBoundingClientRect = () => box(60, calendarHeight);
+    const other = document.getElementById("organizer-other-times");
+    let listsBottom = 900;
+    other.getBoundingClientRect = () => box(listsBottom - 300, 300);
+    const summary = other.querySelector(":scope > summary");
+    // Where the summary ends up as the calendar pins: under it.
+    summary.getBoundingClientRect = () => box(300, 50);
 
-    // Scrolled on to Review attendance: the lists end above the pinned
-    // calendar's bottom edge, so it lets go (the shorter grid stays, so
-    // nothing below moves).
-    listsBottom = 40;
+    await openOtherTimes();
+    await waitFor(() =>
+      expect(root.style.getPropertyValue("--rv-pinned-calendar-h")).toBe(
+        "400px",
+      ),
+    );
+    expect(results).toHaveClass("meeting-results--pinned");
+    expect(calendar.style.getPropertyValue("--rv-pinned-top")).toBe("60px");
+    expect(observers[0].element).toBe(calendar);
+    // The summary that opened the list was covered: brought out, once.
+    expect(HTMLElement.prototype.scrollIntoView.mock.contexts).toEqual([
+      summary,
+    ]);
+    expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledWith({
+      block: "nearest",
+    });
+
+    // Scrolling on, the end of the lists pushes the calendar up...
+    listsBottom = 300;
+    fireEvent.scroll(window);
+    await waitFor(() =>
+      expect(calendar.style.getPropertyValue("--rv-pinned-top")).toBe("-100px"),
+    );
+    expect(results).toHaveClass("meeting-results--pinned");
+    // ...and once the lists are wholly above, it lets go (out of sight).
+    listsBottom = -10;
     fireEvent.scroll(window);
     await waitFor(() =>
       expect(results).not.toHaveClass("meeting-results--pinned"),
     );
     expect(results).toHaveClass("meeting-results--picking");
 
-    // Back up to the lists: pinned again.
-    listsBottom = 700;
+    // Back up to the lists: pinned again, without pulling the page to the
+    // control that has focus.
+    HTMLElement.prototype.scrollIntoView.mockClear();
+    listsBottom = 900;
     fireEvent.scroll(window);
     await waitFor(() => expect(results).toHaveClass("meeting-results--pinned"));
+    expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled();
 
-    // Closing the lists ends picking altogether.
-    await userEvent.click(other.querySelector(":scope > summary"));
+    // The calendar resizing is measured as well.
+    calendarHeight = 300;
+    act(() => observers[0].callback([]));
+    await waitFor(() =>
+      expect(root.style.getPropertyValue("--rv-pinned-calendar-h")).toBe(
+        "300px",
+      ),
+    );
+
+    // Closing ends picking and clears it all.
+    await userEvent.click(summary);
     expect(results).not.toHaveClass("meeting-results--picking");
-    expect(results).not.toHaveClass("meeting-results--pinned");
+    expect(root.style.getPropertyValue("--rv-pinned-calendar-h")).toBe("");
+    expect(calendar.style.getPropertyValue("--rv-pinned-top")).toBe("");
+    expect(observers[0].disconnected).toBe(true);
+
+    // Reopened from a summary that is not covered: no scroll.
+    summary.getBoundingClientRect = () => box(600, 50);
+    await openOtherTimes();
+    await waitFor(() =>
+      expect(root.style.getPropertyValue("--rv-pinned-calendar-h")).toBe(
+        "300px",
+      ),
+    );
+    expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled();
   } finally {
+    global.ResizeObserver = originalObserver;
+    HTMLElement.prototype.scrollIntoView = originalScroll;
     nowSpy.mockRestore();
   }
 });
