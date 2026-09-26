@@ -75,6 +75,7 @@ jest.mock("@/lib/api/events", () => ({
   fetchEvent: jest.fn(),
   fetchEventActivity: jest.fn(),
   fetchEventResults: jest.fn(),
+  openEventStream: jest.fn(),
   previewFinalMeeting: jest.fn(),
   retryDeliveryRequest: jest.fn(),
   sendReminders: jest.fn(),
@@ -101,20 +102,24 @@ jest.mock("@/lib/api/roster", () => ({
   renameRosterGroup: jest.fn(),
   sendRosterInvitations: jest.fn(),
 }));
+jest.mock("@/lib/liveStream", () => ({ connectLiveStream: jest.fn() }));
 
 import { useAuth } from "@/components/auth/AuthContext";
 import EventContext from "@/components/event/EventContext";
 import OrganizerScaleView from "@/components/schedule/OrganizerScaleView";
 import {
+  LIVE_REFRESH_BACKSTOP_PACE,
   LIVE_REFRESH_FASTEST_MS,
   LIVE_REFRESH_IDLE_PACE,
 } from "@/lib/liveRefresh";
+import { connectLiveStream } from "@/lib/liveStream";
 import {
   confirmFinalMeeting,
   fetchDeliveryRequest,
   fetchEvent,
   fetchEventActivity,
   fetchEventResults,
+  openEventStream,
   previewFinalMeeting,
   sendReminders,
   updateEventLifecycle,
@@ -130,6 +135,13 @@ import {
   patchRosterBulk,
   patchRosterParticipant,
 } from "@/lib/api/roster";
+
+// The event streams the workspace opened in the current test, oldest
+// first: the fake connection records the handlers it was given so a test
+// can push the server's frames, and its `close` is a spy. Nothing is pushed
+// unless a test does it, so the workspace polls as it would without a
+// server that streams.
+let streams = [];
 
 const organizer = { id: "organizer-1", displayName: "Organizer" };
 const event = {
@@ -382,6 +394,12 @@ async function openInvitePersonForm() {
 describe("scaled organizer workspace", () => {
   beforeEach(() => {
     jest.resetAllMocks();
+    streams = [];
+    connectLiveStream.mockImplementation((handlers) => {
+      const stream = { handlers, close: jest.fn() };
+      streams.push(stream);
+      return stream;
+    });
     window.history.replaceState({}, "", "/event?code=BIG1000");
     window.sessionStorage.clear();
     window.localStorage.clear();
@@ -2375,6 +2393,17 @@ describe("scaled organizer workspace", () => {
       });
     }
 
+    // While the server pushes, the poll only checks once a minute.
+    const BACKSTOP = LIVE_REFRESH_BACKSTOP_PACE.fastestMs;
+
+    // Pushes one of the server's frames into the newest stream, inside act
+    // so the workspace's reaction to it settles.
+    async function pushFrame(name, ...args) {
+      await act(async () => {
+        streams.at(-1).handlers[name](...args);
+      });
+    }
+
     test("loads a new response into every section on its own and keeps the pick", async () => {
       const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTime });
       const { setEvent } = await renderLiveWorkspace();
@@ -2613,6 +2642,13 @@ describe("scaled organizer workspace", () => {
         releaseActivity(baseActivity);
       });
       expect(fetchRoster).not.toHaveBeenCalled();
+      // The catch-up it was asked for runs once it is done: exactly one
+      // follow-up read of the digest, and the pace continues from that.
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(2));
+      await tick(FASTEST);
+      expect(fetchEventActivity).toHaveBeenCalledTimes(2);
+      await tick(EASED[0]);
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(3));
     });
 
     test("waits for a section's first load before comparing it", async () => {
@@ -2814,6 +2850,364 @@ describe("scaled organizer workspace", () => {
       fetchEventActivity.mockClear();
       await tick(FASTEST);
       await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(1));
+    });
+
+    test("opens the event stream while the tab is visible and closes it on unmount", async () => {
+      const { unmount } = await renderLiveWorkspace();
+      expect(connectLiveStream).toHaveBeenCalledTimes(1);
+      // The connection fetches this event's stream with the signal it is
+      // handed, so closing can abort the request.
+      const { signal } = new AbortController();
+      streams[0].handlers.open(signal);
+      expect(openEventStream).toHaveBeenCalledWith(event.code, { signal });
+      expect(streams[0].close).not.toHaveBeenCalled();
+      unmount();
+      expect(streams[0].close).toHaveBeenCalledTimes(1);
+      expect(connectLiveStream).toHaveBeenCalledTimes(1);
+    });
+
+    test("runs one catch-up pass when the stream opens, then only a backstop check a minute later", async () => {
+      await renderLiveWorkspace();
+      await pushFrame("onOpen");
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(1));
+      // The live pace would check again 3 s on; the backstop waits a minute,
+      // and a quiet check does not ease it off any further.
+      await tick(BACKSTOP - 1);
+      expect(fetchEventActivity).toHaveBeenCalledTimes(1);
+      await tick(1);
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(2));
+      await tick(BACKSTOP - 1);
+      expect(fetchEventActivity).toHaveBeenCalledTimes(2);
+      await tick(1);
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(3));
+      expect(screen.getByTestId("live-sync")).toHaveTextContent("Live");
+    });
+
+    test("runs one pass per change frame and coalesces a change that arrives mid-pass", async () => {
+      // A delivery run still in progress reads on the same pushed changes.
+      window.sessionStorage.setItem(
+        `releviz.delivery-request.${event.code}`,
+        JSON.stringify({
+          id: "stored-delivery",
+          operation: "invitation",
+          delivery: { total: 5, pending: 1, sent: 4 },
+        }),
+      );
+      fetchDeliveryRequest.mockResolvedValue({
+        deliveryRequest: {
+          id: "stored-delivery",
+          operation: "invitation",
+          delivery: { total: 5, pending: 1, sent: 4 },
+        },
+      });
+      await renderLiveWorkspace();
+      await screen.findByLabelText("Event delivery progress");
+      // The stream opening is one catch-up pass, and one catch-up read of
+      // the run.
+      await pushFrame("onOpen");
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(1));
+      await waitFor(() =>
+        expect(fetchDeliveryRequest).toHaveBeenCalledTimes(1),
+      );
+
+      // A change: one pass, and the delivery card reads at once too.
+      await pushFrame("onChange");
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(2));
+      await waitFor(() =>
+        expect(fetchDeliveryRequest).toHaveBeenCalledTimes(2),
+      );
+
+      // Two more changes arrive while the pass for a third is still waiting
+      // on the digest: together they are worth one more pass after it, not
+      // two, and not a concurrent one.
+      let releaseActivity;
+      fetchEventActivity.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseActivity = resolve;
+          }),
+      );
+      await pushFrame("onChange");
+      await waitFor(() => expect(releaseActivity).toBeDefined());
+      expect(fetchEventActivity).toHaveBeenCalledTimes(3);
+      await pushFrame("onChange");
+      await pushFrame("onChange");
+      expect(fetchEventActivity).toHaveBeenCalledTimes(3);
+      await act(async () => {
+        releaseActivity(baseActivity);
+      });
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(4));
+      // Then nothing until the backstop; the card read on every change.
+      await tick(FASTEST * 2);
+      expect(fetchEventActivity).toHaveBeenCalledTimes(4);
+      expect(fetchDeliveryRequest).toHaveBeenCalledTimes(5);
+    });
+
+    test("a delivery run in progress is read at once whenever the stream opens", async () => {
+      // A run restored on page load may have moved while the page was away,
+      // and one may move while the stream is down: the card catches up the
+      // moment the stream is up rather than at the backstop a minute on.
+      window.sessionStorage.setItem(
+        `releviz.delivery-request.${event.code}`,
+        JSON.stringify({
+          id: "stored-delivery",
+          operation: "invitation",
+          delivery: { total: 5, pending: 3, sent: 2 },
+        }),
+      );
+      fetchDeliveryRequest.mockResolvedValue({
+        deliveryRequest: {
+          id: "stored-delivery",
+          operation: "invitation",
+          delivery: { total: 5, pending: 1, sent: 4 },
+        },
+      });
+      await renderLiveWorkspace();
+      const card = await screen.findByLabelText("Event delivery progress");
+      expect(card).toHaveTextContent("2 sent");
+      await pushFrame("onOpen");
+      await waitFor(() => expect(card).toHaveTextContent("4 sent"));
+      expect(fetchDeliveryRequest).toHaveBeenCalledTimes(1);
+
+      // The stream drops and the last emails go out before it is back.
+      fetchDeliveryRequest.mockResolvedValue({
+        deliveryRequest: {
+          id: "stored-delivery",
+          operation: "invitation",
+          delivery: { total: 5, sent: 5 },
+        },
+      });
+      await pushFrame("onDown", "ended");
+      await pushFrame("onOpen");
+      await waitFor(() => expect(card).toHaveTextContent("5 sent"));
+      expect(fetchDeliveryRequest).toHaveBeenCalledTimes(2);
+      expect(card).toHaveTextContent("Complete");
+    });
+
+    test("a change pushed during a trigger pass still gets its own pass", async () => {
+      await renderLiveWorkspace();
+      // The window regains focus while the stream is still opening, and the
+      // catch-up pass waits on the digest ...
+      let releaseActivity;
+      fetchEventActivity.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseActivity = resolve;
+          }),
+      );
+      await act(async () => {
+        window.dispatchEvent(new Event("focus"));
+      });
+      await waitFor(() => expect(releaseActivity).toBeDefined());
+      // ... the stream opens meanwhile, which hands the pace to a fresh
+      // backstop scheduler, and a change is pushed: the pass it asks for
+      // finds the first one still running and is put off ...
+      await pushFrame("onOpen");
+      await pushFrame("onChange");
+      expect(fetchEventActivity).toHaveBeenCalledTimes(1);
+      // ... until that one is done, and then runs exactly once.
+      await act(async () => {
+        releaseActivity(baseActivity);
+      });
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(2));
+      await tick(FASTEST * 2);
+      expect(fetchEventActivity).toHaveBeenCalledTimes(2);
+    });
+
+    test("a wake that reaches a new scheduler during the old one's pass runs right after it", async () => {
+      await renderLiveWorkspace();
+      await pushFrame("onOpen");
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(1));
+      // The window regains focus, and that pass waits on the digest ...
+      let releaseActivity;
+      fetchEventActivity.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseActivity = resolve;
+          }),
+      );
+      await act(async () => {
+        window.dispatchEvent(new Event("focus"));
+      });
+      await waitFor(() => expect(releaseActivity).toBeDefined());
+      // ... when the stream drops, which hands the pace to a fresh
+      // live-pace scheduler, and the network returning wakes that one: its
+      // pass finds the first one still running and is put off ...
+      await pushFrame("onDown", "interrupted");
+      await act(async () => {
+        window.dispatchEvent(new Event("online"));
+      });
+      expect(fetchEventActivity).toHaveBeenCalledTimes(2);
+      // ... until that one is done, and then runs exactly once.
+      await act(async () => {
+        releaseActivity(baseActivity);
+      });
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(3));
+      await tick(FASTEST);
+      expect(fetchEventActivity).toHaveBeenCalledTimes(3);
+    });
+
+    test("a stream that opens during a poll pass gets its catch-up pass right after it", async () => {
+      await renderLiveWorkspace();
+      // A poll pass waits on the digest ...
+      let releaseActivity;
+      fetchEventActivity.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseActivity = resolve;
+          }),
+      );
+      await tick(FASTEST);
+      await waitFor(() => expect(releaseActivity).toBeDefined());
+      // ... when the stream opens. The pass was reading before the server
+      // started listening, so a write in between is only caught by the
+      // catch-up pass, which must survive the poll scheduler being swapped
+      // for the backstop one while it waits.
+      await pushFrame("onOpen");
+      expect(fetchEventActivity).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        releaseActivity(baseActivity);
+      });
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(2));
+      // Exactly one, and then the backstop.
+      await tick(FASTEST * 2);
+      expect(fetchEventActivity).toHaveBeenCalledTimes(2);
+    });
+
+    test("a change pushed during a pass just before the stream drops gets its pass right after it", async () => {
+      await renderLiveWorkspace();
+      await pushFrame("onOpen");
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(1));
+      // A change's pass waits on the digest ...
+      let releaseActivity;
+      fetchEventActivity.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseActivity = resolve;
+          }),
+      );
+      await pushFrame("onChange");
+      await waitFor(() => expect(releaseActivity).toBeDefined());
+      expect(fetchEventActivity).toHaveBeenCalledTimes(2);
+      // ... when another change arrives and the stream ends right behind
+      // it, which swaps the backstop scheduler for one at the live pace.
+      await act(async () => {
+        streams.at(-1).handlers.onChange();
+        streams.at(-1).handlers.onDown("ended");
+      });
+      expect(fetchEventActivity).toHaveBeenCalledTimes(2);
+      // The change is read as soon as the running pass is done, not at the
+      // new scheduler's first turn, and only once.
+      await act(async () => {
+        releaseActivity(baseActivity);
+      });
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(3));
+      await tick(FASTEST);
+      expect(fetchEventActivity).toHaveBeenCalledTimes(3);
+    });
+
+    test("falls back to the live pace while the stream is down and returns to the backstop when it reopens", async () => {
+      await renderLiveWorkspace();
+      await pushFrame("onOpen");
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(1));
+      // The stream drops: the next check is 3 s out rather than a minute.
+      await pushFrame("onDown", "ended");
+      await tick(FASTEST - 1);
+      expect(fetchEventActivity).toHaveBeenCalledTimes(1);
+      await tick(1);
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(2));
+      // It reopens: one catch-up pass, then the backstop again.
+      await pushFrame("onOpen");
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(3));
+      await tick(BACKSTOP - 1);
+      expect(fetchEventActivity).toHaveBeenCalledTimes(3);
+      await tick(1);
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(4));
+      // The server declining the stream hands the pace back the same way.
+      await pushFrame("onUnavailable");
+      await tick(FASTEST - 1);
+      expect(fetchEventActivity).toHaveBeenCalledTimes(4);
+      await tick(1);
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(5));
+      // A second report of the same state changes nothing: the quiet check
+      // eased the pace off, and it stays eased off.
+      await pushFrame("onDown", "interrupted");
+      await tick(EASED[0] - 1);
+      expect(fetchEventActivity).toHaveBeenCalledTimes(5);
+      await tick(1);
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(6));
+    });
+
+    test("a pushed pass that fails is retried seconds later, not at the backstop a minute on", async () => {
+      await renderLiveWorkspace();
+      await pushFrame("onOpen");
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(1));
+      // A change is pushed while a deploy drains the task that would serve
+      // the digest, so its pass fails and the header says so.
+      fetchEventActivity.mockRejectedValueOnce(new Error("Bad gateway"));
+      await pushFrame("onChange");
+      expect(fetchEventActivity).toHaveBeenCalledTimes(2);
+      expect(screen.getByTestId("live-sync")).toHaveTextContent(
+        "New responses could not be loaded automatically (Bad gateway).",
+      );
+      // The pass is tried again at the live pace's first backoff, 4.5 s on.
+      await tick(EASED[0] - 1);
+      expect(fetchEventActivity).toHaveBeenCalledTimes(2);
+      await tick(1);
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(3));
+      // It gets through, which clears the notice, and the next check is the
+      // backstop's a minute on.
+      await waitFor(() =>
+        expect(screen.getByTestId("live-sync")).toHaveTextContent("Live"),
+      );
+      await tick(BACKSTOP - 1);
+      expect(fetchEventActivity).toHaveBeenCalledTimes(3);
+      await tick(1);
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(4));
+    });
+
+    test("closes the stream while the tab is hidden and reconnects when it is shown", async () => {
+      await renderLiveWorkspace();
+      await pushFrame("onOpen");
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(1));
+      setTabVisibility("hidden");
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(streams[0].close).toHaveBeenCalledTimes(1);
+      expect(connectLiveStream).toHaveBeenCalledTimes(1);
+      // Nothing is read while hidden, at either pace.
+      await tick(BACKSTOP);
+      expect(fetchEventActivity).toHaveBeenCalledTimes(1);
+      // Shown again: a fresh stream, and the usual catch-up pass at once.
+      setTabVisibility("visible");
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(connectLiveStream).toHaveBeenCalledTimes(2);
+      expect(streams[1].close).not.toHaveBeenCalled();
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(2));
+      // Until the fresh stream is open the poll runs at the live pace ...
+      await tick(EASED[0]);
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(3));
+      // ... and once it is, at the backstop again.
+      await pushFrame("onOpen");
+      await waitFor(() => expect(fetchEventActivity).toHaveBeenCalledTimes(4));
+      await tick(FASTEST * 2);
+      expect(fetchEventActivity).toHaveBeenCalledTimes(4);
+    });
+
+    test("ignores frames after the workspace is gone", async () => {
+      const { unmount } = await renderLiveWorkspace();
+      unmount();
+      expect(streams[0].close).toHaveBeenCalledTimes(1);
+      // Frames that were already on their way when the stream was closed.
+      await pushFrame("onOpen");
+      await pushFrame("onChange");
+      await pushFrame("onDown", "ended");
+      await pushFrame("onUnavailable");
+      await tick(BACKSTOP);
+      expect(fetchEventActivity).not.toHaveBeenCalled();
     });
   });
 

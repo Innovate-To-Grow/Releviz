@@ -229,11 +229,30 @@ EMAIL_WORKER_RATE_PER_SECOND = float(os.environ.get("EMAIL_WORKER_RATE_PER_SECON
 EMAIL_WORKER_POLL_SECONDS = float(os.environ.get("EMAIL_WORKER_POLL_SECONDS", "1"))
 RESULT_WORKER_BATCH_SIZE = int(os.environ.get("RESULT_WORKER_BATCH_SIZE", "100"))
 RESULT_WORKER_POLL_SECONDS = float(os.environ.get("RESULT_WORKER_POLL_SECONDS", "1"))
+# Push change notifications to the organizer workspace over an event stream.
+LIVE_STREAM_ENABLED = True
+# Quiet seconds before a stream sends a comment line so proxies keep it open.
+LIVE_STREAM_HEARTBEAT_SECONDS = 20
+# Longest a stream stays open before the client is told to reconnect.
+LIVE_STREAM_MAX_SECONDS = 900
+# Open streams one worker process accepts before it declines with a 204.
+LIVE_STREAM_MAX_SUBSCRIBERS = 200
+# Pause after a change before its frame goes out, so a burst becomes one frame.
+LIVE_STREAM_COALESCE_SECONDS = 0.3
+# Least time between two change frames on one stream. A steady run of writes,
+# such as the email worker sending a thousand invitations at about thirty
+# notifications a second, would otherwise send a frame every coalescing pause
+# and keep the workspace reloading back to back for the whole send.
+LIVE_STREAM_MIN_INTERVAL_SECONDS = 2
 
 REQUIRE_ENCRYPTED_PASSWORDS = False
 FRONTEND_URL = ""
 BACKEND_URL = ""
 CORS_ALLOW_CREDENTIALS = True
+# The browser calls the API cross-origin, and neither header is on the CORS
+# safelist, so without this the workspace could not read when a declined event
+# stream (a 204) may be tried again or why it was declined.
+CORS_EXPOSE_HEADERS = ["Retry-After", "X-Live-Stream-Unavailable"]
 DATA_UPLOAD_MAX_NUMBER_FIELDS = 100000
 DATA_UPLOAD_MAX_MEMORY_SIZE = ROSTER_IMPORT_MAX_UNCOMPRESSED_BYTES + 1024 * 1024
 FIELD_ENCRYPTION_KEY = os.environ.get("DJANGO_FIELD_ENCRYPTION_KEY", "")

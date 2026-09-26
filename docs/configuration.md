@@ -16,6 +16,7 @@
 | `CORS_ALLOWED_ORIGINS`, `CSRF_TRUSTED_ORIGINS` | Cross-origin and CSRF allow lists |
 | `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT` | PostgreSQL connection (`DB_PORT` defaults to `5432`) |
 | `DB_POOL_MIN_SIZE`, `DB_POOL_MAX_SIZE`, `DB_POOL_TIMEOUT` | Per-process psycopg connection pool in production (defaults `1`, `12`, `30` seconds); under ASGI every request runs in its own thread and would otherwise open its own connection |
+| `LIVE_STREAM_ENABLED` | `1` by default; `0` turns off the organizer workspace's pushed change stream, and every open workspace falls back to polling |
 
 ### Startup and administrator
 

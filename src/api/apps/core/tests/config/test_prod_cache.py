@@ -71,6 +71,13 @@ class ProductionSettingsTests(SimpleTestCase):
             {"min_size": 2, "max_size": 20, "timeout": 5},
         )
 
+    def test_live_stream_is_enabled_unless_the_kill_switch_is_set(self):
+        with patch.dict("os.environ", PROD_ENV, clear=True):
+            self.assertTrue(reload_prod_settings().LIVE_STREAM_ENABLED)
+
+        with patch.dict("os.environ", {**PROD_ENV, "LIVE_STREAM_ENABLED": "0"}, clear=True):
+            self.assertFalse(reload_prod_settings().LIVE_STREAM_ENABLED)
+
     def test_current_environment_overrides_are_parsed(self):
         env = {
             **PROD_ENV,

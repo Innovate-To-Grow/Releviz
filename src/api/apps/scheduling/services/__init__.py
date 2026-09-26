@@ -4,13 +4,14 @@ The layer is grouped by domain; import from the subpackage that owns the
 behaviour, for example ``from apps.scheduling.services.invitations import
 upsert_and_send_invitations``.
 
-- ``activity`` – the change digest the organizer workspace polls
+- ``activity`` – the change digest the organizer workspace compares
 - ``availability`` – shape and validation of availability arrays
 - ``events`` – configuration, lifecycle, and write operations for events
 - ``fingerprints`` – stable hashes for idempotent requests
 - ``finalization`` – confirming and canceling the final meeting
 - ``ics`` – iCalendar attachments
 - ``invitations`` – invitation delivery, reminders, and status
+- ``live`` – push change notifications to open organizer workspaces
 - ``results`` – aggregation, recommendations, and result snapshots
 - ``roster_imports`` – roster preview, validation, and commit
 - ``slots`` – slot geometry for an event
@@ -25,6 +26,7 @@ from . import (
     fingerprints,
     ics,
     invitations,
+    live,
     results,
     roster_imports,
     slots,
@@ -39,6 +41,7 @@ __all__ = [
     "fingerprints",
     "ics",
     "invitations",
+    "live",
     "results",
     "roster_imports",
     "slots",

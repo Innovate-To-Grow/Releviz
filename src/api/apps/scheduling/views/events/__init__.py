@@ -5,6 +5,7 @@ from .crud import EventDuplicateView, EventsView
 from .dashboard import DashboardEventsView
 from .lifecycle import EventLifecycleView
 from .results import EventResultsView
+from .stream import EventStreamView
 
 __all__ = [
     "DashboardEventsView",
@@ -12,5 +13,6 @@ __all__ = [
     "EventDuplicateView",
     "EventLifecycleView",
     "EventResultsView",
+    "EventStreamView",
     "EventsView",
 ]

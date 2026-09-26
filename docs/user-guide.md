@@ -239,11 +239,19 @@ completed results; once current, it shows when they were generated.
 
 ### Live updates
 
-The workspace updates itself; there is no Refresh button. While the tab is visible, new responses,
-invitation opens, and edits made elsewhere appear without disturbing a selected time, an unsaved
-row, or an open drawer. While the event is active it checks about every 3 seconds while things are
-changing and slows to every 15 seconds when idle. While the event is closed, finalized, or archived
-it checks every 15 seconds, slowing to once a minute, which is enough to notice a reactivation made
-elsewhere. It checks immediately when you return to the tab, the window regains focus, or you
-reconnect. While the event is active the header shows a **Live** badge with the last update time,
-or **Live updates paused** with the reason if a check fails; checking continues on its own.
+The workspace updates itself; there is no Refresh button. While the tab is visible it holds one
+event stream open (`GET /events/stream`, Server-Sent Events), and the server announces every change
+to the event: a participant saving, an email being sent, results being recomputed, or an edit made
+in another session. Each announcement arrives well under a second after the change and reloads just
+the parts of the workspace that changed, without disturbing a selected time, an unsaved row, or an
+open drawer. A check once a minute remains as a safety net, and a check that fails is retried within
+seconds.
+
+When the stream is unavailable (local development on SQLite, a proxy that buffers responses, or the
+`LIVE_STREAM_ENABLED=0` switch) the workspace falls back to checking on its own. While the event is
+active it checks about every 3 seconds while things are changing and slows to every 15 seconds when
+idle. While the event is closed, finalized, or archived it checks every 15 seconds, slowing to once
+a minute, which is enough to notice a reactivation made elsewhere. Either way it checks immediately
+when you return to the tab, the window regains focus, or you reconnect. While the event is active
+the header shows a **Live** badge with the last update time, or **Live updates paused** with the
+reason if a check fails; checking continues on its own.

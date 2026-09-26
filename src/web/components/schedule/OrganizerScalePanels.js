@@ -35,6 +35,8 @@ import EventDetailsGrid from "@/components/event/EventDetailsGrid";
 import BlockedSlotsEditor from "@/components/schedule/BlockedSlotsEditor";
 import MeetingCalendar from "@/components/schedule/MeetingCalendar";
 import {
+  LIVE_REFRESH_ACTIVE_PACE,
+  LIVE_REFRESH_BACKSTOP_PACE,
   attachLiveRefreshTriggers,
   createLiveRefreshScheduler,
 } from "@/lib/liveRefresh";
@@ -136,10 +138,17 @@ function MetricListItem({ value, label }) {
   );
 }
 
+// `pushed` says the workspace is being told of changes by the server, and
+// `liveVersion` counts the times it has been told to look again: each
+// change, and each time the stream opens, since the run may have moved while
+// it was down. While pushed, the card re-reads the run on each one instead
+// of polling for it.
 export function DeliveryRequestProgress({
   initialRequest,
   getToken,
   onChange,
+  pushed = false,
+  liveVersion = 0,
   ariaLabel = "Delivery progress",
 }) {
   const [request, setRequest] = useState(initialRequest || null);
@@ -151,6 +160,11 @@ export function DeliveryRequestProgress({
   // itself, both reached through refs so the scheduler outlives re-renders.
   const requestRef = useRef(request);
   const checkRef = useRef(null);
+  // The scheduler while one runs, for a pushed change to wake, and the last
+  // `liveVersion` the card acted on: a card mounted mid-session starts from
+  // the count it was given rather than reading for changes it never saw.
+  const schedulerRef = useRef(null);
+  const seenVersionRef = useRef(liveVersion);
 
   useEffect(() => {
     requestRef.current = request;
@@ -180,23 +194,39 @@ export function DeliveryRequestProgress({
     checkRef.current = check;
   }, [check]);
 
-  // While recipients are still waiting, the card keeps itself current: quick
-  // while the counts move, easing off while they stall, never while the tab
-  // is hidden, and at once when the tab is shown again, the window regains
+  // While recipients are still waiting, the card keeps itself current. With
+  // the server pushing changes it re-reads on each one and only checks once
+  // a minute as a backstop; otherwise it polls, quick while the counts move
+  // and easing off while they stall. Either way never while the tab is
+  // hidden, and at once when the tab is shown again, the window regains
   // focus, or the network returns. Once everyone is sent or failed there is
   // nothing left to read.
   useEffect(() => {
     if (!requestId || !waiting) return undefined;
     const scheduler = createLiveRefreshScheduler({
       check: () => checkRef.current(),
+      pace: pushed ? LIVE_REFRESH_BACKSTOP_PACE : LIVE_REFRESH_ACTIVE_PACE,
     });
+    schedulerRef.current = scheduler;
     const detach = attachLiveRefreshTriggers(scheduler, { activity: false });
     scheduler.start();
     return () => {
       detach();
       scheduler.stop();
+      schedulerRef.current = null;
     };
-  }, [requestId, waiting]);
+  }, [requestId, waiting, pushed]);
+
+  // This effect comes after the scheduler's on purpose. When the stream
+  // opens, `pushed` and `liveVersion` change in the same render, and effects
+  // run in the order they are declared, so the scheduler at the backstop
+  // pace is already in place when this wakes it; the wake then reads the run
+  // at once rather than a minute on.
+  useEffect(() => {
+    if (liveVersion === seenVersionRef.current) return;
+    seenVersionRef.current = liveVersion;
+    schedulerRef.current?.wake();
+  }, [liveVersion]);
 
   if (!request) return null;
   const counts = deliveryCounts(request);
@@ -825,6 +855,7 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
     invalidationKey,
     onChoose,
     onSelect,
+    pushed = false,
     selection = null,
     headingRef,
     finalizeHeadingRef,
@@ -922,12 +953,23 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
       document.removeEventListener("visibilitychange", updateVisibility);
   }, []);
 
+  // A snapshot still being computed is re-read every couple of seconds
+  // while it is in view, unless the server pushes changes to the workspace
+  // (`pushed`): its digest pass then reloads the snapshot the moment the
+  // worker publishes it. A panel whose last load failed polls as before
+  // until one succeeds, though: the digest pass skips a panel that has never
+  // shown a snapshot, and reloads one only once the snapshot moves again.
   useEffect(() => {
-    if (snapshot.status !== "refreshing" || !sectionVisible || !documentVisible)
+    if (
+      (pushed && !error) ||
+      snapshot.status !== "refreshing" ||
+      !sectionVisible ||
+      !documentVisible
+    )
       return undefined;
     const timer = setInterval(load, 2000);
     return () => clearInterval(timer);
-  }, [documentVisible, load, sectionVisible, snapshot.status]);
+  }, [documentVisible, error, load, pushed, sectionVisible, snapshot.status]);
 
   const results = snapshot.results || null;
   const recommendations = (results?.recommendations || []).slice(0, 10);

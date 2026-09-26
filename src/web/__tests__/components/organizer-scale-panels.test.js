@@ -339,6 +339,116 @@ test(
 );
 
 test(
+  "delivery progress waits for pushed changes and re-reads at once when one arrives",
+  withFakeTimers(async () => {
+    fetchDeliveryRequest.mockResolvedValue({
+      id: "delivery-5",
+      operation: "invitation",
+      delivery: { total: 3, pending: 2, sent: 1 },
+    });
+    const card = (liveVersion) => (
+      <DeliveryRequestProgress
+        initialRequest={{
+          id: "delivery-5",
+          delivery: { total: 3, pending: 3 },
+        }}
+        getToken={getToken}
+        pushed
+        liveVersion={liveVersion}
+      />
+    );
+    const { rerender, unmount } = render(card(0));
+    // With the server pushing changes there is no read at the live pace,
+    // only the backstop a minute on.
+    await tick(3000);
+    expect(fetchDeliveryRequest).not.toHaveBeenCalled();
+    await tick(57000);
+    await waitFor(() => expect(fetchDeliveryRequest).toHaveBeenCalledTimes(1));
+    // A pushed change is read at once.
+    rerender(card(1));
+    await waitFor(() => expect(fetchDeliveryRequest).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Delivery progress")).toHaveTextContent(
+        "1 sent",
+      ),
+    );
+    // Once the run has settled a change is nothing to read for.
+    fetchDeliveryRequest.mockResolvedValue({
+      id: "delivery-5",
+      operation: "invitation",
+      delivery: { total: 3, sent: 3 },
+    });
+    rerender(card(2));
+    await waitFor(() => expect(fetchDeliveryRequest).toHaveBeenCalledTimes(3));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Delivery progress")).toHaveTextContent(
+        "Complete",
+      ),
+    );
+    rerender(card(3));
+    await tick(60000);
+    expect(fetchDeliveryRequest).toHaveBeenCalledTimes(3);
+
+    // A card mounted mid-session starts from the count it is given rather
+    // than reading at once for changes it never saw.
+    unmount();
+    fetchDeliveryRequest.mockClear();
+    render(card(3));
+    await tick(3000);
+    expect(fetchDeliveryRequest).not.toHaveBeenCalled();
+    await tick(57000);
+    await waitFor(() => expect(fetchDeliveryRequest).toHaveBeenCalledTimes(1));
+  }),
+);
+
+test(
+  "delivery progress reads at once whenever the stream opens",
+  withFakeTimers(async () => {
+    fetchDeliveryRequest.mockResolvedValue({
+      id: "delivery-6",
+      operation: "invitation",
+      delivery: { total: 3, pending: 2, sent: 1 },
+    });
+    const card = (pushed, liveVersion) => (
+      <DeliveryRequestProgress
+        initialRequest={{
+          id: "delivery-6",
+          delivery: { total: 3, pending: 3 },
+        }}
+        getToken={getToken}
+        pushed={pushed}
+        liveVersion={liveVersion}
+      />
+    );
+    const { rerender } = render(card(false, 0));
+    // The stream opens before the card's first poll: `pushed` and the count
+    // change in the same render, and the card reads at once rather than at
+    // the backstop a minute on.
+    await tick(1000);
+    expect(fetchDeliveryRequest).not.toHaveBeenCalled();
+    rerender(card(true, 1));
+    await waitFor(() => expect(fetchDeliveryRequest).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Delivery progress")).toHaveTextContent(
+        "1 sent",
+      ),
+    );
+    // From there on it waits for changes, with only the backstop behind.
+    await tick(3000);
+    expect(fetchDeliveryRequest).toHaveBeenCalledTimes(1);
+    // The stream drops, so the card polls at the live pace again ...
+    rerender(card(false, 1));
+    await tick(3000);
+    await waitFor(() => expect(fetchDeliveryRequest).toHaveBeenCalledTimes(2));
+    // ... and when it reopens the card catches up at once once more.
+    rerender(card(true, 2));
+    await waitFor(() => expect(fetchDeliveryRequest).toHaveBeenCalledTimes(3));
+    await tick(3000);
+    expect(fetchDeliveryRequest).toHaveBeenCalledTimes(3);
+  }),
+);
+
+test(
   "delivery progress keeps its pace while the organizer works in the page",
   withFakeTimers(async () => {
     // Email is not sent any faster for a click, so activity does not pull
@@ -1852,6 +1962,80 @@ test("the ranked list is collapsed by default and summarizes the best window", a
     "No time selected yet",
   );
 });
+
+test(
+  "results leave a computing snapshot to the pushed digest",
+  withFakeTimers(async () => {
+    fetchEventResults.mockResolvedValue({
+      status: "refreshing",
+      requestedRevision: 8,
+      computedRevision: 7,
+      generatedAt: "2026-08-19T12:00:00Z",
+      results: { recommendations: [] },
+    });
+    const panel = (pushed) => (
+      <ResultsSnapshotPanel
+        event={baseEvent}
+        setEvent={jest.fn()}
+        getToken={getToken}
+        onChoose={jest.fn()}
+        onSelect={jest.fn()}
+        pushed={pushed}
+      />
+    );
+    const { rerender } = render(panel(true));
+    await screen.findByText(/Results are updating for revision 8/);
+    expect(fetchEventResults).toHaveBeenCalledTimes(1);
+    // With the server pushing changes, the workspace's digest pass reloads
+    // the snapshot the moment it is published, so the panel does not poll
+    // for it.
+    await tick(2000);
+    await tick(2000);
+    expect(fetchEventResults).toHaveBeenCalledTimes(1);
+    // Without the push it polls every couple of seconds again.
+    rerender(panel(false));
+    await tick(2000);
+    await waitFor(() => expect(fetchEventResults).toHaveBeenCalledTimes(2));
+  }),
+);
+
+test(
+  "results whose load failed keep polling while pushed until one succeeds",
+  withFakeTimers(async () => {
+    fetchEventResults.mockRejectedValueOnce(new Error("snapshot unavailable"));
+    fetchEventResults.mockResolvedValue({
+      status: "refreshing",
+      requestedRevision: 8,
+      computedRevision: 7,
+      generatedAt: "2026-08-19T12:00:00Z",
+      results: { recommendations: [] },
+    });
+    render(
+      <ResultsSnapshotPanel
+        event={baseEvent}
+        setEvent={jest.fn()}
+        getToken={getToken}
+        onChoose={jest.fn()}
+        onSelect={jest.fn()}
+        pushed
+      />,
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "snapshot unavailable",
+    );
+    expect(fetchEventResults).toHaveBeenCalledTimes(1);
+    // The workspace's digest pass has no snapshot here to compare against,
+    // so the panel tries again on its own ...
+    await tick(2000);
+    await waitFor(() => expect(fetchEventResults).toHaveBeenCalledTimes(2));
+    await screen.findByText(/Results are updating for revision 8/);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    // ... and once a load succeeds, it leaves the snapshot to the push.
+    await tick(2000);
+    await tick(2000);
+    expect(fetchEventResults).toHaveBeenCalledTimes(2);
+  }),
+);
 
 test("the ranked list explains an empty or still-computing snapshot", async () => {
   fetchEventResults.mockResolvedValueOnce({

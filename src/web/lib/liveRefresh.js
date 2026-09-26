@@ -12,6 +12,22 @@
 // change made in another session.
 export const LIVE_REFRESH_ACTIVE_PACE = { fastestMs: 3000, slowestMs: 15000 };
 export const LIVE_REFRESH_IDLE_PACE = { fastestMs: 15000, slowestMs: 60000 };
+// While the server pushes changes to the workspace (see liveStream.js), a
+// check a minute is only a safety net, so the backstop pace has a single
+// wait: a change does not pull the next check closer, and `hurry` can never
+// pull one in under it.
+//
+// A failed check is the exception. A pace may name a `retry` curve, a pace of
+// its own whose waits are all shorter than the pace's, and failures ease off
+// along it instead. The backstop's is the active pace, so a pass that fell
+// over (a 502 while a deploy drains a task, a pool timeout, a network blip) is
+// tried again seconds later, as it would be without the stream, rather than
+// leaving the workspace showing its updates as paused for a whole minute.
+export const LIVE_REFRESH_BACKSTOP_PACE = {
+  fastestMs: 60000,
+  slowestMs: 60000,
+  retry: LIVE_REFRESH_ACTIVE_PACE,
+};
 export const LIVE_REFRESH_FASTEST_MS = LIVE_REFRESH_ACTIVE_PACE.fastestMs;
 export const LIVE_REFRESH_SLOWEST_MS = LIVE_REFRESH_ACTIVE_PACE.slowestMs;
 const LIVE_REFRESH_BACKOFF = 1.5;
@@ -21,6 +37,14 @@ const LIVE_REFRESH_BACKOFF = 1.5;
 // failed; ease off the same way so an unreachable server is not hammered), or
 // "skipped" (an earlier check was still running, so nothing was learned; keep
 // the pace).
+//
+// On a pace with a `retry` curve a failure eases off along the curve instead.
+// The first failure after one of the pace's own waits waits the curve's first
+// step up from its fastest, and each further failure grows that by the usual
+// factor up to the curve's slowest. A wait shorter than the pace's fastest can
+// only be a retry, which is how the two are told apart. The first check that
+// gets through, quiet or changed, returns to the pace's own wait, since
+// neither outcome can land under the pace's fastest.
 export function nextLiveRefreshDelay(
   current,
   outcome,
@@ -28,6 +52,14 @@ export function nextLiveRefreshDelay(
 ) {
   if (outcome === "changed") return pace.fastestMs;
   if (outcome === "skipped") return current;
+  if (outcome === "failed" && pace.retry) {
+    const retrying = current < pace.fastestMs;
+    return nextLiveRefreshDelay(
+      retrying ? current : pace.retry.fastestMs,
+      outcome,
+      pace.retry,
+    );
+  }
   return Math.min(
     Math.max(Math.round(current * LIVE_REFRESH_BACKOFF), pace.fastestMs),
     pace.slowestMs,
@@ -37,10 +69,12 @@ export function nextLiveRefreshDelay(
 /**
  * Runs `check` (which resolves to an outcome above) on the adaptive `pace`.
  * The caller wires the triggers (see `attachLiveRefreshTriggers`): `wake`
- * checks now (the tab was shown again, the network returned), `hurry` keeps
- * the pace up without an extra check (the organizer is active), and `stop`
- * ends it. A check is never run while the tab is hidden; the next `wake`
- * catches up.
+ * checks now (the tab was shown again, the network returned, the server
+ * pushed a change), `hurry` keeps the pace up without an extra check (the
+ * organizer is active), and `stop` ends it. A check is never run while the
+ * tab is hidden; the next `wake` catches up. A `wake` while a check is
+ * running asks for one more check right after it rather than a concurrent
+ * one.
  */
 export function createLiveRefreshScheduler({
   check,
@@ -55,6 +89,12 @@ export function createLiveRefreshScheduler({
   // so a check that was already running when they happened cannot schedule a
   // second chain when it finishes.
   let generation = 0;
+  // Whether a check is in flight, and whether a wake arrived while it was.
+  // Starting a concurrent check instead would be reported as "skipped" by the
+  // workspace and lose a change that arrived in the middle of the pass, so
+  // the wake is kept and honoured as one more check right after this one.
+  let running = false;
+  let rerun = false;
 
   const schedule = (chain) => {
     dueAt = now() + delay;
@@ -62,14 +102,27 @@ export function createLiveRefreshScheduler({
   };
   const run = async (chain) => {
     if (isVisible()) {
-      const outcome = await check();
+      running = true;
+      let outcome;
+      try {
+        outcome = await check();
+      } finally {
+        running = false;
+      }
       if (chain !== generation) return;
+      if (rerun) {
+        rerun = false;
+        delay = pace.fastestMs;
+        void run(chain);
+        return;
+      }
       delay = nextLiveRefreshDelay(delay, outcome, pace);
     }
     schedule(chain);
   };
   const restart = ({ immediately }) => {
     generation += 1;
+    rerun = false;
     window.clearTimeout(timer);
     delay = pace.fastestMs;
     if (immediately) void run(generation);
@@ -81,7 +134,8 @@ export function createLiveRefreshScheduler({
       schedule(generation);
     },
     wake() {
-      restart({ immediately: true });
+      if (running) rerun = true;
+      else restart({ immediately: true });
     },
     hurry() {
       // Pull a far-off check in; a near one keeps its slot. Either way the
@@ -91,6 +145,7 @@ export function createLiveRefreshScheduler({
     },
     stop() {
       generation += 1;
+      rerun = false;
       window.clearTimeout(timer);
     },
   };

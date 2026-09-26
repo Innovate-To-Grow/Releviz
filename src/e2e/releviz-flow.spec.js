@@ -434,6 +434,20 @@ test.describe("Releviz account and scheduling flow", () => {
     await registerAccount(page, organizerEmail, "Morgan", "Manager");
     await page.getByRole("link", { name: "Create New Event" }).click();
     await fillTextbox(page, "Event Name", eventName);
+    // The workspace opens one event stream as soon as it mounts. Playwright
+    // reports a response when its headers arrive, which for a Server-Sent
+    // Events response is long before the body ends, so this wait settles
+    // while the stream stays open. The request counter shows the stream is
+    // doing the work: while it is up, the digest is only read on a pushed
+    // change or once a minute.
+    const streamOpened = page.waitForResponse(
+      (response) =>
+        response.url().includes("/events/stream?") && response.status() === 200,
+    );
+    let activityRequests = 0;
+    page.on("request", (request) => {
+      if (request.url().includes("/events/activity?")) activityRequests += 1;
+    });
     await page.getByRole("button", { name: "Create Event" }).click();
     await page.waitForURL(/\/event\?code=/);
     const eventCode = new URL(page.url()).searchParams.get("code");
@@ -441,6 +455,20 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(
       page.getByRole("heading", { level: 2, name: eventName }),
     ).toBeVisible();
+    await streamOpened;
+    // The results worker publishes the new event's first snapshot, and that
+    // publication is itself a pushed change; once the panel shows the
+    // revision, the catch-up pass the stream's open triggered has landed.
+    await expect
+      .poll(() => currentResultsRevision(page), { timeout: 20_000 })
+      .toBeGreaterThan(0);
+    await page.waitForTimeout(1500);
+    const quietStart = activityRequests;
+    await page.waitForTimeout(12_000);
+    // While the stream is up the workspace only checks the digest on a pushed
+    // change or once a minute, whereas fallback polling would have asked at
+    // least twice in twelve seconds.
+    expect(activityRequests - quietStart).toBe(0);
     const organizerSession = await readSession(page);
     const activeEvent = await apiJson(
       request,
