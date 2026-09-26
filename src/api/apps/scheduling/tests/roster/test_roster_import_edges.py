@@ -1804,7 +1804,7 @@ class RosterImportDatabaseEdgeTests(TestCase):
         self.assertIn("invalid", invalid_uuid.data["error"])
 
         with patch(
-            "apps.scheduling.views.roster.bulk._bulk_selector",
+            "apps.scheduling.views.roster.bulk.bulk_selector",
             side_effect=ValueError("invalid participant identifier"),
         ):
             invalid_value = self.client.patch(
@@ -1819,7 +1819,7 @@ class RosterImportDatabaseEdgeTests(TestCase):
         self.assertEqual(invalid_value.status_code, 400)
         self.assertEqual(invalid_value.data["error"], "A participant id is invalid.")
 
-        with patch("apps.scheduling.views.roster.bulk.MAX_ROSTER_ROWS", 1):
+        with patch("apps.scheduling.views.roster.selectors.MAX_ROSTER_ROWS", 1):
             too_many = self.client.patch(
                 f"/events/roster/bulk?code={self.event.code}",
                 {

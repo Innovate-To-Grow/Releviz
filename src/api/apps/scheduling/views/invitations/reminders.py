@@ -16,7 +16,13 @@ from apps.scheduling.services.events import response_write_error
 from apps.scheduling.services.invitations import (
     EventEmailRequestError,
     enqueue_manual_reminders,
+    reminder_candidates,
+    reminder_preview,
 )
+
+
+def _iso_or_none(value):
+    return value.isoformat() if value is not None else None
 
 
 class EventRemindersView(APIView):
@@ -37,6 +43,20 @@ class EventRemindersView(APIView):
             return Response({"error": "Event not found"}, status=404)
         if event.organizer_id != request.user.pk:
             return Response({"error": "Only the organizer can send reminders"}, status=403)
+        preview = request.data.get("preview", False)
+        if not isinstance(preview, bool):
+            return Response({"error": "preview must be a boolean."}, status=400)
+        if preview:
+            # A look at what a run would do: no write guard, no quota, no key.
+            summary = reminder_preview(event)
+            return Response(
+                {
+                    "preview": True,
+                    **summary,
+                    "nextAutomaticAt": _iso_or_none(summary["nextAutomaticAt"]),
+                    "deadline": _iso_or_none(summary["deadline"]),
+                }
+            )
         write_error = response_write_error(event)
         if write_error:
             return Response({"error": write_error}, status=409)
@@ -45,13 +65,7 @@ class EventRemindersView(APIView):
         except (ValueError, TypeError, AttributeError):
             return Response({"error": "idempotencyKey must be a UUID"}, status=400)
 
-        recipient_count = (
-            event.invitations.filter(first_sent_at__isnull=False)
-            .exclude(status="submitted")
-            .count()
-            if event.reminders_enabled
-            else 0
-        )
+        recipient_count = reminder_candidates(event).count() if event.reminders_enabled else 0
         is_replay = EmailDeliveryRequest.objects.filter(
             event=event,
             operation=EmailDeliveryRequest.Operation.REMINDER,

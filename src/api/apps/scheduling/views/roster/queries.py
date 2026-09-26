@@ -19,14 +19,19 @@ from django.db.models import (
 from django.db.models.functions import Coalesce, NullIf
 
 from apps.authn.models import ContactEmail
+from apps.mail.models import EmailDeliveryJob, EmailMessageLog
 from apps.scheduling.models import EventInvitation, Participant, TemporaryEventSession, Weight
 from apps.scheduling.payloads.delivery import delivery_request_status_payload
 from apps.scheduling.payloads.participants import participant_memberships
 from apps.scheduling.permissions import organizer_may_edit_response
+from apps.scheduling.services.invitations.reminders import reminder_candidates
 from apps.scheduling.services.roster_imports import RosterImportError
 from apps.scheduling.services.roster_people import email_change_allowed
 
 UNGROUPED_FILTER = "__ungrouped__"
+# Where the latest invitation email stands: still to be sent, or given up on.
+DELIVERY_QUEUED = "queued"
+DELIVERY_FAILED = "failed"
 
 
 def roster_queryset(event):
@@ -52,6 +57,7 @@ def roster_queryset(event):
                 Value(True),
                 output_field=BooleanField(),
             ),
+            roster_invitation_id=Subquery(invitation_query.values("pk")[:1]),
             roster_invitation_email=Subquery(
                 invitation_query.values("email")[:1],
                 output_field=CharField(),
@@ -77,6 +83,30 @@ def roster_queryset(event):
     primary_contact = ContactEmail.objects.filter(
         member_id=OuterRef("member_id"), email_type="primary"
     ).order_by("created_at")
+    # The newest invitation email for the person's latest invitation, reduced
+    # to whether it is still to be sent or was given up on; a delivered,
+    # uncertain, or canceled one leaves the value null.
+    latest_invitation_job = (
+        EmailDeliveryJob.objects.filter(
+            invitation_id=OuterRef("roster_invitation_id"),
+            message_type=EmailMessageLog.MessageType.INVITATION,
+        )
+        .annotate(
+            delivery=Case(
+                When(
+                    status__in=EmailDeliveryJob.IN_FLIGHT_STATUSES,
+                    then=Value(DELIVERY_QUEUED),
+                ),
+                When(
+                    status=EmailDeliveryJob.Status.PERMANENT_FAILURE,
+                    then=Value(DELIVERY_FAILED),
+                ),
+                default=Value(None),
+                output_field=CharField(),
+            )
+        )
+        .order_by("-created_at", "-pk")
+    )
     return queryset.annotate(
         roster_email=Coalesce(
             NullIf("contact_email", Value("")),
@@ -92,6 +122,10 @@ def roster_queryset(event):
             default=Value("sent"),
             output_field=CharField(),
         ),
+        roster_invitation_delivery=Subquery(
+            latest_invitation_job.values("delivery")[:1],
+            output_field=CharField(),
+        ),
     )
 
 
@@ -103,6 +137,8 @@ INVITATION_STATUS_ALIASES = {
     "opened": "sent",
     "submitted": "accepted",
 }
+# ``invitationStatus`` values that select on the delivery state instead.
+INVITATION_DELIVERY_FILTERS = {DELIVERY_QUEUED, DELIVERY_FAILED}
 
 
 def boolean_query(value, label):
@@ -153,7 +189,9 @@ def apply_roster_filters(queryset, params):
             roster_included=boolean_query(params.get("included"), "included")
         )
     invitation_status = str(params.get("invitationStatus") or "").strip()
-    if invitation_status:
+    if invitation_status in INVITATION_DELIVERY_FILTERS:
+        queryset = queryset.filter(roster_invitation_delivery=invitation_status)
+    elif invitation_status:
         if invitation_status not in INVITATION_STATUS_ALIASES:
             raise RosterImportError("invitationStatus is invalid.")
         queryset = queryset.filter(
@@ -193,6 +231,9 @@ def participant_summary(participant) -> dict:
             has_session=bool(getattr(participant, "roster_signed_in", False)),
         ),
         "invitationStatus": getattr(participant, "roster_invitation_status", "not_sent"),
+        # "queued" while an invitation email waits to go out, "failed" once
+        # delivery was given up on, otherwise null.
+        "invitationDelivery": getattr(participant, "roster_invitation_delivery", None),
         "version": participant.version,
     }
 
@@ -246,22 +287,82 @@ def group_stats(event, queryset) -> list[dict]:
     return stats
 
 
-def roster_stats(event, queryset, *, groups_queryset=None) -> dict:
+def roster_totals(queryset, **counts) -> dict:
+    """Head counts of ``queryset`` in one query.
+
+    Always the five shared keys (``total``, ``submitted``, ``notSubmitted``,
+    ``included``, ``excluded``); ``counts`` adds further ``Count`` aggregates
+    under their own names.
+    """
+
     totals = queryset.aggregate(
         total=Count("pk"),
         submitted=Count("pk", filter=Q(submitted=True)),
         included=Count("pk", filter=Q(roster_included=True)),
+        **counts,
     )
+    return {
+        **totals,
+        "notSubmitted": totals["total"] - totals["submitted"],
+        "excluded": totals["total"] - totals["included"],
+    }
+
+
+def roster_stats(event, queryset, *, groups_queryset=None) -> dict:
+    totals = roster_totals(queryset)
     # Totals follow the active filters; the group list always describes the
     # whole roster so organizers can manage groups while a filter is on.
     groups = group_stats(event, queryset if groups_queryset is None else groups_queryset)
     return {
         "total": totals["total"],
         "submitted": totals["submitted"],
-        "notSubmitted": totals["total"] - totals["submitted"],
+        "notSubmitted": totals["notSubmitted"],
         "included": totals["included"],
-        "excluded": totals["total"] - totals["included"],
+        "excluded": totals["excluded"],
         "groups": groups,
+    }
+
+
+def not_invited_query(event) -> Q:
+    """Rows a plain send (no resend) would queue an invitation for right now."""
+
+    return (
+        Q(roster_invitation_status="not_sent", organizer_managed=False)
+        & ~Q(member_id=event.organizer_id)
+        & ~Q(roster_email="")
+        & (
+            Q(roster_invitation_delivery__isnull=True)
+            | Q(roster_invitation_delivery=DELIVERY_FAILED)
+        )
+    )
+
+
+def roster_overall(event, queryset) -> dict:
+    """Whole-roster counts for the header summary and the email menu.
+
+    ``queryset`` is the unfiltered roster. ``remindable`` counts the
+    invitations a reminder run would consider whether or not reminders are
+    enabled; those are invitation rows, so ``total`` does not bound them.
+    """
+
+    totals = roster_totals(
+        queryset,
+        notInvited=Count("pk", filter=not_invited_query(event)),
+        sending=Count("pk", filter=Q(roster_invitation_delivery=DELIVERY_QUEUED)),
+        failed=Count("pk", filter=Q(roster_invitation_delivery=DELIVERY_FAILED)),
+        noEmail=Count("pk", filter=Q(organizer_managed=True)),
+    )
+    return {
+        "total": totals["total"],
+        "submitted": totals["submitted"],
+        "notSubmitted": totals["notSubmitted"],
+        "included": totals["included"],
+        "excluded": totals["excluded"],
+        "notInvited": totals["notInvited"],
+        "sending": totals["sending"],
+        "failed": totals["failed"],
+        "noEmail": totals["noEmail"],
+        "remindable": reminder_candidates(event).count(),
     }
 
 
