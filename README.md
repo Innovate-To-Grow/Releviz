@@ -177,9 +177,9 @@ picking a window on the calendar opens Finalize. Inside Finalize, **Recommended 
 collapsed list of the recommended meeting times as compact chips; the calendar outlines them only
 while the list is open (pointing at a chip highlights its time), and choosing one selects it in
 Finalize without leaving the list. **Other times**, collapsed under it, picks any open time,
-recommended or not, from a day and a start (each start shows its lowest slot's share, and its rank
-when it is also recommended; weekly events offer the next four weeks); the pick shows on the
-calendar too.
+recommended or not, the same way: click a day (weekly events offer the next four weeks, a week at a
+time), then click one of its times, shown as chips with the lowest slot's share and the rank when
+the time is also recommended. The pick shows on the calendar too.
 The organizer can:
 
 - search/filter a server-paginated roster (50 rows by default, 100 maximum);

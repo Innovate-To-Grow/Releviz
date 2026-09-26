@@ -22,6 +22,8 @@ import {
   CalendarIcon,
   CheckIcon,
   ChevronDownIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   DownloadIcon,
   EditIcon,
   FinalizeIcon,
@@ -37,8 +39,10 @@ import BlockedSlotsControls, {
 } from "@/components/schedule/BlockedSlotsEditor";
 import MeetingCalendar from "@/components/schedule/MeetingCalendar";
 import {
+  COLUMNS_PER_PAGE,
   dateFromMs,
   formatDate,
+  formatWeekLabel,
   formatWindowTimes,
   groupKind,
   localDateOf,
@@ -51,6 +55,7 @@ import {
   selectionMatchesRecommendation,
   startableRows,
   upcomingColumns,
+  weekStartOf,
   windowAt,
   windowMetrics,
   windowSlotCount,
@@ -1104,28 +1109,43 @@ function useStartableDays(event, now) {
   return { k, weekly: groupKind(groups) === "weekday", days };
 }
 
-// One start the Other times picker offers: its local times, the lowest
-// slot's weighted share (an upper bound, as in Finalize), and its rank when
-// the same time is also recommended.
-function otherTimeLabel({ column, row, k, channel, results, recommendations }) {
-  const window = windowAt(column, row, k);
-  const share = windowMetrics(results, channel, window.slotIndices).weighted;
-  const recommendation = recommendationForWindow(
-    recommendations,
-    channel,
-    window,
-  );
-  return [
-    formatWindowTimes(column.slots.slice(row, row + k)),
-    share == null
-      ? null
-      : share > 0
-        ? `up to ${shareOf(share)}% weighted`
-        : "0% weighted",
-    recommendation ? `Recommended #${recommendation.rank}` : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+// One open time as a chip: its local times, the lowest slot's weighted share
+// (an upper bound, as in Finalize), its rank when the same time is also
+// recommended, and whether it is the current pick.
+function otherTimeEntries({
+  day,
+  k,
+  channel,
+  results,
+  recommendations,
+  selectedKey,
+}) {
+  return day.rows.map((row) => {
+    const window = windowAt(day.column, row, k);
+    const share = windowMetrics(results, channel, window.slotIndices).weighted;
+    const recommendation = recommendationForWindow(
+      recommendations,
+      channel,
+      window,
+    );
+    return {
+      row,
+      key: `${day.column.key}:${row}`,
+      startsAt: window.startsAt,
+      times: formatWindowTimes(day.column.slots.slice(row, row + k)),
+      share:
+        share == null ? null : share > 0 ? `up to ${shareOf(share)}%` : "0%",
+      chipShare: share == null ? null : share > 0 ? shareOf(share) : "0",
+      rank: recommendation?.rank ?? null,
+      selected:
+        selectedKey != null &&
+        selectionKey({
+          channel,
+          startsAt: window.startsAt,
+          endsAt: window.endsAt,
+        }) === selectedKey,
+    };
+  });
 }
 
 function dayLabel(column) {
@@ -1136,12 +1156,43 @@ function dayLabel(column) {
   });
 }
 
+// The days shown together: a week of a weekly event, or up to seven dates.
+function dayGroups(days, weekly) {
+  const groups = [];
+  days.forEach((day, index) => {
+    const key = weekly
+      ? weekStartOf(day.column.date)
+      : Math.floor(index / COLUMNS_PER_PAGE);
+    const last = groups[groups.length - 1];
+    if (last && last.key === key) last.days.push(day);
+    else groups.push({ key, days: [day] });
+  });
+  return groups.map((group) => {
+    const first = group.days[0].column.date;
+    const final = group.days[group.days.length - 1].column.date;
+    return {
+      ...group,
+      label: weekly
+        ? formatWeekLabel(group.key)
+        : first === final
+          ? formatDate(first, {
+              month: "short",
+              day: "numeric",
+              year: "numeric",
+            })
+          : `${formatDate(first, { month: "short", day: "numeric" })} – ${formatDate(final, { month: "short", day: "numeric", year: "numeric" })}`,
+    };
+  });
+}
+
 /**
- * Other times: any open meeting time, recommended or not, chosen from a day
- * and a start inside Finalize (the same windows the calendar lets the
- * organizer pick; `pickable` comes from useStartableDays). Choosing one
- * selects it exactly like a calendar pick and shows it on the calendar,
- * while focus stays on the button and a status message confirms it.
+ * Other times: any open meeting time, recommended or not, picked by clicking
+ * inside Finalize, the same way as Recommended times: a day (grouped by
+ * week, like the calendar), then one of its times as a chip. The times are
+ * the windows the calendar lets the organizer pick (`pickable` comes from
+ * useStartableDays). A click selects the time exactly like a calendar pick
+ * and shows it on the calendar; focus stays on the chip, which turns
+ * pressed.
  */
 function OtherTimesSection({
   event,
@@ -1151,49 +1202,83 @@ function OtherTimesSection({
   onChannelChange,
   pickable,
   meetingMinutes,
+  selection,
   onPick,
-  onExpired,
 }) {
   const [open, setOpen] = useState(false);
   const [dayKey, setDayKey] = useState(null);
-  const [startRow, setStartRow] = useState(null);
+  const [focusKey, setFocusKey] = useState(null);
   const [announcement, setAnnouncement] = useState("");
   const timeZone = event.timezone || "UTC";
   const mixed = event.mode === "mixed";
   const { k, weekly, days } = pickable;
-  const day = days.find((entry) => entry.column.key === dayKey) || days[0];
-  const row =
-    day && day.rows.includes(startRow) ? startRow : (day?.rows[0] ?? null);
+  const total = days.reduce((sum, day) => sum + day.rows.length, 0);
+  const groups = useMemo(() => dayGroups(days, weekly), [days, weekly]);
+  const selectedKey =
+    selection?.startsAt && selection.channel === channel
+      ? selectionKey(selection)
+      : null;
+  // Opening on the day of the pick, when it is one of these days.
+  const pickedDayKey = useMemo(() => {
+    if (!open || !selection?.startsAt) return null;
+    const start = Date.parse(selection.startsAt);
+    const hit = days.find((day) =>
+      day.rows.some(
+        (row) => Date.parse(windowAt(day.column, row, k).startsAt) === start,
+      ),
+    );
+    return hit ? hit.column.key : null;
+  }, [open, selection, days, k]);
+  const day =
+    days.find((entry) => entry.column.key === dayKey) ||
+    days.find((entry) => entry.column.key === pickedDayKey) ||
+    days[0];
+  const groupIndex = day
+    ? groups.findIndex((group) => group.days.includes(day))
+    : -1;
+  const group = groups[groupIndex];
+  const entries =
+    open && day
+      ? otherTimeEntries({
+          day,
+          k,
+          channel,
+          results,
+          recommendations,
+          selectedKey,
+        })
+      : [];
+  const detailed =
+    entries.find((entry) => entry.key === focusKey) ||
+    entries.find((entry) => entry.selected) ||
+    entries[0];
 
-  const choose = () => {
-    // The minute may have moved past the start since the list was built.
-    if (Date.parse(windowAt(day.column, row, k).startsAt) < Date.now()) {
-      onExpired();
-      setAnnouncement("That time has just started. Pick another one.");
-      return;
-    }
+  const choose = (entry) => {
     const picked = selectionFromWindow({
       column: day.column,
-      row,
+      row: entry.row,
       k,
       channel,
       results,
       event,
       recommendations,
     });
-    onPick(
+    // onPick refuses a start the clock has passed since the chips were built.
+    const accepted = onPick(
       { ...picked, source: "picker" },
       {
         startsAt: picked.startsAt,
         slotIndices: picked.slotIndices,
-        startDayOffset: day.column.slots[row].startDayOffset,
+        startDayOffset: day.column.slots[entry.row].startDayOffset,
         groupKey: day.column.groupKey,
       },
     );
     setAnnouncement(
-      `Selected ${dayLabel(day.column)}, ${formatWindowTimes(day.column.slots.slice(row, row + k))}.`,
+      accepted ? "" : "That time has just started. Pick another one.",
     );
   };
+
+  const showDaysOf = (index) => setDayKey(groups[index].days[0].column.key);
 
   let body = null;
   if (!open) {
@@ -1216,69 +1301,159 @@ function OtherTimesSection({
   } else {
     body = (
       <>
-        <div className="other-times__fields">
-          {mixed && (
-            <FormField label="Format" className="other-times__field">
-              <select
-                className="form-select"
-                value={channel}
-                onChange={(changeEvent) =>
-                  onChannelChange(changeEvent.target.value)
-                }
+        <p className="ranked-chips__intro text-secondary small mb-0">
+          Any time the calendar lets you pick, recommended or not. Choose a day,
+          then click a time to select it. Shares are weighted, from each
+          time&apos;s lowest slot; times are in {timeZone}.
+        </p>
+        {(mixed || groups.length > 1) && (
+          <div className="other-times__controls">
+            {groups.length > 1 && (
+              <div
+                role="group"
+                aria-label={weekly ? "Week shown" : "Dates shown"}
+                className="meeting-calendar__stepper other-times__stepper"
               >
-                <option value="inperson">In person</option>
-                <option value="virtual">Virtual</option>
-              </select>
-            </FormField>
-          )}
-          <FormField label="Day" className="other-times__field">
-            <select
-              className="form-select"
-              value={day.column.key}
-              onChange={(changeEvent) => {
-                setDayKey(changeEvent.target.value);
-                setStartRow(null);
-              }}
-            >
-              {days.map((entry) => (
-                <option key={entry.column.key} value={entry.column.key}>
-                  {dayLabel(entry.column)}
-                </option>
-              ))}
-            </select>
-          </FormField>
-          <FormField
-            label="Start"
-            className="other-times__field"
-            help={`Times are in ${timeZone}. Shares are weighted, from each time's lowest slot; Review attendance gives exact counts.`}
-          >
-            <select
-              className="form-select"
-              value={row}
-              onChange={(changeEvent) =>
-                setStartRow(Number(changeEvent.target.value))
-              }
-            >
-              {day.rows.map((option) => (
-                <option key={option} value={option}>
-                  {otherTimeLabel({
-                    column: day.column,
-                    row: option,
-                    k,
-                    channel,
-                    results,
-                    recommendations,
+                <button
+                  type="button"
+                  className="btn btn-outline-secondary app-btn"
+                  aria-label="Earlier days"
+                  disabled={groupIndex <= 0}
+                  onClick={() => showDaysOf(groupIndex - 1)}
+                >
+                  <span className="app-btn-icon" aria-hidden="true">
+                    <ChevronLeftIcon />
+                  </span>
+                </button>
+                <span
+                  className="meeting-calendar__range-label"
+                  aria-live="polite"
+                >
+                  {group.label}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-outline-secondary app-btn"
+                  aria-label="Later days"
+                  disabled={groupIndex >= groups.length - 1}
+                  onClick={() => showDaysOf(groupIndex + 1)}
+                >
+                  <span className="app-btn-icon" aria-hidden="true">
+                    <ChevronRightIcon />
+                  </span>
+                </button>
+              </div>
+            )}
+            {mixed && (
+              <div
+                role="group"
+                aria-label="Format"
+                className="btn-group other-times__format"
+              >
+                {[
+                  ["inperson", "In person"],
+                  ["virtual", "Virtual"],
+                ].map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    className={`btn ${channel === key ? "btn-primary" : "btn-outline-secondary"}`}
+                    aria-pressed={channel === key}
+                    onClick={() => onChannelChange(key)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        <div role="group" aria-label="Day" className="day-chips">
+          {group.days.map((entry) => {
+            const active = entry === day;
+            return (
+              <button
+                key={entry.column.key}
+                type="button"
+                className={`day-chip${active ? " day-chip--active" : ""}${entry.column.key === pickedDayKey ? " day-chip--picked" : ""}`}
+                aria-pressed={active}
+                onClick={() => {
+                  setDayKey(entry.column.key);
+                  setFocusKey(null);
+                }}
+              >
+                <span className="day-chip__weekday">
+                  {formatDate(entry.column.date, { weekday: "short" })}
+                </span>{" "}
+                <span className="day-chip__date">
+                  {formatDate(entry.column.date, {
+                    month: "short",
+                    day: "numeric",
                   })}
-                </option>
-              ))}
-            </select>
-          </FormField>
+                </span>
+              </button>
+            );
+          })}
         </div>
-        <div className="other-times__actions">
-          <AppButton variant="outlined" onClick={choose}>
-            Select this time
-          </AppButton>
-        </div>
+        <ol
+          className="ranked-chips"
+          aria-label={`Open times on ${dayLabel(day.column)}`}
+        >
+          {entries.map((entry) => (
+            <li key={entry.key} className="ranked-chips__item">
+              <button
+                type="button"
+                className={`ranked-chip other-time-chip${entry.rank == null ? " ranked-chip--plain" : ""}${entry.selected ? " ranked-chip--selected" : ""}`}
+                aria-pressed={entry.selected}
+                onClick={() => choose(entry)}
+                onPointerEnter={() => setFocusKey(entry.key)}
+                onPointerLeave={() => setFocusKey(null)}
+                onFocus={() => setFocusKey(entry.key)}
+                onBlur={() => setFocusKey(null)}
+              >
+                {entry.rank != null && (
+                  <>
+                    <span className="ranked-chip__rank">
+                      #{entry.rank}
+                    </span>{" "}
+                  </>
+                )}
+                <span className="ranked-chip__title">{entry.times}</span>{" "}
+                {entry.chipShare != null && (
+                  <span className="ranked-chip__share">
+                    {entry.chipShare}%
+                    <span className="visually-hidden"> weighted</span>
+                  </span>
+                )}
+                {entry.selected && (
+                  <span
+                    className="ranked-chip__check icon-inline"
+                    aria-hidden="true"
+                  >
+                    <CheckIcon />
+                  </span>
+                )}
+                <span className="visually-hidden">
+                  {`${entry.rank != null ? `, recommended #${entry.rank}` : ""}${entry.selected ? ", selected time" : ", select this time"}`}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ol>
+        {detailed && (
+          <p className="ranked-chips__detail text-secondary small mb-0">
+            <strong>
+              {dayLabel(day.column)} {detailed.times}
+            </strong>
+            {[
+              detailed.share ? `${detailed.share} weighted` : null,
+              detailed.rank != null ? `recommended #${detailed.rank}` : null,
+            ]
+              .filter(Boolean)
+              .map((part) => ` · ${part}`)
+              .join("")}
+          </p>
+        )}
       </>
     );
   }
@@ -1291,9 +1466,13 @@ function OtherTimesSection({
       headingLevel={5}
       title="Other times"
       hint={
-        weekly
-          ? `Any open ${meetingMinutes}-minute time in the next ${OTHER_TIMES_WEEKS} weeks, recommended or not`
-          : `Any open ${meetingMinutes}-minute time, recommended or not`
+        k < 1
+          ? "The meeting length does not fit the slots"
+          : total === 0
+            ? weekly
+              ? `No open time in the next ${OTHER_TIMES_WEEKS} weeks`
+              : "No upcoming open time"
+            : `${total} open time${total === 1 ? "" : "s"}${weekly ? ` in the next ${OTHER_TIMES_WEEKS} weeks` : ""} · recommended or not`
       }
       open={open}
       onToggle={setOpen}
@@ -1506,15 +1685,22 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
     if (!finalizeOpen) setRankedOpen(false);
   }, []);
 
-  // A time chosen under Other times: selected like a calendar pick, and
-  // revealed on the calendar (painting would hide it, so painting stops).
+  // A time chosen under Other times: selected like a calendar pick and
+  // revealed on the calendar (painting would hide it, so painting stops),
+  // unless the clock has passed its start since the chips were built; then
+  // the chips catch up and it reports false.
   const handlePick = useCallback(
     (picked, revealTarget) => {
+      if (Date.parse(picked.startsAt) < Date.now()) {
+        refreshClock();
+        return false;
+      }
       setBlockedOpen(false);
       calendarRef.current?.reveal(revealTarget);
       onSelect?.(picked);
+      return true;
     },
-    [onSelect],
+    [onSelect, refreshClock],
   );
 
   const handleChoose = useCallback(
@@ -1674,8 +1860,8 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
                     onChannelChange={setChannel}
                     pickable={pickable}
                     meetingMinutes={meetingMinutes}
+                    selection={selection}
                     onPick={handlePick}
-                    onExpired={refreshClock}
                   />
                 </>
               }

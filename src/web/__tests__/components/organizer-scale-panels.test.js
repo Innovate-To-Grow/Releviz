@@ -3188,14 +3188,32 @@ async function openOtherTimes() {
   return other;
 }
 
-test("Other times picks any open time inside Finalize, recommended or not", async () => {
+// Keeps the pick like the workspace does, so chips can show it pressed.
+function PickingTimeTable({ onSelect, ...props }) {
+  const [selection, setSelection] = useState(null);
+  return (
+    <ResultsSnapshotPanel
+      {...props}
+      selection={selection}
+      onSelect={(picked) => {
+        onSelect?.(picked);
+        setSelection(picked);
+      }}
+    />
+  );
+}
+
+const otherChips = (other) =>
+  within(other.querySelector(".ranked-chips")).getAllByRole("button");
+const textsOf = (elements) =>
+  elements.map((element) => element.textContent.trim());
+
+test("Other times picks any open time with one click, like Recommended times", async () => {
   const nowSpy = jest.spyOn(Date, "now").mockReturnValue(DATED_NOW);
   try {
     mockDatedSnapshot();
     const onSelect = jest.fn();
-    render(
-      <ResultsSnapshotPanel {...timeTableProps(datedEvent, { onSelect })} />,
-    );
+    render(<PickingTimeTable {...timeTableProps(datedEvent, { onSelect })} />);
     await screen.findByText(/Results are current at revision 7/);
     const finalize = document.getElementById("organizer-finalize");
     const other = document.getElementById("organizer-other-times");
@@ -3207,41 +3225,59 @@ test("Other times picks any open time inside Finalize, recommended or not", asyn
         name: "Other times",
       }),
     ).toBeInTheDocument();
+    // Summed up like the recommended times: how many there are.
     expect(other.querySelector("summary")).toHaveTextContent(
-      "Any open 60-minute time, recommended or not",
+      "3 open times · recommended or not",
     );
 
     await openOtherTimes();
-    const day = within(other).getByLabelText("Day");
-    const start = within(other).getByLabelText("Start");
-    expect(Array.from(day.options).map((option) => option.value)).toEqual([
-      "date:2026-08-20",
-    ]);
-    // Every start the calendar would accept, with its lowest slot's share
-    // and, when it is also recommended, its rank.
-    expect(
-      Array.from(start.options).map((option) => option.textContent),
-    ).toEqual([
-      "09:00–10:00 · up to 50% weighted · Recommended #2",
-      "09:30–10:30 · up to 90% weighted · Recommended #1",
-      "10:00–11:00 · up to 40% weighted",
-    ]);
-    // The time zone and what the share means are the Start field's help.
-    expect(within(other).getByLabelText("Start")).toHaveAccessibleDescription(
-      "Times are in UTC. Shares are weighted, from each time's lowest slot; Review attendance gives exact counts.",
+    expect(other).toHaveTextContent(
+      "Any time the calendar lets you pick, recommended or not. Choose a day, then click a time to select it. Shares are weighted, from each time's lowest slot; times are in UTC.",
     );
+    // One date: no week stepper, one day, already open.
+    expect(
+      within(other).queryByRole("group", { name: "Dates shown" }),
+    ).toBeNull();
+    const days = within(
+      within(other).getByRole("group", { name: "Day" }),
+    ).getAllByRole("button");
+    expect(days).toHaveLength(1);
+    expect(days[0]).toHaveAttribute("aria-pressed", "true");
+
+    // Every start the calendar would accept, as chips: times, the lowest
+    // slot's share, and the rank when it is also recommended.
+    const list = within(other).getByRole("list", { name: /^Open times on / });
+    expect(list).toHaveClass("ranked-chips");
+    let chips = otherChips(other);
+    expect(
+      textsOf(chips.map((chip) => chip.querySelector(".ranked-chip__title"))),
+    ).toEqual(["09:00–10:00", "09:30–10:30", "10:00–11:00"]);
+    expect(
+      textsOf(chips.map((chip) => chip.querySelector(".ranked-chip__share"))),
+    ).toEqual(["50% weighted", "90% weighted", "40% weighted"]);
+    expect(chips[0].querySelector(".ranked-chip__rank")).toHaveTextContent(
+      "#2",
+    );
+    expect(chips[1].querySelector(".ranked-chip__rank")).toHaveTextContent(
+      "#1",
+    );
+    expect(chips[2].querySelector(".ranked-chip__rank")).toBeNull();
+    expect(chips[2]).toHaveClass("ranked-chip--plain");
+    expect(chips[0]).toHaveAccessibleName(/recommended #2, select this time$/);
+    const detail = () => other.querySelector(".ranked-chips__detail");
+    expect(detail()).toHaveTextContent(
+      /09:00–10:00 · up to 50% weighted · recommended #2$/,
+    );
+    await userEvent.hover(chips[2]);
+    expect(detail()).toHaveTextContent(/10:00–11:00 · up to 40% weighted$/);
     // With recommendations and open times, Finalize points at both.
     expect(finalize).toHaveTextContent(
       "Pick a time on the calendar, or choose a recommended or other time above.",
     );
 
-    // A time nobody recommended: selected like a calendar pick, and focus
-    // stays on the button.
-    await userEvent.selectOptions(start, "2");
-    const select = within(other).getByRole("button", {
-      name: "Select this time",
-    });
-    await userEvent.click(select);
+    // A time nobody recommended: one click selects it like a calendar pick;
+    // the chip turns pressed and keeps focus.
+    await userEvent.click(chips[2]);
     expect(onSelect).toHaveBeenLastCalledWith(
       expect.objectContaining({
         source: "picker",
@@ -3251,14 +3287,16 @@ test("Other times picks any open time inside Finalize, recommended or not", asyn
         metrics: expect.objectContaining({ exact: false, weighted: 0.4 }),
       }),
     );
-    expect(select).toHaveFocus();
-    expect(within(other).getByRole("status")).toHaveTextContent(
-      /^Selected .*, 10:00–11:00\.$/,
-    );
+    chips = otherChips(other);
+    expect(chips[2]).toHaveAttribute("aria-pressed", "true");
+    expect(chips[2]).toHaveAccessibleName(/selected time$/);
+    expect(chips[2].querySelector(".ranked-chip__check")).not.toBeNull();
+    expect(chips[2]).toHaveFocus();
+    expect(within(other).getByRole("status")).toHaveTextContent("");
 
-    // A recommended time picked here is still that recommendation.
-    await userEvent.selectOptions(start, "0");
-    await userEvent.click(select);
+    // A recommended time picked here is that recommendation, and the chip
+    // under Recommended times shows it too.
+    await userEvent.click(chips[0]);
     expect(onSelect).toHaveBeenLastCalledWith(
       expect.objectContaining({
         source: "picker",
@@ -3266,12 +3304,22 @@ test("Other times picks any open time inside Finalize, recommended or not", asyn
         metrics: expect.objectContaining({ exact: true, rank: 2 }),
       }),
     );
+    chips = otherChips(other);
+    expect(chips.map((chip) => chip.getAttribute("aria-pressed"))).toEqual([
+      "true",
+      "false",
+      "false",
+    ]);
+    const rail = document.getElementById("organizer-recommended-times");
+    expect(
+      within(rail).getByRole("button", { name: /selected time/ }),
+    ).toHaveTextContent("#2");
   } finally {
     nowSpy.mockRestore();
   }
 });
 
-test("Other times lists a weekly event's days in its own time zone and resets the start per day", async () => {
+test("Other times pages a weekly event by week in its own time zone", async () => {
   // Wednesday 23:30 in Los Angeles is already Thursday in UTC. Four weeks
   // from the event-local Wednesday end on Monday 19 October; counted from
   // the UTC Thursday they would reach Wednesday 21 October.
@@ -3297,7 +3345,7 @@ test("Other times lists a weekly event's days in its own time zone and resets th
     });
     const onSelect = jest.fn();
     render(
-      <ResultsSnapshotPanel
+      <PickingTimeTable
         {...timeTableProps(
           { ...weeklyEvent, timezone: "America/Los_Angeles" },
           { onSelect },
@@ -3305,52 +3353,76 @@ test("Other times lists a weekly event's days in its own time zone and resets th
       />,
     );
     await screen.findByText(/Results are current at revision 1/);
-    const other = await openOtherTimes();
-    const day = () => within(other).getByLabelText("Day");
-    const start = () => within(other).getByLabelText("Start");
-    const values = Array.from(day().options).map((option) => option.value);
-    expect(values[0]).toBe("weekday:1:2026-09-28");
-    expect(values[values.length - 1]).toBe("weekday:1:2026-10-19");
-    expect(values).toHaveLength(7);
-    // Monday's later windows run into a 0% slot.
-    expect(
-      Array.from(start().options).map((option) => option.textContent),
-    ).toEqual([
-      "09:00–10:00 · up to 50% weighted",
-      "09:30–10:30 · 0% weighted",
-      "10:00–11:00 · 0% weighted",
-    ]);
-    await userEvent.selectOptions(start(), "2");
-    expect(start()).toHaveValue("2");
-    // A new day starts over at its first start.
-    await userEvent.selectOptions(day(), "weekday:3:2026-09-30");
-    expect(start()).toHaveValue("0");
-    expect(start().options[0]).toHaveTextContent(
-      "09:00–10:00 · up to 100% weighted",
+    const other = document.getElementById("organizer-other-times");
+    expect(other.querySelector("summary")).toHaveTextContent(
+      "21 open times in the next 4 weeks · recommended or not",
     );
+    await openOtherTimes();
+    const stepper = within(other).getByRole("group", { name: "Week shown" });
+    const earlier = within(stepper).getByRole("button", {
+      name: "Earlier days",
+    });
+    const later = within(stepper).getByRole("button", { name: "Later days" });
+    const dayButtons = () =>
+      within(within(other).getByRole("group", { name: "Day" })).getAllByRole(
+        "button",
+      );
+    const pressedDay = () =>
+      dayButtons().find(
+        (button) => button.getAttribute("aria-pressed") === "true",
+      );
+    const shares = () =>
+      textsOf(
+        otherChips(other).map((chip) =>
+          chip.querySelector(".ranked-chip__share"),
+        ),
+      );
+
+    // The first week is the event-local one, starting on Monday the 28th.
+    expect(stepper).toHaveTextContent(formatWeekLabel("2026-09-27"));
+    expect(earlier).toBeDisabled();
+    expect(dayButtons()).toHaveLength(2);
+    expect(pressedDay()).toHaveTextContent(/Mon\s*Sep 28/);
+    // Monday's later windows run into a 0% slot.
+    expect(shares()).toEqual(["50% weighted", "0% weighted", "0% weighted"]);
     // Nothing recommended, so Finalize points at Other times only.
     expect(document.getElementById("organizer-finalize")).toHaveTextContent(
       "Pick a time on the calendar, or choose one under Other times above.",
     );
 
-    // A start that passed since the list was built is refused, and the list
-    // catches up with the clock.
-    await userEvent.selectOptions(day(), "weekday:1:2026-09-28");
+    // The last week offered holds only Monday the 19th.
+    await userEvent.click(later);
+    await userEvent.click(later);
+    await userEvent.click(later);
+    expect(stepper).toHaveTextContent(formatWeekLabel("2026-10-18"));
+    expect(later).toBeDisabled();
+    expect(dayButtons()).toHaveLength(1);
+    expect(pressedDay()).toHaveTextContent(/Mon\s*Oct 19/);
+
+    // Another day's chips.
+    await userEvent.click(earlier);
+    await userEvent.click(dayButtons()[1]);
+    expect(pressedDay()).toHaveTextContent(/Wed\s*Oct 14/);
+    expect(shares()).toEqual([
+      "100% weighted",
+      "100% weighted",
+      "100% weighted",
+    ]);
+
+    // A start that passed since the chips were built is refused, and the
+    // chips catch up with the clock.
+    await userEvent.click(earlier);
+    await userEvent.click(earlier);
+    expect(pressedDay()).toHaveTextContent(/Mon\s*Sep 28/);
     // Monday 09:15 in Los Angeles.
     nowSpy.mockReturnValue(Date.parse("2026-09-28T16:15:00Z"));
-    await userEvent.click(
-      within(other).getByRole("button", { name: "Select this time" }),
-    );
+    await userEvent.click(otherChips(other)[0]);
     expect(onSelect).not.toHaveBeenCalled();
     expect(within(other).getByRole("status")).toHaveTextContent(
       "That time has just started. Pick another one.",
     );
-    await waitFor(() =>
-      expect(Array.from(start().options).map((option) => option.value)).toEqual(
-        ["1", "2"],
-      ),
-    );
-    expect(day().options[0]).toHaveValue("weekday:1:2026-09-28");
+    await waitFor(() => expect(otherChips(other)).toHaveLength(2));
+    expect(pressedDay()).toHaveTextContent(/Mon\s*Sep 28/);
   } finally {
     nowSpy.mockRestore();
   }
@@ -3367,18 +3439,23 @@ test("Other times follows the calendar's format and explains when nothing can st
     );
     await screen.findByText(/Results are current at revision 7/);
     let other = await openOtherTimes();
-    const format = within(other).getByLabelText("Format");
-    expect(format).toHaveValue("inperson");
-    await userEvent.selectOptions(format, "virtual");
+    const format = within(other).getByRole("group", { name: "Format" });
+    expect(
+      within(format).getByRole("button", { name: "In person" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(
+      within(format).getByRole("button", { name: "Virtual" }),
+    );
     const channels = screen.getByRole("group", { name: "Meeting channel" });
     expect(
       within(channels).getByRole("button", { name: "Virtual" }),
     ).toHaveAttribute("aria-pressed", "true");
-    expect(within(other).getByLabelText("Format")).toHaveValue("virtual");
-    // No virtual results: the starts carry no share.
-    expect(within(other).getByLabelText("Start").options[2]).toHaveTextContent(
-      /^10:00–11:00$/,
-    );
+    expect(
+      within(format).getByRole("button", { name: "Virtual" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    // No virtual results: the chips carry no share.
+    expect(other.querySelectorAll(".ranked-chip__share")).toHaveLength(0);
+    expect(otherChips(other)).toHaveLength(3);
     unmount();
 
     // The dates have passed.
@@ -3388,6 +3465,10 @@ test("Other times follows the calendar's format and explains when nothing can st
       <ResultsSnapshotPanel {...timeTableProps(datedEvent)} />,
     );
     await screen.findByText(/Results are current at revision 7/);
+    other = document.getElementById("organizer-other-times");
+    expect(other.querySelector("summary")).toHaveTextContent(
+      "No upcoming open time",
+    );
     other = await openOtherTimes();
     expect(other).toHaveTextContent("No upcoming 60-minute time can start.");
     expect(within(other).queryByRole("button")).toBeNull();
@@ -3414,9 +3495,9 @@ test("Other times follows the calendar's format and explains when nothing can st
     other = document.getElementById("organizer-other-times");
     const closedContent = other.querySelector(".time-table__section-content");
     expect(closedContent.textContent).toBe("");
-    expect(closedContent.querySelectorAll("select, button")).toHaveLength(0);
+    expect(closedContent.querySelectorAll("button")).toHaveLength(0);
     expect(other.querySelector("summary")).toHaveTextContent(
-      "Any open 60-minute time in the next 4 weeks, recommended or not",
+      "No open time in the next 4 weeks",
     );
     other = await openOtherTimes();
     expect(other).toHaveTextContent(
@@ -3432,6 +3513,10 @@ test("Other times follows the calendar's format and explains when nothing can st
       />,
     );
     await screen.findByText(/Results are current/);
+    other = document.getElementById("organizer-other-times");
+    expect(other.querySelector("summary")).toHaveTextContent(
+      "The meeting length does not fit the slots",
+    );
     other = await openOtherTimes();
     expect(other).toHaveTextContent(
       "The meeting length does not divide into the slot length",

@@ -500,35 +500,36 @@ test.describe("Organizer meeting-time calendar", () => {
       "true",
     );
 
-    // Other times, inside Finalize, picks any open time without the
-    // calendar: the pick lands in Finalize and on the calendar, and focus
-    // stays on the button.
+    // Other times, inside Finalize, picks any open time with one click, like
+    // the recommended times: a day, then a time chip. The last week offered
+    // is weeks ahead of the one on screen, so the calendar has to move to
+    // show the pick; focus stays on the chip.
     const otherTimes = page.locator("details#organizer-other-times");
     await otherTimes.locator("> summary").click();
     await expect(otherTimes).toHaveAttribute("open", "");
-    const otherDay = otherTimes.getByLabel("Day");
-    const otherStart = otherTimes.getByLabel("Start");
-    // The last day offered is weeks ahead of the week on screen, so the
-    // calendar has to move to show the pick.
-    const lastDay = otherDay.locator("option").last();
-    const lastDayValue = await lastDay.getAttribute("value");
-    await otherDay.selectOption(lastDayValue);
-    await otherStart.selectOption({ index: 1 });
-    const otherLabel = await otherStart.evaluate(
-      (select) => select.selectedOptions[0].textContent,
+    const laterDays = otherTimes.getByRole("button", { name: "Later days" });
+    while (await laterDays.isEnabled()) await laterDays.click();
+    const dayChips = otherTimes
+      .getByRole("group", { name: "Day", exact: true })
+      .getByRole("button");
+    const lastDayChip = dayChips.last();
+    await lastDayChip.click();
+    await expect(lastDayChip).toHaveAttribute("aria-pressed", "true");
+    const lastDayName = (await lastDayChip.textContent()).replace(
+      /^\S+\s*/,
+      "",
     );
-    const otherTimesRange = otherLabel.split(" · ")[0];
+    const timeChip = otherTimes.locator(".ranked-chips .ranked-chip").nth(1);
+    const chipTimes = await timeChip
+      .locator(".ranked-chip__title")
+      .textContent();
     await expectAccessible(page, "organizer other times");
-    const selectOther = otherTimes.getByRole("button", {
-      name: "Select this time",
-    });
-    await selectOther.click();
-    await expect(candidate).toContainText(otherTimesRange);
-    await expect(selectOther).toBeFocused();
+    await timeChip.click();
+    await expect(candidate).toContainText(chipTimes);
+    await expect(timeChip).toHaveAttribute("aria-pressed", "true");
+    await expect(timeChip).toBeFocused();
     await expect(
-      grid.getByRole("columnheader", {
-        name: shortDate(lastDayValue.split(":").pop()),
-      }),
+      grid.getByRole("columnheader", { name: lastDayName }),
     ).toBeVisible();
     await expect(grid.locator('[aria-selected="true"]')).toHaveCount(2);
 

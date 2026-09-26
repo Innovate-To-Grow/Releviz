@@ -2639,13 +2639,15 @@ describe("scaled organizer workspace", () => {
       await userEvent.click(finalize.querySelector(":scope > summary"));
       const other = document.getElementById("organizer-other-times");
       await userEvent.click(other.querySelector(":scope > summary"));
-      const select = within(other).getByRole("button", {
-        name: "Select this time",
-      });
-      await userEvent.click(select);
+      const firstTime = within(
+        other.querySelector(".ranked-chips"),
+      ).getAllByRole("button")[0];
+      await userEvent.click(firstTime);
 
       expect(finalize).toHaveTextContent("Custom window");
-      expect(select).toHaveFocus();
+      // The chip turns pressed and keeps focus; the list stays open.
+      expect(firstTime).toHaveAttribute("aria-pressed", "true");
+      expect(firstTime).toHaveFocus();
       expect(other).toHaveAttribute("open");
       expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled();
       // The calendar shows the pick too.
