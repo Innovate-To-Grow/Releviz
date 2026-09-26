@@ -2280,15 +2280,54 @@ describe("RosterPanel adds people and sends invitations", () => {
     );
     await waitFor(() =>
       expect(screen.getByRole("status")).toHaveTextContent(
-        "Queued 0 invitation(s). 0 already invited were skipped.",
+        "Queued 0 invitation(s).",
       ),
     );
+    expect(screen.getByRole("status")).not.toHaveTextContent("skipped");
     expect(sendRosterInvitations).toHaveBeenLastCalledWith(
       "ROSTER1",
       { participantIds: ["p-1"], resend: true, idempotencyKey: "roster-key" },
       "token",
     );
     expect(onDeliveryRequestChange).not.toHaveBeenCalled();
+  });
+
+  test("reports people with no email of their own apart from those already invited", async () => {
+    sendRosterInvitations
+      .mockResolvedValueOnce({
+        deliveryRequest: null,
+        requestedCount: 3,
+        queuedCount: 0,
+        skippedCount: 3,
+        unreachableCount: 2,
+      })
+      .mockResolvedValueOnce({
+        deliveryRequest: null,
+        requestedCount: 2,
+        queuedCount: 1,
+        skippedCount: 1,
+        unreachableCount: 1,
+      });
+    await renderPanel();
+    await screen.findByText("Ada");
+    fireEvent.click(screen.getByLabelText("Select Ada"));
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Send invitation" })[0],
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Queued 0 invitation(s). 1 already invited were skipped. 2 with no email of their own were not invited.",
+    );
+
+    fireEvent.click(screen.getByLabelText("Select Ben"));
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Send invitation" })[0],
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "Queued 1 invitation(s). 1 with no email of their own were not invited.",
+      ),
+    );
+    expect(screen.getByRole("status")).not.toHaveTextContent("skipped");
   });
 
   test("reports send failures and keeps the selection", async () => {
@@ -3995,8 +4034,11 @@ describe("RosterPanel people corrections", () => {
         "token",
       ),
     );
-    expect(await screen.findByRole("status")).toHaveTextContent(
-      "Ada was updated.",
+    // The status names the person as they are called after the save.
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "Ada K. was updated.",
+      ),
     );
   });
 

@@ -470,7 +470,10 @@ function CreateEvent({
         setResetRequired(true);
         setResetParticipantCount(err.participantCount || 0);
       }
-      if (err.event) setConflictEvent(err.event);
+      // A response-reset error carries the current event too, but only a
+      // version conflict means another session changed it; a reset prompt
+      // is answered in place, and reloading would discard this edit.
+      if (err.event && !err.requiresResponseReset) setConflictEvent(err.event);
       setError(
         err.message ||
           (editing ? "Failed to save event" : "Failed to create event"),

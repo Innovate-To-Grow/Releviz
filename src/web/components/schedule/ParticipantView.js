@@ -22,6 +22,7 @@ import PageHeader from "@/components/ui/PageHeader";
 import Panel from "@/components/ui/Panel";
 import StatusBadge from "@/components/ui/StatusBadge";
 import {
+  DownloadIcon,
   RefreshIcon,
   SendIcon,
   SignInIcon,
@@ -31,7 +32,7 @@ import {
 import EventContext from "@/components/event/EventContext";
 import ScheduleChannelEditor from "@/components/schedule/ScheduleChannelEditor";
 import { useAuth } from "@/components/auth/AuthContext";
-import { fetchEvent } from "@/lib/api/events";
+import { downloadFinalCalendar, fetchEvent } from "@/lib/api/events";
 import {
   fetchCurrentParticipant,
   joinEvent,
@@ -39,6 +40,7 @@ import {
 } from "@/lib/api/participants";
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
 import useAutosaveNavigationGuard from "@/components/schedule/useAutosaveNavigationGuard";
+import { formatDateTimeInTimezone, formatMode } from "@/lib/format";
 
 const NOOP = () => {};
 
@@ -55,6 +57,32 @@ function blockedSlotIndices(slotGroups) {
     }
   }
   return blocked;
+}
+
+// The same Final Start / End / Method cards EventDetailsGrid shows before
+// joining, without the rest of the event facts the workspace already covers.
+function FinalMeetingDetails({ meeting, timezone }) {
+  const cards = [
+    ["Final Start", formatDateTimeInTimezone(meeting.startsAt, timezone)],
+    ["Final End", formatDateTimeInTimezone(meeting.endsAt, timezone)],
+    [
+      "Final Method",
+      `${formatMode(meeting.channel)} · ${meeting.location || "Location not set"}`,
+    ],
+  ];
+  return (
+    <dl
+      className="detail-list detail-list--compact participant-final-meeting"
+      aria-label="Confirmed meeting"
+    >
+      {cards.map(([label, value]) => (
+        <div key={label} className="detail-list__item event-info-item">
+          <dt className="event-info-label">{label}</dt>
+          <dd className="event-info-value">{value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
 }
 
 function ParticipantView() {
@@ -99,6 +127,8 @@ function ParticipantView() {
   const [draftSaveState, setDraftSaveState] = useState("idle");
   const [draftSaveError, setDraftSaveError] = useState("");
   const [saveConflict, setSaveConflict] = useState(null);
+  const [downloadingCalendar, setDownloadingCalendar] = useState(false);
+  const [calendarError, setCalendarError] = useState("");
   const [deadlineClock, setDeadlineClock] = useState(() => Date.now());
 
   const participantIdRef = useRef(null);
@@ -533,6 +563,32 @@ function ParticipantView() {
     }
   };
 
+  // Only a signed-in member reaches the joined workspace, so getToken is the
+  // bearer token the calendar endpoint authorizes; temporary-access guests use
+  // TempAccessClient instead and never see this download.
+  const handleDownloadCalendar = async () => {
+    setDownloadingCalendar(true);
+    setCalendarError("");
+    try {
+      const token = await getToken();
+      const { blob, filename } = await downloadFinalCalendar(event.code, token);
+      const href = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = href;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(href), 0);
+    } catch (err) {
+      setCalendarError(
+        `We couldn't download the calendar invitation: ${err.message || "Please try again."}`,
+      );
+    } finally {
+      setDownloadingCalendar(false);
+    }
+  };
+
   if (authLoading || !user) {
     return (
       <main className="page-shell" aria-busy="true">
@@ -587,6 +643,10 @@ function ParticipantView() {
       : draftSaveState === "submitted"
         ? "success"
         : "info";
+  const finalMeeting =
+    event.finalMeeting && event.finalMeeting.active !== false
+      ? event.finalMeeting
+      : null;
 
   return (
     <main className="page-shell page-shell--wide participant-workspace">
@@ -774,6 +834,37 @@ function ParticipantView() {
                   ? `Responses are locked while this event is ${event.status}.`
                   : "The response deadline has passed."}
               </Alert>
+            )}
+            {finalMeeting && (
+              <div className="d-flex flex-column gap-2">
+                <FinalMeetingDetails
+                  meeting={finalMeeting}
+                  timezone={event.timezone}
+                />
+                {calendarError && (
+                  <Alert
+                    variant="danger"
+                    role="alert"
+                    className="participant-error"
+                  >
+                    {calendarError}
+                  </Alert>
+                )}
+                <div>
+                  <AppButton
+                    variant="outlined"
+                    size="sm"
+                    icon={<DownloadIcon />}
+                    onClick={handleDownloadCalendar}
+                    disabled={downloadingCalendar}
+                    busy={downloadingCalendar}
+                  >
+                    {downloadingCalendar
+                      ? "Preparing…"
+                      : "Download calendar (.ics)"}
+                  </AppButton>
+                </div>
+              </div>
             )}
             <div className="d-flex flex-wrap gap-2">
               <AppButton

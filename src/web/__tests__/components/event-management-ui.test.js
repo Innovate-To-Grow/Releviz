@@ -345,6 +345,10 @@ describe("organizer event management UI", () => {
     fireEvent.change(codeField, { target: { value: " A B C " } });
     fireEvent.keyDown(codeField, { key: "Enter" });
     expect(navigateTo).toHaveBeenCalledWith("/event?code=A%20B%20C");
+
+    fireEvent.change(codeField, { target: { value: " event123 " } });
+    fireEvent.keyDown(codeField, { key: "Enter" });
+    expect(navigateTo).toHaveBeenLastCalledWith("/event?code=EVENT123");
   });
 
   test("dashboard reports archive and delete failures and blocks editing a finalized event", async () => {
@@ -434,6 +438,10 @@ describe("organizer event management UI", () => {
       {
         requiresResponseReset: true,
         participantCount: 2,
+        // The backend attaches the current event to the reset error as well
+        // as to version conflicts, so the reset prompt must not mistake it
+        // for a conflict.
+        event: baseEvent,
       },
     );
     updateEvent.mockRejectedValueOnce(resetError).mockResolvedValueOnce({
@@ -464,6 +472,12 @@ describe("organizer event management UI", () => {
         /clear draft and submitted availability for 2 participants/,
       ),
     ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/The latest saved version is/),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Reload latest event" }),
+    ).not.toBeInTheDocument();
     const confirmation = screen.getByLabelText(
       "I understand that participant availability will be reset.",
     );
@@ -549,6 +563,7 @@ describe("organizer event management UI", () => {
     searchParams = new URLSearchParams("code=EVENT123");
     fetchEvent.mockResolvedValueOnce({ event: baseEvent });
     const conflict = Object.assign(new Error("Reload your edits."), {
+      status: 409,
       event: { ...baseEvent, version: 5 },
     });
     updateEvent.mockRejectedValueOnce(conflict);

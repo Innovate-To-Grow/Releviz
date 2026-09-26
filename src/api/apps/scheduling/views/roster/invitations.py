@@ -87,6 +87,7 @@ class RosterInvitationsView(PrivateAPIView):
                 "requestedCount": result["requestedCount"],
                 "queuedCount": result["queuedCount"],
                 "skippedCount": result["skippedCount"],
+                "unreachableCount": result["unreachableCount"],
                 "idempotent": delivery_result["idempotent"],
             },
             status=202,

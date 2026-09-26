@@ -1,4 +1,5 @@
 import json
+import uuid
 from datetime import timedelta
 
 from django.test import TestCase
@@ -6,7 +7,9 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.authn.tests.helpers import create_member, token_for
-from apps.scheduling.models import Event, EventInvitation, Participant, Weight
+from apps.mail.models import EmailDeliveryJob, EmailMessageLog
+from apps.mail.services import dispatch_email_job
+from apps.scheduling.models import Event, EventInvitation, FinalMeeting, Participant, Weight
 from apps.scheduling.services.events.lifecycle import (
     LifecycleError,
     response_write_error,
@@ -128,6 +131,19 @@ class LifecycleDomainTests(TestCase):
             now=self.now,
         )
         self.assertEqual(finalized.status, Event.Status.ACTIVE)
+
+        archived_final = self.event(code="ARCHFINAL", status=Event.Status.FINALIZED)
+        archived_final.finalized_at = self.now
+        changed = transition_event(
+            archived_final,
+            Event.Status.ARCHIVED,
+            response_deadline=None,
+            now=self.now,
+        )
+        self.assertEqual(archived_final.status, Event.Status.ARCHIVED)
+        self.assertEqual(archived_final.archived_at, self.now)
+        self.assertEqual(archived_final.finalized_at, self.now)
+        self.assertNotIn("finalized_at", changed)
 
         with self.assertRaisesMessage(LifecycleError, "Invalid event status"):
             transition_event(active, "unknown", response_deadline=future, now=self.now)
@@ -349,6 +365,83 @@ class LifecycleApiTests(TestCase):
             extended.data["event"]["version"],
         )
         self.assertEqual(finalization.status_code, 400)
+
+    def test_archived_finalized_event_keeps_its_meeting_until_reactivated(self):
+        self.event.timezone = "UTC"
+        self.event.day_selection_type = "specific_dates"
+        self.event.specific_dates = ["2026-07-20"]
+        self.event.slot_minutes = 30
+        self.event.meeting_duration_minutes = 60
+        self.event.save()
+        Participant.objects.create(
+            event=self.event,
+            member=self.participant,
+            participant_name=self.participant.display_name(),
+            availability_inperson=[1, 1],
+            submitted=True,
+        )
+        EventInvitation.objects.create(
+            event=self.event,
+            email=self.participant.email,
+            member=self.participant,
+            invited_by=self.organizer,
+            status=EventInvitation.Status.SUBMITTED,
+            first_sent_at=timezone.now(),
+        )
+        self.authenticate(self.organizer)
+        finalized = self.client.put(
+            f"/events/finalization?code={self.event.code}",
+            {
+                "startsAt": "2026-07-20T09:00:00+00:00",
+                "endsAt": "2026-07-20T10:00:00+00:00",
+                "channel": "inperson",
+                "location": "Main Room",
+                "expectedVersion": self.event.version,
+                "idempotencyKey": str(uuid.uuid4()),
+            },
+            format="json",
+        )
+        self.assertEqual(finalized.status_code, 202)
+        confirmation = EmailDeliveryJob.objects.get(
+            message_type=EmailMessageLog.MessageType.FINAL_CONFIRMATION
+        )
+
+        archived = self.transition(Event.Status.ARCHIVED, finalized.data["event"]["version"])
+        self.assertEqual(archived.status_code, 200)
+        self.assertEqual(archived.data["event"]["status"], "archived")
+        self.assertIsNotNone(archived.data["event"]["finalizedAt"])
+        self.assertIsNotNone(archived.data["event"]["finalMeeting"])
+        self.assertEqual(archived.data["cancellationEnqueued"], 0)
+        meeting = FinalMeeting.objects.get(event=self.event)
+        self.assertTrue(meeting.active)
+        confirmation.refresh_from_db()
+        self.assertEqual(confirmation.status, EmailDeliveryJob.Status.PENDING)
+
+        # Archiving only stops availability mail, so the invite still goes out.
+        dispatch_email_job(confirmation.pk)
+        confirmation.refresh_from_db()
+        self.assertEqual(confirmation.status, EmailDeliveryJob.Status.SENT)
+
+        self.authenticate(self.participant)
+        calendar = self.client.get(f"/events/finalization/calendar?code={self.event.code}")
+        self.assertEqual(calendar.status_code, 200)
+        self.assertIn("BEGIN:VCALENDAR", calendar.content.decode())
+
+        self.authenticate(self.organizer)
+        reactivated = self.transition(Event.Status.ACTIVE, archived.data["event"]["version"])
+        self.assertEqual(reactivated.status_code, 202)
+        self.assertEqual(reactivated.data["event"]["status"], "active")
+        self.assertIsNone(reactivated.data["event"]["finalizedAt"])
+        self.assertIsNone(reactivated.data["event"]["finalMeeting"])
+        self.assertEqual(reactivated.data["cancellationEnqueued"], 1)
+        self.assertIsNotNone(reactivated.data["cancellationDeliveryRequestId"])
+        meeting.refresh_from_db()
+        self.assertFalse(meeting.active)
+        cancellation = EmailDeliveryJob.objects.get(
+            message_type=EmailMessageLog.MessageType.FINAL_CANCELLATION
+        )
+        self.assertEqual(cancellation.recipient, self.participant.email)
+        self.assertEqual(cancellation.status, EmailDeliveryJob.Status.PENDING)
 
     def test_deadline_status_and_concurrent_response_writes(self):
         participant = self.join()

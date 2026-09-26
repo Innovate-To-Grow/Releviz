@@ -330,6 +330,31 @@ def create_or_reuse_managed_participant_and_send(
     return result
 
 
+def _latest_invitations(event: Event, participants) -> dict:
+    latest_invitations = {}
+    for invitation in EventInvitation.objects.filter(
+        event=event,
+        member_id__in=[participant.member_id for participant in participants],
+    ).order_by("-created_at"):
+        latest_invitations.setdefault(invitation.member_id, invitation)
+    return latest_invitations
+
+
+def _own_invitation_email(event: Event, participant, invitation) -> str:
+    """The address a roster invitation for ``participant`` would go to.
+
+    Empty for someone with no address of their own: the organizer's own row
+    (they answer for themselves), a person the organizer manages (the address
+    on file is the organizer's), or anyone with no email on file.
+    """
+
+    if participant.member_id == event.organizer_id or participant.organizer_managed:
+        return ""
+    if invitation is not None:
+        return invitation.email
+    return participant.member.get_primary_email().strip().lower()
+
+
 @transaction.atomic
 def send_roster_invitations(
     *,
@@ -344,6 +369,10 @@ def send_roster_invitations(
     People whose invitation was already sent (or is still in flight) are
     skipped unless ``resend`` is set. Failed deliveries that never reached the
     recipient do not count as sent, so a plain send re-queues them.
+
+    ``skippedCount`` covers everyone requested but not queued. People with no
+    address of their own are never invited, so ``unreachableCount`` reports
+    them apart from the ones skipped as already invited.
     """
 
     # Imported lazily: the roster views import this package.
@@ -390,22 +419,29 @@ def send_roster_invitations(
                 "This idempotency key was already used with different invitation details.",
                 status_code=409,
             )
-        requested_count = matched.count()
+        participants = list(matched)
+        latest_invitations = _latest_invitations(event, participants)
+        unreachable_count = sum(
+            not _own_invitation_email(
+                event, participant, latest_invitations.get(participant.member_id)
+            )
+            for participant in participants
+        )
+        requested_count = len(participants)
         queued_count = previous.recipient_count
+        skipped_count = max(requested_count - queued_count, 0)
         return {
             "deliveryResult": _request_result(previous, event=event, idempotent=True),
             "requestedCount": requested_count,
             "queuedCount": queued_count,
-            "skippedCount": max(requested_count - queued_count, 0),
+            "skippedCount": skipped_count,
+            # Recounted from the roster as it is now, which may have changed
+            # since the original request, so it never exceeds what it skipped.
+            "unreachableCount": min(unreachable_count, skipped_count),
         }
 
     participants = list(matched.order_by("pk"))
-    latest_invitations = {}
-    for invitation in EventInvitation.objects.filter(
-        event=event,
-        member_id__in=[participant.member_id for participant in participants],
-    ).order_by("-created_at"):
-        latest_invitations.setdefault(invitation.member_id, invitation)
+    latest_invitations = _latest_invitations(event, participants)
     in_flight_invitation_ids = set(
         EmailDeliveryJob.objects.filter(
             invitation_id__in=[invitation.pk for invitation in latest_invitations.values()],
@@ -419,20 +455,17 @@ def send_roster_invitations(
     )
 
     emails = []
+    unreachable_count = 0
     for participant in participants:
-        # The organizer's own row answers for itself and is never invited.
-        if participant.member_id == event.organizer_id:
-            continue
         invitation = latest_invitations.get(participant.member_id)
-        if invitation is not None:
-            email = invitation.email
-            already_sent = (
-                invitation.first_sent_at is not None or invitation.pk in in_flight_invitation_ids
-            )
-        else:
-            email = participant.member.get_primary_email().strip().lower()
-            already_sent = False
-        if not email or (already_sent and not resend):
+        email = _own_invitation_email(event, participant, invitation)
+        if not email:
+            unreachable_count += 1
+            continue
+        already_sent = invitation is not None and (
+            invitation.first_sent_at is not None or invitation.pk in in_flight_invitation_ids
+        )
+        if already_sent and not resend:
             continue
         emails.append(email)
 
@@ -468,6 +501,7 @@ def send_roster_invitations(
         "requestedCount": requested_count,
         "queuedCount": queued_count,
         "skippedCount": requested_count - queued_count,
+        "unreachableCount": unreachable_count,
     }
 
 

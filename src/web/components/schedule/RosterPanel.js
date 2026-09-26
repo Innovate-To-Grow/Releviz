@@ -620,9 +620,20 @@ const RosterPanel = forwardRef(function RosterPanel(
         token,
       );
       const queuedCount = data.queuedCount || 0;
-      const skippedCount = data.skippedCount || 0;
+      // skippedCount also counts people with no email of their own (the
+      // organizer's row, people they manage), who were never invited at all.
+      const unreachableCount = data.unreachableCount || 0;
+      const alreadyInvitedCount = (data.skippedCount || 0) - unreachableCount;
       setStatus(
-        `Queued ${queuedCount} invitation(s). ${skippedCount} already invited were skipped.`,
+        [
+          `Queued ${queuedCount} invitation(s).`,
+          alreadyInvitedCount > 0 &&
+            `${alreadyInvitedCount} already invited were skipped.`,
+          unreachableCount > 0 &&
+            `${unreachableCount} with no email of their own were not invited.`,
+        ]
+          .filter(Boolean)
+          .join(" "),
       );
       if (data.deliveryRequest?.recipientCount > 0) {
         onDeliveryRequestChange?.(data.deliveryRequest);
@@ -1051,6 +1062,10 @@ const RosterPanel = forwardRef(function RosterPanel(
         setStatus(
           `${updates.name || detailsTarget.name} now uses ${updates.email}. Their invitation has not been sent to this address yet.`,
         );
+      } else {
+        // The dialog sends only a changed name or email, so this save renamed
+        // them, and patchRow reported the name they had before it.
+        setStatus(`${updates.name} was updated.`);
       }
     } else if (result === "conflict") {
       setDetailsTarget(null);

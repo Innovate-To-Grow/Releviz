@@ -84,6 +84,7 @@ class RosterInvitationApiTests(TestCase):
         self.assertEqual(first.data["requestedCount"], 2)
         self.assertEqual(first.data["queuedCount"], 2)
         self.assertEqual(first.data["skippedCount"], 0)
+        self.assertEqual(first.data["unreachableCount"], 0)
         self.assertFalse(first.data["idempotent"])
         self.assertEqual(first.data["deliveryRequest"]["operation"], "invitation")
         self.assertEqual(first.data["deliveryRequest"]["recipientCount"], 2)
@@ -108,6 +109,7 @@ class RosterInvitationApiTests(TestCase):
         self.assertEqual(in_flight.data["requestedCount"], 2)
         self.assertEqual(in_flight.data["queuedCount"], 0)
         self.assertEqual(in_flight.data["skippedCount"], 2)
+        self.assertEqual(in_flight.data["unreachableCount"], 0)
         self.assertEqual(in_flight.data["deliveryRequest"]["recipientCount"], 0)
         self.assertEqual(in_flight.data["deliveryRequest"]["enqueued"], 0)
         self.assertEqual(jobs.count(), 2)
@@ -289,6 +291,7 @@ class RosterInvitationApiTests(TestCase):
         self.assertEqual(response.data["requestedCount"], 2)
         self.assertEqual(response.data["queuedCount"], 1)
         self.assertEqual(response.data["skippedCount"], 1)
+        self.assertEqual(response.data["unreachableCount"], 1)
         invitation = EventInvitation.objects.get(event=self.event)
         self.assertEqual(invitation.email, "direct@example.com")
         self.assertEqual(invitation.member, direct_member)
@@ -301,6 +304,7 @@ class RosterInvitationApiTests(TestCase):
         self.assertEqual(nothing.data["requestedCount"], 1)
         self.assertEqual(nothing.data["queuedCount"], 0)
         self.assertEqual(nothing.data["skippedCount"], 1)
+        self.assertEqual(nothing.data["unreachableCount"], 1)
         self.assertFalse(nothing.data["idempotent"])
         self.assertEqual(nothing.data["deliveryRequest"]["recipientCount"], 0)
         self.assertEqual(nothing.data["deliveryRequest"]["enqueued"], 0)
@@ -309,6 +313,65 @@ class RosterInvitationApiTests(TestCase):
         self.assertEqual(empty_request.recipient_count, 0)
         self.assertEqual(empty_request.created_job_count, 0)
         self.assertEqual(EmailDeliveryJob.objects.count(), 1)
+
+    def test_people_with_no_address_of_their_own_are_not_counted_as_already_invited(self):
+        ada = self.add_person("Ada", "ada@example.com")
+        managed = create_or_reuse_managed_participant(
+            event=self.event,
+            organizer=self.organizer,
+            name="Grandma Ruth",
+            email="",
+            organizer_managed=True,
+        )["participant"]
+        own = Participant.objects.create(
+            event=self.event,
+            member=self.organizer,
+            participant_name="Roster Owner",
+            availability_inperson=[0, 0],
+            availability_virtual=[0, 0],
+        )
+        selection = [ada.pk, managed.pk, own.pk]
+        key = uuid.uuid4()
+
+        first = self.send(selection, key=key)
+        self.assertEqual(first.status_code, 202, first.data)
+        self.assertEqual(first.data["requestedCount"], 3)
+        self.assertEqual(first.data["queuedCount"], 1)
+        self.assertEqual(first.data["skippedCount"], 2)
+        self.assertEqual(first.data["unreachableCount"], 2)
+        self.assertEqual(EmailDeliveryJob.objects.get().recipient, "ada@example.com")
+
+        # Ada's invitation is in flight now, so she alone is already invited.
+        again = self.send(selection, resend=False)
+        self.assertEqual(again.status_code, 202, again.data)
+        self.assertEqual(again.data["queuedCount"], 0)
+        self.assertEqual(again.data["skippedCount"], 3)
+        self.assertEqual(again.data["unreachableCount"], 2)
+
+        resent = self.send(selection, resend=True)
+        self.assertEqual(resent.status_code, 202, resent.data)
+        self.assertEqual(resent.data["queuedCount"], 1)
+        self.assertEqual(resent.data["skippedCount"], 2)
+        self.assertEqual(resent.data["unreachableCount"], 2)
+        self.assertEqual(
+            list(EmailDeliveryJob.objects.values_list("recipient", flat=True)),
+            ["ada@example.com", "ada@example.com"],
+        )
+
+        replay = self.send(selection, key=key)
+        self.assertTrue(replay.data["idempotent"])
+        self.assertEqual(replay.data["skippedCount"], 2)
+        self.assertEqual(replay.data["unreachableCount"], 2)
+
+        # A replay recounts the roster as it is now but never reports more
+        # unreachable people than the original request skipped.
+        Participant.objects.filter(pk=ada.pk).update(organizer_managed=True)
+        replay = self.send(selection, key=key)
+        self.assertTrue(replay.data["idempotent"])
+        self.assertEqual(replay.data["queuedCount"], 1)
+        self.assertEqual(replay.data["skippedCount"], 2)
+        self.assertEqual(replay.data["unreachableCount"], 2)
+        self.assertEqual(EmailDeliveryJob.objects.count(), 2)
 
     def test_endpoint_validates_payloads_and_guards_actor_and_lifecycle(self):
         request = SimpleNamespace(user=self.organizer)
@@ -465,6 +528,7 @@ class RosterInvitationApiTests(TestCase):
         self.assertEqual(replay.data["requestedCount"], 2)
         self.assertEqual(replay.data["queuedCount"], 2)
         self.assertEqual(replay.data["skippedCount"], 0)
+        self.assertEqual(replay.data["unreachableCount"], 0)
         self.assertEqual(replay.data["deliveryRequest"]["delivery"]["pending"], 2)
         consume.assert_not_called()
         self.assertEqual(EmailDeliveryJob.objects.count(), 2)
