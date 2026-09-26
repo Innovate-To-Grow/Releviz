@@ -37,6 +37,7 @@ import BlockedSlotsControls, {
 } from "@/components/schedule/BlockedSlotsEditor";
 import MeetingCalendar from "@/components/schedule/MeetingCalendar";
 import {
+  rankedRecommendations,
   selectionFromRecommendation,
   selectionKey,
   selectionMatchesRecommendation,
@@ -671,12 +672,75 @@ function percentOf(value) {
   return Number.isFinite(percent) ? Math.min(100, Math.max(0, percent)) : 0;
 }
 
+// A share as the chips print it: a ranked window always has someone free,
+// so a share that rounds to 0 reads "<1", never "0".
+function shareOf(value) {
+  const percent = percentOf(value);
+  return percent === 0 && Number(value) > 0 ? "<1" : String(percent);
+}
+
 function defaultChannel(event) {
   return event?.mode === "virtual" ? "virtual" : "inperson";
 }
 
+// Why the ranked list is empty, keyed by the API's recommendation status:
+// the collapsed hint, then the empty state's title and body.
+function emptyRankingCopy({ basis, meetingMinutes, slotMinutes }) {
+  switch (basis?.status) {
+    case "no_viable_windows":
+      return {
+        hint: "No time works yet",
+        title: "No time works yet",
+        body: `No upcoming ${meetingMinutes}-minute window has anyone free for all of it.${basis.zeroWeightOnlyAvailability ? " Some times suit only people weighted 0, who don't count toward the ranking." : ""} Ask for more availability, unblock times, or shorten the meeting.`,
+      };
+    case "no_weighted_responses":
+      return {
+        hint: "No weighted responses yet",
+        title: "No one who counts has responded",
+        body: "Everyone who has responded so far has weight 0, so their times aren't ranked. Ranked windows appear once someone with a weight above 0 responds.",
+      };
+    case "no_future_slots":
+      return {
+        hint: "No upcoming times",
+        title: "No upcoming times",
+        body: "Every configured time has passed or is blocked, so there is nothing left to rank.",
+      };
+    case "invalid_duration":
+      return {
+        hint: "Meeting length doesn't fit",
+        title: "Meeting length doesn't fit",
+        body: `The meeting length must be a whole number of ${slotMinutes}-minute slots.`,
+      };
+    case "waiting_for_submissions":
+      return {
+        hint: "Waiting for responses",
+        title: "Waiting for responses",
+        body: "Ranked windows appear once someone submits availability.",
+      };
+    default:
+      return {
+        hint: "No recommendation yet",
+        title: "No recommendation yet",
+        body: "No valid meeting window is available yet.",
+      };
+  }
+}
+
+// How many windows qualified before the list's ceiling (v2 snapshots).
+function qualifyingTotal(basis, count) {
+  const total = Number(basis?.qualifyingWindowTotal);
+  return Number.isFinite(total) && total > count ? total : count;
+}
+
 // The one-line state of the ranked list, shown while it is collapsed.
-function rankedWindowsHint({ event, recommendations, loading, refreshing }) {
+function rankedWindowsHint({
+  event,
+  recommendations,
+  basis,
+  meetingMinutes,
+  loading,
+  refreshing,
+}) {
   const count = recommendations.length;
   const best = recommendations[0];
   const bestLabel = best
@@ -689,11 +753,52 @@ function rankedWindowsHint({ event, recommendations, loading, refreshing }) {
         : "")
     : "";
   if (count > 0) {
-    return `${count} candidate${count === 1 ? "" : "s"}${bestLabel ? ` · best ${bestLabel}` : ""}`;
+    const total = qualifyingTotal(basis, count);
+    return `${count}${total > count ? ` of ${total}` : ""} candidate${total === 1 ? "" : "s"}${bestLabel ? ` · best ${bestLabel}` : ""}`;
   }
   return loading || refreshing
     ? "Calculating the best options"
-    : "No recommendation yet";
+    : emptyRankingCopy({
+        basis,
+        meetingMinutes,
+        slotMinutes: event.slotMinutes,
+      }).hint;
+}
+
+// What the list holds and why it ends where it does (v2 snapshots only;
+// an older snapshot is on screen just until its recompute lands).
+function rankedWindowsIntro({ basis, count, meetingMinutes, mixed }) {
+  const pointer =
+    "Point at one to find it on the calendar; click one to select it.";
+  if (!(Number(basis?.ruleVersion) >= 2))
+    return `The calendar outlines every ranked window. ${pointer}`;
+  const sentences = [
+    `Times someone can attend for the whole ${meetingMinutes} minutes, at least half as available as the best, never overlapping${mixed ? " in the same format" : ""}.`,
+  ];
+  const total = qualifyingTotal(basis, count);
+  if (basis.listEnd === "limit")
+    sentences.push(
+      `Showing the top ${count} of ${total}; ties go to the earlier time.`,
+    );
+  else if (
+    basis.listEnd === "belowFloor" &&
+    basis.nextWeightedAvailability != null
+  )
+    sentences.push(
+      `The next option drops to ${shareOf(basis.nextWeightedAvailability)}% weighted, under half of the best.`,
+    );
+  else if (basis.listEnd === "noMoreWindows")
+    sentences.push(
+      count === 1
+        ? "Every other time overlaps this one or has nobody free for all of it."
+        : "Every other time overlaps one of these or has nobody free for all of it.",
+    );
+  if (Number(basis.bestWeightedAvailability) < 0.5)
+    sentences.push(
+      "No time suits even half of the weighted group; these are the closest.",
+    );
+  sentences.push(pointer);
+  return sentences.join(" ");
 }
 
 /**
@@ -704,6 +809,8 @@ function rankedWindowsHint({ event, recommendations, loading, refreshing }) {
 function RankedWindowsSection({
   event,
   recommendations,
+  basis = null,
+  meetingMinutes,
   selection,
   loading,
   refreshing,
@@ -727,12 +834,12 @@ function RankedWindowsSection({
       rank: recommendation.rank || index + 1,
       recommendation,
       selected: selectionMatchesRecommendation(selection, recommendation),
-      weighted: percentOf(
+      weighted: shareOf(
         recommendation.weightedAvailability ??
           recommendation.weightedScore ??
           0,
       ),
-      unweighted: percentOf(
+      unweighted: shareOf(
         recommendation.unweightedAvailability ??
           recommendation.unweightedScore ??
           0,
@@ -754,6 +861,11 @@ function RankedWindowsSection({
       isBest: index === 0,
     };
   });
+  const empty = emptyRankingCopy({
+    basis,
+    meetingMinutes,
+    slotMinutes: event.slotMinutes,
+  });
   const detailed =
     entries.find((entry) => entry.rank === highlightRank) ||
     entries.find((entry) => entry.selected) ||
@@ -764,15 +876,21 @@ function RankedWindowsSection({
       className="organizer-ranked-windows"
       headingId="organizer-ranked-windows-heading"
       title="Ranked windows"
-      hint={rankedWindowsHint({ event, recommendations, loading, refreshing })}
+      hint={rankedWindowsHint({
+        event,
+        recommendations,
+        basis,
+        meetingMinutes,
+        loading,
+        refreshing,
+      })}
       open={open}
       onToggle={onToggle}
     >
       {count > 0 ? (
         <>
-          <p className="text-secondary small mb-0">
-            The calendar outlines every ranked window. Point at a candidate to
-            find it there; click one to select it.
+          <p className="ranked-chips__intro text-secondary small mb-0">
+            {rankedWindowsIntro({ basis, count, meetingMinutes, mixed })}
           </p>
           <ol className="ranked-chips">
             {entries.map((entry) => {
@@ -871,9 +989,9 @@ function RankedWindowsSection({
           headingLevel={5}
           className="organizer-empty-state"
           icon={<ResultsIcon />}
-          title="No recommendation yet"
+          title={empty.title}
         >
-          <p className="mb-0">No valid meeting window is available yet.</p>
+          <p className="mb-0">{empty.body}</p>
         </EmptyState>
       )}
     </TimeTableSection>
@@ -1019,7 +1137,11 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
   }, [documentVisible, load, sectionVisible, snapshot.status]);
 
   const results = snapshot.results || null;
-  const recommendations = (results?.recommendations || []).slice(0, 10);
+  // The API decides how many windows are worth listing (at most ten).
+  const recommendations = useMemo(
+    () => rankedRecommendations(results),
+    [results],
+  );
   // Snapshots computed before blocking shipped lack the key; the calendar
   // greys cells from `event.slotGroups` either way, so this is only a note.
   const blockedSlotIndices = Array.isArray(results?.blockedSlotIndices)
@@ -1164,6 +1286,8 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
             <RankedWindowsSection
               event={event}
               recommendations={recommendations}
+              basis={results?.recommendationBasis || null}
+              meetingMinutes={meetingMinutes}
               selection={selection}
               loading={loading}
               refreshing={snapshot.status === "refreshing"}
@@ -1313,9 +1437,10 @@ function SelectionMetrics({ metrics }) {
   }
   return (
     <p className="final-candidate__metrics mb-0">
-      At least {percentOf(metrics.weighted)}% weighted ·{" "}
-      {percentOf(metrics.unweighted)}% unweighted across this window (lowest
-      slot). Exact attendance counts appear after Review attendance.
+      Up to {percentOf(metrics.weighted)}% weighted ·{" "}
+      {percentOf(metrics.unweighted)}% unweighted across this window (its lowest
+      slot; people must be free for all of it). Exact attendance counts appear
+      after Review attendance.
     </p>
   );
 }

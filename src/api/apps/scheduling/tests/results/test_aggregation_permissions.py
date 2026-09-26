@@ -153,9 +153,11 @@ class AggregationDomainTests(TestCase):
                 (1, "virtual", 0, 0.8333),
                 (2, "virtual", 1, 0.6667),
                 (3, "inperson", 1, 0.6667),
-                (4, "inperson", 0, 0.3333),
             ],
         )
+        # In person at 09:00 (33%) is under half of the best window (83%).
+        self.assertEqual(results["recommendationBasis"]["listEnd"], "belowFloor")
+        self.assertEqual(results["recommendationBasis"]["nextWeightedAvailability"], 0.3333)
         self.assertEqual(
             results["recommendations"][0],
             {

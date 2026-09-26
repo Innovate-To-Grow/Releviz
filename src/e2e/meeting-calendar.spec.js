@@ -279,9 +279,26 @@ test.describe("Organizer meeting-time calendar", () => {
     await expect(
       page.getByText("Ranked window", { exact: true }),
     ).toBeVisible();
-    expect(
-      await rail.getByRole("button", { name: "Choose this time" }).count(),
-    ).toBeGreaterThanOrEqual(3);
+    // Only windows someone can attend in full, at least half as good as the
+    // best: Thursday 09:00 (Ada and Dev, 43% weighted) is under half of
+    // Monday's 100%, and the 0% windows that used to pad the list to ten
+    // (overlapping Monday's and each other) are gone.
+    await expect(rail.locator(".ranked-chip__title")).toHaveText([
+      "Mon 10:00–11:00",
+      "Tue 11:00–12:00",
+      "Wed 14:00–15:00",
+    ]);
+    await expect(rail.locator(".ranked-chip__share")).toHaveText([
+      /^100% weighted/,
+      /^86% weighted/,
+      /^57% weighted/,
+    ]);
+    await expect(rail.locator(".ranked-chips__intro")).toContainText(
+      "The next option drops to 43% weighted, under half of the best.",
+    );
+    await expect(rail.locator("summary")).toContainText(
+      "3 candidates · best Mon 10:00–11:00",
+    );
     await expect(rail.locator(".ranked-chip__rank").first()).toHaveText("#1");
     await expect(rail.locator(".ranked-chip--best")).toHaveCount(1);
     await expectAccessible(page, "organizer results calendar");
@@ -388,7 +405,7 @@ test.describe("Organizer meeting-time calendar", () => {
     await expect(candidate).toContainText("Wed 14:00–15:00");
     await expect(candidate).toContainText("Custom window");
     await expect(candidate).toContainText(
-      "At least 57% weighted · 50% unweighted across this window (lowest slot).",
+      "Up to 57% weighted · 50% unweighted across this window (its lowest slot; people must be free for all of it).",
     );
     await expect(wednesday14).toHaveAttribute("aria-selected", "true");
     await expect(cellAt(grid, 11, 2)).toHaveAttribute("aria-selected", "true");
@@ -619,10 +636,17 @@ test.describe("Organizer meeting-time calendar", () => {
       page.getByText("Dates 8–9 of 9", { exact: false }),
     ).toBeVisible();
     await expect(grid.getByRole("columnheader")).toHaveCount(3);
+    // Kim's virtual hour (33%) is under half of the best time (100% in
+    // person), so it is shaded but not ranked.
     await expect(cellAt(grid, 0, 0)).toHaveAttribute(
       "aria-label",
-      /Weighted 33%, unweighted 33% of 3 responses.*Inside ranked window #3/,
+      /Weighted 33%, unweighted 33% of 3 responses/,
     );
+    await expect(cellAt(grid, 0, 0)).not.toHaveAttribute(
+      "aria-label",
+      /Inside ranked window/,
+    );
+    await expect(rail.locator(".ranked-chip")).toHaveCount(2);
     await page.getByRole("button", { name: "Previous dates" }).click();
     await expect(
       page.getByText("Dates 1–7 of 9", { exact: false }),
@@ -784,9 +808,8 @@ test.describe("Organizer meeting-time calendar", () => {
 
     // Ranked windows skip the blocked slots: the best window is Tuesday even
     // though everyone was free on Monday, and no rank badge covers a block.
-    // The run before the block still ranks (every other window scores 0, so
-    // the earliest one, Monday 09:00–10:00, is #2) and ends right at it.
-    // The calendar shows them once the ranked list is open.
+    // Every other window scores 0 (nobody can attend all of it), so Tuesday
+    // is the only one listed. The calendar shows it once the list is open.
     await openRankedWindows(page);
     const tuesday11 = cellAt(grid, 4, 1);
     await expect(tuesday11).toHaveAttribute("data-state", "startable");
@@ -803,24 +826,18 @@ test.describe("Organizer meeting-time calendar", () => {
         '[data-blocked-slot="true"][aria-label*="Inside ranked window"]',
       ),
     ).toHaveCount(0);
-    await expect(cellAt(grid, 0, 0)).toHaveAttribute(
+    await expect(cellAt(grid, 0, 0)).not.toHaveAttribute(
       "aria-label",
-      /Inside ranked window #2/,
+      /Inside ranked window/,
     );
-    await expect(monday930).toHaveAttribute(
+    await expect(monday930).not.toHaveAttribute(
       "aria-label",
-      /Inside ranked window #2/,
+      /Inside ranked window/,
     );
     const rail = page.locator("details.organizer-ranked-windows");
-    const titles = rail.locator(".ranked-chip__title");
-    await expect(titles.first()).toHaveText("Tue 11:00–12:00");
-    await expect(titles.nth(1)).toHaveText("Mon 09:00–10:00");
-    expect(
-      (await titles.allTextContents()).filter(
-        (title) =>
-          title.startsWith("Mon 10:00") || title.startsWith("Mon 10:30"),
-      ),
-    ).toEqual([]);
+    await expect(rail.locator(".ranked-chip__title")).toHaveText([
+      "Tue 11:00–12:00",
+    ]);
 
     // Painting one more block (Tuesday 09:00) happens on the calendar
     // itself: opening the step turns it into the paint surface, and saving

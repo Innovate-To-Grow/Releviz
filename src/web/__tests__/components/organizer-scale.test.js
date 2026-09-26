@@ -2384,7 +2384,7 @@ describe("scaled organizer workspace", () => {
       expect(finalizeSection()).toHaveTextContent(/9:30/);
       // The estimate is the lowest per-slot share across slots 1 and 2.
       expect(finalizeSection()).toHaveTextContent(
-        "At least 50% weighted · 60% unweighted across this window (lowest slot). Exact attendance counts appear after Review attendance.",
+        "Up to 50% weighted · 60% unweighted across this window (its lowest slot; people must be free for all of it). Exact attendance counts appear after Review attendance.",
       );
       expect(finalizeSection()).toHaveAttribute("open");
       expect(screen.getByRole("heading", { name: "Finalize" })).toHaveFocus();

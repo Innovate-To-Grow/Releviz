@@ -15,6 +15,7 @@ import {
   groupKind,
   localDateOf,
   normalizeSlotGroups,
+  rankedRecommendations,
   pageCount,
   recommendationBlocks,
   selectionBlock,
@@ -1592,6 +1593,65 @@ describe("selectionFromWindow", () => {
 });
 
 // --- blocks -----------------------------------------------------------------
+
+describe("rankedRecommendations", () => {
+  const listed = (weightedAvailability, rank) => ({
+    rank,
+    channel: "inperson",
+    slotIndices: [rank],
+    weightedAvailability,
+  });
+
+  it("uses a current snapshot's list as the API ranked it", () => {
+    const recommendations = Array.from({ length: 12 }, (_, index) =>
+      listed(0.9, index + 1),
+    );
+    const results = {
+      recommendations,
+      recommendationBasis: { ruleVersion: 2, status: "ready" },
+    };
+    expect(rankedRecommendations(results)).toBe(recommendations);
+    expect(
+      rankedRecommendations({
+        ...results,
+        recommendationBasis: { ruleVersion: 3 },
+      }),
+    ).toBe(recommendations);
+  });
+
+  it("drops the windows nobody can attend from an older snapshot", () => {
+    const best = listed(1, 1);
+    const unscored = { rank: 2, channel: "virtual", slotIndices: [2] };
+    const legacyScore = { ...listed(undefined, 3), weightedScore: 0.4 };
+    const results = {
+      recommendations: [
+        best,
+        unscored,
+        legacyScore,
+        listed(0, 4),
+        { ...listed(undefined, 5), weightedScore: 0 },
+      ],
+      recommendationBasis: { status: "ready", maximumRecommendations: 10 },
+    };
+    expect(rankedRecommendations(results)).toEqual([
+      best,
+      unscored,
+      legacyScore,
+    ]);
+    expect(
+      rankedRecommendations({
+        ...results,
+        recommendationBasis: { ruleVersion: 1 },
+      }),
+    ).toHaveLength(3);
+  });
+
+  it("is empty without a usable list", () => {
+    expect(rankedRecommendations(null)).toEqual([]);
+    expect(rankedRecommendations({})).toEqual([]);
+    expect(rankedRecommendations({ recommendations: "none" })).toEqual([]);
+  });
+});
 
 describe("recommendationBlocks", () => {
   const best = {

@@ -39,6 +39,7 @@ import {
   localDateOf,
   normalizeSlotGroups,
   pageCount,
+  rankedRecommendations,
   recommendationBlocks,
   selectionBlock,
   selectionFromWindow,
@@ -299,8 +300,9 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
   const groups = useMemo(() => normalizeSlotGroups(event), [event]);
   const kind = groupKind(groups);
   const k = windowSlotCount(event);
+  // The same list the Time Table's ranked chips show.
   const recommendations = useMemo(
-    () => results?.recommendations || [],
+    () => rankedRecommendations(results),
     [results],
   );
   const painting = Boolean(blockedEditing);

@@ -1258,7 +1258,7 @@ test("finalize describes a custom calendar window with its estimated availabilit
   expect(screen.getByText("In person")).toBeInTheDocument();
   expect(
     screen.getByText(
-      "At least 75% weighted · 70% unweighted across this window (lowest slot). Exact attendance counts appear after Review attendance.",
+      "Up to 75% weighted · 70% unweighted across this window (its lowest slot; people must be free for all of it). Exact attendance counts appear after Review attendance.",
     ),
   ).toBeInTheDocument();
   expect(
@@ -1404,7 +1404,7 @@ test("finalize shows exact ranked metrics and the rescheduled note", () => {
   expect(
     screen.getByText("75% weighted · 70% unweighted · 5 fully available"),
   ).toBeInTheDocument();
-  expect(screen.queryByText(/At least/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/Up to/)).not.toBeInTheDocument();
   expect(
     screen.getByText(
       "The suggested date has passed; this uses the next occurrence.",
@@ -1421,7 +1421,7 @@ test("finalize explains when a window has no counted responses", () => {
   expect(
     screen.getByText("No responses have been counted yet."),
   ).toBeInTheDocument();
-  expect(screen.queryByText(/At least/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/Up to/)).not.toBeInTheDocument();
   expect(screen.queryByText(/weighted/)).not.toBeInTheDocument();
   expect(screen.getByText("Custom window")).toBeInTheDocument();
   expect(
@@ -1839,6 +1839,257 @@ test("the ranked list explains an empty or still-computing snapshot", async () =
       document.querySelector("details.organizer-ranked-windows"),
     ).toHaveTextContent("No recommendation yet"),
   );
+});
+
+// A ranked window as the current API lists it, `rank` hours after 09:00 on
+// 1 September 2026 (virtual, like `recommendation`).
+function rankedAt(rank, weightedAvailability = 0.8) {
+  const hour = String(8 + rank).padStart(2, "0");
+  const next = String(9 + rank).padStart(2, "0");
+  return {
+    ...recommendation,
+    rank,
+    label: `Tue ${hour}:00–${next}:00`,
+    startsAt: `2026-09-01T${hour}:00:00Z`,
+    endsAt: `2026-09-01T${next}:00:00Z`,
+    weightedAvailability,
+    unweightedAvailability: weightedAvailability,
+    fullyAvailableParticipantTotal: 2,
+  };
+}
+
+function mockRanking(recommendations, basis) {
+  fetchEventResults.mockResolvedValue({
+    status: "fresh",
+    requestedRevision: 2,
+    computedRevision: 2,
+    results: {
+      recommendations,
+      recommendationBasis: { ruleVersion: 2, status: "ready", ...basis },
+    },
+  });
+}
+
+async function renderRanking(recommendations, basis) {
+  mockRanking(recommendations, basis);
+  const view = render(
+    <ResultsSnapshotPanel
+      event={baseEvent}
+      setEvent={jest.fn()}
+      getToken={getToken}
+      onChoose={jest.fn()}
+      onSelect={jest.fn()}
+    />,
+  );
+  await screen.findByText(/Results are current at revision 2/);
+  const rail = document.querySelector("details.organizer-ranked-windows");
+  return { ...view, rail, intro: rail.querySelector(".ranked-chips__intro") };
+}
+
+const RANKING_RULE =
+  "Times someone can attend for the whole 60 minutes, at least half as available as the best, never overlapping in the same format.";
+const RANKING_POINTER =
+  "Point at one to find it on the calendar; click one to select it.";
+
+test.each([
+  [
+    "every other time overlaps or suits nobody",
+    [rankedAt(1, 1), rankedAt(2, 0.75)],
+    { listEnd: "noMoreWindows", bestWeightedAvailability: 1 },
+    "Every other time overlaps one of these or has nobody free for all of it.",
+  ],
+  [
+    "a single window",
+    [rankedAt(1, 1)],
+    { listEnd: "noMoreWindows", bestWeightedAvailability: 1 },
+    "Every other time overlaps this one or has nobody free for all of it.",
+  ],
+  [
+    "the next option falls under half of the best",
+    [rankedAt(1, 1), rankedAt(2, 0.8571)],
+    {
+      listEnd: "belowFloor",
+      bestWeightedAvailability: 1,
+      nextWeightedAvailability: 0.4286,
+    },
+    "The next option drops to 43% weighted, under half of the best.",
+  ],
+  [
+    "a best window under half of the group",
+    [rankedAt(1, 0.4), rankedAt(2, 0.2)],
+    {
+      listEnd: "belowFloor",
+      bestWeightedAvailability: 0.4,
+      nextWeightedAvailability: 0.1,
+    },
+    "The next option drops to 10% weighted, under half of the best. No time suits even half of the weighted group; these are the closest.",
+  ],
+])(
+  "the ranked list says why it ends where it does: %s",
+  async (_case, recommendations, basis, reason) => {
+    const { rail, intro } = await renderRanking(recommendations, basis);
+    expect(intro).toHaveTextContent(
+      `${RANKING_RULE} ${reason} ${RANKING_POINTER}`,
+      { normalizeWhitespace: true },
+    );
+    expect(
+      within(rail).getAllByRole("button", { name: /choose this time/i }),
+    ).toHaveLength(recommendations.length);
+    expect(rail.querySelector("summary")).toHaveTextContent(
+      `${recommendations.length} candidate${recommendations.length === 1 ? "" : "s"} · best Tue 09:00–10:00`,
+    );
+  },
+);
+
+test("a full ranked list reports how many more windows qualified", async () => {
+  const recommendations = Array.from({ length: 10 }, (_, index) =>
+    rankedAt(index + 1, 1),
+  );
+  const { rail, intro } = await renderRanking(recommendations, {
+    listEnd: "limit",
+    qualifyingWindowTotal: 12,
+    bestWeightedAvailability: 1,
+  });
+  expect(rail.querySelector("summary")).toHaveTextContent(
+    "10 of 12 candidates · best Tue 09:00–10:00",
+  );
+  expect(intro).toHaveTextContent(
+    "Showing the top 10 of 12; ties go to the earlier time.",
+  );
+  expect(rail.querySelectorAll(".ranked-chip")).toHaveLength(10);
+});
+
+test("the ranked list never slices what the API listed", async () => {
+  // Older clients cut at ten; the API now decides the length.
+  const recommendations = Array.from({ length: 12 }, (_, index) =>
+    rankedAt(index + 1, 1),
+  );
+  const { rail } = await renderRanking(recommendations, {
+    listEnd: "noMoreWindows",
+    qualifyingWindowTotal: 12,
+    bestWeightedAvailability: 1,
+  });
+  expect(rail.querySelectorAll(".ranked-chip")).toHaveLength(12);
+  expect(rail.querySelector("summary")).toHaveTextContent(
+    "12 candidates · best Tue 09:00–10:00",
+  );
+});
+
+test("a listed window never reads 0%", async () => {
+  const { rail } = await renderRanking([rankedAt(1, 0.004)], {
+    listEnd: "noMoreWindows",
+    bestWeightedAvailability: 0.004,
+  });
+  const chip = rail.querySelector(".ranked-chip");
+  expect(chip.querySelector(".ranked-chip__share")).toHaveTextContent(
+    "<1% weighted",
+  );
+  expect(chip).toHaveAccessibleName(/<1% weighted ?, <1% unweighted/);
+  expect(rail.querySelector(".ranked-chips__detail")).toHaveTextContent(
+    "<1% weighted · <1% unweighted",
+  );
+});
+
+test.each([
+  [
+    "no_viable_windows",
+    { zeroWeightOnlyAvailability: false },
+    "No time works yet",
+    "No time works yet",
+    "No upcoming 60-minute window has anyone free for all of it. Ask for more availability, unblock times, or shorten the meeting.",
+  ],
+  [
+    "no_viable_windows",
+    { zeroWeightOnlyAvailability: true },
+    "No time works yet",
+    "No time works yet",
+    "No upcoming 60-minute window has anyone free for all of it. Some times suit only people weighted 0, who don't count toward the ranking. Ask for more availability, unblock times, or shorten the meeting.",
+  ],
+  [
+    "no_weighted_responses",
+    {},
+    "No weighted responses yet",
+    "No one who counts has responded",
+    "Everyone who has responded so far has weight 0, so their times aren't ranked. Ranked windows appear once someone with a weight above 0 responds.",
+  ],
+  [
+    "no_future_slots",
+    {},
+    "No upcoming times",
+    "No upcoming times",
+    "Every configured time has passed or is blocked, so there is nothing left to rank.",
+  ],
+  [
+    "invalid_duration",
+    {},
+    "Meeting length doesn't fit",
+    "Meeting length doesn't fit",
+    "The meeting length must be a whole number of 30-minute slots.",
+  ],
+  [
+    "waiting_for_submissions",
+    {},
+    "Waiting for responses",
+    "Waiting for responses",
+    "Ranked windows appear once someone submits availability.",
+  ],
+])(
+  "an empty ranked list names its reason: %s",
+  async (status, extra, hint, title, body) => {
+    const { rail } = await renderRanking([], { status, ...extra });
+    expect(rail.querySelector(".time-table__section-hint")).toHaveTextContent(
+      hint,
+    );
+    expect(
+      within(rail).getByRole("heading", { level: 5, name: title }),
+    ).toBeInTheDocument();
+    expect(within(rail).getByText(body)).toBeInTheDocument();
+  },
+);
+
+test("an older snapshot's 0% padding is neither listed nor outlined", async () => {
+  const nowSpy = jest.spyOn(Date, "now").mockReturnValue(DATED_NOW);
+  try {
+    fetchEventResults.mockResolvedValue({
+      status: "refreshing",
+      requestedRevision: 7,
+      computedRevision: 7,
+      results: {
+        countedResponseTotal: 3,
+        channels: {
+          inperson: {
+            weighted: [0, 0.9, 0.9, 0],
+            unweighted: [0, 0.8, 0.8, 0],
+          },
+        },
+        // Ranked before rule version 2: the list was padded to its
+        // length with windows nobody can attend.
+        recommendations: [
+          datedRanked,
+          { ...datedRunnerUp, weightedAvailability: 0 },
+        ],
+        recommendationBasis: { status: "ready", maximumRecommendations: 10 },
+      },
+    });
+    render(<ResultsSnapshotPanel {...timeTableProps(datedEvent)} />);
+    await screen.findByText(/Results are updating for revision 7/);
+    const rail = document.querySelector("details.organizer-ranked-windows");
+    await userEvent.click(within(rail).getByText("Ranked windows"));
+    expect(rail.querySelectorAll(".ranked-chip")).toHaveLength(1);
+    expect(rail.querySelector("summary")).toHaveTextContent(
+      "1 candidate · best Thu 09:30–10:30",
+    );
+    expect(rail.querySelector(".ranked-chips__intro")).toHaveTextContent(
+      "The calendar outlines every ranked window. Point at one to find it on the calendar; click one to select it.",
+    );
+    const outlines = document.querySelectorAll(
+      ".meeting-calendar__block--rank",
+    );
+    expect(outlines).toHaveLength(1);
+    expect(outlines[0]).toHaveAttribute("data-rank", "1");
+  } finally {
+    nowSpy.mockRestore();
+  }
 });
 
 // The API shape of `weeklyEvent` with `slotCount` and per-slot `blocked`

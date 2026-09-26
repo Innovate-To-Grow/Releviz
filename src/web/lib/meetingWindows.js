@@ -692,6 +692,26 @@ function rowOfIndex(column, index) {
 }
 
 /** Ranked windows that fall on the visible columns (weekly blocks repeat every week). */
+/**
+ * The ranked windows a results snapshot offers, as the API listed them. A
+ * snapshot ranked before rule version 2 (served while it is recomputed, or
+ * after a failed recompute) padded its list to ten with windows nobody can
+ * attend; those are dropped here so they are never offered or outlined.
+ */
+export function rankedRecommendations(results) {
+  const recommendations = Array.isArray(results?.recommendations)
+    ? results.recommendations
+    : [];
+  if (Number(results?.recommendationBasis?.ruleVersion) >= 2)
+    return recommendations;
+  return recommendations.filter((recommendation) => {
+    const score = Number(
+      recommendation.weightedAvailability ?? recommendation.weightedScore,
+    );
+    return !(Number.isFinite(score) && score <= 0);
+  });
+}
+
 export function recommendationBlocks(recommendations, columns, channel) {
   const blocks = [];
   (recommendations || []).forEach((recommendation) => {

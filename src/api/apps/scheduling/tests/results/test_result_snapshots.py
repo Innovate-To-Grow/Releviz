@@ -9,6 +9,7 @@ from django.utils import timezone
 
 from apps.authn.tests.helpers import create_member
 from apps.scheduling.models import Event, EventResultInvalidation, EventResultSnapshot
+from apps.scheduling.services.results.recommendations import RECOMMENDATION_RULE_VERSION
 from apps.scheduling.services.results.snapshots import (
     ensure_result_snapshot,
     flush_event_result_invalidations,
@@ -75,6 +76,75 @@ class EventResultSnapshotTests(TestCase):
             recompute_event_results(self.event.pk),
             {"attempted": False, "status": "fresh", "published": False},
         )
+
+    def publish_with_basis(self, basis):
+        """Publish the current results, then swap in another recommendation basis."""
+
+        recompute_event_results(self.event.pk)
+        snapshot = EventResultSnapshot.objects.get(event=self.event)
+        self.assertEqual(snapshot.status, EventResultSnapshot.Status.FRESH)
+        snapshot.payload = {**snapshot.payload, "recommendationBasis": basis}
+        snapshot.save(update_fields=["payload", "updated_at"])
+        return snapshot
+
+    def test_a_ranking_from_an_older_rule_is_recomputed_at_the_same_revision(self):
+        self.assertTrue(recompute_event_results(self.event.pk)["published"])
+        current = serialize_result_snapshot(self.event)
+        self.assertEqual(current["status"], "fresh")
+        self.assertEqual(
+            current["results"]["recommendationBasis"]["ruleVersion"],
+            RECOMMENDATION_RULE_VERSION,
+        )
+
+        # Snapshots published before the stamp existed carry no ruleVersion.
+        self.publish_with_basis({"status": "ready", "maximumRecommendations": 10})
+        served = serialize_result_snapshot(self.event)
+        self.assertEqual(served["status"], "refreshing")
+        self.assertEqual(served["requestedRevision"], 1)
+        self.assertEqual(served["computedRevision"], 1)
+        self.assertNotIn("ruleVersion", served["results"]["recommendationBasis"])
+        self.event.refresh_from_db()
+        self.assertEqual(self.event.results_revision, 1)
+
+        self.assertEqual(recompute_due_event_results(limit=10)["published"], 1)
+        refreshed = serialize_result_snapshot(self.event)
+        self.assertEqual(refreshed["status"], "fresh")
+        self.assertEqual(refreshed["computedRevision"], 1)
+        self.assertEqual(
+            refreshed["results"]["recommendationBasis"]["ruleVersion"],
+            RECOMMENDATION_RULE_VERSION,
+        )
+        self.assertEqual(recompute_due_event_results(limit=10)["attempted"], 0)
+
+    def test_a_worker_never_confirms_an_outdated_ranking_as_fresh(self):
+        # A worker can reach the snapshot before any read flags it.
+        self.publish_with_basis({"status": "ready", "ruleVersion": RECOMMENDATION_RULE_VERSION - 1})
+        republished = recompute_event_results(self.event.pk)
+        self.assertEqual(republished, {"attempted": True, "status": "fresh", "published": True})
+        snapshot = EventResultSnapshot.objects.get(event=self.event)
+        self.assertEqual(
+            snapshot.payload["recommendationBasis"]["ruleVersion"],
+            RECOMMENDATION_RULE_VERSION,
+        )
+
+    def test_payloads_without_a_ranking_and_failed_snapshots_keep_their_status(self):
+        self.assertTrue(recompute_event_results(self.event.pk)["published"])
+        snapshot = EventResultSnapshot.objects.get(event=self.event)
+        snapshot.payload = {"eventCode": self.event.code}
+        snapshot.save(update_fields=["payload", "updated_at"])
+        self.assertEqual(serialize_result_snapshot(self.event)["status"], "fresh")
+        self.assertEqual(
+            recompute_event_results(self.event.pk),
+            {"attempted": False, "status": "fresh", "published": False},
+        )
+
+        snapshot.payload = {"recommendationBasis": {"status": "ready"}}
+        snapshot.status = EventResultSnapshot.Status.FAILED
+        snapshot.last_error = "calculation failed"
+        snapshot.save(update_fields=["payload", "status", "last_error", "updated_at"])
+        failed = serialize_result_snapshot(self.event)
+        self.assertEqual(failed["status"], "failed")
+        self.assertEqual(failed["lastError"], "calculation failed")
 
     def test_newer_revision_prevents_stale_publish_and_failure_can_recover(self):
         def make_stale(_event, *, now=None):

@@ -5,9 +5,15 @@ from unittest.mock import patch
 from django.test import TestCase
 
 from apps.authn.tests.helpers import create_member
-from apps.scheduling.models import Event, Participant
+from apps.scheduling.models import Event, Participant, Weight
 from apps.scheduling.services.results.aggregation import build_event_results
-from apps.scheduling.services.results.recommendations import build_ranked_recommendations
+from apps.scheduling.services.results.recommendations import (
+    MAX_RECOMMENDATIONS,
+    RECOMMENDATION_RULE_VERSION,
+    build_ranked_recommendations,
+)
+
+BEFORE_THE_DATES = datetime(2026, 7, 19, 12, tzinfo=UTC)
 
 
 class RecommendationDomainTests(TestCase):
@@ -40,6 +46,216 @@ class RecommendationDomainTests(TestCase):
             availability_virtual=[0] * slot_count,
             submitted=True,
         )
+
+    def respond(self, event, name, *, inperson, virtual=None, weight=None):
+        """Submit one person's availability, optionally with an organizer weight."""
+
+        member = create_member(f"{event.code.lower()}-{name.lower()}@example.com")
+        participant = Participant.objects.create(
+            event=event,
+            member=member,
+            participant_name=name,
+            availability_inperson=list(inperson),
+            availability_virtual=list(virtual if virtual is not None else [0] * len(inperson)),
+            submitted=True,
+        )
+        if weight is not None:
+            Weight.objects.create(event=event, participant=participant, weight=weight)
+        return participant
+
+    def dated_event(self, code, dates, **overrides):
+        """Half-hour slots from 09:00 to 13:00 and an hour-long meeting per date."""
+
+        values = {
+            "end_minutes": 13 * 60,
+            "slot_minutes": 30,
+            "meeting_duration_minutes": 60,
+            "day_selection_type": "specific_dates",
+            "specific_dates": list(dates),
+        }
+        values.update(overrides)
+        return self.event(code, **values)
+
+    @staticmethod
+    def marks(slot_total, indices, value=1):
+        return [value if index in indices else 0 for index in range(slot_total)]
+
+    def test_windows_nobody_can_attend_never_pad_the_list(self):
+        # The reported event: four real options, then only 0% windows, which
+        # the old fixed top ten appended (overlapping #1 and each other).
+        event = self.dated_event(
+            "PADDING",
+            ["2026-07-20", "2026-07-21", "2026-07-22", "2026-07-23"],
+        )
+        monday_10, tuesday_11, wednesday_12, thursday_9 = {2, 3}, {12, 13}, {22, 23}, {24, 25}
+        for name, windows in (
+            ("Ada", monday_10 | tuesday_11 | wednesday_12 | thursday_9),
+            ("Ben", monday_10 | tuesday_11 | wednesday_12),
+            ("Cara", monday_10 | tuesday_11),
+            ("Dev", monday_10 | thursday_9),
+        ):
+            self.respond(event, name, inperson=self.marks(32, windows))
+
+        results = build_event_results(event, now=BEFORE_THE_DATES)
+
+        self.assertEqual(
+            [
+                (
+                    recommendation["rank"],
+                    recommendation["label"],
+                    recommendation["weightedAvailability"],
+                )
+                for recommendation in results["recommendations"]
+            ],
+            [
+                (1, "2026-07-20 10:00–11:00", 1.0),
+                (2, "2026-07-21 11:00–12:00", 0.75),
+                (3, "2026-07-22 12:00–13:00", 0.5),
+                (4, "2026-07-23 09:00–10:00", 0.5),
+            ],
+        )
+        basis = results["recommendationBasis"]
+        self.assertEqual(basis["status"], "ready")
+        self.assertEqual(basis["ruleVersion"], RECOMMENDATION_RULE_VERSION)
+        self.assertEqual(basis["maximumRecommendations"], MAX_RECOMMENDATIONS)
+        self.assertEqual(basis["candidateTotal"], 28)
+        self.assertEqual(basis["viableWindowTotal"], 4)
+        self.assertEqual(basis["qualifyingWindowTotal"], 4)
+        self.assertEqual(basis["bestWeightedAvailability"], 1.0)
+        self.assertEqual(basis["weightedAvailabilityFloor"], 0.5)
+        self.assertIsNone(basis["nextWeightedAvailability"])
+        self.assertEqual(basis["listEnd"], "noMoreWindows")
+        self.assertFalse(basis["zeroWeightOnlyAvailability"])
+
+    def test_a_long_free_stretch_tiles_into_separate_windows_above_half_the_best(self):
+        event = self.dated_event("STRETCH", ["2026-07-20", "2026-07-21"])
+        for name in ("Ada", "Ben", "Cara"):
+            self.respond(event, name, inperson=self.marks(16, set(range(8))))
+        # Dev is free all Monday morning and on Tuesday 09:00–10:00, alone.
+        self.respond(event, "Dev", inperson=self.marks(16, set(range(8)) | {8, 9}))
+
+        results = build_event_results(event, now=BEFORE_THE_DATES)
+
+        # Seven 100% starts fit Monday; the ones shifted by half an hour share
+        # a slot with a listed hour, so the list tiles the morning instead.
+        self.assertEqual(
+            [recommendation["slotIndices"] for recommendation in results["recommendations"]],
+            [[0, 1], [2, 3], [4, 5], [6, 7]],
+        )
+        basis = results["recommendationBasis"]
+        self.assertEqual(basis["viableWindowTotal"], 8)
+        self.assertEqual(basis["qualifyingWindowTotal"], 4)
+        # Tuesday suits one person in four, under half of the best.
+        self.assertEqual(basis["nextWeightedAvailability"], 0.25)
+        self.assertEqual(basis["listEnd"], "belowFloor")
+
+    def test_a_weaker_shift_of_a_listed_window_is_not_reported_as_the_next_option(self):
+        event = self.dated_event("SHIFTED", ["2026-07-20"], end_minutes=10 * 60 + 30)
+        self.respond(event, "Ada", inperson=[1, 1, 0.5])
+        self.respond(event, "Ben", inperson=[1, 1, 0])
+
+        results = build_event_results(event, now=BEFORE_THE_DATES)
+
+        self.assertEqual(
+            [recommendation["slotIndices"] for recommendation in results["recommendations"]],
+            [[0, 1]],
+        )
+        basis = results["recommendationBasis"]
+        self.assertIsNone(basis["nextWeightedAvailability"])
+        self.assertEqual(basis["listEnd"], "noMoreWindows")
+
+    def test_exactly_half_of_the_best_is_kept_despite_float_rounding(self):
+        event = self.event(
+            "HALF", day_selection_type="specific_dates", specific_dates=["2026-07-20"]
+        )
+        self.respond(event, "Ada", inperson=[1, 0], weight=0.1)
+        self.respond(event, "Ben", inperson=[1, 0], weight=0.2)
+        self.respond(event, "Cara", inperson=[1, 1], weight=0.3)
+
+        results = build_event_results(event, now=BEFORE_THE_DATES)
+
+        # 0.3 / (0.1 + 0.2 + 0.3) is 0.49999999999999994 in floating point.
+        self.assertEqual(
+            [
+                (recommendation["slotIndices"], recommendation["weightedAvailability"])
+                for recommendation in results["recommendations"]
+            ],
+            [([0], 1.0), ([1], 0.5)],
+        )
+        self.assertEqual(results["recommendationBasis"]["listEnd"], "noMoreWindows")
+
+    def test_the_list_stops_at_the_ceiling_and_reports_how_many_qualified(self):
+        event = self.event(
+            "CEILING",
+            end_minutes=12 * 60,
+            day_selection_type="specific_dates",
+            specific_dates=["2026-07-20"],
+        )
+        self.respond(event, "Ada", inperson=[1] * 12)
+
+        results = build_event_results(event, now=BEFORE_THE_DATES)
+
+        self.assertEqual(
+            [recommendation["rank"] for recommendation in results["recommendations"]],
+            list(range(1, MAX_RECOMMENDATIONS + 1)),
+        )
+        self.assertEqual(
+            [recommendation["slotIndex"] for recommendation in results["recommendations"]],
+            list(range(MAX_RECOMMENDATIONS)),
+        )
+        basis = results["recommendationBasis"]
+        self.assertEqual(basis["qualifyingWindowTotal"], 12)
+        self.assertEqual(basis["listEnd"], "limit")
+
+    def test_the_same_time_is_listed_once_per_channel_in_mixed_mode(self):
+        event = self.event(
+            "MIXEDSAME",
+            mode="mixed",
+            day_selection_type="specific_dates",
+            specific_dates=["2026-07-20"],
+        )
+        self.respond(event, "Ada", inperson=[1, 0], virtual=[1, 0.25])
+
+        results = build_event_results(event, now=BEFORE_THE_DATES)
+
+        self.assertEqual(
+            [
+                (recommendation["channel"], recommendation["slotIndices"])
+                for recommendation in results["recommendations"]
+            ],
+            [("inperson", [0]), ("virtual", [0])],
+        )
+        # The floor is shared by both channels: virtual at 09:15 (25%) is out.
+        self.assertEqual(results["recommendationBasis"]["nextWeightedAvailability"], 0.25)
+
+    def test_weight_zero_availability_alone_never_makes_a_window_viable(self):
+        event = self.event(
+            "ZEROONLY", day_selection_type="specific_dates", specific_dates=["2026-07-20"]
+        )
+        self.respond(event, "Ada", inperson=[0, 0], weight=1)
+        optional = self.respond(event, "Ben", inperson=[0, 1], weight=0)
+
+        results = build_event_results(event, now=BEFORE_THE_DATES)
+
+        self.assertEqual(results["recommendations"], [])
+        basis = results["recommendationBasis"]
+        self.assertEqual(basis["status"], "no_viable_windows")
+        self.assertTrue(basis["zeroWeightOnlyAvailability"])
+        self.assertEqual(basis["candidateTotal"], 2)
+        self.assertEqual(basis["viableWindowTotal"], 0)
+        self.assertIsNone(basis["listEnd"])
+        self.assertEqual(basis["ruleVersion"], RECOMMENDATION_RULE_VERSION)
+
+        optional.availability_inperson = [0, 0]
+        optional.save(update_fields=["availability_inperson"])
+        nobody = build_event_results(event, now=BEFORE_THE_DATES)["recommendationBasis"]
+        self.assertEqual(nobody["status"], "no_viable_windows")
+        self.assertFalse(nobody["zeroWeightOnlyAvailability"])
+
+        Participant.objects.filter(event=event, participant_name="Ada").delete()
+        weightless = build_event_results(event, now=BEFORE_THE_DATES)
+        self.assertEqual(weightless["recommendations"], [])
+        self.assertEqual(weightless["recommendationBasis"]["status"], "no_weighted_responses")
 
     def test_weekly_recommendations_choose_the_next_occurrence_after_a_passed_slot(self):
         event = self.event("WEEKLY")
@@ -191,14 +407,16 @@ class RecommendationDomainTests(TestCase):
 
         windows = [recommendation["slotIndices"] for recommendation in results["recommendations"]]
         # Row 5 on day one is open but too short for a two-slot window on its own.
-        self.assertEqual(windows, [[6, 7], [7, 8], [8, 9], [1, 2], [9, 10]])
+        # Day two's 100% run tiles into [6, 7] and [8, 9]; the shifted [7, 8]
+        # and [9, 10] share a slot with them, so they are not listed again.
+        self.assertEqual(windows, [[6, 7], [8, 9], [1, 2]])
         self.assertTrue(all(index not in {0, 3, 4, 11} for window in windows for index in window))
         self.assertEqual(
             [
                 recommendation["weightedAvailability"]
                 for recommendation in results["recommendations"]
             ],
-            [1.0, 1.0, 1.0, 0.5, 0.5],
+            [1.0, 1.0, 0.5],
         )
         self.assertEqual(results["blockedSlotIndices"], [0, 3, 4, 11])
         self.assertEqual(
@@ -237,6 +455,7 @@ class RecommendationDomainTests(TestCase):
         )
         self.assertEqual(recommendations, [])
         self.assertEqual(basis["status"], "invalid_duration")
+        self.assertEqual(basis["ruleVersion"], RECOMMENDATION_RULE_VERSION)
 
         too_long = self.event(
             "TOOLONG",

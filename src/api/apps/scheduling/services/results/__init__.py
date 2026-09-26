@@ -9,7 +9,11 @@ from .aggregation import (
     participant_is_excluded,
     result_channels,
 )
-from .recommendations import MAX_RECOMMENDATIONS, build_ranked_recommendations
+from .recommendations import (
+    MAX_RECOMMENDATIONS,
+    RECOMMENDATION_RULE_VERSION,
+    build_ranked_recommendations,
+)
 from .snapshots import (
     ensure_result_snapshot,
     flush_event_result_invalidations,
@@ -23,6 +27,7 @@ from .snapshots import (
 
 __all__ = [
     "MAX_RECOMMENDATIONS",
+    "RECOMMENDATION_RULE_VERSION",
     "build_event_results",
     "build_ranked_recommendations",
     "classify_event_responses",

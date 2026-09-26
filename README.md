@@ -201,8 +201,14 @@ The organizer can:
   see that group's best meeting times, and bring everyone back with **Include everyone**. People
   in several groups follow the last change, exactly as with a group's weight;
 - apply group/filter/selection weight and included changes, then override an individual;
-- view the top ten meeting-duration candidates ranked by weighted availability, unweighted
-  availability, fully available count, and configured-time order;
+- view the meeting-duration windows worth offering, ranked by weighted availability, unweighted
+  availability, fully available count, and configured-time order. The list is as long as the good
+  options are, at most ten: a window is listed only if someone with a weight above 0 can attend all
+  of it, it scores at least half of the best window, and it shares no slot with a better listed
+  window in the same format (so a long free stretch tiles into separate hours). The list says why it
+  ends where it does, and an empty list names the reason (no responses yet, nobody free for a whole
+  window, no upcoming times). Results cached under an older ranking rule are recomputed on the next
+  read;
 - finalize one authoritative continuous interval, queue stable-UID iCalendar `REQUEST`/`CANCEL`
   notifications, and download the calendar file.
 

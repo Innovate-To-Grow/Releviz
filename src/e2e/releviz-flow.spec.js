@@ -2428,13 +2428,15 @@ test.describe("Releviz account and scheduling flow", () => {
       name: "Choose this time",
     });
     await expect(candidateButtons.first()).toBeVisible();
-    expect(await candidateButtons.count()).toBeGreaterThanOrEqual(3);
-    await candidateButtons.nth(2).click();
+    // The participant's free 09:00–11:00 tiles into two hours; the half-hour
+    // shifts in between overlap them, so they are not listed again.
+    await expect(candidateButtons).toHaveCount(2);
+    await candidateButtons.nth(1).click();
     // The Finalize step re-keys on a new selection: wait for the new pick to
     // land before driving its buttons.
     await expect(page.getByRole("heading", { name: "Finalize" })).toBeFocused();
     await expect(page.locator("#organizer-finalize")).toContainText(
-      "Ranked #3",
+      "Ranked #2",
     );
     await reviewAttendance(page);
     const secondFinalStartedAt = Date.now() - 1000;
