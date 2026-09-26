@@ -47,6 +47,7 @@ const PURPOSE_SUBJECTS = {
   password_reset: "Password reset code - Releviz",
   account_delete: "Delete account code - Releviz",
   temp_event_access: "Your verification code - Releviz",
+  admin_login: "Admin login code - Releviz",
 };
 
 function emailMessage(recipient, subject, code) {

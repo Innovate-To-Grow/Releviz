@@ -4,17 +4,17 @@ const path = require("node:path");
 const { expect, test } = require("@playwright/test");
 const { expectAccessible } = require("./helpers/accessibility");
 const {
-  ADMIN_EMAIL,
-  ADMIN_PASSWORD,
   BACKEND_URL,
   PYTHON_BIN,
   ROOT,
   apiJson,
+  beforeUnloadIsBlocked,
   datetimeLocalHoursFromNow,
   dispatchEmailJobs,
   expandAdvancedOptions,
   expectDashboard,
   fillTextbox,
+  importRoster,
   latestEmailFor,
   latestVerificationCode,
   loginWithEmailCode,
@@ -25,31 +25,9 @@ const {
   refreshWorkspace,
   registerAccount,
   selectOption,
+  temporaryAccessPathFromEmail,
 } = require("./helpers/releviz");
-
-async function importRoster(request, eventCode, token, pastedText) {
-  const preview = await apiJson(
-    request,
-    "POST",
-    `/events/roster-imports?code=${eventCode}`,
-    token,
-    { sourceType: "paste", pastedText },
-  );
-  expect(preview.response.status()).toBe(201);
-  const committed = await apiJson(
-    request,
-    "POST",
-    `/events/roster-imports/${preview.payload.import.id}/commit?code=${eventCode}`,
-    token,
-    {
-      mode: "merge",
-      sendInvitations: true,
-      idempotencyKey: crypto.randomUUID(),
-    },
-  );
-  expect(committed.response.status()).toBe(201);
-  return committed.payload;
-}
+const { reviewAttendance } = require("./helpers/workspace");
 
 function assertDatabaseState(payload) {
   const script = `
@@ -384,34 +362,6 @@ async function currentResultsRevision(page) {
     .catch(() => "");
   const match = String(text || "").match(/revision (\d+)/);
   return match ? Number(match[1]) : -1;
-}
-
-function temporaryAccessPathFromEmail(body) {
-  const rawLink = body.match(/Link:\s*(https?:\/\/[^\s<]+)/i)?.[1];
-  if (!rawLink)
-    throw new Error("No temporary access link found in invitation email");
-  const link = new URL(rawLink.replaceAll("&amp;", "&"));
-  return `${link.pathname}${link.search}`;
-}
-
-// Clicks "Review attendance" until the preview lands. The Finalize step
-// re-keys when a pick changes, so a click made right after can be dropped by
-// slower engines (seen on WebKit); the preview is read-only, so retrying is
-// safe.
-async function reviewAttendance(page) {
-  const notice = page.getByText(
-    "Attendance review is current for this candidate.",
-  );
-  await expect
-    .poll(
-      async () => {
-        if (await notice.isVisible()) return true;
-        await page.getByRole("button", { name: "Review attendance" }).click();
-        return notice.isVisible();
-      },
-      { timeout: 20_000, intervals: [500, 1000, 2000] },
-    )
-    .toBe(true);
 }
 
 test.describe("Releviz account and scheduling flow", () => {
@@ -1537,12 +1487,6 @@ test.describe("Releviz account and scheduling flow", () => {
       availabilityGrid.locator(`[data-cell-idx="${index}"]`);
     const arrowTargetIndex = eventDefinition.slotGroups[1]?.slots[0]?.index;
     expect(arrowTargetIndex).toBeDefined();
-    const beforeUnloadIsBlocked = () =>
-      participantPage.evaluate(() => {
-        const event = new Event("beforeunload", { cancelable: true });
-        window.dispatchEvent(event);
-        return event.defaultPrevented;
-      });
 
     await participantPage
       .getByRole("button", { name: "Apply Available to all" })
@@ -1595,7 +1539,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await cell(touchSlotIndex).tap();
     await expect(participantPage.getByText("Saving draft…")).toBeVisible();
     await expect(savedStatus).toBeVisible();
-    expect(await beforeUnloadIsBlocked()).toBe(false);
+    expect(await beforeUnloadIsBlocked(participantPage)).toBe(false);
     draftState = await apiJson(
       request,
       "GET",
@@ -1757,7 +1701,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(
       participantPage.getByText("Temporary autosave outage"),
     ).toBeVisible();
-    expect(await beforeUnloadIsBlocked()).toBe(true);
+    expect(await beforeUnloadIsBlocked(participantPage)).toBe(true);
     const retriedAutosaveResponse = participantPage.waitForResponse(
       (response) =>
         response.request().method() === "PUT" &&
@@ -1767,7 +1711,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await participantPage.getByRole("button", { name: "Retry save" }).click();
     await retriedAutosaveResponse;
     await expect(savedStatus).toBeVisible();
-    expect(await beforeUnloadIsBlocked()).toBe(false);
+    expect(await beforeUnloadIsBlocked(participantPage)).toBe(false);
     await participantPage.unroute(updateRoutePattern, failAutosaveOnce);
 
     draftState = await apiJson(
@@ -1801,7 +1745,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(
       participantPage.getByText(/changed in another session/i),
     ).toBeVisible();
-    expect(await beforeUnloadIsBlocked()).toBe(true);
+    expect(await beforeUnloadIsBlocked(participantPage)).toBe(true);
     await participantPage
       .getByRole("button", { name: "Reload latest response" })
       .click();
@@ -1814,7 +1758,7 @@ test.describe("Releviz account and scheduling flow", () => {
       "aria-selected",
       "false",
     );
-    expect(await beforeUnloadIsBlocked()).toBe(false);
+    expect(await beforeUnloadIsBlocked(participantPage)).toBe(false);
 
     const finalDate = nextWeekdayDate();
     const finalDayIndex = new Date(`${finalDate}T00:00:00Z`).getUTCDay();
@@ -2900,60 +2844,5 @@ test.describe("Releviz account and scheduling flow", () => {
     expect(deletedLogin.status()).toBe(400);
     assertDeletedAccountState({ member_id: memberId, email });
     await otherContext.close();
-  });
-});
-
-test.describe("Releviz admin", () => {
-  test("renders the themed admin login and authenticated sidebar", async ({
-    page,
-  }) => {
-    await page.setViewportSize({ width: 1440, height: 900 });
-    await page.goto(`${BACKEND_URL}/admin/login/?next=/admin/`);
-    await expect(page.locator(".login-box")).toBeVisible();
-    await expect(page.locator("img.login-logo")).toHaveAttribute(
-      "src",
-      /releviz-mark\.png/,
-    );
-    await expect(page.getByText("Releviz Admin")).toBeVisible();
-    // The login page opens on the email-code step; the password form lives
-    // behind the alternate-mode link.
-    await page
-      .getByRole("link", { name: "Sign in with password instead" })
-      .click();
-    await page.locator("#id_email").fill(ADMIN_EMAIL);
-    await page.locator("#id_password").fill(ADMIN_PASSWORD);
-    await page.getByRole("button", { name: "Sign In" }).click();
-    await expect(page).toHaveURL(/\/admin\/$/);
-    await expect(
-      page
-        .locator("#nav-sidebar-apps")
-        .getByRole("heading", { name: "Scheduling" }),
-    ).toBeVisible();
-    await expect(
-      page
-        .locator("#nav-sidebar-apps")
-        .getByRole("heading", { name: "Members & Authentication" }),
-    ).toBeVisible();
-    await expect(
-      page.locator('[data-admin-theme-choice="dark"]').first(),
-    ).toBeAttached();
-
-    const sidebar = page.locator("#nav-sidebar-apps");
-    const activeSidebarLinks = sidebar.locator("a.active");
-
-    await sidebar.getByRole("link", { name: "AWS SES Providers" }).click();
-    await expect(page).toHaveURL(/\/admin\/mail\/emailproviderconfig\/$/);
-    await expect(activeSidebarLinks).toHaveCount(1);
-    await expect(activeSidebarLinks).toHaveText("AWS SES Providers");
-
-    const activeTabs = page.locator("#tabs-items a.active");
-    await page
-      .locator("#tabs-items")
-      .getByRole("link", { name: "Email Logs" })
-      .click();
-    await expect(page).toHaveURL(/\/admin\/mail\/emailmessagelog\/$/);
-    await expect(activeSidebarLinks).toHaveCount(1);
-    await expect(activeSidebarLinks).toHaveText("AWS SES Providers");
-    await expect(activeTabs).toHaveText("Email Logs");
   });
 });

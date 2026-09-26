@@ -35,6 +35,9 @@ const backendEnv = {
 
 module.exports = defineConfig({
   testDir: ".",
+  // Every test creates its own accounts and events, so tests within a file
+  // run in parallel too.
+  fullyParallel: true,
   timeout: 120_000,
   expect: { timeout: 10_000 },
   reporter: [
