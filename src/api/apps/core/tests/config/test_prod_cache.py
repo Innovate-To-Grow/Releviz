@@ -40,9 +40,12 @@ class ProductionSettingsTests(SimpleTestCase):
                 "PASSWORD": "releviz_password",
                 "HOST": "db.example.com",
                 "PORT": "5432",
-                "CONN_MAX_AGE": 60,
+                "CONN_MAX_AGE": 0,
                 "CONN_HEALTH_CHECKS": True,
-                "OPTIONS": {"sslmode": "require"},
+                "OPTIONS": {
+                    "sslmode": "require",
+                    "pool": {"min_size": 1, "max_size": 12, "timeout": 30},
+                },
             },
         )
         self.assertEqual(
@@ -52,6 +55,21 @@ class ProductionSettingsTests(SimpleTestCase):
         self.assertTrue(settings.SECURE_SSL_REDIRECT)
         self.assertTrue(settings.SESSION_COOKIE_SECURE)
         self.assertEqual(settings.AUTH_REFRESH_COOKIE_SAMESITE, "None")
+
+    def test_connection_pool_sizes_follow_the_environment(self):
+        env = {
+            **PROD_ENV,
+            "DB_POOL_MIN_SIZE": "2",
+            "DB_POOL_MAX_SIZE": "20",
+            "DB_POOL_TIMEOUT": "5",
+        }
+        with patch.dict("os.environ", env, clear=True):
+            settings = reload_prod_settings()
+
+        self.assertEqual(
+            settings.DATABASES["default"]["OPTIONS"]["pool"],
+            {"min_size": 2, "max_size": 20, "timeout": 5},
+        )
 
     def test_current_environment_overrides_are_parsed(self):
         env = {
@@ -81,8 +99,10 @@ class ProductionSettingsTests(SimpleTestCase):
         self.assertEqual(settings.CSRF_TRUSTED_ORIGINS, ["https://one.example"])
         self.assertEqual(settings.DATABASES["default"]["ENGINE"], "django.db.backends.sqlite3")
         self.assertEqual(settings.DATABASES["default"]["PORT"], "6432")
-        self.assertEqual(settings.DATABASES["default"]["CONN_MAX_AGE"], 10)
-        self.assertEqual(settings.DATABASES["default"]["OPTIONS"], {"sslmode": "verify-full"})
+        # Django refuses to pool persistent connections, so the old override
+        # no longer applies.
+        self.assertEqual(settings.DATABASES["default"]["CONN_MAX_AGE"], 0)
+        self.assertEqual(settings.DATABASES["default"]["OPTIONS"]["sslmode"], "verify-full")
         self.assertTrue(settings.ENABLE_LEGACY_API_PREFIX)
         self.assertFalse(settings.REQUIRE_ENCRYPTED_PASSWORDS)
         self.assertFalse(settings.USE_SES_EMAIL_PROVIDER)

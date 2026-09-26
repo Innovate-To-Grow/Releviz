@@ -23,6 +23,12 @@ The frontend calls the Django API directly at `http://localhost:4000` by default
 `NEXT_PUBLIC_API_BASE_URL` to use another origin. Endpoints have no `/api` prefix, so the local
 health check is `http://localhost:4000/health`.
 
+Production serves the API with gunicorn running uvicorn workers (`-k uvicorn_worker.UvicornWorker`,
+see `src/api/Dockerfile`). gunicorn's own ASGI worker is not used because it drops a request that
+arrives on a kept-alive connection while Django is still finishing the previous one. Under ASGI,
+Django reads a request body before routing or authenticating it, so the server refuses bodies over
+50 MiB (twice the 25 MiB pasted-roster limit, which JSON escaping can double) with a 413.
+
 ## Background workers
 
 Results and email are processed by two workers. Run them in separate terminals when working on

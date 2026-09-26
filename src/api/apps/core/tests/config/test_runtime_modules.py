@@ -3,7 +3,11 @@
 import importlib
 from unittest.mock import patch
 
+from django.conf import settings
+from django.core.handlers.asgi import ASGIHandler
 from django.test import SimpleTestCase, override_settings
+
+from apps.core.middleware import RequestBodyLimitMiddleware
 
 
 class RuntimeConfigurationModuleTests(SimpleTestCase):
@@ -13,6 +17,16 @@ class RuntimeConfigurationModuleTests(SimpleTestCase):
 
         self.assertIsNotNone(importlib.reload(asgi).application)
         self.assertIsNotNone(importlib.reload(wsgi).application)
+
+    def test_asgi_entrypoint_caps_request_bodies_in_front_of_django(self):
+        import config.asgi as asgi
+
+        application = importlib.reload(asgi).application
+
+        self.assertIsInstance(application, RequestBodyLimitMiddleware)
+        self.assertEqual(application.max_bytes, settings.REQUEST_BODY_MAX_BYTES)
+        self.assertIsInstance(application.app, ASGIHandler)
+        self.assertIs(application.app, asgi.django_application)
 
     def test_local_settings_accept_extra_hosts(self):
         import config.settings.local as local_settings

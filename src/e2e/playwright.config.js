@@ -56,7 +56,9 @@ module.exports = defineConfig({
   },
   webServer: [
     {
-      command: `${JSON.stringify(pythonBin)} src/api/manage.py runserver 127.0.0.1:${backendPort} --noreload --settings=config.settings.e2e`,
+      // The stream endpoint needs an ASGI server (runserver is WSGI); this is
+      // the production server, gunicorn running uvicorn workers.
+      command: `${JSON.stringify(pythonBin)} -m gunicorn config.asgi:application -k uvicorn_worker.UvicornWorker --chdir src/api --bind 127.0.0.1:${backendPort} --workers 1`,
       cwd: rootDir,
       url: `${backendUrl}/health`,
       env: backendEnv,

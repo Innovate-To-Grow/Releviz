@@ -26,7 +26,7 @@ See the [user guide](docs/user-guide.md) for the full walkthrough.
 | Layer          | Technology                                                                   |
 | -------------- | ---------------------------------------------------------------------------- |
 | Frontend       | Next.js 16 static export, React 19, Bootstrap 5.3                            |
-| Backend        | Django 6, Django REST Framework, SimpleJWT                                   |
+| Backend        | Django 6, Django REST Framework, SimpleJWT; gunicorn with uvicorn workers    |
 | Database       | PostgreSQL (RDS) in production; SQLite for local development                 |
 | Infrastructure | AWS Amplify (frontend); public ALB with private ECS Fargate API and workers  |
 | IaC and CI/CD  | Terraform; GitHub Actions                                                    |

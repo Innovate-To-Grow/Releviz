@@ -208,6 +208,16 @@ ROSTER_IMPORT_MAX_FILE_BYTES = 5 * 1024 * 1024
 ROSTER_IMPORT_MAX_UNCOMPRESSED_BYTES = 25 * 1024 * 1024
 ROSTER_IMPORT_MAX_COLUMNS = 50
 ROSTER_IMPORT_MAX_ROWS = 1000
+# Largest request body the ASGI entrypoint lets through to Django, which reads
+# every body in full before routing or authentication. The largest legitimate
+# body is a pasted roster table of up to ROSTER_IMPORT_MAX_UNCOMPRESSED_BYTES
+# sent as one JSON string, and escaping its tabs, newlines and quotes can
+# double it. DRF's JSON parser reads the request stream directly, so
+# DATA_UPLOAD_MAX_MEMORY_SIZE does not cap it. A file upload is at most
+# ROSTER_IMPORT_MAX_FILE_BYTES plus multipart overhead. Keeping the cap above
+# both means an oversized roster still reaches the view, which explains the
+# roster limit, instead of a bare 413 that carries no CORS headers.
+REQUEST_BODY_MAX_BYTES = 2 * ROSTER_IMPORT_MAX_UNCOMPRESSED_BYTES
 ROSTER_IMPORT_PREVIEW_LIFETIME = timedelta(hours=24)
 RESULT_SNAPSHOT_LOCK_TIMEOUT_SECONDS = int(
     os.environ.get("RESULT_SNAPSHOT_LOCK_TIMEOUT_SECONDS", "60")

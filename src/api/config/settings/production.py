@@ -47,9 +47,28 @@ DATABASES = {
         "PASSWORD": required_env("DB_PASSWORD"),
         "HOST": required_env("DB_HOST"),
         "PORT": os.environ.get("DB_PORT", "5432"),
-        "CONN_MAX_AGE": int(os.environ.get("DB_CONN_MAX_AGE", "60")),
+        # Django refuses to pool persistent connections. The pool below
+        # already reuses them, so each request hands its connection back to
+        # the pool when it finishes instead of keeping it open.
+        "CONN_MAX_AGE": 0,
+        # Django hands this to the pool as its connection check, which drops
+        # a connection an RDS failover broke before a request gets it.
         "CONN_HEALTH_CHECKS": True,
-        "OPTIONS": {"sslmode": os.environ.get("DB_SSLMODE", "require")},
+        "OPTIONS": {
+            "sslmode": os.environ.get("DB_SSLMODE", "require"),
+            # One pool per process bounds its connections however many
+            # requests run at once, and reuses them across requests instead of
+            # paying a TLS handshake for each. Twelve covers the email
+            # worker's ten sending threads plus its main thread, and at the
+            # six-task ceiling of three processes each the API stays well
+            # under the roughly 450 connections RDS allows. A request that
+            # finds the pool empty waits up to the timeout, then fails.
+            "pool": {
+                "min_size": int(os.environ.get("DB_POOL_MIN_SIZE", "1")),
+                "max_size": int(os.environ.get("DB_POOL_MAX_SIZE", "12")),
+                "timeout": int(os.environ.get("DB_POOL_TIMEOUT", "30")),
+            },
+        },
     }
 }
 
