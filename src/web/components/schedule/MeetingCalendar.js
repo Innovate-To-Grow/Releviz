@@ -240,6 +240,9 @@ function EmptyCell({ columnIndex, headerLabel }) {
  * open slot whose window would run into a block is unpickable too
  * (`data-state="blocked"`) but keeps its share, like a tail cell.
  *
+ * `highlightRank` emphasizes one ranked window's outline (the ranked chip the
+ * organizer points at).
+ *
  * With `blockedEditing` set (the Time Table's Blocked times step is open) the
  * calendar is the block editor: every slot cell paints the draft with the
  * step's brush (a stroke by pointer, Enter/Space by keyboard), and picking,
@@ -257,6 +260,7 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
     now = null,
     defaultMetric = "weighted",
     showRankedWindows = true,
+    highlightRank = null,
     blockedEditing = null,
   },
   ref,
@@ -1042,7 +1046,7 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
             {blocks.map((block) => (
               <div
                 key={block.key}
-                className={`meeting-calendar__block meeting-calendar__block--rank${block.best ? " meeting-calendar__block--best" : ""}`}
+                className={`meeting-calendar__block meeting-calendar__block--rank${block.best ? " meeting-calendar__block--best" : ""}${block.rank != null && block.rank === highlightRank ? " meeting-calendar__block--highlight" : ""}`}
                 data-rank={block.rank ?? undefined}
                 style={{
                   "--rv-cal-col": block.columnIndex,

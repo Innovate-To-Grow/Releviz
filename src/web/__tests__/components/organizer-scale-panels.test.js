@@ -1039,7 +1039,7 @@ test("results support the legacy envelope and failed or empty snapshots", async 
     screen.getByRole("heading", { name: "Ranked windows" }),
   ).toBeInTheDocument();
   await userEvent.click(
-    screen.getByRole("button", { name: "Choose this time" }),
+    screen.getByRole("button", { name: /choose this time/i }),
   );
   expect(onChoose).toHaveBeenCalledWith(
     expect.objectContaining({ id: "legacy-1" }),
@@ -1492,7 +1492,7 @@ test("choosing a stale ranked window reveals its next occurrence and keeps it ma
     <ResultsSnapshotPanel {...panelProps} selection={null} />,
   );
   const choose = await screen.findByRole("button", {
-    name: "Choose this time",
+    name: /choose this time/i,
   });
   expect(choose).toHaveAttribute("aria-pressed", "false");
 
@@ -1518,10 +1518,9 @@ test("choosing a stale ranked window reveals its next occurrence and keeps it ma
   ).toHaveAccessibleName(`Meeting time calendar, ${formatWeekLabel(week)}`);
 
   rerender(<ResultsSnapshotPanel {...panelProps} selection={selection} />);
-  expect(screen.getByRole("button", { name: "Selected time" })).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
+  expect(
+    screen.getByRole("button", { name: /selected time/i }),
+  ).toHaveAttribute("aria-pressed", "true");
   expect(
     document.querySelector(".meeting-calendar__block--selected"),
   ).not.toBeNull();
@@ -1621,9 +1620,9 @@ test("results refresh through the workspace handle and show a finalized event's 
   await waitFor(() => expect(fetchEventResults).toHaveBeenCalledTimes(1));
   // The ranked window still renders its times through the browser zone.
   expect(
-    await screen.findByRole("button", { name: "Choose this time" }),
+    await screen.findByRole("button", { name: /choose this time/i }),
   ).toBeInTheDocument();
-  expect(document.querySelector(".result-option__time")).toHaveTextContent(
+  expect(document.querySelector(".ranked-chips__detail")).toHaveTextContent(
     /\d{1,2}\/\d{1,2}\/2026.* – .*2026/,
   );
   // No refresh button of its own: the workspace header drives refreshes.
@@ -1779,15 +1778,15 @@ test("the ranked list is collapsed by default and summarizes the best window", a
   );
   // Buttons exist for tests and assistive tech, but are hidden until opened.
   expect(
-    within(rail).getAllByRole("button", { name: "Choose this time" }),
+    within(rail).getAllByRole("button", { name: /choose this time/i }),
   ).toHaveLength(2);
   expect(
-    within(rail).getAllByRole("button", { name: "Choose this time" })[0],
+    within(rail).getAllByRole("button", { name: /choose this time/i })[0],
   ).not.toBeVisible();
   await userEvent.click(within(rail).getByText("Ranked windows"));
   expect(rail).toHaveAttribute("open");
   expect(
-    within(rail).getAllByRole("button", { name: "Choose this time" })[0],
+    within(rail).getAllByRole("button", { name: /choose this time/i })[0],
   ).toBeVisible();
   // The Finalize step renders under it in the same panel, collapsed too.
   expect(
@@ -1942,14 +1941,17 @@ const openBlockedTimes = async () => {
   if (!blockedTimesDetails().open) await userEvent.click(blockedTimesSummary());
   expect(blockedTimesDetails()).toHaveAttribute("open");
 };
-// The panel renders its own snapshot status, so the step's feedback is
-// looked up inside the step.
-const blockedStatus = () => within(blockedTimesDetails()).queryByRole("status");
-const blockedAlert = () => within(blockedTimesDetails()).queryByRole("alert");
+// While the step is open its tools (brush, Save, feedback) live in a bar
+// under the calendar; the panel renders its own snapshot status, so the
+// draft's feedback is looked up inside that bar.
+const paintBar = () =>
+  screen.getByRole("region", { name: "Blocked times tools" });
+const blockedStatus = () => within(paintBar()).queryByRole("status");
+const blockedAlert = () => within(paintBar()).queryByRole("alert");
 const DISCARDED_MESSAGE =
   "Unsaved blocked-time marks were discarded because the event changed.";
 const STEP_DESCRIPTION =
-  "While this step is open, paint on the calendar above to mark the parts of each day that are not available for this event. Participants see these times greyed out.";
+  "While this step is open, paint on the calendar above to mark the parts of each day that are not available for this event. Participants see these times greyed out. The brush and Save stay in the bar under the calendar.";
 
 test("the blocked-times step starts closed and turns the calendar into the paint surface while open", async () => {
   const { unmount } = renderTimeTable(weeklyEvent);
@@ -2167,9 +2169,9 @@ test("painting on the calendar saves the marked rows and re-hydrates from the sa
     event: savedEvent,
     responsesReset: 0,
   });
-  expect(
-    await within(blockedTimesDetails()).findByRole("status"),
-  ).toHaveTextContent("Blocked times saved.");
+  expect(await within(paintBar()).findByRole("status")).toHaveTextContent(
+    "Blocked times saved.",
+  );
   // The stored event now carries the block, so there is nothing to save,
   // and the step stays open with the calendar still painting.
   expect(editorCell(0)).toHaveAttribute("data-blocked-paint", "true");
@@ -2235,9 +2237,9 @@ test("the Open brush unmarks on the calendar and Clear all clears every mark", a
       "token",
     ),
   );
-  expect(
-    await within(blockedTimesDetails()).findByRole("status"),
-  ).toHaveTextContent("Blocked times saved.");
+  expect(await within(paintBar()).findByRole("status")).toHaveTextContent(
+    "Blocked times saved.",
+  );
 });
 
 test("the blocked-times draft recovers from a conflict by loading the newer event", async () => {
@@ -2259,7 +2261,7 @@ test("the blocked-times draft recovers from a conflict by loading the newer even
   paintCell(0);
   await userEvent.click(saveButton());
 
-  const alert = await within(blockedTimesDetails()).findByRole("alert");
+  const alert = await within(paintBar()).findByRole("alert");
   expect(alert).toHaveTextContent(
     "The event changed in another session. Reload and try again.",
   );
@@ -2376,7 +2378,7 @@ test("the blocked-times draft announces unsaved marks it discards for a changed 
   expect(editorCell(1)).toHaveAttribute("data-blocked-paint", "false");
   expect(editorCell(6)).toHaveAttribute("data-blocked-paint", "true");
   expect(blockedStatus()).toHaveTextContent(DISCARDED_MESSAGE);
-  expect(blockedStatus()).toHaveClass("alert-warning");
+  expect(blockedStatus()).toHaveClass("blocked-slots-controls__note--warning");
   expect(blockedAlert()).toBeNull();
   expect(screen.getByText("1 slots marked")).toBeInTheDocument();
   expect(saveButton()).toBeDisabled();
@@ -2424,7 +2426,7 @@ test("the blocked-times draft reloads the page for a conflict without the newer 
   paintCell(2);
   await userEvent.click(saveButton());
 
-  const alert = await within(blockedTimesDetails()).findByRole("alert");
+  const alert = await within(paintBar()).findByRole("alert");
   await userEvent.click(
     within(alert).getByRole("button", { name: "Reload latest event" }),
   );
@@ -2455,7 +2457,7 @@ test("the blocked-times draft surfaces other failures without a reload action", 
 
   paintCell(4);
   await userEvent.click(saveButton());
-  let alert = await within(blockedTimesDetails()).findByRole("alert");
+  let alert = await within(paintBar()).findByRole("alert");
   expect(alert).toHaveTextContent("Blocked slots leave no open window.");
   expect(
     within(alert).queryByRole("button", { name: "Reload latest event" }),
@@ -2466,7 +2468,7 @@ test("the blocked-times draft surfaces other failures without a reload action", 
 
   // A 409 demanding a reset cannot come from blocks; it is shown as is.
   await userEvent.click(saveButton());
-  alert = await within(blockedTimesDetails()).findByRole("alert");
+  alert = await within(paintBar()).findByRole("alert");
   expect(alert).toHaveTextContent("Responses would be reset.");
   expect(
     within(alert).queryByRole("button", { name: "Reload latest event" }),
@@ -2479,9 +2481,9 @@ test("the blocked-times draft surfaces other failures without a reload action", 
   expect(saveButton()).toBeDisabled();
   paintCell(6);
   await userEvent.click(saveButton());
-  expect(
-    await within(blockedTimesDetails()).findByRole("alert"),
-  ).toHaveTextContent("Failed to save blocked times.");
+  expect(await within(paintBar()).findByRole("alert")).toHaveTextContent(
+    "Failed to save blocked times.",
+  );
 });
 
 test.each([
@@ -2510,7 +2512,7 @@ test.each([
     expect(screen.getByRole("button", { name: "Blocked" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Open" })).toBeDisabled();
     // The reason is visible, not just a tooltip, and the calendar says so.
-    expect(within(blockedTimesDetails()).getByText(reason)).toBeInTheDocument();
+    expect(within(paintBar()).getByText(reason)).toBeInTheDocument();
     expect(screen.getByText("Blocked times (read-only)")).toBeInTheDocument();
     expect(screen.queryByText("Marking blocked times")).not.toBeInTheDocument();
     // Read-only, yet still reachable: the grid keeps its tab stop.
@@ -2587,9 +2589,9 @@ test("the blocked-times draft stands alone without a lock or a save listener", a
       "token",
     ),
   );
-  expect(
-    await within(blockedTimesDetails()).findByRole("status"),
-  ).toHaveTextContent("Blocked times saved.");
+  expect(await within(paintBar()).findByRole("status")).toHaveTextContent(
+    "Blocked times saved.",
+  );
 });
 
 test("the blocked-times draft hook defaults to an unlocked, saveable draft", async () => {
@@ -2626,6 +2628,50 @@ test("the blocked-times draft hook defaults to an unlocked, saveable draft", asy
     "token",
   );
   expect(seen.status).toBe("Blocked times saved.");
+});
+
+test("the blocked-times tools sit in a bar under the calendar only while the step is open", async () => {
+  renderTimeTable(weeklyEvent);
+  await screen.findByText(/Results are current/);
+  expect(
+    screen.queryByRole("region", { name: "Blocked times tools" }),
+  ).not.toBeInTheDocument();
+
+  await openBlockedTimes();
+  const bar = paintBar();
+  // Right under the calendar, before the steps, so it stays with the surface.
+  expect(bar.previousElementSibling).toHaveClass("meeting-calendar");
+  expect(bar.nextElementSibling).toHaveClass("time-table__sections");
+  expect(
+    within(bar).getByRole("group", { name: "Mark times as" }),
+  ).toBeInTheDocument();
+  expect(
+    within(bar).getByRole("button", { name: "Save blocked times" }),
+  ).toBeInTheDocument();
+  expect(within(bar).getByText("0 slots marked")).toBeInTheDocument();
+  // The step itself only explains the mode.
+  expect(
+    within(blockedTimesDetails()).queryByRole("button", {
+      name: "Save blocked times",
+    }),
+  ).not.toBeInTheDocument();
+  expect(
+    within(blockedTimesDetails()).getByText(STEP_DESCRIPTION),
+  ).toBeInTheDocument();
+
+  // Close closes the step: the bar goes, the draft stays, and focus lands on
+  // the step's summary instead of falling off the unmounted button.
+  paintCell(2);
+  await userEvent.click(within(bar).getByRole("button", { name: "Close" }));
+  expect(blockedTimesDetails()).not.toHaveAttribute("open");
+  expect(
+    screen.queryByRole("region", { name: "Blocked times tools" }),
+  ).not.toBeInTheDocument();
+  await waitFor(() => expect(blockedTimesSummary()).toHaveFocus());
+  expect(blockedTimesSummary()).toHaveTextContent("unsaved changes");
+  await openBlockedTimes();
+  expect(editorCell(2)).toHaveAttribute("data-blocked-paint", "true");
+  expect(within(paintBar()).getByText("1 slots marked")).toBeInTheDocument();
 });
 
 test("painting on the calendar never picks a window", async () => {
@@ -2685,6 +2731,18 @@ const datedRanked = {
   unweightedAvailability: 0.8,
   fullyAvailableParticipantTotal: 3,
 };
+const datedRunnerUp = {
+  rank: 2,
+  channel: "inperson",
+  groupKey: "date:2026-08-20",
+  slotIndices: [0, 1],
+  suggestedStartsAt: "2026-08-20T09:00:00Z",
+  suggestedEndsAt: "2026-08-20T10:00:00Z",
+  label: "Thu 09:00–10:00",
+  weightedAvailability: 0.5,
+  unweightedAvailability: 0.4,
+  fullyAvailableParticipantTotal: 1,
+};
 const DATED_NOW = Date.parse("2026-08-01T00:00:00Z");
 
 function mockDatedSnapshot() {
@@ -2700,7 +2758,7 @@ function mockDatedSnapshot() {
           unweighted: [0.4, 0.8, 0.8, 0.3],
         },
       },
-      recommendations: [datedRanked],
+      recommendations: [datedRanked, datedRunnerUp],
     },
   });
 }
@@ -2742,6 +2800,69 @@ test("opening Blocked times hides the ranked outlines and the pick until it clos
   }
 });
 
+test("ranked windows are compact chips that highlight their window on the calendar", async () => {
+  const nowSpy = jest.spyOn(Date, "now").mockReturnValue(DATED_NOW);
+  try {
+    mockDatedSnapshot();
+    render(<ResultsSnapshotPanel {...timeTableProps(datedEvent)} />);
+    await screen.findByText(/Results are current at revision 7/);
+    const rail = document.querySelector("details.organizer-ranked-windows");
+    await userEvent.click(within(rail).getByText("Ranked windows"));
+
+    // One chip per candidate: rank, window, weighted share; the rest of the
+    // figures are in the accessible name and in the detail line below.
+    const chips = within(rail).getAllByRole("button", {
+      name: /choose this time/i,
+    });
+    expect(chips).toHaveLength(2);
+    const [best, runnerUp] = chips;
+    expect(best).toHaveClass("ranked-chip", "ranked-chip--best");
+    expect(runnerUp).not.toHaveClass("ranked-chip--best");
+    expect(best.querySelector(".ranked-chip__rank")).toHaveTextContent("#1");
+    expect(best.querySelector(".ranked-chip__title")).toHaveTextContent(
+      "Thu 09:30–10:30",
+    );
+    expect(best.querySelector(".ranked-chip__share")).toHaveTextContent("90%");
+    // The name is built from the inline text as a browser reads it: spaces
+    // between the parts, no tooltip repeating it.
+    expect(best).toHaveAccessibleName(
+      /^#1 Thu 09:30–10:30 90% weighted\s*, 80% unweighted, 3 fully available, best match, choose this time$/,
+    );
+    expect(best).not.toHaveAttribute("title");
+    expect(best).toHaveAttribute("aria-pressed", "false");
+    expect(within(rail).queryByText("Weighted")).not.toBeInTheDocument();
+
+    // The detail line spells out the best candidate until a chip is pointed
+    // at or focused, then follows it; the calendar emphasizes that window.
+    const detail = () => rail.querySelector(".ranked-chips__detail");
+    const block = (rank) =>
+      document.querySelector(
+        `.meeting-calendar__block--rank[data-rank="${rank}"]`,
+      );
+    expect(detail()).toHaveAttribute("data-rank", "1");
+    expect(detail()).toHaveTextContent(
+      "#1 Thu 09:30–10:30 · Thu, Aug 20, 2026, 9:30 AM – Thu, Aug 20, 2026, 10:30 AM · 90% weighted · 80% unweighted · 3 fully available",
+    );
+    expect(block(1)).not.toHaveClass("meeting-calendar__block--highlight");
+    fireEvent.pointerEnter(runnerUp);
+    expect(detail()).toHaveAttribute("data-rank", "2");
+    expect(detail()).toHaveTextContent(
+      "#2 Thu 09:00–10:00 · Thu, Aug 20, 2026, 9:00 AM – Thu, Aug 20, 2026, 10:00 AM · 50% weighted · 40% unweighted · 1 fully available",
+    );
+    expect(block(2)).toHaveClass("meeting-calendar__block--highlight");
+    expect(block(1)).not.toHaveClass("meeting-calendar__block--highlight");
+    fireEvent.pointerLeave(runnerUp);
+    expect(detail()).toHaveAttribute("data-rank", "1");
+    expect(block(2)).not.toHaveClass("meeting-calendar__block--highlight");
+    fireEvent.focus(runnerUp);
+    expect(block(2)).toHaveClass("meeting-calendar__block--highlight");
+    fireEvent.blur(runnerUp);
+    expect(block(2)).not.toHaveClass("meeting-calendar__block--highlight");
+  } finally {
+    nowSpy.mockRestore();
+  }
+});
+
 test("choosing a ranked window leaves painting mode and keeps the draft", async () => {
   const nowSpy = jest.spyOn(Date, "now").mockReturnValue(DATED_NOW);
   try {
@@ -2758,7 +2879,7 @@ test("choosing a ranked window leaves painting mode and keeps the draft", async 
     const rail = document.querySelector("details.organizer-ranked-windows");
     await userEvent.click(within(rail).getByText("Ranked windows"));
     await userEvent.click(
-      screen.getByRole("button", { name: "Choose this time" }),
+      screen.getAllByRole("button", { name: /choose this time/i })[0],
     );
 
     expect(onChoose).toHaveBeenCalledWith(datedRanked);
@@ -2900,7 +3021,7 @@ test("finalize stays collapsed until a pick opens it and sums up its state", asy
   ).toBeInTheDocument();
 });
 
-test("the blocked-times step sits last under the calendar and saves through the workspace", async () => {
+test("the blocked-times step sits first under the calendar and saves through the workspace", async () => {
   const onEventSaved = jest.fn();
   updateEvent.mockResolvedValue({
     event: blockedWeeklyEvent({ "weekday:1": [0] }, { version: 5 }),
@@ -2911,9 +3032,9 @@ test("the blocked-times step sits last under the calendar and saves through the 
 
   const stack = document.querySelector(".time-table__sections");
   expect(Array.from(stack.children).map((step) => step.id)).toEqual([
+    "organizer-blocked-times",
     "organizer-ranked-windows",
     "organizer-finalize",
-    "organizer-blocked-times",
   ]);
   expect(stack.previousElementSibling).toHaveClass("meeting-calendar");
   // One time table: the calendar is the only grid, before and after opening.
@@ -2939,7 +3060,7 @@ test("the blocked-times step sits last under the calendar and saves through the 
     }),
   );
   expect(
-    within(blockedTimesDetails()).getByText("Blocked times saved."),
+    within(paintBar()).getByText("Blocked times saved."),
   ).toBeInTheDocument();
 });
 

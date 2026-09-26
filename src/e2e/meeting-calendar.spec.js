@@ -282,8 +282,8 @@ test.describe("Organizer meeting-time calendar", () => {
     expect(
       await rail.getByRole("button", { name: "Choose this time" }).count(),
     ).toBeGreaterThanOrEqual(3);
-    await expect(rail.locator(".result-option__rank").first()).toHaveText("#1");
-    await expect(rail.getByText("Best match")).toBeVisible();
+    await expect(rail.locator(".ranked-chip__rank").first()).toHaveText("#1");
+    await expect(rail.locator(".ranked-chip--best")).toHaveCount(1);
     await expectAccessible(page, "organizer results calendar");
 
     // Shading: the same cell reports both figures; the toggle changes the
@@ -331,7 +331,11 @@ test.describe("Organizer meeting-time calendar", () => {
       name: "Weighted",
       exact: true,
     });
-    const unweightedButton = page.getByRole("button", { name: "Unweighted" });
+    // Exact: the ranked chips name their unweighted share too.
+    const unweightedButton = page.getByRole("button", {
+      name: "Unweighted",
+      exact: true,
+    });
     await expect(weightedButton).toHaveAttribute("aria-pressed", "true");
     await unweightedButton.click();
     await expect(unweightedButton).toHaveAttribute("aria-pressed", "true");
@@ -456,8 +460,9 @@ test.describe("Organizer meeting-time calendar", () => {
     await expect(candidate).toContainText(
       "100% weighted · 100% unweighted · 4 fully available",
     );
-    await expect(rail.locator(".result-option").first()).toContainText(
-      "Selected time",
+    await expect(rail.locator(".ranked-chip").first()).toHaveAttribute(
+      "aria-pressed",
+      "true",
     );
 
     // Finalize a custom window and confirm the API stored the cell's instant.
@@ -591,7 +596,7 @@ test.describe("Organizer meeting-time calendar", () => {
     const inPerson = channelGroup.getByRole("button", { name: "In person" });
     const virtual = channelGroup.getByRole("button", { name: "Virtual" });
     await expect(inPerson).toHaveAttribute("aria-pressed", "true");
-    await expect(rail.locator(".result-option__title").first()).toHaveText(
+    await expect(rail.locator(".ranked-chip__title").first()).toHaveText(
       `${dates[0]} 09:00–10:00`,
     );
     await expect(cellAt(grid, 0, 0)).toHaveAttribute(
@@ -604,7 +609,7 @@ test.describe("Organizer meeting-time calendar", () => {
     // The rail keeps every ranked window; the calendar re-shades for the
     // chosen channel.
     const virtualBest = rail
-      .locator(".result-option")
+      .locator(".ranked-chip")
       .filter({ hasText: `${dates[8]} 10:00–11:00` });
     await expect(virtualBest).toContainText("Virtual");
     await expect(virtualBest).toContainText("#2");
@@ -807,7 +812,7 @@ test.describe("Organizer meeting-time calendar", () => {
       /Inside ranked window #2/,
     );
     const rail = page.locator("details.organizer-ranked-windows");
-    const titles = rail.locator(".result-option__title");
+    const titles = rail.locator(".ranked-chip__title");
     await expect(titles.first()).toHaveText("Tue 11:00–12:00");
     await expect(titles.nth(1)).toHaveText("Mon 09:00–10:00");
     expect(
@@ -883,7 +888,7 @@ test.describe("Organizer meeting-time calendar", () => {
     );
     await expect(saveBlocked).toBeEnabled();
     await saveBlocked.click();
-    await expect(blockedTimes.getByText("Blocked times saved.")).toBeVisible();
+    await expect(page.getByText("Blocked times saved.")).toBeVisible();
     await expect(blockedTimes.locator("summary")).toContainText(
       "3 slots blocked",
     );

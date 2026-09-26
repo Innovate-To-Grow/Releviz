@@ -614,10 +614,11 @@ export function OverviewPanel({ event, onEventSaved }) {
 }
 
 /**
- * Blocked times: one step of the Time Table. While it is open the calendar
- * above is the paint surface for `draft` (see `useBlockedSlotsDraft`); the
- * step itself holds the brush, the feedback and Save. The panel owns `open`
- * because the calendar's mode follows it.
+ * Blocked times: the first step under the Time Table calendar. While it is
+ * open the calendar is the paint surface for `draft` (see
+ * `useBlockedSlotsDraft`) and the panel shows the brush, the feedback and
+ * Save in a bar pinned under the calendar; the step itself explains the
+ * mode. The panel owns `open` because the calendar's mode follows it.
  */
 export function BlockedTimesSection({ event, draft, open, onToggle }) {
   const blockedCount = countBlockedSlots(event.blockedSlots);
@@ -639,9 +640,9 @@ export function BlockedTimesSection({ event, draft, open, onToggle }) {
       <p className="text-secondary mb-0">
         While this step is open, paint on the calendar above to mark the parts
         of each day that are not available for this event. Participants see
-        these times greyed out.
+        these times greyed out. The brush and Save stay in the bar under the
+        calendar.
       </p>
-      <BlockedSlotsControls draft={draft} />
     </TimeTableSection>
   );
 }
@@ -709,8 +710,54 @@ function RankedWindowsSection({
   open,
   onToggle,
   onChoose,
+  onHighlight,
+  highlightRank = null,
 }) {
   const count = recommendations.length;
+  const mixed = event.mode === "mixed";
+  // One entry per candidate; the chips show rank, window and weighted
+  // share, and the detail line under them spells out the rest for the chip
+  // under the pointer or focus, else the selected one, else the best.
+  const entries = recommendations.map((recommendation, index) => {
+    const startsAt =
+      recommendation.suggestedStartsAt || recommendation.startsAt;
+    const endsAt = recommendation.suggestedEndsAt || recommendation.endsAt;
+    return {
+      key: recommendationKey(recommendation, index),
+      rank: recommendation.rank || index + 1,
+      recommendation,
+      selected: selectionMatchesRecommendation(selection, recommendation),
+      weighted: percentOf(
+        recommendation.weightedAvailability ??
+          recommendation.weightedScore ??
+          0,
+      ),
+      unweighted: percentOf(
+        recommendation.unweightedAvailability ??
+          recommendation.unweightedScore ??
+          0,
+      ),
+      fully: recommendation.fullyAvailableParticipantTotal || 0,
+      label:
+        recommendation.label ||
+        (startsAt
+          ? formatInTimezone(startsAt, event.timezone)
+          : "Candidate window"),
+      timeRange:
+        startsAt && endsAt
+          ? `${formatInTimezone(startsAt, event.timezone)} – ${formatInTimezone(endsAt, event.timezone)}`
+          : null,
+      channelLabel:
+        recommendation.channel === "virtual" ? "Virtual" : "In person",
+      ChannelIcon:
+        recommendation.channel === "virtual" ? VirtualIcon : GroupIcon,
+      isBest: index === 0,
+    };
+  });
+  const detailed =
+    entries.find((entry) => entry.rank === highlightRank) ||
+    entries.find((entry) => entry.selected) ||
+    entries[0];
   return (
     <TimeTableSection
       id="organizer-ranked-windows"
@@ -722,87 +769,87 @@ function RankedWindowsSection({
       onToggle={onToggle}
     >
       {count > 0 ? (
-        <ol className="results-list">
-          {recommendations.map((recommendation, index) => {
-            const key = recommendationKey(recommendation, index);
-            const selected = selectionMatchesRecommendation(
-              selection,
-              recommendation,
-            );
-            const weighted =
-              recommendation.weightedAvailability ??
-              recommendation.weightedScore ??
-              0;
-            const unweighted =
-              recommendation.unweightedAvailability ??
-              recommendation.unweightedScore ??
-              0;
-            const startsAt =
-              recommendation.suggestedStartsAt || recommendation.startsAt;
-            const endsAt =
-              recommendation.suggestedEndsAt || recommendation.endsAt;
-            const isBest = index === 0;
-            return (
-              <li
-                key={key}
-                className={`result-option${isBest ? " result-option--best" : ""}${selected ? " result-option--selected" : ""}`}
-              >
-                <div className="result-option__content">
-                  <div className="result-option__heading">
-                    <span className="result-option__rank">
-                      #{recommendation.rank || index + 1}
-                    </span>
-                    <strong className="result-option__title">
-                      {recommendation.label ||
-                        (startsAt
-                          ? formatInTimezone(startsAt, event.timezone)
-                          : "Candidate window")}
-                    </strong>
-                    <ChannelBadge channel={recommendation.channel} />
-                    {isBest && (
-                      <StatusBadge status="primary" dot={false}>
-                        <span className="icon-inline" aria-hidden="true">
-                          <BestIcon />
-                        </span>
-                        Best match
-                      </StatusBadge>
-                    )}
-                  </div>
-                  {startsAt && endsAt && (
-                    <small className="result-option__time">
-                      {formatInTimezone(startsAt, event.timezone)} –{" "}
-                      {formatInTimezone(endsAt, event.timezone)}
-                    </small>
-                  )}
-                  <dl className="result-option__metrics">
-                    <div className="result-option__metric">
-                      <dt>Weighted</dt>
-                      <dd>{`${percentOf(weighted)}% weighted`}</dd>
-                    </div>
-                    <div className="result-option__metric">
-                      <dt>Unweighted</dt>
-                      <dd>{`${percentOf(unweighted)}% unweighted`}</dd>
-                    </div>
-                    <div className="result-option__metric">
-                      <dt>Participants</dt>
-                      <dd>{`${recommendation.fullyAvailableParticipantTotal || 0} fully available`}</dd>
-                    </div>
-                  </dl>
-                </div>
-                <div className="result-option__actions">
-                  <AppButton
-                    variant={selected ? "filled" : "outlined"}
-                    icon={selected ? <CheckIcon /> : null}
-                    aria-pressed={selected}
-                    onClick={() => onChoose(recommendation)}
+        <>
+          <p className="text-secondary small mb-0">
+            The calendar outlines every ranked window. Point at a candidate to
+            find it there; click one to select it.
+          </p>
+          <ol className="ranked-chips">
+            {entries.map((entry) => {
+              const { ChannelIcon } = entry;
+              return (
+                <li key={entry.key} className="ranked-chips__item">
+                  {/* Explicit spaces between the parts: a browser builds the
+                      accessible name from the inline text as is. */}
+                  <button
+                    type="button"
+                    className={`ranked-chip${entry.isBest ? " ranked-chip--best" : ""}${entry.selected ? " ranked-chip--selected" : ""}`}
+                    aria-pressed={entry.selected}
+                    onClick={() => onChoose(entry.recommendation)}
+                    onPointerEnter={() => onHighlight?.(entry.rank)}
+                    onPointerLeave={() => onHighlight?.(null)}
+                    onFocus={() => onHighlight?.(entry.rank)}
+                    onBlur={() => onHighlight?.(null)}
                   >
-                    {selected ? "Selected time" : "Choose this time"}
-                  </AppButton>
-                </div>
-              </li>
-            );
-          })}
-        </ol>
+                    <span className="ranked-chip__rank">#{entry.rank}</span>{" "}
+                    {entry.isBest && (
+                      <span
+                        className="ranked-chip__best icon-inline"
+                        aria-hidden="true"
+                      >
+                        <BestIcon />
+                      </span>
+                    )}
+                    <span className="ranked-chip__title">{entry.label}</span>{" "}
+                    {mixed && (
+                      <span
+                        className="ranked-chip__channel icon-inline"
+                        aria-hidden="true"
+                      >
+                        <ChannelIcon />
+                      </span>
+                    )}
+                    <span className="ranked-chip__share">
+                      {entry.weighted}%
+                      <span className="visually-hidden"> weighted</span>
+                    </span>
+                    {entry.selected && (
+                      <span
+                        className="ranked-chip__check icon-inline"
+                        aria-hidden="true"
+                      >
+                        <CheckIcon />
+                      </span>
+                    )}
+                    <span className="visually-hidden">
+                      {`, ${entry.unweighted}% unweighted, ${entry.fully} fully available${mixed ? `, ${entry.channelLabel}` : ""}${entry.isBest ? ", best match" : ""}${entry.selected ? ", selected time" : ", choose this time"}`}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ol>
+          {detailed && (
+            <p
+              className="ranked-chips__detail text-secondary small mb-0"
+              data-rank={detailed.rank}
+            >
+              <strong>
+                #{detailed.rank} {detailed.label}
+              </strong>
+              {[
+                detailed.timeRange,
+                `${detailed.weighted}% weighted`,
+                `${detailed.unweighted}% unweighted`,
+                `${detailed.fully} fully available`,
+                mixed ? detailed.channelLabel : null,
+              ]
+                .filter(Boolean)
+                .map((part) => ` · ${part}`)
+                .join("")}
+            </p>
+          )}
+        </>
       ) : loading || refreshing ? (
         <EmptyState
           headingLevel={5}
@@ -835,10 +882,11 @@ function RankedWindowsSection({
 
 /**
  * Time Table: the meeting-time calendar (group availability heatmap, any
- * startable cell pickable) with three collapsed steps under it: the ranked
- * list (which also switches the ranked outlines on the calendar on), the
- * Finalize step (which opens itself on a pick), and the Blocked times step
- * (while it is open the calendar paints blocked times instead of picking).
+ * startable cell pickable) with three collapsed steps under it: Blocked
+ * times (while it is open the calendar paints blocked times instead of
+ * picking, with the tools in a bar pinned under the calendar), the ranked
+ * list (which also switches the ranked outlines on the calendar on), and
+ * the Finalize step (which opens itself on a pick).
  */
 export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
   {
@@ -876,6 +924,9 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
   // paints the draft instead of picking, so the draft lives here, next to
   // the calendar, and survives the step closing.
   const [blockedOpen, setBlockedOpen] = useState(false);
+  // The ranked chip under the pointer (or focus): the calendar emphasizes
+  // that window's outline.
+  const [highlightRank, setHighlightRank] = useState(null);
   const { locked: editLocked, reason: editLockReason } = editLockOf(event);
   const blockedDraft = useBlockedSlotsDraft(event, {
     getToken,
@@ -978,6 +1029,18 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
   const mixed = event.mode === "mixed";
   const activeChannel = mixed ? channel : defaultChannel(event);
 
+  // Close unmounts the bar (and the button that had focus), so focus moves
+  // to the step's summary, right under the calendar.
+  const closeBlockedTimes = useCallback(() => {
+    setBlockedOpen(false);
+    window.setTimeout(() => {
+      document
+        .getElementById("organizer-blocked-times")
+        ?.querySelector("summary")
+        ?.focus();
+    }, 0);
+  }, []);
+
   const handleChoose = useCallback(
     (recommendation) => {
       // A revealed pick is invisible on the paint surface: leave painting.
@@ -1011,7 +1074,7 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
       title="Time Table"
       description={
         blockedOpen
-          ? "Marking blocked times: click or drag on the calendar to block or open times, then save them in the Blocked times step below."
+          ? "Marking blocked times: click or drag on the calendar to block or open times, then save with the bar under the calendar."
           : `Group availability for a ${meetingMinutes}-minute meeting. Pick a window on the calendar or from the ranked list below, then confirm it in Finalize.`
       }
     >
@@ -1070,10 +1133,34 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
             onSelect={onSelect}
             now={now}
             showRankedWindows={rankedOpen}
+            highlightRank={rankedOpen ? highlightRank : null}
             blockedEditing={blockedOpen ? blockedDraft.surface : null}
           />
 
+          {/* While painting, the brush and Save sit right under the calendar
+              and stay pinned to the bottom of the screen while the calendar
+              is taller than it, so the tools never drift away from the
+              surface being painted. */}
+          {blockedOpen && (
+            <div
+              className="time-table__paint-bar"
+              role="region"
+              aria-label="Blocked times tools"
+            >
+              <BlockedSlotsControls
+                draft={blockedDraft}
+                onDone={closeBlockedTimes}
+              />
+            </div>
+          )}
+
           <div className="time-table__sections">
+            <BlockedTimesSection
+              event={event}
+              draft={blockedDraft}
+              open={blockedOpen}
+              onToggle={setBlockedOpen}
+            />
             <RankedWindowsSection
               event={event}
               recommendations={recommendations}
@@ -1083,6 +1170,8 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
               open={rankedOpen}
               onToggle={setRankedOpen}
               onChoose={handleChoose}
+              onHighlight={setHighlightRank}
+              highlightRank={highlightRank}
             />
             <FinalizeScalePanel
               event={event}
@@ -1091,12 +1180,6 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
               selection={selection}
               headingRef={finalizeHeadingRef}
               onDeliveryRequest={onDeliveryRequest}
-            />
-            <BlockedTimesSection
-              event={event}
-              draft={blockedDraft}
-              open={blockedOpen}
-              onToggle={setBlockedOpen}
             />
           </div>
         </div>

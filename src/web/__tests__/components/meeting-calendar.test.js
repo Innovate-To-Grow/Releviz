@@ -578,6 +578,49 @@ describe("MeetingCalendar", () => {
     expect(rankBlock().style.getPropertyValue("--rv-cal-span")).toBe("2");
   });
 
+  test("emphasizes the ranked window the organizer points at", () => {
+    const runnerUp = {
+      ...recommendation,
+      rank: 2,
+      slotIndices: [4, 5],
+      groupKey: "weekday:3",
+      weekday: 3,
+      localStart: "09:00",
+      localEnd: "10:00",
+      suggestedStartsAt: "2026-09-16T09:00:00Z",
+      suggestedEndsAt: "2026-09-16T10:00:00Z",
+      label: "Wed 09:00–10:00",
+    };
+    const twoResults = {
+      ...results,
+      recommendations: [recommendation, runnerUp],
+    };
+    const block = (rank) =>
+      document.querySelector(
+        `.meeting-calendar__block--rank[data-rank="${rank}"]`,
+      );
+    const { rerender } = renderCalendar({
+      results: twoResults,
+      highlightRank: 1,
+    });
+    expect(block(1)).toHaveClass("meeting-calendar__block--highlight");
+    expect(block(2)).not.toHaveClass("meeting-calendar__block--highlight");
+
+    rerender(
+      <MeetingCalendar
+        event={weeklyEvent}
+        results={twoResults}
+        channel="inperson"
+        onSelect={jest.fn()}
+        onChannelChange={jest.fn()}
+        now={NOW}
+        highlightRank={2}
+      />,
+    );
+    expect(block(1)).not.toHaveClass("meeting-calendar__block--highlight");
+    expect(block(2)).toHaveClass("meeting-calendar__block--highlight");
+  });
+
   test("hides the ranked windows while the ranked list is collapsed", async () => {
     const { onSelect, rerender } = renderCalendar({
       showRankedWindows: false,

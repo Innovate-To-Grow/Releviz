@@ -629,11 +629,13 @@ describe("scaled organizer workspace", () => {
     expect(
       screen.queryByRole("grid", { name: "Blocked times" }),
     ).not.toBeInTheDocument();
+    // Its tools appear only while it is open.
     expect(
-      within(resultsSection).getByRole("button", {
-        name: "Save blocked times",
-      }),
-    ).toBeInTheDocument();
+      screen.queryByRole("region", { name: "Blocked times tools" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Save blocked times" }),
+    ).not.toBeInTheDocument();
     expect(
       within(overviewSection).queryByRole("heading", {
         name: "Blocked times",
@@ -2018,7 +2020,7 @@ describe("scaled organizer workspace", () => {
       await screen.findByText(/Results are current at revision 3/),
     ).toBeInTheDocument();
     await userEvent.click(
-      screen.getByRole("button", { name: "Choose this time" }),
+      screen.getByRole("button", { name: /choose this time/i }),
     );
     expect(document.getElementById("organizer-finalize")).toHaveTextContent(
       "Thursday 9:00 AM",
@@ -2104,7 +2106,7 @@ describe("scaled organizer workspace", () => {
       screen.queryByRole("complementary", { name: "Ranked windows" }),
     ).not.toBeInTheDocument();
     const chooseButtons = screen.getAllByRole("button", {
-      name: "Choose this time",
+      name: /choose this time/i,
     });
     expect(chooseButtons).toHaveLength(1);
     chooseButtons.forEach((button) => expect(rail).toContainElement(button));
@@ -2120,7 +2122,7 @@ describe("scaled organizer workspace", () => {
     await userEvent.click(chooseButtons[0]);
     expect(screen.getByRole("heading", { name: "Finalize" })).toHaveFocus();
     expect(
-      screen.getByRole("button", { name: "Selected time" }),
+      screen.getByRole("button", { name: /selected time/i }),
     ).toHaveAttribute("aria-pressed", "true");
     // Revealing the chosen window scrolls the calendar, never the page:
     // the only page scroll nudges the Finalize step into view if needed.
@@ -2193,14 +2195,14 @@ describe("scaled organizer workspace", () => {
         name: "Browse results",
       }),
     ).not.toBeInTheDocument();
-    // The three steps stack under the calendar, all closed: the ranked list,
-    // then Finalize, then Blocked times.
+    // The three steps stack under the calendar, all closed: Blocked times
+    // (nearest the surface it paints), then the ranked list, then Finalize.
     const stack = finalizeSection.closest(".time-table__sections");
     expect(stack).not.toBeNull();
     expect(Array.from(stack.children).map((step) => step.id)).toEqual([
+      "organizer-blocked-times",
       "organizer-ranked-windows",
       "organizer-finalize",
-      "organizer-blocked-times",
     ]);
     expect(
       document
@@ -2283,10 +2285,13 @@ describe("scaled organizer workspace", () => {
       });
       expect(calendarCell(3)).toHaveAttribute("data-blocked-paint", "true");
       expect(finalizeSection()).toHaveTextContent("Custom window");
+      // The tools sit in a bar under the calendar, not in the step.
+      const paintBar = screen.getByRole("region", {
+        name: "Blocked times tools",
+      });
+      expect(paintBar.previousElementSibling).toHaveClass("meeting-calendar");
       await userEvent.click(
-        within(blockedTimes).getByRole("button", {
-          name: "Save blocked times",
-        }),
+        within(paintBar).getByRole("button", { name: "Save blocked times" }),
       );
 
       await waitFor(() =>
@@ -2297,7 +2302,7 @@ describe("scaled organizer workspace", () => {
         ),
       );
       expect(
-        await within(blockedTimes).findByText("Blocked times saved."),
+        await within(paintBar).findByText("Blocked times saved."),
       ).toBeInTheDocument();
       // The workspace stored the event, re-read the results, and dropped the
       // pick; the step stays open and keeps painting.
@@ -2538,7 +2543,7 @@ describe("scaled organizer workspace", () => {
     ).toHaveAttribute("aria-pressed", "false");
 
     await userEvent.click(
-      screen.getByRole("button", { name: "Choose this time" }),
+      screen.getByRole("button", { name: /choose this time/i }),
     );
 
     expect(
@@ -2548,7 +2553,7 @@ describe("scaled organizer workspace", () => {
       within(channelGroup).getByRole("button", { name: "In person" }),
     ).toHaveAttribute("aria-pressed", "false");
     expect(
-      screen.getByRole("button", { name: "Selected time" }),
+      screen.getByRole("button", { name: /selected time/i }),
     ).toHaveAttribute("aria-pressed", "true");
     const finalizeSection = document.getElementById("organizer-finalize");
     expect(finalizeSection).toHaveAttribute("open");
@@ -2584,7 +2589,7 @@ describe("scaled organizer workspace", () => {
 
     await screen.findByText("Legacy result");
     await userEvent.click(
-      screen.getByRole("button", { name: "Choose this time" }),
+      screen.getByRole("button", { name: /choose this time/i }),
     );
 
     expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledWith({
@@ -2642,7 +2647,7 @@ describe("scaled organizer workspace", () => {
       const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTime });
       const { setEvent } = await renderLiveWorkspace();
       await user.click(
-        screen.getByRole("button", { name: "Choose this time" }),
+        screen.getByRole("button", { name: /choose this time/i }),
       );
       const finalize = document.getElementById("organizer-finalize");
       expect(finalize).toHaveTextContent("Thursday 9:00 AM");
@@ -3073,6 +3078,7 @@ describe("scaled organizer workspace", () => {
       await screen.findByText(/Results are updating for revision 4/),
     ).toHaveTextContent("Showing the last successful snapshot meanwhile");
     // Named once in the collapsed summary and once in the list itself.
-    expect(screen.getAllByText(/Previous best window/)).toHaveLength(2);
+    // Named in the collapsed summary, on the chip, and in the detail line.
+    expect(screen.getAllByText(/Previous best window/)).toHaveLength(3);
   });
 });

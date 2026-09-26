@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
-import Alert from "@/components/ui/Alert";
 import AppButton from "@/components/ui/AppButton";
 import { AvailabilitySwatch } from "@/components/ui/Availability";
 import { RefreshIcon, SaveIcon } from "@/components/ui/icons";
@@ -236,10 +235,12 @@ export function useBlockedSlotsDraft(
 }
 
 /**
- * The controls under the Time Table for a blocked-times draft: the brush,
- * Clear all, the feedback, and Save. Painting itself happens on the calendar.
+ * The tools for a blocked-times draft, shown in a bar under the Time Table
+ * calendar while the Blocked times step is open: the brush, Clear all, the
+ * feedback, Save, and Close (which closes the step and keeps any unsaved
+ * marks). Painting itself happens on the calendar.
  */
-export default function BlockedSlotsControls({ draft }) {
+export default function BlockedSlotsControls({ draft, onDone }) {
   const {
     markValue,
     setMarkValue,
@@ -259,10 +260,14 @@ export default function BlockedSlotsControls({ draft }) {
   } = draft;
 
   return (
-    <div className="blocked-slots-editor d-flex flex-column gap-3">
-      <div className="schedule-toolbar mb-0">
-        <div className="schedule-toolbar__group">
-          <p className="schedule-toolbar__label">Mark times as</p>
+    <div className="blocked-slots-controls">
+      <div className="blocked-slots-controls__row">
+        <div className="blocked-slots-controls__brush">
+          {/* The group is named for assistive technology; on a phone the
+              visible label gives way to the brushes themselves. */}
+          <p className="schedule-toolbar__label mb-0 d-none d-sm-block">
+            Mark times as
+          </p>
           <div
             role="group"
             aria-label="Mark times as"
@@ -274,7 +279,7 @@ export default function BlockedSlotsControls({ draft }) {
                 <button
                   key={choice.label}
                   type="button"
-                  className={`btn ${active ? "btn-primary" : "btn-outline-secondary"}`}
+                  className={`btn btn-sm ${active ? "btn-primary" : "btn-outline-secondary"}`}
                   aria-pressed={active}
                   disabled={locked}
                   onClick={() => setMarkValue(choice.value)}
@@ -285,8 +290,6 @@ export default function BlockedSlotsControls({ draft }) {
               );
             })}
           </div>
-        </div>
-        <div className="schedule-toolbar__actions">
           <AppButton
             variant="outlined"
             size="sm"
@@ -297,54 +300,77 @@ export default function BlockedSlotsControls({ draft }) {
             Clear all
           </AppButton>
         </div>
+        <div className="blocked-slots-controls__actions">
+          <p className="text-secondary small mb-0">
+            {markedCount} slots marked
+          </p>
+          <AppButton
+            size="sm"
+            icon={<SaveIcon />}
+            busy={saving}
+            onClick={save}
+            disabled={busy || !dirty}
+            title={lockTitle}
+          >
+            {saving ? "Saving…" : "Save blocked times"}
+          </AppButton>
+          {onDone && (
+            <AppButton
+              variant="text"
+              size="sm"
+              onClick={onDone}
+              title="Closes the step. Unsaved marks stay until you save or reload."
+            >
+              Close
+            </AppButton>
+          )}
+        </div>
       </div>
 
-      {locked && lockReason && (
-        <p className="text-secondary small mb-0">{lockReason}</p>
-      )}
-      {notice && (
-        <Alert variant="warning" role="status">
-          {notice}
-        </Alert>
-      )}
-      {status && (
-        <Alert variant="success" role="status">
-          {status}
-        </Alert>
-      )}
-      {failure && (
-        <Alert
-          variant="danger"
-          role="alert"
-          actions={
-            failure.conflict ? (
-              <AppButton
-                variant="outlined"
-                size="sm"
-                icon={<RefreshIcon />}
-                onClick={reloadLatest}
-              >
-                Reload latest event
-              </AppButton>
-            ) : null
-          }
-        >
-          {failure.message}
-        </Alert>
-      )}
-
-      <div className="d-flex flex-wrap align-items-center gap-3">
-        <AppButton
-          icon={<SaveIcon />}
-          busy={saving}
-          onClick={save}
-          disabled={busy || !dirty}
-          title={lockTitle}
-        >
-          {saving ? "Saving…" : "Save blocked times"}
-        </AppButton>
-        <p className="text-secondary small mb-0">{markedCount} slots marked</p>
-      </div>
+      {/* Feedback stays one short line inside the bar (it is pinned to the
+          bottom of the screen while the calendar is tall), so it never
+          grows over the surface being painted. */}
+      {(locked && lockReason) || notice || status || failure ? (
+        <div className="blocked-slots-controls__feedback small">
+          {locked && lockReason && (
+            <span className="text-secondary">{lockReason}</span>
+          )}
+          {notice && (
+            <span
+              role="status"
+              className="blocked-slots-controls__note blocked-slots-controls__note--warning"
+            >
+              {notice}
+            </span>
+          )}
+          {status && (
+            <span
+              role="status"
+              className="blocked-slots-controls__note blocked-slots-controls__note--success"
+            >
+              {status}
+            </span>
+          )}
+          {failure && (
+            <span
+              role="alert"
+              className="blocked-slots-controls__note blocked-slots-controls__note--danger"
+            >
+              {failure.message}
+              {failure.conflict && (
+                <AppButton
+                  variant="outlined"
+                  size="sm"
+                  icon={<RefreshIcon />}
+                  onClick={reloadLatest}
+                >
+                  Reload latest event
+                </AppButton>
+              )}
+            </span>
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }
