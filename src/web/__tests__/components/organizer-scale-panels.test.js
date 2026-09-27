@@ -528,6 +528,48 @@ test.each([
   }
 });
 
+test.each([
+  // What an older server answers: it ignores `preview` and retries.
+  [
+    "a retry's reply",
+    {
+      deliveryRequest: { id: "delivery-6", delivery: { pending: 2 } },
+      retried: 2,
+    },
+  ],
+  ["a reply without the preview flag", { retryable: 2, obsolete: 0 }],
+  ["a preview without its counts", { preview: true, email: null }],
+  [
+    "a preview with a count missing",
+    { preview: true, retryable: 2, email: previewEmail() },
+  ],
+])("the retry review refuses %s", async (_label, reply) => {
+  const user = userEvent.setup();
+  previewDeliveryRetry.mockResolvedValueOnce(reply);
+  render(
+    <DeliveryRequestProgress
+      initialRequest={{ id: "delivery-6", delivery: { permanentFailure: 2 } }}
+      getToken={getToken}
+    />,
+  );
+  await user.click(
+    screen.getByRole("button", { name: "Retry failed recipients" }),
+  );
+  const dialog = emailDialog("Retry failed recipients");
+  // Not "nothing to send": the reply said nothing about what a retry sends.
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+    "Unable to check which emails can be sent again.",
+  );
+  expect(dialog).not.toHaveTextContent(
+    "There are no failed emails to send again.",
+  );
+  expect(within(dialog).queryByTitle("Email preview")).not.toBeInTheDocument();
+  expect(
+    within(dialog).getByRole("button", { name: "Continue" }),
+  ).toBeDisabled();
+  expect(retryDeliveryRequest).not.toHaveBeenCalled();
+});
+
 test("a retry preview that answers after the review closed is dropped", async () => {
   const user = userEvent.setup();
   let answer;
@@ -557,7 +599,7 @@ test("a retry preview that answers after the review closed is dropped", async ()
       name: "Cancel",
     }),
   );
-  await act(async () => answer({ retryable: 1, obsolete: 0 }));
+  await act(async () => answer({ preview: true, retryable: 1, obsolete: 0 }));
   expect(
     screen.queryByRole("dialog", { name: "Retry failed recipients" }),
   ).not.toBeInTheDocument();
@@ -1719,6 +1761,9 @@ test("results expose request failures", async () => {
 test("finalize handles nested attendance, delivery progress, and confirmation errors", async () => {
   previewFinalMeeting.mockResolvedValueOnce({
     finalMeeting: { attendance: { availableParticipantTotal: 4 } },
+    recipientCount: 0,
+    email: null,
+    sample: null,
   });
   confirmFinalMeeting.mockResolvedValueOnce({
     event: { ...baseEvent, status: "finalized" },
@@ -1940,6 +1985,178 @@ test("finalize reads one confirmation recipient in the singular", async () => {
   ).toBeInTheDocument();
 });
 
+test("finalize drops a review that answers after the location changed and sends the location reviewed", async () => {
+  // The first review is still out when the location is edited: its reply
+  // (for the old location) must not offer Finalize, whether it answers or
+  // fails.
+  let answer;
+  let failure;
+  previewFinalMeeting
+    .mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    )
+    .mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          failure = reject;
+        }),
+    )
+    .mockResolvedValueOnce({
+      attendance: { availableParticipantTotal: 2 },
+      recipientCount: 2,
+      email: previewEmail({ text: "Location: Room 3" }),
+      sample: null,
+    });
+  confirmFinalMeeting.mockResolvedValueOnce({
+    event: { ...baseEvent, status: "finalized" },
+  });
+  render(
+    <FinalizeScalePanel
+      event={baseEvent}
+      setEvent={jest.fn()}
+      getToken={getToken}
+      selection={recommendation}
+    />,
+  );
+  const location = screen.getByLabelText("Location or meeting link");
+  const review = screen.getByRole("button", { name: "Review attendance" });
+  const finalize = screen.getByRole("button", { name: "Finalize meeting" });
+
+  fireEvent.change(location, { target: { value: "Room 1" } });
+  await userEvent.click(review);
+  await waitFor(() =>
+    expect(previewFinalMeeting).toHaveBeenLastCalledWith(
+      baseEvent.code,
+      expect.objectContaining({ location: "Room 1" }),
+      "token",
+    ),
+  );
+  fireEvent.change(location, { target: { value: "Room 2" } });
+  await act(async () =>
+    answer({
+      attendance: { availableParticipantTotal: 9 },
+      recipientCount: 9,
+      email: previewEmail({ text: "Location: Room 1" }),
+      sample: null,
+    }),
+  );
+  expect(
+    screen.queryByRole("group", { name: "Attendance review" }),
+  ).not.toBeInTheDocument();
+  expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  expect(finalize).toBeDisabled();
+  expect(review).toBeEnabled();
+
+  await userEvent.click(review);
+  await waitFor(() =>
+    expect(previewFinalMeeting).toHaveBeenLastCalledWith(
+      baseEvent.code,
+      expect.objectContaining({ location: "Room 2" }),
+      "token",
+    ),
+  );
+  fireEvent.change(location, { target: { value: "Room 3" } });
+  await act(async () => failure(new Error("review for Room 2 failed")));
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(finalize).toBeDisabled();
+
+  await userEvent.click(review);
+  await screen.findByRole("group", { name: "Attendance review" });
+  expect(previewFinalMeeting).toHaveBeenCalledTimes(3);
+  expect(previewFinalMeeting).toHaveBeenLastCalledWith(
+    baseEvent.code,
+    expect.objectContaining({ location: "Room 3" }),
+    "token",
+  );
+  await userEvent.click(finalize);
+  const dialog = emailDialog("Finalize meeting");
+  expect(dialog).toHaveTextContent(
+    "2 invited people will receive the confirmation and a calendar invitation.",
+  );
+  await userEvent.click(
+    within(dialog).getByRole("tab", { name: "Plain text" }),
+  );
+  expect(dialog).toHaveTextContent("Location: Room 3");
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Continue" }),
+  );
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Finalize and send 2 emails" }),
+  );
+  // The meeting finalized is the one whose email was reviewed.
+  await waitFor(() =>
+    expect(confirmFinalMeeting).toHaveBeenCalledWith(
+      baseEvent.code,
+      {
+        startsAt: recommendation.startsAt,
+        endsAt: recommendation.endsAt,
+        channel: recommendation.channel,
+        location: "Room 3",
+        expectedVersion: 4,
+        idempotencyKey: "request-key",
+      },
+      "token",
+    ),
+  );
+});
+
+test("finalize refuses a review reply that does not say who would be emailed", async () => {
+  // A reply without `recipientCount` (an older server) says nothing about
+  // the confirmation email, so it must not read as "nobody is emailed".
+  previewFinalMeeting.mockResolvedValueOnce({
+    attendance: { availableParticipantTotal: 4 },
+  });
+  renderFinalize(recommendation);
+  await userEvent.click(
+    screen.getByRole("button", { name: "Review attendance" }),
+  );
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Unable to check who would get the confirmation email.",
+  );
+  expect(
+    screen.queryByRole("group", { name: "Attendance review" }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "Finalize meeting" }),
+  ).toBeDisabled();
+});
+
+test("the finalize dialog is drawn on the page body, outside the sticky results column", async () => {
+  previewFinalMeeting.mockResolvedValueOnce({
+    attendance: { availableParticipantTotal: 1 },
+    recipientCount: 1,
+    email: previewEmail(),
+    sample: null,
+  });
+  render(
+    <div className="meeting-results__side">
+      <FinalizeScalePanel
+        event={baseEvent}
+        setEvent={jest.fn()}
+        getToken={getToken}
+        selection={recommendation}
+      />
+    </div>,
+  );
+  await userEvent.click(
+    screen.getByRole("button", { name: "Review attendance" }),
+  );
+  await screen.findByRole("group", { name: "Attendance review" });
+  await userEvent.click(
+    screen.getByRole("button", { name: "Finalize meeting" }),
+  );
+  const dialog = emailDialog("Finalize meeting");
+  expect(document.querySelector(".meeting-results__side")).not.toContainElement(
+    dialog,
+  );
+  expect(dialog.closest(".app-modal-backdrop").parentElement).toBe(
+    document.body,
+  );
+});
+
 test("finalized organizers can download ICS and see download errors", async () => {
   const createObjectURL = jest.fn().mockReturnValue("blob:calendar");
   const revokeObjectURL = jest.fn();
@@ -2063,6 +2280,7 @@ function renderFinalize(selection) {
 test("finalize describes a custom calendar window with its estimated availability", async () => {
   previewFinalMeeting.mockResolvedValueOnce({
     attendance: { availableParticipantTotal: 3 },
+    recipientCount: 0,
   });
   renderFinalize(calendarSelection);
 
@@ -2148,6 +2366,7 @@ test("finalize lists attendance by person behind the count tiles", async () => {
         { participantId: "p-8", name: "Rex Reasonless", reason: "mystery" },
       ],
     },
+    recipientCount: 0,
   });
   renderFinalize(calendarSelection);
 

@@ -401,6 +401,9 @@ function mockCalendarWindowFlow() {
       unansweredParticipantTotal: 0,
       excludedParticipantTotal: 0,
     },
+    recipientCount: 0,
+    email: null,
+    sample: null,
   });
   confirmFinalMeeting.mockResolvedValue({
     event: {
@@ -2273,6 +2276,9 @@ describe("scaled organizer workspace", () => {
           },
         ],
       },
+      recipientCount: 0,
+      email: null,
+      sample: null,
     });
     renderView(jest.fn(), { ...event, status: "active" });
     await screen.findByText(/Results are current at revision 3/);
