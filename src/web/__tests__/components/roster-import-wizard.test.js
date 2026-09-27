@@ -829,14 +829,12 @@ test("labels the commit by mode and count, guards a rebuild with the event code,
       createdCount: 2,
       updatedCount: 0,
     },
-    autoInvitedCount: 1,
+    autoInvitedCount: 0,
     event: { code: "IMPORT1", status: "active" },
-    deliveryRequest: {
-      id: "delivery-1",
-      operation: "invitation",
-      recipientCount: 1,
-      delivery: { total: 1, pending: 1, sent: 0 },
-    },
+    deliveryRequest: null,
+    // A rebuild re-adds everyone, so every emailable row is up for review.
+    addedParticipantIds: ["41"],
+    importedParticipantIds: ["41", "43"],
   };
   createRosterImport.mockResolvedValue({ import: record });
   configureRosterImport.mockResolvedValue({ import: record });
@@ -855,32 +853,22 @@ test("labels the commit by mode and count, guards a rebuild with the event code,
   commitRosterImport.mockResolvedValue(response);
   const onCommitted = jest.fn();
   const onClose = jest.fn();
-  renderWizard({ onCommitted, onClose });
+  const onSendInvitations = jest.fn();
+  renderWizard({ onCommitted, onClose, onSendInvitations });
   await reachReview("name\temail\nAda\tada@example.com\nGuest\t");
 
+  // Nobody is emailed from the import itself any more.
   expect(screen.getByRole("button", { name: "Import 2 people" })).toBeEnabled();
   expect(screen.queryByRole("note")).not.toBeInTheDocument();
-  const send = screen.getByLabelText(
-    "Email invitations to the people this import adds",
-  );
-  expect(send).not.toBeChecked();
-  expect(send).toHaveAccessibleDescription(
-    "Never people without an email of their own.",
-  );
-  await userEvent.click(send);
-  expect(
-    screen.getByRole("button", {
-      name: "Import 2 people and send invitations",
-    }),
-  ).toBeEnabled();
+  expect(screen.queryByRole("checkbox", { name: /invitations/i })).toBeNull();
 
   await userEvent.click(screen.getByLabelText(/Replace the whole list/));
   const rebuild = screen.getByRole("button", {
-    name: "Replace the list with 2 people and send invitations",
+    name: "Replace the list with 2 people",
   });
   expect(rebuild).toBeDisabled();
   expect(screen.getByRole("note")).toHaveTextContent(
-    "Rebuilding clears schedules, invitations, and pending delivery.",
+    "Rebuilding clears schedules, invitations, and pending delivery. Everyone starts as Not sent and gets no reminders until you send invitations, which you can review once the import is done.",
   );
   const code = screen.getByLabelText("Rebuild confirmation code");
   fireEvent.change(code, { target: { value: "WRONG" } });
@@ -888,16 +876,10 @@ test("labels the commit by mode and count, guards a rebuild with the event code,
   fireEvent.change(code, { target: { value: " import1 " } });
   expect(rebuild).toBeEnabled();
   await userEvent.click(screen.getByLabelText(/Add and update people/));
-  expect(
-    screen.getByRole("button", {
-      name: "Import 2 people and send invitations",
-    }),
-  ).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Import 2 people" })).toBeEnabled();
   await userEvent.click(screen.getByLabelText(/Replace the whole list/));
   await userEvent.click(
-    screen.getByRole("button", {
-      name: "Replace the list with 2 people and send invitations",
-    }),
+    screen.getByRole("button", { name: "Replace the list with 2 people" }),
   );
   await waitFor(() =>
     expect(commitRosterImport).toHaveBeenCalledWith(
@@ -906,7 +888,7 @@ test("labels the commit by mode and count, guards a rebuild with the event code,
       {
         mode: "rebuild",
         idempotencyKey: "import-key",
-        sendInvitations: true,
+        sendInvitations: false,
         confirmationCode: " import1 ",
       },
       "token",
@@ -915,45 +897,39 @@ test("labels the commit by mode and count, guards a rebuild with the event code,
 
   // Done: the sheet stays open with the result and what happens next.
   expect(await screen.findByRole("status")).toHaveTextContent(
-    "Imported 2 people: 2 added, 0 updated. 1 invitation queued.",
+    "Imported 2 people: 2 added, 0 updated. No invitations were sent.",
   );
+  expect(screen.queryByText(/invitations? queued/)).not.toBeInTheDocument();
   expect(
     screen.getByRole("dialog", { name: "Import participants" }),
   ).toHaveAccessibleDescription(
     "The participant import was committed successfully.",
   );
-  expect(
-    screen.getByText(
-      "1 person has no email of their own and is never invited.",
-    ),
-  ).toBeInTheDocument();
-  expect(screen.getByText("Delivery: 0 of 1 sent")).toBeInTheDocument();
-  expect(screen.getByText("In progress")).toBeInTheDocument();
   expect(onCommitted).toHaveBeenCalledWith({
     ...response,
-    sendInvitations: true,
+    sendInvitations: false,
   });
   expect(onClose).not.toHaveBeenCalled();
-
-  // View progress closes the sheet and jumps to the delivery card.
-  const card = document.createElement("div");
-  card.className = "organizer-workspace__delivery";
-  card.scrollIntoView = jest.fn();
-  document.body.appendChild(card);
-  await userEvent.click(screen.getByRole("button", { name: "View progress" }));
-  expect(onClose).toHaveBeenCalledTimes(1);
-  await waitFor(() => expect(card.scrollIntoView).toHaveBeenCalled());
-  expect(card).toHaveFocus();
-  card.remove();
 
   await userEvent.click(
     screen.getByRole("button", { name: "Back to participants" }),
   );
-  expect(onClose).toHaveBeenCalledTimes(2);
+  expect(onClose).toHaveBeenCalledTimes(1);
   // A finished import closes without asking or cancelling anything.
   fireEvent.keyDown(document, { key: "Escape" });
-  expect(onClose).toHaveBeenCalledTimes(3);
+  expect(onClose).toHaveBeenCalledTimes(2);
   expect(cancelRosterImport).not.toHaveBeenCalled();
+
+  // A rebuild offers invitations for everyone it imported: the sheet closes
+  // and the participant list reviews them.
+  await userEvent.click(
+    screen.getByRole("button", { name: "Review and send invitations (2)…" }),
+  );
+  expect(onClose).toHaveBeenCalledTimes(3);
+  expect(onSendInvitations).toHaveBeenCalledWith(["41", "43"]);
+  expect(onClose.mock.invocationCallOrder[2]).toBeLessThan(
+    onSendInvitations.mock.invocationCallOrder[0],
+  );
 
   // Import another list starts over with an empty paste.
   await userEvent.click(
@@ -966,52 +942,47 @@ test("labels the commit by mode and count, guards a rebuild with the event code,
   expect(screen.getByText("Paste rows to see a preview.")).toBeInTheDocument();
 });
 
-test.each([
-  ["Complete", { total: 2, sent: 2, pending: 0 }, "Delivery: 2 of 2 sent"],
-  [
-    "Needs attention",
-    { total: 2, sent: 1, permanentFailure: 1 },
-    "Delivery: 1 of 2 sent",
-  ],
-])(
-  "reads a %s delivery run on the Done step",
-  async (label, delivery, line) => {
-    const record = importRecord({ id: "import-6" });
-    createRosterImport.mockResolvedValue({ import: record });
-    configureRosterImport.mockResolvedValue({ import: record });
-    fetchRosterImportRows.mockResolvedValue(
-      rowsResponse(record, [importRow()]),
-    );
-    commitRosterImport.mockResolvedValue({
-      receipt: {
-        mode: "merge",
-        importedCount: 2,
-        createdCount: 2,
-        updatedCount: 0,
-      },
-      autoInvitedCount: 2,
-      deliveryRequest: { id: "delivery-2", delivery },
-    });
-    renderWizard();
-    await reachReview();
-    await userEvent.click(
-      screen.getByLabelText("Email invitations to the people this import adds"),
-    );
-    await userEvent.click(
-      screen.getByRole("button", {
-        name: "Import 1 person and send invitations",
-      }),
-    );
-    expect(await screen.findByRole("status")).toHaveTextContent(
-      "2 invitations queued.",
-    );
-    expect(screen.getByText(line)).toBeInTheDocument();
-    expect(screen.getByText(label)).toBeInTheDocument();
-    expect(screen.queryByText(/no email of their own/)).not.toBeInTheDocument();
-  },
-);
+test("a merge offers invitations for the people it added, not everyone it imported", async () => {
+  const record = importRecord({ id: "import-6" });
+  createRosterImport.mockResolvedValue({ import: record });
+  configureRosterImport.mockResolvedValue({ import: record });
+  fetchRosterImportRows.mockResolvedValue(rowsResponse(record, [importRow()]));
+  commitRosterImport.mockResolvedValue({
+    receipt: {
+      mode: "merge",
+      importedCount: 2,
+      createdCount: 1,
+      updatedCount: 1,
+    },
+    autoInvitedCount: 0,
+    deliveryRequest: null,
+    addedParticipantIds: ["52"],
+    importedParticipantIds: ["51", "52"],
+  });
+  const onClose = jest.fn();
+  const onSendInvitations = jest.fn();
+  renderWizard({ onClose, onSendInvitations });
+  await reachReview();
+  await userEvent.click(
+    screen.getByRole("button", { name: "Import 1 person" }),
+  );
+  expect(await screen.findByRole("status")).toHaveTextContent(
+    "Imported 2 people: 1 added, 1 updated. No invitations were sent.",
+  );
+  const review = screen.getByRole("button", {
+    name: "Review and send invitations (1)…",
+  });
+  // The review is the way forward; going back to the list is secondary.
+  expect(review).toHaveClass("btn-primary");
+  expect(
+    screen.getByRole("button", { name: "Back to participants" }),
+  ).not.toHaveClass("btn-primary");
+  await userEvent.click(review);
+  expect(onClose).toHaveBeenCalledTimes(1);
+  expect(onSendInvitations).toHaveBeenCalledWith(["52"]);
+});
 
-test("skips the delivery and no-email lines when nothing was emailed", async () => {
+test("skips the invitation review when the import added nobody to invite", async () => {
   const record = importRecord({ id: "import-7" });
   createRosterImport.mockResolvedValue({ import: record });
   configureRosterImport.mockResolvedValue({ import: record });
@@ -1034,10 +1005,12 @@ test("skips the delivery and no-email lines when nothing was emailed", async () 
   expect(await screen.findByRole("status")).toHaveTextContent(
     "Imported 1 people: 1 added, 0 updated. No invitations were sent.",
   );
-  expect(screen.queryByText(/^Delivery:/)).not.toBeInTheDocument();
   expect(
-    screen.queryByRole("button", { name: "View progress" }),
+    screen.queryByRole("button", { name: /^Review and send invitations/ }),
   ).not.toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "Back to participants" }),
+  ).toHaveClass("btn-primary");
   expect(screen.queryByText(/no email of their own/)).not.toBeInTheDocument();
   expect(commitRosterImport).toHaveBeenCalledWith(
     "IMPORT1",

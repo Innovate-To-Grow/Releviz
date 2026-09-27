@@ -13,6 +13,7 @@ import {
   ChevronRightIcon,
   CopyIcon,
   ImportIcon,
+  SendIcon,
   SpreadsheetIcon,
   WarningIcon,
 } from "@/components/ui/icons";
@@ -170,18 +171,6 @@ function matchesShow(row, show) {
   return true;
 }
 
-// Same reading of a delivery run as the workspace's delivery card.
-function deliveryState(delivery) {
-  const waiting =
-    Number(delivery.pending || 0) +
-    Number(delivery.processing || 0) +
-    Number(delivery.retry || 0);
-  if (waiting > 0) return { status: "info", label: "In progress" };
-  if (Number(delivery.permanentFailure || 0) > 0)
-    return { status: "warning", label: "Needs attention" };
-  return { status: "success", label: "Complete" };
-}
-
 function isGone(requestError) {
   return requestError?.status === 404 || requestError?.status === 410;
 }
@@ -283,11 +272,17 @@ function PastePreview({ table }) {
   );
 }
 
+// The import itself never emails anyone. When it put people on the list who
+// could be invited (those it added, or everyone for a rebuild), the Done
+// step offers to review their invitations: the sheet closes and
+// `onSendInvitations(participantIds)` asks the participant list to open its
+// send dialog for them.
 export default function RosterImportWizard({
   event,
   getToken,
   onEventChange,
   onCommitted,
+  onSendInvitations,
   onClose,
 }) {
   const [sourceType, setSourceType] = useState("file");
@@ -307,7 +302,6 @@ export default function RosterImportWizard({
   const [show, setShow] = useState("all");
   const [phase, setPhase] = useState("source");
   const [mode, setMode] = useState("merge");
-  const [sendInvitations, setSendInvitations] = useState(false);
   const [confirmationCode, setConfirmationCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -395,7 +389,6 @@ export default function RosterImportWizard({
     setPagination(null);
     setShow("all");
     setMode("merge");
-    setSendInvitations(false);
     setConfirmationCode("");
     setError("");
     setExpired(false);
@@ -663,12 +656,13 @@ export default function RosterImportWizard({
         {
           mode,
           idempotencyKey: idempotencyKey.current,
-          sendInvitations,
+          // Invitations are reviewed and sent from the participant list.
+          sendInvitations: false,
           ...(mode === "rebuild" ? { confirmationCode } : {}),
         },
         token,
       );
-      const committed = { ...data, sendInvitations };
+      const committed = { ...data, sendInvitations: false };
       setResult(committed);
       setPhase("complete");
       onCommitted?.(committed);
@@ -705,19 +699,6 @@ export default function RosterImportWizard({
     }
   };
 
-  // The delivery card lives in the workspace behind the sheet, so the jump
-  // waits until the sheet has closed and focus has settled.
-  const viewProgress = () => {
-    onClose?.();
-    setTimeout(() => {
-      const card = document.querySelector(".organizer-workspace__delivery");
-      if (!card) return;
-      if (!card.hasAttribute("tabindex")) card.setAttribute("tabindex", "-1");
-      card.focus?.({ preventScroll: true });
-      card.scrollIntoView?.({ behavior: "smooth", block: "start" });
-    }, 0);
-  };
-
   const sampleFor = (field) => {
     const index = mapping[field];
     if (index === undefined || !Array.isArray(sampleRow)) return "—";
@@ -732,8 +713,6 @@ export default function RosterImportWizard({
   const showId = `${fieldIds}-show`;
   const mergeModeId = `${fieldIds}-mode-merge`;
   const rebuildModeId = `${fieldIds}-mode-rebuild`;
-  const sendInvitationsId = `${fieldIds}-send-invitations`;
-  const sendInvitationsHelpId = `${fieldIds}-send-invitations-help`;
 
   const sheetName =
     record?.selectedWorksheet ||
@@ -751,18 +730,23 @@ export default function RosterImportWizard({
     busy || expired || Boolean(commitBlocker) || !codeConfirmed;
   const commitLabel = busy
     ? "Importing…"
-    : `${
-        mode === "rebuild"
-          ? `Replace the list with ${people(counts.ready)}`
-          : `Import ${people(counts.ready)}`
-      }${sendInvitations ? " and send invitations" : ""}`;
+    : mode === "rebuild"
+      ? `Replace the list with ${people(counts.ready)}`
+      : `Import ${people(counts.ready)}`;
   const selectedOnPage = rows.filter((row) => row.selected).length;
   const allOnPageSelected = rows.length > 0 && selectedOnPage === rows.length;
 
   const receipt = result?.receipt || {};
-  const managedCount =
-    (receipt.createdCount || 0) - (result?.autoInvitedCount || 0);
-  const delivery = result?.deliveryRequest?.delivery || null;
+  // A rebuild starts everyone over as Not sent, so all of them are up for
+  // an invitation; a merge offers only the people it added.
+  const invitableIds =
+    (mode === "rebuild"
+      ? result?.importedParticipantIds
+      : result?.addedParticipantIds) || [];
+  const reviewInvitations = () => {
+    onClose?.();
+    onSendInvitations?.(invitableIds);
+  };
 
   const footer =
     phase === "source" ? (
@@ -824,9 +808,18 @@ export default function RosterImportWizard({
         >
           Import another list
         </AppButton>
-        <AppButton icon={<ArrowRightIcon />} onClick={() => onClose?.()}>
+        <AppButton
+          variant={invitableIds.length > 0 ? "outlined" : "filled"}
+          icon={<ArrowRightIcon />}
+          onClick={() => onClose?.()}
+        >
           Back to participants
         </AppButton>
+        {invitableIds.length > 0 && (
+          <AppButton icon={<SendIcon />} onClick={reviewInvitations}>
+            Review and send invitations ({invitableIds.length})…
+          </AppButton>
+        )}
       </>
     );
 
@@ -1446,10 +1439,9 @@ export default function RosterImportWizard({
                 <div className="import-sheet__rebuild d-flex flex-column gap-3 mt-3">
                   <Alert variant="warning" role="note">
                     Rebuilding clears schedules, invitations, and pending
-                    delivery. With invitations enabled below it sends a new
-                    invitation to every imported participant; otherwise everyone
-                    starts as Not sent and gets no reminders until you send
-                    invitations.
+                    delivery. Everyone starts as Not sent and gets no reminders
+                    until you send invitations, which you can review once the
+                    import is done.
                   </Alert>
                   <FormField
                     label={`Type ${event.code} to confirm`}
@@ -1467,24 +1459,6 @@ export default function RosterImportWizard({
                   </FormField>
                 </div>
               )}
-              <div className="form-check mt-3">
-                <input
-                  id={sendInvitationsId}
-                  className="form-check-input"
-                  type="checkbox"
-                  checked={sendInvitations}
-                  aria-describedby={sendInvitationsHelpId}
-                  onChange={(changeEvent) =>
-                    setSendInvitations(changeEvent.target.checked)
-                  }
-                />
-                <label className="form-check-label" htmlFor={sendInvitationsId}>
-                  Email invitations to the people this import adds
-                </label>
-                <div id={sendInvitationsHelpId} className="form-text mt-0">
-                  Never people without an email of their own.
-                </div>
-              </div>
             </fieldset>
           </div>
         )}
@@ -1495,35 +1469,9 @@ export default function RosterImportWizard({
               {rosterImportStatusMessage({
                 receipt,
                 autoInvitedCount: result.autoInvitedCount,
-                sendInvitations: result.sendInvitations,
+                sendInvitations: false,
               })}
             </Alert>
-            {result.sendInvitations && managedCount > 0 && (
-              <p className="mb-0">
-                {managedCount === 1
-                  ? "1 person has no email of their own and is never invited."
-                  : `${managedCount} people have no email of their own and are never invited.`}
-              </p>
-            )}
-            {delivery && (
-              <div className="d-flex flex-wrap align-items-center gap-2">
-                <span>
-                  Delivery: {Number(delivery.sent || 0)} of{" "}
-                  {Number(delivery.total || 0)} sent
-                </span>
-                <StatusBadge status={deliveryState(delivery).status}>
-                  {deliveryState(delivery).label}
-                </StatusBadge>
-                <AppButton
-                  variant="text"
-                  size="sm"
-                  className="p-0 align-baseline"
-                  onClick={viewProgress}
-                >
-                  View progress
-                </AppButton>
-              </div>
-            )}
           </div>
         )}
       </Modal>

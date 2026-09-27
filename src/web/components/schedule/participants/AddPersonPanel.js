@@ -13,7 +13,7 @@ function resultLine(result) {
   if (result.alreadyExisted)
     return `${name} is already on the list, so nothing was added.`;
   if (result.participant?.organizerManaged) return `${name} was added.`;
-  if (result.autoInvited)
+  if (result.autoInvited || result.invited)
     return `${name} was added and their invitation is queued.`;
   return `${name} was added. No invitation was sent.`;
 }
@@ -25,6 +25,11 @@ function resultLine(result) {
  * fields clear, Full name gets focus and the outcome is shown at the top.
  * `dialogOpen` says the parent has a dialog of its own open above the panel
  * (the send dialog), so Escape and Tab are left to it.
+ *
+ * Nothing is emailed from here: `Add and send invitation` adds the person
+ * and then hands them to `onSendInvitation`, which reviews the invitation
+ * and resolves true once it is sent (false when the review is closed
+ * without sending, which leaves `Send invitation` on the result line).
  */
 export default function AddPersonPanel({
   organizerEmail = "",
@@ -96,16 +101,17 @@ export default function AddPersonPanel({
     if (!keyRef.current) keyRef.current = crypto.randomUUID();
     setBusyAction(sendInvitation ? "send" : "add");
     setError("");
+    let outcome = null;
     try {
-      const outcome = await onAdd({
+      outcome = await onAdd({
         name: name.trim(),
         email: noEmail ? "" : email.trim().toLowerCase(),
         phone: phone.trim(),
         organizerManaged: noEmail,
-        sendInvitation: sendInvitation && !noEmail,
+        sendInvitation: false,
         idempotencyKey: keyRef.current,
       });
-      setResult(outcome);
+      setResult({ ...outcome, offerInvitation: sendInvitation });
       keyRef.current = "";
       setName("");
       setEmail("");
@@ -117,15 +123,27 @@ export default function AddPersonPanel({
     } finally {
       setBusyAction("");
     }
+    if (outcome && sendInvitation) void invite(outcome.participant);
+  };
+
+  // Reviews and sends the added person's invitation through the parent's
+  // send dialog; someone without an email of their own is never invited.
+  const invite = async (participant) => {
+    if (!participant || participant.organizerManaged || !onSendInvitation)
+      return;
+    const sent = await onSendInvitation(participant);
+    if (sent) setResult((current) => ({ ...current, invited: true }));
   };
 
   const added = result?.participant;
   const canSendLater =
     Boolean(added) &&
-    result.alreadyExisted &&
     Boolean(onSendInvitation) &&
     !added.organizerManaged &&
-    added.invitationStatus === "not_sent";
+    !result.invited &&
+    (result.alreadyExisted
+      ? added.invitationStatus === "not_sent"
+      : result.offerInvitation && !result.autoInvited);
 
   return (
     <Drawer
@@ -207,7 +225,7 @@ export default function AddPersonPanel({
                   variant="text"
                   size="sm"
                   className="p-0"
-                  onClick={() => onSendInvitation(added)}
+                  onClick={() => void invite(added)}
                 >
                   Send invitation
                 </AppButton>

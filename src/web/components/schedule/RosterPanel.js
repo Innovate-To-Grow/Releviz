@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/icons";
 import { ManagedScheduleDrawer } from "@/components/schedule/OrganizerPanels";
 import RosterImportWizard from "@/components/schedule/RosterImportWizard";
+import EmailSendDialog from "@/components/schedule/email/EmailSendDialog";
 import AddPersonPanel from "@/components/schedule/participants/AddPersonPanel";
 import {
   DeadlineBanner,
@@ -131,7 +132,8 @@ function reminderDeliveryRequest(data) {
   };
 }
 
-// The counts the send dialog shows, from a preview reply.
+// The counts the send dialog shows, from a preview reply, with the email
+// the first recipient would get and who that is.
 function previewFromResponse(data) {
   const skipped = data?.skipped || {};
   return {
@@ -141,8 +143,42 @@ function previewFromResponse(data) {
     inFlight: skipped.inFlight ?? 0,
     organizer: skipped.organizer ?? 0,
     total: data?.requestedCount ?? 0,
+    email: data?.email ?? null,
+    sample: data?.sample ?? null,
   };
 }
+
+// The reminder dialog's lines: who gets one now and who was already
+// reminded for this deadline (each only when there is someone), and who a
+// run never emails.
+function ReminderSummary({ wouldEnqueue, alreadyReminded }) {
+  return (
+    <div className="d-flex flex-column gap-2">
+      <ul className="list-unstyled d-flex flex-column gap-2 mb-0 participants-send-summary">
+        {wouldEnqueue > 0 && (
+          <li>
+            {wouldEnqueue === 1
+              ? "1 invited person who hasn't submitted will get a reminder"
+              : `${wouldEnqueue} invited people who haven't submitted will get a reminder`}
+          </li>
+        )}
+        {alreadyReminded > 0 && (
+          <li>
+            {alreadyReminded === 1
+              ? "1 was already reminded for this deadline and is skipped"
+              : `${alreadyReminded} were already reminded for this deadline and are skipped`}
+          </li>
+        )}
+      </ul>
+      <p className="small text-secondary mb-0">
+        People never invited, people without an email, and you are skipped.
+      </p>
+    </div>
+  );
+}
+
+const reminders = (count) =>
+  `${count} ${count === 1 ? "reminder" : "reminders"}`;
 
 function participantFromSchedule(data, slotCount) {
   const summary = data.participant || {};
@@ -220,8 +256,11 @@ const RosterPanel = forwardRef(function RosterPanel(
   // values with Apply again / Dismiss.
   const [rowConflicts, setRowConflicts] = useState({});
   const [personBusy, setPersonBusy] = useState(false);
-  // { selector, preview, busy, error, clearSelection } while open.
+  // { selector, preview, resend, resendPreview, busy, error,
+  // clearSelection, onSettled } while open.
   const [sendDialog, setSendDialog] = useState(null);
+  // { preview, busy, error } while open: `preview` is the reminders
+  // preview reply, with its counts, `email` and `sample`.
   const [reminderDialog, setReminderDialog] = useState(null);
   const [reminderBusy, setReminderBusy] = useState(false);
   // { title, groups, state, counts, resolve?, onApply? } while open.
@@ -707,38 +746,65 @@ const RosterPanel = forwardRef(function RosterPanel(
 
   // Invitations ----------------------------------------------------------
 
-  // Opens the send dialog for a selection (`participantIds` or `filter`)
-  // and counts who would be emailed before anything is sent.
-  const openSendDialog = (selector, { clearSelection: clear = false } = {}) => {
-    const dialog = {
-      selector,
-      preview: null,
-      busy: false,
-      error: "",
-      clearSelection: clear,
-    };
-    setSendDialog(dialog);
+  // Fills the open send dialog's preview for `selector`: the plain one, or
+  // the one that emails the already-invited again too. A reply for a
+  // dialog that has since closed or moved on is dropped.
+  const loadSendPreview = async (selector, resend) => {
     const patch = (changes) =>
       setSendDialog((current) =>
         current && current.selector === selector
           ? { ...current, ...changes }
           : current,
       );
-    void (async () => {
-      try {
-        const token = await getToken();
-        const data = await sendRosterInvitations(
-          event.code,
-          { ...selector, preview: true, resend: false },
-          token,
-        );
-        patch({ preview: previewFromResponse(data) });
-      } catch (requestError) {
-        patch({
-          error: requestError.message || "Unable to check who can be invited.",
-        });
-      }
-    })();
+    try {
+      const token = await getToken();
+      const data = await sendRosterInvitations(
+        event.code,
+        { ...selector, preview: true, resend },
+        token,
+      );
+      patch({
+        [resend ? "resendPreview" : "preview"]: previewFromResponse(data),
+      });
+    } catch (requestError) {
+      patch({
+        error: requestError.message || "Unable to check who can be invited.",
+      });
+    }
+  };
+
+  // Opens the send dialog for a selection (`participantIds` or `filter`)
+  // and previews who would be emailed, and with what, before anything is
+  // sent. `onSettled` hears whether the invitations went out (true) or the
+  // dialog closed without sending them (false).
+  const openSendDialog = (
+    selector,
+    { clearSelection: clear = false, onSettled = null } = {},
+  ) => {
+    setSendDialog({
+      selector,
+      preview: null,
+      resend: false,
+      resendPreview: null,
+      busy: false,
+      error: "",
+      clearSelection: clear,
+      onSettled,
+    });
+    void loadSendPreview(selector, false);
+  };
+
+  // `Email them again too` shows the email the first person would get with
+  // the already-invited counted in; that preview is asked for once.
+  const changeResend = (resend) => {
+    const { selector, resendPreview } = sendDialog;
+    setSendDialog((current) => ({ ...current, resend, error: "" }));
+    if (resend && !resendPreview) void loadSendPreview(selector, true);
+  };
+
+  const closeSendDialog = (sent) => {
+    sendDialog?.onSettled?.(sent);
+    setSendDialog(null);
   };
 
   const confirmSend = async ({ resend }) => {
@@ -758,12 +824,12 @@ const RosterPanel = forwardRef(function RosterPanel(
       if (data.deliveryRequest?.recipientCount > 0) {
         onDeliveryRequestChange?.(data.deliveryRequest);
       }
-      setSendDialog(null);
+      closeSendDialog(true);
       if (clear) clearSelection();
       await loadRoster();
     } catch (requestError) {
       if (requestError.status === 429) {
-        setSendDialog(null);
+        closeSendDialog(false);
         toastFailure(
           "Too many invitation requests. Try again in a few minutes.",
         );
@@ -799,7 +865,7 @@ const RosterPanel = forwardRef(function RosterPanel(
         });
         return;
       }
-      setReminderDialog({ count: data?.wouldEnqueue ?? 0, busy: false });
+      setReminderDialog({ preview: data, busy: false, error: "" });
     } catch (requestError) {
       toastFailure(
         requestError.message || "Unable to check who can be reminded.",
@@ -809,8 +875,9 @@ const RosterPanel = forwardRef(function RosterPanel(
     }
   };
 
+  // A failed run keeps the dialog open on its confirmation, with the error.
   const confirmReminders = async () => {
-    setReminderDialog((current) => ({ ...current, busy: true }));
+    setReminderDialog((current) => ({ ...current, busy: true, error: "" }));
     try {
       const token = await getToken();
       const data = await sendReminders(
@@ -821,13 +888,18 @@ const RosterPanel = forwardRef(function RosterPanel(
       const request = reminderDeliveryRequest(data);
       onDeliveryRequestChange?.(request);
       const count = data?.recipientCount ?? request?.recipientCount ?? 0;
-      toastSuccess(
-        `Queued ${count} ${count === 1 ? "reminder" : "reminders"}.`,
-      );
-    } catch (requestError) {
-      toastFailure(requestError.message || "Unable to queue reminders.");
-    } finally {
+      toastSuccess(`Queued ${reminders(count)}.`);
       setReminderDialog(null);
+    } catch (requestError) {
+      setReminderDialog((current) =>
+        current
+          ? {
+              ...current,
+              busy: false,
+              error: requestError.message || "Unable to queue reminders.",
+            }
+          : current,
+      );
     }
   };
 
@@ -1376,6 +1448,10 @@ const RosterPanel = forwardRef(function RosterPanel(
 
   // Layout -------------------------------------------------------------------
 
+  const reminderCount = Number(reminderDialog?.preview?.wouldEnqueue ?? 0);
+  const reminderSample =
+    reminderDialog?.preview?.sample?.name ||
+    reminderDialog?.preview?.sample?.email;
   const total = Number(overall?.total ?? stats.total ?? 0);
   const chips = filterChips(filters);
   const hasActiveFilters = chips.length > 0;
@@ -1781,7 +1857,12 @@ const RosterPanel = forwardRef(function RosterPanel(
           onEnterSchedule={(participant) => void openEditor(participant)}
           onAddMyself={() => void addMyself()}
           onSendInvitation={(participant) =>
-            openSendDialog({ participantIds: [participant.id] })
+            new Promise((resolve) =>
+              openSendDialog(
+                { participantIds: [participant.id] },
+                { onSettled: resolve },
+              ),
+            )
           }
           onClose={() => setOpenPanel(null)}
         />
@@ -1840,6 +1921,9 @@ const RosterPanel = forwardRef(function RosterPanel(
           getToken={getToken}
           onEventChange={setEvent}
           onCommitted={handleImportCommitted}
+          onSendInvitations={(participantIds) =>
+            openSendDialog({ participantIds })
+          }
           onClose={closeImport}
         />
       )}
@@ -1860,31 +1944,57 @@ const RosterPanel = forwardRef(function RosterPanel(
       {sendDialog && (
         <SendInvitationsDialog
           preview={sendDialog.preview}
+          resendPreview={sendDialog.resendPreview}
+          resend={sendDialog.resend}
+          onResendChange={changeResend}
           error={sendDialog.error}
           busy={sendDialog.busy}
-          onConfirm={(choice) => void confirmSend(choice)}
+          onConfirm={confirmSend}
           onClose={() => {
-            if (!sendDialog.busy) setSendDialog(null);
+            if (!sendDialog.busy) closeSendDialog(false);
           }}
         />
       )}
 
       {reminderDialog && (
-        <ConfirmDialog
-          title={`Remind ${reminderDialog.count} invited people who haven't submitted?`}
-          confirmLabel="Send reminders"
+        <EmailSendDialog
+          title="Send reminders"
+          recipientCount={reminderCount}
+          recipientsSummary={
+            <ReminderSummary
+              wouldEnqueue={reminderCount}
+              alreadyReminded={Number(
+                reminderDialog.preview?.alreadyReminded ?? 0,
+              )}
+            />
+          }
+          email={reminderDialog.preview?.email ?? null}
+          emailNote={
+            reminderSample
+              ? `Shown for ${reminderSample}. Each person gets their own private link.`
+              : null
+          }
+          error={reminderDialog.error}
           busy={reminderDialog.busy}
-          onConfirm={() => void confirmReminders()}
+          confirmTitle={
+            reminderCount === 1
+              ? "Remind 1 invited person who hasn't submitted?"
+              : `Remind ${reminderCount} invited people who haven't submitted?`
+          }
+          confirmBody={
+            <p className="mb-0">
+              Emails go out right away and can&apos;t be recalled. Anyone
+              already reminded since the deadline was set isn&apos;t emailed
+              again.
+            </p>
+          }
+          sendLabel={`Send ${reminders(reminderCount)}`}
+          emptyMessage="Nobody needs a reminder right now."
+          onConfirm={confirmReminders}
           onClose={() => {
             if (!reminderDialog.busy) setReminderDialog(null);
           }}
-        >
-          <p className="mb-0">
-            People never invited, people without an email, and you are skipped.
-            Anyone already reminded since the deadline was set isn&apos;t
-            emailed again.
-          </p>
-        </ConfirmDialog>
+        />
       )}
 
       {newGroup && (

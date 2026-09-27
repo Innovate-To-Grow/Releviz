@@ -2,7 +2,13 @@
  * @jest-environment jsdom
  */
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 
@@ -102,7 +108,7 @@ describe("AddPersonPanel", () => {
     );
   });
 
-  test("Enter submits and Add and send invitation asks for an invitation", async () => {
+  test("Enter submits and a server-side invitation is reported as queued", async () => {
     const user = userEvent.setup();
     const handlers = renderPanel({
       onAdd: jest.fn().mockResolvedValue(added({ autoInvited: true })),
@@ -114,17 +120,102 @@ describe("AddPersonPanel", () => {
     expect(await screen.findByRole("status")).toHaveTextContent(
       "Grace Hopper was added and their invitation is queued.",
     );
+  });
 
+  test("Add and send invitation adds without sending, then reviews the invitation", async () => {
+    const user = userEvent.setup();
+    let settle;
+    const onSendInvitation = jest.fn(
+      () =>
+        new Promise((resolve) => {
+          settle = resolve;
+        }),
+    );
+    const handlers = renderPanel({ onSendInvitation });
     await user.type(name(), "Grace");
     await user.type(email(), "grace@example.com");
     await user.click(
       screen.getByRole("button", { name: "Add and send invitation" }),
     );
-    await waitFor(() => expect(handlers.onAdd).toHaveBeenCalledTimes(2));
-    expect(handlers.onAdd.mock.calls[1][0]).toMatchObject({
-      sendInvitation: true,
-      idempotencyKey: "key-2",
+    await waitFor(() => expect(onSendInvitation).toHaveBeenCalledTimes(1));
+    expect(handlers.onAdd.mock.calls[0][0]).toMatchObject({
+      sendInvitation: false,
+      idempotencyKey: "key-1",
     });
+    expect(onSendInvitation).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "21" }),
+    );
+    // The person is on the list whatever the send dialog decides.
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Grace Hopper was added. No invitation was sent.",
+    );
+
+    // Closed without sending: the invitation is still on offer.
+    await act(async () => settle(false));
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Grace Hopper was added. No invitation was sent.",
+    );
+    await user.click(screen.getByRole("button", { name: "Send invitation" }));
+    expect(onSendInvitation).toHaveBeenCalledTimes(2);
+
+    // Sent from there: the line says so and the offer goes away.
+    await act(async () => settle(true));
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Grace Hopper was added and their invitation is queued.",
+    );
+    expect(
+      screen.queryByRole("button", { name: "Send invitation" }),
+    ).toBeNull();
+    expect(screen.getByRole("button", { name: "Open" })).toBeInTheDocument();
+  });
+
+  test("Add and send invitation sends at once when the dialog confirms, and never for someone without an email", async () => {
+    const user = userEvent.setup();
+    const onSendInvitation = jest.fn().mockResolvedValue(true);
+    const onAdd = jest
+      .fn()
+      .mockResolvedValueOnce(added())
+      .mockResolvedValueOnce(
+        added({ participant: { organizerManaged: true } }),
+      );
+    renderPanel({ onAdd, onSendInvitation });
+    await user.type(name(), "Grace");
+    await user.type(email(), "grace@example.com");
+    await user.click(
+      screen.getByRole("button", { name: "Add and send invitation" }),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Grace Hopper was added and their invitation is queued.",
+    );
+
+    // The server filed this one under the organizer: nobody to invite.
+    await user.type(name(), "Grace");
+    await user.type(email(), "grace@example.com");
+    await user.click(
+      screen.getByRole("button", { name: "Add and send invitation" }),
+    );
+    await waitFor(() => expect(onAdd).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Grace Hopper was added.",
+    );
+    expect(onSendInvitation).toHaveBeenCalledTimes(1);
+  });
+
+  test("Add and send invitation without a send handler only adds", async () => {
+    const user = userEvent.setup();
+    const handlers = renderPanel();
+    await user.type(name(), "Grace");
+    await user.type(email(), "grace@example.com");
+    await user.click(
+      screen.getByRole("button", { name: "Add and send invitation" }),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Grace Hopper was added. No invitation was sent.",
+    );
+    expect(handlers.onAdd.mock.calls[0][0].sendInvitation).toBe(false);
+    expect(
+      screen.queryByRole("button", { name: "Send invitation" }),
+    ).toBeNull();
   });
 
   test("validates name, email and phone, focusing the first problem", async () => {
@@ -210,8 +301,35 @@ describe("AddPersonPanel", () => {
     expect(onSendInvitation).toHaveBeenCalledWith(
       expect.objectContaining({ id: "21" }),
     );
+    // A handler that settles nothing leaves the offer in place.
+    expect(
+      await screen.findByRole("button", { name: "Send invitation" }),
+    ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Open" }));
     expect(handlers.onOpenPerson).toHaveBeenCalled();
+  });
+
+  test("Add and send invitation for someone already on the list reviews their invitation", async () => {
+    const user = userEvent.setup();
+    const onSendInvitation = jest.fn().mockResolvedValue(true);
+    renderPanel({
+      onAdd: jest.fn().mockResolvedValue(added({ alreadyExisted: true })),
+      onSendInvitation,
+    });
+    await user.type(name(), "Grace");
+    await user.type(email(), "grace@example.com");
+    await user.click(
+      screen.getByRole("button", { name: "Add and send invitation" }),
+    );
+    await waitFor(() => expect(onSendInvitation).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Grace Hopper is already on the list, so nothing was added.",
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "Send invitation" }),
+      ).toBeNull(),
+    );
   });
 
   test("an already-invited existing person only offers Open", async () => {

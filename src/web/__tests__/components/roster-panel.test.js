@@ -18,7 +18,7 @@ import { createRef } from "react";
 // and asks to be closed.
 jest.mock("@/components/schedule/RosterImportWizard", () => ({
   __esModule: true,
-  default: ({ onCommitted, onClose }) => (
+  default: ({ onCommitted, onSendInvitations, onClose }) => (
     <div data-testid="import-wizard">
       <button
         type="button"
@@ -47,6 +47,15 @@ jest.mock("@/components/schedule/RosterImportWizard", () => ({
       </button>
       <button type="button" onClick={onClose}>
         Close import
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          onClose();
+          onSendInvitations(["p-1", "p-2"]);
+        }}
+      >
+        Review invitations
       </button>
     </div>
   ),
@@ -236,6 +245,26 @@ function rosterResponse(participants, extra = {}) {
     organizerOnRoster: true,
     ...extra,
   };
+}
+
+// A preview payload as the API renders it for one recipient.
+function invitationEmail(to, overrides = {}) {
+  return {
+    from: "noreply@releviz.local",
+    replyTo: "",
+    to,
+    subject: "You're invited to Roster drawer",
+    html: "<!doctype html><p>Pick your times</p>",
+    text: "Pick your times",
+    attachments: [],
+    ...overrides,
+  };
+}
+
+// Reviews the open send dialog and confirms it: Continue, then the send.
+function confirmEmail(dialog, sendLabel) {
+  fireEvent.click(within(dialog).getByRole("button", { name: "Continue" }));
+  fireEvent.click(within(dialog).getByRole("button", { name: sendLabel }));
 }
 
 function scheduleResponse(overrides = {}) {
@@ -1125,6 +1154,16 @@ describe("RosterPanel invitations", () => {
         requestedCount: 2,
         willSend: 1,
         skipped: { alreadyInvited: 1, noEmail: 0, organizer: 0, inFlight: 0 },
+        email: invitationEmail("Second Person <second@example.com>"),
+        sample: { name: "Second Person", email: "second@example.com" },
+      })
+      .mockResolvedValueOnce({
+        preview: true,
+        requestedCount: 2,
+        willSend: 2,
+        skipped: { alreadyInvited: 0, noEmail: 0, organizer: 0, inFlight: 0 },
+        email: invitationEmail("Temp Person <temp@example.com>"),
+        sample: { name: "Temp Person", email: "temp@example.com" },
       })
       .mockResolvedValueOnce({
         queuedCount: 2,
@@ -1142,7 +1181,7 @@ describe("RosterPanel invitations", () => {
     const dialog = await screen.findByRole("dialog", {
       name: "Send invitations",
     });
-    expect(dialog).toHaveTextContent("Checking who can be invited…");
+    expect(dialog).toHaveTextContent("Preparing the email preview…");
     expect(
       await within(dialog).findByText("1 will get an invitation now"),
     ).toBeInTheDocument();
@@ -1151,7 +1190,41 @@ describe("RosterPanel invitations", () => {
       { participantIds: ["p-1", "p-2"], preview: true, resend: false },
       "token",
     );
+    // The review shows exactly what the first recipient gets.
+    expect(within(dialog).getByTitle("Email preview")).toHaveAttribute(
+      "sandbox",
+      "",
+    );
+    expect(dialog).toHaveTextContent("Second Person <second@example.com>");
+    expect(dialog).toHaveTextContent(
+      "Shown for Second Person. Each person gets their own private link.",
+    );
+
+    // Emailing the already-invited again previews with them counted in.
     fireEvent.click(within(dialog).getByLabelText("Email them again too"));
+    expect(
+      await within(dialog).findByText(
+        "Shown for Temp Person. Each person gets their own private link.",
+      ),
+    ).toBeInTheDocument();
+    expect(sendRosterInvitations).toHaveBeenLastCalledWith(
+      "ROSTER1",
+      { participantIds: ["p-1", "p-2"], preview: true, resend: true },
+      "token",
+    );
+    // Back and forth reuses both previews.
+    fireEvent.click(within(dialog).getByLabelText("Email them again too"));
+    expect(dialog).toHaveTextContent("Shown for Second Person.");
+    fireEvent.click(within(dialog).getByLabelText("Email them again too"));
+    expect(dialog).toHaveTextContent("Shown for Temp Person.");
+    expect(sendRosterInvitations).toHaveBeenCalledTimes(2);
+
+    // Nothing is sent until the second, explicit confirmation.
+    fireEvent.click(within(dialog).getByRole("button", { name: "Continue" }));
+    expect(
+      within(dialog).getByRole("heading", { name: "Send 2 invitations now?" }),
+    ).toHaveFocus();
+    expect(sendRosterInvitations).toHaveBeenCalledTimes(2);
     fireEvent.click(
       within(dialog).getByRole("button", { name: "Send 2 invitations" }),
     );
@@ -1211,10 +1284,8 @@ describe("RosterPanel invitations", () => {
     await openRowMenu("Second Person");
     fireEvent.click(menuItem("Send invitation"));
     dialog = await screen.findByRole("dialog", { name: "Send invitations" });
-    const send = await within(dialog).findByRole("button", {
-      name: "Send 1 invitation",
-    });
-    fireEvent.click(send);
+    await within(dialog).findByText("1 will get an invitation now");
+    confirmEmail(dialog, "Send 1 invitation");
     expect(
       await findToast(
         "Too many invitation requests. Try again in a few minutes.",
@@ -1225,12 +1296,15 @@ describe("RosterPanel invitations", () => {
     await openRowMenu("Second Person");
     fireEvent.click(menuItem("Send invitation"));
     dialog = await screen.findByRole("dialog", { name: "Send invitations" });
-    fireEvent.click(
-      await within(dialog).findByRole("button", { name: "Send 1 invitation" }),
-    );
+    await within(dialog).findByText("1 will get an invitation now");
+    confirmEmail(dialog, "Send 1 invitation");
+    // A failed send stays on the confirmation, where it can be tried again.
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
       "Mail is down",
     );
+    expect(
+      within(dialog).getByRole("heading", { name: "Send 1 invitation now?" }),
+    ).toBeInTheDocument();
     fireEvent.click(
       within(dialog).getByRole("button", { name: "Send 1 invitation" }),
     );
@@ -1248,15 +1322,40 @@ describe("RosterPanel invitations", () => {
       skipped: {},
     });
     sendReminders
-      .mockResolvedValueOnce({ preview: true, wouldEnqueue: 3 })
+      .mockResolvedValueOnce({
+        preview: true,
+        eligible: 4,
+        alreadyReminded: 1,
+        wouldEnqueue: 3,
+        email: invitationEmail("temp@example.com", {
+          subject: "Reminder: Roster drawer",
+        }),
+        sample: { name: "", email: "temp@example.com" },
+      })
       .mockResolvedValueOnce({
         deliveryRequestId: "reminder-1",
         recipientCount: 3,
         delivery: { total: 3, pending: 3 },
       })
       .mockRejectedValueOnce(new Error(""))
-      .mockResolvedValueOnce({ preview: true, wouldEnqueue: 2 })
-      .mockRejectedValueOnce(new Error("Reminders failed"));
+      .mockResolvedValueOnce({
+        preview: true,
+        eligible: 1,
+        alreadyReminded: 0,
+        wouldEnqueue: 1,
+        email: invitationEmail("Temp Person <temp@example.com>"),
+        sample: { name: "Temp Person", email: "temp@example.com" },
+      })
+      .mockRejectedValueOnce(new Error("Reminders failed"))
+      .mockRejectedValueOnce(new Error(""))
+      .mockResolvedValueOnce({
+        preview: true,
+        eligible: 2,
+        alreadyReminded: 2,
+        wouldEnqueue: 0,
+        email: invitationEmail("Temp Person <temp@example.com>"),
+        sample: { name: "Temp Person", email: "temp@example.com" },
+      });
     await renderPanel({
       onDeliveryRequestChange,
       event: {
@@ -1286,19 +1385,38 @@ describe("RosterPanel invitations", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Email" }));
     fireEvent.click(menuItem("Send reminders (3)…"));
-    const confirm = await screen.findByRole("dialog", {
-      name: "Remind 3 invited people who haven't submitted?",
+    const reminder = await screen.findByRole("dialog", {
+      name: "Send reminders",
     });
     expect(sendReminders).toHaveBeenCalledWith(
       "ROSTER1",
       { preview: true },
       "token",
     );
-    expect(confirm).toHaveTextContent(
+    expect(
+      within(reminder)
+        .getAllByRole("listitem")
+        .map((item) => item.textContent),
+    ).toEqual([
+      "3 invited people who haven't submitted will get a reminder",
+      "1 was already reminded for this deadline and is skipped",
+    ]);
+    expect(reminder).toHaveTextContent(
       "People never invited, people without an email, and you are skipped.",
     );
+    expect(reminder).toHaveTextContent("Reminder: Roster drawer");
+    expect(reminder).toHaveTextContent(
+      "Shown for temp@example.com. Each person gets their own private link.",
+    );
+    fireEvent.click(within(reminder).getByRole("button", { name: "Continue" }));
+    expect(
+      within(reminder).getByRole("heading", {
+        name: "Remind 3 invited people who haven't submitted?",
+      }),
+    ).toHaveFocus();
+    expect(sendReminders).toHaveBeenCalledTimes(1);
     fireEvent.click(
-      within(confirm).getByRole("button", { name: "Send reminders" }),
+      within(reminder).getByRole("button", { name: "Send 3 reminders" }),
     );
     await waitFor(() =>
       expect(sendReminders).toHaveBeenLastCalledWith(
@@ -1311,21 +1429,58 @@ describe("RosterPanel invitations", () => {
     expect(onDeliveryRequestChange).toHaveBeenCalledWith(
       expect.objectContaining({ id: "reminder-1", operation: "reminder" }),
     );
+    expect(
+      screen.queryByRole("dialog", { name: "Send reminders" }),
+    ).not.toBeInTheDocument();
 
-    // A failed preview is a toast; a failed send too.
+    // A failed preview is a toast.
     fireEvent.click(screen.getByRole("button", { name: "Email" }));
     fireEvent.click(menuItem("Send reminders (3)…"));
     expect(
       await findToast("Unable to check who can be reminded."),
     ).toBeInTheDocument();
+
+    // A failed send stays on the confirmation with its error, and Cancel
+    // is there once back on the review.
     fireEvent.click(screen.getByRole("button", { name: "Email" }));
     fireEvent.click(menuItem("Send reminders (3)…"));
-    fireEvent.submit(
-      await screen.findByRole("dialog", {
-        name: "Remind 2 invited people who haven't submitted?",
-      }),
+    let single = await screen.findByRole("dialog", { name: "Send reminders" });
+    expect(single).toHaveTextContent(
+      "1 invited person who hasn't submitted will get a reminder",
     );
-    expect(await findToast("Reminders failed")).toBeInTheDocument();
+    confirmEmail(single, "Send 1 reminder");
+    expect(await within(single).findByRole("alert")).toHaveTextContent(
+      "Reminders failed",
+    );
+    expect(
+      within(single).getByRole("heading", {
+        name: "Remind 1 invited person who hasn't submitted?",
+      }),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      within(single).getByRole("button", { name: "Send 1 reminder" }),
+    );
+    expect(await within(single).findByRole("alert")).toHaveTextContent(
+      "Unable to queue reminders.",
+    );
+    fireEvent.click(within(single).getByRole("button", { name: "Back" }));
+    fireEvent.click(within(single).getByRole("button", { name: "Cancel" }));
+    expect(
+      screen.queryByRole("dialog", { name: "Send reminders" }),
+    ).not.toBeInTheDocument();
+
+    // Everyone already reminded: nothing to send.
+    fireEvent.click(screen.getByRole("button", { name: "Email" }));
+    fireEvent.click(menuItem("Send reminders (3)…"));
+    single = await screen.findByRole("dialog", { name: "Send reminders" });
+    expect(single).toHaveTextContent("Nobody needs a reminder right now.");
+    expect(
+      within(single).getByRole("button", { name: "Continue" }),
+    ).toBeDisabled();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(
+      screen.queryByRole("dialog", { name: "Send reminders" }),
+    ).not.toBeInTheDocument();
   });
 
   test("keeps reminders off the menu while they are off, and refuses a run the server says is off", async () => {
@@ -2101,9 +2256,8 @@ describe("RosterPanel adds people", () => {
       .mockResolvedValueOnce({
         participant: added,
         created: true,
-        autoInvitedCount: 1,
-        deliveryRequestId: "manual-delivery",
-        recipientCount: 1,
+        autoInvitedCount: 0,
+        deliveryRequest: null,
       })
       .mockResolvedValueOnce({
         participant: added,
@@ -2147,20 +2301,55 @@ describe("RosterPanel adds people", () => {
     expect(fetchRoster).toHaveBeenCalledTimes(2);
     expect(fetchRosterSchedule).not.toHaveBeenCalled();
 
+    // Add and send invitation adds without emailing anyone, then reviews
+    // the invitation in the send dialog; the add panel waits behind it.
+    sendRosterInvitations
+      .mockResolvedValueOnce({
+        requestedCount: 1,
+        willSend: 1,
+        skipped: {},
+        email: invitationEmail("Manual Person <manual@example.com>"),
+        sample: { name: "Manual Person", email: "manual@example.com" },
+      })
+      .mockResolvedValueOnce({
+        queuedCount: 1,
+        skipped: {},
+        deliveryRequest: { id: "manual-delivery", recipientCount: 1 },
+      });
     fillAdd(dialog);
     fireEvent.click(
       within(dialog).getByRole("button", { name: "Add and send invitation" }),
     );
+    const send = await screen.findByRole("dialog", {
+      name: "Send invitations",
+    });
+    expect(createManagedParticipant).toHaveBeenLastCalledWith(
+      "ROSTER1",
+      expect.objectContaining({ sendInvitation: false }),
+      "token",
+    );
+    expect(sendRosterInvitations).toHaveBeenCalledWith(
+      "ROSTER1",
+      { participantIds: ["p-3"], preview: true, resend: false },
+      "token",
+    );
+    expect(
+      within(dialog).getByText(
+        "Manual Person was added. No invitation was sent.",
+      ),
+    ).toBeInTheDocument();
+    await within(send).findByText("1 will get an invitation now");
+    confirmEmail(send, "Send 1 invitation");
     expect(
       await within(dialog).findByText(
         "Manual Person was added and their invitation is queued.",
       ),
     ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("dialog", { name: "Send invitations" }),
+    ).not.toBeInTheDocument();
     expect(onDeliveryRequestChange).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "manual-delivery",
-        operation: "invitation",
-      }),
+      expect.objectContaining({ id: "manual-delivery" }),
     );
 
     fillAdd(dialog);
@@ -2191,6 +2380,10 @@ describe("RosterPanel adds people", () => {
     );
     expect(
       screen.getByRole("dialog", { name: "Add a person" }),
+    ).toBeInTheDocument();
+    // Nothing was sent, so the invitation is still on offer.
+    expect(
+      within(dialog).getByRole("button", { name: "Send invitation" }),
     ).toBeInTheDocument();
 
     // Open shows the roster row, not the create reply: the address can
@@ -2501,6 +2694,40 @@ describe("RosterPanel import", () => {
         "Imported 1 people: 1 added, 0 updated. No invitations were sent.",
       ),
     ).toBeInTheDocument();
+  });
+
+  test("hands the people an import added to the invitation review", async () => {
+    sendRosterInvitations.mockResolvedValue({
+      requestedCount: 2,
+      willSend: 2,
+      skipped: {},
+      email: invitationEmail("Temp Person <temp@example.com>"),
+      sample: { name: "Temp Person", email: "temp@example.com" },
+    });
+    await renderPanel();
+    fireEvent.click(await screen.findByRole("button", { name: "Import" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Commit rebuild" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Review invitations" }));
+    // The sheet is gone, its outcome is told, and the review is open.
+    expect(screen.queryByTestId("import-wizard")).not.toBeInTheDocument();
+    expect(
+      await findToast(
+        "Imported 1 people: 1 added, 0 updated. No invitations were sent.",
+      ),
+    ).toBeInTheDocument();
+    const dialog = await screen.findByRole("dialog", {
+      name: "Send invitations",
+    });
+    expect(
+      await within(dialog).findByText("2 will get an invitation now"),
+    ).toBeInTheDocument();
+    expect(sendRosterInvitations).toHaveBeenCalledWith(
+      "ROSTER1",
+      { participantIds: ["p-1", "p-2"], preview: true, resend: false },
+      "token",
+    );
   });
 });
 
