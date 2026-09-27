@@ -17,7 +17,7 @@ from apps.scheduling.services.roster_groups import (
     update_memberships,
     validate_group_names,
 )
-from apps.scheduling.services.roster_imports import MAX_ROSTER_ROWS, RosterImportError
+from apps.scheduling.services.roster_imports import RosterImportError
 
 from ..helpers import PrivateAPIView
 from .helpers import (
@@ -25,10 +25,10 @@ from .helpers import (
     event_for_organizer,
     mark_results_dirty,
     parse_weight,
-    participant_identity_query,
     roster_write_error,
 )
-from .queries import apply_roster_filters, boolean_query, roster_queryset
+from .queries import boolean_query, roster_queryset
+from .selectors import bulk_selector
 
 
 def _group_name_list(updates, key) -> list[str]:
@@ -38,53 +38,6 @@ def _group_name_list(updates, key) -> list[str]:
     if len(value) > MAX_GROUPS_PER_CELL:
         raise RosterImportError(TOO_MANY_GROUPS_MESSAGE)
     return value
-
-
-def _bulk_selector(queryset, data):
-    has_selector = False
-    participant_ids = data.get("participantIds")
-    if participant_ids is not None:
-        has_selector = True
-        if not isinstance(participant_ids, list) or not participant_ids:
-            raise RosterImportError("participantIds must be a non-empty array.")
-        if len(participant_ids) > MAX_ROSTER_ROWS:
-            raise RosterImportError(
-                f"participantIds may contain at most {MAX_ROSTER_ROWS} entries."
-            )
-        queryset = queryset.filter(participant_identity_query(participant_ids))
-    if "group" in data:
-        has_selector = True
-        group_name = str(data.get("group") or "").strip()
-        # A name selects its explicit members plus everyone flagged for all
-        # groups; a blank name selects the people in no group at all.
-        queryset = apply_roster_filters(queryset, {"group": group_name or "__ungrouped__"})
-    if "filter" in data:
-        has_selector = True
-        filter_data = data.get("filter")
-        if not isinstance(filter_data, dict):
-            raise RosterImportError("filter must be an object.")
-        allowed_filters = {
-            "all",
-            "search",
-            "group",
-            "submitted",
-            "included",
-            "invitationStatus",
-            "accountAccess",
-        }
-        unknown_filters = set(filter_data) - allowed_filters
-        if unknown_filters:
-            raise RosterImportError(f"Unknown participant filter: {sorted(unknown_filters)[0]}.")
-        if not filter_data:
-            raise RosterImportError(
-                "filter must contain a participant filter or explicit all=true."
-            )
-        if "all" in filter_data and filter_data.get("all") is not True:
-            raise RosterImportError("filter.all must be true when provided.")
-        queryset = apply_roster_filters(queryset, filter_data)
-    if not has_selector:
-        raise RosterImportError("Choose participantIds, group, or filter for a bulk update.")
-    return queryset
 
 
 class RosterBulkView(PrivateAPIView):
@@ -159,7 +112,7 @@ class RosterBulkView(PrivateAPIView):
                 if unknown:
                     raise RosterImportError(f"Unknown bulk update field: {sorted(unknown)[0]}.")
 
-                selected = _bulk_selector(roster_queryset(event), request.data)
+                selected = bulk_selector(roster_queryset(event), request.data)
                 # The group filter joins memberships, so a person can match twice.
                 selected_ids = set(selected.values_list("pk", flat=True))
                 participants = list(

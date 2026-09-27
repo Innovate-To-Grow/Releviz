@@ -334,12 +334,21 @@ def rows_summary(rows: list[RosterImportRow]) -> dict:
     conflicts = [
         row for row in selected if row.duplicate_status == RosterImportRow.DuplicateStatus.CONFLICT
     ]
+    merged = [
+        row for row in rows if row.duplicate_status == RosterImportRow.DuplicateStatus.IDENTICAL
+    ]
+    # Every row lands in exactly one of the last four: it goes in as it is,
+    # it needs a hand first, it folded into another row, or it was left out.
     return {
         "total": len(rows),
         "selected": len(selected),
         "valid": len(valid),
         "invalid": len(selected) - len(valid),
         "conflicts": len(conflicts),
+        "ready": len(valid),
+        "needsFix": len(selected) - len(valid),
+        "mergedDuplicates": len(merged),
+        "skipped": len(rows) - len(selected) - len(merged),
     }
 
 
@@ -356,13 +365,7 @@ def active_rows(batch: RosterImportBatch) -> list[RosterImportRow]:
 
 def normalize_import_batch(batch: RosterImportBatch) -> None:
     if not batch.selected_worksheet:
-        batch.summary = {
-            "total": 0,
-            "selected": 0,
-            "valid": 0,
-            "invalid": 0,
-            "conflicts": 0,
-        }
+        batch.summary = rows_summary([])
         batch.save(update_fields=["summary", "updated_at"])
         return
     batch.rows.exclude(worksheet=batch.selected_worksheet).update(selected=False)

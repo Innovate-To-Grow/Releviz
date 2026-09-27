@@ -110,6 +110,9 @@ class EmailDeliveryJob(TimestampedModel):
         UNCERTAIN = "uncertain", "Uncertain Delivery"
         CANCELED = "canceled", "Canceled"
 
+    # A job that has not reached a terminal state yet: still to be sent.
+    IN_FLIGHT_STATUSES = (Status.PENDING, Status.PROCESSING, Status.RETRY)
+
     idempotency_key = models.CharField(max_length=255, unique=True)
     message_type = models.CharField(max_length=32, choices=EmailMessageLog.MessageType.choices)
     recipient = models.EmailField()

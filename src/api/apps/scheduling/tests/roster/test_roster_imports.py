@@ -137,7 +137,17 @@ class RosterImportApiTests(TestCase):
         self.assertEqual(import_payload["columnMapping"], {"name": 0, "email": 1, "phone": 2})
         self.assertEqual(
             import_payload["summary"],
-            {"total": 6, "selected": 6, "valid": 2, "invalid": 4, "conflicts": 0},
+            {
+                "total": 6,
+                "selected": 6,
+                "valid": 2,
+                "invalid": 4,
+                "conflicts": 0,
+                "ready": 2,
+                "needsFix": 4,
+                "mergedDuplicates": 0,
+                "skipped": 0,
+            },
         )
 
         rows = self.client.get(
@@ -244,7 +254,17 @@ class RosterImportApiTests(TestCase):
         self.assertEqual(response.status_code, 201, response.data)
         self.assertEqual(
             response.data["import"]["summary"],
-            {"total": 4, "selected": 3, "valid": 1, "invalid": 2, "conflicts": 2},
+            {
+                "total": 4,
+                "selected": 3,
+                "valid": 1,
+                "invalid": 2,
+                "conflicts": 2,
+                "ready": 1,
+                "needsFix": 2,
+                "mergedDuplicates": 1,
+                "skipped": 0,
+            },
         )
         rows = self.client.get(
             f"/events/roster-imports/{response.data['import']['id']}/rows?code={self.event.code}"
@@ -384,7 +404,17 @@ class RosterImportApiTests(TestCase):
         import_id = preview.data["import"]["id"]
         self.assertEqual(
             preview.data["import"]["summary"],
-            {"total": 3, "selected": 3, "valid": 1, "invalid": 2, "conflicts": 0},
+            {
+                "total": 3,
+                "selected": 3,
+                "valid": 1,
+                "invalid": 2,
+                "conflicts": 0,
+                "ready": 1,
+                "needsFix": 2,
+                "mergedDuplicates": 0,
+                "skipped": 0,
+            },
         )
 
         rows = self.client.get(f"/events/roster-imports/{import_id}/rows?code={self.event.code}")
@@ -424,7 +454,17 @@ class RosterImportApiTests(TestCase):
         self.assertEqual(deselected.status_code, 200, deselected.data)
         self.assertEqual(
             deselected.data["import"]["summary"],
-            {"total": 3, "selected": 1, "valid": 1, "invalid": 0, "conflicts": 0},
+            {
+                "total": 3,
+                "selected": 1,
+                "valid": 1,
+                "invalid": 0,
+                "conflicts": 0,
+                "ready": 1,
+                "needsFix": 0,
+                "mergedDuplicates": 0,
+                "skipped": 2,
+            },
         )
 
         committed = self.commit(import_id)
@@ -637,7 +677,17 @@ class RosterImportApiTests(TestCase):
         import_id = preview.data["import"]["id"]
         self.assertEqual(
             preview.data["import"]["summary"],
-            {"total": 4, "selected": 4, "valid": 4, "invalid": 0, "conflicts": 0},
+            {
+                "total": 4,
+                "selected": 4,
+                "valid": 4,
+                "invalid": 0,
+                "conflicts": 0,
+                "ready": 4,
+                "needsFix": 0,
+                "mergedDuplicates": 0,
+                "skipped": 0,
+            },
         )
         rows = self.preview_rows(import_id)
         self.assertEqual(
@@ -778,7 +828,17 @@ class RosterImportApiTests(TestCase):
         self.assertEqual(preview.status_code, 201, preview.data)
         self.assertEqual(
             preview.data["import"]["summary"],
-            {"total": 5, "selected": 4, "valid": 1, "invalid": 3, "conflicts": 2},
+            {
+                "total": 5,
+                "selected": 4,
+                "valid": 1,
+                "invalid": 3,
+                "conflicts": 2,
+                "ready": 1,
+                "needsFix": 3,
+                "mergedDuplicates": 1,
+                "skipped": 0,
+            },
         )
         rows = self.client.get(
             f"/events/roster-imports/{preview.data['import']['id']}/rows?code={self.event.code}"
