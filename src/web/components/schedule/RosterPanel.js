@@ -180,6 +180,19 @@ function ReminderSummary({ wouldEnqueue, alreadyReminded }) {
 const reminders = (count) =>
   `${count} ${count === 1 ? "reminder" : "reminders"}`;
 
+// What a reminder run did, in the dialog's terms. The run's request also
+// lists people already reminded for this deadline (its `recipientCount`),
+// whose existing reminder is reused, so the count queued is `enqueued` and
+// the rest were skipped.
+function reminderResultMessage(data) {
+  const queued = Number(data?.enqueued) || 0;
+  const skipped = Number(data?.deduplicated) || 0;
+  const message = `Queued ${reminders(queued)}.`;
+  return skipped > 0
+    ? `${message} Skipped ${skipped} already reminded.`
+    : message;
+}
+
 function participantFromSchedule(data, slotCount) {
   const summary = data.participant || {};
   const schedule = data.schedule || {};
@@ -887,8 +900,7 @@ const RosterPanel = forwardRef(function RosterPanel(
       );
       const request = reminderDeliveryRequest(data);
       onDeliveryRequestChange?.(request);
-      const count = data?.recipientCount ?? request?.recipientCount ?? 0;
-      toastSuccess(`Queued ${reminders(count)}.`);
+      toastSuccess(reminderResultMessage(data));
       setReminderDialog(null);
     } catch (requestError) {
       setReminderDialog((current) =>
