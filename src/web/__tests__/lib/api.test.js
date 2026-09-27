@@ -1719,6 +1719,50 @@ describe("business API helpers", () => {
     });
   });
 
+  test("roster invitation and reminder requests send only the keys they are given", async () => {
+    global.fetch.mockResolvedValue(
+      jsonResponse({ preview: true, willSend: 2, skipped: {} }),
+    );
+
+    await sendRosterInvitations(
+      "ABC",
+      { filter: { invitationStatus: "not_sent" }, preview: true, resend: false },
+      "tok",
+    );
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      "/events/roster/invitations?code=ABC",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          filter: { invitationStatus: "not_sent" },
+          resend: false,
+          preview: true,
+        }),
+      }),
+    );
+
+    // An omitted selection sends an empty body rather than `undefined` keys.
+    await sendRosterInvitations("ABC", undefined, "tok");
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      "/events/roster/invitations?code=ABC",
+      expect.objectContaining({ body: "{}" }),
+    );
+
+    await sendReminders("ABC", { preview: true }, "tok");
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      "/events/reminders?code=ABC",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ preview: true }),
+      }),
+    );
+    await sendReminders("ABC", undefined, "tok");
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      "/events/reminders?code=ABC",
+      expect.objectContaining({ body: "{}" }),
+    );
+  });
+
   test("invitation and participant errors normalize every payload shape", async () => {
     const responseWithText = (text, status) => ({
       ok: false,

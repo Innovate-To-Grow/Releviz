@@ -304,13 +304,22 @@ export async function sendInvitations(
   return res.json();
 }
 
-export async function sendReminders(code, { idempotencyKey }, token) {
+// `preview: true` only counts who would be reminded; a real run carries its
+// `idempotencyKey`. Only the keys given are sent.
+export async function sendReminders(
+  code,
+  { idempotencyKey, preview } = {},
+  token,
+) {
+  const body = {};
+  if (idempotencyKey !== undefined) body.idempotencyKey = idempotencyKey;
+  if (preview !== undefined) body.preview = preview;
   const res = await apiFetch(
     `${API_BASE}/events/reminders?code=${encodeURIComponent(code)}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ idempotencyKey }),
+      body: JSON.stringify(body),
     },
     token,
   );
