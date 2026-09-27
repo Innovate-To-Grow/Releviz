@@ -9,6 +9,32 @@ const TABS = [
 
 const TAB_KEYS = TABS.map((tab) => tab.key);
 
+// Where the preview's `<base>` goes: first in the head, so it is the one that
+// counts; failing that, as early as the markup allows.
+const BASE_AFTER = [
+  /<head(?:\s[^>]*)?>/i,
+  /<html(?:\s[^>]*)?>/i,
+  /<!doctype[^>]*>/i,
+];
+const INERT_LINKS = '<base target="_blank">';
+
+// The email's HTML for display only, with every link aimed at a new window.
+// The frame's sandbox has no `allow-popups`, so the browser refuses to open
+// one and a click does nothing. Without it a link would navigate the frame
+// itself to the (unframeable) event page and leave an error page in its
+// place. What is sent is unchanged.
+function inertLinks(html) {
+  if (!html) return "";
+  for (const pattern of BASE_AFTER) {
+    const match = pattern.exec(html);
+    if (match) {
+      const at = match.index + match[0].length;
+      return `${html.slice(0, at)}${INERT_LINKS}${html.slice(at)}`;
+    }
+  }
+  return `${INERT_LINKS}${html}`;
+}
+
 /**
  * One email exactly as a recipient gets it: the envelope (From, Reply to when
  * set, To, Subject, and Attachments when there are any), an optional `note`
@@ -16,8 +42,11 @@ const TAB_KEYS = TABS.map((tab) => tab.key);
  *
  * The HTML part is handed to an iframe through `srcDoc` with an empty
  * `sandbox`, so the email's markup never enters this page's DOM and it can't
- * run scripts, navigate, submit forms or open popups: its links are inert.
- * Both panels stay mounted so switching tabs doesn't reload the frame.
+ * run scripts, submit forms, open popups or navigate the page. Its links are
+ * aimed at a new window, which the sandbox blocks, so they are inert too. The
+ * frame is kept out of the tab order: focus inside it would take keys away
+ * from the dialog, Escape included. Both panels stay mounted so switching
+ * tabs doesn't reload the frame.
  *
  * `email` is the preview payload from the API
  * (`{ from, replyTo, to, subject, html, text, attachments }`); `null`
@@ -119,7 +148,8 @@ export default function EmailPreview({ email, note = null }) {
             title="Email preview"
             className="email-preview__frame"
             sandbox=""
-            srcDoc={email.html || ""}
+            tabIndex={-1}
+            srcDoc={inertLinks(email.html)}
           />
         </div>
         {/* The text panel scrolls and has no controls of its own, so it takes
