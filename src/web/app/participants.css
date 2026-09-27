@@ -484,3 +484,123 @@
     width: calc(100vw - 1rem);
   }
 }
+
+/* Email preview */
+
+/* EmailPreview and EmailSendDialog (components/schedule/email): what a
+   recipient receives, shown before anything is sent. */
+
+.email-send-dialog__review {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.email-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.email-preview__envelope {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--bs-border-color);
+  border-radius: var(--bs-border-radius);
+  background: var(--bs-tertiary-bg);
+  font-size: 0.875rem;
+}
+
+.email-preview__field {
+  display: grid;
+  grid-template-columns: 6.5rem minmax(0, 1fr);
+  column-gap: 0.75rem;
+}
+
+.email-preview__field dt {
+  color: var(--bs-secondary-color);
+  font-weight: 500;
+}
+
+.email-preview__field dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.email-preview__subject {
+  font-weight: 600;
+}
+
+.email-preview__note {
+  margin: 0;
+  color: var(--bs-secondary-color);
+  font-size: 0.875rem;
+}
+
+/* The frame and the text panel sit flush under the tabs, closing the tab
+   box. */
+.email-preview__frame,
+.email-preview__text-panel {
+  width: 100%;
+  height: min(32rem, 65vh);
+  border: 1px solid var(--bs-border-color);
+  border-top: 0;
+  border-radius: 0 0 var(--bs-border-radius) var(--bs-border-radius);
+}
+
+/* Emails are written for a light background, so the frame keeps one in
+   dark mode too. */
+.email-preview__frame {
+  display: block;
+  background-color: #fff;
+  color-scheme: light;
+}
+
+.email-preview__text-panel {
+  padding: 1rem;
+  overflow: auto;
+  background: var(--rv-surface-raised);
+}
+
+.email-preview__text-panel:focus-visible {
+  outline: 0;
+  box-shadow: var(--rv-focus-ring);
+}
+
+.email-preview__text {
+  margin: 0;
+  color: var(--bs-body-color);
+  font-size: 0.875rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.email-send-dialog__confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.email-send-dialog__confirm-title {
+  margin: 0;
+}
+
+.email-send-dialog__recap {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border-left: 3px solid var(--bs-primary);
+  background: var(--bs-tertiary-bg);
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .email-preview__field {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
