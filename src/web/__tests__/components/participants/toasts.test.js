@@ -2,9 +2,12 @@
  * @jest-environment jsdom
  */
 
+import fs from "fs";
+import path from "path";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 
+import { MENU_Z_INDEX } from "@/components/schedule/participants/MenuButton";
 import {
   ToastRegion,
   useToasts,
@@ -28,6 +31,15 @@ function renderToasts() {
   return { ...utils, api: () => api };
 }
 
+const APP_DIR = path.join(__dirname, "..", "..", "..", "app");
+
+function zIndexOf(stylesheet, selector) {
+  const css = fs.readFileSync(path.join(APP_DIR, stylesheet), "utf8");
+  const escaped = selector.replace(/\./g, "\\.");
+  const block = css.match(new RegExp(`^${escaped}\\s*\\{([^}]*)\\}`, "m"));
+  return Number(block?.[1].match(/z-index:\s*(\d+)/)?.[1]);
+}
+
 describe("toasts", () => {
   beforeEach(() => {
     jest.useFakeTimers();
@@ -35,6 +47,17 @@ describe("toasts", () => {
 
   afterEach(() => {
     jest.useRealTimers();
+  });
+
+  test("the toast region stacks above open drawers and modals but below menus", () => {
+    const toasts = zIndexOf("participants.css", ".participants-toasts");
+    expect(toasts).toBeGreaterThan(
+      zIndexOf("globals.css", ".app-drawer-layer"),
+    );
+    expect(toasts).toBeGreaterThan(
+      zIndexOf("globals.css", ".app-modal-backdrop"),
+    );
+    expect(toasts).toBeLessThan(MENU_Z_INDEX);
   });
 
   test("success toasts are polite and fade after six seconds", () => {

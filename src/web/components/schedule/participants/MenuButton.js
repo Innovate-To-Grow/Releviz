@@ -61,6 +61,9 @@ export function usePopover() {
 
 const MENU_ITEM = '[role="menuitem"]:not([disabled])';
 
+/** Above the drawer and modal layers and the toast region (participants.css). */
+export const MENU_Z_INDEX = 1060;
+
 /**
  * Generic dropdown menu on the pattern of the account menu: the trigger
  * announces `aria-haspopup="menu"`, ArrowDown/ArrowUp open it with the
@@ -109,7 +112,7 @@ export default function MenuButton({
         rect.top - menuHeight - 4 > 8;
       // Every edge is set so the stylesheet's absolute placement (top and
       // right for an end-aligned menu) cannot combine with these values.
-      const style = { position: "fixed", zIndex: 1060 };
+      const style = { position: "fixed", zIndex: MENU_Z_INDEX };
       if (openUp) {
         style.bottom = viewportHeight - rect.top + 4;
         style.top = "auto";
