@@ -31,6 +31,63 @@ const {
 // wait for a change they pick up needs more than the default expect timeout.
 const LIVE_SYNC_TIMEOUT_MS = 20_000;
 
+// The Participants section's counts line under its heading.
+function participantSummary(page) {
+  return page.locator("#organizer-roster .panel__description");
+}
+
+// The section's header actions (Email, Import, + Add person). The empty
+// state repeats some of these names, so the header is addressed on its own.
+function participantActions(page) {
+  return page.getByRole("group", { name: "Participant actions" });
+}
+
+function participantRow(page, text) {
+  return page.locator("tr.participants-row", { hasText: text });
+}
+
+// Waits for a toast in the Participants section, then dismisses it so a
+// later toast with the same words is the only match. Toasts sit under an
+// open drawer or dialog, so the close is dispatched rather than clicked.
+async function expectToast(page, text) {
+  const toast = page
+    .getByRole("region", { name: "Notifications" })
+    .locator(".participants-toast", { hasText: text });
+  await expect(toast).toBeVisible();
+  await toast.getByRole("button", { name: "Dismiss" }).dispatchEvent("click");
+  await expect(toast).toHaveCount(0);
+}
+
+async function openAddPanel(page) {
+  await participantActions(page)
+    .getByRole("button", { name: "+ Add person" })
+    .click();
+  const panel = page.getByRole("dialog", { name: "Add a person" });
+  await expect(panel).toBeVisible();
+  return panel;
+}
+
+// Adds one person from the open add panel without inviting them. The panel
+// stays open, cleared for the next person.
+async function addPerson(panel, name, email) {
+  await panel.getByRole("textbox", { name: "Full name" }).fill(name);
+  await panel.getByRole("textbox", { name: "Email" }).fill(email);
+  await panel.getByRole("button", { name: "Add", exact: true }).click();
+  await expect(
+    panel.getByText(`${name} was added. No invitation was sent.`),
+  ).toBeVisible();
+}
+
+// The row's name opens the person panel.
+async function openPersonPanel(page, name) {
+  await participantRow(page, name)
+    .getByRole("button", { name: new RegExp(`^${name}`) })
+    .click();
+  const panel = page.getByRole("dialog", { name, exact: true });
+  await expect(panel).toBeVisible();
+  return panel;
+}
+
 async function importRoster(request, eventCode, token, pastedText) {
   const preview = await apiJson(
     request,
@@ -479,31 +536,55 @@ test.describe("Releviz account and scheduling flow", () => {
     expect(activeEvent.response.status()).toBe(200);
     expect(activeEvent.payload.event.status).toBe("active");
 
-    await page.getByRole("button", { name: "Import participants" }).click();
-    await page.getByRole("tab", { name: "Paste spreadsheet" }).click();
-    await page
+    // The import sheet walks through Source, Columns, Review and Done.
+    await participantActions(page)
+      .getByRole("button", { name: "Import", exact: true })
+      .click();
+    const importSheet = page.getByRole("dialog", {
+      name: "Import participants",
+    });
+    await importSheet
+      .getByRole("tab", { name: "Paste from a spreadsheet" })
+      .click();
+    await importSheet
       .getByLabel("Pasted participant rows")
       .fill(
         "name\temail\tgroup\tweight\tincluded\n" +
           `Temporary Taylor\t${temporaryEmail}\tE2E Group\t0.5\ttrue`,
       );
-    await page.getByRole("button", { name: "Continue to mapping" }).click();
+    await importSheet
+      .getByRole("button", { name: "Continue", exact: true })
+      .click();
     await expect(
-      page.getByText("Choose a worksheet and map its columns."),
+      importSheet.getByText(
+        "Check which column fills each field. We matched them by their headers.",
+      ),
     ).toBeVisible();
-    await page.getByRole("button", { name: "Preview rows" }).click();
-    await expect(page.getByLabel("Email for row 2")).toHaveValue(
+    await importSheet.getByRole("button", { name: "Preview rows" }).click();
+    await expect(importSheet.getByLabel("Email for row 2")).toHaveValue(
       temporaryEmail,
     );
-    await expect(page.getByText("Ready", { exact: true })).toBeVisible();
-    await page.getByLabel("Send invitations to newly added people").check();
+    await expect(importSheet.getByText("Ready", { exact: true })).toBeVisible();
+    await importSheet
+      .getByLabel("Email invitations to the people this import adds")
+      .check();
     const invitationStartedAt = Date.now() - 1000;
-    await page.getByRole("button", { name: "Merge participants" }).click();
+    await importSheet
+      .getByRole("button", { name: "Import 1 person and send invitations" })
+      .click();
     await expect(
-      page.getByText(
+      importSheet.getByText(
         "Imported 1 people: 1 added, 0 updated. 1 invitation queued.",
       ),
     ).toBeVisible();
+    await importSheet
+      .getByRole("button", { name: "Back to participants" })
+      .click();
+    await expect(importSheet).toHaveCount(0);
+    await expectToast(
+      page,
+      "Imported 1 people: 1 added, 0 updated. 1 invitation queued.",
+    );
     const eventDeliveryProgress = page.getByLabel("Event delivery progress");
     await expect(eventDeliveryProgress).toBeVisible();
 
@@ -526,7 +607,17 @@ test.describe("Releviz account and scheduling flow", () => {
     const participantCard = page.locator(
       `[data-roster-participant-id="${managedParticipant.id}"]`,
     );
-    await expect(participantCard.getByText(/Temporary$/)).toBeVisible();
+    await expect(participantCard).toContainText(temporaryEmail);
+    await expect(participantCard).toContainText("Weight 0.5");
+    // How the row is answered is explained in the person panel.
+    const taylorPanel = await openPersonPanel(page, "Temporary Taylor");
+    await expect(
+      taylorPanel.getByText(
+        "Invited by email. Signs in with their link, no account.",
+      ),
+    ).toBeVisible();
+    await taylorPanel.getByRole("button", { name: "Cancel" }).click();
+    await expect(taylorPanel).toHaveCount(0);
 
     const createdState = temporaryAccountState({
       code: eventCode,
@@ -605,9 +696,7 @@ test.describe("Releviz account and scheduling flow", () => {
       temporaryPage.getByText("You are responding as Temporary Taylor"),
     ).toBeVisible();
 
-    await expect(page.getByLabel("Participant summary")).toContainText(
-      "0 submitted",
-    );
+    await expect(participantSummary(page)).toContainText("0 submitted");
     let revisionBeforeResponse = -1;
     await expect
       .poll(
@@ -638,13 +727,12 @@ test.describe("Releviz account and scheduling flow", () => {
     // sync checks every 3 s while things change and eases off to every 15 s
     // while nothing does): the roster counts it and the results move on to a
     // newer revision, with no Refresh press.
-    await expect(page.getByLabel("Participant summary")).toContainText(
-      "1 submitted",
-      {
-        timeout: 20_000,
-      },
-    );
-    await expect(participantCard).toContainText(/Response\s*Submitted/);
+    await expect(participantSummary(page)).toContainText("1 submitted", {
+      timeout: 20_000,
+    });
+    await expect(
+      participantCard.locator(".participants-table__response"),
+    ).toHaveText("Submitted");
     await expect
       .poll(() => currentResultsRevision(page), { timeout: 20_000 })
       .toBeGreaterThan(revisionBeforeResponse);
@@ -819,12 +907,21 @@ test.describe("Releviz account and scheduling flow", () => {
       }),
     );
 
+    // The response was submitted on Taylor's behalf, so saving it as a draft
+    // asks first; the save itself is refused because the response is now
+    // Taylor's own, which closes the editor.
     await organizerDrawer.getByRole("button", { name: "Save draft" }).click();
+    const draftDialog = page.getByRole("dialog", { name: "Save as a draft?" });
+    await expect(draftDialog).toContainText(
+      "This takes Temporary Taylor's answers out of the results until you submit again.",
+    );
+    await draftDialog.getByRole("button", { name: "Save as draft" }).click();
     await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expectToast(page, /now manages their own response/);
     const fullAccessCard = page.locator(
       `[data-roster-participant-id="${managedParticipant.id}"]`,
     );
-    await expect(fullAccessCard.getByText(/Full account$/)).toBeVisible();
+    await expect(fullAccessCard.getByText("Answers themselves")).toBeVisible();
     await expect(
       fullAccessCard.getByRole("button", { name: "Edit schedule" }),
     ).toHaveCount(0);
@@ -888,21 +985,15 @@ test.describe("Releviz account and scheduling flow", () => {
     );
 
     const addedEmail = `added-${runId}@example.com`;
-    await page.getByRole("button", { name: "Add person", exact: true }).click();
-    await fillTextbox(page, "Full name", "Added Avery");
-    await fillTextbox(page, "Email address", addedEmail);
-    await page.getByRole("button", { name: "Add only" }).click();
-    await expect(
-      page.getByText("Added Avery was added. No invitation was sent."),
-    ).toBeVisible();
-    // Adding someone never selects them, so the next Send invitation cannot
+    const addPanel = await openAddPanel(page);
+    await addPerson(addPanel, "Added Avery", addedEmail);
+    await addPanel.getByRole("button", { name: "Done" }).click();
+    await expect(addPanel).toHaveCount(0);
+    // Adding someone never selects them, so a later Send invitation cannot
     // quietly include a person who was added without one.
-    await expect(page.getByText("0 selected", { exact: true })).toHaveCount(2);
     await expect(
-      page
-        .getByRole("button", { name: "Send invitation", exact: true })
-        .first(),
-    ).toBeDisabled();
+      page.getByRole("region", { name: "Selected people" }),
+    ).toHaveCount(0);
 
     const rosterAfterAdd = await apiJson(
       request,
@@ -932,12 +1023,22 @@ test.describe("Releviz account and scheduling flow", () => {
       }),
     );
 
+    // Selecting the row brings up the selection bar; sending previews who
+    // gets an email before anything goes out.
     await addedCard.getByLabel("Select Added Avery").check();
-    await page
-      .getByRole("button", { name: "Send invitation", exact: true })
-      .first()
+    const selectionBar = page.getByRole("region", { name: "Selected people" });
+    await expect(selectionBar).toContainText("1 selected");
+    await selectionBar
+      .getByRole("button", { name: "Send invitation…" })
       .click();
-    await expect(page.getByText(/Queued 1 invitation/)).toBeVisible();
+    const sendDialog = page.getByRole("dialog", { name: "Send invitations" });
+    await expect(
+      sendDialog.getByText("1 will get an invitation now"),
+    ).toBeVisible();
+    await sendDialog.getByRole("button", { name: "Send 1 invitation" }).click();
+    await expect(sendDialog).toHaveCount(0);
+    await expectToast(page, "Queued 1 invitation.");
+    await expect(selectionBar).toHaveCount(0);
     await expect(eventDeliveryProgress).toBeVisible();
 
     dispatchEmailJobs();
@@ -993,37 +1094,59 @@ test.describe("Releviz account and scheduling flow", () => {
 
     // The email can stay blank: the person is filed under the organizer's
     // own address, which never becomes theirs.
-    await page.getByRole("button", { name: "Add person", exact: true }).click();
-    await fillTextbox(page, "Full name", managedName);
-    await fillTextbox(page, "Phone (optional)", managedPhone);
-    await page
+    const addPanel = await openAddPanel(page);
+    await addPanel
+      .getByRole("textbox", { name: "Full name" })
+      .fill(managedName);
+    await addPanel.getByRole("textbox", { name: "Phone" }).fill(managedPhone);
+    await addPanel
       .getByRole("checkbox", {
-        name: "No email of their own — use one of mine and I'll enter their schedule",
+        name: "They have no email. I'll enter their schedule.",
       })
       .check();
     await expect(
-      page.getByText(
-        "Leave blank to use your account email, or enter another of your verified addresses. No invitation is sent.",
+      addPanel.getByText(
+        "Blank = filed under your account email. They are never emailed.",
       ),
     ).toBeVisible();
-    await page.getByRole("button", { name: "Add person", exact: true }).click();
+    // With no email there is nobody to invite, so that action goes away.
     await expect(
-      page.getByText(
-        `${managedName} was added. Use Edit schedule to enter their availability.`,
-      ),
+      addPanel.getByRole("button", { name: "Add and send invitation" }),
+    ).toHaveCount(0);
+    await addPanel.getByRole("button", { name: "Add", exact: true }).click();
+    await expect(addPanel.getByText(`${managedName} was added.`)).toBeVisible();
+    await expect(
+      addPanel.getByRole("button", { name: "Enter their schedule" }),
     ).toBeVisible();
+    await addPanel.getByRole("button", { name: "Done" }).click();
+    await expect(addPanel).toHaveCount(0);
 
-    const managedRow = page.locator("tr.roster-table__row", {
-      hasText: managedName,
-    });
-    await expect(managedRow).toContainText("Organizer-managed");
-    await expect(managedRow).toContainText("No email");
+    const managedRow = participantRow(page, managedName);
+    await expect(managedRow).toContainText(
+      "No email · you enter their schedule",
+    );
     await expect(managedRow).not.toContainText(organizerEmail);
-    await expect(managedRow).toContainText(managedPhone);
-    await expect(managedRow).toContainText("Not sent");
+    await expect(
+      managedRow.locator(".participants-table__invitation"),
+    ).toHaveText("No email");
     await expect(
       managedRow.getByRole("button", { name: "Edit schedule" }),
     ).toBeVisible();
+    // The phone is kept but never shown on the row; the person panel has it.
+    const managedPanel = await openPersonPanel(page, managedName);
+    await expect(
+      managedPanel.getByText(
+        "No email of their own. You enter their schedule.",
+      ),
+    ).toBeVisible();
+    await expect(
+      managedPanel.getByRole("textbox", { name: "Phone" }),
+    ).toHaveValue(managedPhone);
+    await expect(
+      managedPanel.getByRole("textbox", { name: "Email" }),
+    ).toHaveAttribute("placeholder", "Add their email to invite them");
+    await managedPanel.getByRole("button", { name: "Cancel" }).click();
+    await expect(managedPanel).toHaveCount(0);
 
     assertOrganizerManagedState({
       code: eventCode,
@@ -1062,13 +1185,11 @@ test.describe("Releviz account and scheduling flow", () => {
       organizerSession.access,
     );
     expect(dashboard.payload.participating).toEqual([]);
-    const samRow = page.locator("tr.roster-table__row", {
-      hasText: "Sam No Email",
-    });
+    const samRow = participantRow(page, "Sam No Email");
     await expect(samRow).toContainText("No email", { timeout: 20_000 });
-    await expect(
-      samRow.getByLabel("All groups for Sam No Email"),
-    ).toBeChecked();
+    await expect(samRow.locator(".participants-table__groups")).toHaveText(
+      "Every group",
+    );
     await expect(
       samRow.getByRole("button", { name: "Edit schedule" }),
     ).toBeVisible();
@@ -1099,22 +1220,29 @@ test.describe("Releviz account and scheduling flow", () => {
     expect(eventCode).toMatch(/^[A-Z0-9]+$/);
     const organizerSession = await readSession(page);
 
-    await page.getByRole("button", { name: "Add person", exact: true }).click();
-    await fillTextbox(page, "Full name", participantName);
-    await fillTextbox(page, "Email address", participantEmail);
-    await page.getByRole("button", { name: "Add only" }).click();
+    const addPanel = await openAddPanel(page);
+    await addPerson(addPanel, participantName, participantEmail);
+    const fullRow = participantRow(page, participantName);
+    await expect(fullRow).toContainText(participantEmail);
+    await expect(fullRow.locator(".participants-table__invitation")).toHaveText(
+      "Not sent",
+    );
+    // The result's Open link goes to the person panel, which says how the
+    // row is answered and opens the schedule editor from there.
+    await addPanel.getByRole("button", { name: "Open", exact: true }).click();
+    await expect(addPanel).toHaveCount(0);
+    const fullPanel = page.getByRole("dialog", {
+      name: participantName,
+      exact: true,
+    });
+    await expect(fullPanel).toBeVisible();
     await expect(
-      page.getByText(
-        `${participantName} was added. No invitation was sent. They already have a Releviz account, so you can use Edit schedule until they respond themselves.`,
+      fullPanel.getByText(
+        "Has a Releviz account. You can enter their schedule until they answer themselves.",
       ),
     ).toBeVisible();
-
-    const fullRow = page.locator("tr.roster-table__row", {
-      hasText: participantName,
-    });
-    await expect(fullRow).toContainText("Full account");
-    await expect(fullRow).toContainText("Not sent");
-    await fullRow.getByRole("button", { name: "Edit schedule" }).click();
+    await fullPanel.getByRole("button", { name: "Edit schedule" }).click();
+    await expect(fullPanel).toHaveCount(0);
     const organizerDrawer = page.getByRole("dialog", {
       name: `Edit ${participantName}'s schedule`,
     });
@@ -1179,15 +1307,18 @@ test.describe("Releviz account and scheduling flow", () => {
     );
     expect(ownSave.response.status()).toBe(200);
 
+    // The response was submitted on Fiona's behalf, so saving it as a draft
+    // asks first; the save itself is refused because the response is hers.
     await organizerDrawer.getByRole("button", { name: "Save draft" }).click();
+    const draftDialog = page.getByRole("dialog", { name: "Save as a draft?" });
+    await draftDialog.getByRole("button", { name: "Save as draft" }).click();
     await expect(page.getByRole("dialog")).toHaveCount(0);
-    await expect(
-      page.getByText(
-        `${participantName} now manages their own response, so you can no longer edit their schedule.`,
-      ),
-    ).toBeVisible();
+    await expectToast(
+      page,
+      `${participantName} now manages their own response, so you can no longer edit their schedule.`,
+    );
 
-    await expect(fullRow).toContainText("Self-managed", {
+    await expect(fullRow.getByText("Answers themselves")).toBeVisible({
       timeout: LIVE_SYNC_TIMEOUT_MS,
     });
     await expect(
@@ -1244,88 +1375,164 @@ test.describe("Releviz account and scheduling flow", () => {
     const eventCode = new URL(page.url()).searchParams.get("code");
     const organizerSession = await readSession(page);
 
+    // The add panel stays open between people, so a list is entered in one
+    // go.
+    const addPanel = await openAddPanel(page);
     for (const [name, email] of [
       ["Ada Typo", typoEmail],
       ["Ben Leaving", `ben-${runId}@example.com`],
     ]) {
-      await page
-        .getByRole("button", { name: "Add person", exact: true })
-        .click();
-      await fillTextbox(page, "Full name", name);
-      await fillTextbox(page, "Email address", email);
-      await page.getByRole("button", { name: "Add only" }).click();
-      await expect(
-        page.getByText(`${name} was added. No invitation was sent.`),
-      ).toBeVisible();
+      await addPerson(addPanel, name, email);
     }
 
     // The organizer answers too, under their own account, and is never
-    // invited.
-    await page.getByRole("button", { name: "Add myself" }).click();
+    // invited: their row opens straight in the schedule editor.
+    await addPanel.getByRole("button", { name: "Add myself" }).click();
     const ownDrawer = page.getByRole("dialog", { name: "Edit my schedule" });
     await expect(ownDrawer).toBeVisible();
+    await expect(addPanel).toHaveCount(0);
+    await expectToast(page, "You're on the list. Your schedule is open.");
     await expect(ownDrawer.getByText("Your own response")).toBeVisible();
     await ownDrawer
       .getByRole("button", { name: "Submit", exact: true })
       .click();
     await expect(ownDrawer.getByText("Schedule submitted.")).toBeVisible();
-    await ownDrawer.locator(".managed-drawer__close").click();
+    // Once a save has landed the footer offers Close instead of Cancel.
+    await expect(
+      ownDrawer.getByRole("button", { name: "Cancel", exact: true }),
+    ).toHaveCount(0);
+    await ownDrawer.getByRole("button", { name: "Close", exact: true }).click();
     await expect(ownDrawer).toHaveCount(0);
-    const ownRow = page.locator("tr.roster-table__row", {
-      hasText: "Owen Organizer",
-    });
-    await expect(ownRow).toContainText("You (organizer)");
-    await expect(page.getByRole("button", { name: "Add myself" })).toHaveCount(
-      0,
+    const ownRow = participantRow(page, "Owen Organizer");
+    await expect(ownRow).toContainText("Owen Organizer (you)");
+    await expect(ownRow).toContainText("From your account");
+    await expect(ownRow.locator(".participants-table__invitation")).toHaveText(
+      "—",
+    );
+    await expect(
+      ownRow.getByRole("button", { name: "Edit my schedule" }),
+    ).toBeVisible();
+    // Already on the list, the organizer is not offered Add myself again.
+    const reopenedAddPanel = await openAddPanel(page);
+    await expect(
+      reopenedAddPanel.getByRole("button", { name: "Add myself" }),
+    ).toHaveCount(0);
+    await reopenedAddPanel.getByRole("button", { name: "Done" }).click();
+    await expect(reopenedAddPanel).toHaveCount(0);
+
+    // A mistyped address is fixed in the person panel; the row keeps its
+    // name and the new address starts uninvited.
+    const adaPanel = await openPersonPanel(page, "Ada Typo");
+    await adaPanel.getByRole("textbox", { name: "Email" }).fill(fixedEmail);
+    await adaPanel.getByRole("button", { name: "Save", exact: true }).click();
+    await expectToast(page, "Saved. The new address hasn't been invited yet.");
+    await adaPanel.getByRole("button", { name: "Cancel" }).click();
+    await expect(adaPanel).toHaveCount(0);
+    const adaRow = participantRow(page, "Ada Typo");
+    await expect(adaRow).toContainText(fixedEmail);
+    await expect(adaRow.locator(".participants-table__invitation")).toHaveText(
+      "Not sent",
     );
 
-    // A mistyped address is fixed in place; the row keeps its name.
-    await page
-      .getByRole("button", { name: "Edit name and email for Ada Typo" })
-      .click();
-    const details = page.getByRole("dialog", { name: "Edit Ada Typo" });
-    await details.getByLabel(/Email address/).fill(fixedEmail);
-    await details.getByRole("button", { name: "Save details" }).click();
-    await expect(details).toHaveCount(0);
-    await expect(
-      page.getByText(
-        `Ada Typo now uses ${fixedEmail}. Their invitation has not been sent to this address yet.`,
-      ),
-    ).toBeVisible();
-    const adaRow = page.locator("tr.roster-table__row", {
-      hasText: "Ada Typo",
+    // A group is created from the Group filter, and one selected person is
+    // put in it through the selection bar's picker.
+    await page.getByRole("button", { name: "Group: Everyone" }).click();
+    await page.getByRole("button", { name: "+ New group" }).click();
+    const newGroupDialog = page.getByRole("dialog", { name: "New group" });
+    await newGroupDialog
+      .getByRole("textbox", { name: "Group name" })
+      .fill("Team A");
+    await newGroupDialog.getByRole("button", { name: "Create" }).click();
+    await expect(newGroupDialog).toHaveCount(0);
+    await expectToast(page, "Created group Team A.");
+    await adaRow.getByLabel("Select Ada Typo").check();
+    const selectionBar = page.getByRole("region", { name: "Selected people" });
+    await expect(selectionBar).toContainText("1 selected");
+    await selectionBar.getByRole("button", { name: "Groups…" }).click();
+    const adaPicker = page.getByRole("dialog", {
+      name: "Groups for 1 selected people",
     });
-    await expect(adaRow).toContainText(fixedEmail);
-    await expect(adaRow).toContainText("Not sent");
+    await adaPicker.getByRole("checkbox", { name: "Team A" }).check();
+    await adaPicker.getByRole("button", { name: "Apply" }).click();
+    await expect(adaPicker).toHaveCount(0);
+    await expectToast(page, "Updated groups for 1 person.");
+    await expect(adaRow.locator(".participants-table__groups")).toHaveText(
+      "Team A",
+    );
+    await selectionBar.getByRole("button", { name: "Clear" }).click();
+    await expect(selectionBar).toHaveCount(0);
 
-    // One group alone counts in the results; Include everyone undoes it.
-    await page.getByRole("button", { name: "New group", exact: true }).click();
-    await page.getByLabel("New group name").fill("Team A");
-    await page
-      .getByRole("button", { name: "Create group", exact: true })
-      .click();
-    await expect(page.getByText("Created Team A.")).toBeVisible();
-    await page.getByLabel("Ada Typo in Team A").check();
-    await page.getByRole("button", { name: "Save group changes" }).click();
-    const teamRow = page
-      .getByRole("region", { name: "Participant groups" })
-      .locator('[data-roster-group="Team A"]');
-    await expect(teamRow).toContainText("1 person");
-    await teamRow.getByRole("button", { name: "Only this group" }).click();
+    // The Group filter narrows the list to that group; the chip clears it.
+    await page.getByRole("button", { name: "Group: Everyone" }).click();
+    await page.getByRole("radio", { name: "Team A" }).click();
+    await expect(participantSummary(page)).toContainText(
+      "Showing 1 of 3 people",
+    );
+    await expect(participantRow(page, "Ben Leaving")).toHaveCount(0);
     await expect(
-      page.getByText(
-        "Only Team A counts in the results now. Use Include everyone to bring the others back.",
-      ),
+      page.getByRole("button", { name: "Remove filter Group: Team A" }),
     ).toBeVisible();
-    await expect(page.getByLabel("Include Ada Typo")).toBeChecked();
-    await expect(page.getByLabel("Include Ben Leaving")).not.toBeChecked();
-    await expect(page.getByLabel("Include Owen Organizer")).not.toBeChecked();
-    await page.getByRole("button", { name: "Include everyone" }).click();
-    await expect(page.getByLabel("Include Ben Leaving")).toBeChecked();
-    await expect(page.getByLabel("Include Owen Organizer")).toBeChecked();
+    await page
+      .locator("#organizer-roster")
+      .getByRole("button", { name: "Clear all" })
+      .click();
+    await expect(participantSummary(page)).toContainText("3 people");
+    await expect(participantRow(page, "Ben Leaving")).toBeVisible();
+
+    // One group alone counts in the results; the banner brings everyone
+    // back.
+    await page.getByRole("button", { name: "Group: Everyone" }).click();
+    await page.getByRole("button", { name: "Manage groups…" }).click();
+    const groupsPanel = page.getByRole("dialog", {
+      name: "Groups",
+      exact: true,
+    });
+    const teamRow = groupsPanel.locator("tr", { hasText: "Team A" });
+    await expect(teamRow).toContainText("1 person");
+    await teamRow.getByRole("button", { name: "Actions for Team A" }).click();
+    await page
+      .getByRole("menuitem", { name: "Count only this group…" })
+      .click();
+    const countOnlyDialog = page.getByRole("dialog", {
+      name: "Count only Team A in the results?",
+    });
+    await expect(countOnlyDialog).toContainText(
+      "2 people outside Team A will be left out. Weights don't change.",
+    );
+    await countOnlyDialog
+      .getByRole("button", { name: "Count only this group" })
+      .click();
+    await expect(countOnlyDialog).toHaveCount(0);
+    await expectToast(page, "Only Team A counts in the results now.");
+    await expect(
+      teamRow.locator(".participants-groups-table__counted"),
+    ).toContainText("All");
+    await groupsPanel
+      .getByRole("button", { name: "Close", exact: true })
+      .click();
+    await expect(groupsPanel).toHaveCount(0);
+    await expect(adaRow).not.toContainText("Left out of results");
+    await expect(participantRow(page, "Ben Leaving")).toContainText(
+      "Left out of results",
+    );
+    await expect(ownRow).toContainText("Left out of results");
+    const leftOutBanner = page.getByText(
+      "2 people are left out of the results.",
+    );
+    await expect(leftOutBanner).toBeVisible();
+    await page.getByRole("button", { name: "Count everyone again" }).click();
+    await expectToast(page, "Everyone counts in the results again.");
+    await expect(leftOutBanner).toHaveCount(0);
+    await expect(participantRow(page, "Ben Leaving")).not.toContainText(
+      "Left out of results",
+    );
+    await expect(ownRow).not.toContainText("Left out of results");
 
     // Removing asks first, then deletes the row and its invitation.
-    await page.getByRole("button", { name: "Remove Ben Leaving" }).click();
+    await participantRow(page, "Ben Leaving")
+      .getByRole("button", { name: "Actions for Ben Leaving" })
+      .click();
+    await page.getByRole("menuitem", { name: "Remove from event…" }).click();
     const removeDialog = page.getByRole("dialog", {
       name: "Remove Ben Leaving from the event?",
     });
@@ -1333,12 +1540,8 @@ test.describe("Releviz account and scheduling flow", () => {
       removeDialog.getByRole("button", { name: "Cancel" }),
     ).toBeFocused();
     await removeDialog.getByRole("button", { name: "Remove person" }).click();
-    await expect(
-      page.getByText("Ben Leaving was removed from the event."),
-    ).toBeVisible();
-    await expect(
-      page.locator("tr.roster-table__row", { hasText: "Ben Leaving" }),
-    ).toHaveCount(0);
+    await expectToast(page, "Ben Leaving was removed from the event.");
+    await expect(participantRow(page, "Ben Leaving")).toHaveCount(0);
 
     const roster = await apiJson(
       request,
@@ -1408,31 +1611,45 @@ test.describe("Releviz account and scheduling flow", () => {
     ).toBeVisible();
     await expectAccessible(page, "organizer event");
 
-    // Groups can be set up before anyone is on the roster. This one is
-    // deleted again straight away so the group checks further down still see
-    // only the groups the roster import and the organizer create later.
-    await expect(page.getByText("No participants yet")).toBeVisible();
-    await page.getByRole("button", { name: "New group", exact: true }).click();
-    await page.getByLabel("New group name").fill("E2E Early");
-    await page
-      .getByRole("button", { name: "Create group", exact: true })
+    // Groups can be set up before anyone is on the list, from the empty
+    // state's link into the Groups panel. This one is deleted again straight
+    // away so the group checks further down still see only the groups the
+    // import and the organizer create later.
+    await expect(
+      page.getByRole("heading", { name: "No participants yet" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Create a group" }).click();
+    const groupsPanel = page.getByRole("dialog", {
+      name: "Groups",
+      exact: true,
+    });
+    await expect(groupsPanel.getByText(/No groups yet/)).toBeVisible();
+    await groupsPanel.getByRole("button", { name: "+ New group" }).click();
+    await groupsPanel.getByLabel("New group name").fill("E2E Early");
+    await groupsPanel
+      .getByRole("button", { name: "Create", exact: true })
       .click();
-    await expect(page.getByText("Created E2E Early.")).toBeVisible();
-    const earlyGroupRow = page
-      .getByRole("region", { name: "Participant groups" })
-      .locator('[data-roster-group="E2E Early"]');
+    await expectToast(page, "Created group E2E Early.");
+    const earlyGroupRow = groupsPanel.locator("tr", { hasText: "E2E Early" });
     await expect(earlyGroupRow).toContainText("0 people");
-    await earlyGroupRow.getByRole("button", { name: "Delete group" }).click();
+    await earlyGroupRow
+      .getByRole("button", { name: "Actions for E2E Early" })
+      .click();
+    await page.getByRole("menuitem", { name: "Delete group…" }).click();
     const earlyGroupDialog = page.getByRole("dialog", {
       name: "Delete group E2E Early?",
     });
     await earlyGroupDialog
       .getByRole("button", { name: "Delete group" })
       .click();
-    await expect(page.getByText("Deleted E2E Early.")).toBeVisible();
+    await expectToast(page, "Deleted E2E Early.");
     await expect(earlyGroupDialog).toHaveCount(0);
     await expect(earlyGroupRow).toHaveCount(0);
-    await expect(page.getByText(/No groups yet/)).toBeVisible();
+    await expect(groupsPanel.getByText(/No groups yet/)).toBeVisible();
+    await groupsPanel
+      .getByRole("button", { name: "Close", exact: true })
+      .click();
+    await expect(groupsPanel).toHaveCount(0);
 
     const organizerSession = await readSession(page);
     const eventDefinitionResponse = await apiJson(
@@ -1966,11 +2183,27 @@ test.describe("Releviz account and scheduling flow", () => {
       participantSession.user.id,
     );
 
+    // Reminders go out from the Email menu, which says when the next
+    // automatic one is due, counts who would get one now and confirms first.
     const reminderStartedAt = Date.now() - 1000;
-    await page.getByRole("button", { name: "Queue reminders" }).click();
-    await expect(
-      page.getByText("1 reminder emails were queued."),
-    ).toBeVisible();
+    await participantActions(page)
+      .getByRole("button", { name: "Email", exact: true })
+      .click();
+    await expect(page.getByRole("menu", { name: "Email" })).toContainText(
+      "Next automatic reminder:",
+    );
+    await page.getByRole("menuitem", { name: "Send reminders (1)…" }).click();
+    const reminderDialog = page.getByRole("dialog", {
+      name: "Remind 1 invited people who haven't submitted?",
+    });
+    await expect(reminderDialog).toContainText(
+      "People never invited, people without an email, and you are skipped.",
+    );
+    await reminderDialog
+      .getByRole("button", { name: "Send reminders" })
+      .click();
+    await expect(reminderDialog).toHaveCount(0);
+    await expectToast(page, "Queued 1 reminder.");
     // The background email worker may deliver before the panel renders, so
     // assert the run's size rather than its transient "queued" count.
     const reminderDeliveryProgress = page.getByLabel("Event delivery progress");
@@ -2016,56 +2249,73 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(
       page.getByRole("heading", { level: 2, name: eventName }),
     ).toBeVisible();
-    const registeredParticipantCard = page
-      .locator("tbody tr")
-      .filter({ hasText: participantEmail });
+    const registeredParticipantCard = participantRow(page, participantEmail);
+    const manualParticipantCard = participantRow(page, manualEmail);
     await expect(registeredParticipantCard).toContainText(participantEmail);
-    await expect(registeredParticipantCard).toContainText("Submitted");
+    await expect(
+      registeredParticipantCard.locator(".participants-table__response"),
+    ).toHaveText("Submitted");
 
-    const bulkControls = page.locator(
-      'details[aria-label="Bulk participant actions"]',
+    // A weight for everyone in E2E Group: filter to the group, select the
+    // page, and set it from the selection bar.
+    await page.getByRole("button", { name: "Group: Everyone" }).click();
+    await page.getByRole("radio", { name: "E2E Group" }).click();
+    await expect(participantSummary(page)).toContainText(
+      "Showing 2 of 2 people",
     );
-    await bulkControls.locator("summary").click();
-    await bulkControls.getByLabel("Bulk update scope").selectOption("group");
-    await bulkControls
-      .getByLabel("Bulk update group")
-      .selectOption("E2E Group");
-    await bulkControls.getByLabel("Apply bulk weight").check();
-    await bulkControls
-      .getByRole("spinbutton", { name: "Bulk weight", exact: true })
-      .fill("0.75");
-    await bulkControls.getByRole("button", { name: "Apply update" }).click();
-    await expect(page.getByText("Updated 2 participants.")).toBeVisible();
+    await page.getByLabel("Select everyone on this page").check();
+    const selectionBar = page.getByRole("region", { name: "Selected people" });
+    await expect(selectionBar).toContainText("2 selected");
+    await selectionBar.getByRole("button", { name: "More" }).click();
+    await page.getByRole("menuitem", { name: "Set weight…" }).click();
+    const weightDialog = page.getByRole("dialog", { name: "Set weight" });
+    await weightDialog.getByRole("spinbutton", { name: "Weight" }).fill("0.75");
+    await weightDialog.getByRole("button", { name: "Apply" }).click();
+    await expect(weightDialog).toHaveCount(0);
+    await expectToast(page, "Set weight 0.75 for 2 people.");
+    await expect(registeredParticipantCard).toContainText("Weight 0.75");
+    await expect(manualParticipantCard).toContainText("Weight 0.75");
+    await selectionBar.getByRole("button", { name: "Clear" }).click();
+    await expect(selectionBar).toHaveCount(0);
+    await page
+      .getByRole("button", { name: "Remove filter Group: E2E Group" })
+      .click();
+    await expect(participantSummary(page)).toContainText("2 people ·");
 
-    const participantWeight = registeredParticipantCard.getByLabel(
-      "Weight for Pat Participant",
-    );
-    await participantWeight.fill("0.5");
-    await participantWeight.press("Tab");
-    await expect(page.getByText("Pat Participant was updated.")).toBeVisible();
+    // One person's weight is set in their panel.
+    const setPatWeight = async (weight) => {
+      const patPanel = await openPersonPanel(page, "Pat Participant");
+      await patPanel.getByRole("spinbutton", { name: "Weight" }).fill(weight);
+      await patPanel.getByRole("button", { name: "Save", exact: true }).click();
+      await expectToast(page, "Saved.");
+      await patPanel.getByRole("button", { name: "Cancel" }).click();
+      await expect(patPanel).toHaveCount(0);
+      await expect(registeredParticipantCard).toContainText(`Weight ${weight}`);
+    };
+    await setPatWeight("0.5");
 
-    // The Groups table manages a whole group at once: its shared weight is
+    // The Groups panel manages a whole group at once: its shared weight is
     // now mixed, and setting it re-applies one weight to every member.
-    const groupsTable = page.getByRole("region", {
-      name: "Participant groups",
-    });
-    const groupRow = groupsTable.locator('[data-roster-group="E2E Group"]');
+    await page.getByRole("button", { name: "Group: Everyone" }).click();
+    await page.getByRole("button", { name: "Manage groups…" }).click();
+    const groupRow = groupsPanel.locator("tr", { hasText: "E2E Group" });
     await expect(groupRow).toContainText("2 people");
-    await expect(groupRow).toContainText("Mixed");
-    const groupWeight = groupsTable.getByRole("spinbutton", {
-      name: "Weight for group E2E Group",
+    const groupWeight = groupsPanel.getByRole("spinbutton", {
+      name: "Weight for E2E Group",
     });
+    await expect(groupWeight).toHaveAttribute("placeholder", "mixed");
+    await expect(groupWeight).toHaveValue("");
     await groupWeight.fill("0.6");
     await groupWeight.press("Enter");
-    await expect(
-      page.getByText("Weight 0.6 now applies to 2 people in E2E Group."),
-    ).toBeVisible();
+    await expectToast(page, "Set weight 0.6 for 2 people.");
     await expect(groupWeight).toHaveValue("0.6");
-    await expect(groupRow).not.toContainText("Mixed");
-    await expect(participantWeight).toHaveValue("0.6");
-    await participantWeight.fill("0.5");
-    await participantWeight.press("Tab");
-    await expect(page.getByText("Pat Participant was updated.")).toBeVisible();
+    await expect(groupWeight).not.toHaveAttribute("placeholder", "mixed");
+    await groupsPanel
+      .getByRole("button", { name: "Close", exact: true })
+      .click();
+    await expect(groupsPanel).toHaveCount(0);
+    await expect(registeredParticipantCard).toContainText("Weight 0.6");
+    await setPatWeight("0.5");
 
     const rosterAfterWeights = await apiJson(
       request,
@@ -2094,86 +2344,137 @@ test.describe("Releviz account and scheduling flow", () => {
 
     // Groups exist on their own: create an empty one from the Groups panel,
     // then add one selected person to it without leaving E2E Group.
-    await page.getByRole("button", { name: "New group", exact: true }).click();
-    await page.getByLabel("New group name").fill("E2E Second");
-    await page
-      .getByRole("button", { name: "Create group", exact: true })
+    await page.getByRole("button", { name: "Group: Everyone" }).click();
+    await page.getByRole("button", { name: "Manage groups…" }).click();
+    await groupsPanel.getByRole("button", { name: "+ New group" }).click();
+    await groupsPanel.getByLabel("New group name").fill("E2E Second");
+    await groupsPanel
+      .getByRole("button", { name: "Create", exact: true })
       .click();
-    await expect(page.getByText("Created E2E Second.")).toBeVisible();
-    const secondGroupRow = groupsTable.locator(
-      '[data-roster-group="E2E Second"]',
-    );
+    await expectToast(page, "Created group E2E Second.");
+    const secondGroupRow = groupsPanel.locator("tr", { hasText: "E2E Second" });
     await expect(secondGroupRow).toContainText("0 people");
+    await groupsPanel
+      .getByRole("button", { name: "Close", exact: true })
+      .click();
+    await expect(groupsPanel).toHaveCount(0);
     await page.getByLabel("Select Manual Participant").check();
-    await secondGroupRow.getByRole("button", { name: "Add selected" }).click();
-    await expect(page.getByText("Added 1 person to E2E Second.")).toBeVisible();
-    await expect(secondGroupRow).toContainText("1 person");
-    await expect(groupRow).toContainText("2 people");
-    await page.getByLabel("Select Manual Participant").uncheck();
-
-    // Every group is also a checkbox column on the roster rows: ticking one
-    // stages that single membership until Save group changes, and All puts
-    // the person in every group.
-    const patInSecond = page.getByLabel("Pat Participant in E2E Second");
-    const unsavedGroups = page.getByRole("region", {
-      name: "Unsaved group changes",
+    await selectionBar.getByRole("button", { name: "Groups…" }).click();
+    const manualPicker = page.getByRole("dialog", {
+      name: "Groups for 1 selected people",
     });
-    const saveGroups = page.getByRole("button", { name: "Save group changes" });
     await expect(
-      page.getByLabel("Manual Participant in E2E Second"),
+      manualPicker.getByRole("checkbox", { name: "E2E Group" }),
     ).toBeChecked();
-    await expect(patInSecond).not.toBeChecked();
-    await patInSecond.check();
-    await expect(unsavedGroups).toContainText(
-      "1 unsaved group change for 1 person.",
+    const manualInSecond = manualPicker.getByRole("checkbox", {
+      name: "E2E Second",
+    });
+    await expect(manualInSecond).not.toBeChecked();
+    await manualInSecond.check();
+    await manualPicker.getByRole("button", { name: "Apply" }).click();
+    await expect(manualPicker).toHaveCount(0);
+    await expectToast(page, "Updated groups for 1 person.");
+    const manualGroupsCell = manualParticipantCard.locator(
+      ".participants-table__groups",
     );
-    // Nothing is saved until the organizer says so.
-    await expect(secondGroupRow).toContainText("1 person");
-    await saveGroups.click();
-    await expect(unsavedGroups).toHaveCount(0);
-    await expect(secondGroupRow).toContainText("2 people");
-    await patInSecond.uncheck();
-    await saveGroups.click();
-    await expect(unsavedGroups).toHaveCount(0);
-    await expect(secondGroupRow).toContainText("1 person");
-    const patInAll = page.getByLabel("All groups for Pat Participant");
-    await patInAll.check();
-    await expect(patInSecond).toBeChecked();
-    await expect(patInSecond).toBeDisabled();
-    await saveGroups.click();
-    await expect(unsavedGroups).toHaveCount(0);
-    await expect(secondGroupRow).toContainText("2 people");
-    await patInAll.uncheck();
-    await expect(patInSecond).toBeEnabled();
-    await expect(patInSecond).not.toBeChecked();
-    await saveGroups.click();
-    await expect(unsavedGroups).toHaveCount(0);
-    await expect(secondGroupRow).toContainText("1 person");
-    await expect(groupRow).toContainText("2 people");
-
-    // Deleting a group asks in the page first. A throwaway group with one
-    // member shows the delete keeps that person and their other groups; the
-    // roster checks below still see only E2E Group and E2E Second.
-    await page.getByRole("button", { name: "New group", exact: true }).click();
-    await page.getByLabel("New group name").fill("E2E Throwaway");
-    await page
-      .getByRole("button", { name: "Create group", exact: true })
-      .click();
-    await expect(page.getByText("Created E2E Throwaway.")).toBeVisible();
-    const throwawayGroupRow = groupsTable.locator(
-      '[data-roster-group="E2E Throwaway"]',
-    );
-    await page.getByLabel("Select Manual Participant").check();
-    await throwawayGroupRow
-      .getByRole("button", { name: "Add selected" })
-      .click();
-    await expect(
-      page.getByText("Added 1 person to E2E Throwaway."),
-    ).toBeVisible();
+    await expect(manualGroupsCell).toHaveText("E2E Group, E2E Second");
     await page.getByLabel("Select Manual Participant").uncheck();
-    await throwawayGroupRow
-      .getByRole("button", { name: "Delete group" })
+    await expect(selectionBar).toHaveCount(0);
+
+    // One person's groups are edited in their panel: the picker stages the
+    // change and nothing is saved until Save. Every group puts the person in
+    // every group, including groups created later.
+    const patPanel = await openPersonPanel(page, "Pat Participant");
+    const patGroups = patPanel.getByRole("list", { name: "Groups" });
+    const patGroupsCell = registeredParticipantCard.locator(
+      ".participants-table__groups",
+    );
+    await expect(patGroups).toHaveText("E2E Group");
+    const pickPatGroups = async (change) => {
+      await patPanel.getByRole("button", { name: "+ Add to group" }).click();
+      const picker = page.getByRole("dialog", {
+        name: "Groups for Pat Participant",
+      });
+      await change(picker);
+      await picker.getByRole("button", { name: "Apply" }).click();
+      await expect(picker).toHaveCount(0);
+    };
+    const savePat = async () => {
+      await patPanel.getByRole("button", { name: "Save", exact: true }).click();
+      await expectToast(page, "Saved.");
+    };
+    await pickPatGroups((picker) =>
+      picker.getByRole("checkbox", { name: "E2E Second" }).check(),
+    );
+    await expect(patGroups).toContainText("E2E Second");
+    // Nothing is saved until the organizer says so.
+    await expect(patGroupsCell).toHaveText("E2E Group");
+    await savePat();
+    await expect(patGroupsCell).toHaveText("E2E Group, E2E Second");
+    await pickPatGroups((picker) =>
+      picker.getByRole("checkbox", { name: "E2E Second" }).uncheck(),
+    );
+    await savePat();
+    await expect(patGroupsCell).toHaveText("E2E Group");
+    const everyGroup = (picker) =>
+      picker.getByRole("checkbox", {
+        name: "Every group, including groups added later",
+      });
+    await pickPatGroups(async (picker) => {
+      await everyGroup(picker).check();
+      await expect(
+        picker.getByRole("checkbox", { name: "E2E Second" }),
+      ).toBeDisabled();
+    });
+    await expect(patGroups).toHaveText(
+      "Every group, including groups added later",
+    );
+    await savePat();
+    await expect(patGroupsCell).toHaveText("Every group");
+    await pickPatGroups((picker) => everyGroup(picker).uncheck());
+    await expect(patGroups).toHaveText("E2E Group");
+    await savePat();
+    await expect(patGroupsCell).toHaveText("E2E Group");
+    await patPanel.getByRole("button", { name: "Cancel" }).click();
+    await expect(patPanel).toHaveCount(0);
+
+    // A group can also be created from inside the picker, ticked for the
+    // selection at once. Deleting a group asks in the page first; a
+    // throwaway group with one member shows the delete keeps that person and
+    // their other groups, so the checks below still see only E2E Group and
+    // E2E Second.
+    await page.getByLabel("Select Manual Participant").check();
+    await selectionBar.getByRole("button", { name: "Groups…" }).click();
+    const throwawayPicker = page.getByRole("dialog", {
+      name: "Groups for 1 selected people",
+    });
+    await throwawayPicker.getByRole("button", { name: "+ New group" }).click();
+    await throwawayPicker.getByLabel("New group name").fill("E2E Throwaway");
+    await throwawayPicker
+      .getByRole("button", { name: "Create", exact: true })
       .click();
+    await expectToast(page, "Created group E2E Throwaway.");
+    await expect(
+      throwawayPicker.getByRole("checkbox", { name: "E2E Throwaway" }),
+    ).toBeChecked();
+    await throwawayPicker.getByRole("button", { name: "Apply" }).click();
+    await expect(throwawayPicker).toHaveCount(0);
+    await expectToast(page, "Updated groups for 1 person.");
+    await expect(manualGroupsCell).toContainText("E2E Throwaway");
+    await page.getByLabel("Select Manual Participant").uncheck();
+    await page.getByRole("button", { name: "Group: Everyone" }).click();
+    await page.getByRole("button", { name: "Manage groups…" }).click();
+    const throwawayGroupRow = groupsPanel.locator("tr", {
+      hasText: "E2E Throwaway",
+    });
+    await expect(throwawayGroupRow).toContainText("1 person");
+    const askToDeleteThrowaway = async () => {
+      await throwawayGroupRow
+        .getByRole("button", { name: "Actions for E2E Throwaway" })
+        .click();
+      await page.getByRole("menuitem", { name: "Delete group…" }).click();
+    };
+    await askToDeleteThrowaway();
     const deleteGroupDialog = page.getByRole("dialog", {
       name: "Delete group E2E Throwaway?",
     });
@@ -2186,18 +2487,21 @@ test.describe("Releviz account and scheduling flow", () => {
     await deleteGroupDialog.getByRole("button", { name: "Cancel" }).click();
     await expect(deleteGroupDialog).toHaveCount(0);
     await expect(throwawayGroupRow).toContainText("1 person");
-    await throwawayGroupRow
-      .getByRole("button", { name: "Delete group" })
-      .click();
+    await askToDeleteThrowaway();
     await deleteGroupDialog
       .getByRole("button", { name: "Delete group" })
       .click();
-    await expect(page.getByText("Deleted E2E Throwaway.")).toBeVisible();
+    await expectToast(page, "Deleted E2E Throwaway.");
     await expect(deleteGroupDialog).toHaveCount(0);
     await expect(throwawayGroupRow).toHaveCount(0);
-    await expect(page.getByLabel("Select Manual Participant")).toBeVisible();
     await expect(secondGroupRow).toContainText("1 person");
     await expect(groupRow).toContainText("2 people");
+    await groupsPanel
+      .getByRole("button", { name: "Close", exact: true })
+      .click();
+    await expect(groupsPanel).toHaveCount(0);
+    await expect(manualGroupsCell).toHaveText("E2E Group, E2E Second");
+    await expect(page.getByLabel("Select Manual Participant")).toBeVisible();
 
     const rosterAfterGroups = await apiJson(
       request,
