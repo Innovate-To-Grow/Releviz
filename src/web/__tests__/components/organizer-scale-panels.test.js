@@ -2467,7 +2467,9 @@ test("a focused recommended time keeps its highlight and focus when a live updat
     await toggleRecommendedTimes();
     const rail = document.querySelector("details.organizer-recommended-times");
     const chipFor = (label) =>
-      within(rail).getByRole("button", { name: new RegExp(label) });
+      within(rail).getByRole("button", {
+        name: (name) => name.includes(label),
+      });
     const highlighted = () =>
       document.querySelector(".meeting-calendar__block--highlight");
 
