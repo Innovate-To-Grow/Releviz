@@ -17,6 +17,7 @@ from .addresses import normalize_phone, resolve_invited_member
 from .errors import EventEmailRequestError
 from .managed import create_or_reuse_managed_participant
 from .messages import event_email_parts
+from .previews import invitation_email_preview, no_email_preview
 from .reminders import enqueue_reminder_job, reminder_candidates, reminder_cycle
 
 security_logger = logging.getLogger("releviz.security")
@@ -355,8 +356,8 @@ def _roster_recipients(
     *,
     resend: bool,
     queued_invitation_ids=frozenset(),
-) -> tuple[list[str], dict]:
-    """Split ``participants`` into the addresses a send queues and why the rest wait.
+) -> tuple[list[tuple[Participant, str]], dict]:
+    """Split ``participants`` into who a send emails, at which address, and why the rest wait.
 
     The preview and the send both go through here, so the counts an
     organizer confirms are the ones the send acts on. Skips, in the order
@@ -385,7 +386,7 @@ def _roster_recipients(
         ]
     )
 
-    emails = []
+    recipients = []
     skipped = {"alreadyInvited": 0, "noEmail": 0, "organizer": 0, "inFlight": 0}
     for participant in participants:
         # The organizer's own row answers for itself and is never invited.
@@ -412,8 +413,31 @@ def _roster_recipients(
             if participant.roster_invitation_first_sent is not None and not resend:
                 skipped["alreadyInvited"] += 1
                 continue
-        emails.append(email)
-    return emails, skipped
+        recipients.append((participant, email))
+    return recipients, skipped
+
+
+def _roster_invitation_preview(event: Event, participant: Participant, email: str) -> dict:
+    """The invitation a send would queue for ``participant`` at ``email``.
+
+    The send reuses the event's invitation to ``email``, keeping its message,
+    or creates one without a message. ``email`` is the row's own address (its
+    latest invitation's, else its account's primary one), so the account the
+    send resolves it to is the row's, and that account's access level picks
+    the link and wording. The preview renders an unsaved invitation like
+    that: nothing is written, and the link carries no real token.
+    """
+
+    custom_message = (
+        event.invitations.filter(email=email).values_list("custom_message", flat=True).first()
+    )
+    invitation = EventInvitation(
+        event=event,
+        member=participant.member,
+        email=email,
+        custom_message=custom_message or "",
+    )
+    return invitation_email_preview(invitation, name=participant.participant_name, reminder=False)
 
 
 @transaction.atomic
@@ -470,12 +494,18 @@ def send_roster_invitations(
     requested_count = len(participants)
 
     if preview:
-        emails, skipped = _roster_recipients(event, participants, resend=resend)
+        recipients, skipped = _roster_recipients(event, participants, resend=resend)
         return {
             "preview": True,
             "requestedCount": requested_count,
-            "willSend": len(emails),
+            "willSend": len(recipients),
             "skipped": skipped,
+            # The first email the send would queue, in the order it queues them.
+            **(
+                _roster_invitation_preview(event, *recipients[0])
+                if recipients
+                else no_email_preview()
+            ),
         }
 
     fingerprint = payload_fingerprint(
@@ -503,7 +533,7 @@ def send_roster_invitations(
         queued_count = previous.recipient_count
         # The people this request queued are its sends, however far their
         # email has got since; everyone else is classified as of now.
-        _emails, skipped = _roster_recipients(
+        _recipients, skipped = _roster_recipients(
             event,
             participants,
             resend=resend,
@@ -518,7 +548,8 @@ def send_roster_invitations(
             "skipped": skipped,
         }
 
-    emails, skipped = _roster_recipients(event, participants, resend=resend)
+    recipients, skipped = _roster_recipients(event, participants, resend=resend)
+    emails = [email for _participant, email in recipients]
     if emails and charge_recipients is not None:
         charge_recipients(len(emails))
 
