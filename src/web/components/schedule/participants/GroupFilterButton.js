@@ -1,15 +1,20 @@
 "use client";
 
+import { useRef } from "react";
 import AppButton from "@/components/ui/AppButton";
 import { ChevronDownIcon, GroupIcon } from "@/components/ui/icons";
 import { usePopover } from "@/components/schedule/participants/MenuButton";
 import { UNGROUPED } from "@/lib/participants";
 
+const ARROW_KEYS = new Set(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]);
+
 /**
  * `Group: …` filter: a popover titled Show with Everyone, each group and (when
  * anyone is ungrouped) No group, each with its head count, plus links to
  * create a group or open the groups panel. `value` is "" for everyone, a
- * group name, or the ungrouped marker.
+ * group name, or the ungrouped marker. Picking an option applies it; a click,
+ * Space or Enter also closes the popover, while the arrow keys (which check
+ * each radio they land on) leave it open so the list can be walked.
  */
 export default function GroupFilterButton({
   value = "",
@@ -36,9 +41,13 @@ export default function GroupFilterButton({
   if (noGroupCount > 0 || value === UNGROUPED)
     options.push({ value: UNGROUPED, label: "No group", count: noGroupCount });
 
+  // Browsers move the check with the arrow keys by clicking the radio they
+  // land on; the key is still held while that click arrives.
+  const arrowKeyHeld = useRef(false);
+
   const choose = (next) => {
-    close();
     if (next !== value) onChange(next);
+    if (!arrowKeyHeld.current) close();
   };
 
   return (
@@ -63,7 +72,15 @@ export default function GroupFilterButton({
       </AppButton>
       {open && (
         <div id={id} className="dropdown-menu show participants-popover__menu">
-          <fieldset className="participants-popover__group">
+          <fieldset
+            className="participants-popover__group"
+            onKeyDown={(event) => {
+              if (ARROW_KEYS.has(event.key)) arrowKeyHeld.current = true;
+            }}
+            onKeyUp={() => {
+              arrowKeyHeld.current = false;
+            }}
+          >
             <legend className="participants-popover__legend">Show</legend>
             {options.map((option) => {
               const inputId = `${id}-${option.value || "everyone"}`;
@@ -83,7 +100,13 @@ export default function GroupFilterButton({
                     onClick={() => {
                       // Re-choosing the current option fires no change event;
                       // it still means "done".
-                      if (option.value === value) close();
+                      if (option.value === value) choose(option.value);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Enter") return;
+                      event.preventDefault();
+                      arrowKeyHeld.current = false;
+                      choose(option.value);
                     }}
                   />
                   <label className="form-check-label" htmlFor={inputId}>
