@@ -60,9 +60,13 @@ describe("EmailPreview", () => {
 
     const frame = screen.getByTitle("Email preview");
     expect(frame.tagName).toBe("IFRAME");
-    // An empty sandbox: no scripts, navigation, popups or forms.
+    // An empty sandbox: no scripts, top-level navigation, popups or forms.
     expect(frame).toHaveAttribute("sandbox", "");
-    expect(frame.getAttribute("srcdoc")).toBe(HTML);
+    // The email as sent, with its links pointed at a new window, which the
+    // sandbox refuses to open (see the inert-links test).
+    expect(frame.getAttribute("srcdoc")).toBe(
+      HTML.replace("<html>", '<html><base target="_blank">'),
+    );
     expect(frame).not.toHaveAttribute("src");
     expect(frame).toBeVisible();
     // The email's markup stays inside the frame, never in this page's DOM.
@@ -72,6 +76,47 @@ describe("EmailPreview", () => {
       screen.queryByRole("link", { name: "Open the event" }),
     ).not.toBeInTheDocument();
     expect(window.previewRan).toBeUndefined();
+  });
+
+  test("keeps the email's links inert and the frame out of the tab order", () => {
+    // Without a target, a link in the sandboxed frame navigates the frame
+    // itself to a page that refuses to be framed. With every link opening a
+    // new window, which the sandbox (no `allow-popups`) blocks, a click does
+    // nothing and nothing is requested.
+    const branded =
+      '<!doctype html>\n<html lang="en">\n  <HEAD data-x="1">\n    <meta charset="utf-8">\n  </HEAD>\n  <body><a href="https://example.com/event?invitation=preview">Share your availability</a></body>\n</html>';
+    const { rerender } = render(
+      <EmailPreview email={email({ html: branded })} />,
+    );
+    const frame = screen.getByTitle("Email preview");
+    // First in the head, so it is the base target and the rest of the
+    // email is left as it was.
+    expect(frame.getAttribute("srcdoc")).toBe(
+      branded.replace(
+        '<HEAD data-x="1">',
+        '<HEAD data-x="1"><base target="_blank">',
+      ),
+    );
+    // Focus never moves into the frame, where the dialog could no longer
+    // hear Escape.
+    expect(frame).toHaveAttribute("tabindex", "-1");
+
+    // An email with no <head> or <html> still gets the base first.
+    const fragments = [
+      [
+        "<!DOCTYPE html><p>Hi</p>",
+        '<!DOCTYPE html><base target="_blank"><p>Hi</p>',
+      ],
+      ["<p>Hi</p>", '<base target="_blank"><p>Hi</p>'],
+      // An element whose name starts with `head` is not the head.
+      ["<header>Hi</header>", '<base target="_blank"><header>Hi</header>'],
+    ];
+    for (const [html, expected] of fragments) {
+      rerender(<EmailPreview email={email({ html })} />);
+      expect(screen.getByTitle("Email preview").getAttribute("srcdoc")).toBe(
+        expected,
+      );
+    }
   });
 
   test("lists the reply-to address and attachments only when there are any", () => {

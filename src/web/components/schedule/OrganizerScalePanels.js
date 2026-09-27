@@ -60,6 +60,23 @@ import {
 const emailCount = (count) => `${count} ${count === 1 ? "email" : "emails"}`;
 const peopleCount = (count) => `${count} ${count === 1 ? "person" : "people"}`;
 
+// A count from an email preview reply. A reply without one says nothing
+// about who would be emailed, so it is an error rather than 0.
+const isCount = (value) => Number.isInteger(value) && value >= 0;
+
+// Whether a reply is the retry review it was asked for. An older server
+// answers the retry URL by retrying at once, with no `preview` flag and no
+// counts: that reply must not read as "nothing to send".
+function isRetryPreview(reply) {
+  return (
+    reply?.preview === true &&
+    isCount(reply.retryable) &&
+    isCount(reply.obsolete)
+  );
+}
+
+const RETRY_PREVIEW_FAILED = "Unable to check which emails can be sent again.";
+
 // Who an email preview was rendered for, as the note under its envelope.
 function shownFor(sample) {
   const who = sample?.name || sample?.email;
@@ -255,22 +272,22 @@ export function DeliveryRequestProgress({
 
   // A retry re-sends stored emails, so it is reviewed first: which failed
   // emails would go out again (the first of them shown) and which are no
-  // longer current and would be canceled. A reply for a review that has
-  // since been closed is dropped.
+  // longer current and would be canceled. A reply that isn't that review
+  // is an error, and a reply for a review that has since been closed is
+  // dropped.
   const openRetry = async () => {
     setRetryDialog({ preview: null, busy: false, error: "" });
     try {
       const token = await getToken();
       const preview = await previewDeliveryRetry(request.id, token);
+      if (!isRetryPreview(preview)) throw new Error(RETRY_PREVIEW_FAILED);
       setRetryDialog((current) => current && { ...current, preview });
     } catch (requestError) {
       setRetryDialog(
         (current) =>
           current && {
             ...current,
-            error:
-              requestError.message ||
-              "Unable to check which emails can be sent again.",
+            error: requestError.message || RETRY_PREVIEW_FAILED,
           },
       );
     }
@@ -295,8 +312,8 @@ export function DeliveryRequestProgress({
   };
 
   const retryPreview = retryDialog?.preview;
-  const retryable = Number(retryPreview?.retryable || 0);
-  const obsolete = Number(retryPreview?.obsolete || 0);
+  const retryable = retryPreview?.retryable ?? 0;
+  const obsolete = retryPreview?.obsolete ?? 0;
   const retryNote = shownFor(retryPreview?.sample);
 
   return (
@@ -1403,11 +1420,16 @@ function FinalizeScalePanelContent({
 }) {
   const [location, setLocation] = useState(event.location || "");
   const [review, setReview] = useState(null);
-  // The confirmation email the reviewed time would send, from the same
-  // reply as `review`: { recipientCount, email, sample }. A new selection
-  // mounts this step afresh and a location edit clears `review`, so
-  // Finalize is only offered with a preview of the time being finalized.
+  // The confirmation email the reviewed meeting would send, from the same
+  // reply as `review`: { payload, recipientCount, email, sample }, where
+  // `payload` is the meeting reviewed and the one Finalize sends. A new
+  // selection mounts this step afresh, and a location edit clears the
+  // review and drops any reply still on its way, so Finalize is only
+  // offered with a preview of the meeting being finalized.
   const [confirmationPreview, setConfirmationPreview] = useState(null);
+  // Counts reviews asked for and location edits; a reply is applied only
+  // while its number is still the latest.
+  const reviewRequestRef = useRef(0);
   // { error } while the confirmation email is reviewed before finalizing.
   const [finalizeDialog, setFinalizeDialog] = useState(null);
   const [reviewing, setReviewing] = useState(false);
@@ -1429,34 +1451,57 @@ function FinalizeScalePanelContent({
 
   const preview = async () => {
     if (!payload?.startsAt || !payload?.endsAt) return;
+    const reviewed = payload;
+    reviewRequestRef.current += 1;
+    const request = reviewRequestRef.current;
+    const current = () => request === reviewRequestRef.current;
     setReviewing(true);
     setError("");
     try {
       const token = await getToken();
-      const data = await previewFinalMeeting(event.code, payload, token);
+      const data = await previewFinalMeeting(event.code, reviewed, token);
+      if (!current()) return;
+      // A reply without the count (an older server) doesn't say who the
+      // confirmation goes to, so it can't stand for "nobody".
+      if (!isCount(data?.recipientCount)) {
+        throw new Error(
+          "Unable to check who would get the confirmation email. Try again.",
+        );
+      }
       setReview(data.attendance || data.finalMeeting?.attendance || null);
       setConfirmationPreview({
-        recipientCount: Number(data.recipientCount || 0),
+        payload: reviewed,
+        recipientCount: data.recipientCount,
         email: data.email ?? null,
         sample: data.sample ?? null,
       });
       setStatus("Attendance review is current for this candidate.");
     } catch (requestError) {
+      if (!current()) return;
       setError(requestError.message || "Unable to review this meeting time.");
     } finally {
       setReviewing(false);
     }
   };
 
-  const confirmationRecipients = Number(
-    confirmationPreview?.recipientCount || 0,
-  );
+  // A location edit makes any review, and any reply still on its way, out of
+  // date.
+  const changeLocation = (value) => {
+    reviewRequestRef.current += 1;
+    setLocation(value);
+    setReview(null);
+    setConfirmationPreview(null);
+    setStatus("");
+  };
+
+  const confirmationRecipients = confirmationPreview?.recipientCount ?? 0;
 
   // Runs once the confirmation email was reviewed and confirmed; a failure
   // stays on the dialog's confirmation step, and trying again reuses the
-  // same idempotency key.
+  // same idempotency key. It finalizes the meeting that was reviewed.
   const confirm = async () => {
-    if (!review || !payload) return;
+    const reviewed = confirmationPreview?.payload;
+    if (!review || !reviewed) return;
     if (!confirmationKey.current) confirmationKey.current = crypto.randomUUID();
     setConfirming(true);
     setError("");
@@ -1466,7 +1511,7 @@ function FinalizeScalePanelContent({
       const data = await confirmFinalMeeting(
         event.code,
         {
-          ...payload,
+          ...reviewed,
           expectedVersion: event.version,
           idempotencyKey: confirmationKey.current,
         },
@@ -1623,10 +1668,9 @@ function FinalizeScalePanelContent({
               className="form-control"
               value={location}
               maxLength={500}
-              onChange={(changeEvent) => {
-                setLocation(changeEvent.target.value);
-                setReview(null);
-              }}
+              onChange={(changeEvent) =>
+                changeLocation(changeEvent.target.value)
+              }
             />
           </FormField>
           <div className="finalize-block__actions d-flex flex-wrap gap-2">

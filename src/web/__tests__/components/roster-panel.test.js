@@ -1332,10 +1332,14 @@ describe("RosterPanel invitations", () => {
         }),
         sample: { name: "", email: "temp@example.com" },
       })
+      // The run's request also lists the job of the person reminded
+      // earlier (`recipientCount` 4), but only 3 new reminders go out.
       .mockResolvedValueOnce({
         deliveryRequestId: "reminder-1",
-        recipientCount: 3,
-        delivery: { total: 3, pending: 3 },
+        recipientCount: 4,
+        enqueued: 3,
+        deduplicated: 1,
+        delivery: { total: 4, pending: 3, sent: 1 },
       })
       .mockRejectedValueOnce(new Error(""))
       .mockResolvedValueOnce({
@@ -1425,7 +1429,11 @@ describe("RosterPanel invitations", () => {
         "token",
       ),
     );
-    expect(await findToast("Queued 3 reminders.")).toBeInTheDocument();
+    // The toast counts the reminders queued, as the dialog did, and the
+    // people it skipped, not everyone on the run's request.
+    expect(
+      await findToast("Queued 3 reminders. Skipped 1 already reminded."),
+    ).toBeInTheDocument();
     expect(onDeliveryRequestChange).toHaveBeenCalledWith(
       expect.objectContaining({ id: "reminder-1", operation: "reminder" }),
     );
