@@ -20,6 +20,8 @@ from apps.scheduling.services.invitations import (
     reminder_preview,
 )
 
+from ..helpers import private_response
+
 
 def _iso_or_none(value):
     return value.isoformat() if value is not None else None
@@ -54,8 +56,9 @@ class EventRemindersView(APIView):
             return Response({"error": "preview must be a boolean."}, status=400)
         if preview:
             # A look at what a run would do: no write guard, no quota, no key.
+            # It shows a recipient's address and email, so it is never cached.
             summary = reminder_preview(event)
-            return Response(
+            return private_response(
                 {
                     "preview": True,
                     **summary,

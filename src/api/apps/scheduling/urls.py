@@ -74,6 +74,11 @@ urlpatterns = [
         views.EventFinalizationView.as_view(),
         name="api-event-finalization",
     ),
+    path(
+        "events/lifecycle/preview",
+        views.EventLifecyclePreviewView.as_view(),
+        name="api-event-lifecycle-preview",
+    ),
     path("events/lifecycle", views.EventLifecycleView.as_view(), name="api-event-lifecycle"),
     path("events/reminders", views.EventRemindersView.as_view(), name="api-event-reminders"),
     path(

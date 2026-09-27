@@ -5,6 +5,9 @@ from .delivery import (
     confirmation_jobs,
     enqueue_final_cancellation_jobs,
     enqueue_final_confirmation_jobs,
+    final_cancellation_parts,
+    final_cancellation_recipients,
+    final_confirmation_parts,
     final_delivery_summary,
 )
 from .errors import FinalizationError
@@ -27,8 +30,11 @@ __all__ = [
     "enqueue_final_confirmation_jobs",
     "final_cancellation_body",
     "final_cancellation_html_body",
+    "final_cancellation_parts",
+    "final_cancellation_recipients",
     "final_confirmation_body",
     "final_confirmation_html_body",
+    "final_confirmation_parts",
     "final_delivery_summary",
     "final_notification_recipients",
     "normalize_final_time",

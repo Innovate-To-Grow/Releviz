@@ -8,9 +8,16 @@ from apps.scheduling.services.ics import response_deadline_ics
 from .links import invitation_link
 
 
-def invitation_body(invitation: EventInvitation, *, reminder: bool = False) -> str:
+def invitation_body(
+    invitation: EventInvitation,
+    *,
+    reminder: bool = False,
+    link: str | None = None,
+) -> str:
+    """The plain-text part. ``link`` replaces the recipient's own private link."""
+
     event = invitation.event
-    link = invitation_link(invitation)
+    link = invitation_link(invitation) if link is None else link
     is_temporary = (
         invitation.member is not None
         and getattr(invitation.member, "access_level", "full") == "temporary"
@@ -38,9 +45,16 @@ def invitation_body(invitation: EventInvitation, *, reminder: bool = False) -> s
     )
 
 
-def invitation_html_body(invitation: EventInvitation, *, reminder: bool = False) -> str:
+def invitation_html_body(
+    invitation: EventInvitation,
+    *,
+    reminder: bool = False,
+    link: str | None = None,
+) -> str:
+    """The HTML part. ``link`` replaces the recipient's own private link."""
+
     event = invitation.event
-    link = invitation_link(invitation)
+    link = invitation_link(invitation) if link is None else link
     is_temporary = (
         invitation.member is not None
         and getattr(invitation.member, "access_level", "full") == "temporary"
@@ -88,9 +102,17 @@ def event_email_parts(
     invitation: EventInvitation,
     *,
     reminder: bool,
+    link: str | None = None,
 ) -> tuple[str, str, str, list[EmailAttachment]]:
+    """Subject, text, HTML, and attachments of an invitation or reminder.
+
+    ``link`` stands in for the recipient's private link everywhere it
+    appears; previews pass one so they never show a real access token.
+    """
+
     event = invitation.event
-    attachment = response_deadline_ics(event, link=invitation_link(invitation))
+    link = invitation_link(invitation) if link is None else link
+    attachment = response_deadline_ics(event, link=link)
     subject = (
         f"Reminder: share your availability for {event.name}"
         if reminder
@@ -98,7 +120,7 @@ def event_email_parts(
     )
     return (
         subject,
-        invitation_body(invitation, reminder=reminder),
-        invitation_html_body(invitation, reminder=reminder),
+        invitation_body(invitation, reminder=reminder, link=link),
+        invitation_html_body(invitation, reminder=reminder, link=link),
         [attachment] if attachment else [],
     )

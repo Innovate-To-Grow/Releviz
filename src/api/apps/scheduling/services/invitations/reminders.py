@@ -13,6 +13,7 @@ from apps.scheduling.services.events.lifecycle import response_write_error
 from apps.scheduling.services.fingerprints import email_content_fingerprint
 
 from .messages import event_email_parts
+from .previews import invitation_email_preview, no_email_preview, recipient_name
 
 
 def reminder_cycle(event: Event) -> str:
@@ -73,23 +74,45 @@ def next_automatic_reminder_at(event: Event, *, now=None):
     return reminder_at if reminder_at > (now or timezone.now()) else None
 
 
+def _reminder_email_preview(event: Event, invitation_id) -> dict:
+    invitation = EventInvitation.objects.select_related("member").get(pk=invitation_id)
+    invitation.event = event
+    return invitation_email_preview(
+        invitation,
+        name=recipient_name(event, invitation.email),
+        reminder=True,
+    )
+
+
 def reminder_preview(event: Event) -> dict:
     """What a manual reminder run would do now, without doing it.
 
     ``eligible`` ignores ``reminders_enabled`` so the organizer sees who a
     run would reach once reminders are on; ``alreadyReminded`` are the
-    eligible people this cycle already queued a reminder for.
+    eligible people this cycle already queued a reminder for. ``email`` is
+    the first reminder a run would queue (runs go in address order), or the
+    first eligible person's when everyone was already reminded.
     """
 
-    invitation_ids = list(reminder_candidates(event).values_list("pk", flat=True))
-    already_reminded = len(reminded_invitation_ids(event, invitation_ids))
+    # The same order a manual run walks its candidates in.
+    invitation_ids = list(reminder_candidates(event).order_by("email").values_list("pk", flat=True))
+    reminded = reminded_invitation_ids(event, invitation_ids)
+    sample_id = next(
+        (pk for pk in invitation_ids if pk not in reminded),
+        invitation_ids[0] if invitation_ids else None,
+    )
     return {
         "remindersEnabled": event.reminders_enabled,
         "eligible": len(invitation_ids),
-        "alreadyReminded": already_reminded,
-        "wouldEnqueue": len(invitation_ids) - already_reminded,
+        "alreadyReminded": len(reminded),
+        "wouldEnqueue": len(invitation_ids) - len(reminded),
         "nextAutomaticAt": next_automatic_reminder_at(event),
         "deadline": event.response_deadline,
+        **(
+            _reminder_email_preview(event, sample_id)
+            if sample_id is not None
+            else no_email_preview()
+        ),
     }
 
 

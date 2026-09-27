@@ -17,6 +17,7 @@ from .delivery import (
     enqueue_final_cancellation_jobs,
     enqueue_final_confirmation_jobs,
     ensure_final_delivery_request,
+    final_cancellation_recipients,
     final_request_fingerprint,
     stabilize_pre_final_delivery_jobs,
 )
@@ -273,13 +274,9 @@ def cancel_active_final_meeting(event: Event, *, now=None) -> list[EmailDelivery
         job.updated_at = current_time
     if processing_jobs:
         EmailDeliveryJob.objects.bulk_update(processing_jobs, ["max_attempts", "updated_at"])
-    recipients = sorted(
-        {
-            job.recipient
-            for job in confirmation_jobs
-            if job.status in {EmailDeliveryJob.Status.SENT, EmailDeliveryJob.Status.PROCESSING}
-        }
-    )
+    # The statuses as loaded, before the cancellations above: the same ones a
+    # reactivation preview counts.
+    recipients = final_cancellation_recipients(confirmation_jobs)
     meeting.active = False
     meeting.canceled_at = current_time
     meeting.calendar_sequence += 1

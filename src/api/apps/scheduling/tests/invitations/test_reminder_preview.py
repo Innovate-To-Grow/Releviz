@@ -75,6 +75,7 @@ class ReminderPreviewApiTests(TestCase):
         ) as consume:
             response = self.preview()
         self.assertEqual(response.status_code, 200, response.data)
+        email = response.data.pop("email")
         self.assertEqual(
             response.data,
             {
@@ -85,8 +86,11 @@ class ReminderPreviewApiTests(TestCase):
                 "wouldEnqueue": 1,
                 "nextAutomaticAt": (self.deadline - timedelta(hours=1)).isoformat(),
                 "deadline": self.deadline.isoformat(),
+                # The reminder the run would send, shown for its one recipient.
+                "sample": {"name": "", "email": "sent@example.com"},
             },
         )
+        self.assertEqual(email["to"], "sent@example.com")
         consume.assert_not_called()
         self.assertFalse(EmailDeliveryRequest.objects.exists())
         self.assertFalse(EmailDeliveryJob.objects.exists())

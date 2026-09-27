@@ -170,6 +170,30 @@ def _safe_log_each(**kwargs) -> None:
         )
 
 
+def sender_addresses(config: EmailProviderConfig | None) -> tuple[str, str]:
+    """The From and Reply-To addresses an email goes out with.
+
+    The provider's own when one is configured, else the site default sender
+    and no Reply-To.
+    """
+
+    if config is None:
+        return getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@releviz.local"), ""
+    return config.from_email, config.reply_to_email
+
+
+def delivered_html_body(*, subject: str, body: str, html_body: str) -> str:
+    """The HTML part an email goes out with: its own, else the text in the branded layout."""
+
+    if html_body:
+        return html_body
+    return render_branded_email(
+        title=_clean_header(subject),
+        preheader=_clean_header(subject),
+        paragraphs=(body,),
+    )
+
+
 def send_email_message(
     *,
     subject: str,
@@ -189,20 +213,9 @@ def send_email_message(
     if not clean_recipients:
         raise EmailDeliveryError("At least one recipient is required.")
 
-    if not html_body:
-        html_body = render_branded_email(
-            title=_clean_header(subject),
-            preheader=_clean_header(subject),
-            paragraphs=(body,),
-        )
-
+    html_body = delivered_html_body(subject=subject, body=body, html_body=html_body)
     config = provider_config or active_provider_config()
-    from_email = (
-        config.from_email
-        if config
-        else getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@releviz.local")
-    )
-    reply_to = config.reply_to_email if config else ""
+    from_email, reply_to = sender_addresses(config)
     message = _message(
         subject=subject,
         body=body,

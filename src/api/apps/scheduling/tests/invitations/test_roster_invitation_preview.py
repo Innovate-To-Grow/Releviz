@@ -135,6 +135,7 @@ class RosterInvitationPreviewTests(TestCase):
         ) as consume:
             preview = self.post({"participantIds": everyone, "preview": True})
         self.assertEqual(preview.status_code, 200, preview.data)
+        email = preview.data.pop("email")
         self.assertEqual(
             preview.data,
             {
@@ -142,8 +143,11 @@ class RosterInvitationPreviewTests(TestCase):
                 "requestedCount": 6,
                 "willSend": 1,
                 "skipped": {"alreadyInvited": 1, "noEmail": 2, "organizer": 1, "inFlight": 1},
+                # The one person the send would email, and what they would get.
+                "sample": {"name": "Ada", "email": "ada@example.com"},
             },
         )
+        self.assertEqual(email["to"], "Ada <ada@example.com>")
         consume.assert_not_called()
         self.assertFalse(EmailDeliveryRequest.objects.filter(event=self.event).exists())
         self.assertEqual(EmailDeliveryJob.objects.count(), 1)
@@ -364,10 +368,18 @@ class RosterInvitationPreviewTests(TestCase):
 
         preview = self.post({"filter": {"invitationStatus": "failed"}, "preview": True})
         self.assertEqual(preview.status_code, 200, preview.data)
+        email = preview.data.pop("email")
         self.assertEqual(
             preview.data,
-            {"preview": True, "requestedCount": 1, "willSend": 1, "skipped": NO_SKIPS},
+            {
+                "preview": True,
+                "requestedCount": 1,
+                "willSend": 1,
+                "skipped": NO_SKIPS,
+                "sample": {"name": "Ada", "email": "ada@example.com"},
+            },
         )
+        self.assertIn("invitation=preview", email["text"])
 
         sent = self.post(
             {"filter": {"invitationStatus": "failed"}, "idempotencyKey": str(uuid.uuid4())}
