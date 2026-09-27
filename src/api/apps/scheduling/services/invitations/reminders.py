@@ -35,24 +35,47 @@ def reminder_candidates(event: Event):
 def reminder_job_key_prefix(event: Event, invitation_pk, cycle: str) -> str:
     """The start every reminder job key for ``invitation_pk`` in ``cycle`` shares.
 
-    The full key adds the content fingerprint, so a reminder whose wording
-    changed within one cycle gets a fresh job.
+    The full key adds the content fingerprint, so one cycle can hold several
+    jobs for an invitation when the wording changed between them.
     """
 
     return f"reminder:{event.event_id}:{invitation_pk}:{cycle}:"
 
 
-def reminded_invitation_ids(event: Event, invitation_ids) -> set:
-    """Ids among ``invitation_ids`` that already hold a reminder job for the
-    current cycle, whatever became of that job."""
+def cycle_reminder_job_ids(event: Event, invitation_ids) -> dict:
+    """The newest reminder job the current cycle holds for each of
+    ``invitation_ids``, by invitation id.
+
+    Any job counts, whatever became of it and whatever it said: a renamed
+    event, or any change to the event that restamps the deadline's calendar
+    file, changes a reminder's wording and so its job key, but the person
+    was reminded all the same.
+    """
 
     cycle = reminder_cycle(event)
     prefixes = {pk: reminder_job_key_prefix(event, pk, cycle) for pk in invitation_ids}
-    jobs = EmailDeliveryJob.objects.filter(
-        invitation_id__in=prefixes,
-        message_type=EmailMessageLog.MessageType.REMINDER,
-    ).values_list("invitation_id", "idempotency_key")
-    return {invitation_id for invitation_id, key in jobs if key.startswith(prefixes[invitation_id])}
+    jobs = (
+        EmailDeliveryJob.objects.filter(
+            invitation_id__in=prefixes,
+            message_type=EmailMessageLog.MessageType.REMINDER,
+        )
+        .order_by("pk")
+        .values_list("invitation_id", "idempotency_key", "pk")
+    )
+    return {
+        invitation_id: job_pk
+        for invitation_id, key, job_pk in jobs
+        if key.startswith(prefixes[invitation_id])
+    }
+
+
+def reminded_invitation_ids(event: Event, invitation_ids) -> set:
+    """Ids among ``invitation_ids`` this cycle already reminded.
+
+    A manual run skips exactly these, so the preview counts with them too.
+    """
+
+    return set(cycle_reminder_job_ids(event, invitation_ids))
 
 
 def automatic_reminder_at(event: Event):

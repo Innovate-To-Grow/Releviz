@@ -13,7 +13,11 @@ from apps.authn.tests.helpers import create_member, token_for
 from apps.mail.models import EmailDeliveryJob, EmailDeliveryRequest, EmailMessageLog
 from apps.mail.services import enqueue_email_job
 from apps.scheduling.models import Event, EventInvitation
-from apps.scheduling.services.invitations import reminder_cycle
+from apps.scheduling.services.invitations import (
+    enqueue_reminder_job,
+    event_email_parts,
+    reminder_cycle,
+)
 from apps.scheduling.services.invitations.reminders import (
     next_automatic_reminder_at,
     reminded_invitation_ids,
@@ -183,6 +187,78 @@ class ReminderPreviewApiTests(TestCase):
         not_preview = self.preview(preview=False)
         self.assertEqual(not_preview.status_code, 400)
         self.assertEqual(not_preview.data["error"], "idempotencyKey must be a UUID")
+
+    def test_a_run_emails_exactly_the_people_the_preview_counted(self):
+        """Anyone this cycle already reminded is skipped, whatever the reminder said.
+
+        A reminder's wording can change within a cycle: the event is renamed,
+        or any change to the event restamps the deadline's calendar file. A
+        run still skips everyone the preview counted as already reminded, so
+        it emails exactly the people the organizer confirmed.
+        """
+
+        people = [
+            self.sent,
+            *(self.invite(f"p{index}@example.com", sent=True) for index in range(4)),
+        ]
+        by_email = {invitation.email: invitation for invitation in people}
+        old_jobs = {
+            email: enqueue_reminder_job(by_email[email])[0]
+            for email in ["p0@example.com", "p1@example.com"]
+        }
+        Event.objects.filter(pk=self.event.pk).update(name="Renamed event")
+        # p0 also holds this cycle's reminder under the new name; the newest
+        # of her reminders is the one that counts.
+        self.event.refresh_from_db()
+        by_email["p0@example.com"].event = self.event
+        newest_p0, _created = enqueue_reminder_job(by_email["p0@example.com"])
+
+        preview = self.preview().data
+        self.assertEqual(
+            (preview["eligible"], preview["alreadyReminded"], preview["wouldEnqueue"]),
+            (5, 2, 3),
+        )
+        self.assertEqual(preview["sample"]["email"], "p2@example.com")
+        self.assertEqual(
+            preview["email"]["subject"], "Reminder: share your availability for Renamed event"
+        )
+
+        jobs_before = set(EmailDeliveryJob.objects.values_list("pk", flat=True))
+        sent = self.send()
+        self.assertEqual(sent.status_code, 202, sent.data)
+        self.assertEqual(sent.data["enqueued"], preview["wouldEnqueue"])
+        self.assertEqual(sent.data["recipientCount"], preview["eligible"])
+        self.assertEqual(sent.data["deduplicated"], preview["alreadyReminded"])
+        new_jobs = EmailDeliveryJob.objects.exclude(pk__in=jobs_before)
+        self.assertEqual(
+            sorted(new_jobs.values_list("recipient", flat=True)),
+            ["p2@example.com", "p3@example.com", "sent@example.com"],
+        )
+        # The skipped people's latest reminders stand for them in the run.
+        request_record = EmailDeliveryRequest.objects.get(pk=sent.data["deliveryRequestId"])
+        self.assertEqual(
+            set(request_record.jobs.values_list("pk", flat=True)),
+            {newest_p0.pk, old_jobs["p1@example.com"].pk, *new_jobs.values_list("pk", flat=True)},
+        )
+
+        # Any later change to the event restamps the deadline's calendar file
+        # in every reminder, and still nobody reminded this cycle is emailed
+        # again.
+        invitation = EventInvitation.objects.select_related("event").get(pk=self.sent.pk)
+        calendar_file = event_email_parts(invitation, reminder=True)[3][0].content
+        Event.objects.filter(pk=self.event.pk).update(
+            updated_at=timezone.now() + timedelta(hours=1)
+        )
+        invitation.event.refresh_from_db()
+        self.assertNotEqual(
+            event_email_parts(invitation, reminder=True)[3][0].content, calendar_file
+        )
+        again = self.preview().data
+        self.assertEqual((again["alreadyReminded"], again["wouldEnqueue"]), (5, 0))
+        rerun = self.send()
+        self.assertEqual(rerun.status_code, 202, rerun.data)
+        self.assertEqual((rerun.data["enqueued"], rerun.data["deduplicated"]), (0, 5))
+        self.assertEqual(EmailDeliveryJob.objects.count(), len(jobs_before) + 3)
 
     def test_reminded_ids_match_only_this_cycle_and_these_invitations(self):
         other = self.invite("other@example.com", sent=True)
