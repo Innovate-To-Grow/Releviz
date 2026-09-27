@@ -158,6 +158,9 @@ class RosterImportCommitView(PrivateAPIView):
         except RosterImportError as exc:
             return error_response(exc)
         receipt.event.refresh_from_db()
+        # Recorded on the committed batch, so a replay reports the same people;
+        # a commit made before these were recorded reports nobody.
+        summary = receipt.batch.summary
         return Response(
             {
                 "receipt": roster_import_receipt_payload(receipt),
@@ -165,6 +168,10 @@ class RosterImportCommitView(PrivateAPIView):
                 "event": api_event(receipt.event),
                 "deliveryRequest": email_delivery_request_payload(delivery_request),
                 "autoInvitedCount": auto_invited_count,
+                # Roster ids to review invitations for: who this commit added
+                # (or brought back), and everyone it imported.
+                "addedParticipantIds": summary.get("addedParticipantIds", []),
+                "importedParticipantIds": summary.get("importedParticipantIds", []),
             },
             status=200 if idempotent else 201,
         )
