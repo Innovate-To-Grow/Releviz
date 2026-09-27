@@ -61,7 +61,9 @@ function renderPanel(participant = person(), props = {}) {
   return { ...handlers, ...utils };
 }
 
-const field = (name) => screen.getByLabelText(new RegExp(`^${name}`));
+// Labels can carry more text (a required marker) after the name.
+const field = (name) =>
+  screen.getByLabelText((label) => label.startsWith(name));
 const save = () => screen.getByRole("button", { name: "Save" });
 
 describe("PersonPanel", () => {

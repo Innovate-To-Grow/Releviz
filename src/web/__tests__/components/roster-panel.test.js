@@ -302,14 +302,17 @@ const closeButton = (dialogName, label) =>
 // Popovers close on a pointer press outside them.
 const closePopover = () => fireEvent.pointerDown(document.body);
 
+// Matches text that begins with `prefix` (a function matcher, so no pattern
+// is built from a variable).
+const startsWith = (prefix) => (text) => text.startsWith(prefix);
+
 // The row's title span comes before any panel or notice that repeats the
 // name.
-const rowFor = (name) =>
-  screen.getAllByText(new RegExp(`^${name}`))[0].closest("tr");
+const rowFor = (name) => screen.getAllByText(startsWith(name))[0].closest("tr");
 
 async function openPerson(name = "Temp Person") {
   fireEvent.click(
-    await screen.findByRole("button", { name: new RegExp(`^${name}`) }),
+    await screen.findByRole("button", { name: startsWith(name) }),
   );
   return screen.findByRole("dialog", { name });
 }
