@@ -107,12 +107,23 @@ export default function MenuButton({
       const openUp =
         below + menuHeight > viewportHeight - 8 &&
         rect.top - menuHeight - 4 > 8;
+      // Every edge is set so the stylesheet's absolute placement (top and
+      // right for an end-aligned menu) cannot combine with these values.
       const style = { position: "fixed", zIndex: 1060 };
-      if (openUp) style.bottom = viewportHeight - rect.top + 4;
-      else style.top = below;
-      if (align === "end")
+      if (openUp) {
+        style.bottom = viewportHeight - rect.top + 4;
+        style.top = "auto";
+      } else {
+        style.top = below;
+        style.bottom = "auto";
+      }
+      if (align === "end") {
         style.right = Math.max(8, viewportWidth - rect.right);
-      else style.left = Math.max(8, rect.left);
+        style.left = "auto";
+      } else {
+        style.left = Math.max(8, rect.left);
+        style.right = "auto";
+      }
       setMenuStyle(style);
     };
     place();

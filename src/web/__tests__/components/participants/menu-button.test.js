@@ -274,7 +274,7 @@ describe("MenuButton placement", () => {
         top: "134px",
         right: "240px",
       });
-      expect(menu.style.bottom).toBe("");
+      expect(menu).toHaveStyle({ bottom: "auto", left: "auto" });
     } finally {
       restore();
     }
@@ -294,7 +294,7 @@ describe("MenuButton placement", () => {
         bottom: "54px",
         left: "20px",
       });
-      expect(menu.style.top).toBe("");
+      expect(menu).toHaveStyle({ top: "auto", right: "auto" });
     } finally {
       restore();
     }
