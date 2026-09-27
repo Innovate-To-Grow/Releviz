@@ -298,9 +298,12 @@ describe("filter chips", () => {
         group: "",
         submitted: null,
         invitationStatus: "bogus",
-        included: undefined,
+        included: null,
       }),
     ).toEqual([]);
+    expect(filterChips({ included: undefined, submitted: undefined })).toEqual(
+      [],
+    );
   });
 });
 
