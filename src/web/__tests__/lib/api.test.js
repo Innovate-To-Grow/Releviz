@@ -48,6 +48,8 @@ import {
   fetchInvitations,
   markInvitationOpened,
   openEventStream,
+  previewDeliveryRetry,
+  previewEventLifecycle,
   previewFinalMeeting,
   sendInvitations,
   sendReminders,
@@ -1764,6 +1766,109 @@ describe("business API helpers", () => {
     expect(global.fetch).toHaveBeenLastCalledWith(
       "/events/reminders?code=ABC",
       expect.objectContaining({ body: "{}" }),
+    );
+  });
+
+  test("email previews ask the server to render without sending anything", async () => {
+    const email = {
+      from: "Releviz <noreply@releviz.com>",
+      replyTo: "",
+      to: "Ada Lovelace <ada@example.com>",
+      subject: "Planning was canceled",
+      html: "<!doctype html><p>Canceled</p>",
+      text: "Canceled",
+      attachments: [],
+    };
+    global.fetch
+      .mockResolvedValueOnce(
+        jsonResponse({
+          cancellation: {
+            recipientCount: 2,
+            email,
+            sample: { name: "Ada Lovelace", email: "ada@example.com" },
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ preview: true, retryable: 3, obsolete: 1, email }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ id: "delivery 1" }));
+
+    await expect(
+      previewEventLifecycle("ABC 123", { status: "active" }, "tok"),
+    ).resolves.toEqual({
+      cancellation: {
+        recipientCount: 2,
+        email,
+        sample: { name: "Ada Lovelace", email: "ada@example.com" },
+      },
+    });
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      "/events/lifecycle/preview?code=ABC%20123",
+      expect.objectContaining({
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer tok",
+        },
+        body: JSON.stringify({ status: "active" }),
+      }),
+    );
+
+    await expect(previewDeliveryRetry("delivery 1", "tok")).resolves.toEqual({
+      preview: true,
+      retryable: 3,
+      obsolete: 1,
+      email,
+    });
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      "/events/delivery-requests/delivery%201",
+      expect.objectContaining({
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer tok",
+        },
+        body: JSON.stringify({ preview: true }),
+      }),
+    );
+
+    // The real retry is unchanged: an empty body, no preview flag.
+    await retryDeliveryRequest("delivery 1", "tok");
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      "/events/delivery-requests/delivery%201",
+      expect.objectContaining({ method: "POST", body: "{}" }),
+    );
+  });
+
+  test("email preview refusals keep the server wording and status", async () => {
+    global.fetch
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            error: "Only a finalized or closed event can be reopened.",
+            event: { code: "ABC", status: "active" },
+          },
+          { status: 409 },
+        ),
+      )
+      .mockResolvedValueOnce(textResponse("gateway", { status: 502 }))
+      .mockResolvedValueOnce(
+        jsonResponse({ error: "Delivery request not found." }, { status: 404 }),
+      );
+
+    await expect(
+      previewEventLifecycle("ABC", { status: "active" }, "tok"),
+    ).rejects.toMatchObject({
+      message: "Only a finalized or closed event can be reopened.",
+      status: 409,
+      event: { code: "ABC", status: "active" },
+    });
+    await expect(
+      previewEventLifecycle("ABC", { status: "active" }, "tok"),
+    ).rejects.toMatchObject({ message: "HTTP 502", status: 502 });
+    await expect(previewDeliveryRetry("missing", "tok")).rejects.toThrow(
+      "Delivery request not found.",
     );
   });
 
