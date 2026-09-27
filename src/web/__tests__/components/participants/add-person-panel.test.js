@@ -303,7 +303,7 @@ describe("AddPersonPanel", () => {
   test("disables the buttons while an add is in flight", async () => {
     const user = userEvent.setup();
     let resolveAdd;
-    renderPanel({
+    const handlers = renderPanel({
       onAdd: jest.fn(
         () =>
           new Promise((resolve) => {
@@ -320,6 +320,7 @@ describe("AddPersonPanel", () => {
     ).toBeDisabled();
     expect(screen.getByRole("button", { name: "Done" })).toBeDisabled();
     fireEvent.keyDown(document, { key: "Escape" });
+    expect(handlers.onClose).not.toHaveBeenCalled();
     resolveAdd(added());
     await screen.findByRole("status");
     expect(add()).toBeEnabled();
