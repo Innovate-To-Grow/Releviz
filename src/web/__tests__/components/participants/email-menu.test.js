@@ -12,7 +12,7 @@ const openMenu = async (user) =>
   user.click(screen.getByRole("button", { name: "Email" }));
 
 describe("EmailMenu", () => {
-  test("lists both actions with their counts and the next reminder time", async () => {
+  test("lists both actions with their counts and the next reminder time in the event zone", async () => {
     const user = userEvent.setup();
     const onInviteAll = jest.fn();
     const onSendReminders = jest.fn();
@@ -21,15 +21,20 @@ describe("EmailMenu", () => {
       <EmailMenu
         notInvitedCount={7}
         remindCount={3}
-        reminders={{ enabled: true, nextAt }}
+        reminders={{ enabled: true, nextAt, timezone: "America/New_York" }}
         onInviteAll={onInviteAll}
         onSendReminders={onSendReminders}
       />,
     );
     await openMenu(user);
     expect(screen.getByRole("menu")).toHaveTextContent(
-      `Next automatic reminder: ${new Date(nextAt).toLocaleString([], {})}`,
+      `Next automatic reminder: ${new Date(nextAt).toLocaleString([], {
+        timeZone: "America/New_York",
+        timeZoneName: "short",
+      })}`,
     );
+    // 09:00Z is 5:00 AM in New York in October, and the zone is named.
+    expect(screen.getByRole("menu")).toHaveTextContent(/5:00:00\sAM EDT/);
     await user.click(
       screen.getByRole("menuitem", {
         name: "Invite everyone not invited yet (7)…",

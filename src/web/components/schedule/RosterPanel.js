@@ -1629,6 +1629,7 @@ const RosterPanel = forwardRef(function RosterPanel(
                 reminders={{
                   enabled: Boolean(event.remindersEnabled),
                   nextAt: reminderNextAt(event, now),
+                  timezone: event.timezone,
                 }}
                 disabled={reminderBusy}
                 onInviteAll={() =>

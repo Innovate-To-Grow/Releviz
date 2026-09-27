@@ -7,7 +7,8 @@ import MenuButton from "@/components/schedule/participants/MenuButton";
 /**
  * The header's Email menu: invite everyone still uninvited, send reminders to
  * invited people who have not submitted, and a line saying when the next
- * automatic reminder goes out.
+ * automatic reminder goes out, in the event's zone with the zone named (as
+ * the event details show the response deadline).
  */
 export default function EmailMenu({
   notInvitedCount = 0,
@@ -19,7 +20,9 @@ export default function EmailMenu({
 }) {
   const nextAt =
     reminders?.enabled && reminders?.nextAt
-      ? formatDateTimeInTimezone(reminders.nextAt)
+      ? formatDateTimeInTimezone(reminders.nextAt, reminders.timezone, {
+          timeZoneName: "short",
+        })
       : null;
   return (
     <MenuButton
