@@ -1448,6 +1448,10 @@ function FinalizeScalePanelContent({
     }
   };
 
+  const confirmationRecipients = Number(
+    confirmationPreview?.recipientCount || 0,
+  );
+
   // Runs once the confirmation email was reviewed and confirmed; a failure
   // stays on the dialog's confirmation step, and trying again reuses the
   // same idempotency key.
@@ -1497,10 +1501,6 @@ function FinalizeScalePanelContent({
       setConfirming(false);
     }
   };
-
-  const confirmationRecipients = Number(
-    confirmationPreview?.recipientCount || 0,
-  );
 
   const download = async () => {
     setDownloading(true);

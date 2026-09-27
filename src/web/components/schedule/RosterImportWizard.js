@@ -1466,11 +1466,7 @@ export default function RosterImportWizard({
         {phase === "complete" && result && (
           <div className="import-sheet__done d-flex flex-column gap-3">
             <Alert variant="success" role="status">
-              {rosterImportStatusMessage({
-                receipt,
-                autoInvitedCount: result.autoInvitedCount,
-                sendInvitations: false,
-              })}
+              {rosterImportStatusMessage({ receipt, sendInvitations: false })}
             </Alert>
           </div>
         )}
