@@ -657,7 +657,7 @@ describe("RosterPanel schedule drawer", () => {
       screen.getByRole("button", { name: "Edit schedule" }),
     ).toBeDisabled();
     expect(
-      screen.queryByRole("group", { name: "Roster actions" }),
+      screen.queryByRole("group", { name: "Participant actions" }),
     ).not.toBeInTheDocument();
   });
 });
@@ -723,10 +723,10 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
     expect(
       within(groupFilter).getByRole("option", { name: "Ungrouped" }),
     ).toHaveValue("__ungrouped__");
-    expect(screen.getByLabelText("Roster summary")).toHaveTextContent(
+    expect(screen.getByLabelText("Participant summary")).toHaveTextContent(
       "2 groups",
     );
-    const table = screen.getByRole("region", { name: "Roster participants" });
+    const table = screen.getByRole("region", { name: "Participant table" });
     // Name, email, then All and one checkbox column per group, headed by the
     // group's name as typed.
     expect(
@@ -887,7 +887,7 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
     patchRosterBulk.mockRejectedValueOnce(new Error("Bulk failed"));
     const onResultsInvalidated = jest.fn();
     await renderPanel({ onResultsInvalidated });
-    const bulk = await screen.findByLabelText("Bulk roster actions");
+    const bulk = await screen.findByLabelText("Bulk participant actions");
     fireEvent.click(within(bulk).getByText("Bulk actions"));
     fireEvent.click(screen.getByLabelText("Select Temp Person"));
     fireEvent.click(within(bulk).getByLabelText("Apply bulk included status"));
@@ -1219,7 +1219,7 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
     act(() => {
       silent = panel.current.refresh("token", { silent: true });
     });
-    expect(screen.queryByText("Loading roster…")).not.toBeInTheDocument();
+    expect(screen.queryByText("Loading participants…")).not.toBeInTheDocument();
     await act(async () => {
       releaseRoster(
         rosterResponse(
@@ -1233,7 +1233,7 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
     });
     expect(fetchRoster).toHaveBeenCalledTimes(2);
     expect(panel.current.activity()).toEqual(moved);
-    expect(screen.getByLabelText("Roster summary")).toHaveTextContent(
+    expect(screen.getByLabelText("Participant summary")).toHaveTextContent(
       "1 submitted",
     );
     expect(screen.getByLabelText("Weight for Temp Person")).toHaveFocus();
@@ -1248,7 +1248,7 @@ describe("RosterPanel filters, paging, and bulk updates", () => {
       ).rejects.toThrow("offline");
     });
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Roster summary")).toHaveTextContent(
+    expect(screen.getByLabelText("Participant summary")).toHaveTextContent(
       "1 submitted",
     );
     fetchRoster.mockResolvedValueOnce(
@@ -1538,7 +1538,7 @@ describe("RosterPanel organizer-managed people", () => {
     });
     fireEvent.submit(invite.form);
     expect(await screen.findByRole("status")).toHaveTextContent(
-      /^Managed Person is already on this roster\. No new invitation was sent\.$/,
+      /^Managed Person is already a participant\. No new invitation was sent\.$/,
     );
 
     // A hidden row that comes back counts as added again.
@@ -1721,7 +1721,7 @@ describe("RosterPanel organizer-managed people", () => {
     );
     await renderPanel();
     const table = await screen.findByRole("region", {
-      name: "Roster participants",
+      name: "Participant table",
     });
     const rowFor = (name) =>
       within(table).getByRole("rowheader", { name }).closest("tr");
@@ -1743,7 +1743,7 @@ describe("RosterPanel organizer-managed people", () => {
       within(managedRow).getByRole("button", { name: "Edit schedule" }),
     ).toBeEnabled();
     expect(within(managedRow).getByText("Not sent")).toBeInTheDocument();
-    expect(screen.getByLabelText("Search roster")).toHaveAttribute(
+    expect(screen.getByLabelText("Search participants")).toHaveAttribute(
       "placeholder",
       "Search name, email or phone",
     );
@@ -1836,7 +1836,7 @@ describe("RosterPanel adds people and sends invitations", () => {
       within(form).getByRole("heading", { name: "Add a person" }),
     ).toBeInTheDocument();
     expect(form).toHaveTextContent(
-      "Add one person to the roster. Enter adds them without emailing; use Add and send invitation to email their secure link now, or Send invitation later.",
+      "Add one person to the event. Enter adds them without emailing; use Add and send invitation to email their secure link now, or Send invitation later.",
     );
     expect(screen.getByRole("button", { name: "Close add person" })).toBe(
       trigger,
@@ -1944,7 +1944,7 @@ describe("RosterPanel adds people and sends invitations", () => {
     });
     fireEvent.click(within(reopened).getByRole("button", { name: "Add only" }));
     expect(await screen.findByRole("status")).toHaveTextContent(
-      "Ben is already on this roster. No new invitation was sent.",
+      "Ben is already a participant. No new invitation was sent.",
     );
     expect(onDeliveryRequestChange).not.toHaveBeenCalled();
   });
@@ -2093,7 +2093,7 @@ describe("RosterPanel adds people and sends invitations", () => {
       within(reopened).getByRole("button", { name: "Add and send invitation" }),
     );
     expect(await screen.findByRole("status")).toHaveTextContent(
-      "Ben is already on this roster. No new invitation was sent.",
+      "Ben is already a participant. No new invitation was sent.",
     );
     expect(onDeliveryRequestChange).toHaveBeenCalledTimes(1);
   });
@@ -2131,7 +2131,7 @@ describe("RosterPanel adds people and sends invitations", () => {
     fireEvent.submit(form);
     await waitFor(() =>
       expect(within(form).getByRole("alert")).toHaveTextContent(
-        "The participant was added without a roster ID.",
+        "The participant was added without an ID.",
       ),
     );
     expect(createManagedParticipant).toHaveBeenCalledTimes(3);
@@ -2168,9 +2168,9 @@ describe("RosterPanel adds people and sends invitations", () => {
     resendBoxes.forEach((box) => expect(box).not.toBeChecked());
     expect(screen.getAllByText("0 selected")).toHaveLength(2);
 
-    const list = screen.getByRole("region", { name: "Roster entries" });
+    const list = screen.getByRole("region", { name: "Participant list" });
     const [topBar, bottomBar] = within(list).getAllByText(/selected$/);
-    const table = screen.getByRole("region", { name: "Roster participants" });
+    const table = screen.getByRole("region", { name: "Participant table" });
     expect(
       topBar.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
@@ -2337,7 +2337,7 @@ describe("RosterPanel adds people and sends invitations", () => {
     await renderPanel();
     expect(
       await screen.findByText(
-        "Add someone or import a roster to start collecting availability.",
+        "Add someone or import a participant list to start collecting availability.",
       ),
     ).toBeVisible();
     expect(
@@ -2389,7 +2389,7 @@ describe("RosterPanel groups", () => {
   };
 
   async function openBulk() {
-    const bulk = await screen.findByLabelText("Bulk roster actions");
+    const bulk = await screen.findByLabelText("Bulk participant actions");
     fireEvent.click(within(bulk).getByText("Bulk actions"));
     return bulk;
   }
@@ -2450,10 +2450,12 @@ describe("RosterPanel groups", () => {
     const onResultsInvalidated = jest.fn();
     await renderPanel({ onResultsInvalidated });
     await screen.findByText("Ada");
-    expect(screen.getByLabelText("Roster summary")).toHaveTextContent(
+    expect(screen.getByLabelText("Participant summary")).toHaveTextContent(
       "1 group",
     );
-    const groupsRegion = screen.getByRole("region", { name: "Roster groups" });
+    const groupsRegion = screen.getByRole("region", {
+      name: "Participant groups",
+    });
     expect(groupsRegion).toHaveTextContent("Faculty");
     expect(groupsRegion).toHaveTextContent("2 people");
     // Each group heads a checkbox column in the roster.
@@ -2636,7 +2638,7 @@ describe("RosterPanel groups", () => {
     expect(
       await screen.findByLabelText("Weight for group Board"),
     ).toBeInTheDocument();
-    expect(screen.getByLabelText("Roster summary")).toHaveTextContent(
+    expect(screen.getByLabelText("Participant summary")).toHaveTextContent(
       "2 groups",
     );
     expect(fetchRoster).toHaveBeenCalledTimes(3);
@@ -2707,7 +2709,7 @@ describe("RosterPanel groups", () => {
     });
     // The older listing does not take the new group away again.
     expect(screen.getByLabelText("Weight for group Board")).toBeInTheDocument();
-    expect(screen.getByLabelText("Roster summary")).toHaveTextContent(
+    expect(screen.getByLabelText("Participant summary")).toHaveTextContent(
       "2 groups",
     );
 
@@ -2727,9 +2729,9 @@ describe("RosterPanel groups", () => {
       await panel.current.refresh("token", { silent: true });
     });
     expect(
-      within(screen.getByRole("region", { name: "Roster groups" })).getByText(
-        "1 person",
-      ),
+      within(
+        screen.getByRole("region", { name: "Participant groups" }),
+      ).getByText("1 person"),
     ).toBeInTheDocument();
   });
 
@@ -3023,9 +3025,9 @@ describe("RosterPanel groups", () => {
     ).not.toBeInTheDocument();
     // The recounted groups arrive with the patch; no reload is needed.
     expect(
-      within(screen.getByRole("region", { name: "Roster groups" })).getByText(
-        "1 person",
-      ),
+      within(
+        screen.getByRole("region", { name: "Participant groups" }),
+      ).getByText("1 person"),
     ).toBeInTheDocument();
     expect(fetchRoster).toHaveBeenCalledTimes(1);
 
@@ -3221,7 +3223,7 @@ describe("RosterPanel groups", () => {
       ),
     );
     expect(
-      screen.getByRole("region", { name: "Roster groups" }),
+      screen.getByRole("region", { name: "Participant groups" }),
     ).toHaveTextContent("Mixed");
     // No roster reload was needed for the table to update.
     expect(fetchRoster).toHaveBeenCalledTimes(1);
@@ -3289,7 +3291,7 @@ describe("RosterPanel groups", () => {
       ),
     );
     expect(await screen.findByRole("status")).toHaveTextContent(
-      "Updated 2 roster entries.",
+      "Updated 2 participants.",
     );
     await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(2));
 
@@ -3425,7 +3427,7 @@ describe("RosterPanel groups", () => {
     );
     expect(patchRosterBulk).toHaveBeenCalledTimes(1);
     expect(await screen.findByRole("status")).toHaveTextContent(
-      "Updated 2 roster entries.",
+      "Updated 2 participants.",
     );
     await waitFor(() => expect(fetchRoster).toHaveBeenCalledTimes(3));
   });
@@ -3531,7 +3533,7 @@ describe("RosterPanel groups", () => {
       ),
     );
     expect(await screen.findByRole("status")).toHaveTextContent(
-      "Updated 2 roster entries.",
+      "Updated 2 participants.",
     );
   });
 
@@ -3569,7 +3571,7 @@ describe("RosterPanel groups", () => {
     ).not.toBeInTheDocument();
     expect(screen.getByLabelText("All groups for Ada")).toBeDisabled();
     expect(
-      screen.queryByLabelText("Bulk roster actions"),
+      screen.queryByLabelText("Bulk participant actions"),
     ).not.toBeInTheDocument();
 
     // Reactivating brings the bulk form back at its defaults.
@@ -3601,17 +3603,17 @@ describe("RosterPanel groups", () => {
     await renderPanel();
     expect(
       await screen.findByText(
-        "Add someone or import a roster to start collecting availability.",
+        "Add someone or import a participant list to start collecting availability.",
       ),
     ).toBeVisible();
     // Nothing to filter or bulk-edit yet, but groups can be set up ahead of
     // the import.
     expect(
-      screen.queryByRole("search", { name: "Roster filters" }),
+      screen.queryByRole("search", { name: "Participant filters" }),
     ).not.toBeInTheDocument();
     expect(screen.queryByText("Bulk actions")).not.toBeInTheDocument();
     expect(screen.getByText(/No groups yet/)).toHaveTextContent(
-      "once they are on the roster",
+      "once they are on the participant list",
     );
 
     await userEvent.click(screen.getByRole("button", { name: "New group" }));
@@ -3630,7 +3632,7 @@ describe("RosterPanel groups", () => {
       "Created Faculty.",
     );
     const groupsRegion = await screen.findByRole("region", {
-      name: "Roster groups",
+      name: "Participant groups",
     });
     expect(
       within(groupsRegion).getByLabelText("Weight for group Faculty"),
@@ -3703,7 +3705,7 @@ describe("RosterPanel groups", () => {
     expect(screen.getByRole("button", { name: "New group" })).toBeEnabled();
     expect(screen.getByText(/No groups yet/)).toBeInTheDocument();
     expect(
-      screen.queryByRole("region", { name: "Roster groups" }),
+      screen.queryByRole("region", { name: "Participant groups" }),
     ).not.toBeInTheDocument();
     expect(screen.getByLabelText("All groups for Ada")).toBeChecked();
   });
@@ -3801,7 +3803,7 @@ describe("RosterPanel people corrections", () => {
     ).toBeEnabled();
     expect(
       screen.getByText(
-        "You are on the roster now. Enter your availability with Edit my schedule on your row.",
+        "You are on the participant list now. Enter your availability with Edit my schedule on your row.",
       ),
     ).toBeInTheDocument();
     expect(
@@ -3872,7 +3874,7 @@ describe("RosterPanel people corrections", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add myself" }));
     await waitFor(() =>
       expect(screen.getByRole("alert")).toHaveTextContent(
-        "Unable to add you to the roster.",
+        "Unable to add you as a participant.",
       ),
     );
     expect(fetchRosterSchedule).not.toHaveBeenCalled();
@@ -3936,7 +3938,7 @@ describe("RosterPanel people corrections", () => {
   test("renames without a request when nothing changed, and keeps the dialog on errors", async () => {
     patchRosterParticipant
       .mockRejectedValueOnce(
-        Object.assign(new Error("ada@example.com is already on this roster."), {
+        Object.assign(new Error("ada@example.com is already a participant."), {
           status: 409,
         }),
       )
@@ -3970,10 +3972,10 @@ describe("RosterPanel people corrections", () => {
     );
     // The reason shows in the dialog, not under the table.
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-      "ada@example.com is already on this roster.",
+      "ada@example.com is already a participant.",
     );
     expect(
-      screen.queryByText("ada@example.com is already on this roster.", {
+      screen.queryByText("ada@example.com is already a participant.", {
         selector: ".roster-panel__message *, .roster-panel__message",
       }),
     ).not.toBeInTheDocument();
@@ -4052,7 +4054,7 @@ describe("RosterPanel people corrections", () => {
     // Cancel leaves everything as it was.
     fireEvent.click(screen.getByRole("button", { name: "Remove Ada" }));
     let dialog = screen.getByRole("dialog", {
-      name: "Remove Ada from the roster?",
+      name: "Remove Ada from the event?",
     });
     expect(dialog).toHaveTextContent(
       "To keep their answers but leave them out of the results, untick Included instead.",
@@ -4063,7 +4065,7 @@ describe("RosterPanel people corrections", () => {
     fetchRoster.mockResolvedValue(rosterResponse([ben]));
     fireEvent.click(screen.getByRole("button", { name: "Remove Ada" }));
     dialog = screen.getByRole("dialog", {
-      name: "Remove Ada from the roster?",
+      name: "Remove Ada from the event?",
     });
     fireEvent.click(
       within(dialog).getByRole("button", { name: "Remove person" }),
@@ -4076,7 +4078,7 @@ describe("RosterPanel people corrections", () => {
       ),
     );
     expect(await screen.findByRole("status")).toHaveTextContent(
-      "Ada was removed from the roster.",
+      "Ada was removed from the event.",
     );
     expect(onResultsInvalidated).toHaveBeenCalledWith(12);
     expect(screen.queryByText("Ada")).not.toBeInTheDocument();
@@ -4085,20 +4087,20 @@ describe("RosterPanel people corrections", () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove Ben" }));
     fireEvent.click(
       within(
-        screen.getByRole("dialog", { name: "Remove Ben from the roster?" }),
+        screen.getByRole("dialog", { name: "Remove Ben from the event?" }),
       ).getByRole("button", { name: "Remove person" }),
     );
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "An email to this person is being sent right now.",
     );
     expect(
-      screen.queryByRole("dialog", { name: "Remove Ben from the roster?" }),
+      screen.queryByRole("dialog", { name: "Remove Ben from the event?" }),
     ).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Remove Ben" }));
     fireEvent.click(
       within(
-        screen.getByRole("dialog", { name: "Remove Ben from the roster?" }),
+        screen.getByRole("dialog", { name: "Remove Ben from the event?" }),
       ).getByRole("button", { name: "Remove person" }),
     );
     await waitFor(() =>
@@ -4114,11 +4116,11 @@ describe("RosterPanel people corrections", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Remove Ada" }));
     fireEvent.click(
       within(
-        screen.getByRole("dialog", { name: "Remove Ada from the roster?" }),
+        screen.getByRole("dialog", { name: "Remove Ada from the event?" }),
       ).getByRole("button", { name: "Remove person" }),
     );
     expect(await screen.findByRole("status")).toHaveTextContent(
-      "Ada was removed from the roster.",
+      "Ada was removed from the event.",
     );
   });
 
@@ -4232,7 +4234,7 @@ describe("RosterPanel group inclusion", () => {
     await renderPanel({ onResultsInvalidated });
     const facultyRow = (
       await screen.findByRole("region", {
-        name: "Roster groups",
+        name: "Participant groups",
       })
     ).querySelector('[data-roster-group="Faculty"]');
     fireEvent.click(
@@ -4281,7 +4283,7 @@ describe("RosterPanel group inclusion", () => {
     await renderPanel({ onResultsInvalidated });
     const facultyRow = (
       await screen.findByRole("region", {
-        name: "Roster groups",
+        name: "Participant groups",
       })
     ).querySelector('[data-roster-group="Faculty"]');
     fireEvent.click(

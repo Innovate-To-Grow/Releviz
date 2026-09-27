@@ -8,7 +8,7 @@ import {
   startingAvailabilityValue,
 } from "@/components/ui/Availability";
 import FormField from "@/components/ui/FormField";
-import { RefreshIcon, SaveIcon, VerifiedIcon } from "@/components/ui/icons";
+import { SaveIcon, VerifiedIcon } from "@/components/ui/icons";
 import StatusBadge from "@/components/ui/StatusBadge";
 import ScheduleChannelEditor from "@/components/schedule/ScheduleChannelEditor";
 
@@ -22,8 +22,9 @@ function formatClockTime(value) {
 /**
  * The live-sync line under the event name: whether new responses are being
  * picked up on their own, and when the workspace last changed because of it.
- * Live sync is always on while the event is active; `live` is null when the
- * workspace is not syncing (the event is not active).
+ * There is no manual refresh; a failed pass is retried on its own. `live` is
+ * null while the event is not active (the workspace still syncs then, at a
+ * slower pace, but there are no responses to speak of).
  */
 export function LiveSyncStatus({ live }) {
   if (!live) return null;
@@ -40,7 +41,7 @@ export function LiveSyncStatus({ live }) {
           to be read out every time. */}
       <span role="status" className="text-secondary">
         {paused
-          ? `${live.error} Use Refresh to load new responses.`
+          ? `${live.error} Retrying automatically.`
           : "New responses load automatically."}
       </span>
       {live.updatedAt ? (
@@ -59,13 +60,7 @@ export function LiveSyncStatus({ live }) {
   );
 }
 
-export function OrganizerHeader({
-  event,
-  onRefresh,
-  refreshing = false,
-  controls = null,
-  live = null,
-}) {
+export function OrganizerHeader({ event, controls = null, live = null }) {
   return (
     <header className="organizer-heading page-header">
       <div className="page-header__copy organizer-heading__content">
@@ -84,15 +79,6 @@ export function OrganizerHeader({
         aria-label="Workspace actions"
       >
         {controls}
-        <AppButton
-          onClick={onRefresh}
-          variant="outlined"
-          icon={<RefreshIcon />}
-          disabled={refreshing}
-          aria-busy={refreshing}
-        >
-          {refreshing ? "Refreshing…" : "Refresh"}
-        </AppButton>
       </div>
     </header>
   );

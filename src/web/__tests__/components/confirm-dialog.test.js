@@ -16,7 +16,7 @@ function renderDialog(props = {}) {
       onClose={jest.fn()}
       {...props}
     >
-      <p>People stay on the roster.</p>
+      <p>People stay on the participant list.</p>
     </ConfirmDialog>,
   );
 }
@@ -27,7 +27,9 @@ describe("ConfirmDialog", () => {
     expect(
       screen.getByRole("dialog", { name: "Delete group Faculty?" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("People stay on the roster.")).toBeInTheDocument();
+    expect(
+      screen.getByText("People stay on the participant list."),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
     expect(
       screen.getByRole("button", { name: "Delete group" }),

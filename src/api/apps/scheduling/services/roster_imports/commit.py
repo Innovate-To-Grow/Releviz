@@ -72,7 +72,7 @@ def _resolve_members(rows: list[RosterImportRow]):
         for contact in locked_contacts
     ):
         raise RosterImportError(
-            "An account changed while the roster was being imported; retry the commit.",
+            "An account changed while participants were being imported; retry the commit.",
             status_code=409,
         )
     contacts = {}
@@ -92,12 +92,12 @@ def _resolve_members(rows: list[RosterImportRow]):
             member = contact.member
             if not member.is_active:
                 raise RosterImportError(
-                    "A roster email belongs to an inactive account.",
+                    "An imported email belongs to an inactive account.",
                     status_code=409,
                 )
             if getattr(member, "access_level", "full") == "full" and not contact.verified:
                 raise RosterImportError(
-                    "A roster email belongs to an unverified full account.",
+                    "An imported email belongs to an unverified full account.",
                     status_code=409,
                 )
             resolved[email] = member
@@ -139,7 +139,7 @@ def _resolve_members(rows: list[RosterImportRow]):
     member_ids = [member.pk for member in resolved.values()]
     if len(set(member_ids)) != len(member_ids):
         raise RosterImportError(
-            "Two roster email addresses resolve to the same account.",
+            "Two imported email addresses resolve to the same account.",
             status_code=409,
         )
     return resolved
@@ -168,7 +168,7 @@ def _rebuild_event_roster(event: Event, now) -> None:
     )
     if any(job.status == EmailDeliveryJob.Status.PROCESSING for job in jobs):
         raise RosterImportError(
-            "Wait for in-progress email deliveries to finish before rebuilding the roster.",
+            "Wait for in-progress email deliveries to finish before rebuilding the participant list.",
             status_code=409,
         )
     if challenge_ids:
@@ -184,7 +184,7 @@ def _rebuild_event_roster(event: Event, now) -> None:
             ],
         ).update(
             status=EmailDeliveryJob.Status.CANCELED,
-            last_error="The event roster was rebuilt.",
+            last_error="The participant list was rebuilt.",
             locked_at=None,
             lock_token=None,
             updated_at=now,
@@ -501,7 +501,7 @@ def commit_roster_import(*, event: Event, batch_id, organizer, data):
                 .first()
             )
             if batch is None:
-                raise RosterImportError("Roster import not found.", status_code=404)
+                raise RosterImportError("Participant import not found.", status_code=404)
             previous = RosterImportReceipt.objects.filter(
                 event=event,
                 idempotency_key=idempotency_key,
@@ -531,7 +531,7 @@ def commit_roster_import(*, event: Event, batch_id, organizer, data):
             require_preview(batch)
             if event.organizer_id != organizer.pk:
                 raise RosterImportError(
-                    "Only the organizer can commit a roster import.",
+                    "Only the organizer can commit a participant import.",
                     status_code=403,
                 )
             write_error = response_write_error(event)
@@ -542,7 +542,7 @@ def commit_roster_import(*, event: Event, batch_id, organizer, data):
                 )
             if getattr(event, "final_meeting", None) is not None and event.final_meeting.active:
                 raise RosterImportError(
-                    "Reopen this event before changing a roster with a confirmed meeting.",
+                    "Reopen this event before changing the participants of a confirmed meeting.",
                     status_code=409,
                 )
             if mode == RosterImportReceipt.Mode.REBUILD:
@@ -562,11 +562,11 @@ def commit_roster_import(*, event: Event, batch_id, organizer, data):
                 .order_by("row_number")
             )
             if not rows:
-                raise RosterImportError("Select at least one valid roster row.")
+                raise RosterImportError("Select at least one valid row.")
             invalid = [row for row in rows if row.validation_errors]
             if invalid:
                 raise RosterImportError(
-                    "Resolve or deselect invalid roster rows before committing.",
+                    "Resolve or deselect invalid rows before committing.",
                     status_code=409,
                     extra={"invalidRowCount": len(invalid)},
                 )
@@ -654,6 +654,6 @@ def commit_roster_import(*, event: Event, batch_id, organizer, data):
         raise RosterImportError(str(exc), status_code=exc.status_code) from exc
     except IntegrityError as exc:
         raise RosterImportError(
-            "The roster changed concurrently; refresh the preview and try again.",
+            "The participant list changed concurrently; refresh the preview and try again.",
             status_code=409,
         ) from exc

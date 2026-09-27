@@ -1,2 +1,8 @@
 -r base.in
 gunicorn>=26.0.0,<27
+# gunicorn keeps managing the worker processes, and uvicorn serves ASGI in
+# them. gunicorn's own ASGI worker (26.1 and 26.2) drops a request that
+# arrives on a kept-alive connection while Django is still finishing the
+# previous one, which a busy browser or the load balancer does routinely.
+uvicorn>=0.54.0,<0.55
+uvicorn-worker>=0.4.0,<0.5

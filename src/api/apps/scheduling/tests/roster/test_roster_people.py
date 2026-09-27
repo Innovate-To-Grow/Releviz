@@ -372,7 +372,7 @@ class ChangeParticipantEmailTests(RosterPeopleTestCase):
         gone = self.patch(bob, {"email": "gone@example.com"})
 
         self.assertEqual(taken.status_code, 409)
-        self.assertEqual(taken.data["error"], "ada@example.com is already on this roster.")
+        self.assertEqual(taken.data["error"], "ada@example.com is already a participant.")
         self.assertEqual(own.status_code, 409)
         self.assertEqual(own.data["error"], OWN_ADDRESS_MESSAGE)
         self.assertEqual(gone.status_code, 409)

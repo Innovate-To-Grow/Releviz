@@ -434,7 +434,7 @@ class RosterGroupEndpointTests(RosterGroupTestCase):
                 response = getattr(self.client, method)(url, payload, format="json")
                 self.assertEqual(response.status_code, 403)
                 self.assertEqual(
-                    response.data, {"error": "Only the organizer can manage the roster"}
+                    response.data, {"error": "Only the organizer can manage participants"}
                 )
         self.assertEqual(
             list(ParticipantGroup.objects.filter(event=self.event).values_list("name", flat=True)),

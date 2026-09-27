@@ -51,4 +51,12 @@ USER appuser
 EXPOSE 4000
 
 ENTRYPOINT ["./docker-entrypoint.sh"]
-CMD ["sh", "-c", "gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-4000} --workers 3"]
+# gunicorn manages the worker processes and uvicorn serves ASGI in each one,
+# which lets Django stream the organizer event feed (a sync WSGI worker would
+# buffer the whole response). gunicorn's own ASGI worker is not used: it drops
+# a request that arrives on a kept-alive connection while Django is still
+# finishing the previous one. Keep-alive stays above the ALB's 60 s idle
+# timeout so the load balancer, not the worker, closes idle connections, and
+# the graceful timeout stays under ECS's 30 s stop so a worker holding open
+# streams exits before the SIGKILL.
+CMD ["sh", "-c", "gunicorn config.asgi:application -k uvicorn_worker.UvicornWorker --bind 0.0.0.0:${PORT:-4000} --workers 3 --keep-alive 75 --graceful-timeout 10"]

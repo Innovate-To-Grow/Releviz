@@ -31,7 +31,7 @@ EMAIL_LOCKED_MESSAGE = (
 OWN_ROW_EMAIL_MESSAGE = "Your own email comes from your account settings."
 OWN_ADDRESS_MESSAGE = (
     "That is one of your own addresses. Enter this person's own email, or use Add myself "
-    "to put yourself on the roster."
+    "to add yourself as a participant."
 )
 
 
@@ -73,7 +73,7 @@ def _retire_invitations(invitations, now) -> None:
         status__in=[EmailDeliveryJob.Status.PENDING, EmailDeliveryJob.Status.RETRY],
     ).update(
         status=EmailDeliveryJob.Status.CANCELED,
-        last_error="The person was changed on the event roster.",
+        last_error="The person was changed on the event's participant list.",
         locked_at=None,
         lock_token=None,
         updated_at=now,
@@ -157,7 +157,7 @@ def change_participant_email(*, event: Event, participant: Participant, organize
     except ManagedParticipantError as exc:
         raise RosterImportError(str(exc), status_code=exc.status_code) from exc
     if member.pk != participant.member_id and event.participants.filter(member=member).exists():
-        raise RosterImportError(f"{normalized} is already on this roster.", status_code=409)
+        raise RosterImportError(f"{normalized} is already a participant.", status_code=409)
 
     # A leftover invitation for the new address (someone removed earlier)
     # is replaced too, so the new one starts unsent with a fresh link.

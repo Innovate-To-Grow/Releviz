@@ -22,10 +22,14 @@ const {
   openRecommendedTimes,
   readSession,
   recomputeEventResults,
-  refreshWorkspace,
   registerAccount,
   selectOption,
 } = require("./helpers/releviz");
+
+// The workspace and its delivery card keep themselves current on their own,
+// checking every 3 s and easing off to every 15 s while nothing changes, so a
+// wait for a change they pick up needs more than the default expect timeout.
+const LIVE_SYNC_TIMEOUT_MS = 20_000;
 
 async function importRoster(request, eventCode, token, pastedText) {
   const preview = await apiJson(
@@ -430,6 +434,20 @@ test.describe("Releviz account and scheduling flow", () => {
     await registerAccount(page, organizerEmail, "Morgan", "Manager");
     await page.getByRole("link", { name: "Create New Event" }).click();
     await fillTextbox(page, "Event Name", eventName);
+    // The workspace opens one event stream as soon as it mounts. Playwright
+    // reports a response when its headers arrive, which for a Server-Sent
+    // Events response is long before the body ends, so this wait settles
+    // while the stream stays open. The request counter shows the stream is
+    // doing the work: while it is up, the digest is only read on a pushed
+    // change or once a minute.
+    const streamOpened = page.waitForResponse(
+      (response) =>
+        response.url().includes("/events/stream?") && response.status() === 200,
+    );
+    let activityRequests = 0;
+    page.on("request", (request) => {
+      if (request.url().includes("/events/activity?")) activityRequests += 1;
+    });
     await page.getByRole("button", { name: "Create Event" }).click();
     await page.waitForURL(/\/event\?code=/);
     const eventCode = new URL(page.url()).searchParams.get("code");
@@ -437,6 +455,20 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(
       page.getByRole("heading", { level: 2, name: eventName }),
     ).toBeVisible();
+    await streamOpened;
+    // The results worker publishes the new event's first snapshot, and that
+    // publication is itself a pushed change; once the panel shows the
+    // revision, the catch-up pass the stream's open triggered has landed.
+    await expect
+      .poll(() => currentResultsRevision(page), { timeout: 20_000 })
+      .toBeGreaterThan(0);
+    await page.waitForTimeout(1500);
+    const quietStart = activityRequests;
+    await page.waitForTimeout(12_000);
+    // While the stream is up the workspace only checks the digest on a pushed
+    // change or once a minute, whereas fallback polling would have asked at
+    // least twice in twelve seconds.
+    expect(activityRequests - quietStart).toBe(0);
     const organizerSession = await readSession(page);
     const activeEvent = await apiJson(
       request,
@@ -447,10 +479,10 @@ test.describe("Releviz account and scheduling flow", () => {
     expect(activeEvent.response.status()).toBe(200);
     expect(activeEvent.payload.event.status).toBe("active");
 
-    await page.getByRole("button", { name: "Import roster" }).click();
+    await page.getByRole("button", { name: "Import participants" }).click();
     await page.getByRole("tab", { name: "Paste spreadsheet" }).click();
     await page
-      .getByLabel("Pasted roster rows")
+      .getByLabel("Pasted participant rows")
       .fill(
         "name\temail\tgroup\tweight\tincluded\n" +
           `Temporary Taylor\t${temporaryEmail}\tE2E Group\t0.5\ttrue`,
@@ -466,7 +498,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(page.getByText("Ready", { exact: true })).toBeVisible();
     await page.getByLabel("Send invitations to newly added people").check();
     const invitationStartedAt = Date.now() - 1000;
-    await page.getByRole("button", { name: "Merge roster" }).click();
+    await page.getByRole("button", { name: "Merge participants" }).click();
     await expect(
       page.getByText(
         "Imported 1 people: 1 added, 0 updated. 1 invitation queued.",
@@ -519,8 +551,9 @@ test.describe("Releviz account and scheduling flow", () => {
       invitationStartedAt,
       (body) => body.includes(`/temp-access?code=${eventCode}`),
     );
-    await refreshWorkspace(page);
-    await expect(eventDeliveryProgress.getByText("1 sent")).toBeVisible();
+    await expect(eventDeliveryProgress.getByText("1 sent")).toBeVisible({
+      timeout: LIVE_SYNC_TIMEOUT_MS,
+    });
     const sentRoster = await apiJson(
       request,
       "GET",
@@ -572,7 +605,7 @@ test.describe("Releviz account and scheduling flow", () => {
       temporaryPage.getByText("You are responding as Temporary Taylor"),
     ).toBeVisible();
 
-    await expect(page.getByLabel("Roster summary")).toContainText(
+    await expect(page.getByLabel("Participant summary")).toContainText(
       "0 submitted",
     );
     let revisionBeforeResponse = -1;
@@ -605,7 +638,7 @@ test.describe("Releviz account and scheduling flow", () => {
     // sync checks every 3 s while things change and eases off to every 15 s
     // while nothing does): the roster counts it and the results move on to a
     // newer revision, with no Refresh press.
-    await expect(page.getByLabel("Roster summary")).toContainText(
+    await expect(page.getByLabel("Participant summary")).toContainText(
       "1 submitted",
       {
         timeout: 20_000,
@@ -618,8 +651,12 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(
       page.getByText("New responses load automatically."),
     ).toBeVisible();
-    // Live sync cannot be switched off: the header offers no rate control.
+    // Live sync cannot be switched off and needs no hand: the header offers
+    // neither a rate control nor a Refresh button.
     await expect(page.getByLabel("Check for new responses")).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "Refresh", exact: true }),
+    ).toHaveCount(0);
 
     await organizerDrawer.getByRole("button", { name: "Save draft" }).click();
     await expect(
@@ -904,8 +941,11 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(eventDeliveryProgress).toBeVisible();
 
     dispatchEmailJobs();
-    await refreshWorkspace(page);
-    await expect(addedCard.getByText("Sent", { exact: true })).toBeVisible();
+    // Delivery moves the invitation, which the live sync picks up as a
+    // roster change.
+    await expect(addedCard.getByText("Sent", { exact: true })).toBeVisible({
+      timeout: LIVE_SYNC_TIMEOUT_MS,
+    });
     const rosterAfterSend = await apiJson(
       request,
       "GET",
@@ -1147,8 +1187,9 @@ test.describe("Releviz account and scheduling flow", () => {
       ),
     ).toBeVisible();
 
-    await refreshWorkspace(page);
-    await expect(fullRow).toContainText("Self-managed");
+    await expect(fullRow).toContainText("Self-managed", {
+      timeout: LIVE_SYNC_TIMEOUT_MS,
+    });
     await expect(
       fullRow.getByRole("button", { name: "Edit schedule" }),
     ).toHaveCount(0);
@@ -1267,7 +1308,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await page.getByLabel("Ada Typo in Team A").check();
     await page.getByRole("button", { name: "Save group changes" }).click();
     const teamRow = page
-      .getByRole("region", { name: "Roster groups" })
+      .getByRole("region", { name: "Participant groups" })
       .locator('[data-roster-group="Team A"]');
     await expect(teamRow).toContainText("1 person");
     await teamRow.getByRole("button", { name: "Only this group" }).click();
@@ -1286,14 +1327,14 @@ test.describe("Releviz account and scheduling flow", () => {
     // Removing asks first, then deletes the row and its invitation.
     await page.getByRole("button", { name: "Remove Ben Leaving" }).click();
     const removeDialog = page.getByRole("dialog", {
-      name: "Remove Ben Leaving from the roster?",
+      name: "Remove Ben Leaving from the event?",
     });
     await expect(
       removeDialog.getByRole("button", { name: "Cancel" }),
     ).toBeFocused();
     await removeDialog.getByRole("button", { name: "Remove person" }).click();
     await expect(
-      page.getByText("Ben Leaving was removed from the roster."),
+      page.getByText("Ben Leaving was removed from the event."),
     ).toBeVisible();
     await expect(
       page.locator("tr.roster-table__row", { hasText: "Ben Leaving" }),
@@ -1378,7 +1419,7 @@ test.describe("Releviz account and scheduling flow", () => {
       .click();
     await expect(page.getByText("Created E2E Early.")).toBeVisible();
     const earlyGroupRow = page
-      .getByRole("region", { name: "Roster groups" })
+      .getByRole("region", { name: "Participant groups" })
       .locator('[data-roster-group="E2E Early"]');
     await expect(earlyGroupRow).toContainText("0 people");
     await earlyGroupRow.getByRole("button", { name: "Delete group" }).click();
@@ -1935,8 +1976,9 @@ test.describe("Releviz account and scheduling flow", () => {
     const reminderDeliveryProgress = page.getByLabel("Event delivery progress");
     await expect(reminderDeliveryProgress.getByText("1 total")).toBeVisible();
     dispatchEmailJobs();
-    await refreshWorkspace(page);
-    await expect(reminderDeliveryProgress.getByText("1 sent")).toBeVisible();
+    await expect(reminderDeliveryProgress.getByText("1 sent")).toBeVisible({
+      timeout: LIVE_SYNC_TIMEOUT_MS,
+    });
     const reminder = await latestEmailFor(
       manualEmail,
       reminderStartedAt,
@@ -1981,7 +2023,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(registeredParticipantCard).toContainText("Submitted");
 
     const bulkControls = page.locator(
-      'details[aria-label="Bulk roster actions"]',
+      'details[aria-label="Bulk participant actions"]',
     );
     await bulkControls.locator("summary").click();
     await bulkControls.getByLabel("Bulk update scope").selectOption("group");
@@ -1993,7 +2035,7 @@ test.describe("Releviz account and scheduling flow", () => {
       .getByRole("spinbutton", { name: "Bulk weight", exact: true })
       .fill("0.75");
     await bulkControls.getByRole("button", { name: "Apply update" }).click();
-    await expect(page.getByText("Updated 2 roster entries.")).toBeVisible();
+    await expect(page.getByText("Updated 2 participants.")).toBeVisible();
 
     const participantWeight = registeredParticipantCard.getByLabel(
       "Weight for Pat Participant",
@@ -2004,7 +2046,9 @@ test.describe("Releviz account and scheduling flow", () => {
 
     // The Groups table manages a whole group at once: its shared weight is
     // now mixed, and setting it re-applies one weight to every member.
-    const groupsTable = page.getByRole("region", { name: "Roster groups" });
+    const groupsTable = page.getByRole("region", {
+      name: "Participant groups",
+    });
     const groupRow = groupsTable.locator('[data-roster-group="E2E Group"]');
     await expect(groupRow).toContainText("2 people");
     await expect(groupRow).toContainText("Mixed");
@@ -2133,7 +2177,9 @@ test.describe("Releviz account and scheduling flow", () => {
     const deleteGroupDialog = page.getByRole("dialog", {
       name: "Delete group E2E Throwaway?",
     });
-    await expect(deleteGroupDialog).toContainText("People stay on the roster.");
+    await expect(deleteGroupDialog).toContainText(
+      "People stay on the participant list.",
+    );
     await expect(
       deleteGroupDialog.getByRole("button", { name: "Cancel" }),
     ).toBeFocused();
@@ -2311,10 +2357,10 @@ test.describe("Releviz account and scheduling flow", () => {
       finalizationDeliveryProgress.getByText("2 total"),
     ).toBeVisible();
     dispatchEmailJobs();
-    await refreshWorkspace(page);
-    await expect(
-      finalizationDeliveryProgress.getByText("2 sent"),
-    ).toBeVisible();
+    // The card keeps reading its run whatever the event's lifecycle state.
+    await expect(finalizationDeliveryProgress.getByText("2 sent")).toBeVisible({
+      timeout: LIVE_SYNC_TIMEOUT_MS,
+    });
     const firstFinalEvent = await apiJson(
       request,
       "GET",
@@ -2353,7 +2399,7 @@ test.describe("Releviz account and scheduling flow", () => {
 
     // While the meeting is finalized, picking is locked until the event is
     // reactivated: Finalize offers no lists and the calendar is read-only.
-    // (The refresh above already cleared the pick.)
+    // (The pick that was finalized is kept, but no longer drawn.)
     const rankedRail = page.locator("details.organizer-recommended-times");
     await expect(rankedRail).toHaveCount(0);
     await expect(page.locator("details#organizer-other-times")).toHaveCount(0);
@@ -2405,10 +2451,9 @@ test.describe("Releviz account and scheduling flow", () => {
       cancellationDeliveryProgress.getByText("2 total"),
     ).toBeVisible();
     dispatchEmailJobs();
-    await refreshWorkspace(page);
-    await expect(
-      cancellationDeliveryProgress.getByText("2 sent"),
-    ).toBeVisible();
+    await expect(cancellationDeliveryProgress.getByText("2 sent")).toBeVisible({
+      timeout: LIVE_SYNC_TIMEOUT_MS,
+    });
     const cancellation = await latestEmailFor(
       participantEmail,
       cancellationStartedAt,
@@ -2451,10 +2496,9 @@ test.describe("Releviz account and scheduling flow", () => {
       ),
     ).toBeVisible();
     dispatchEmailJobs();
-    await refreshWorkspace(page);
-    await expect(
-      finalizationDeliveryProgress.getByText("2 sent"),
-    ).toBeVisible();
+    await expect(finalizationDeliveryProgress.getByText("2 sent")).toBeVisible({
+      timeout: LIVE_SYNC_TIMEOUT_MS,
+    });
     const reconfirmedEvent = await apiJson(
       request,
       "GET",

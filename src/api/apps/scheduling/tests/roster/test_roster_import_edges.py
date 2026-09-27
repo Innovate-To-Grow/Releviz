@@ -1912,7 +1912,7 @@ class RosterImportDatabaseEdgeTests(TestCase):
 
         for filter_data, message in [
             ({}, "explicit all=true"),
-            ({"unknown": "value"}, "Unknown roster filter"),
+            ({"unknown": "value"}, "Unknown participant filter"),
             ({"all": False}, "filter.all must be true"),
         ]:
             with self.subTest(filter_data=filter_data):

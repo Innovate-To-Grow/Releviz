@@ -47,6 +47,7 @@ import {
   fetchFinalization,
   fetchInvitations,
   markInvitationOpened,
+  openEventStream,
   previewFinalMeeting,
   sendInvitations,
   sendReminders,
@@ -1270,6 +1271,38 @@ describe("business API helpers", () => {
     );
     expect(urls).toContain(
       "/events/participants/update/unhide?code=ABC%20123&participantId=user%201",
+    );
+  });
+
+  test("openEventStream asks for the event stream and hands back the raw response", async () => {
+    writeAuthSession({ access: "tok", user: { id: "u" } });
+    const response = { ok: true, status: 200, body: {}, json: jest.fn() };
+    global.fetch.mockResolvedValue(response);
+    const controller = new AbortController();
+
+    await expect(
+      openEventStream("ABC 123", { signal: controller.signal }),
+    ).resolves.toBe(response);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/events/stream?code=ABC%20123"),
+      expect.objectContaining({
+        signal: controller.signal,
+        credentials: "include",
+        headers: {
+          Accept: "text/event-stream",
+          Authorization: "Bearer tok",
+        },
+      }),
+    );
+    // The body is the caller's to read, so nothing has touched it.
+    expect(response.json).not.toHaveBeenCalled();
+
+    // Without a signal the request is simply not abortable.
+    await expect(openEventStream("ABC 123")).resolves.toBe(response);
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      expect.stringContaining("/events/stream?code=ABC%20123"),
+      expect.objectContaining({ signal: undefined, credentials: "include" }),
     );
   });
 

@@ -74,7 +74,7 @@ function renderGroups(props = {}) {
 
 function row(name) {
   return screen
-    .getByRole("region", { name: "Roster groups" })
+    .getByRole("region", { name: "Participant groups" })
     .querySelector(`[data-roster-group="${groupFilterValue(name)}"]`);
 }
 
@@ -135,10 +135,10 @@ describe("RosterGroups", () => {
     renderGroups();
     expect(
       screen.getByText(
-        "People can belong to several groups: tick a group's column in the roster below, or All for every group, then save the changes. A group's weight and Included box apply to everyone currently in that group, including people who are also in other groups. Use Only this group to see one group's best meeting times in the results.",
+        "People can belong to several groups: tick a group's column in the participant table below, or All for every group, then save the changes. A group's weight and Included box apply to everyone currently in that group, including people who are also in other groups. Use Only this group to see one group's best meeting times in the results.",
       ),
     ).toBeInTheDocument();
-    const table = screen.getByRole("region", { name: "Roster groups" });
+    const table = screen.getByRole("region", { name: "Participant groups" });
     expect(
       within(table)
         .getAllByRole("row")
@@ -469,7 +469,7 @@ describe("RosterGroups", () => {
     let dialog = await screen.findByRole("dialog", {
       name: "Delete group Faculty?",
     });
-    expect(dialog).toHaveTextContent("People stay on the roster.");
+    expect(dialog).toHaveTextContent("People stay on the participant list.");
     await click(within(dialog).getByRole("button", { name: "Cancel" }));
     await waitFor(() =>
       expect(
@@ -796,7 +796,7 @@ describe("RosterGroups", () => {
     });
     expect(
       screen.getByText(
-        "No groups yet. Create a group, then tick its column for each person once they are on the roster.",
+        "No groups yet. Create a group, then tick its column for each person once they are on the participant list.",
       ),
     ).toBeInTheDocument();
     // An unknown head count renders as nothing rather than "null people".
@@ -805,7 +805,7 @@ describe("RosterGroups", () => {
     );
     rerender(<RosterGroups groups={[]} selectedCount={0} {...handlers} />);
     expect(
-      screen.queryByRole("region", { name: "Roster groups" }),
+      screen.queryByRole("region", { name: "Participant groups" }),
     ).not.toBeInTheDocument();
     expect(screen.getByText(/No groups yet/)).toBeInTheDocument();
     // A locked roster cannot create one, so the hint stops at the fact.

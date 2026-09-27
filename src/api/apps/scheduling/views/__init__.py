@@ -11,6 +11,7 @@ from .events import (
     EventDuplicateView,
     EventLifecycleView,
     EventResultsView,
+    EventStreamView,
     EventsView,
 )
 from .finalization import (
@@ -61,6 +62,7 @@ __all__ = [
     "EventDuplicateView",
     "EventLifecycleView",
     "EventResultsView",
+    "EventStreamView",
     "EventsView",
     # Participants
     "ManagedParticipantView",

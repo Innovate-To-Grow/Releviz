@@ -436,7 +436,9 @@ const RosterPanel = forwardRef(function RosterPanel(
         return data;
       } catch (requestError) {
         if (!silent && currentRequest === requestNumber.current) {
-          setError(requestError.message || "Unable to load this roster.");
+          setError(
+            requestError.message || "Unable to load the participant list.",
+          );
         }
         if (throwOnError) throw requestError;
         return null;
@@ -534,7 +536,7 @@ const RosterPanel = forwardRef(function RosterPanel(
       );
       addedParticipant = data.participant || null;
       if (!addedParticipant?.id) {
-        throw new Error("The participant was added without a roster ID.");
+        throw new Error("The participant was added without an ID.");
       }
 
       onResultsInvalidated?.();
@@ -548,7 +550,7 @@ const RosterPanel = forwardRef(function RosterPanel(
       setPage(1);
       await loadRoster();
       const displayName = addedParticipant.name || normalizedName;
-      const alreadyOnRosterNotice = `${displayName} is already on this roster. No new invitation was sent.`;
+      const alreadyOnRosterNotice = `${displayName} is already a participant. No new invitation was sent.`;
       const baseNotice = inviteManaged
         ? data.created || data.restored
           ? `${displayName} was added. Use Edit schedule to enter their availability.`
@@ -903,7 +905,7 @@ const RosterPanel = forwardRef(function RosterPanel(
         token,
       );
       setStatus(
-        `Updated ${data.updatedCount ?? data.matchedCount ?? 0} roster entries.`,
+        `Updated ${data.updatedCount ?? data.matchedCount ?? 0} participants.`,
       );
       updateSelected(new Set());
       bulkIdempotencyKey.current = "";
@@ -1007,7 +1009,7 @@ const RosterPanel = forwardRef(function RosterPanel(
       onResultsInvalidated?.();
       await loadRoster();
       setInviteNotice(
-        "You are on the roster now. Enter your availability with Edit my schedule on your row.",
+        "You are on the participant list now. Enter your availability with Edit my schedule on your row.",
       );
       if (data?.participant?.id) {
         await openEditor({
@@ -1016,7 +1018,7 @@ const RosterPanel = forwardRef(function RosterPanel(
         });
       }
     } catch (requestError) {
-      setError(requestError.message || "Unable to add you to the roster.");
+      setError(requestError.message || "Unable to add you as a participant.");
     } finally {
       setAddingSelf(false);
     }
@@ -1082,7 +1084,7 @@ const RosterPanel = forwardRef(function RosterPanel(
       if (Array.isArray(data?.groups)) applyGroupStats(data.groups);
       onResultsInvalidated?.(data?.resultsRevision);
       await loadRoster();
-      setStatus(`${target.name} was removed from the roster.`);
+      setStatus(`${target.name} was removed from the event.`);
     } catch (requestError) {
       setRemoveTarget(null);
       setError(requestError.message || `Unable to remove ${target.name}.`);
@@ -1474,8 +1476,8 @@ const RosterPanel = forwardRef(function RosterPanel(
 
   const readOnlyNote =
     event.status === "closed"
-      ? "This roster is read-only while responses are closed. Reactivate the event to make changes."
-      : "Reactivate this event before changing its roster.";
+      ? "The participant list is read-only while responses are closed. Reactivate the event to make changes."
+      : "Reactivate this event before changing its participants.";
   const bulkHint =
     bulkScope === "selected"
       ? selected.size > 0
@@ -1546,9 +1548,9 @@ const RosterPanel = forwardRef(function RosterPanel(
         className="roster-panel__controls"
         headingLevel={3}
         titleId="organizer-roster-heading"
-        title="Roster"
+        title="Participants"
         description={
-          <span className="stat-row" aria-label="Roster summary">
+          <span className="stat-row" aria-label="Participant summary">
             <span>
               <strong>{stats.total || 0}</strong>{" "}
               {(stats.total || 0) === 1 ? "person" : "people"}
@@ -1570,7 +1572,7 @@ const RosterPanel = forwardRef(function RosterPanel(
             <div
               className="d-flex flex-wrap gap-2"
               role="group"
-              aria-label="Roster actions"
+              aria-label="Participant actions"
             >
               <AppButton
                 id="roster-invite-trigger"
@@ -1609,7 +1611,7 @@ const RosterPanel = forwardRef(function RosterPanel(
                 disabled={inviteBusy}
                 aria-expanded={showImport}
               >
-                {showImport ? "Hide import" : "Import roster"}
+                {showImport ? "Hide import" : "Import participants"}
               </AppButton>
             </div>
           ) : null
@@ -1644,7 +1646,7 @@ const RosterPanel = forwardRef(function RosterPanel(
                 Add a person
               </h4>
               <p className="text-secondary mb-3">
-                Add one person to the roster. Enter adds them without emailing;
+                Add one person to the event. Enter adds them without emailing;
                 use Add and send invitation to email their secure link now, or
                 Send invitation later.
               </p>
@@ -1830,7 +1832,7 @@ const RosterPanel = forwardRef(function RosterPanel(
             <div
               className="roster-panel__filters row g-2"
               role="search"
-              aria-label="Roster filters"
+              aria-label="Participant filters"
             >
               <div className="col-12 col-xxl-6">
                 <div className="input-group">
@@ -1840,7 +1842,7 @@ const RosterPanel = forwardRef(function RosterPanel(
                   <input
                     type="search"
                     className="form-control"
-                    aria-label="Search roster"
+                    aria-label="Search participants"
                     value={searchInput}
                     onChange={(event) => setSearchInput(event.target.value)}
                     placeholder="Search name, email or phone"
@@ -1933,7 +1935,7 @@ const RosterPanel = forwardRef(function RosterPanel(
           {rosterMutable && hasRosterEntries && (
             <details
               className="disclosure roster-panel__bulk"
-              aria-label="Bulk roster actions"
+              aria-label="Bulk participant actions"
             >
               <summary className="roster-panel__bulk-summary">
                 <span className="disclosure__summary-copy">
@@ -2223,10 +2225,10 @@ const RosterPanel = forwardRef(function RosterPanel(
         />
       )}
 
-      <Panel className="roster-panel__list" aria-label="Roster entries">
+      <Panel className="roster-panel__list" aria-label="Participant list">
         {renderSelectionBar("top")}
         {loading ? (
-          <LoadingState label="Loading roster…" />
+          <LoadingState label="Loading participants…" />
         ) : participants.length === 0 ? (
           !showInvite &&
           !showImport &&
@@ -2251,7 +2253,7 @@ const RosterPanel = forwardRef(function RosterPanel(
                 {hasActiveFilters
                   ? "Try a different search or clear the current filters."
                   : rosterMutable
-                    ? "Add someone or import a roster to start collecting availability."
+                    ? "Add someone or import a participant list to start collecting availability."
                     : "This event does not have any participants."}
               </p>
             </EmptyState>
@@ -2263,13 +2265,11 @@ const RosterPanel = forwardRef(function RosterPanel(
             <div
               className="table-responsive"
               role="region"
-              aria-label="Roster participants"
+              aria-label="Participant table"
               tabIndex={0}
             >
               <table className="table table-hover align-middle roster-table">
-                <caption className="visually-hidden">
-                  Roster participants
-                </caption>
+                <caption className="visually-hidden">Participants</caption>
                 <thead>
                   <tr>
                     <th scope="col" className="roster-table__select">
@@ -2810,7 +2810,7 @@ const RosterPanel = forwardRef(function RosterPanel(
 
       {removeTarget && (
         <ConfirmDialog
-          title={`Remove ${removeTarget.name} from the roster?`}
+          title={`Remove ${removeTarget.name} from the event?`}
           confirmLabel="Remove person"
           busy={removeBusy}
           onConfirm={() => void confirmRemove()}

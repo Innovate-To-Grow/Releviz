@@ -326,14 +326,6 @@ function recomputeEventResults(eventCode) {
   runBackendCommand("recompute_event_results", `--event-code=${eventCode}`);
 }
 
-// The header's Refresh is the workspace's only refresh control; it re-reads
-// the event, roster, results, and any delivery progress that is showing.
-async function refreshWorkspace(page) {
-  await page.getByRole("button", { name: "Refresh", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Refreshing…" })).toBeHidden();
-  await expect(page.getByText("Workspace updated.")).toBeVisible();
-}
-
 // The recommended times are a collapsed list inside the Finalize step; open
 // Finalize first, then the list (the calendar outlines the recommended times
 // only while the list is open).
@@ -372,7 +364,6 @@ module.exports = {
   closeBlockedTimes,
   openBlockedTimes,
   openRecommendedTimes,
-  refreshWorkspace,
   ADMIN_EMAIL,
   ADMIN_PASSWORD,
   BACKEND_URL,

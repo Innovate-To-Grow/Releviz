@@ -10,6 +10,9 @@ from django.utils import timezone
 starting_availability_migration = import_module(
     "apps.scheduling.migrations.0004_event_starting_availability"
 )
+live_change_notifications = import_module(
+    "apps.scheduling.migrations.0011_live_change_notifications"
+)
 
 
 class ActiveStatusMigrationTests(TransactionTestCase):
@@ -690,3 +693,63 @@ class CommaFreeGroupNameMigrationTests(TransactionTestCase):
         self.assertEqual(names["pair"], "Alpha Beta (2)")
         self.assertEqual(names["elsewhere"], "Alpha Beta")
         self.assertEqual(names["plain"], "Plain name")
+
+
+class LiveChangeNotificationMigrationTests(TransactionTestCase):
+    """0011 installs the change-notification function and triggers on Postgres only."""
+
+    migrate_from = ("scheduling", "0010_participantgroup_comma_free_names")
+    migrate_to = ("scheduling", "0011_live_change_notifications")
+
+    @staticmethod
+    def targets(executor, scheduling_node):
+        """Pin every other app at its leaf so the mail tables the triggers need exist."""
+        return [node for node in executor.loader.graph.leaf_nodes() if node[0] != "scheduling"] + [
+            scheduling_node
+        ]
+
+    def setUp(self):
+        super().setUp()
+        self.executor = MigrationExecutor(connection)
+        self.executor.migrate(self.targets(self.executor, self.migrate_from))
+
+        self.executor = MigrationExecutor(connection)
+        self.to_targets = self.targets(self.executor, self.migrate_to)
+        self.executor.migrate(self.to_targets)
+
+    def tearDown(self):
+        executor = MigrationExecutor(connection)
+        executor.migrate(executor.loader.graph.leaf_nodes())
+        super().tearDown()
+
+    @staticmethod
+    def installed_objects():
+        """How many notification functions and triggers the Postgres catalog holds."""
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT count(*) FROM pg_proc WHERE proname = %s",
+                [live_change_notifications.FUNCTION_NAME],
+            )
+            functions = cursor.fetchone()[0]
+            cursor.execute(
+                "SELECT count(*) FROM pg_trigger WHERE tgname LIKE %s", ["releviz_notify_%"]
+            )
+            triggers = cursor.fetchone()[0]
+        return functions, triggers
+
+    def test_the_migration_commits_each_statement_on_its_own(self):
+        # One transaction would hold a lock on every table until the end and
+        # could deadlock with the email worker during a deploy.
+        self.assertFalse(live_change_notifications.Migration.atomic)
+
+    def test_forward_installs_and_backward_removes_the_notification_objects(self):
+        # Nine tables, three event types each; other vendors only walk the no-op.
+        self.assertEqual(3 * len(live_change_notifications.TABLE_ROW_SOURCES), 27)
+        if connection.vendor == "postgresql":
+            self.assertEqual(self.installed_objects(), (1, 27))
+
+        executor = MigrationExecutor(connection)
+        executor.migrate(self.targets(executor, self.migrate_from))
+
+        if connection.vendor == "postgresql":
+            self.assertEqual(self.installed_objects(), (0, 0))
