@@ -2,8 +2,10 @@
  * @jest-environment jsdom
  */
 
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { hydrateRoot } from "react-dom/client";
+import { renderToString } from "react-dom/server";
 import "@testing-library/jest-dom";
 
 import Modal from "@/components/ui/Modal";
@@ -156,12 +158,11 @@ describe("Modal", () => {
     const onSubmit = jest.fn((event) => event.preventDefault());
     render(
       <div>
-        <h3 id="custom-title">Rename</h3>
         <Modal
           as="form"
           size="lg"
           labelledBy="custom-title"
-          title="Ignored heading"
+          title="Rename"
           onClose={() => {}}
           onSubmit={onSubmit}
           className="extra"
@@ -172,10 +173,67 @@ describe("Modal", () => {
       </div>,
     );
     const dialog = screen.getByRole("dialog", { name: "Rename" });
+    // The title takes the given id, for a page that points at it.
+    expect(dialog).toHaveAttribute("aria-labelledby", "custom-title");
+    expect(document.getElementById("custom-title")).toBe(
+      screen.getByRole("heading", { level: 2, name: "Rename" }),
+    );
     expect(dialog.tagName).toBe("FORM");
     expect(dialog).toHaveClass("app-modal--lg", "extra");
     expect(dialog).not.toHaveAttribute("aria-describedby");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  test("renders on the page body, clear of a sticky parent's stacking context", () => {
+    // A sticky column (the Results side rail) is its own stacking context:
+    // a dialog drawn inside it sits under the sticky section nav however high
+    // its z-index, so the dialog is drawn on the body instead.
+    const onClose = jest.fn();
+    const { container } = render(
+      <div className="meeting-results__side" style={{ position: "sticky" }}>
+        <Modal title="Finalize meeting" onClose={onClose}>
+          <button type="button">Inside</button>
+        </Modal>
+      </div>,
+    );
+    const dialog = screen.getByRole("dialog", { name: "Finalize meeting" });
+    const backdrop = dialog.parentElement;
+    expect(backdrop).toHaveClass("app-modal-backdrop");
+    expect(backdrop.parentElement).toBe(document.body);
+    expect(container).not.toContainElement(dialog);
+    // Focus and dismissal work as before.
+    expect(screen.getByRole("button", { name: "Close dialog" })).toHaveFocus();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  test("server markup keeps the dialog in place until it is hydrated onto the body", async () => {
+    const onClose = jest.fn();
+    const tree = (
+      <Harness onClose={onClose}>
+        <button type="button">Inside</button>
+      </Harness>
+    );
+    const html = renderToString(tree);
+    expect(html).toContain('role="dialog"');
+    const container = document.createElement("div");
+    container.innerHTML = html;
+    document.body.appendChild(container);
+    expect(container.querySelector('[role="dialog"]')).not.toBeNull();
+
+    let root;
+    await act(async () => {
+      root = hydrateRoot(container, tree);
+    });
+    const dialog = screen.getByRole("dialog", { name: "Delete event" });
+    expect(dialog.parentElement.parentElement).toBe(document.body);
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    // The dialog that moved is the one that has focus and hears Escape.
+    expect(screen.getByRole("button", { name: "Close dialog" })).toHaveFocus();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    await act(async () => root.unmount());
+    container.remove();
   });
 });
