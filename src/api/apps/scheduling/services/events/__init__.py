@@ -13,6 +13,7 @@ from .lifecycle import (
     LifecycleError,
     event_configuration_write_error,
     response_write_error,
+    transition_error,
     transition_event,
 )
 from .mutations import create_event, delete_event, duplicate_event, update_event
@@ -35,6 +36,7 @@ __all__ = [
     "generate_event_code",
     "parse_event_configuration",
     "response_write_error",
+    "transition_error",
     "transition_event",
     "update_event",
 ]

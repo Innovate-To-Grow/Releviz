@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.scheduling.models import Event
+from apps.scheduling.services.email_previews import final_confirmation_preview
 from apps.scheduling.services.finalization import (
     FinalizationError,
     build_attendance_review,
@@ -61,5 +62,7 @@ class EventFinalizationPreviewView(APIView):
                     "location": normalized["location"],
                 },
                 "attendance": build_attendance_review(event, normalized),
+                # ``recipientCount``, and the confirmation the first of them gets.
+                **final_confirmation_preview(event, normalized),
             }
         )
