@@ -473,27 +473,44 @@ describe("RosterPanel states", () => {
       isOrganizer: true,
       canOrganizerEditAvailability: false,
     });
-    fetchRoster.mockResolvedValue(rosterResponse([participant(), me]));
+    const leftOut = participant({
+      id: "p-out",
+      memberId: "m-out",
+      name: "Left Out",
+      included: false,
+    });
+    fetchRoster.mockResolvedValue(rosterResponse([participant(), leftOut, me]));
+    const summaries = {
+      "p-me": {
+        id: "p-me",
+        memberId: "m-me",
+        name: "Olive Organizer",
+        isOrganizer: true,
+        version: 1,
+      },
+      "p-out": {
+        id: "p-out",
+        memberId: "m-out",
+        name: "Left Out",
+        included: false,
+        version: 1,
+      },
+    };
     fetchRosterSchedule.mockImplementation((_code, id) =>
       Promise.resolve(
-        scheduleResponse(
-          id === "p-me"
-            ? {
-                participant: {
-                  id: "p-me",
-                  memberId: "m-me",
-                  name: "Olive Organizer",
-                  isOrganizer: true,
-                  version: 1,
-                },
-              }
-            : {},
-        ),
+        scheduleResponse(summaries[id] ? { participant: summaries[id] } : {}),
       ),
     );
     await renderPanel({
       event: { ...event, responseDeadline: "2020-01-01T00:00:00Z" },
     });
+    // The roster cannot change, so the left-out banner only offers to show
+    // who is left out.
+    expect(
+      screen.getByRole("button", { name: "Count everyone again" }),
+    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Show them" })).toBeEnabled();
+
     let dialog = await openEditor("Edit my schedule");
     expect(within(dialog).getByRole("note")).toHaveTextContent(
       "The response deadline has passed, so your own answers can't change.",
@@ -508,6 +525,22 @@ describe("RosterPanel states", () => {
     expect(
       within(dialog).getByRole("button", { name: "Submit on behalf" }),
     ).toBeEnabled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    // Counting a left-out person in again is a roster change, so it waits
+    // for the deadline to move.
+    fireEvent.click(
+      within(rowFor("Left Out")).getByRole("button", { name: "Edit schedule" }),
+    );
+    dialog = await screen.findByRole("dialog", {
+      name: "Edit Left Out's schedule",
+    });
+    expect(within(dialog).getByRole("status")).toHaveTextContent(
+      "Left Out is left out of the results, so their schedule can't change.",
+    );
+    expect(
+      within(dialog).getByRole("button", { name: "Count them again" }),
+    ).toBeDisabled();
   });
 
   test("reports a failed load with a retry and clears it after a silent reload", async () => {
@@ -785,7 +818,8 @@ describe("RosterPanel search, filters and paging", () => {
         pagination: { page, pageSize: 25, total: 60, pages: 3 },
       }),
     );
-    await renderPanel();
+    const panel = createRef();
+    await renderPanel({ ref: panel });
     await screen.findByText("Page 1 of 3");
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     await waitFor(() =>
@@ -820,20 +854,21 @@ describe("RosterPanel search, filters and paging", () => {
         pagination: { page, pageSize: 100, total: 40, pages: 1 },
       }),
     );
-    const panel = createRef();
-    // A refresh with the ref, as the live sync would do.
+    // A silent refresh through the ref, as the live sync does, notices it
+    // and lands on the last page on its own.
     await act(async () => {
-      await panel.current?.refresh?.("token", { silent: true });
+      await panel.current.refresh("token", { silent: true });
     });
-    fireEvent.click(screen.getByRole("button", { name: "Previous" }));
     await waitFor(() =>
       expect(fetchRoster).toHaveBeenLastCalledWith(
         "ROSTER1",
-        expect.objectContaining({ page: 1 }),
+        expect.objectContaining({ page: 1, pageSize: 100 }),
         "token",
       ),
     );
     await screen.findByText("Page 1 of 1");
+    expect(screen.getByRole("button", { name: "Previous" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
   });
 });
 
@@ -1290,6 +1325,49 @@ describe("RosterPanel invitations", () => {
     expect(await findToast("Reminders failed")).toBeInTheDocument();
   });
 
+  test("keeps reminders off the menu while they are off, and refuses a run the server says is off", async () => {
+    sendReminders.mockResolvedValue({
+      preview: true,
+      wouldEnqueue: 2,
+      remindersEnabled: false,
+    });
+    const { rerender, getToken } = await renderPanel();
+    fireEvent.click(await screen.findByRole("button", { name: "Email" }));
+    expect(screen.getByRole("menu", { name: "Email" })).toHaveTextContent(
+      "Reminders are off",
+    );
+    expect(menuItem("Send reminders (3)…")).toBeDisabled();
+    fireEvent.keyDown(screen.getByRole("menu", { name: "Email" }), {
+      key: "Escape",
+    });
+
+    // The event on screen says reminders are on, but the preview (the
+    // server's word) says they were turned off since.
+    rerender(
+      <RosterPanel
+        event={{ ...event, remindersEnabled: true }}
+        setEvent={jest.fn()}
+        getToken={getToken}
+        onResultsInvalidated={jest.fn()}
+        onDeliveryRequestChange={jest.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Email" }));
+    fireEvent.click(menuItem("Send reminders (3)…"));
+    expect(
+      await findToast(
+        "Reminders are off for this event, so nobody would be emailed. Turn them on in the event settings first.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(sendReminders).toHaveBeenCalledTimes(1);
+    expect(sendReminders).toHaveBeenCalledWith(
+      "ROSTER1",
+      { preview: true },
+      "token",
+    );
+  });
+
   test("says reminders are off and lets the reminder confirmation be cancelled", async () => {
     sendReminders.mockResolvedValue({ preview: true, wouldEnqueue: 1 });
     fetchRoster.mockResolvedValue({
@@ -1395,7 +1473,7 @@ describe("RosterPanel person panel", () => {
     ).toBeInTheDocument();
   });
 
-  test("shows a version conflict on the row and re-applies the change on request", async () => {
+  test("keeps a conflicted draft in the panel and saves it again on the newer version", async () => {
     patchRosterParticipant
       .mockRejectedValueOnce(
         Object.assign(new Error("Conflict"), {
@@ -1404,7 +1482,11 @@ describe("RosterPanel person panel", () => {
         }),
       )
       .mockResolvedValueOnce({
-        participant: participant({ phone: "+1 555 0100", version: 10 }),
+        participant: participant({
+          phone: "+1 555 0100",
+          weight: 0.5,
+          version: 10,
+        }),
       });
     await renderPanel();
     const dialog = await openPerson();
@@ -1412,32 +1494,48 @@ describe("RosterPanel person panel", () => {
       target: { value: "+1 555 0100" },
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
-    const message =
-      "Temp Person was changed in another session, so your change wasn't saved. The latest values are shown.";
-    expect(await within(dialog).findByText(message)).toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "Temp Person was changed in another session, so your change wasn't saved. Save again to apply it on top of the latest values.",
+    );
+    // The row holds what the server has; the panel keeps the typed values,
+    // still unsaved.
     const row = rowFor("Temp Person");
     expect(
       within(row).getByText("temp@example.com · +1 555 0999"),
     ).toBeInTheDocument();
-    const notice = row.nextElementSibling;
-    expect(notice).toHaveTextContent(message);
+    expect(screen.queryByRole("button", { name: "Apply again" })).toBeNull();
+    expect(within(dialog).getByLabelText(/^Phone/)).toHaveValue("+1 555 0100");
+    expect(within(dialog).getByRole("button", { name: "Save" })).toBeEnabled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    const discard = await screen.findByRole("dialog", {
+      name: "Discard your changes?",
+    });
     fireEvent.click(
-      within(notice).getByRole("button", { name: "Apply again" }),
+      within(discard).getByRole("button", { name: "Keep editing" }),
     );
+
+    // A further edit does not lose the conflicted field.
+    fireEvent.change(within(dialog).getByLabelText(/^Weight/), {
+      target: { value: "0.5" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() =>
       expect(patchRosterParticipant).toHaveBeenLastCalledWith(
         "ROSTER1",
         "p-1",
-        { phone: "+1 555 0100", expectedVersion: 9 },
+        { phone: "+1 555 0100", weight: 0.5, expectedVersion: 9 },
         "token",
       ),
     );
-    expect(await findToast("Temp Person was updated.")).toBeInTheDocument();
-    expect(row.nextElementSibling).not.toHaveTextContent(message);
+    expect(await findToast("Saved.")).toBeInTheDocument();
+    expect(within(dialog).queryByRole("alert")).toBeNull();
+    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(
+      within(rowFor("Temp Person")).getByText("temp@example.com · +1 555 0100"),
+    ).toBeInTheDocument();
   });
 
-  test("keeps other failures inside the panel and dismisses a conflict", async () => {
+  test("keeps other failures inside the panel and lets a conflicted draft be discarded", async () => {
     patchRosterParticipant
       .mockRejectedValueOnce(
         Object.assign(new Error("Bad phone"), { status: 400 }),
@@ -1445,7 +1543,7 @@ describe("RosterPanel person panel", () => {
       .mockRejectedValueOnce(
         Object.assign(new Error("Conflict"), {
           status: 409,
-          participant: participant({ version: 9 }),
+          participant: participant({ phone: "+1 555 0999", version: 9 }),
         }),
       );
     await renderPanel();
@@ -1460,8 +1558,21 @@ describe("RosterPanel person panel", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
     await within(dialog).findByText(/changed in another session/);
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    const discard = await screen.findByRole("dialog", {
+      name: "Discard your changes?",
+    });
+    fireEvent.click(within(discard).getByRole("button", { name: "Discard" }));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Temp Person" }),
+      ).not.toBeInTheDocument(),
+    );
+    // The row shows what the server holds, with nothing left to apply.
+    expect(
+      within(rowFor("Temp Person")).getByText("temp@example.com · +1 555 0999"),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/changed in another session/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Apply again" })).toBeNull();
   });
 
   test("picks groups for the person, removes them, and opens their schedule", async () => {
@@ -1554,6 +1665,15 @@ describe("RosterPanel rows", () => {
           status: 409,
           participant: participant({ included: false, version: 8 }),
         }),
+      )
+      .mockResolvedValueOnce({
+        participant: participant({ included: false, version: 9 }),
+      })
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Conflict"), {
+          status: 409,
+          participant: participant({ included: false, version: 11 }),
+        }),
       );
     const onResultsInvalidated = jest.fn();
     await renderPanel({ onResultsInvalidated });
@@ -1592,11 +1712,38 @@ describe("RosterPanel rows", () => {
 
     await openRowMenu("Temp Person");
     fireEvent.click(menuItem("Leave out of results"));
-    expect(
-      await screen.findByText(/Temp Person was changed in another session/),
-    ).toBeInTheDocument();
+    const message =
+      "Temp Person was changed in another session, so your change wasn't saved. The latest values are shown.";
+    expect(await screen.findByText(message)).toBeInTheDocument();
     const row = rowFor("Temp Person");
     expect(within(row).getByText("Left out of results")).toBeInTheDocument();
+
+    // Apply again re-runs the same change on the version now shown.
+    fireEvent.click(
+      within(row.nextElementSibling).getByRole("button", {
+        name: "Apply again",
+      }),
+    );
+    await waitFor(() =>
+      expect(patchRosterParticipant).toHaveBeenLastCalledWith(
+        "ROSTER1",
+        "p-1",
+        { included: false, expectedVersion: 8 },
+        "token",
+      ),
+    );
+    expect(await findToast("Temp Person was updated.")).toBeInTheDocument();
+    expect(screen.queryByText(message)).toBeNull();
+
+    await openRowMenu("Temp Person");
+    fireEvent.click(menuItem("Count in results"));
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    fireEvent.click(
+      within(rowFor("Temp Person").nextElementSibling).getByRole("button", {
+        name: "Dismiss",
+      }),
+    );
+    expect(screen.queryByText(message)).toBeNull();
   });
 
   test("reloads when a stale change carries no row, and opens details from the menu", async () => {
@@ -1900,9 +2047,10 @@ describe("RosterPanel manage groups", () => {
 });
 
 describe("RosterPanel adds people", () => {
+  // The create reply describes the member: its id is the member's, and it
+  // carries none of the roster-only fields the row and the panel read.
   const added = {
-    id: "p-3",
-    memberId: "m-3",
+    id: "m-3",
     name: "Manual Person",
     email: "manual@example.com",
     accountAccess: "temporary",
@@ -1910,12 +2058,31 @@ describe("RosterPanel adds people", () => {
     invitationStatus: "not_sent",
     version: 1,
   };
+  const addedRow = participant({
+    id: "p-3",
+    memberId: "m-3",
+    name: "Manual Person",
+    email: "manual@example.com",
+    group: "",
+    groups: [],
+    invitationStatus: "not_sent",
+    version: 1,
+  });
 
   async function openAdd() {
     fireEvent.click(
       (await screen.findAllByRole("button", { name: "+ Add person" }))[0],
     );
     return screen.findByRole("dialog", { name: "Add a person" });
+  }
+
+  function fillAdd(dialog) {
+    fireEvent.change(within(dialog).getByLabelText(/^Full name/), {
+      target: { value: "Manual Person" },
+    });
+    fireEvent.change(within(dialog).getByLabelText(/^Email/), {
+      target: { value: "manual@example.com" },
+    });
   }
 
   test("adds a person, opens them, and queues an invitation when asked", async () => {
@@ -1941,6 +2108,10 @@ describe("RosterPanel adds people", () => {
         autoInvitedCount: 0,
       });
     await renderPanel({ onDeliveryRequestChange, onResultsInvalidated });
+    // Once added, the person is on the reloaded page.
+    fetchRoster.mockResolvedValue(
+      rosterResponse([participant(), second, addedRow]),
+    );
     const dialog = await openAdd();
     fireEvent.change(within(dialog).getByLabelText(/^Full name/), {
       target: { value: "Manual Person" },
@@ -1971,13 +2142,9 @@ describe("RosterPanel adds people", () => {
     expect(onResultsInvalidated).toHaveBeenCalled();
     expect(onDeliveryRequestChange).not.toHaveBeenCalled();
     expect(fetchRoster).toHaveBeenCalledTimes(2);
+    expect(fetchRosterSchedule).not.toHaveBeenCalled();
 
-    fireEvent.change(within(dialog).getByLabelText(/^Full name/), {
-      target: { value: "Manual Person" },
-    });
-    fireEvent.change(within(dialog).getByLabelText(/^Email/), {
-      target: { value: "manual@example.com" },
-    });
+    fillAdd(dialog);
     fireEvent.click(
       within(dialog).getByRole("button", { name: "Add and send invitation" }),
     );
@@ -1993,12 +2160,7 @@ describe("RosterPanel adds people", () => {
       }),
     );
 
-    fireEvent.change(within(dialog).getByLabelText(/^Full name/), {
-      target: { value: "Manual Person" },
-    });
-    fireEvent.change(within(dialog).getByLabelText(/^Email/), {
-      target: { value: "manual@example.com" },
-    });
+    fillAdd(dialog);
     fireEvent.click(within(dialog).getByRole("button", { name: "Add" }));
     expect(
       await within(dialog).findByText(
@@ -2012,13 +2174,117 @@ describe("RosterPanel adds people", () => {
     expect(
       await screen.findByRole("dialog", { name: "Send invitations" }),
     ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(sendRosterInvitations).toHaveBeenCalledWith(
+      "ROSTER1",
+      { participantIds: ["p-3"], preview: true, resend: false },
+      "token",
+    );
+    // Escape closes the send dialog only; the add panel stays.
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Send invitations" }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(
+      screen.getByRole("dialog", { name: "Add a person" }),
+    ).toBeInTheDocument();
 
+    // Open shows the roster row, not the create reply: the address can
+    // still change and the person sits among their neighbours.
+    fireEvent.click(within(dialog).getByRole("button", { name: "Open" }));
+    const panel = await screen.findByRole("dialog", { name: "Manual Person" });
+    expect(screen.queryByRole("dialog", { name: "Add a person" })).toBeNull();
+    expect(within(panel).getByLabelText(/^Email/)).toBeEnabled();
+    expect(within(panel).getByText("3 of 3")).toBeInTheDocument();
+  });
+
+  test("fetches the new person's row when the page does not list them, and falls back to the reply", async () => {
+    createManagedParticipant.mockResolvedValue({
+      participant: added,
+      created: true,
+      autoInvitedCount: 0,
+    });
+    fetchRosterSchedule.mockResolvedValueOnce({
+      participant: addedRow,
+      schedule: {},
+    });
+    await renderPanel();
+    let dialog = await openAdd();
+    fillAdd(dialog);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add" }));
+    await within(dialog).findByText(
+      "Manual Person was added. No invitation was sent.",
+    );
+    expect(fetchRosterSchedule).toHaveBeenCalledWith("ROSTER1", "m-3", "token");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Open" }));
+    let panel = await screen.findByRole("dialog", { name: "Manual Person" });
+    expect(within(panel).getByLabelText(/^Email/)).toBeEnabled();
+    fireEvent.click(closeButton("Manual Person", "Close details"));
+
+    // When the row cannot be read either, the reply stands in, and the
+    // panel follows each save so its version stays current.
+    fetchRosterSchedule
+      .mockRejectedValueOnce(new Error("Not found"))
+      .mockResolvedValueOnce({});
+    patchRosterParticipant
+      .mockResolvedValueOnce({
+        participant: { ...addedRow, phone: "+1 555 0100", version: 2 },
+      })
+      .mockResolvedValueOnce({
+        participant: {
+          ...addedRow,
+          phone: "+1 555 0100",
+          weight: 0.5,
+          version: 3,
+        },
+      });
+    dialog = await openAdd();
+    fillAdd(dialog);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add" }));
+    await within(dialog).findByText(
+      "Manual Person was added. No invitation was sent.",
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Open" }));
+    panel = await screen.findByRole("dialog", { name: "Manual Person" });
+    fireEvent.change(within(panel).getByLabelText(/^Phone/), {
+      target: { value: "+1 555 0100" },
+    });
+    fireEvent.click(within(panel).getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(patchRosterParticipant).toHaveBeenLastCalledWith(
+        "ROSTER1",
+        "m-3",
+        { phone: "+1 555 0100", expectedVersion: 1 },
+        "token",
+      ),
+    );
+    expect(await findToast("Saved.")).toBeInTheDocument();
+    fireEvent.change(within(panel).getByLabelText(/^Weight/), {
+      target: { value: "0.5" },
+    });
+    fireEvent.click(within(panel).getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(patchRosterParticipant).toHaveBeenLastCalledWith(
+        "ROSTER1",
+        "m-3",
+        { weight: 0.5, expectedVersion: 2 },
+        "token",
+      ),
+    );
+    fireEvent.click(closeButton("Manual Person", "Close details"));
+
+    // A reply without a participant stands in the same way.
+    dialog = await openAdd();
+    fillAdd(dialog);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add" }));
+    await within(dialog).findByText(
+      "Manual Person was added. No invitation was sent.",
+    );
     fireEvent.click(within(dialog).getByRole("button", { name: "Open" }));
     expect(
       await screen.findByRole("dialog", { name: "Manual Person" }),
     ).toBeInTheDocument();
-    expect(screen.queryByRole("dialog", { name: "Add a person" })).toBeNull();
   });
 
   test("adds a person without email and opens their schedule", async () => {
@@ -2038,6 +2304,13 @@ describe("RosterPanel adds people", () => {
       }),
     );
     await renderPanel();
+    fetchRoster.mockResolvedValue(
+      rosterResponse([
+        participant(),
+        second,
+        { ...addedRow, email: "", organizerManaged: true },
+      ]),
+    );
     const dialog = await openAdd();
     fireEvent.change(within(dialog).getByLabelText(/^Full name/), {
       target: { value: "Manual Person" },
@@ -2437,19 +2710,21 @@ describe("RosterPanel schedule drawer", () => {
 
   test("falls back to the schedule's own row when it is off the page", async () => {
     fetchRoster.mockResolvedValue(rosterResponse([participant()]));
+    // The new person is not on the page, so their row is read by member id.
     fetchRosterSchedule.mockResolvedValue(
       scheduleResponse({
         participant: {
           id: "p-9",
           memberId: "m-9",
           name: "Off Page",
+          organizerManaged: true,
           included: false,
           version: 2,
         },
       }),
     );
     createManagedParticipant.mockResolvedValue({
-      participant: { id: "p-9", name: "Off Page", organizerManaged: true },
+      participant: { id: "m-9", name: "Off Page", organizerManaged: true },
       created: true,
     });
     patchRosterParticipant.mockRejectedValueOnce(new Error("Nope"));

@@ -90,8 +90,8 @@ const CLOSED_NOTE =
  * The organizer's schedule editor for one participant (or for their own
  * row). `responsesOpen` false locks the grid with `lockReason` as the note;
  * `leftOut` locks it because the person is not counted in the results, with
- * `onCountIn` to bring them back; `saved` turns Cancel into Close once a
- * save has landed.
+ * `onCountIn` to bring them back while `countInAllowed` (the roster can
+ * change) holds; `saved` turns Cancel into Close once a save has landed.
  */
 export function ManagedScheduleDrawer({
   event,
@@ -104,6 +104,7 @@ export function ManagedScheduleDrawer({
   responsesOpen,
   lockReason = CLOSED_NOTE,
   leftOut = false,
+  countInAllowed = true,
   saved = false,
   saving,
   error,
@@ -247,7 +248,7 @@ export function ManagedScheduleDrawer({
                 <AppButton
                   variant="outlined"
                   onClick={onCountIn}
-                  disabled={saving}
+                  disabled={saving || !responsesOpen || !countInAllowed}
                 >
                   Count them again
                 </AppButton>

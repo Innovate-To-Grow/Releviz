@@ -23,11 +23,14 @@ function resultLine(result) {
  * idempotency key that survives a retry of the same values and is replaced
  * as soon as a field changes or the add succeeds. After a success the
  * fields clear, Full name gets focus and the outcome is shown at the top.
+ * `dialogOpen` says the parent has a dialog of its own open above the panel
+ * (the send dialog), so Escape and Tab are left to it.
  */
 export default function AddPersonPanel({
   organizerEmail = "",
   addMyselfAvailable = false,
   readOnly = false,
+  dialogOpen = false,
   onAdd,
   onOpenPerson,
   onEnterSchedule,
@@ -129,6 +132,7 @@ export default function AddPersonPanel({
       title="Add a person"
       onClose={onClose}
       busy={busy}
+      dialogOpen={dialogOpen}
       closeLabel="Close add person"
       className="participants-add-panel"
       footer={

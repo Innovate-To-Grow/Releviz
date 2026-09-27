@@ -60,6 +60,27 @@ describe("LeftOutBanner", () => {
       screen.getByRole("button", { name: "Count everyone again" }),
     ).toBeDisabled();
   });
+
+  test("keeps the count link off while the list is read-only, with Show them still available", () => {
+    const onShow = jest.fn();
+    const onCountEveryone = jest.fn();
+    render(
+      <LeftOutBanner
+        count={2}
+        readOnly
+        onShow={onShow}
+        onCountEveryone={onCountEveryone}
+      />,
+    );
+    const countEveryone = screen.getByRole("button", {
+      name: "Count everyone again",
+    });
+    expect(countEveryone).toBeDisabled();
+    fireEvent.click(countEveryone);
+    expect(onCountEveryone).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Show them" }));
+    expect(onShow).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("DeadlineBanner", () => {

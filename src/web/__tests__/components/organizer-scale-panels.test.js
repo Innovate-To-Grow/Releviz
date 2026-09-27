@@ -782,6 +782,38 @@ test("managed schedule drawer locks editing while left out, saving, closed, or c
   expect(onReloadLatest).toHaveBeenCalledTimes(1);
 });
 
+test("managed schedule drawer keeps Count them again off while the roster cannot change", () => {
+  const onCountIn = jest.fn();
+  const countIn = () =>
+    screen.getByRole("button", { name: "Count them again" });
+  const { rerender } = renderDrawer({
+    leftOut: true,
+    countInAllowed: false,
+    onCountIn,
+  });
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "Temporary Taylor is left out of the results, so their schedule can't change.",
+  );
+  expect(countIn()).toBeDisabled();
+  fireEvent.click(countIn());
+  expect(onCountIn).not.toHaveBeenCalled();
+
+  // Closed responses lock it too, whatever the roster allows.
+  rerender(
+    <ManagedScheduleDrawer
+      {...renderDrawerProps({ leftOut: true, responsesOpen: false, onCountIn })}
+    />,
+  );
+  expect(countIn()).toBeDisabled();
+
+  rerender(
+    <ManagedScheduleDrawer
+      {...renderDrawerProps({ leftOut: true, countInAllowed: true, onCountIn })}
+    />,
+  );
+  expect(countIn()).toBeEnabled();
+});
+
 test("overview keeps key summaries and its edit button visible while details are collapsed", () => {
   render(<OverviewPanel event={baseEvent} onEventSaved={jest.fn()} />);
 

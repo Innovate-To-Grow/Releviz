@@ -40,7 +40,8 @@ export default function EmailMenu({
           key: "remind",
           label: `Send reminders (${remindCount})…`,
           icon: <ReminderIcon />,
-          disabled: remindCount === 0,
+          // A run while reminders are off queues nobody.
+          disabled: remindCount === 0 || !reminders?.enabled,
           onSelect: onSendReminders,
         },
       ]}

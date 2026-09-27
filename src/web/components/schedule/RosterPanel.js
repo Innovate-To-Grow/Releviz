@@ -103,6 +103,12 @@ function conflictMessage(name) {
   return `${name} was changed in another session, so your change wasn't saved. The latest values are shown.`;
 }
 
+// The person panel keeps its draft on a conflict, so there its Save is the
+// "apply again".
+function panelConflictMessage(name) {
+  return `${name} was changed in another session, so your change wasn't saved. Save again to apply it on top of the latest values.`;
+}
+
 function invitationDeliveryRequest(data) {
   if (data?.deliveryRequest) return data.deliveryRequest;
   if (!data?.deliveryRequestId) return null;
@@ -478,6 +484,20 @@ const RosterPanel = forwardRef(function RosterPanel(
       participantsRef.current = next;
       return next;
     });
+    // A panel opened for someone the page does not list (from the create
+    // reply, say) follows the change too, so its version stays current.
+    setOpenPanel((current) =>
+      current?.type === "person" && current.id === participantId
+        ? {
+            ...current,
+            participant: {
+              ...current.participant,
+              ...patch,
+              id: current.participant.id,
+            },
+          }
+        : current,
+    );
   };
 
   const clearConflict = (participantId) =>
@@ -485,8 +505,14 @@ const RosterPanel = forwardRef(function RosterPanel(
 
   // Every change to one row goes through here, one at a time per row and
   // always against the version this session holds. A newer version on the
-  // server replaces the row with what it now holds and marks the conflict.
-  const patchRow = async (participant, updates) => {
+  // server replaces the row with what it now holds and marks the conflict
+  // on the row (Apply again / Dismiss) unless the caller keeps the change
+  // itself, as the person panel does.
+  const patchRow = async (
+    participant,
+    updates,
+    { markConflict = true } = {},
+  ) => {
     const previous =
       rowMutationQueuesRef.current.get(participant.id) || Promise.resolve();
     const request = previous
@@ -516,13 +542,15 @@ const RosterPanel = forwardRef(function RosterPanel(
         } catch (requestError) {
           if (requestError.status === 409 && requestError.participant) {
             replaceRow(participant.id, requestError.participant);
-            setRowConflicts((current) => ({
-              ...current,
-              [participant.id]: {
-                message: conflictMessage(latest.name),
-                updates,
-              },
-            }));
+            if (markConflict) {
+              setRowConflicts((current) => ({
+                ...current,
+                [participant.id]: {
+                  message: conflictMessage(latest.name),
+                  updates,
+                },
+              }));
+            }
             return { status: "conflict", name: latest.name };
           }
           // Reload first: loadRoster clears the panel error when it starts.
@@ -759,6 +787,18 @@ const RosterPanel = forwardRef(function RosterPanel(
     try {
       const token = await getToken();
       const data = await sendReminders(event.code, { preview: true }, token);
+      // The preview's count ignores the reminders setting, but a run with
+      // reminders off queues nobody, so it is not offered. An older reply
+      // without the flag defers to the event on screen.
+      if (!(data?.remindersEnabled ?? event.remindersEnabled)) {
+        pushToast({
+          tone: "warning",
+          sticky: true,
+          message:
+            "Reminders are off for this event, so nobody would be emailed. Turn them on in the event settings first.",
+        });
+        return;
+      }
       setReminderDialog({ count: data?.wouldEnqueue ?? 0, busy: false });
     } catch (requestError) {
       toastFailure(
@@ -963,11 +1003,18 @@ const RosterPanel = forwardRef(function RosterPanel(
     reportRowResult(result, ({ name }) => toastSuccess(`${name} was updated.`));
   };
 
+  // The panel commits its draft only when the save landed: on a conflict it
+  // keeps the typed values, stays unsaved, and its next Save runs against
+  // the version the row now holds.
   const savePerson = async (participant, updates) => {
     setPersonBusy(true);
     try {
-      const result = await patchRow(participant, updates);
+      const result = await patchRow(participant, updates, {
+        markConflict: false,
+      });
       if (result.status === "failed") throw new Error(result.message);
+      if (result.status === "conflict")
+        throw new Error(panelConflictMessage(result.name));
       if (result.status === "saved") {
         if (updates.email) {
           toastSuccess("Saved. The new address hasn't been invited yet.", {
@@ -1049,10 +1096,29 @@ const RosterPanel = forwardRef(function RosterPanel(
     setPage(1);
     await loadRoster();
     return {
-      participant: added,
+      participant: await rosterRowFor(added),
       alreadyExisted: data.created === false && !data.restored,
       autoInvited: autoInvitedCount > 0,
     };
+  };
+
+  // The create reply describes the member (its id is the member's, and it
+  // carries none of the roster-only fields), so the person handed back to
+  // the add panel is their roster row: the one on the reloaded page, or
+  // else the one the schedule endpoint reads by member id.
+  const rosterRowFor = async (added) => {
+    const listed = participantsRef.current.find(
+      (row) => row.memberId === added.id,
+    );
+    if (listed) return listed;
+    try {
+      const token = await getToken();
+      const data = await fetchRosterSchedule(event.code, added.id, token);
+      return data.participant || added;
+    } catch {
+      // They were added; the reply stands in until the row is listed.
+      return added;
+    }
   };
 
   // Schedule drawer ----------------------------------------------------------
@@ -1514,6 +1580,7 @@ const RosterPanel = forwardRef(function RosterPanel(
             <LeftOutBanner
               count={excludedCount}
               busy={countingEveryone}
+              readOnly={!mutable}
               onShow={() => applyFilters({ included: "false" })}
               onCountEveryone={() => void countEveryone()}
             />
@@ -1708,6 +1775,7 @@ const RosterPanel = forwardRef(function RosterPanel(
         <AddPersonPanel
           addMyselfAvailable={organizerOnRoster === false}
           readOnly={!mutable}
+          dialogOpen={Boolean(sendDialog)}
           onAdd={addPerson}
           onOpenPerson={openPerson}
           onEnterSchedule={(participant) => void openEditor(participant)}
@@ -1919,6 +1987,7 @@ const RosterPanel = forwardRef(function RosterPanel(
             : undefined
         }
         leftOut={editorLeftOut}
+        countInAllowed={mutable}
         saved={editorSaved}
         saving={editorSaving}
         error={editorError}

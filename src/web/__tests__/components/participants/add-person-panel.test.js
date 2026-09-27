@@ -300,6 +300,18 @@ describe("AddPersonPanel", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
+  test("leaves Escape to a dialog stacked above it", () => {
+    const onClose = jest.fn();
+    const { rerender } = renderPanel({ onClose, dialogOpen: true });
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+    rerender(
+      <AddPersonPanel onAdd={jest.fn()} onClose={onClose} dialogOpen={false} />,
+    );
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   test("disables the buttons while an add is in flight", async () => {
     const user = userEvent.setup();
     let resolveAdd;
