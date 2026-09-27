@@ -1,9 +1,12 @@
 """Invitation sends by filter, their preview, and the skip breakdown they report."""
 
 import uuid
+from datetime import timedelta
 from unittest.mock import patch
 
+from django.db import connection
 from django.test import TestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -52,7 +55,7 @@ class RosterInvitationPreviewTests(TestCase):
     def invitation_for(self, participant):
         return EventInvitation.objects.get(event=self.event, member=participant.member)
 
-    def add_job(self, invitation, status):
+    def add_job(self, invitation, status, **fields):
         key = str(uuid.uuid4())
         job, _created = enqueue_email_job(
             idempotency_key=f"preview:{key}",
@@ -64,8 +67,30 @@ class RosterInvitationPreviewTests(TestCase):
             event=self.event,
             invitation=invitation,
         )
-        EmailDeliveryJob.objects.filter(pk=job.pk).update(status=status)
+        EmailDeliveryJob.objects.filter(pk=job.pk).update(status=status, **fields)
         return job
+
+    def self_joined(self, index, *, primary_contact=True):
+        """Someone who joined with the event code: an account, no invitation.
+
+        Without ``primary_contact`` the account has no address on file at all.
+        """
+
+        member = create_member(f"joined-{index}@example.com", "Joined", str(index))
+        if not primary_contact:
+            ContactEmail.objects.filter(member=member).delete()
+        return Participant.objects.create(
+            event=self.event,
+            member=member,
+            participant_name=f"Joined {index}",
+            availability_inperson=[0, 0],
+            availability_virtual=[0, 0],
+        )
+
+    def roster(self):
+        response = self.client.get(f"/events/roster?code={self.event.code}")
+        self.assertEqual(response.status_code, 200, response.data)
+        return response.data
 
     def mixed_roster(self):
         """One person of each kind a send tells apart; returns them by name."""
@@ -268,6 +293,102 @@ class RosterInvitationPreviewTests(TestCase):
             too_many = self.post({"filter": {"all": True}, "preview": True})
         self.assertEqual(too_many.status_code, 400, too_many.data)
         self.assertEqual(too_many.data["error"], "participantIds may contain at most 1 entries.")
+
+    def test_addresses_resolve_in_a_fixed_number_of_queries(self):
+        """A preview of a large selection costs the same queries as a small one.
+
+        People without an invitation are the ones whose address is not on an
+        invitation row: someone who joined with the code, with or without a
+        primary contact email, or someone the organizer manages. The whole
+        selection is classified under the event lock, so their addresses must
+        be looked up together, not one person at a time.
+        """
+
+        def add_people(indexes):
+            for index in indexes:
+                self.self_joined(index)
+                self.self_joined(index + 100, primary_contact=False)
+                self.add_person(f"Managed {index}", managed=True)
+
+        def preview_everyone():
+            with CaptureQueriesContext(connection) as captured:
+                response = self.post({"filter": {"all": True}, "preview": True})
+            self.assertEqual(response.status_code, 200, response.data)
+            return response.data, [query["sql"] for query in captured.captured_queries]
+
+        add_people(range(3))
+        # The first request of a scope also creates its rate-limit buckets.
+        preview_everyone()
+        small, small_queries = preview_everyone()
+        self.assertEqual(small["requestedCount"], 9)
+        self.assertEqual(small["willSend"], 3)
+        self.assertEqual(small["skipped"], {**NO_SKIPS, "noEmail": 6})
+
+        add_people(range(3, 13))
+        large, large_queries = preview_everyone()
+        self.assertEqual(large["requestedCount"], 39)
+        self.assertEqual(large["willSend"], 13)
+        self.assertEqual(large["skipped"], {**NO_SKIPS, "noEmail": 26})
+
+        self.assertEqual(len(large_queries), len(small_queries))
+        contact_lookups = [
+            sql for sql in large_queries if sql.startswith('SELECT "authn_contactemail"')
+        ]
+        self.assertEqual(len(contact_lookups), 1, contact_lookups)
+
+    def test_in_flight_skip_follows_the_newest_invitation_email(self):
+        """The send skips as in flight exactly the rows the roster shows as sending.
+
+        An earlier invitation email can still be backing off after a transient
+        error when a later one for the same invitation has failed for good; the
+        roster reduces that to the newest email, so the send must too, or the
+        organizer could not retry the failure the list reports.
+        """
+
+        ada = self.add_person("Ada", "ada@example.com")
+        invitation = self.invitation_for(ada)
+        now = timezone.now()
+        self.add_job(
+            invitation,
+            EmailDeliveryJob.Status.RETRY,
+            created_at=now - timedelta(minutes=5),
+            next_attempt_at=now + timedelta(hours=1),
+        )
+        self.add_job(invitation, EmailDeliveryJob.Status.PERMANENT_FAILURE, created_at=now)
+
+        listing = self.roster()
+        self.assertEqual(listing["participants"][0]["invitationDelivery"], "failed")
+        self.assertEqual(listing["overall"]["failed"], 1)
+        self.assertEqual(listing["overall"]["sending"], 0)
+        self.assertEqual(listing["overall"]["notInvited"], 1)
+
+        preview = self.post({"filter": {"invitationStatus": "failed"}, "preview": True})
+        self.assertEqual(preview.status_code, 200, preview.data)
+        self.assertEqual(
+            preview.data,
+            {"preview": True, "requestedCount": 1, "willSend": 1, "skipped": NO_SKIPS},
+        )
+
+        sent = self.post(
+            {"filter": {"invitationStatus": "failed"}, "idempotencyKey": str(uuid.uuid4())}
+        )
+        self.assertEqual(sent.status_code, 202, sent.data)
+        self.assertEqual(sent.data["queuedCount"], 1)
+        self.assertEqual(sent.data["skipped"], NO_SKIPS)
+        self.assertEqual(
+            EmailDeliveryJob.objects.filter(
+                invitation=invitation, status=EmailDeliveryJob.Status.PENDING
+            ).count(),
+            1,
+        )
+
+        # Now the newest email is the one waiting to go out, and the row and
+        # the send agree on that too.
+        self.assertEqual(self.roster()["participants"][0]["invitationDelivery"], "queued")
+        again = self.post({"participantIds": [str(ada.pk)], "preview": True, "resend": True})
+        self.assertEqual(again.status_code, 200, again.data)
+        self.assertEqual(again.data["willSend"], 0)
+        self.assertEqual(again.data["skipped"], {**NO_SKIPS, "inFlight": 1})
 
     def test_service_requires_exactly_one_selector(self):
         ada = self.add_person("Ada", "ada@example.com")
