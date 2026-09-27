@@ -13,6 +13,7 @@ from django.utils import timezone
 from apps.scheduling.models import Event, EventResultInvalidation, EventResultSnapshot
 
 from .aggregation import build_event_results
+from .recommendations import RECOMMENDATION_RULE_VERSION
 
 RESULT_LOCK_TIMEOUT = timedelta(seconds=settings.RESULT_SNAPSHOT_LOCK_TIMEOUT_SECONDS)
 RESULT_FAILURE_RETRY_DELAY = timedelta(seconds=settings.RESULT_FAILURE_RETRY_DELAY_SECONDS)
@@ -27,8 +28,33 @@ def _snapshot_defaults(event: Event) -> dict:
     }
 
 
+def _ranking_rule_is_outdated(snapshot: EventResultSnapshot) -> bool:
+    """Whether a published payload was ranked by an older recommendation rule.
+
+    Such a payload (for example one listing ten windows padded with 0% ones)
+    is recomputed without advancing the event revision. A payload with no
+    basis at all was never ranked, so it is left alone, and a newer rule's
+    payload is never downgraded (a worker may deploy ahead of the web).
+    """
+
+    payload = snapshot.payload if isinstance(snapshot.payload, dict) else {}
+    basis = payload.get("recommendationBasis")
+    if not isinstance(basis, dict):
+        return False
+    version = basis.get("ruleVersion")
+    return not (
+        isinstance(version, int)
+        and not isinstance(version, bool)
+        and version >= RECOMMENDATION_RULE_VERSION
+    )
+
+
 def ensure_result_snapshot(event: Event) -> EventResultSnapshot:
-    """Return an event snapshot and reconcile it with the event's current revision."""
+    """Return an event snapshot and reconcile it with the event's current revision.
+
+    A fresh snapshot ranked by an older recommendation rule goes back to
+    refreshing too, so the result worker republishes it at the same revision.
+    """
 
     with transaction.atomic():
         snapshot, _created = EventResultSnapshot.objects.select_for_update().get_or_create(
@@ -47,6 +73,11 @@ def ensure_result_snapshot(event: Event) -> EventResultSnapshot:
                     "updated_at",
                 ]
             )
+        elif snapshot.status == EventResultSnapshot.Status.FRESH and _ranking_rule_is_outdated(
+            snapshot
+        ):
+            snapshot.status = EventResultSnapshot.Status.REFRESHING
+            snapshot.save(update_fields=["status", "updated_at"])
         return snapshot
 
 
@@ -181,7 +212,11 @@ def _claim_result_snapshot(event_id, *, now, force: bool):
         )
         if has_active_lock:
             return event, snapshot, None
-        if not force and snapshot.computed_revision >= event.results_revision:
+        if (
+            not force
+            and snapshot.computed_revision >= event.results_revision
+            and not _ranking_rule_is_outdated(snapshot)
+        ):
             if snapshot.status != "fresh" or snapshot.requested_revision != event.results_revision:
                 snapshot.status = "fresh"
                 snapshot.requested_revision = event.results_revision
@@ -359,6 +394,9 @@ def recompute_due_event_results(
     due = Event.objects.filter(
         Q(result_snapshot__isnull=True)
         | Q(result_snapshot__computed_revision__lt=F("results_revision"))
+        # A failure at the computed revision (a recompute for a newer ranking
+        # rule) is retried too, after the same delay as any other failure.
+        | Q(result_snapshot__status=EventResultSnapshot.Status.FAILED)
         | (
             Q(result_snapshot__status=EventResultSnapshot.Status.REFRESHING)
             & (

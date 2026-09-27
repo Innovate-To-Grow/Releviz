@@ -1,6 +1,11 @@
 const { expect, test } = require("@playwright/test");
 const { expectAccessible } = require("./helpers/accessibility");
-const { createEvent, readSession, registerAccount } = require("./helpers/releviz");
+const {
+  createEvent,
+  openBlockedTimes,
+  readSession,
+  registerAccount,
+} = require("./helpers/releviz");
 
 test.use({ viewport: { width: 320, height: 720 } });
 
@@ -81,7 +86,8 @@ test.describe("automated accessibility baseline", () => {
       // whole workspace is measured.
       await expect(page.getByRole("heading", { name: "No participants yet" })).toBeVisible();
 
-      const layout = await page.evaluate(() => {
+      const measureLayout = () =>
+        page.evaluate(() => {
         // Content inside a horizontally scrolling box (the calendar canvas, a
         // responsive table) may extend past the viewport edge; anything else
         // that reaches past it widens the page instead.
@@ -107,12 +113,38 @@ test.describe("automated accessibility baseline", () => {
           offenders,
         };
       });
+      const layout = await measureLayout();
       expect(
         layout.scrollWidth,
         "organizer workspace must not overflow a 375px viewport"
       ).toBeLessThanOrEqual(layout.clientWidth);
       expect(layout.offenders, "elements reaching past the 375px viewport").toEqual([]);
       await expectAccessible(page, "organizer workspace at 375px");
+
+      // Painting blocked times on the calendar at phone width: the step opens
+      // without widening the page, a tap paints, and the page stays clean.
+      await openBlockedTimes(page);
+      await expect(
+        page.getByRole("grid", { name: /marking blocked times$/ })
+      ).toBeVisible();
+      const paintingLayout = await measureLayout();
+      expect(
+        paintingLayout.scrollWidth,
+        "organizer workspace must not overflow a 375px viewport while painting"
+      ).toBeLessThanOrEqual(paintingLayout.clientWidth);
+      expect(paintingLayout.offenders, "elements reaching past the 375px viewport").toEqual([]);
+      // Pin the cell by index: once painted it no longer matches an "open"
+      // locator.
+      const firstOpenIndex = await page
+        .locator('[data-blocked-paint="false"]')
+        .first()
+        .getAttribute("data-cell-idx");
+      const tappedCell = page.locator(`[data-cell-idx="${firstOpenIndex}"]`);
+      await tappedCell.scrollIntoViewIfNeeded();
+      const cellBox = await tappedCell.boundingBox();
+      await page.touchscreen.tap(cellBox.x + cellBox.width / 2, cellBox.y + cellBox.height / 2);
+      await expect(tappedCell).toHaveAttribute("data-blocked-paint", "true");
+      await expectAccessible(page, "organizer workspace at 375px, marking blocked times");
     });
   });
 });

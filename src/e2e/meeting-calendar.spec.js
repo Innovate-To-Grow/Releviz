@@ -2,9 +2,11 @@ const { expect, test } = require("@playwright/test");
 const { expectAccessible } = require("./helpers/accessibility");
 const {
   apiJson,
+  closeBlockedTimes,
   createEvent,
   fillTextbox,
-  openRankedWindows,
+  openBlockedTimes,
+  openRecommendedTimes,
   readSession,
   recomputeEventResults,
   registerAccount,
@@ -78,6 +80,19 @@ async function pickCell(page, cell, expectedText) {
       { timeout: 20_000, intervals: [500, 1000, 2000] },
     )
     .toContain(expectedText);
+}
+
+// Whether `locator` is the topmost element at its own centre, i.e. not
+// hidden under something pinned over it (the calendar while picking).
+async function isUncovered(locator) {
+  return locator.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const hit = document.elementFromPoint(
+      box.left + box.width / 2,
+      box.top + Math.min(box.height / 2, 12),
+    );
+    return element.contains(hit);
+  });
 }
 
 // Adds a managed participant and submits the given availability. `inperson`
@@ -260,22 +275,55 @@ test.describe("Organizer meeting-time calendar", () => {
     await expect(grid.getByRole("columnheader")).toHaveCount(6);
     await expect(grid.getByRole("columnheader").nth(1)).toContainText("Mon");
     await expect(grid.getByRole("columnheader").nth(5)).toContainText("Fri");
-    const rail = page.getByRole("complementary", { name: "Ranked windows" });
-    // The list starts collapsed with a one-line summary of the best window.
-    await expect(rail.locator("details")).not.toHaveAttribute("open", "");
-    await expect(rail).toContainText(/\d+ candidates · best /);
+    const rail = page.locator("details.organizer-recommended-times");
+    // The recommended times sit collapsed inside the (collapsed) Finalize
+    // step with a one-line summary of the best one, which Finalize's own
+    // summary counts; the calendar outlines none until the list is opened.
+    await expect(rail).not.toHaveAttribute("open", "");
+    await expect(page.locator("#organizer-finalize")).not.toHaveAttribute(
+      "open",
+      "",
+    );
+    await expect(page.locator("#organizer-finalize > summary")).toContainText(
+      "No time selected yet · 3 recommended",
+    );
+    await expect(rail).toContainText(/\d+ recommended · best /);
     await expect(
       rail.getByRole("button", { name: "Choose this time" }).first(),
     ).toBeHidden();
-    await openRankedWindows(page);
+    await expect(page.locator(".meeting-calendar__block--rank")).toHaveCount(0);
+    await expect(
+      page.getByText("Recommended time", { exact: true }),
+    ).toBeHidden();
+    await openRecommendedTimes(page);
     await expect(
       rail.getByRole("button", { name: "Choose this time" }).first(),
     ).toBeVisible();
-    expect(
-      await rail.getByRole("button", { name: "Choose this time" }).count(),
-    ).toBeGreaterThanOrEqual(3);
-    await expect(rail.locator(".result-option__rank").first()).toHaveText("#1");
-    await expect(rail.getByText("Best match")).toBeVisible();
+    await expect(
+      page.getByText("Recommended time", { exact: true }),
+    ).toBeVisible();
+    // Only windows someone can attend in full, at least half as good as the
+    // best: Thursday 09:00 (Ada and Dev, 43% weighted) is under half of
+    // Monday's 100%, and the 0% windows that used to pad the list to ten
+    // (overlapping Monday's and each other) are gone.
+    await expect(rail.locator(".ranked-chip__title")).toHaveText([
+      "Mon 10:00–11:00",
+      "Tue 11:00–12:00",
+      "Wed 14:00–15:00",
+    ]);
+    await expect(rail.locator(".ranked-chip__share")).toHaveText([
+      /^100% weighted/,
+      /^86% weighted/,
+      /^57% weighted/,
+    ]);
+    await expect(rail.locator(".ranked-chips__intro")).toContainText(
+      "The next option drops to 43% weighted, under half of the best.",
+    );
+    await expect(rail.locator("summary")).toContainText(
+      "3 recommended · best Mon 10:00–11:00",
+    );
+    await expect(rail.locator(".ranked-chip__rank").first()).toHaveText("#1");
+    await expect(rail.locator(".ranked-chip--best")).toHaveCount(1);
     await expectAccessible(page, "organizer results calendar");
 
     // Shading: the same cell reports both figures; the toggle changes the
@@ -309,7 +357,7 @@ test.describe("Organizer meeting-time calendar", () => {
     );
     await expect(monday10).toHaveAttribute(
       "aria-label",
-      /Inside ranked window #1/,
+      /Inside recommended time #1/,
     );
     const thursday9 = cellAt(grid, 0, 3);
     await expect(thursday9).toHaveAttribute(
@@ -323,7 +371,11 @@ test.describe("Organizer meeting-time calendar", () => {
       name: "Weighted",
       exact: true,
     });
-    const unweightedButton = page.getByRole("button", { name: "Unweighted" });
+    // Exact: the ranked chips name their unweighted share too.
+    const unweightedButton = page.getByRole("button", {
+      name: "Unweighted",
+      exact: true,
+    });
     await expect(weightedButton).toHaveAttribute("aria-pressed", "true");
     await unweightedButton.click();
     await expect(unweightedButton).toHaveAttribute("aria-pressed", "true");
@@ -357,17 +409,31 @@ test.describe("Organizer meeting-time calendar", () => {
       grid.getByRole("columnheader", { name: shortDate(nextMonday) }),
     ).toBeVisible();
 
+    // Closing Finalize closes the recommended times inside it, and their
+    // outlines leave the calendar.
+    const finalizeStep = page.locator("#organizer-finalize");
+    await finalizeStep.locator("> summary").click();
+    await expect(finalizeStep).not.toHaveAttribute("open", "");
+    await expect(rail).not.toHaveAttribute("open", "");
+    await expect(page.locator(".meeting-calendar__block--rank")).toHaveCount(0);
+
     // Pointer pick: Wednesday 14:00 starts a 60-minute custom window.
     await gotoWeekWith(page, grid, customWednesday);
     const wednesday14 = cellAt(grid, 10, 2);
     await expect(wednesday14).toHaveAttribute("data-state", "startable");
     await pickCell(page, wednesday14, "Wed 14:00–15:00");
+    // A calendar pick opens the collapsed Finalize step and focuses it.
+    await expect(finalizeStep).toHaveAttribute("open", "");
     await expect(page.getByRole("heading", { name: "Finalize" })).toBeFocused();
+    await expect(
+      page.getByRole("button", { name: "Review attendance" }),
+    ).toBeVisible();
+    await expectAccessible(page, "organizer finalize step");
     const candidate = page.locator(".final-candidate");
     await expect(candidate).toContainText("Wed 14:00–15:00");
     await expect(candidate).toContainText("Custom window");
     await expect(candidate).toContainText(
-      "At least 57% weighted · 50% unweighted across this window (lowest slot).",
+      "Up to 57% weighted · 50% unweighted across this window (its lowest slot; people must be free for all of it).",
     );
     await expect(wednesday14).toHaveAttribute("aria-selected", "true");
     await expect(cellAt(grid, 11, 2)).toHaveAttribute("aria-selected", "true");
@@ -412,8 +478,10 @@ test.describe("Organizer meeting-time calendar", () => {
       grid.getByRole("columnheader", { name: shortDate(customMonday) }),
     ).toBeVisible();
 
-    // Choosing a ranked window from the rail reveals it on the calendar, and
-    // clicking the first cell of a ranked window yields that exact result.
+    // Choosing a recommended time reveals it on the calendar and keeps focus
+    // on its chip (the list lives inside Finalize, next to the result), and
+    // clicking the first cell of a recommended time yields that exact result.
+    await openRecommendedTimes(page);
     const secondChoice = rail
       .getByRole("button", { name: "Choose this time" })
       .nth(1);
@@ -421,7 +489,8 @@ test.describe("Organizer meeting-time calendar", () => {
     await expect(
       rail.getByRole("button", { name: "Selected time" }),
     ).toHaveCount(1);
-    await expect(candidate).toContainText("Ranked #2");
+    await expect(rail.locator(".ranked-chip").nth(1)).toBeFocused();
+    await expect(candidate).toContainText("Recommended #2");
     await expect(candidate).toContainText("Tue 11:00–12:00");
     await expect(candidate).toContainText(
       "86% weighted · 75% unweighted · 3 fully available",
@@ -432,16 +501,81 @@ test.describe("Organizer meeting-time calendar", () => {
     const bestCell = cellAt(grid, 2, 0);
     await expect(bestCell).toHaveAttribute(
       "aria-label",
-      /Inside ranked window #1/,
+      /Inside recommended time #1/,
     );
-    await pickCell(page, bestCell, "Ranked #1");
+    await pickCell(page, bestCell, "Recommended #1");
     await expect(candidate).toContainText("Mon 10:00–11:00");
     await expect(candidate).toContainText(
       "100% weighted · 100% unweighted · 4 fully available",
     );
-    await expect(rail.locator(".result-option").first()).toContainText(
-      "Selected time",
+    await expect(rail.locator(".ranked-chip").first()).toHaveAttribute(
+      "aria-pressed",
+      "true",
     );
+
+    // Other times, inside Finalize, picks any open time with one click, like
+    // the recommended times: a day, then a time chip. The last week offered
+    // is weeks ahead of the one on screen, so the calendar has to move to
+    // show the pick; focus stays on the chip.
+    const otherTimes = page.locator("details#organizer-other-times");
+    await otherTimes.locator("> summary").click();
+    await expect(otherTimes).toHaveAttribute("open", "");
+    // The summary just clicked is brought out from under the calendar as it
+    // pins.
+    await expect
+      .poll(() => isUncovered(otherTimes.locator("> summary")))
+      .toBe(true);
+    const laterDays = otherTimes.getByRole("button", { name: "Later days" });
+    await expect(laterDays).toBeVisible();
+    // The arrows stay focusable at the ends and say so with aria-disabled.
+    for (
+      let step = 0;
+      step < 8 && (await laterDays.getAttribute("aria-disabled")) !== "true";
+      step += 1
+    ) {
+      await laterDays.click();
+    }
+    await expect(laterDays).toHaveAttribute("aria-disabled", "true");
+    const dayChips = otherTimes
+      .getByRole("group", { name: "Day", exact: true })
+      .getByRole("button");
+    const lastDayChip = dayChips.last();
+    await lastDayChip.click();
+    await expect(lastDayChip).toHaveAttribute("aria-pressed", "true");
+    const lastDayName = (
+      await lastDayChip.locator(".day-chip__date").textContent()
+    ).trim();
+    const timeChip = otherTimes.locator(".ranked-chips .ranked-chip").nth(1);
+    const chipTimes = await timeChip
+      .locator(".ranked-chip__title")
+      .textContent();
+    // Choosing shows on the time table: the calendar stays in view (pinned
+    // while a picker is open), moves to the day listed and highlights it,
+    // and draws the time under the pointer.
+    await expect(
+      page.locator(".meeting-results--pinned > .meeting-calendar"),
+    ).toHaveCSS("position", "sticky");
+    await expect(
+      grid.locator(".meeting-calendar__column-header--focus"),
+    ).toContainText(lastDayName);
+    await timeChip.hover();
+    const candidateBlock = page.locator(".meeting-calendar__block--candidate");
+    await expect(candidateBlock).toContainText(chipTimes);
+    // Drawn where it can be seen: the pinned grid scrolls to it.
+    await expect(candidateBlock).toBeInViewport();
+    // Keyboard focus on a chip is never hidden under the pinned calendar.
+    await timeChip.focus();
+    await expect.poll(() => isUncovered(timeChip)).toBe(true);
+    await expectAccessible(page, "organizer other times");
+    await timeChip.click();
+    await expect(candidate).toContainText(chipTimes);
+    await expect(candidate).toContainText(lastDayName);
+    await expect(timeChip).toHaveAttribute("aria-pressed", "true");
+    await expect(timeChip).toBeFocused();
+    await expect(
+      grid.getByRole("columnheader", { name: lastDayName }),
+    ).toBeVisible();
+    await expect(grid.locator('[aria-selected="true"]')).toHaveCount(2);
 
     // Finalize a custom window and confirm the API stored the cell's instant.
     await gotoWeekWith(page, grid, customWednesday);
@@ -461,14 +595,63 @@ test.describe("Organizer meeting-time calendar", () => {
         channel: "inperson",
       }),
     );
+    // The finalizing button left with the review: focus is on Download.
     await expect(
       page.getByRole("button", { name: "Download calendar (.ics)" }),
-    ).toBeVisible();
+    ).toBeFocused();
     await expect(page.locator(".meeting-calendar")).toHaveClass(
       /meeting-calendar--finalized/,
     );
     await expect(
       page.locator(".meeting-calendar__block--confirmed"),
+    ).toBeVisible();
+    // Picking is locked until the event is reactivated: Finalize offers no
+    // lists, the grid is read-only, and the pick is not drawn over the
+    // confirmed meeting, whose label stays readable.
+    await expect(page.locator("#organizer-recommended-times")).toHaveCount(0);
+    await expect(page.locator("#organizer-other-times")).toHaveCount(0);
+    await expect(grid).toHaveAttribute("aria-readonly", "true");
+    await expect(
+      page.locator(".meeting-calendar__block--selected"),
+    ).toHaveCount(0);
+    // (Overlays let the pointer through, so this compares label boxes.)
+    const confirmedLabel = page.locator(
+      ".meeting-calendar__block--confirmed .meeting-calendar__block-label",
+    );
+    await expect(confirmedLabel).toBeVisible();
+    const labelsOverlap = await confirmedLabel.evaluate((label) => {
+      const box = label.getBoundingClientRect();
+      return [...document.querySelectorAll(".meeting-calendar__block-label")]
+        .filter((other) => other !== label)
+        .some((other) => {
+          const rect = other.getBoundingClientRect();
+          return (
+            rect.left < box.right &&
+            rect.right > box.left &&
+            rect.top < box.bottom &&
+            rect.bottom > box.top
+          );
+        });
+    });
+    expect(labelsOverlap).toBe(false);
+    // A pick would re-key Finalize and drop the review below the meeting.
+    // (The cell is aria-disabled, so the click is forced past Playwright's
+    // enabled check: a real pointer still reaches it.)
+    const lockedCell = cellAt(grid, 12, 2);
+    await expect(lockedCell).toHaveAttribute("aria-disabled", "true");
+    await lockedCell.click({ force: true });
+    await expect(lockedCell).toBeFocused();
+    await expect(grid.locator('[aria-selected="true"]')).toHaveCount(0);
+    await expect(page.locator("#organizer-finalize > summary")).toContainText(
+      "Finalized",
+    );
+    await expect(
+      page.getByRole("group", { name: "Attendance review" }),
+    ).toBeVisible();
+    await expect(
+      page.getByText(
+        "The meeting is finalized and calendar invitations are queued.",
+      ),
     ).toBeVisible();
     await expect(
       grid.getByRole("columnheader", { name: shortDate(customWednesday) }),
@@ -501,6 +684,17 @@ test.describe("Organizer meeting-time calendar", () => {
     }));
     expect(overflow.page).toBe(false);
     expect(overflow.calendar).toBe(true);
+    // The Confirmed label (a check mark here) stays inside its block.
+    const labelInside = await mobilePage
+      .locator(".meeting-calendar__block--confirmed")
+      .evaluate((block) => {
+        const outer = block.getBoundingClientRect();
+        const inner = block
+          .querySelector(".meeting-calendar__block-label")
+          .getBoundingClientRect();
+        return inner.left >= outer.left && inner.right <= outer.right;
+      });
+    expect(labelInside).toBe(true);
     await expectAccessible(mobilePage, "organizer results calendar at 375px");
     await mobileContext.close();
   });
@@ -568,13 +762,13 @@ test.describe("Organizer meeting-time calendar", () => {
       page.getByText("Dates 1–7 of 9", { exact: false }),
     ).toBeVisible();
     await expect(grid.getByRole("columnheader")).toHaveCount(8);
-    const rail = page.getByRole("complementary", { name: "Ranked windows" });
-    await openRankedWindows(page);
+    const rail = page.locator("details.organizer-recommended-times");
+    await openRecommendedTimes(page);
     const channelGroup = page.getByRole("group", { name: "Meeting channel" });
     const inPerson = channelGroup.getByRole("button", { name: "In person" });
     const virtual = channelGroup.getByRole("button", { name: "Virtual" });
     await expect(inPerson).toHaveAttribute("aria-pressed", "true");
-    await expect(rail.locator(".result-option__title").first()).toHaveText(
+    await expect(rail.locator(".ranked-chip__title").first()).toHaveText(
       `${dates[0]} 09:00–10:00`,
     );
     await expect(cellAt(grid, 0, 0)).toHaveAttribute(
@@ -587,7 +781,7 @@ test.describe("Organizer meeting-time calendar", () => {
     // The rail keeps every ranked window; the calendar re-shades for the
     // chosen channel.
     const virtualBest = rail
-      .locator(".result-option")
+      .locator(".ranked-chip")
       .filter({ hasText: `${dates[8]} 10:00–11:00` });
     await expect(virtualBest).toContainText("Virtual");
     await expect(virtualBest).toContainText("#2");
@@ -597,10 +791,17 @@ test.describe("Organizer meeting-time calendar", () => {
       page.getByText("Dates 8–9 of 9", { exact: false }),
     ).toBeVisible();
     await expect(grid.getByRole("columnheader")).toHaveCount(3);
+    // Kim's virtual hour (33%) is under half of the best time (100% in
+    // person), so it is shaded but not ranked.
     await expect(cellAt(grid, 0, 0)).toHaveAttribute(
       "aria-label",
-      /Weighted 33%, unweighted 33% of 3 responses.*Inside ranked window #3/,
+      /Weighted 33%, unweighted 33% of 3 responses/,
     );
+    await expect(cellAt(grid, 0, 0)).not.toHaveAttribute(
+      "aria-label",
+      /Inside recommended time/,
+    );
+    await expect(rail.locator(".ranked-chip")).toHaveCount(2);
     await page.getByRole("button", { name: "Previous dates" }).click();
     await expect(
       page.getByText("Dates 1–7 of 9", { exact: false }),
@@ -622,11 +823,11 @@ test.describe("Organizer meeting-time calendar", () => {
     const lastDay10 = cellAt(grid, 2, 1);
     await expect(lastDay10).toHaveAttribute(
       "aria-label",
-      /Weighted 67%, unweighted 67% of 3 responses.*Inside ranked window #2/,
+      /Weighted 67%, unweighted 67% of 3 responses.*Inside recommended time #2/,
     );
     await lastDay10.click();
     const candidate = page.locator(".final-candidate");
-    await expect(candidate).toContainText("Ranked #2");
+    await expect(candidate).toContainText("Recommended #2");
     await expect(candidate).toContainText("Virtual");
     await expect(
       rail.getByRole("button", { name: "Selected time" }),
@@ -762,76 +963,109 @@ test.describe("Organizer meeting-time calendar", () => {
 
     // Ranked windows skip the blocked slots: the best window is Tuesday even
     // though everyone was free on Monday, and no rank badge covers a block.
-    // The run before the block still ranks (every other window scores 0, so
-    // the earliest one, Monday 09:00–10:00, is #2) and ends right at it.
+    // Every other window scores 0 (nobody can attend all of it), so Tuesday
+    // is the only one listed. The calendar shows it once the list is open.
+    await openRecommendedTimes(page);
     const tuesday11 = cellAt(grid, 4, 1);
     await expect(tuesday11).toHaveAttribute("data-state", "startable");
     await expect(tuesday11).toHaveAttribute(
       "aria-label",
-      /Weighted 67%, unweighted 67% of 3 responses.*Inside ranked window #1/,
+      /Weighted 67%, unweighted 67% of 3 responses.*Inside recommended time #1/,
     );
     await expect(monday10).not.toHaveAttribute(
       "aria-label",
-      /Inside ranked window/,
+      /Inside recommended time/,
     );
     await expect(
       grid.locator(
-        '[data-blocked-slot="true"][aria-label*="Inside ranked window"]',
+        '[data-blocked-slot="true"][aria-label*="Inside recommended time"]',
       ),
     ).toHaveCount(0);
-    await expect(cellAt(grid, 0, 0)).toHaveAttribute(
+    await expect(cellAt(grid, 0, 0)).not.toHaveAttribute(
       "aria-label",
-      /Inside ranked window #2/,
+      /Inside recommended time/,
     );
-    await expect(monday930).toHaveAttribute(
+    await expect(monday930).not.toHaveAttribute(
       "aria-label",
-      /Inside ranked window #2/,
+      /Inside recommended time/,
     );
-    const rail = page.getByRole("complementary", { name: "Ranked windows" });
-    await openRankedWindows(page);
-    const titles = rail.locator(".result-option__title");
-    await expect(titles.first()).toHaveText("Tue 11:00–12:00");
-    await expect(titles.nth(1)).toHaveText("Mon 09:00–10:00");
-    expect(
-      (await titles.allTextContents()).filter(
-        (title) =>
-          title.startsWith("Mon 10:00") || title.startsWith("Mon 10:30"),
-      ),
-    ).toEqual([]);
+    const rail = page.locator("details.organizer-recommended-times");
+    await expect(rail.locator(".ranked-chip__title")).toHaveText([
+      "Tue 11:00–12:00",
+    ]);
 
-    // Painting one more block (Tuesday 09:00) and saving updates the
-    // summary, the API and the calendar in place, with no reload.
-    await blockedTimes.locator("summary").click();
-    await expect(blockedTimes).toHaveAttribute("open", "");
+    // Painting one more block (Tuesday 09:00) happens on the calendar
+    // itself: opening the step turns it into the paint surface, and saving
+    // updates the summary, the API and the calendar in place, with no reload.
+    await openBlockedTimes(page);
+    await expect(grid).toHaveAccessibleName(/, marking blocked times$/);
+    await expect(
+      page.getByRole("grid", { name: "Blocked times", exact: true }),
+    ).toHaveCount(0);
+    await expect(page.locator(".meeting-calendar__block--rank")).toHaveCount(0);
     await expect(
       blockedTimes.getByText(
-        "Mark the parts of each day that are not available for this event. Participants see these times greyed out.",
+        "While this step is open, paint on the calendar above to mark the parts of each day that are not available for this event. Participants see these times greyed out.",
       ),
     ).toBeVisible();
     const brushes = page.getByRole("group", { name: "Mark times as" });
     await expect(
       brushes.getByRole("button", { name: "Blocked", exact: true }),
     ).toHaveAttribute("aria-pressed", "true");
-    const blockedGrid = page.getByRole("grid", { name: "Blocked times" });
-    await expect(blockedGrid).toBeVisible();
-    await expect(
-      blockedGrid.locator(`[data-cell-idx="${mon10}"]`),
-    ).toHaveAttribute("data-blocked-paint", "true");
+    const mondayMark = grid.locator(`[data-cell-idx="${mon10}"]`);
+    await expect(mondayMark).toHaveAttribute("data-blocked-paint", "true");
+    await expect(mondayMark).toHaveAttribute("aria-selected", "true");
     const saveBlocked = page.getByRole("button", {
       name: "Save blocked times",
     });
     await expect(saveBlocked).toBeDisabled();
-    await expectAccessible(page, "organizer blocked times editor");
-    const tuesday9Mark = blockedGrid.locator(`[data-cell-idx="${tue9}"]`);
+    await expectAccessible(page, "organizer blocked times painting");
+    const tuesday9Mark = grid.locator(`[data-cell-idx="${tue9}"]`);
     await expect(tuesday9Mark).toHaveAttribute("data-blocked-paint", "false");
     await tuesday9Mark.click();
     await expect(tuesday9Mark).toHaveAttribute("data-blocked-paint", "true");
     await expect(tuesday9Mark).toHaveAttribute("aria-selected", "true");
+    // A drag paints every cell it crosses...
+    const tuesday10Mark = grid.locator(`[data-cell-idx="${tue9 + 2}"]`);
+    const tuesday1030Mark = grid.locator(`[data-cell-idx="${tue9 + 3}"]`);
+    await tuesday10Mark.scrollIntoViewIfNeeded();
+    await tuesday1030Mark.scrollIntoViewIfNeeded();
+    const dragFrom = await tuesday10Mark.boundingBox();
+    const dragTo = await tuesday1030Mark.boundingBox();
+    await page.mouse.move(
+      dragFrom.x + dragFrom.width / 2,
+      dragFrom.y + dragFrom.height / 2,
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      dragTo.x + dragTo.width / 2,
+      dragTo.y + dragTo.height / 2,
+      { steps: 4 },
+    );
+    await page.mouse.up();
+    await expect(tuesday10Mark).toHaveAttribute("data-blocked-paint", "true");
+    await expect(tuesday1030Mark).toHaveAttribute("data-blocked-paint", "true");
+    // ...and the Open brush takes them back, so only one new block is saved.
+    await brushes.getByRole("button", { name: "Open" }).click();
+    await tuesday10Mark.click();
+    await tuesday1030Mark.click();
+    await expect(tuesday10Mark).toHaveAttribute("data-blocked-paint", "false");
+    await expect(tuesday1030Mark).toHaveAttribute(
+      "data-blocked-paint",
+      "false",
+    );
+    await brushes.getByRole("button", { name: "Blocked", exact: true }).click();
+    await expect(blockedTimes.locator("summary")).toContainText(
+      "unsaved changes",
+    );
     await expect(saveBlocked).toBeEnabled();
     await saveBlocked.click();
     await expect(page.getByText("Blocked times saved.")).toBeVisible();
     await expect(blockedTimes.locator("summary")).toContainText(
       "3 slots blocked",
+    );
+    await expect(blockedTimes.locator("summary")).not.toContainText(
+      "unsaved changes",
     );
     // The stored event now matches the marks, so there is nothing to save.
     await expect(saveBlocked).toBeDisabled();
@@ -846,10 +1080,17 @@ test.describe("Organizer meeting-time calendar", () => {
       "weekday:1": [2, 3],
       "weekday:2": [0],
     });
+    // Closing the step hands the calendar back to the picker: the new block
+    // is greyed out and the ranked outlines return (the list is still open).
+    await closeBlockedTimes(page);
+    await expect(grid).not.toHaveAccessibleName(/marking blocked times/);
     const tuesday9 = cellAt(grid, 0, 1);
     await expect(tuesday9).toHaveAttribute("data-state", "blocked");
     await expect(tuesday9).toHaveAttribute("data-blocked-slot", "true");
     await expect(tuesday9).toHaveAttribute("aria-disabled", "true");
+    await expect(
+      page.locator(".meeting-calendar__block--rank").first(),
+    ).toBeVisible();
 
     // A participant's grid (here the managed drawer) shows all three blocks
     // greyed out and unpaintable, with the legend explaining the stripes.
@@ -870,9 +1111,7 @@ test.describe("Organizer meeting-time calendar", () => {
     await expect(
       drawer.getByRole("list", { name: "Availability legend" }),
     ).toContainText("Blocked");
-    await drawer
-      .getByRole("button", { name: "Close schedule editor" })
-      .click();
+    await drawer.getByRole("button", { name: "Close schedule editor" }).click();
     await expect(page.getByRole("dialog")).toHaveCount(0);
 
     // A brand-new event lands on its organizer page with the empty editor
@@ -884,16 +1123,22 @@ test.describe("Organizer meeting-time calendar", () => {
     await selectOption(page, "Event timezone", "UTC");
     await page.getByRole("button", { name: "Create Event" }).click();
     await page.waitForURL(/\/event\?code=/);
-    const freshBlockedTimes = page.locator(
-      "details.organizer-blocked-times[open]",
-    );
+    // A fresh event starts with the step closed; opening it paints on the
+    // calendar itself (there is no second grid).
+    const freshBlockedTimes = page.locator("details.organizer-blocked-times");
     await expect(freshBlockedTimes).toBeVisible();
+    await expect(freshBlockedTimes).not.toHaveAttribute("open", "");
     await expect(freshBlockedTimes.locator("summary")).toContainText(
       "0 slots blocked",
     );
+    await openBlockedTimes(page);
     await expect(
-      freshBlockedTimes.getByRole("grid", { name: "Blocked times" }),
+      page.getByRole("grid", { name: /marking blocked times$/ }),
     ).toBeVisible();
+    await expect(page.locator("[data-blocked-paint]").first()).toBeVisible();
+    await expect(
+      page.getByRole("grid", { name: "Blocked times", exact: true }),
+    ).toHaveCount(0);
     await expect(
       page.getByText("This event is active and accepting responses."),
     ).toBeVisible();

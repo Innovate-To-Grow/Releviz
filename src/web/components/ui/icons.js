@@ -49,6 +49,7 @@ export {
   BsSearch as SearchIcon,
   BsSend as SendIcon,
   BsSliders as TuneIcon,
+  BsTable as TimeTableIcon,
   BsTrash3 as DeleteIcon,
   BsTrophy as BestIcon,
   BsUpload as ImportIcon,

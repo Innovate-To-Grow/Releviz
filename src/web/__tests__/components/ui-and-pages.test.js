@@ -421,6 +421,58 @@ describe("small UI modules", () => {
     expect(cell(4)).toHaveFocus();
   });
 
+  test("ScheduleGrid picks the nearest cell when several lie in an arrow's direction", () => {
+    // Three rows and three columns: every arrow press from the middle has two
+    // candidates, so the nearest-first ordering is what moves focus.
+    const slot = (index, localStart, localEnd) => ({
+      index,
+      localStart,
+      localEnd,
+      startDayOffset: 0,
+      endDayOffset: 0,
+    });
+    const times = [
+      ["09:00", "09:30"],
+      ["09:30", "10:00"],
+      ["10:00", "10:30"],
+    ];
+    const slotGroups = ["Mon", "Tue", "Wed"].map((label, column) => ({
+      key: `weekday:${column + 1}`,
+      label,
+      weekday: column + 1,
+      slots: times.map(([start, end], row) =>
+        slot(column * 3 + row, start, end),
+      ),
+    }));
+    render(
+      <ScheduleGrid
+        schedule={Array(9).fill(0)}
+        slotGroups={slotGroups}
+        readOnly={false}
+        onCellPaint={jest.fn()}
+      />,
+    );
+    const cell = (index) =>
+      document.querySelector(`[data-cell-idx='${index}']`);
+
+    // Down from the top row: two cells below, the nearer one wins.
+    cell(0).focus();
+    fireEvent.keyDown(cell(0), { key: "ArrowDown" });
+    expect(cell(1)).toHaveFocus();
+    // Up from the bottom row: two cells above.
+    cell(2).focus();
+    fireEvent.keyDown(cell(2), { key: "ArrowUp" });
+    expect(cell(1)).toHaveFocus();
+    // Left from the last column: two columns to the left.
+    cell(7).focus();
+    fireEvent.keyDown(cell(7), { key: "ArrowLeft" });
+    expect(cell(4)).toHaveFocus();
+    // Right from the first column: two columns to the right.
+    cell(1).focus();
+    fireEvent.keyDown(cell(1), { key: "ArrowRight" });
+    expect(cell(4)).toHaveFocus();
+  });
+
   test("ScheduleGrid supports read-only specific dates", () => {
     const painted = jest.fn();
     render(
@@ -744,125 +796,12 @@ describe("small UI modules", () => {
     expect(cell(1)).toHaveFocus();
   });
 
-  test("ScheduleGrid blockedEditing mode paints every slot as blocked or open", () => {
-    const painted = jest.fn();
-    document.elementFromPoint = jest.fn();
-    render(
-      <ScheduleGrid
-        schedule={[1, 0, 0.5, 0, 1, 0]}
-        slotGroups={blockedSlotGroups()}
-        readOnly={false}
-        onCellPaint={painted}
-        blockedEditing
-      />,
-    );
-    const cell = (index) =>
-      document.querySelector(`[data-cell-idx='${index}']`);
-
-    // `slot.blocked` is ignored: index 0 is an ordinary paintable cell.
-    expect(document.querySelector("[data-blocked='true']")).toBeNull();
-    expect(
-      document.querySelectorAll(".schedule-grid-cell-blocked"),
-    ).toHaveLength(0);
-    expect(document.querySelectorAll("[data-blocked-paint]")).toHaveLength(6);
-    expect(cell(0)).toHaveClass("schedule-grid-cell");
-    expect(cell(0)).toHaveAttribute("tabindex", "0");
-    expect(cell(0)).toHaveAttribute("data-blocked-paint", "true");
-    expect(cell(0)).toHaveAttribute("aria-selected", "true");
-    expect(cell(0)).toHaveAttribute(
-      "aria-label",
-      "Mon, 9:00 AM – 9:30 AM, blocked",
-    );
-    expect(cell(0)).toHaveAttribute("title", "Mon, 9:00 AM – 9:30 AM, blocked");
-    expect(
-      cell(0).querySelector(".schedule-grid-cell__glyph"),
-    ).toHaveTextContent("✕");
-    expect(cell(2)).toHaveAttribute("data-blocked-paint", "true");
-    expect(cell(1)).toHaveAttribute("data-blocked-paint", "false");
-    expect(cell(1)).toHaveAttribute("aria-selected", "false");
-    expect(cell(1)).toHaveAttribute(
-      "aria-label",
-      "Mon, 9:30 AM – 10:00 AM, open",
-    );
-    expect(cell(1)).toHaveAttribute("title", "Mon, 9:30 AM – 10:00 AM, open");
-    expect(
-      cell(1).querySelector(".schedule-grid-cell__glyph"),
-    ).toHaveTextContent("");
-    for (const index of [0, 1, 4]) {
-      expect(cell(index)).not.toHaveAttribute("data-availability");
-      expect(cell(index)).not.toHaveAttribute("aria-disabled");
-      expect(cell(index).style.backgroundColor).toBe("");
-    }
-
-    // Pointer strokes and the keyboard paint exactly as in availability mode.
-    fireEvent.pointerDown(cell(0), {
-      button: 0,
-      pointerId: 3,
-      pointerType: "mouse",
-    });
-    expect(painted).toHaveBeenLastCalledWith(
-      0,
-      expect.objectContaining({ phase: "start", type: "pointerdown" }),
-    );
-    document.elementFromPoint.mockReturnValue(cell(4));
-    fireEvent.pointerMove(cell(0), {
-      clientX: 1,
-      clientY: 1,
-      pointerId: 3,
-      pointerType: "mouse",
-    });
-    expect(painted).toHaveBeenLastCalledWith(
-      4,
-      expect.objectContaining({ phase: "move" }),
-    );
-    fireEvent.pointerUp(cell(0), { pointerId: 3, pointerType: "mouse" });
-    cell(0).focus();
-    fireEvent.keyDown(cell(0), { key: "ArrowDown" });
-    expect(cell(1)).toHaveFocus();
-    fireEvent.keyDown(cell(1), { key: "ArrowRight" });
-    expect(cell(4)).toHaveFocus();
-    fireEvent.keyDown(cell(4), { key: " " });
-    expect(painted).toHaveBeenLastCalledWith(
-      4,
-      expect.objectContaining({ phase: "keyboard", pointerType: "keyboard" }),
-    );
-    expect(painted).toHaveBeenCalledTimes(3);
-  });
-
-  test("ScheduleGrid blockedEditing respects readOnly", () => {
-    const painted = jest.fn();
-    render(
-      <ScheduleGrid
-        schedule={[1]}
-        slotGroups={[blockedSlotGroups()[0]].map((group) => ({
-          ...group,
-          slots: group.slots.slice(0, 1),
-        }))}
-        readOnly
-        onCellPaint={painted}
-        blockedEditing
-      />,
-    );
-    const cell = document.querySelector("[data-cell-idx='0']");
-    expect(cell).toHaveAttribute("aria-readonly", "true");
-    expect(cell).toHaveAttribute("data-blocked-paint", "true");
-    expect(cell).not.toHaveAttribute("tabindex");
-    fireEvent.pointerDown(cell, {
-      button: 0,
-      pointerId: 4,
-      pointerType: "mouse",
-    });
-    fireEvent.keyDown(cell, { key: "Enter" });
-    expect(painted).not.toHaveBeenCalled();
-  });
-
   test("ScheduleGrid takes an accessible name from ariaLabel without a title", () => {
     const { unmount } = render(
       <ScheduleGrid
         schedule={[0]}
         slotGroups={[blockedSlotGroups()[0]]}
         ariaLabel="Blocked times"
-        blockedEditing
       />,
     );
     expect(

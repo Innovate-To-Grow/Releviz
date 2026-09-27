@@ -28,15 +28,17 @@ event does not send any email.
 
 ### Blocked times
 
-The organizer workspace opens on the **Blocked times** editor right after the event is created.
-Paint the parts of each day that are never available (a lunch break on Mondays, a late start on
-Fridays) and save. Every day then gets its own usable window within the event's shared start, end,
-and days.
+Open the **Blocked times** step under the Time Table calendar: while it is open, the calendar
+itself is the paint surface. Mark the parts of each day that are never available (a lunch break on
+Mondays, a late start on Fridays) with the **Blocked** or **Open** brush, by clicking, dragging, or
+Enter/Space from the keyboard, and save; the brush and Save sit in a bar under the calendar that
+stays on screen while you paint. A mark on a weekday applies to that weekday in every week. Every
+day then gets its own usable window within the event's shared start, end, and days.
 
-Blocked slots stay visible in the schedule grid but are greyed out and cannot be painted. They
-count as 0 in the results, never appear in ranked windows, and cannot be finalized into. You can
-change blocked times at any time from the Overview panel without resetting responses; after
-finalization, reactivate the event first.
+Blocked slots stay visible in the schedule grid but are greyed out and cannot be painted by
+participants. They count as 0 in the results, are never recommended, and cannot be finalized into.
+You can change blocked times at any time without resetting responses; after finalization,
+reactivate the event first.
 
 ## Participants
 
@@ -183,7 +185,8 @@ Participants only ever see their own schedule; group availability is visible to 
 ## Organizer dashboard
 
 Open the organizer view from the account that created the event. It is one page with three
-sections, **Overview**, **Results**, and **Participants**; finalizing is a step inside Results.
+sections, **Overview**, **Time Table**, and **Participants**; finalizing is a step inside the Time
+Table.
 
 ### Participants and schedules
 
@@ -218,25 +221,48 @@ for confirmation; the group's people stay on the participant list.
   show that group's best times. **Include everyone** brings everyone back.
 - People in several groups follow the most recent change.
 
-### Results and finalizing
+### Time Table and finalizing
 
-The Results section shows the top ten candidate windows of the meeting's length, ranked by weighted
-availability, then unweighted availability, then the number of fully available people, then time
-order. For a window spanning several slots, each person's score is their lowest availability in that
-window. The weighted score is `sum(person_score * weight) / sum(positive weights)` over included
-people who have submitted; people with weight zero still count toward the unweighted score. There
-are no required participants.
+The Time Table shows the meeting-time calendar, with two collapsible steps under it, both closed by
+default: **Blocked times** (see above) and **Finalize**. Picking a time on the calendar opens
+Finalize. Inside Finalize:
+
+- **Recommended times** lists the recommended windows of the meeting's length as chips. The calendar
+  outlines them only while the list is open, and pointing at a chip highlights its time.
+- **Other times** picks any open time, recommended or not: choose a day (weekly events offer the
+  next four weeks, a week at a time), then click one of its start times, shown with the lowest
+  slot's share and the rank when the time is also recommended.
+
+While either list is open and in view, the calendar stays pinned under the section nav (on screens
+with room for it, with a shorter grid; scrolled past the lists, it goes with the page). Opening
+Other times or browsing its days takes the calendar to that day and highlights its column, and the
+time under the pointer or focus is drawn on the calendar before it is picked.
+
+Recommended times are ranked by weighted availability, then unweighted availability, then the
+number of fully available people, then time order. For a window spanning several slots, each
+person's score is their lowest availability in that window. The weighted score is
+`sum(person_score * weight) / sum(positive weights)` over included people who have submitted; people
+with weight zero still count toward the unweighted score. There are no required participants.
+
+The list is as long as the good options are, at most ten: a window is listed only if someone with a
+weight above 0 can attend all of it, it scores at least half of the best window, and it shares no
+slot with a better listed window in the same format (so a long free stretch tiles into separate
+hours). The list says why it ends where it does, and an empty list names the reason (no responses
+yet, nobody free for a whole window, no upcoming times). Results cached under an older ranking rule
+are recomputed on the next read.
 
 On the meeting-time calendar, blocked times are hatched, show no percentage, and cannot be picked.
 An open slot whose meeting window would run into a blocked time shows its percentage but cannot
 start a meeting.
 
 **Finalize** fixes one continuous meeting time, emails an iCalendar invitation to participants, and
-offers the calendar file for download. Reactivating a finalized event emails a matching
-cancellation.
+offers the calendar file for download. Once a meeting is finalized, picking is locked until the
+event is reactivated: Finalize shows the confirmed meeting without the two lists, and the calendar
+draws the confirmed meeting alone and ignores clicks. Reactivating a finalized event emails a
+matching cancellation.
 
-While new responses are being processed, Results says it is updating and keeps showing the last
-completed results; once current, it shows when they were generated.
+While new responses are being processed, the Time Table says it is updating and keeps showing the
+last completed results; once current, it shows when they were generated.
 
 ### Live updates
 

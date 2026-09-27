@@ -19,7 +19,7 @@ const {
   latestVerificationCode,
   loginWithEmailCode,
   nextWeekdayDate,
-  openRankedWindows,
+  openRecommendedTimes,
   readSession,
   recomputeEventResults,
   registerAccount,
@@ -2296,19 +2296,28 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(
       page.getByRole("heading", { level: 2, name: eventName }),
     ).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Results" })).toBeVisible();
     await expect(
-      page.getByText("Top continuous windows for a 60-minute meeting."),
+      page.getByRole("heading", { name: "Time Table" }),
+    ).toBeVisible();
+    await expect(
+      page.getByText("Group availability for a 60-minute meeting."),
     ).toBeVisible();
     await expect(
       page.getByText(/Results are current at revision/),
     ).toBeVisible();
-    await openRankedWindows(page);
+    await openRecommendedTimes(page);
     await page
       .getByRole("button", { name: "Choose this time" })
       .first()
       .click();
-    await expect(page.getByRole("heading", { name: "Finalize" })).toBeFocused();
+    // The recommended times sit inside Finalize: the chosen chip keeps focus
+    // and the step below it shows the pick.
+    await expect(
+      page.locator("details.organizer-recommended-times .ranked-chip").first(),
+    ).toBeFocused();
+    await expect(page.locator(".final-candidate")).toContainText(
+      "Recommended #1",
+    );
     await reviewAttendance(page);
     await expect(page.getByText("Available", { exact: true })).toBeVisible();
     // The count tiles are backed by a per-person breakdown: a header row plus
@@ -2388,34 +2397,15 @@ test.describe("Releviz account and scheduling flow", () => {
       "METHOD:REQUEST",
     );
 
-    // Nothing clears the pick when the meeting is finalized: the rail still
-    // marks it, and the Finalize step ignores it until the event is active
-    // again. Make sure a live one is selected through the ranked rail before
-    // reactivating (the loop below only clicks if none is marked).
-    await openRankedWindows(page);
-    const rankedRail = page.getByRole("complementary", {
-      name: "Ranked windows",
-    });
-    // The rail re-renders as the ranked windows load, and a click that lands
-    // mid-render is dropped on slower engines (WebKit), so the pick is retried
-    // until one window reports itself selected.
-    const selectedRankedTime = rankedRail.getByRole("button", {
-      name: "Selected time",
-    });
-    await expect
-      .poll(
-        async () => {
-          if ((await selectedRankedTime.count()) === 0) {
-            await rankedRail
-              .getByRole("button", { name: "Choose this time" })
-              .first()
-              .click();
-          }
-          return selectedRankedTime.count();
-        },
-        { timeout: 20_000, intervals: [500, 1000, 2000] },
-      )
-      .toBe(1);
+    // While the meeting is finalized, picking is locked until the event is
+    // reactivated: Finalize offers no lists and the calendar is read-only.
+    // (The pick that was finalized is kept, but no longer drawn.)
+    const rankedRail = page.locator("details.organizer-recommended-times");
+    await expect(rankedRail).toHaveCount(0);
+    await expect(page.locator("details#organizer-other-times")).toHaveCount(0);
+    await expect(
+      page.getByRole("grid", { name: /^Meeting time calendar/ }),
+    ).toHaveAttribute("aria-readonly", "true");
 
     const cancellationStartedAt = Date.now() - 1000;
     const cancellationResponsePromise = page.waitForResponse(
@@ -2434,18 +2424,23 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(
       page.getByText("This event is active and accepting responses."),
     ).toBeVisible();
-    // Reactivating drops the stale pick: the Finalize step asks for a window
+    // Reactivating unlocks picking: the Finalize step asks for a window
     // again instead of still offering the meeting that was just cancelled.
     const finalizeStep = page.locator("#organizer-finalize");
     await expect(finalizeStep).toContainText("No time selected yet");
     await expect(finalizeStep).toContainText(
-      "Pick a window on the calendar or choose a ranked one.",
+      "Pick a time on the calendar, or choose a recommended or other time above.",
     );
-    await expect(finalizeStep).not.toContainText("Ranked #");
-    await expect(finalizeStep).not.toContainText("The meeting is finalized");
+    // Only the pick area: an open Other times list names recommended ranks.
     await expect(
-      rankedRail.getByRole("button", { name: "Selected time" }),
-    ).toHaveCount(0);
+      finalizeStep.locator(".finalize-block__body"),
+    ).not.toContainText("Recommended #");
+    await expect(finalizeStep).not.toContainText("The meeting is finalized");
+    await expect(finalizeStep).not.toContainText("This meeting is finalized");
+    await expect(rankedRail).toHaveCount(1);
+    await expect(
+      page.getByRole("grid", { name: /^Meeting time calendar/ }),
+    ).not.toHaveAttribute("aria-readonly");
     const cancellationDeliveryProgress = page.getByLabel(
       "Event delivery progress",
     );
@@ -2469,18 +2464,22 @@ test.describe("Releviz account and scheduling flow", () => {
     expect(cancellation).toContain("SEQUENCE:1");
 
     recomputeEventResults(eventCode);
-    await openRankedWindows(page);
+    await openRecommendedTimes(page);
     const candidateButtons = page.getByRole("button", {
       name: "Choose this time",
     });
     await expect(candidateButtons.first()).toBeVisible();
-    expect(await candidateButtons.count()).toBeGreaterThanOrEqual(3);
-    await candidateButtons.nth(2).click();
+    // The participant's free 09:00–11:00 tiles into two hours; the half-hour
+    // shifts in between overlap them, so they are not listed again.
+    await expect(candidateButtons).toHaveCount(2);
+    await candidateButtons.nth(1).click();
     // The Finalize step re-keys on a new selection: wait for the new pick to
-    // land before driving its buttons.
-    await expect(page.getByRole("heading", { name: "Finalize" })).toBeFocused();
+    // land before driving its buttons. The chosen chip keeps focus.
+    await expect(
+      page.locator("details.organizer-recommended-times .ranked-chip").nth(1),
+    ).toBeFocused();
     await expect(page.locator("#organizer-finalize")).toContainText(
-      "Ranked #3",
+      "Recommended #2",
     );
     await reviewAttendance(page);
     const secondFinalStartedAt = Date.now() - 1000;
