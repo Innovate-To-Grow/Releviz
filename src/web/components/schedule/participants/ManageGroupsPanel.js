@@ -16,8 +16,11 @@ function keyOf(group) {
   return group.id ?? "ungrouped";
 }
 
+// `includedCount: null` means some but not all members count, without the
+// listing saying how many.
 function countedText(group) {
   if (!group.count) return "—";
+  if (group.includedCount === null) return "Some";
   if (group.includedCount === group.count) return "All";
   if (!group.includedCount) return "None";
   return `${group.includedCount} of ${group.count}`;
@@ -269,8 +272,9 @@ export default function ManageGroupsPanel({
                     const allCounted =
                       !empty && group.includedCount === group.count;
                     const mixedCounted =
-                      group.includedCount > 0 &&
-                      group.includedCount < group.count;
+                      (!empty && group.includedCount === null) ||
+                      (group.includedCount > 0 &&
+                        group.includedCount < group.count);
                     return (
                       <tr key={key} data-participants-group={key}>
                         <th

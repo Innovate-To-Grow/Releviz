@@ -406,4 +406,21 @@ describe("ManageGroupsPanel", () => {
       screen.getByRole("dialog", { name: /Count only/ }),
     ).toHaveTextContent("2 people outside Everyone will be left out.");
   });
+
+  test("shows a partly counted group without a known count as Some", () => {
+    renderPanel({
+      groups: [{ ...sales, includedCount: null }],
+      ungrouped: { count: 0, weight: null, includedCount: 0 },
+    });
+    expect(rowFor("Sales")).toHaveTextContent("Some");
+    expect(
+      screen.getByRole("checkbox", { name: "Count Sales in the results" })
+        .indeterminate,
+    ).toBe(true);
+    expect(rowFor("No group")).toHaveTextContent("—");
+    expect(
+      screen.getByRole("checkbox", { name: "Count No group in the results" })
+        .indeterminate,
+    ).toBe(false);
+  });
 });

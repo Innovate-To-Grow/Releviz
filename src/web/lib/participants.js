@@ -202,3 +202,126 @@ export function buildGroupUpdates(current, next) {
 export function peopleCount(count) {
   return `${count} ${count === 1 ? "person" : "people"}`;
 }
+
+// The API selector for "everyone matching the current filters": the active
+// filter values, or an explicit `all` when nothing is filtered.
+export function activeRosterFilter({
+  search = "",
+  group = "",
+  submitted = "",
+  invitationStatus = "",
+  included = "",
+} = {}) {
+  const active = Object.fromEntries(
+    Object.entries({ search, group, submitted, invitationStatus, included })
+      .map(([key, value]) => [key, String(value ?? "").trim()])
+      .filter(([, value]) => value !== ""),
+  );
+  return Object.keys(active).length ? active : { all: true };
+}
+
+// The toast after a send: how many were queued and, when any, who was
+// skipped and why.
+export function invitationToast({ queuedCount = 0, skipped = null } = {}) {
+  const queued = `Queued ${queuedCount} ${queuedCount === 1 ? "invitation" : "invitations"}.`;
+  const parts = [];
+  const alreadyInvited = Number(skipped?.alreadyInvited || 0);
+  const noEmail = Number(skipped?.noEmail || 0);
+  if (alreadyInvited) parts.push(`${alreadyInvited} already invited`);
+  if (noEmail) parts.push(`${noEmail} without an email`);
+  return parts.length ? `${queued} Skipped ${parts.join(" and ")}.` : queued;
+}
+
+// When the next automatic reminder goes out: `reminderHoursBefore` hours
+// before the response deadline, while reminders are on, the event is active
+// and that moment is still ahead.
+export function reminderNextAt(event, now = Date.now()) {
+  if (
+    !event?.remindersEnabled ||
+    event.status !== "active" ||
+    !event.responseDeadline
+  )
+    return null;
+  const deadline = Date.parse(event.responseDeadline);
+  const hours = Number(event.reminderHoursBefore);
+  if (!Number.isFinite(deadline) || !Number.isFinite(hours)) return null;
+  const at = deadline - hours * 3600000;
+  return at > now ? new Date(at).toISOString() : null;
+}
+
+// The section's summary line under the Participants heading.
+export function countsLine({
+  total = 0,
+  shown = 0,
+  submitted = 0,
+  notSubmitted = 0,
+  groups = 0,
+  filtering = false,
+} = {}) {
+  const first = filtering
+    ? `Showing ${shown} of ${total} people`
+    : peopleCount(total);
+  return `${first} · ${submitted} submitted · ${notSubmitted} not submitted · ${groups} ${groups === 1 ? "group" : "groups"}`;
+}
+
+// Group picker state for the selected rows on a page: per group (and for the
+// every-group flag) whether all, none or some of them are members, with the
+// member counts shown beside each box.
+export function pickerStateFromRows(rows = [], groups = []) {
+  const total = rows.length;
+  const stateOf = (count) =>
+    total === 0 || count === 0 ? "none" : count === total ? "all" : "mixed";
+  const everyGroup = rows.filter((row) => Boolean(row.allGroups)).length;
+  const state = { allGroups: stateOf(everyGroup), byGroup: {} };
+  const counts = { total, allGroups: everyGroup, byGroup: {} };
+  groups.forEach((group) => {
+    const count = rows.filter((row) =>
+      (row.groups ?? []).some((member) => member.id === group.id),
+    ).length;
+    counts.byGroup[group.id] = count;
+    state.byGroup[group.id] = stateOf(count);
+  });
+  return { state, counts };
+}
+
+// Picker state when the selection reaches beyond the page (select-all mode):
+// nothing is known about everyone, so every box starts mixed.
+export function mixedPickerState(groups = []) {
+  return {
+    allGroups: "mixed",
+    byGroup: Object.fromEntries(groups.map((group) => [group.id, "mixed"])),
+  };
+}
+
+// The rows of the Manage groups panel from the listing's `stats.groups`: the
+// named groups and the trailing ungrouped bucket. A group whose members are
+// only partly counted comes back with `included: null` and no count, which
+// the panel shows as "Some" (`includedCount: null`).
+export function groupPanelRows(groups = []) {
+  const named = [];
+  let ungrouped = { count: 0, weight: null, includedCount: 0 };
+  (Array.isArray(groups) ? groups : []).forEach((group) => {
+    if (!group || typeof group !== "object") return;
+    const count = Number(group.count || 0);
+    const row = {
+      id: group.id ?? null,
+      name: group.name || "",
+      count,
+      weight: group.weight ?? null,
+      includedCount:
+        group.included === true
+          ? count
+          : group.included === false || count === 0
+            ? 0
+            : null,
+    };
+    if (row.id === null || row.name === "") {
+      ungrouped = {
+        count: row.count,
+        weight: row.weight,
+        includedCount: row.includedCount,
+      };
+    } else named.push(row);
+  });
+  return { groups: named, ungrouped };
+}

@@ -7,7 +7,6 @@ import {
   AvailabilityChoice,
   startingAvailabilityValue,
 } from "@/components/ui/Availability";
-import FormField from "@/components/ui/FormField";
 import { SaveIcon, VerifiedIcon } from "@/components/ui/icons";
 import StatusBadge from "@/components/ui/StatusBadge";
 import ScheduleChannelEditor from "@/components/schedule/ScheduleChannelEditor";
@@ -84,17 +83,28 @@ export function OrganizerHeader({ event, controls = null, live = null }) {
   );
 }
 
+const CLOSED_NOTE =
+  "Availability can only be edited while this event is active.";
+
+/**
+ * The organizer's schedule editor for one participant (or for their own
+ * row). `responsesOpen` false locks the grid with `lockReason` as the note;
+ * `leftOut` locks it because the person is not counted in the results, with
+ * `onCountIn` to bring them back; `saved` turns Cancel into Close once a
+ * save has landed.
+ */
 export function ManagedScheduleDrawer({
   event,
   mode,
   participant,
-  participantName,
-  setParticipantName,
   inperson,
   virtual,
   availabilityValue,
   onAvailabilityValueChange,
   responsesOpen,
+  lockReason = CLOSED_NOTE,
+  leftOut = false,
+  saved = false,
   saving,
   error,
   status,
@@ -102,6 +112,7 @@ export function ManagedScheduleDrawer({
   onInpersonPaint,
   onVirtualPaint,
   onCopy,
+  onCountIn,
   onSaveDraft,
   onSubmit,
   onReloadLatest,
@@ -161,15 +172,11 @@ export function ManagedScheduleDrawer({
   if (!participant) return null;
 
   // The organizer's own row: they answer for themselves, under the name on
-  // their account, so there is no name to edit and nobody to act for.
+  // their account, so there is nobody to act for.
   const ownResponse = Boolean(participant.isOrganizer);
   const editingLocked =
-    !responsesOpen || saving || Boolean(conflictParticipant);
-  const actionsLocked =
-    saving ||
-    !responsesOpen ||
-    Boolean(conflictParticipant) ||
-    (!ownResponse && !participantName.trim());
+    !responsesOpen || leftOut || saving || Boolean(conflictParticipant);
+  const actionsLocked = editingLocked;
   // A full account stays organizer-editable only until the person responds
   // themselves; organizer-managed and temporary rows are always shared.
   const fullAccount =
@@ -224,25 +231,31 @@ export function ManagedScheduleDrawer({
               answers count in the results like everyone else&apos;s.
             </p>
           ) : (
-            <FormField
-              label="Event display name"
-              help={
-                fullAccount
-                  ? "You can enter this schedule until they join, save, or submit it themselves; after that only they can change it. A version conflict will never be silently overwritten."
-                  : "You and this participant edit the same response. A version conflict will never be silently overwritten."
+            <p className="text-secondary mb-0">
+              {fullAccount
+                ? "You can enter this schedule until they join, save, or submit it themselves; after that only they can change it."
+                : "You and this participant edit the same response."}
+            </p>
+          )}
+
+          {leftOut && (
+            <Alert
+              variant="warning"
+              role="status"
+              className="managed-drawer__left-out"
+              actions={
+                <AppButton
+                  variant="outlined"
+                  onClick={onCountIn}
+                  disabled={saving}
+                >
+                  Count them again
+                </AppButton>
               }
             >
-              <input
-                type="text"
-                className="form-control"
-                value={participantName}
-                onChange={(changeEvent) =>
-                  setParticipantName(changeEvent.target.value)
-                }
-                maxLength={100}
-                disabled={!responsesOpen || saving}
-              />
-            </FormField>
+              {participant.name} is left out of the results, so their schedule
+              can&apos;t change.
+            </Alert>
           )}
 
           <div className="schedule-toolbar__group">
@@ -272,7 +285,7 @@ export function ManagedScheduleDrawer({
 
           {!responsesOpen && (
             <Alert variant="warning" role="note">
-              Availability can only be edited while this event is active.
+              {lockReason}
             </Alert>
           )}
           {error && (
@@ -304,7 +317,7 @@ export function ManagedScheduleDrawer({
 
         <footer className="app-drawer__footer managed-drawer__footer">
           <AppButton variant="outlined" onClick={onClose} disabled={saving}>
-            Cancel
+            {saved ? "Close" : "Cancel"}
           </AppButton>
           <AppButton
             variant="outlined"

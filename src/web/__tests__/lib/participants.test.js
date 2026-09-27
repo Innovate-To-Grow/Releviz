@@ -1,19 +1,26 @@
 import {
   UNGROUPED,
   accountLine,
+  activeRosterFilter,
   buildGroupUpdates,
   contactLine,
+  countsLine,
   describeSelection,
   detailsEditable,
   emailError,
   filterChips,
   formatWeight,
   groupNameError,
+  groupPanelRows,
   invitationBadge,
+  invitationToast,
+  mixedPickerState,
   nameEditable,
   nameError,
   peopleCount,
   phoneError,
+  pickerStateFromRows,
+  reminderNextAt,
   responseBadge,
   weightError,
 } from "@/lib/participants";
@@ -340,5 +347,195 @@ describe("buildGroupUpdates", () => {
     expect(buildGroupUpdates(null, { groupIds: [9] })).toEqual({
       addGroupIds: [9],
     });
+  });
+});
+
+describe("activeRosterFilter", () => {
+  test("keeps only the active filters and trims them", () => {
+    expect(
+      activeRosterFilter({
+        search: " zed ",
+        group: "",
+        submitted: "false",
+        invitationStatus: "",
+        included: "",
+      }),
+    ).toEqual({ search: "zed", submitted: "false" });
+    expect(activeRosterFilter({ group: UNGROUPED, included: "true" })).toEqual({
+      group: UNGROUPED,
+      included: "true",
+    });
+  });
+
+  test("selects everyone explicitly when nothing is filtered", () => {
+    expect(activeRosterFilter()).toEqual({ all: true });
+    expect(activeRosterFilter({ search: "  ", submitted: null })).toEqual({
+      all: true,
+    });
+  });
+});
+
+describe("invitationToast", () => {
+  test("counts the queued invitations and the skips that happened", () => {
+    expect(invitationToast({ queuedCount: 1 })).toBe("Queued 1 invitation.");
+    expect(
+      invitationToast({
+        queuedCount: 3,
+        skipped: { alreadyInvited: 2, noEmail: 1, organizer: 1 },
+      }),
+    ).toBe(
+      "Queued 3 invitations. Skipped 2 already invited and 1 without an email.",
+    );
+    expect(invitationToast({ queuedCount: 0, skipped: { noEmail: 4 } })).toBe(
+      "Queued 0 invitations. Skipped 4 without an email.",
+    );
+    expect(
+      invitationToast({ queuedCount: 2, skipped: { alreadyInvited: 1 } }),
+    ).toBe("Queued 2 invitations. Skipped 1 already invited.");
+    expect(invitationToast()).toBe("Queued 0 invitations.");
+  });
+});
+
+describe("reminderNextAt", () => {
+  const now = Date.parse("2026-09-01T00:00:00Z");
+  const event = {
+    status: "active",
+    remindersEnabled: true,
+    responseDeadline: "2026-09-10T12:00:00Z",
+    reminderHoursBefore: 24,
+  };
+
+  test("is the reminder lead time before the deadline while it lies ahead", () => {
+    expect(reminderNextAt(event, now)).toBe("2026-09-09T12:00:00.000Z");
+  });
+
+  test("is null when reminders are off, the event is not active, or it has passed", () => {
+    expect(
+      reminderNextAt({ ...event, remindersEnabled: false }, now),
+    ).toBeNull();
+    expect(reminderNextAt({ ...event, status: "closed" }, now)).toBeNull();
+    expect(
+      reminderNextAt({ ...event, responseDeadline: null }, now),
+    ).toBeNull();
+    expect(
+      reminderNextAt(event, Date.parse("2026-09-09T13:00:00Z")),
+    ).toBeNull();
+    expect(
+      reminderNextAt({ ...event, responseDeadline: "soon" }, now),
+    ).toBeNull();
+    expect(
+      reminderNextAt({ ...event, reminderHoursBefore: "many" }, now),
+    ).toBeNull();
+    expect(reminderNextAt(null, now)).toBeNull();
+  });
+});
+
+describe("countsLine", () => {
+  test("reads people, responses and groups with singulars", () => {
+    expect(
+      countsLine({ total: 1, submitted: 1, notSubmitted: 0, groups: 1 }),
+    ).toBe("1 person · 1 submitted · 0 not submitted · 1 group");
+    expect(
+      countsLine({ total: 12, submitted: 3, notSubmitted: 9, groups: 0 }),
+    ).toBe("12 people · 3 submitted · 9 not submitted · 0 groups");
+    expect(countsLine()).toBe(
+      "0 people · 0 submitted · 0 not submitted · 0 groups",
+    );
+  });
+
+  test("says how many of everyone are shown while filtering", () => {
+    expect(
+      countsLine({
+        total: 12,
+        shown: 4,
+        submitted: 3,
+        notSubmitted: 9,
+        groups: 2,
+        filtering: true,
+      }),
+    ).toBe("Showing 4 of 12 people · 3 submitted · 9 not submitted · 2 groups");
+  });
+});
+
+describe("pickerStateFromRows", () => {
+  const groups = [
+    { id: 1, name: "Design" },
+    { id: 2, name: "Sales" },
+    { id: 3, name: "Empty" },
+  ];
+  const rows = [
+    { id: "a", groups: [{ id: 1 }], allGroups: false },
+    { id: "b", groups: [{ id: 1 }, { id: 2 }], allGroups: true },
+  ];
+
+  test("tells all, none and mixed per group with the member counts", () => {
+    expect(pickerStateFromRows(rows, groups)).toEqual({
+      state: {
+        allGroups: "mixed",
+        byGroup: { 1: "all", 2: "mixed", 3: "none" },
+      },
+      counts: { total: 2, allGroups: 1, byGroup: { 1: 2, 2: 1, 3: 0 } },
+    });
+  });
+
+  test("starts from nothing for no rows and tolerates rows without groups", () => {
+    expect(pickerStateFromRows([], groups).state).toEqual({
+      allGroups: "none",
+      byGroup: { 1: "none", 2: "none", 3: "none" },
+    });
+    expect(pickerStateFromRows([{ id: "c" }], [groups[0]])).toEqual({
+      state: { allGroups: "none", byGroup: { 1: "none" } },
+      counts: { total: 1, allGroups: 0, byGroup: { 1: 0 } },
+    });
+    expect(pickerStateFromRows()).toEqual({
+      state: { allGroups: "none", byGroup: {} },
+      counts: { total: 0, allGroups: 0, byGroup: {} },
+    });
+  });
+
+  test("mixedPickerState starts every box mixed", () => {
+    expect(mixedPickerState(groups)).toEqual({
+      allGroups: "mixed",
+      byGroup: { 1: "mixed", 2: "mixed", 3: "mixed" },
+    });
+    expect(mixedPickerState()).toEqual({ allGroups: "mixed", byGroup: {} });
+  });
+});
+
+describe("groupPanelRows", () => {
+  test("splits the named groups from the ungrouped bucket and counts who is included", () => {
+    expect(
+      groupPanelRows([
+        { id: 1, name: "Design", count: 4, weight: 1, included: true },
+        { id: 2, name: "Sales", count: 3, weight: null, included: null },
+        { id: 3, name: "Left out", count: 2, weight: 0.5, included: false },
+        { id: 4, name: "Empty", count: 0, weight: null, included: null },
+        { id: null, name: "", count: 2, weight: 0.5, included: null },
+      ]),
+    ).toEqual({
+      groups: [
+        { id: 1, name: "Design", count: 4, weight: 1, includedCount: 4 },
+        { id: 2, name: "Sales", count: 3, weight: null, includedCount: null },
+        { id: 3, name: "Left out", count: 2, weight: 0.5, includedCount: 0 },
+        { id: 4, name: "Empty", count: 0, weight: null, includedCount: 0 },
+      ],
+      ungrouped: { count: 2, weight: 0.5, includedCount: null },
+    });
+  });
+
+  test("has an empty bucket without one, and ignores anything that is not a group", () => {
+    expect(groupPanelRows([{ id: 1, name: "Design" }, "Design", null])).toEqual(
+      {
+        groups: [
+          { id: 1, name: "Design", count: 0, weight: null, includedCount: 0 },
+        ],
+        ungrouped: { count: 0, weight: null, includedCount: 0 },
+      },
+    );
+    expect(groupPanelRows()).toEqual({
+      groups: [],
+      ungrouped: { count: 0, weight: null, includedCount: 0 },
+    });
+    expect(groupPanelRows("nope").groups).toEqual([]);
   });
 });

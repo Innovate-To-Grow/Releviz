@@ -490,4 +490,13 @@ describe("PersonPanel", () => {
     ).toBeInTheDocument();
     expect(field("Phone")).toHaveValue("");
   });
+
+  test("leaves Escape to a dialog the parent has open above the panel", async () => {
+    const handlers = renderPanel(person(), { dialogOpen: true });
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(handlers.onClose).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("dialog", { name: "Ada Lovelace" }),
+    ).toBeInTheDocument();
+  });
 });

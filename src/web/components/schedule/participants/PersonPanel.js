@@ -75,7 +75,9 @@ function changesBetween(initial, draft, { canRename, canChangeEmail }) {
  * Side drawer with everything about one participant: contact details,
  * groups, whether and how much they count, and their invitation. Save sends
  * only the fields that changed; closing or moving to another person with
- * unsaved edits asks first.
+ * unsaved edits asks first. `dialogOpen` says the parent has a dialog of its
+ * own open above the panel (a confirmation, the send dialog), so Escape and
+ * Tab are left to it.
  */
 export default function PersonPanel(props) {
   if (!props.participant) return null;
@@ -93,6 +95,7 @@ function PersonPanelForm({
   conflict = null,
   readOnly = false,
   deadlinePassed = false,
+  dialogOpen = false,
   onSave,
   onClose,
   onEditSchedule,
@@ -254,7 +257,7 @@ function PersonPanelForm({
         }
         onClose={() => guard("close")}
         busy={busy}
-        dialogOpen={pending !== null || pickerOpen}
+        dialogOpen={dialogOpen || pending !== null || pickerOpen}
         closeLabel="Close details"
         className="participants-person-panel"
         footer={
