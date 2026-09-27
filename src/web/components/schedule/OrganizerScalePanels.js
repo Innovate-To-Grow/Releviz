@@ -2498,6 +2498,7 @@ function FinalizeScalePanelContent({
         },
         token,
       );
+      handOffFocus.current = isFinalized(data.event);
       setEvent(data.event);
       setReview(data.finalMeeting?.attendance || review);
       // Invitation delivery is tracked in the workspace banner with every
@@ -2549,15 +2550,15 @@ function FinalizeScalePanelContent({
   const meeting = event.finalMeeting;
   const canFinalize = ["active", "closed"].includes(event.status);
   const finalized = isFinalized(event);
-  // Finalizing swaps the review workspace (and the button that had focus)
-  // for the confirmed meeting: focus moves to its Download button instead of
-  // dropping to the page. Focus that is still somewhere is left alone.
+  // Finalizing here swaps the review workspace (and the button that had
+  // focus) for the confirmed meeting: focus moves to its Download button
+  // instead of dropping to the page. A finalization that arrives live, from
+  // elsewhere, never moves focus; nor does one while focus is still somewhere.
   const downloadRef = useRef(null);
-  const wasFinalized = useRef(finalized);
+  const handOffFocus = useRef(false);
   useEffect(() => {
-    const justFinalized = finalized && !wasFinalized.current;
-    wasFinalized.current = finalized;
-    if (!justFinalized) return;
+    if (!finalized || !handOffFocus.current) return;
+    handOffFocus.current = false;
     const active = document.activeElement;
     if (!active || active === document.body) downloadRef.current?.focus();
   }, [finalized]);

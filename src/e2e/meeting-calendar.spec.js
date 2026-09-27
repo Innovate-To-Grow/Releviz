@@ -634,11 +634,25 @@ test.describe("Organizer meeting-time calendar", () => {
         });
     });
     expect(labelsOverlap).toBe(false);
-    await cellAt(grid, 12, 2).click();
+    // A pick would re-key Finalize and drop the review below the meeting.
+    // (The cell is aria-disabled, so the click is forced past Playwright's
+    // enabled check: a real pointer still reaches it.)
+    const lockedCell = cellAt(grid, 12, 2);
+    await expect(lockedCell).toHaveAttribute("aria-disabled", "true");
+    await lockedCell.click({ force: true });
+    await expect(lockedCell).toBeFocused();
     await expect(grid.locator('[aria-selected="true"]')).toHaveCount(0);
     await expect(page.locator("#organizer-finalize > summary")).toContainText(
       "Finalized",
     );
+    await expect(
+      page.getByRole("group", { name: "Attendance review" }),
+    ).toBeVisible();
+    await expect(
+      page.getByText(
+        "The meeting is finalized and calendar invitations are queued.",
+      ),
+    ).toBeVisible();
     await expect(
       grid.getByRole("columnheader", { name: shortDate(customWednesday) }),
     ).toBeVisible();
@@ -670,6 +684,17 @@ test.describe("Organizer meeting-time calendar", () => {
     }));
     expect(overflow.page).toBe(false);
     expect(overflow.calendar).toBe(true);
+    // The Confirmed label (a check mark here) stays inside its block.
+    const labelInside = await mobilePage
+      .locator(".meeting-calendar__block--confirmed")
+      .evaluate((block) => {
+        const outer = block.getBoundingClientRect();
+        const inner = block
+          .querySelector(".meeting-calendar__block-label")
+          .getBoundingClientRect();
+        return inner.left >= outer.left && inner.right <= outer.right;
+      });
+    expect(labelInside).toBe(true);
     await expectAccessible(mobilePage, "organizer results calendar at 375px");
     await mobileContext.close();
   });

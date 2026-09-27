@@ -4456,7 +4456,7 @@ test("a finalized meeting locks picking until the event is reactivated", async (
   }
 });
 
-test("finalizing hands focus to Download calendar, unless focus is still somewhere", async () => {
+test("finalizing here hands focus to Download calendar; a live finalization never moves focus", async () => {
   const finalMeeting = {
     startsAt: recommendation.startsAt,
     endsAt: recommendation.endsAt,
@@ -4499,7 +4499,31 @@ test("finalizing hands focus to Download calendar, unless focus is still somewhe
   );
   unmount();
 
-  // Finalized live while the organizer works elsewhere: focus stays put.
+  // Finalized live, from elsewhere: focus is never moved, whether it rests
+  // on the page or on another control.
+  const live = render(
+    <FinalizeScalePanel
+      event={baseEvent}
+      setEvent={jest.fn()}
+      getToken={getToken}
+      selection={recommendation}
+    />,
+  );
+  document.activeElement?.blur();
+  live.rerender(
+    <FinalizeScalePanel
+      event={{ ...baseEvent, status: "finalized", finalMeeting }}
+      setEvent={jest.fn()}
+      getToken={getToken}
+      selection={recommendation}
+    />,
+  );
+  expect(
+    screen.getByRole("button", { name: "Download calendar (.ics)" }),
+  ).not.toHaveFocus();
+  expect(document.body).toHaveFocus();
+  live.unmount();
+
   const { rerender } = render(
     <>
       <button type="button">Elsewhere</button>

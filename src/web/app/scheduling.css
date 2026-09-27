@@ -1217,6 +1217,12 @@
     --rv-cal-col-w: 64px;
   }
 
+  /* The word would outgrow a 64px column (under the time column, or over
+     the day before); the check mark and the legend carry it. */
+  .meeting-calendar__block--confirmed .meeting-calendar__block-label-text {
+    display: none;
+  }
+
   .meeting-calendar--overnight {
     --rv-cal-time-w: 84px;
   }

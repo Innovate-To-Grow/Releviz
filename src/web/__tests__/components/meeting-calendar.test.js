@@ -1731,12 +1731,65 @@ describe("MeetingCalendar", () => {
     expect(
       document.querySelector(".meeting-calendar__block--preview"),
     ).toBeNull();
+    // No cell offers a pick: a time that could start one says why it cannot.
+    document.querySelectorAll("[data-cell-idx]").forEach((element) => {
+      expect(element).toHaveAttribute("aria-disabled", "true");
+    });
+    expect(cell(4)).toHaveAttribute(
+      "aria-label",
+      expect.stringContaining(lock),
+    );
+    expect(cell(4).getAttribute("aria-label")).not.toMatch(/Starts a/);
+    expect(cell(7)).toHaveAttribute(
+      "aria-label",
+      expect.stringContaining("Not enough time remains"),
+    );
     // The tab stop is the confirmed meeting; no click or key picks.
     expect(tabbableCells()).toEqual([cell(1)]);
     await userEvent.click(cell(4));
     cell(5).focus();
     await userEvent.keyboard("{Enter} ");
     expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  test("opens a locked calendar on the confirmed meeting, not the hidden pick", () => {
+    // Picked in the week of Sep 21, then finalized elsewhere for Sep 14.
+    const selection = selectionFromRecommendation(
+      {
+        ...recommendation,
+        suggestedStartsAt: "2026-09-21T09:30:00Z",
+        suggestedEndsAt: "2026-09-21T10:30:00Z",
+      },
+      weeklyEvent,
+      { now: NOW },
+    );
+    const event = {
+      ...weeklyEvent,
+      status: "finalized",
+      finalMeeting: {
+        startsAt: "2026-09-14T09:30:00Z",
+        endsAt: "2026-09-14T10:30:00Z",
+        channel: "inperson",
+      },
+    };
+    const { rerender, onSelect } = renderCalendar({ event, selection });
+    expect(columnHeaders()).toEqual(["Mon, Sep 21", "Wed, Sep 23"]);
+
+    rerender(
+      <MeetingCalendar
+        event={event}
+        results={results}
+        channel="inperson"
+        onSelect={onSelect}
+        now={NOW}
+        selection={selection}
+        pickLock="Picking is off."
+      />,
+    );
+    expect(columnHeaders()).toEqual(["Mon, Sep 14", "Wed, Sep 16"]);
+    expect(
+      document.querySelector(".meeting-calendar__block--confirmed"),
+    ).not.toBeNull();
   });
 
   test("keeps the confirmed meeting as the tab stop while it is not locked", () => {

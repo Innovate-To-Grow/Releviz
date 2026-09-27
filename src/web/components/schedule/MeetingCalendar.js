@@ -188,7 +188,6 @@ const CalendarCell = memo(function CalendarCell({
       </div>
     );
   }
-  const startable = model.state === "startable";
   return (
     <div
       role="gridcell"
@@ -199,7 +198,7 @@ const CalendarCell = memo(function CalendarCell({
       data-blocked-slot={model.blockedSlot ? "true" : undefined}
       data-level={model.level}
       aria-colindex={columnIndex + 2}
-      aria-disabled={startable ? undefined : "true"}
+      aria-disabled={model.pickable ? undefined : "true"}
       aria-selected={selected ? "true" : undefined}
       aria-label={model.ariaLabel}
       title={model.title}
@@ -324,18 +323,29 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
   const pickLockHelpId = useId();
 
   const finalMeeting = event?.finalMeeting || null;
+  // A locked calendar opens on the confirmed meeting, not on a pick it no
+  // longer draws.
+  const anchorSelection = pickLocked ? null : selection;
   const autoView = useMemo(
     () =>
       defaultView({
         groups,
-        selection,
+        selection: anchorSelection,
         finalMeeting,
         recommendations,
         channel,
         now,
         timeZone,
       }),
-    [groups, selection, finalMeeting, recommendations, channel, now, timeZone],
+    [
+      groups,
+      anchorSelection,
+      finalMeeting,
+      recommendations,
+      channel,
+      now,
+      timeZone,
+    ],
   );
   const effectiveView = view || autoView;
 
@@ -462,12 +472,17 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
             ? " Inside the confirmed meeting."
             : ""
         }`;
-        const sentence = stateSentence({
-          state,
-          reason,
-          durationMinutes,
-          windowLabel,
-        });
+        // Locked, a time that could start a window says why it cannot.
+        const pickable = state === "startable" && !pickLocked;
+        const sentence =
+          state === "startable" && pickLocked
+            ? pickLock
+            : stateSentence({
+                state,
+                reason,
+                durationMinutes,
+                windowLabel,
+              });
         const when = `${column.headerLabel}, ${column.subLabel}, ${slotTimeLabel(slot, mixedOffsets)}`;
         const description = [availabilityText, sentence].filter(Boolean);
         models.set(slot.index, {
@@ -475,6 +490,7 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
           row,
           columnIndex,
           state,
+          pickable,
           blockedSlot,
           level: availabilityKey(shown),
           neutral: cellNeutral,
@@ -510,6 +526,8 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
     neutral,
     counted,
     durationMinutes,
+    pickLocked,
+    pickLock,
   ]);
 
   const selectedIndices = useMemo(() => {
@@ -1182,7 +1200,10 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
                 }}
               >
                 <span className="meeting-calendar__block-label">
-                  <CalendarCheckIcon /> Confirmed
+                  <CalendarCheckIcon />
+                  <span className="meeting-calendar__block-label-text">
+                    Confirmed
+                  </span>
                 </span>
               </div>
             )}
