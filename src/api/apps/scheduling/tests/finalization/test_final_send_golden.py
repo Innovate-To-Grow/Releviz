@@ -1,8 +1,10 @@
 """The real final confirmation and cancellation emails, pinned byte for byte.
 
-Previews build these messages through the same parts the send uses. These
-digests were taken before those parts were factored out, so they prove the
-queued emails are exactly what they were.
+Previews build these messages through the same parts the send uses, so what
+they show is what is sent. The digests were first taken before those parts
+were factored out. They were refreshed when the confirmation and the calendar
+description changed from ISO timestamps and stored codes to readable times and
+labels; the cancellation email's text and HTML stayed the same.
 """
 
 import hashlib
@@ -72,20 +74,19 @@ class FinalSendGoldenTests(TestCase):
                 "subject": "Confirmed: Board & <review>",
                 "body": (
                     "The final meeting time for Board & <review> is confirmed.\n\n"
-                    "Starts: 2026-10-05T09:00:00+02:00\n"
-                    "Ends: 2026-10-05T10:00:00+02:00\n"
+                    "When: Monday, October 5, 2026, 9:00 AM to 10:00 AM CEST\n"
                     "Timezone: Europe/Berlin\n"
-                    "Method: inperson\n"
+                    "Method: In person\n"
                     "Location: Room <4>, Main St.\n"
                     "Event: https://app.releviz.test/event?code=GOLDFIN1\n\n"
                     "A calendar invitation is attached."
                 ),
-                "html": "cdd038235fbde9a0ba4ca66ce8dcd94d83abed060519f81c513156d9bde2b15a",
+                "html": "ff9332d20b73c2469aa4e388b0869bff7c636f4762edb8dcfd6d23f866b1f043",
                 "attachments": [
                     (
                         "releviz-GOLDFIN1-final.ics",
                         "text/calendar; charset=utf-8; method=request",
-                        "2b949048969752548dc6259d937c4cd3beddcccc029bd343989122e12361e429",
+                        "47afa7522a63e756eb4225f56d4334e49be768d7b0bedffdf520d6a40240bd03",
                     )
                 ],
             },
@@ -108,7 +109,7 @@ class FinalSendGoldenTests(TestCase):
                     (
                         "releviz-GOLDFIN1-final.ics",
                         "text/calendar; charset=utf-8; method=cancel",
-                        "3966b82aeb5817cf83319d65449c1b6a50c6a8c9610925862fe3364036bcc8da",
+                        "c325e117b02a6c6a11c76c3b2449a37cd124703e0bcf100c0f82bf041aaa689b",
                     )
                 ],
             },

@@ -1,9 +1,11 @@
 """The real invitation and reminder emails, pinned byte for byte.
 
-Previews render these same messages with a stand-in link. These digests were
-taken before the link override existed, so they prove a real send still
-carries exactly what it did: the recipient's own private link, in the body,
-the HTML, and the calendar attachment.
+Previews render these same messages with a stand-in link, so what they show
+is what is sent. The digests were first taken before the link override
+existed; the body and HTML pins were refreshed when the deadline changed from
+an ISO timestamp to a readable time, and the calendar attachments stayed the
+same. They prove a real send carries the recipient's own private link in the
+body, the HTML, and the calendar attachment.
 """
 
 import hashlib
@@ -24,14 +26,14 @@ FROZEN = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
 FULL_ICS = "9ae63a4e0ebef1b1989d0b549b01f1ba3cacc759f5120469ad9a764b63adfdbd"
 TEMPORARY_ICS = "38f4400dd766ba4a2764b1890fd4ebd5b244708c85f3515fe1af27b02dce799b"
 GOLDEN = {
-    ("full", False): ("330ed8b7181d3f954e018464f685a7caedb4aa581fc13528847541487075bad2", FULL_ICS),
-    ("full", True): ("e372edffb99d70fc5935870f9dd7e57cc8db05d26a4adc214de662aec7344cba", FULL_ICS),
+    ("full", False): ("add7fa16b6ad0d7f9c4a0b885c07b6ab53a03042481e268b2ec69aafc94bf26a", FULL_ICS),
+    ("full", True): ("28d8d0f97fcaf5cf0d2932d9e2697a42e89354e354bf2384ffd07f13ab65f2fb", FULL_ICS),
     ("temporary", False): (
-        "96cd8c087dd06d79bf14683a6796bccee22210d1eeaae4f9ef2bcf48ef68c9f3",
+        "5c74806626cfb90f65901cfb76e835c693e3bd54a97e74579458250d7c2a89bc",
         TEMPORARY_ICS,
     ),
     ("temporary", True): (
-        "ff08a631baa124f9e16de9dfd7dd10cbb6eba5d08c79176baa648237f9b2d81f",
+        "90f3c615bfcd4bc454733f1e42a43e90b6a26b6f9aec90eef5dff7597052470f",
         TEMPORARY_ICS,
     ),
 }
@@ -121,7 +123,7 @@ class InvitationSendGoldenTests(TestCase):
             "You are invited to share your availability.\n\n"
             "Event: Board & <review>\n"
             f"Link: {full_link}\n\n"
-            "Please respond by 2026-10-01T17:00:00+00:00.\n\n"
+            "Please respond by Thursday, October 1, 2026 at 5:00 PM UTC.\n\n"
             "Message from organizer:\nBring <notes> & ideas\n\n"
             "Log in or create a Releviz account with this email address to fill out "
             "your schedule.",
@@ -131,7 +133,7 @@ class InvitationSendGoldenTests(TestCase):
             "Reminder:\n\n"
             "Event: Board & <review>\n"
             f"Link: {temp_link}\n\n"
-            "Please respond by 2026-10-01T17:00:00+00:00.\n\n"
+            "Please respond by Thursday, October 1, 2026 at 5:00 PM UTC.\n\n"
             "Message from organizer:\nBring <notes> & ideas\n\n"
             "Open the link and enter the six-digit code sent to this email address.",
         )

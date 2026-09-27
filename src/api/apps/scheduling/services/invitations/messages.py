@@ -2,10 +2,25 @@
 
 from apps.mail.email_templates import render_branded_email
 from apps.mail.services import EmailAttachment
-from apps.scheduling.models import EventInvitation
+from apps.scheduling.models import Event, EventInvitation
+from apps.scheduling.services.email_formatting import (
+    format_email_datetime,
+    local_datetime,
+    zone_label,
+    zone_suffix,
+)
 from apps.scheduling.services.ics import response_deadline_ics
 
 from .links import invitation_link
+
+
+def response_deadline_text(event: Event) -> str:
+    """The deadline as recipients read it, naming the event's zone when the label does not."""
+
+    deadline = local_datetime(event.response_deadline, event.timezone)
+    return format_email_datetime(deadline, event.timezone) + zone_suffix(
+        event.timezone, zone_label(deadline)
+    )
 
 
 def invitation_body(
@@ -29,9 +44,7 @@ def invitation_body(
         else ""
     )
     deadline = (
-        f"\n\nPlease respond by {event.response_deadline.isoformat()}."
-        if event.response_deadline
-        else ""
+        f"\n\nPlease respond by {response_deadline_text(event)}." if event.response_deadline else ""
     )
     access_instruction = (
         "Open the link and enter the six-digit code sent to this email address."
@@ -61,7 +74,7 @@ def invitation_html_body(
     )
     details = [("Event", event.name)]
     if event.response_deadline:
-        details.append(("Respond by", event.response_deadline.isoformat()))
+        details.append(("Respond by", response_deadline_text(event)))
     return render_branded_email(
         title="Availability reminder" if reminder else "You're invited",
         preheader=(

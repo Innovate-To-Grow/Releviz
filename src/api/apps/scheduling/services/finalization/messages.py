@@ -1,42 +1,48 @@
 """Text and HTML bodies for final meeting confirmations and cancellations."""
 
-from zoneinfo import ZoneInfo
-
 from apps.mail.email_templates import render_branded_email
 from apps.mail.services import frontend_url
 from apps.scheduling.models import Event
+from apps.scheduling.services.email_formatting import (
+    format_email_time_range,
+    meeting_method_label,
+)
+
+
+def _confirmation_details(meeting) -> list[tuple[str, str]]:
+    """The meeting as recipients read it; a blank location is left out."""
+
+    details = [
+        (
+            "When",
+            format_email_time_range(meeting.starts_at, meeting.ends_at, meeting.timezone),
+        ),
+        ("Timezone", meeting.timezone),
+        ("Method", meeting_method_label(meeting.channel)),
+    ]
+    location = (meeting.location or "").strip()
+    if location:
+        details.append(("Location", location))
+    return details
 
 
 def final_confirmation_body(event: Event, meeting) -> str:
-    starts_at = meeting.starts_at.astimezone(ZoneInfo(meeting.timezone))
-    ends_at = meeting.ends_at.astimezone(ZoneInfo(meeting.timezone))
+    lines = "".join(f"{label}: {value}\n" for label, value in _confirmation_details(meeting))
     return (
         f"The final meeting time for {event.name} is confirmed.\n\n"
-        f"Starts: {starts_at.isoformat()}\n"
-        f"Ends: {ends_at.isoformat()}\n"
-        f"Timezone: {meeting.timezone}\n"
-        f"Method: {meeting.channel}\n"
-        f"Location: {meeting.location}\n"
+        f"{lines}"
         f"Event: {frontend_url('/event', code=event.code)}\n\n"
         "A calendar invitation is attached."
     )
 
 
 def final_confirmation_html_body(event: Event, meeting) -> str:
-    starts_at = meeting.starts_at.astimezone(ZoneInfo(meeting.timezone))
-    ends_at = meeting.ends_at.astimezone(ZoneInfo(meeting.timezone))
     return render_branded_email(
         title="Meeting confirmed",
         preheader=f"The final time for {event.name} is confirmed.",
         eyebrow="Final schedule",
         paragraphs=(f"The final meeting time for {event.name} is confirmed.",),
-        details=(
-            ("Starts", starts_at.isoformat()),
-            ("Ends", ends_at.isoformat()),
-            ("Timezone", meeting.timezone),
-            ("Method", meeting.channel),
-            ("Location", meeting.location),
-        ),
+        details=_confirmation_details(meeting),
         cta_label="View event",
         cta_url=frontend_url("/event", code=event.code),
         notice="A calendar invitation is attached to this email.",

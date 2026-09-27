@@ -142,9 +142,10 @@ class FinalEmailPreviewTests(TestCase):
         self.assertEqual(email["to"], "Pat Roster <pat@example.com>")
         self.assertEqual(email["subject"], "Confirmed: Final preview")
         self.assertEqual(email["attachments"], ["releviz-FINPREV1-final.ics"])
-        # The proposed time, with the event's location standing in for a blank one.
-        self.assertIn("Starts: 2026-07-20T09:00:00+00:00\n", email["text"])
-        self.assertIn("Ends: 2026-07-20T11:00:00+00:00\n", email["text"])
+        # The proposed time as recipients read it, with the event's location
+        # standing in for a blank one.
+        self.assertIn("When: Monday, July 20, 2026, 9:00 AM to 11:00 AM UTC\n", email["text"])
+        self.assertIn("Method: In person\n", email["text"])
         self.assertIn("Location: Main Room\n", email["text"])
         self.assertIn("Meeting confirmed", email["html"])
 

@@ -2973,9 +2973,9 @@ test.describe("Releviz account and scheduling flow", () => {
     expect(manualFinal).toContain("X-WR-TIMEZONE:UTC");
     // The confirmation that went out is the one reviewed, for the same time.
     expectDeliveredAsPreviewed(manualFinal, firstConfirmation, manualEmail);
-    const previewedStart = textLine(firstConfirmation.text, "Starts: ");
-    expect(previewedStart).toBeTruthy();
-    expect(manualFinal).toContain(previewedStart);
+    const previewedWhen = textLine(firstConfirmation.text, "When: ");
+    expect(previewedWhen).toBeTruthy();
+    expect(manualFinal).toContain(previewedWhen);
 
     const downloadPromise = page.waitForEvent("download");
     await page
@@ -3146,9 +3146,9 @@ test.describe("Releviz account and scheduling flow", () => {
       attachments: `releviz-${eventCode}-final.ics`,
       heading: "Meeting confirmed",
     });
-    const reviewedSecondStart = textLine(secondConfirmation.text, "Starts: ");
-    expect(reviewedSecondStart).toBeTruthy();
-    expect(reviewedSecondStart).not.toBe(previewedStart);
+    const reviewedSecondWhen = textLine(secondConfirmation.text, "When: ");
+    expect(reviewedSecondWhen).toBeTruthy();
+    expect(reviewedSecondWhen).not.toBe(previewedWhen);
     const finalizeSecond = await continueToConfirm(
       secondFinalizeDialog,
       "Finalize and email 2 people?",
@@ -3191,7 +3191,7 @@ test.describe("Releviz account and scheduling flow", () => {
         body.includes("The final meeting time") && body.includes("SEQUENCE:2"),
     );
     expect(reconfirmation).toContain(`UID:${calendarUid}`);
-    expect(reconfirmation).toContain(reviewedSecondStart);
+    expect(reconfirmation).toContain(reviewedSecondWhen);
 
     const finalizedLock = await apiJson(
       request,
