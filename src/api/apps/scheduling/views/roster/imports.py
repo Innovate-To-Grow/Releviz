@@ -84,6 +84,22 @@ class RosterImportDetailView(PrivateAPIView):
         return Response({"importId": str(batch.pk), "status": batch.status})
 
 
+ROW_VIEWS = {"all", "needs_fix", "skipped"}
+
+
+def _shown_rows(rows, show: str):
+    """Narrow preview rows to the ``show`` view: every row, the selected ones
+    that still have errors, or the ones left out of the import."""
+
+    if show not in ROW_VIEWS:
+        raise RosterImportError("show is invalid.")
+    if show == "needs_fix":
+        return rows.filter(selected=True, validation_errors__0__isnull=False)
+    if show == "skipped":
+        return rows.filter(selected=False)
+    return rows
+
+
 class RosterImportRowsView(PrivateAPIView):
     def get(self, request, import_id):
         event, error = event_for_organizer(request)
@@ -96,12 +112,15 @@ class RosterImportRowsView(PrivateAPIView):
             return Response({"error": "This import preview has expired."}, status=410)
         try:
             page, page_size = pagination(request)
+            rows = _shown_rows(
+                batch.rows.filter(
+                    worksheet=batch.selected_worksheet,
+                    row_number__gt=batch.header_row,
+                ),
+                str(request.query_params.get("show") or "all").strip(),
+            ).order_by("row_number")
         except RosterImportError as exc:
             return error_response(exc)
-        rows = batch.rows.filter(
-            worksheet=batch.selected_worksheet,
-            row_number__gt=batch.header_row,
-        ).order_by("row_number")
         total = rows.count()
         offset = (page - 1) * page_size
         addresses = organizer_addresses(event.organizer_id)

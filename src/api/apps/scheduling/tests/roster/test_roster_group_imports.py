@@ -109,7 +109,17 @@ class RosterImportGroupPreviewTests(RosterGroupImportTestCase):
         )
         self.assertEqual(
             preview.data["import"]["summary"],
-            {"total": 5, "selected": 5, "valid": 4, "invalid": 1, "conflicts": 0},
+            {
+                "total": 5,
+                "selected": 5,
+                "valid": 4,
+                "invalid": 1,
+                "conflicts": 0,
+                "ready": 4,
+                "needsFix": 1,
+                "mergedDuplicates": 0,
+                "skipped": 0,
+            },
         )
 
         rows = self.rows(preview.data["import"]["id"])
@@ -175,7 +185,17 @@ class RosterImportGroupPreviewTests(RosterGroupImportTestCase):
         self.assertEqual(normalized.status_code, 200, normalized.data)
         self.assertEqual(
             normalized.data["import"]["summary"],
-            {"total": 2, "selected": 2, "valid": 1, "invalid": 1, "conflicts": 0},
+            {
+                "total": 2,
+                "selected": 2,
+                "valid": 1,
+                "invalid": 1,
+                "conflicts": 0,
+                "ready": 1,
+                "needsFix": 1,
+                "mergedDuplicates": 0,
+                "skipped": 0,
+            },
         )
         alice, bob = self.rows(import_id)
         self.assertEqual(alice["group"], "b; a")
@@ -251,7 +271,17 @@ class RosterImportGroupDuplicateTests(RosterGroupImportTestCase):
         )
         self.assertEqual(
             preview.data["import"]["summary"],
-            {"total": 12, "selected": 6, "valid": 4, "invalid": 2, "conflicts": 2},
+            {
+                "total": 12,
+                "selected": 6,
+                "valid": 4,
+                "invalid": 2,
+                "conflicts": 2,
+                "ready": 4,
+                "needsFix": 2,
+                "mergedDuplicates": 6,
+                "skipped": 0,
+            },
         )
         rows = self.rows(preview.data["import"]["id"])
         # The same person listed under several groups is one row in every
@@ -340,7 +370,17 @@ class RosterImportGroupDuplicateTests(RosterGroupImportTestCase):
         )
         self.assertEqual(
             preview.data["import"]["summary"],
-            {"total": 8, "selected": 6, "valid": 1, "invalid": 5, "conflicts": 4},
+            {
+                "total": 8,
+                "selected": 6,
+                "valid": 1,
+                "invalid": 5,
+                "conflicts": 4,
+                "ready": 1,
+                "needsFix": 5,
+                "mergedDuplicates": 2,
+                "skipped": 0,
+            },
         )
         rows = self.rows(preview.data["import"]["id"])
         # Byte-identical cells collapse without being parsed, so a cell that
