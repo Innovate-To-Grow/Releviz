@@ -1586,6 +1586,97 @@ describe("scaled organizer workspace", () => {
     ).toBeNull();
   });
 
+  test("keeps a dismissed run away when the roster lists it again, until a new run starts", async () => {
+    const requestKey = `releviz.delivery-request.${event.code}`;
+    const dismissedKey = `releviz.delivery-request.${event.code}.dismissed`;
+    const finished = {
+      id: "finished-run",
+      operation: "invitation",
+      delivery: { total: 3, sent: 3 },
+    };
+    // The listing names the most recent run whatever its state, on every
+    // load.
+    fetchRoster.mockResolvedValue(
+      rosterListing({ latestDeliveryRequest: finished }),
+    );
+    const { unmount } = renderView();
+    const card = await screen.findByLabelText("Event delivery progress");
+    expect(card).toHaveTextContent("Complete");
+    await userEvent.click(
+      within(card).getByRole("button", { name: "Dismiss" }),
+    );
+    expect(
+      screen.queryByLabelText("Event delivery progress"),
+    ).not.toBeInTheDocument();
+    expect(window.sessionStorage.getItem(dismissedKey)).toBe("finished-run");
+
+    // A search reloads the roster, which still carries the finished run.
+    fireEvent.change(screen.getByLabelText("Search participants"), {
+      target: { value: "ada" },
+    });
+    await waitFor(() =>
+      expect(fetchRoster).toHaveBeenLastCalledWith(
+        event.code,
+        expect.objectContaining({ search: "ada" }),
+        "token",
+      ),
+    );
+    await screen.findByText(/^Showing 1 of 1 people/);
+    expect(
+      screen.queryByLabelText("Event delivery progress"),
+    ).not.toBeInTheDocument();
+    expect(window.sessionStorage.getItem(requestKey)).toBeNull();
+
+    // The dismissal outlives the page.
+    unmount();
+    renderView();
+    await screen.findByText("Ada Faculty");
+    expect(
+      screen.queryByLabelText("Event delivery progress"),
+    ).not.toBeInTheDocument();
+
+    // A new run has a new id and shows.
+    fetchRoster.mockResolvedValue(
+      rosterListing({
+        latestDeliveryRequest: {
+          id: "new-run",
+          operation: "invitation",
+          delivery: { total: 1, pending: 1, sent: 0 },
+        },
+      }),
+    );
+    fireEvent.change(screen.getByLabelText("Search participants"), {
+      target: { value: "ada" },
+    });
+    expect(
+      await screen.findByLabelText("Event delivery progress"),
+    ).toHaveTextContent("1 queued");
+    expect(window.sessionStorage.getItem(requestKey)).toContain("new-run");
+  });
+
+  test("dismisses a run that carries no id without remembering it", async () => {
+    window.sessionStorage.setItem(
+      `releviz.delivery-request.${event.code}`,
+      JSON.stringify({
+        operation: "invitation",
+        delivery: { total: 1, sent: 1 },
+      }),
+    );
+    renderView();
+    const card = await screen.findByLabelText("Event delivery progress");
+    await userEvent.click(
+      within(card).getByRole("button", { name: "Dismiss" }),
+    );
+    expect(
+      screen.queryByLabelText("Event delivery progress"),
+    ).not.toBeInTheDocument();
+    expect(
+      window.sessionStorage.getItem(
+        `releviz.delivery-request.${event.code}.dismissed`,
+      ),
+    ).toBeNull();
+  });
+
   test("jumps from the delivery card to the people whose invitation failed", async () => {
     window.sessionStorage.setItem(
       `releviz.delivery-request.${event.code}`,

@@ -72,6 +72,17 @@ function deliveryStorageKey(eventCode) {
   return `releviz.delivery-request.${eventCode}`;
 }
 
+// The run the organizer dismissed. The roster listing names the most recent
+// run on every load, whatever its state, so without this the card would be
+// back after the next search, save or live-sync pass.
+function dismissedDeliveryKey(eventCode) {
+  return `releviz.delivery-request.${eventCode}.dismissed`;
+}
+
+function readDismissedDeliveryId(eventCode) {
+  return window.sessionStorage.getItem(dismissedDeliveryKey(eventCode));
+}
+
 function readStoredDeliveryRequest(eventCode) {
   if (typeof window === "undefined" || !eventCode) return null;
   try {
@@ -158,12 +169,27 @@ export default function OrganizerScaleView() {
   // is remembered per event so its progress survives a reload.
   const setDeliveryRequest = useCallback(
     (next) => {
+      // A dismissed run stays dismissed; a new run has a new id.
+      if (next?.id && next.id === readDismissedDeliveryId(event.code)) return;
       const key = deliveryStorageKey(event.code);
       if (next) window.sessionStorage.setItem(key, JSON.stringify(next));
       else window.sessionStorage.removeItem(key);
       setDeliveryRequestState(next);
     },
     [event.code],
+  );
+
+  const dismissDeliveryRequest = useCallback(
+    (request) => {
+      if (request?.id) {
+        window.sessionStorage.setItem(
+          dismissedDeliveryKey(event.code),
+          request.id,
+        );
+      }
+      setDeliveryRequest(null);
+    },
+    [event.code, setDeliveryRequest],
   );
 
   useEffect(() => {
@@ -456,7 +482,7 @@ export default function OrganizerScaleView() {
             liveVersion={liveVersion}
             ariaLabel="Event delivery progress"
             onShowFailed={() => rosterRef.current?.showFailedInvitations()}
-            onDismiss={() => setDeliveryRequest(null)}
+            onDismiss={() => dismissDeliveryRequest(deliveryRequest)}
           />
         </div>
       )}
