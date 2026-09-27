@@ -1501,6 +1501,17 @@
   box-shadow: inset 0 0 0 2px rgba(13, 110, 253, 0.45);
 }
 
+/* Picking is locked (a finalized meeting): the cells are read only, so they
+   neither invite a click nor answer the pointer. */
+.meeting-calendar--pick-locked .meeting-calendar__cell[data-state] {
+  cursor: default;
+}
+
+.meeting-calendar--pick-locked
+  .meeting-calendar__cell[data-state="startable"]:hover:not(:focus-visible) {
+  box-shadow: none;
+}
+
 .meeting-calendar__cell:focus-visible {
   outline: 0;
   box-shadow:

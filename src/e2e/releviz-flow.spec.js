@@ -2351,31 +2351,15 @@ test.describe("Releviz account and scheduling flow", () => {
       "METHOD:REQUEST",
     );
 
-    // The refresh above already cleared the pick, and the Finalize step
-    // ignores selections while the meeting is finalized, so re-establish a
-    // live one through the ranked rail before reactivating.
-    await openRecommendedTimes(page);
+    // While the meeting is finalized, picking is locked until the event is
+    // reactivated: Finalize offers no lists and the calendar is read-only.
+    // (The refresh above already cleared the pick.)
     const rankedRail = page.locator("details.organizer-recommended-times");
-    // The rail re-renders as the ranked windows load, and a click that lands
-    // mid-render is dropped on slower engines (WebKit), so the pick is retried
-    // until one window reports itself selected.
-    const selectedRankedTime = rankedRail.getByRole("button", {
-      name: "Selected time",
-    });
-    await expect
-      .poll(
-        async () => {
-          if ((await selectedRankedTime.count()) === 0) {
-            await rankedRail
-              .getByRole("button", { name: "Choose this time" })
-              .first()
-              .click();
-          }
-          return selectedRankedTime.count();
-        },
-        { timeout: 20_000, intervals: [500, 1000, 2000] },
-      )
-      .toBe(1);
+    await expect(rankedRail).toHaveCount(0);
+    await expect(page.locator("details#organizer-other-times")).toHaveCount(0);
+    await expect(
+      page.getByRole("grid", { name: /^Meeting time calendar/ }),
+    ).toHaveAttribute("aria-readonly", "true");
 
     const cancellationStartedAt = Date.now() - 1000;
     const cancellationResponsePromise = page.waitForResponse(
@@ -2394,7 +2378,7 @@ test.describe("Releviz account and scheduling flow", () => {
     await expect(
       page.getByText("This event is active and accepting responses."),
     ).toBeVisible();
-    // Reactivating drops the stale pick: the Finalize step asks for a window
+    // Reactivating unlocks picking: the Finalize step asks for a window
     // again instead of still offering the meeting that was just cancelled.
     const finalizeStep = page.locator("#organizer-finalize");
     await expect(finalizeStep).toContainText("No time selected yet");
@@ -2406,9 +2390,11 @@ test.describe("Releviz account and scheduling flow", () => {
       finalizeStep.locator(".finalize-block__body"),
     ).not.toContainText("Recommended #");
     await expect(finalizeStep).not.toContainText("The meeting is finalized");
+    await expect(finalizeStep).not.toContainText("This meeting is finalized");
+    await expect(rankedRail).toHaveCount(1);
     await expect(
-      rankedRail.getByRole("button", { name: "Selected time" }),
-    ).toHaveCount(0);
+      page.getByRole("grid", { name: /^Meeting time calendar/ }),
+    ).not.toHaveAttribute("aria-readonly");
     const cancellationDeliveryProgress = page.getByLabel(
       "Event delivery progress",
     );

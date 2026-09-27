@@ -1678,6 +1678,107 @@ describe("MeetingCalendar", () => {
     expect(screen.getByText("Confirmed meeting")).toBeInTheDocument();
   });
 
+  test("pickLock turns picking off and leaves the confirmed meeting alone", async () => {
+    const lock =
+      "The meeting is finalized. Reactivate the event to pick a different time.";
+    // The pick is the meeting that was confirmed: same window, same week.
+    const selection = selectionFromRecommendation(recommendation, weeklyEvent, {
+      now: NOW,
+    });
+    const { onSelect } = renderCalendar({
+      event: {
+        ...weeklyEvent,
+        status: "finalized",
+        finalMeeting: {
+          startsAt: "2026-09-14T09:30:00Z",
+          endsAt: "2026-09-14T10:30:00Z",
+          channel: "inperson",
+        },
+      },
+      selection,
+      pickLock: lock,
+      previewWindow: {
+        startsAt: "2026-09-16T09:00:00Z",
+        slotIndices: [4, 5],
+        groupKey: "weekday:3",
+        label: "09:00 · 60%",
+      },
+    });
+
+    const grid = screen.getByRole("grid");
+    expect(grid).toHaveAttribute("aria-readonly", "true");
+    expect(grid).toHaveAccessibleDescription(lock);
+    expect(document.querySelector(".meeting-calendar")).toHaveClass(
+      "meeting-calendar--pick-locked",
+    );
+    // Only the confirmed meeting is drawn, with its own label in view: the
+    // pick is not drawn (or selected) on top of it.
+    expect(
+      document.querySelector(".meeting-calendar__block--selected"),
+    ).toBeNull();
+    expect(
+      document.querySelector(".meeting-calendar__block--confirmed"),
+    ).toHaveTextContent("Confirmed");
+    expect(document.querySelectorAll('[aria-selected="true"]')).toHaveLength(0);
+    const legend = screen.getByRole("list", { name: "Calendar legend" });
+    expect(within(legend).queryByText("Selected window")).toBeNull();
+    expect(within(legend).getByText("Confirmed meeting")).toBeInTheDocument();
+    // Nothing previews a pick: not the picker's candidate, not the pointer.
+    expect(
+      document.querySelector(".meeting-calendar__block--preview"),
+    ).toBeNull();
+    await userEvent.hover(cell(4));
+    expect(
+      document.querySelector(".meeting-calendar__block--preview"),
+    ).toBeNull();
+    // The tab stop is the confirmed meeting; no click or key picks.
+    expect(tabbableCells()).toEqual([cell(1)]);
+    await userEvent.click(cell(4));
+    cell(5).focus();
+    await userEvent.keyboard("{Enter} ");
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  test("keeps the confirmed meeting as the tab stop while it is not locked", () => {
+    renderCalendar({
+      event: {
+        ...weeklyEvent,
+        finalMeeting: {
+          startsAt: "2026-09-16T09:00:00Z",
+          endsAt: "2026-09-16T10:00:00Z",
+          channel: "inperson",
+        },
+      },
+    });
+
+    // Before the best recommended time (Monday 09:30).
+    expect(tabbableCells()).toEqual([cell(4)]);
+    expect(screen.getByRole("grid")).not.toHaveAttribute("aria-readonly");
+  });
+
+  test("drops the picking hints while picking is locked", () => {
+    const lock = "Picking is off.";
+    const { unmount } = renderCalendar({ results: null, pickLock: lock });
+    const note = document.querySelector(".meeting-calendar__note");
+    expect(note).toHaveTextContent(
+      /^Availability shading appears once the first results snapshot is ready\.$/,
+    );
+    unmount();
+
+    // A meeting length that fits no window: no "cannot be picked" note.
+    const odd = renderCalendar({
+      event: { ...weeklyEvent, meetingDurationMinutes: 45 },
+      pickLock: lock,
+    });
+    expect(document.querySelector(".meeting-calendar__note")).toBeNull();
+    odd.unmount();
+
+    // A range where nothing can start any more: no "move on" note either.
+    renderCalendar({ now: Date.parse("2027-01-01T00:00:00Z"), pickLock: lock });
+    fireEvent.click(screen.getByRole("button", { name: "Previous week" }));
+    expect(document.querySelector(".meeting-calendar__note")).toBeNull();
+  });
+
   test("exposes a valid ARIA grid with one tab stop and the overlays outside it", () => {
     const selection = selectionFromRecommendation(recommendation, weeklyEvent, {
       now: NOW,

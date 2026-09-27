@@ -595,15 +595,50 @@ test.describe("Organizer meeting-time calendar", () => {
         channel: "inperson",
       }),
     );
+    // The finalizing button left with the review: focus is on Download.
     await expect(
       page.getByRole("button", { name: "Download calendar (.ics)" }),
-    ).toBeVisible();
+    ).toBeFocused();
     await expect(page.locator(".meeting-calendar")).toHaveClass(
       /meeting-calendar--finalized/,
     );
     await expect(
       page.locator(".meeting-calendar__block--confirmed"),
     ).toBeVisible();
+    // Picking is locked until the event is reactivated: Finalize offers no
+    // lists, the grid is read-only, and the pick is not drawn over the
+    // confirmed meeting, whose label stays readable.
+    await expect(page.locator("#organizer-recommended-times")).toHaveCount(0);
+    await expect(page.locator("#organizer-other-times")).toHaveCount(0);
+    await expect(grid).toHaveAttribute("aria-readonly", "true");
+    await expect(
+      page.locator(".meeting-calendar__block--selected"),
+    ).toHaveCount(0);
+    // (Overlays let the pointer through, so this compares label boxes.)
+    const confirmedLabel = page.locator(
+      ".meeting-calendar__block--confirmed .meeting-calendar__block-label",
+    );
+    await expect(confirmedLabel).toBeVisible();
+    const labelsOverlap = await confirmedLabel.evaluate((label) => {
+      const box = label.getBoundingClientRect();
+      return [...document.querySelectorAll(".meeting-calendar__block-label")]
+        .filter((other) => other !== label)
+        .some((other) => {
+          const rect = other.getBoundingClientRect();
+          return (
+            rect.left < box.right &&
+            rect.right > box.left &&
+            rect.top < box.bottom &&
+            rect.bottom > box.top
+          );
+        });
+    });
+    expect(labelsOverlap).toBe(false);
+    await cellAt(grid, 12, 2).click();
+    await expect(grid.locator('[aria-selected="true"]')).toHaveCount(0);
+    await expect(page.locator("#organizer-finalize > summary")).toContainText(
+      "Finalized",
+    );
     await expect(
       grid.getByRole("columnheader", { name: shortDate(customWednesday) }),
     ).toBeVisible();

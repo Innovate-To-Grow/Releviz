@@ -247,6 +247,11 @@ function EmptyCell({ columnIndex, headerLabel }) {
  * it lists, and `previewWindow` (`{ startsAt, slotIndices, groupKey, label }`)
  * draws the time under the pointer or focus, when it is on screen.
  *
+ * `pickLock` (a sentence saying why, e.g. the meeting is finalized) turns
+ * picking off: no cell selects a window, nothing previews one, and the pick
+ * itself is not drawn, so the confirmed meeting stands alone. The grid is
+ * read-only and described by that sentence.
+ *
  * With `blockedEditing` set (the Time Table's Blocked times step is open) the
  * calendar is the block editor: every slot cell paints the draft with the
  * step's brush (a stroke by pointer, Enter/Space by keyboard), and picking,
@@ -268,6 +273,7 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
     previewWindow = null,
     focusColumn = null,
     blockedEditing = null,
+    pickLock = null,
   },
   ref,
 ) {
@@ -313,6 +319,9 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
   const painting = Boolean(blockedEditing);
   const paintReadOnly = painting && Boolean(blockedEditing.readOnly);
   const paintHelpId = useId();
+  // Picking is off (see `pickLock`); the paint surface has its own lock.
+  const pickLocked = Boolean(pickLock) && !painting;
+  const pickLockHelpId = useId();
 
   const finalMeeting = event?.finalMeeting || null;
   const autoView = useMemo(
@@ -362,13 +371,15 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
     [drawnRecommendations, columns, channel, k, now],
   );
   // The pick, the confirmed meeting and the hover preview are picker chrome:
-  // none of them shows on the paint surface.
+  // none of them shows on the paint surface. With picking locked the pick
+  // is not drawn either: it would sit on (and label over) the confirmed
+  // meeting it became.
   const selected = useMemo(
     () =>
-      !painting && selection?.channel === channel
+      !painting && !pickLocked && selection?.channel === channel
         ? selectionBlock(selection, columns)
         : null,
-    [painting, selection, columns, channel],
+    [painting, pickLocked, selection, columns, channel],
   );
   const confirmed = useMemo(() => {
     // A read-only paint surface (finalized event) keeps the confirmed
@@ -531,21 +542,24 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
     (position) => cellModels.get(position.index)?.state === "startable",
   );
   const bestBlock = blocks.find((block) => block.best) || null;
-  // One tab stop: the focused cell, else the selected window, else the best
-  // ranked window, else the first startable cell. While painting every cell
-  // is a target, so the focused cell or the first one.
+  // One tab stop: the focused cell, else the selected window, else the
+  // confirmed meeting, else the best ranked window, else the first startable
+  // cell. While painting every cell is a target, so the focused cell or the
+  // first one.
   let rovingIndex = positions[0]?.index;
   if (positionByIndex.has(activeCellIndex)) rovingIndex = activeCellIndex;
   else if (painting) rovingIndex = positions[0]?.index;
   else if (selected)
     rovingIndex = columns[selected.columnIndex].slots[selected.row]?.index;
+  else if (confirmed)
+    rovingIndex = columns[confirmed.columnIndex].slots[confirmed.row]?.index;
   else if (bestBlock)
     rovingIndex = columns[bestBlock.columnIndex].slots[bestBlock.row]?.index;
   else if (firstStartable) rovingIndex = firstStartable.index;
 
   // What the Other times picker is pointing at, and the day it lists.
   const candidateBlock = useMemo(() => {
-    if (painting || !previewWindow) return null;
+    if (painting || pickLocked || !previewWindow) return null;
     const block = selectionBlock(previewWindow, columns);
     if (!block) return null;
     // Only a time that can still be picked, and not the pick itself (its
@@ -560,14 +574,14 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
     )
       return null;
     return block;
-  }, [painting, previewWindow, columns, cellModels, selected]);
+  }, [painting, pickLocked, previewWindow, columns, cellModels, selected]);
   const focusColumnIndex =
     painting || !focusColumn
       ? -1
       : columns.findIndex((column) => column.key === focusColumn);
 
   const previewBlock = useMemo(() => {
-    if (painting) return null;
+    if (painting || pickLocked) return null;
     const index = hoverIndex ?? null;
     if (index === null) return null;
     const model = cellModels.get(index);
@@ -575,7 +589,15 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
     if (selectedIndices.has(index) && selected && selected.row === model.row)
       return null;
     return { columnIndex: model.columnIndex, row: model.row, span: k };
-  }, [painting, hoverIndex, cellModels, selectedIndices, selected, k]);
+  }, [
+    painting,
+    pickLocked,
+    hoverIndex,
+    cellModels,
+    selectedIndices,
+    selected,
+    k,
+  ]);
 
   const navigate = useCallback(
     (direction) => {
@@ -704,6 +726,7 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
 
   const selectCell = useCallback(
     (index) => {
+      if (pickLocked) return;
       const position = positionByIndex.get(index);
       if (!position) return;
       const model = cellModels.get(index);
@@ -720,6 +743,7 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
       if (nextSelection) onSelect?.(nextSelection);
     },
     [
+      pickLocked,
       positionByIndex,
       cellModels,
       columns,
@@ -899,7 +923,7 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
 
   return (
     <div
-      className={`meeting-calendar${overnight ? " meeting-calendar--overnight" : ""}${finalized ? " meeting-calendar--finalized" : ""}${painting ? " meeting-calendar--painting" : ""}`}
+      className={`meeting-calendar${overnight ? " meeting-calendar--overnight" : ""}${finalized ? " meeting-calendar--finalized" : ""}${painting ? " meeting-calendar--painting" : ""}${pickLocked ? " meeting-calendar--pick-locked" : ""}`}
       data-channel={channel}
       data-metric={metric}
       data-mode={painting ? "blocked-editing" : undefined}
@@ -1005,6 +1029,11 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
             : ""}
         </p>
       )}
+      {pickLocked && (
+        <p id={pickLockHelpId} className="visually-hidden">
+          {pickLock}
+        </p>
+      )}
 
       <div className="meeting-calendar__scroll" ref={scrollRef}>
         <div className="meeting-calendar__canvas">
@@ -1015,8 +1044,10 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
               painting ? `${gridLabel}, marking blocked times` : gridLabel
             }
             aria-multiselectable={painting ? "true" : undefined}
-            aria-readonly={paintReadOnly ? "true" : undefined}
-            aria-describedby={painting ? paintHelpId : undefined}
+            aria-readonly={paintReadOnly || pickLocked ? "true" : undefined}
+            aria-describedby={
+              painting ? paintHelpId : pickLocked ? pickLockHelpId : undefined
+            }
             aria-colcount={columns.length + 1}
             aria-rowcount={maxRows + 1}
             onKeyDown={handleKeyDown}
@@ -1227,13 +1258,15 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
                 <span>Recommended time</span>
               </li>
             )}
-            <li className="meeting-calendar__legend-item">
-              <span
-                className="meeting-calendar__legend-swatch meeting-calendar__legend-swatch--selected"
-                aria-hidden="true"
-              />
-              <span>Selected window</span>
-            </li>
+            {!pickLocked && (
+              <li className="meeting-calendar__legend-item">
+                <span
+                  className="meeting-calendar__legend-swatch meeting-calendar__legend-swatch--selected"
+                  aria-hidden="true"
+                />
+                <span>Selected window</span>
+              </li>
+            )}
             {event?.finalMeeting && (
               <li className="meeting-calendar__legend-item">
                 <span
@@ -1252,7 +1285,7 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
           Blocked times repeat every week.
         </p>
       )}
-      {!painting && k < 1 && (
+      {!painting && !pickLocked && k < 1 && (
         <p className="meeting-calendar__note">
           The meeting duration does not divide into the slot length, so no
           window can be picked. Edit the event to fix the duration.
@@ -1261,10 +1294,11 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
       {!painting && k >= 1 && neutral && (
         <p className="meeting-calendar__note">
           Availability shading appears once the first results snapshot is ready.
-          You can already pick any window.
+          {pickLocked ? "" : " You can already pick any window."}
         </p>
       )}
       {!painting &&
+        !pickLocked &&
         k >= 1 &&
         !neutral &&
         !firstStartable &&

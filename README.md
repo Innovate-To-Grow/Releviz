@@ -184,6 +184,9 @@ open and in view, the calendar stays pinned under the section nav (on screens wi
 with a shorter grid; scrolled on past the lists it goes with the page). Opening Other times or
 browsing its days takes the calendar to that day and highlights its column, and the time under
 the pointer or focus is drawn on it, scrolled into view in the grid, before it is picked.
+Once a meeting is finalized, picking is locked until the event is reactivated: Finalize shows the
+confirmed meeting without the two lists, and the calendar draws the confirmed meeting alone and
+ignores clicks.
 The organizer can:
 
 - search/filter a server-paginated roster (50 rows by default, 100 maximum);

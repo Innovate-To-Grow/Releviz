@@ -4363,3 +4363,169 @@ test("results note blocked slots only when the snapshot lists them", async () =>
     screen.queryByText(/blocked slots are excluded/),
   ).not.toBeInTheDocument();
 });
+
+test("a finalized meeting locks picking until the event is reactivated", async () => {
+  const nowSpy = jest.spyOn(Date, "now").mockReturnValue(DATED_NOW);
+  try {
+    mockDatedSnapshot();
+    const onSelect = jest.fn();
+    const props = timeTableProps(datedEvent, { onSelect });
+    const { rerender } = render(<PickingTimeTable {...props} />);
+    await screen.findByText(/Results are current at revision 7/);
+    const cellAt = (index) =>
+      screen
+        .getByRole("grid", { name: /^Meeting time calendar/ })
+        .querySelector(`[data-cell-idx="${index}"]`);
+    // Picked on the calendar, with both lists open: the calendar is picking,
+    // outlines the recommended times and previews the pointed-at time.
+    await userEvent.click(cellAt(1));
+    await toggleRecommendedTimes();
+    await openOtherTimes();
+    const results = document.querySelector(".meeting-results");
+    expect(results).toHaveClass("meeting-results--picking");
+    expect(
+      document.querySelector(".meeting-calendar__block--rank"),
+    ).not.toBeNull();
+    onSelect.mockClear();
+
+    // Finalized (here, or live from elsewhere): the lists fold away and
+    // leave Finalize, and the pick stops being drawn over the meeting.
+    const finalizedEvent = {
+      ...datedEvent,
+      status: "finalized",
+      finalMeeting: {
+        startsAt: "2026-08-20T09:30:00Z",
+        endsAt: "2026-08-20T10:30:00Z",
+        channel: "inperson",
+        location: "Room 4",
+        active: true,
+      },
+    };
+    rerender(<PickingTimeTable {...props} event={finalizedEvent} />);
+    const finalize = document.getElementById("organizer-finalize");
+    expect(document.getElementById("organizer-recommended-times")).toBeNull();
+    expect(document.getElementById("organizer-other-times")).toBeNull();
+    expect(finalize).toHaveTextContent(
+      "This meeting is finalized. Reactivate the event to choose a different time.",
+    );
+    expect(finalize).not.toHaveTextContent(
+      "Confirm the selected time and email calendar invitations.",
+    );
+    expect(
+      screen.getByText(
+        "Group availability for a 60-minute meeting. The meeting is finalized: reactivate the event to pick a different time.",
+      ),
+    ).toBeInTheDocument();
+    expect(results).not.toHaveClass("meeting-results--picking");
+    expect(document.querySelector(".meeting-calendar__block--rank")).toBeNull();
+    const grid = screen.getByRole("grid", { name: /^Meeting time calendar/ });
+    expect(grid).toHaveAttribute("aria-readonly", "true");
+    expect(grid).toHaveAccessibleDescription(
+      "The meeting is finalized. Reactivate the event to pick a different time.",
+    );
+    expect(
+      document.querySelector(".meeting-calendar__block--selected"),
+    ).toBeNull();
+    expect(
+      document.querySelector(".meeting-calendar__block--confirmed"),
+    ).toHaveTextContent("Confirmed");
+    await userEvent.click(cellAt(0));
+    expect(onSelect).not.toHaveBeenCalled();
+
+    // Reactivated: picking is back, with both lists closed.
+    rerender(<PickingTimeTable {...props} event={{ ...datedEvent }} />);
+    expect(
+      document.getElementById("organizer-recommended-times"),
+    ).not.toHaveAttribute("open");
+    expect(
+      document.getElementById("organizer-other-times"),
+    ).not.toHaveAttribute("open");
+    expect(results).not.toHaveClass("meeting-results--picking");
+    expect(
+      screen.getByRole("grid", { name: /^Meeting time calendar/ }),
+    ).not.toHaveAttribute("aria-readonly");
+    expect(finalize).toHaveTextContent(
+      "Confirm the selected time and email calendar invitations.",
+    );
+    await userEvent.click(cellAt(0));
+    expect(onSelect).toHaveBeenCalledWith(
+      expect.objectContaining({ startsAt: "2026-08-20T09:00:00Z" }),
+    );
+  } finally {
+    nowSpy.mockRestore();
+  }
+});
+
+test("finalizing hands focus to Download calendar, unless focus is still somewhere", async () => {
+  const finalMeeting = {
+    startsAt: recommendation.startsAt,
+    endsAt: recommendation.endsAt,
+    channel: "virtual",
+    location: "",
+    active: true,
+  };
+  previewFinalMeeting.mockResolvedValueOnce({
+    attendance: { availableParticipantTotal: 2 },
+  });
+  confirmFinalMeeting.mockResolvedValueOnce({
+    event: { ...baseEvent, status: "finalized", finalMeeting },
+  });
+  function StatefulFinalize() {
+    const [event, setEvent] = useState(baseEvent);
+    return (
+      <FinalizeScalePanel
+        event={event}
+        setEvent={setEvent}
+        getToken={getToken}
+        selection={recommendation}
+      />
+    );
+  }
+  const { unmount } = render(<StatefulFinalize />);
+  await userEvent.click(
+    screen.getByRole("button", { name: "Review attendance" }),
+  );
+  await screen.findByRole("group", { name: "Attendance review" });
+  // The button that finalizes goes away with the review workspace.
+  await userEvent.click(
+    screen.getByRole("button", { name: "Finalize meeting" }),
+  );
+  const download = await screen.findByRole("button", {
+    name: "Download calendar (.ics)",
+  });
+  await waitFor(() => expect(download).toHaveFocus());
+  expect(document.getElementById("organizer-finalize")).toHaveTextContent(
+    "This meeting is finalized. Reactivate the event to choose a different time.",
+  );
+  unmount();
+
+  // Finalized live while the organizer works elsewhere: focus stays put.
+  const { rerender } = render(
+    <>
+      <button type="button">Elsewhere</button>
+      <FinalizeScalePanel
+        event={baseEvent}
+        setEvent={jest.fn()}
+        getToken={getToken}
+        selection={recommendation}
+      />
+    </>,
+  );
+  const elsewhere = screen.getByRole("button", { name: "Elsewhere" });
+  elsewhere.focus();
+  rerender(
+    <>
+      <button type="button">Elsewhere</button>
+      <FinalizeScalePanel
+        event={{ ...baseEvent, status: "finalized", finalMeeting }}
+        setEvent={jest.fn()}
+        getToken={getToken}
+        selection={recommendation}
+      />
+    </>,
+  );
+  expect(
+    screen.getByRole("button", { name: "Download calendar (.ics)" }),
+  ).toBeInTheDocument();
+  expect(elsewhere).toHaveFocus();
+});

@@ -2491,6 +2491,24 @@ describe("scaled organizer workspace", () => {
         expect(headerStatus()).toHaveTextContent("finalized"),
       );
       expect(finalizeSection()).toHaveTextContent("Download calendar (.ics)");
+      // The finalizing button left with the review: focus lands on the
+      // confirmed meeting's Download, not on the page.
+      expect(
+        screen.getByRole("button", { name: "Download calendar (.ics)" }),
+      ).toHaveFocus();
+      // Picking is locked: no lists in Finalize, and the calendar draws the
+      // confirmed meeting alone and ignores clicks.
+      expect(document.getElementById("organizer-recommended-times")).toBeNull();
+      expect(document.getElementById("organizer-other-times")).toBeNull();
+      expect(
+        document.querySelector(".meeting-calendar__block--selected"),
+      ).toBeNull();
+      expect(
+        document.querySelector(".meeting-calendar__block--confirmed"),
+      ).toHaveTextContent("Confirmed");
+      await userEvent.click(calendarCell(0));
+      expect(calendarCell(0)).not.toHaveAttribute("aria-selected");
+      expect(finalizeSection()).toHaveTextContent("Download calendar (.ics)");
       expect(
         screen.getByText(
           "The meeting is finalized. Reactivate the event to collect new responses.",
@@ -2521,6 +2539,12 @@ describe("scaled organizer workspace", () => {
       expect(screen.queryByText("Custom window")).not.toBeInTheDocument();
       expect(screen.queryByText(/Recommended #/)).not.toBeInTheDocument();
       expect(calendarCell(1)).not.toHaveAttribute("aria-selected");
+      // Picking is back: the lists return (closed) and a click picks again.
+      expect(
+        document.getElementById("organizer-other-times"),
+      ).not.toHaveAttribute("open");
+      await userEvent.click(calendarCell(0));
+      expect(finalizeSection()).toHaveTextContent("Custom window");
       expect(
         screen.getAllByText("This event is active and accepting responses."),
       ).toHaveLength(1);

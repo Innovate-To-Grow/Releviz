@@ -1702,6 +1702,10 @@ function OtherTimesSection({
   );
 }
 
+// What the calendar says (to assistive technology) while it cannot pick.
+const PICK_LOCK_FINALIZED =
+  "The meeting is finalized. Reactivate the event to pick a different time.";
+
 // What Finalize's empty state asks for: where a time can come from, or why
 // none can.
 function finalizePrompt({ pickable, recommendedCount }) {
@@ -1766,6 +1770,22 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
   const [otherOpen, setOtherOpen] = useState(false);
   const [pickerDay, setPickerDay] = useState(null);
   const [pickerPreview, setPickerPreview] = useState(null);
+  // A finalized meeting locks picking until the event is reactivated: the
+  // lists leave Finalize and the calendar only shows the confirmed meeting.
+  // Finalizing (here or live, from elsewhere) folds the lists away, so
+  // reactivating brings them back closed.
+  const finalized = isFinalized(event);
+  const [seenFinalized, setSeenFinalized] = useState(finalized);
+  if (finalized !== seenFinalized) {
+    setSeenFinalized(finalized);
+    if (finalized) {
+      setRankedOpen(false);
+      setOtherOpen(false);
+      setPickerPreview(null);
+      setHighlightKey(null);
+    }
+  }
+
   const { locked: editLocked, reason: editLockReason } = editLockOf(event);
   const blockedDraft = useBlockedSlotsDraft(event, {
     getToken,
@@ -2051,7 +2071,9 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
       description={
         blockedOpen
           ? "Marking blocked times: click or drag on the calendar to block or open times, then save with the bar under the calendar."
-          : `Group availability for a ${meetingMinutes}-minute meeting. Pick a time on the calendar, or from Recommended times or Other times in Finalize, then confirm it there.`
+          : finalized
+            ? `Group availability for a ${meetingMinutes}-minute meeting. The meeting is finalized: reactivate the event to pick a different time.`
+            : `Group availability for a ${meetingMinutes}-minute meeting. Pick a time on the calendar, or from Recommended times or Other times in Finalize, then confirm it there.`
       }
     >
       <div className="d-flex flex-column gap-3">
@@ -2118,6 +2140,7 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
             previewWindow={otherOpen ? pickerPreview : null}
             focusColumn={otherOpen ? pickerDay : null}
             blockedEditing={blockedOpen ? blockedDraft.surface : null}
+            pickLock={finalized ? PICK_LOCK_FINALIZED : null}
           />
 
           {/* While painting, the brush and Save sit right under the calendar
@@ -2158,38 +2181,40 @@ export const ResultsSnapshotPanel = forwardRef(function ResultsSnapshotPanel(
               })}
               onOpenChange={closeRecommendedWithFinalize}
               picker={
-                <>
-                  <RecommendedTimesSection
-                    event={event}
-                    recommendations={recommendations}
-                    basis={results?.recommendationBasis || null}
-                    meetingMinutes={meetingMinutes}
-                    selection={selection}
-                    loading={loading}
-                    refreshing={snapshot.status === "refreshing"}
-                    open={rankedOpen}
-                    onToggle={setRankedOpen}
-                    onChoose={handleChoose}
-                    onHighlight={setHighlightKey}
-                    highlightKey={highlightKey}
-                  />
-                  <OtherTimesSection
-                    event={event}
-                    results={results}
-                    recommendations={recommendations}
-                    channel={activeChannel}
-                    onChannelChange={setChannel}
-                    pickable={pickable}
-                    meetingMinutes={meetingMinutes}
-                    selection={selection}
-                    open={otherOpen}
-                    onToggle={setOtherOpen}
-                    onPick={handlePick}
-                    onPreview={setPickerPreview}
-                    onDayShown={setPickerDay}
-                    onBrowse={handleBrowse}
-                  />
-                </>
+                finalized ? null : (
+                  <>
+                    <RecommendedTimesSection
+                      event={event}
+                      recommendations={recommendations}
+                      basis={results?.recommendationBasis || null}
+                      meetingMinutes={meetingMinutes}
+                      selection={selection}
+                      loading={loading}
+                      refreshing={snapshot.status === "refreshing"}
+                      open={rankedOpen}
+                      onToggle={setRankedOpen}
+                      onChoose={handleChoose}
+                      onHighlight={setHighlightKey}
+                      highlightKey={highlightKey}
+                    />
+                    <OtherTimesSection
+                      event={event}
+                      results={results}
+                      recommendations={recommendations}
+                      channel={activeChannel}
+                      onChannelChange={setChannel}
+                      pickable={pickable}
+                      meetingMinutes={meetingMinutes}
+                      selection={selection}
+                      open={otherOpen}
+                      onToggle={setOtherOpen}
+                      onPick={handlePick}
+                      onPreview={setPickerPreview}
+                      onDayShown={setPickerDay}
+                      onBrowse={handleBrowse}
+                    />
+                  </>
+                )
               }
             />
           </div>
@@ -2240,6 +2265,7 @@ function finalizeHint(event, selection, recommendedCount = 0) {
 export function FinalizeScalePanel(props) {
   const { event, headingRef, picker = null, onOpenChange } = props;
   const selection = normalizeSelection(props.selection, event);
+  const finalized = isFinalized(event);
   const [open, setOpen] = useState(() => Boolean(selection));
   const [seen, setSeen] = useState(props.selection);
   if (props.selection !== seen) {
@@ -2263,7 +2289,9 @@ export function FinalizeScalePanel(props) {
       focusable
     >
       <p className="finalize-block__description">
-        Confirm the selected time and email calendar invitations.
+        {finalized
+          ? "This meeting is finalized. Reactivate the event to choose a different time."
+          : "Confirm the selected time and email calendar invitations."}
       </p>
       {picker}
       <FinalizeScalePanelContent
@@ -2521,6 +2549,18 @@ function FinalizeScalePanelContent({
   const meeting = event.finalMeeting;
   const canFinalize = ["active", "closed"].includes(event.status);
   const finalized = isFinalized(event);
+  // Finalizing swaps the review workspace (and the button that had focus)
+  // for the confirmed meeting: focus moves to its Download button instead of
+  // dropping to the page. Focus that is still somewhere is left alone.
+  const downloadRef = useRef(null);
+  const wasFinalized = useRef(finalized);
+  useEffect(() => {
+    const justFinalized = finalized && !wasFinalized.current;
+    wasFinalized.current = finalized;
+    if (!justFinalized) return;
+    const active = document.activeElement;
+    if (!active || active === document.body) downloadRef.current?.focus();
+  }, [finalized]);
 
   return (
     <div className="finalize-block__body">
@@ -2546,6 +2586,7 @@ function FinalizeScalePanelContent({
           </div>
           <div className="finalized-meeting__actions">
             <AppButton
+              ref={downloadRef}
               variant="outlined"
               icon={<DownloadIcon />}
               onClick={download}
