@@ -321,11 +321,21 @@ const MeetingCalendar = forwardRef(function MeetingCalendar(
   // Picking is off (see `pickLock`); the paint surface has its own lock.
   const pickLocked = Boolean(pickLock) && !painting;
   const pickLockHelpId = useId();
+  // Locking (a meeting finalized, here or elsewhere) brings the calendar to
+  // the confirmed meeting, from wherever a pick or browsing had taken it.
+  const [seenLock, setSeenLock] = useState(Boolean(pickLock));
+  if (Boolean(pickLock) !== seenLock) {
+    setSeenLock(Boolean(pickLock));
+    if (pickLock) {
+      setView(null);
+      setActiveCellIndex(null);
+    }
+  }
 
   const finalMeeting = event?.finalMeeting || null;
-  // A locked calendar opens on the confirmed meeting, not on a pick it no
-  // longer draws.
-  const anchorSelection = pickLocked ? null : selection;
+  // A locked calendar (painting or not) opens on the confirmed meeting, not
+  // on a pick it no longer draws.
+  const anchorSelection = pickLock ? null : selection;
   const autoView = useMemo(
     () =>
       defaultView({

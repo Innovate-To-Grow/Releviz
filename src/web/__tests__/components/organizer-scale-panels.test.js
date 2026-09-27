@@ -4401,7 +4401,14 @@ test("a finalized meeting locks picking until the event is reactivated", async (
         active: true,
       },
     };
+    // Focus is on an Other times chip when the finalization lands (from
+    // elsewhere): the chip goes, and focus moves to Download, not the page.
+    const other = document.getElementById("organizer-other-times");
+    otherChips(other)[0].focus();
     rerender(<PickingTimeTable {...props} event={finalizedEvent} />);
+    expect(
+      screen.getByRole("button", { name: "Download calendar (.ics)" }),
+    ).toHaveFocus();
     const finalize = document.getElementById("organizer-finalize");
     expect(document.getElementById("organizer-recommended-times")).toBeNull();
     expect(document.getElementById("organizer-other-times")).toBeNull();

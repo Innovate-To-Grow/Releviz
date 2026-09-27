@@ -2439,6 +2439,12 @@ function AttendanceReviewTable({ review }) {
   );
 }
 
+function focusIsInFinalize() {
+  if (typeof document === "undefined") return false;
+  const section = document.getElementById("organizer-finalize");
+  return Boolean(section?.contains(document.activeElement));
+}
+
 function FinalizeScalePanelContent({
   event,
   setEvent,
@@ -2455,6 +2461,9 @@ function FinalizeScalePanelContent({
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
   const confirmationKey = useRef("");
+  // Set by this tab's own successful Finalize meeting (see below).
+  const handOffFocus = useRef(false);
+  const downloadRef = useRef(null);
 
   const payload = useMemo(() => {
     if (!selection) return null;
@@ -2550,18 +2559,24 @@ function FinalizeScalePanelContent({
   const meeting = event.finalMeeting;
   const canFinalize = ["active", "closed"].includes(event.status);
   const finalized = isFinalized(event);
-  // Finalizing here swaps the review workspace (and the button that had
-  // focus) for the confirmed meeting: focus moves to its Download button
-  // instead of dropping to the page. A finalization that arrives live, from
-  // elsewhere, never moves focus; nor does one while focus is still somewhere.
-  const downloadRef = useRef(null);
-  const handOffFocus = useRef(false);
+  // Finalizing swaps the review workspace (and, above it, the Recommended
+  // and Other times lists) for the confirmed meeting. Focus that was in
+  // Finalize when that happened (this tab's Finalize meeting, or a chip when
+  // the meeting was finalized elsewhere) would drop to the page: it moves to
+  // the Download button instead. Focus anywhere else is never moved.
+  const [seenFinalized, setSeenFinalized] = useState(finalized);
+  const [focusWasInside, setFocusWasInside] = useState(false);
+  if (finalized !== seenFinalized) {
+    setSeenFinalized(finalized);
+    // Read before the swap commits: the focused control is still there.
+    setFocusWasInside(finalized && focusIsInFinalize());
+  }
   useEffect(() => {
-    if (!finalized || !handOffFocus.current) return;
+    if (!finalized || !(handOffFocus.current || focusWasInside)) return;
     handOffFocus.current = false;
     const active = document.activeElement;
     if (!active || active === document.body) downloadRef.current?.focus();
-  }, [finalized]);
+  }, [finalized, focusWasInside]);
 
   return (
     <div className="finalize-block__body">

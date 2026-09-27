@@ -1790,6 +1790,55 @@ describe("MeetingCalendar", () => {
     expect(
       document.querySelector(".meeting-calendar__block--confirmed"),
     ).not.toBeNull();
+
+    // The read-only Blocked times surface keeps the confirmed meeting too.
+    rerender(
+      <MeetingCalendar
+        event={event}
+        results={results}
+        channel="inperson"
+        onSelect={onSelect}
+        now={NOW}
+        selection={selection}
+        pickLock="Picking is off."
+        blockedEditing={{ marks: [], onPaint: jest.fn(), readOnly: true }}
+      />,
+    );
+    expect(columnHeaders()).toEqual(["Mon, Sep 14", "Wed, Sep 16"]);
+    expect(
+      document.querySelector(".meeting-calendar__block--confirmed"),
+    ).not.toBeNull();
+  });
+
+  test("locking brings a browsed calendar back to the confirmed meeting", async () => {
+    const event = {
+      ...weeklyEvent,
+      finalMeeting: {
+        startsAt: "2026-09-14T09:30:00Z",
+        endsAt: "2026-09-14T10:30:00Z",
+        channel: "inperson",
+      },
+    };
+    const { rerender, onSelect } = renderCalendar({ event });
+    await userEvent.click(screen.getByRole("button", { name: "Next week" }));
+    await userEvent.click(screen.getByRole("button", { name: "Next week" }));
+    expect(columnHeaders()).toEqual(["Mon, Sep 28", "Wed, Sep 30"]);
+    await userEvent.click(cell(4));
+    expect(tabbableCells()).toEqual([cell(4)]);
+
+    rerender(
+      <MeetingCalendar
+        event={{ ...event, status: "finalized" }}
+        results={results}
+        channel="inperson"
+        onSelect={onSelect}
+        now={NOW}
+        pickLock="Picking is off."
+      />,
+    );
+    expect(columnHeaders()).toEqual(["Mon, Sep 14", "Wed, Sep 16"]);
+    // The tab stop moves with it, to the confirmed meeting.
+    expect(tabbableCells()).toEqual([cell(1)]);
   });
 
   test("keeps the confirmed meeting as the tab stop while it is not locked", () => {
