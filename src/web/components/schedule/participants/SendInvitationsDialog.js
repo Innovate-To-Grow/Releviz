@@ -5,6 +5,9 @@ import EmailSendDialog from "@/components/schedule/email/EmailSendDialog";
 const invitations = (count) =>
   `${count} ${count === 1 ? "invitation" : "invitations"}`;
 
+/** The singular form for one person, the plural for any other count. */
+const agree = (count, one, many) => (count === 1 ? one : many);
+
 /**
  * Sends invitations in two steps (see EmailSendDialog): first who gets one
  * now, who was already invited (with an opt-in to email them again), who can
@@ -40,7 +43,8 @@ export default function SendInvitationsDialog({
       {willSend > 0 && <li>{willSend} will get an invitation now</li>}
       {alreadyInvited > 0 && (
         <li>
-          {alreadyInvited} were already invited
+          {alreadyInvited} {agree(alreadyInvited, "was", "were")} already
+          invited
           <div className="form-check mt-1">
             <input
               className="form-check-input"
@@ -60,9 +64,20 @@ export default function SendInvitationsDialog({
         </li>
       )}
       {noEmail > 0 && (
-        <li>{noEmail} have no email of their own and are never emailed</li>
+        <li>
+          {noEmail}{" "}
+          {agree(
+            noEmail,
+            "has no email of their own and is never emailed",
+            "have no email of their own and are never emailed",
+          )}
+        </li>
       )}
-      {inFlight > 0 && <li>{inFlight} are being sent right now</li>}
+      {inFlight > 0 && (
+        <li>
+          {inFlight} {agree(inFlight, "is", "are")} being sent right now
+        </li>
+      )}
     </ul>
   );
 

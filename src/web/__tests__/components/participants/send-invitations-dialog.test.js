@@ -73,7 +73,7 @@ describe("SendInvitationsDialog", () => {
     expect(items).toEqual([
       "4 will get an invitation now",
       "2 were already invitedEmail them again too",
-      "1 have no email of their own and are never emailed",
+      "1 has no email of their own and is never emailed",
       "3 are being sent right now",
     ]);
     expect(screen.getByTitle("Email preview")).toHaveAttribute("sandbox", "");
@@ -94,6 +94,21 @@ describe("SendInvitationsDialog", () => {
     expect(onConfirm).not.toHaveBeenCalled();
     await user.click(button("Send 4 invitations"));
     expect(onConfirm).toHaveBeenCalledWith({ resend: false });
+  });
+
+  test("a line about one person reads in the singular", () => {
+    renderDialog({
+      preview: preview({ alreadyInvited: 1, noEmail: 2, inFlight: 1 }),
+    });
+    const items = within(dialog())
+      .getAllByRole("listitem")
+      .map((item) => item.textContent);
+    expect(items).toEqual([
+      "4 will get an invitation now",
+      "1 was already invitedEmail them again too",
+      "2 have no email of their own and are never emailed",
+      "1 is being sent right now",
+    ]);
   });
 
   test("emailing the already-invited again asks for their preview and counts them in", async () => {
