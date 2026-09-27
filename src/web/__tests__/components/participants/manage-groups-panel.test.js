@@ -53,8 +53,11 @@ function renderPanel(props = {}) {
   return { ...handlers, unmount: utils.unmount };
 }
 
+// Rows are named by their group first, then their counts.
 const rowFor = (name) =>
-  screen.getByRole("row", { name: new RegExp(`^${name}`) });
+  screen.getByRole("row", {
+    name: (accessibleName) => accessibleName.startsWith(name),
+  });
 const menuFor = (user, name) =>
   user.click(screen.getByRole("button", { name: `Actions for ${name}` }));
 

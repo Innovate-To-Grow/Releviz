@@ -182,8 +182,10 @@ const INVITATION_REQUEST_KEYS = [
 ];
 
 // Only the keys given are sent: a selection is `participantIds` or a
-// `filter`, `preview: true` counts without sending, and a real send carries
-// its `idempotencyKey`.
+// `filter`, `preview: true` counts without sending (and returns the `email`
+// the first recipient would get plus that `sample` recipient, or
+// `email: null` when nobody would be sent one), and a real send carries its
+// `idempotencyKey`.
 export async function sendRosterInvitations(code, options = {}, token) {
   const body = {};
   INVITATION_REQUEST_KEYS.forEach((key) => {

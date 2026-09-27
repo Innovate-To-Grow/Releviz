@@ -32,12 +32,26 @@ function renderToasts() {
 }
 
 const APP_DIR = path.join(__dirname, "..", "..", "..", "app");
+const STYLESHEETS = {
+  "globals.css": fs.readFileSync(path.join(APP_DIR, "globals.css"), "utf8"),
+  "participants.css": fs.readFileSync(
+    path.join(APP_DIR, "participants.css"),
+    "utf8",
+  ),
+};
 
+// The z-index of a top-level (unindented) `selector {` rule. Plain string
+// matching keeps the file paths and patterns literal.
 function zIndexOf(stylesheet, selector) {
-  const css = fs.readFileSync(path.join(APP_DIR, stylesheet), "utf8");
-  const escaped = selector.replace(/\./g, "\\.");
-  const block = css.match(new RegExp(`^${escaped}\\s*\\{([^}]*)\\}`, "m"));
-  return Number(block?.[1].match(/z-index:\s*(\d+)/)?.[1]);
+  const lines = STYLESHEETS[stylesheet].split("\n");
+  const start = lines.indexOf(`${selector} {`);
+  expect(start).toBeGreaterThanOrEqual(0);
+  const end = lines.indexOf("}", start);
+  const declaration = lines
+    .slice(start + 1, end)
+    .map((line) => line.trim())
+    .find((line) => line.startsWith("z-index:"));
+  return Number(declaration?.slice("z-index:".length).replace(";", ""));
 }
 
 describe("toasts", () => {
