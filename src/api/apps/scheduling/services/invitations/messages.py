@@ -6,6 +6,7 @@ from apps.scheduling.models import Event, EventInvitation
 from apps.scheduling.services.email_formatting import (
     format_email_datetime,
     local_datetime,
+    nowrap_times,
     zone_label,
     zone_suffix,
 )
@@ -74,7 +75,7 @@ def invitation_html_body(
     )
     details = [("Event", event.name)]
     if event.response_deadline:
-        details.append(("Respond by", response_deadline_text(event)))
+        details.append(("Respond by", nowrap_times(response_deadline_text(event))))
     return render_branded_email(
         title="Availability reminder" if reminder else "You're invited",
         preheader=(

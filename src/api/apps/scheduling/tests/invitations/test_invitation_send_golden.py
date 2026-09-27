@@ -3,8 +3,8 @@
 Previews render these same messages with a stand-in link, so what they show
 is what is sent. The digests were first taken before the link override
 existed; the body and HTML pins were refreshed when the deadline changed from
-an ISO timestamp to a readable time, and the calendar attachments stayed the
-same. They prove a real send carries the recipient's own private link in the
+an ISO timestamp to a readable time (the HTML keeps it on one line with
+no-break spaces), and the calendar attachments stayed the same. They prove a real send carries the recipient's own private link in the
 body, the HTML, and the calendar attachment.
 """
 
@@ -26,14 +26,14 @@ FROZEN = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
 FULL_ICS = "9ae63a4e0ebef1b1989d0b549b01f1ba3cacc759f5120469ad9a764b63adfdbd"
 TEMPORARY_ICS = "38f4400dd766ba4a2764b1890fd4ebd5b244708c85f3515fe1af27b02dce799b"
 GOLDEN = {
-    ("full", False): ("add7fa16b6ad0d7f9c4a0b885c07b6ab53a03042481e268b2ec69aafc94bf26a", FULL_ICS),
-    ("full", True): ("28d8d0f97fcaf5cf0d2932d9e2697a42e89354e354bf2384ffd07f13ab65f2fb", FULL_ICS),
+    ("full", False): ("ceda56109482630cd0d6117145fea3eb49c66ff64a6d1a4aa8026652ad470ffe", FULL_ICS),
+    ("full", True): ("d53fb6051320505dd5b0f2af2d4bde0ea792f6a59f2908f26d934f2bd273dc0c", FULL_ICS),
     ("temporary", False): (
-        "5c74806626cfb90f65901cfb76e835c693e3bd54a97e74579458250d7c2a89bc",
+        "90eb2362c04352da5ef7e8c07a6b9f52d1519ddc1e17792916a7bb7ee1294079",
         TEMPORARY_ICS,
     ),
     ("temporary", True): (
-        "90f3c615bfcd4bc454733f1e42a43e90b6a26b6f9aec90eef5dff7597052470f",
+        "c9162694dec33257f0c444248c90c723454c7de8d1d42ffb450f0633a853b750",
         TEMPORARY_ICS,
     ),
 }

@@ -7,6 +7,7 @@ process locale or on Django's language settings. Previews call the same email
 builders as the send, so they show exactly these strings too.
 """
 
+import re
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -28,6 +29,9 @@ MONTHS = (
     "December",
 )
 METHOD_LABELS = dict(FinalMeeting.CHANNEL_CHOICES)
+NO_BREAK_SPACE = "\u00a0"
+_CLOCK_THEN_PERIOD = re.compile(r"(\d{1,2}:\d{2}) ([AP]M)\b")
+_PERIOD_THEN_ZONE = re.compile(r"\b([AP]M) (UTC[+-]\d{2}:\d{2}|[A-Z]{2,6})\b")
 
 
 def _known_zone(tz_name: str) -> ZoneInfo | None:
@@ -107,3 +111,15 @@ def meeting_method_label(channel: str) -> str:
     """``In person`` or ``Virtual``; an unrecognized value is shown as stored."""
 
     return METHOD_LABELS.get(channel, channel)
+
+
+def nowrap_times(text: str) -> str:
+    """``text`` with each clock time kept on one line, for the HTML parts.
+
+    A narrow email column would otherwise break ``11:00 AM EDT`` after
+    ``11:00``. Only the spaces inside a time and before its zone become
+    no-break spaces; the plain-text parts keep ordinary spaces.
+    """
+
+    text = _CLOCK_THEN_PERIOD.sub(rf"\1{NO_BREAK_SPACE}\2", text)
+    return _PERIOD_THEN_ZONE.sub(rf"\1{NO_BREAK_SPACE}\2", text)

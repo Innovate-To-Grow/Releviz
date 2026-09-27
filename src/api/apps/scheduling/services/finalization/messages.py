@@ -6,6 +6,7 @@ from apps.scheduling.models import Event
 from apps.scheduling.services.email_formatting import (
     format_email_time_range,
     meeting_method_label,
+    nowrap_times,
 )
 
 
@@ -42,7 +43,7 @@ def final_confirmation_html_body(event: Event, meeting) -> str:
         preheader=f"The final time for {event.name} is confirmed.",
         eyebrow="Final schedule",
         paragraphs=(f"The final meeting time for {event.name} is confirmed.",),
-        details=_confirmation_details(meeting),
+        details=[(label, nowrap_times(value)) for label, value in _confirmation_details(meeting)],
         cta_label="View event",
         cta_url=frontend_url("/event", code=event.code),
         notice="A calendar invitation is attached to this email.",

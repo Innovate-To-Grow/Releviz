@@ -15,6 +15,7 @@ from apps.scheduling.services.email_formatting import (
     format_email_time_range,
     local_datetime,
     meeting_method_label,
+    nowrap_times,
     zone_label,
     zone_suffix,
 )
@@ -27,6 +28,7 @@ from apps.scheduling.services.invitations import invitation_body, invitation_htm
 
 DEADLINE = datetime(2026, 10, 9, 17, 0, tzinfo=UTC)
 NEW_YORK = ZoneInfo("America/New_York")
+NBSP = "\u00a0"
 
 
 class EmailDatetimeTests(SimpleTestCase):
@@ -252,7 +254,7 @@ class EventEmailTimeTests(TestCase):
         )
         self.assertNotIn("2026-10-09", body)
         self.assertIn(
-            ("Respond by", "Friday, October 9, 2026 at 1:00 PM EDT (America/New_York)"),
+            ("Respond by", f"Friday, October 9, 2026 at 1:00{NBSP}PM{NBSP}EDT (America/New_York)"),
             detail_rows(invitation_html_body(invitation)),
         )
 
@@ -262,8 +264,19 @@ class EventEmailTimeTests(TestCase):
             invitation_body(invitation),
         )
         self.assertIn(
-            ("Respond by", "Friday, October 9, 2026 at 5:00 PM UTC"),
+            ("Respond by", f"Friday, October 9, 2026 at 5:00{NBSP}PM{NBSP}UTC"),
             detail_rows(invitation_html_body(invitation, reminder=True)),
+        )
+
+    def test_only_the_html_parts_keep_times_on_one_line(self):
+        invitation = self.invitation()
+        self.assertNotIn(NBSP, invitation_body(invitation))
+        self.assertNotIn(NBSP, final_confirmation_body(self.event, self.meeting))
+        self.assertNotIn(NBSP, final_meeting_ics(self.event, self.meeting).content)
+        self.assertIn(f"1:00{NBSP}PM{NBSP}EDT", invitation_html_body(invitation))
+        self.assertIn(
+            f"10:00{NBSP}AM to 11:30{NBSP}AM{NBSP}EDT",
+            final_confirmation_html_body(self.event, self.meeting),
         )
 
     def test_confirmation_without_a_location_has_no_location_line_or_row(self):
@@ -279,7 +292,7 @@ class EventEmailTimeTests(TestCase):
         self.assertEqual(
             detail_rows(final_confirmation_html_body(self.event, self.meeting)),
             [
-                ("When", "Monday, September 28, 2026, 10:00 AM to 11:30 AM EDT"),
+                ("When", f"Monday, September 28, 2026, 10:00{NBSP}AM to 11:30{NBSP}AM{NBSP}EDT"),
                 ("Timezone", "America/New_York"),
                 ("Method", "Virtual"),
             ],
@@ -300,7 +313,7 @@ class EventEmailTimeTests(TestCase):
         self.assertEqual(
             detail_rows(final_confirmation_html_body(self.event, self.meeting)),
             [
-                ("When", "Monday, September 28, 2026, 2:00 PM to 3:30 PM UTC"),
+                ("When", f"Monday, September 28, 2026, 2:00{NBSP}PM to 3:30{NBSP}PM{NBSP}UTC"),
                 ("Timezone", "UTC"),
                 ("Method", "In person"),
                 ("Location", "Room 4B"),
@@ -330,3 +343,26 @@ class EventEmailTimeTests(TestCase):
             "DESCRIPTION:Planning\\, round 2 is no longer confirmed for Monday\\, September 28\\, "
             "2026\\, 2:00 PM to 3:30 PM UTC.",
         )
+
+
+class NowrapTimesTests(SimpleTestCase):
+    def test_a_time_its_period_and_its_zone_stay_together(self):
+        self.assertEqual(
+            nowrap_times("Monday, September 28, 2026, 10:00 AM to 11:00 AM EDT"),
+            f"Monday, September 28, 2026, 10:00{NBSP}AM to 11:00{NBSP}AM{NBSP}EDT",
+        )
+        self.assertEqual(
+            nowrap_times("Wednesday, July 1, 2026 at 12:00 PM UTC+04:00"),
+            f"Wednesday, July 1, 2026 at 12:00{NBSP}PM{NBSP}UTC+04:00",
+        )
+        self.assertEqual(
+            nowrap_times("Sunday, November 1, 2026 at 1:30 AM EST (America/New_York)"),
+            f"Sunday, November 1, 2026 at 1:30{NBSP}AM{NBSP}EST (America/New_York)",
+        )
+
+    def test_the_word_between_two_times_and_other_text_are_left_alone(self):
+        self.assertEqual(
+            nowrap_times("10:00 AM to 11:00 AM UTC"), f"10:00{NBSP}AM to 11:00{NBSP}AM{NBSP}UTC"
+        )
+        self.assertEqual(nowrap_times("Room 4B, AM wing"), "Room 4B, AM wing")
+        self.assertEqual(nowrap_times("America/New_York"), "America/New_York")

@@ -4,7 +4,8 @@ Previews build these messages through the same parts the send uses, so what
 they show is what is sent. The digests were first taken before those parts
 were factored out. They were refreshed when the confirmation and the calendar
 description changed from ISO timestamps and stored codes to readable times and
-labels; the cancellation email's text and HTML stayed the same.
+labels (the HTML keeps each time on one line with no-break spaces); the
+cancellation email's text and HTML stayed the same.
 """
 
 import hashlib
@@ -81,7 +82,7 @@ class FinalSendGoldenTests(TestCase):
                     "Event: https://app.releviz.test/event?code=GOLDFIN1\n\n"
                     "A calendar invitation is attached."
                 ),
-                "html": "ff9332d20b73c2469aa4e388b0869bff7c636f4762edb8dcfd6d23f866b1f043",
+                "html": "b78d93c35eacc3387c308fdcaabbf6ea607bc2c40adefa7cb7101a10778008b8",
                 "attachments": [
                     (
                         "releviz-GOLDFIN1-final.ics",
