@@ -82,6 +82,11 @@ urlpatterns = [
     path("events/lifecycle", views.EventLifecycleView.as_view(), name="api-event-lifecycle"),
     path("events/reminders", views.EventRemindersView.as_view(), name="api-event-reminders"),
     path(
+        "events/delivery-requests/<int:request_id>/retry-preview",
+        views.DeliveryRetryPreviewView.as_view(),
+        name="api-event-delivery-retry-preview",
+    ),
+    path(
         "events/delivery-requests/<int:request_id>",
         views.DeliveryRequestView.as_view(),
         name="api-event-delivery-request",
