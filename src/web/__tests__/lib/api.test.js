@@ -1838,16 +1838,11 @@ describe("business API helpers", () => {
       obsolete: 1,
       email,
     });
+    // A read of its own URL, never a POST to the retry: a server without the
+    // preview answers 404 instead of sending the failed emails again.
     expect(global.fetch).toHaveBeenLastCalledWith(
-      "/events/delivery-requests/delivery%201",
-      expect.objectContaining({
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: "Bearer tok",
-        },
-        body: JSON.stringify({ preview: true }),
-      }),
+      "/events/delivery-requests/delivery%201/retry-preview",
+      { headers: { Authorization: "Bearer tok" }, credentials: "include" },
     );
 
     // The real retry is unchanged: an empty body, no preview flag.

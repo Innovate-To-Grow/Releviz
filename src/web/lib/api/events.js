@@ -383,15 +383,13 @@ export async function retryDeliveryRequest(requestId, token) {
 
 // What "Retry failed recipients" would send, without sending it:
 // `{ preview: true, retryable, obsolete, email }`, where `email` is the first
-// failed email that would go out again (or null).
+// failed email that would go out again (or null). A read of its own URL, not
+// a flag on the retry: a server without the preview answers 404 here instead
+// of sending the failed emails again.
 export async function previewDeliveryRetry(requestId, token) {
   const res = await apiFetch(
-    `${API_BASE}/events/delivery-requests/${encodeURIComponent(requestId)}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ preview: true }),
-    },
+    `${API_BASE}/events/delivery-requests/${encodeURIComponent(requestId)}/retry-preview`,
+    {},
     token,
   );
   if (!res.ok) throw new Error(await extractError(res));

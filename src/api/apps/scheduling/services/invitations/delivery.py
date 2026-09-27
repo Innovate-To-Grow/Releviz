@@ -18,7 +18,12 @@ from .errors import EventEmailRequestError
 from .managed import create_or_reuse_managed_participant
 from .messages import event_email_parts
 from .previews import invitation_email_preview, no_email_preview
-from .reminders import enqueue_reminder_job, reminder_candidates, reminder_cycle
+from .reminders import (
+    cycle_reminder_job_ids,
+    enqueue_reminder_job,
+    reminder_candidates,
+    reminder_cycle,
+)
 
 security_logger = logging.getLogger("releviz.security")
 
@@ -646,11 +651,18 @@ def enqueue_manual_reminders(
             f"A reminder request can include at most {maximum} recipients.",
         )
 
-    jobs = []
+    # Nobody this cycle already reminded is emailed again, even when the
+    # reminder reads differently now: the rule the preview counts with. Their
+    # newest reminder stands for them in this request.
+    reminded = cycle_reminder_job_ids(event, [invitation.pk for invitation in invitations])
+    job_ids = []
     created_job_count = 0
     for invitation in invitations:
+        if invitation.pk in reminded:
+            job_ids.append(reminded[invitation.pk])
+            continue
         job, created = enqueue_reminder_job(invitation)
-        jobs.append(job)
+        job_ids.append(job.pk)
         created_job_count += int(created)
 
     request_record = EmailDeliveryRequest.objects.create(
@@ -659,17 +671,17 @@ def enqueue_manual_reminders(
         operation=EmailDeliveryRequest.Operation.REMINDER,
         idempotency_key=idempotency_key,
         request_fingerprint=fingerprint,
-        recipient_count=len(jobs),
+        recipient_count=len(job_ids),
         created_job_count=created_job_count,
     )
-    request_record.jobs.add(*jobs)
+    request_record.jobs.add(*job_ids)
     security_logger.info(
         "event_email_request_created",
         extra={
             "event_id": str(event.pk),
             "operation": EmailDeliveryRequest.Operation.REMINDER,
             "requested_by": str(requested_by.pk),
-            "recipient_count": len(jobs),
+            "recipient_count": len(job_ids),
             "created_job_count": created_job_count,
         },
     )

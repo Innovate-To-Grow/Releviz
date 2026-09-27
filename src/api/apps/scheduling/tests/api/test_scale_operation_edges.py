@@ -135,6 +135,7 @@ class ScaleOperationEdgeTests(TestCase):
                 event=self.event,
                 delivery_request=confirmation_request,
                 jobs=[missing_meeting_job],
+                lock=True,
             ),
             ([], [missing_meeting_job.pk]),
         )
@@ -176,6 +177,7 @@ class ScaleOperationEdgeTests(TestCase):
             event=self.event,
             delivery_request=confirmation_request,
             jobs=[current, stale_sequence, malformed, nonnumeric, wrong_type],
+            lock=True,
         )
         self.assertEqual(eligible, [current.pk])
         self.assertEqual(
@@ -204,6 +206,7 @@ class ScaleOperationEdgeTests(TestCase):
                 operation=EmailDeliveryRequest.Operation.FINAL_CANCELLATION
             ),
             jobs=[cancellation],
+            lock=True,
         )
         self.assertEqual(eligible, [cancellation.pk])
         self.assertEqual(obsolete, [])

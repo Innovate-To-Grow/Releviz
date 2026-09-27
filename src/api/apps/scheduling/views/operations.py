@@ -1,4 +1,4 @@
-"""Inspect and retry an email delivery request."""
+"""Inspect, preview, and retry an email delivery request."""
 
 from django.db import transaction
 from django.utils import timezone
@@ -25,15 +25,29 @@ def _calendar_job_sequence(job: EmailDeliveryJob, *, prefix: str, event: Event) 
         return None
 
 
-def _failed_jobs(delivery_request: EmailDeliveryRequest) -> list[EmailDeliveryJob]:
-    """The request's permanently failed emails, locked, in the order a retry queues them."""
+def _organizer_request(request, request_id):
+    """The delivery request, and a 404 unless the caller organizes its event."""
 
-    return list(
-        delivery_request.jobs.select_for_update(of=("self",))
-        .select_related("invitation")
+    delivery_request = (
+        EmailDeliveryRequest.objects.select_related("event").filter(pk=request_id).first()
+    )
+    if delivery_request is None or delivery_request.event.organizer_id != request.user.pk:
+        return None, Response({"error": "Delivery request not found"}, status=404)
+    return delivery_request, None
+
+
+def _failed_jobs(delivery_request: EmailDeliveryRequest, *, lock: bool) -> list[EmailDeliveryJob]:
+    """The request's permanently failed emails, in the order a retry queues them.
+
+    A retry locks them; a preview only reads them.
+    """
+
+    jobs = (
+        delivery_request.jobs.select_related("invitation")
         .filter(status=EmailDeliveryJob.Status.PERMANENT_FAILURE)
         .order_by("pk")
     )
+    return list(jobs.select_for_update(of=("self",)) if lock else jobs)
 
 
 def _retry_preview(event: Event, jobs: list[EmailDeliveryJob], eligible_ids, obsolete_ids):
@@ -54,7 +68,13 @@ def _retryable_job_ids(
     event: Event,
     delivery_request: EmailDeliveryRequest,
     jobs: list[EmailDeliveryJob],
+    lock: bool,
 ) -> tuple[list, list]:
+    """Which of ``jobs`` a retry sends again and which it cancels as no longer current.
+
+    The one rule for a retry and its preview; only a retry locks the meeting.
+    """
+
     eligible = []
     obsolete = []
     operation = delivery_request.operation
@@ -82,7 +102,8 @@ def _retryable_job_ids(
             (eligible if is_current else obsolete).append(job.pk)
         return eligible, obsolete
 
-    meeting = FinalMeeting.objects.select_for_update().filter(event=event).first()
+    meetings = FinalMeeting.objects.filter(event=event)
+    meeting = (meetings.select_for_update() if lock else meetings).first()
     if operation == EmailDeliveryRequest.Operation.FINAL_CONFIRMATION:
         expected_type = EmailMessageLog.MessageType.FINAL_CONFIRMATION
         prefix = "final-confirmation"
@@ -102,21 +123,36 @@ def _retryable_job_ids(
     return eligible, obsolete
 
 
+class DeliveryRetryPreviewView(APIView):
+    """What retrying a request's failed emails would do, without doing it.
+
+    A read of its own URL rather than a flag on the retry: a server that
+    predates the preview answers 404 here instead of sending the emails
+    again.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, request_id):
+        delivery_request, error = _organizer_request(request, request_id)
+        if error:
+            return error
+        event = delivery_request.event
+        jobs = _failed_jobs(delivery_request, lock=False)
+        eligible_ids, obsolete_ids = _retryable_job_ids(
+            event=event,
+            delivery_request=delivery_request,
+            jobs=jobs,
+            lock=False,
+        )
+        return private_response(_retry_preview(event, jobs, eligible_ids, obsolete_ids))
+
+
 class DeliveryRequestView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def _request(self, request, request_id):
-        delivery_request = (
-            EmailDeliveryRequest.objects.select_related("event").filter(pk=request_id).first()
-        )
-        if delivery_request is None:
-            return None, Response({"error": "Delivery request not found"}, status=404)
-        if delivery_request.event.organizer_id != request.user.pk:
-            return None, Response({"error": "Delivery request not found"}, status=404)
-        return delivery_request, None
-
     def get(self, request, request_id):
-        delivery_request, error = self._request(request, request_id)
+        delivery_request, error = _organizer_request(request, request_id)
         if error:
             return error
         return private_response(
@@ -136,19 +172,26 @@ class DeliveryRequestView(APIView):
         )
         if delivery_request is None or event.organizer_id != request.user.pk:
             return Response({"error": "Delivery request not found"}, status=404)
-        preview = request.data.get("preview", False)
-        if not isinstance(preview, bool):
-            return Response({"error": "preview must be a boolean."}, status=400)
-        retryable = _failed_jobs(delivery_request)
+        data = request.data
+        if isinstance(data, dict) and data.get("preview", False) is not False:
+            # Only the preview URL previews; this one always sends, so a
+            # client asking it for a preview is refused rather than obeyed.
+            return Response(
+                {
+                    "error": (
+                        f"Preview a retry with GET /events/delivery-requests/"
+                        f"{delivery_request.pk}/retry-preview."
+                    )
+                },
+                status=400,
+            )
+        retryable = _failed_jobs(delivery_request, lock=True)
         eligible_ids, obsolete_ids = _retryable_job_ids(
             event=event,
             delivery_request=delivery_request,
             jobs=retryable,
+            lock=True,
         )
-        if preview:
-            # The same failed emails and the same rules as the retry below;
-            # nothing is requeued, canceled, or touched.
-            return private_response(_retry_preview(event, retryable, eligible_ids, obsolete_ids))
         current_time = timezone.now()
         canceled = 0
         if obsolete_ids:

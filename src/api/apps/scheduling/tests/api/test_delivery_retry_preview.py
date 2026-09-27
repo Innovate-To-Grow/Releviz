@@ -61,6 +61,11 @@ class DeliveryRetryPreviewTests(TestCase):
             f"/events/delivery-requests/{delivery_request.pk}", payload, format="json"
         )
 
+    def preview(self, delivery_request):
+        """The preview has a URL of its own, so a server without it cannot retry instead."""
+
+        return self.client.get(f"/events/delivery-requests/{delivery_request.pk}/retry-preview")
+
     def jobs_state(self, delivery_request):
         return list(
             delivery_request.jobs.order_by("pk").values_list(
@@ -82,7 +87,7 @@ class DeliveryRetryPreviewTests(TestCase):
         state = self.jobs_state(delivery_request)
         request_updated = EmailDeliveryRequest.objects.get(pk=delivery_request.pk).updated_at
 
-        preview = self.retry(delivery_request, {"preview": True})
+        preview = self.preview(delivery_request)
 
         self.assertEqual(preview.status_code, 200, preview.data)
         self.assertIn("no-store", preview["Cache-Control"])
@@ -112,7 +117,7 @@ class DeliveryRetryPreviewTests(TestCase):
         self.assertEqual(retried.data["canceled"], preview.data["obsolete"])
 
         # Nothing failed is left, so there is nothing to preview.
-        empty = self.retry(delivery_request, {"preview": True})
+        empty = self.preview(delivery_request)
         self.assertEqual(
             empty.data,
             {"preview": True, "retryable": 0, "obsolete": 0, "email": None, "sample": None},
@@ -124,7 +129,7 @@ class DeliveryRetryPreviewTests(TestCase):
         self.event.status = Event.Status.CLOSED
         self.event.save(update_fields=["status", "updated_at"])
 
-        preview = self.retry(delivery_request, {"preview": True})
+        preview = self.preview(delivery_request)
 
         self.assertEqual(preview.status_code, 200, preview.data)
         self.assertEqual(preview.data["retryable"], 0)
@@ -174,7 +179,7 @@ class DeliveryRetryPreviewTests(TestCase):
         )
         delivery_request.jobs.add(job)
 
-        preview = self.retry(delivery_request, {"preview": True})
+        preview = self.preview(delivery_request)
 
         self.assertEqual(preview.status_code, 200, preview.data)
         self.assertEqual(preview.data["retryable"], 1)
@@ -192,12 +197,48 @@ class DeliveryRetryPreviewTests(TestCase):
             },
         )
 
-    def test_preview_flag_must_be_a_boolean_and_stays_private(self):
-        delivery_request = self.invite_everyone()
-        invalid = self.retry(delivery_request, {"preview": "yes"})
-        self.assertEqual(invalid.status_code, 400)
-        self.assertEqual(invalid.data["error"], "preview must be a boolean.")
+    def test_the_retry_url_never_answers_with_a_preview(self):
+        """Asking the retry itself for a preview is refused, and nothing is sent again."""
 
+        delivery_request = self.invite_everyone()
+        delivery_request.jobs.update(status=EmailDeliveryJob.Status.PERMANENT_FAILURE)
+        state = self.jobs_state(delivery_request)
+        for flag in [True, "yes"]:
+            with self.subTest(preview=flag):
+                refused = self.retry(delivery_request, {"preview": flag})
+                self.assertEqual(refused.status_code, 400, refused.data)
+                self.assertEqual(
+                    refused.data["error"],
+                    f"Preview a retry with GET /events/delivery-requests/"
+                    f"{delivery_request.pk}/retry-preview.",
+                )
+                self.assertEqual(self.jobs_state(delivery_request), state)
+        # The preview URL only reads.
+        self.assertEqual(
+            self.client.post(
+                f"/events/delivery-requests/{delivery_request.pk}/retry-preview", {}, format="json"
+            ).status_code,
+            405,
+        )
+        self.assertEqual(self.jobs_state(delivery_request), state)
+
+        # An explicit false is a plain retry, and so is a body that is not an
+        # object, which the retry has always ignored.
+        retried = self.retry(delivery_request, {"preview": False})
+        self.assertEqual(retried.status_code, 202, retried.data)
+        self.assertEqual(retried.data["retried"], 3)
+        delivery_request.jobs.update(status=EmailDeliveryJob.Status.PERMANENT_FAILURE)
+        listed = self.retry(delivery_request, [{"preview": True}])
+        self.assertEqual(listed.status_code, 202, listed.data)
+        self.assertEqual(listed.data["retried"], 3)
+
+    def test_preview_stays_private(self):
+        delivery_request = self.invite_everyone()
         self.authenticate(self.outsider)
-        hidden = self.retry(delivery_request, {"preview": True})
-        self.assertEqual(hidden.status_code, 404)
+        self.assertEqual(self.preview(delivery_request).status_code, 404)
+        self.authenticate(self.organizer)
+        missing = self.client.get(
+            f"/events/delivery-requests/{delivery_request.pk + 99}/retry-preview"
+        )
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(missing.data, {"error": "Delivery request not found"})
