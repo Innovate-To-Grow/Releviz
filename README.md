@@ -14,12 +14,13 @@ up to 1,000 people and 1,000 time slots.
 2. **Add participants.** Enter people one at a time in a side panel or import `.xlsx`/`.csv`
    through a four-step sheet, filter the list by group, response, or invitation state, change
    many people at once from the selection bar, and invite everyone not invited yet or send
-   reminders from the **Email** menu when you are ready.
+   reminders from the **Email** menu when you are ready. Every email is shown first exactly as
+   recipients will get it, and goes out only after a second confirmation.
 3. **Collect availability.** Each participant paints Busy / If needed / Available on a schedule
    grid. The organizer can also enter a schedule for anyone who has not responded themselves.
 4. **Pick a time.** The organizer dashboard ranks candidate windows by weighted availability, lets
    you include, exclude, or weight people and groups, and finalizes the meeting with an iCalendar
-   invitation.
+   invitation, again after you have reviewed the confirmation email.
 
 See the [user guide](docs/user-guide.md) for the full walkthrough.
 

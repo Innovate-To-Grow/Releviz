@@ -44,10 +44,11 @@ The **Participants** section of the organizer workspace is one list: each person
 their name, a contact line, their groups, a **Response** badge (**Submitted** or **Not
 submitted**), and an **Invitation** badge. The line under the heading counts people, submitted
 and not submitted responses, and groups. Adding people and sending invitations are separate
-steps, and nobody is emailed until you invite them: only **Add and send invitation**, an import
-with **Email invitations to the people this import adds** ticked, **Send invitation…** (in the
-selection bar or a row's **⋯** menu), and the **Email** menu send anything. Closed, finalized, and
-archived events show the list read-only until they are reactivated.
+steps, and nobody is emailed until you have seen the email and confirmed it: **Add and send
+invitation**, **Review and send invitations** at the end of an import, **Send invitation…** (in
+the selection bar or a row's **⋯** menu), and the **Email** menu all open the email review (see
+[Review before sending](#review-before-sending)). Closed, finalized, and archived events show the
+list read-only until they are reactivated.
 
 Above the list, the search box matches names, emails, phones, and groups; **Group:** narrows the
 list to one group (or **No group**); and **Filter** narrows it by response, invitation state, or
@@ -66,7 +67,10 @@ people you answer for. **Change deadline** opens the event settings.
 - **Add** (or pressing Enter) puts the person on the list without sending email. The panel stays
   open with a result line and an **Open** link, so several people can be entered one after
   another; **Done** closes it.
-- **Add and send invitation** also emails their secure link right away.
+- **Add and send invitation** adds the person the same way, then opens the review of their
+  invitation above the panel. The invitation goes out only once you confirm it, and the result
+  line then says it is queued. Closing the review leaves the person on the list without an
+  invitation, and the result line offers **Send invitation** for later.
 
 If the email already belongs to a Releviz account, that account is added. Until the person
 responds themselves, you can still enter their schedule with **Edit schedule**. An email that is
@@ -109,11 +113,12 @@ or your own row), offers **Edit schedule**, and groups everything about the pers
   identity) and keeps its name, groups, weight, and any schedule you entered; it gets a fresh
   invitation marked **Not sent**, the old link stops working, and any queued email to the old
   address is canceled. Adding an email to a person without one makes them an ordinary person you
-  can invite.
+  can invite. After saving a new address, the notice offers **Send invitation** for it.
 - **Groups**: the person's group chips and **+ Add to group**, which opens the group picker.
 - **In the results**: whether their answers are counted (**Count Ada's answers**, for someone
   called Ada) and their **Weight** (0 to 1).
-- **Invitation**: the current state with **Send invitation** or **Resend**.
+- **Invitation**: the current state with **Send invitation** or **Resend**, which open the email
+  review.
 
 **Save** sends only what changed, and closing with unsaved edits asks first. If someone else
 changed the row in the meantime, the row shows the latest values with **Apply again** and
@@ -140,20 +145,22 @@ steps:
 3. **Review**: every row with its status (**Ready**, **Needs fixing**, **Merged into row n**, or
    **Skipped**). Fix cells in place, untick rows to skip them, and use **Show** to see only the
    rows that need fixing. Then choose **Add and update people** (merge) or **Replace the whole
-   list** (rebuild), tick **Email invitations to the people this import adds** if they should be
-   emailed, and click **Import N people** (or **Replace the list with N people**); the button
-   adds **and send invitations** when the box is ticked.
+   list** (rebuild) and click **Import N people** (or **Replace the list with N people**).
    - Merging adds or updates people and keeps existing schedules and delivery history. A row's
      groups are added to the person's existing groups; an import never removes anyone from a
      group.
    - Rebuilding destructively replaces the participant list, schedules, invitations, temporary
-     sessions, and pending deliveries. You must type the event code to confirm.
-4. **Done**: what was imported and, when invitations were sent, how their delivery is going, with
-   **View progress**. **Back to participants** returns to the list, and **Import another list**
-   starts over.
+     sessions, and pending deliveries, and everyone starts as **Not sent**. You must type the
+     event code to confirm.
+4. **Done**: what was imported, ending with **No invitations were sent.** When the import put
+   people on the list who can be invited (those a merge added, or everyone a rebuild imported),
+   **Review and send invitations (N)…** closes the sheet and opens the invitation review for
+   exactly those people. **Back to participants** returns to the list without inviting anyone,
+   and **Import another list** starts over.
 
-People already on the participant list are never emailed again by an import, and people without
-an email of their own are never emailed at all.
+An import never emails anyone itself. People already on the participant list are not offered an
+invitation after a merge, and people without an email of their own and your own row are never
+emailed at all.
 
 Column rules:
 
@@ -172,6 +179,26 @@ Two rows for the same person (the same email, or the same name without an email)
 they are identical or differ only in their groups; the combined row gets all of those groups.
 Otherwise they are flagged as a conflicting duplicate.
 
+### Review before sending
+
+Every email you send to participants opens the same two-step dialog first: invitations,
+reminders, the confirmation sent when you finalize a meeting, the cancellation sent when you
+reopen a finalized event, and failed emails sent again. Nothing is sent until you have passed
+both steps, and closing the dialog at either step (**Cancel**, **×**, or Escape) sends nothing.
+Sign-in codes and other account emails are sent without it.
+
+1. **Review** says who gets the email and shows it exactly as the first of them receives it: the
+   **From**, **To**, **Subject**, and **Attachments** (such as the calendar file) lines, then the
+   email itself on the **Email** tab and its plain-text version on the **Plain text** tab. A note
+   under the envelope names the person it is shown for, for example **Shown for Ada Lovelace.
+   Each person gets their own private link.** In the preview that private link is a stand-in
+   ending in `invitation=preview`, so it never shows anyone's real link. **Continue** is
+   unavailable while the preview loads or when nobody would be emailed.
+2. **Confirm** asks once more, for example **Send 3 invitations now?**, with the subject and the
+   number of recipients. **Back** returns to the review, and the send button (**Send 3
+   invitations**) sends. Emails go out right away and can't be recalled. If sending fails, the
+   dialog stays on this step with the error, so you can try again or go back.
+
 ### Send invitations
 
 Invitations go to a selection or to everyone still uninvited:
@@ -180,19 +207,26 @@ Invitations go to a selection or to everyone still uninvited:
   extends that to everyone matching the filter), then click **Send invitation…** in the selection
   bar. One person's **⋯** menu has **Send invitation** or **Resend invitation** too.
 - The **Email** menu offers **Invite everyone not invited yet (N)…**.
+- **Add and send invitation** in the add panel, and **Review and send invitations (N)…** at the
+  end of an import, invite the people just added.
 
-Either way a confirmation says who gets an invitation now, who was already invited (tick **Email
-them again too** to resend; a resend keeps any custom message), who has no email of their own,
-and who is being emailed right now. Sending returns as soon as the invitation jobs are queued: a
-notice counts what was queued and skipped, and the delivery card at the top of the workspace
-follows the run.
+Each of these opens the [review](#review-before-sending). It says who gets an invitation now, who
+was already invited (tick **Email them again too** to include them; a resend keeps any custom
+message), who has no email of their own, and who is being emailed right now, above the invitation
+the first of them gets. **Send N invitations** on the confirmation step sends them. Sending
+returns as soon as the invitation jobs are queued: a notice counts what was queued and skipped,
+with **View progress**, and the delivery card at the top of the workspace follows the run.
 
 The **Invitation** badge on each row, which **Filter** also uses, shows:
 
 - **Not sent**: no email yet. These people get no reminders until they are invited.
 - **Sending…**: the email is queued or being handed to the provider.
 - **Failed**: the provider refused the email for good. The delivery card's **Show failed** filters
-  the list to these people, and **Retry failed recipients** queues them again.
+  the list to these people. **Retry failed recipients** opens the review with how many failed
+  emails will be sent again and the first of them exactly as it was written; failed emails the
+  event has moved past (to someone since removed, for a meeting time since changed, or for an
+  event no longer active) are canceled instead. **Send N again** on the confirmation step queues
+  them.
 - **Sent**: emailed, including opened.
 - **Accepted**: the person verified their link, joined, or saved or submitted their own response
   after the email. A response you enter for them does not count.
@@ -205,10 +239,14 @@ failed, and can then be dismissed.
 ### Reminders
 
 **Send reminders (N)…** in the **Email** menu emails everyone who was invited and has not
-submitted, after a confirmation that shows the count. People never invited, people without an
+submitted. It opens the [review](#review-before-sending) with how many get a reminder, how many
+were already reminded for this deadline and are skipped, and the reminder the first of them gets;
+**Send N reminders** on the confirmation step sends them. People never invited, people without an
 email, and you are skipped, as is anyone already reminded since the deadline was set. A response
 you submitted for someone counts as submitted. The menu also says when the next automatic
-reminder goes out (**Next automatic reminder: date**) or that **Reminders are off**.
+reminder goes out (**Next automatic reminder: date**) or that **Reminders are off**. While
+reminders are turned off in the event settings, **Send reminders** is unavailable too. Automatic
+reminders go out on their schedule without a review.
 
 ### Who can open an event
 
@@ -306,8 +344,18 @@ An open slot whose meeting window would run into a blocked time shows its percen
 start a meeting.
 
 **Finalize** fixes one continuous meeting time, emails an iCalendar invitation to participants, and
-offers the calendar file for download. Reactivating a finalized event emails a matching
-cancellation.
+offers the calendar file for download. Pick a window, click **Review attendance**, then **Finalize
+meeting**: the [review](#review-before-sending) counts the invited people who will receive the
+confirmation and shows the one the first of them gets, for the picked time and with its calendar
+file attached. Nothing is finalized until **Finalize and send N emails** on the confirmation step.
+Only people who were sent an invitation get the confirmation; when nobody was, the review says no
+confirmation emails will be sent, and **Finalize meeting** on the confirmation step finalizes
+without emailing anyone.
+
+Reactivating a finalized event (**Reactivate event**) cancels the meeting and emails a matching
+cancellation to everyone the confirmation reached. That email is reviewed first in the same way,
+and the event reopens only with **Reopen and send N emails**. When nobody received the
+confirmation, it reopens at once.
 
 While new responses are being processed, Results says it is updating and keeps showing the last
 completed results; once current, it shows when they were generated.
