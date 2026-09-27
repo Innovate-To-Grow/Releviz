@@ -85,7 +85,9 @@ describe("EmailPreview", () => {
     // nothing and nothing is requested.
     const branded =
       '<!doctype html>\n<html lang="en">\n  <HEAD data-x="1">\n    <meta charset="utf-8">\n  </HEAD>\n  <body><a href="https://example.com/event?invitation=preview">Share your availability</a></body>\n</html>';
-    const { rerender } = render(<EmailPreview email={email({ html: branded })} />);
+    const { rerender } = render(
+      <EmailPreview email={email({ html: branded })} />,
+    );
     const frame = screen.getByTitle("Email preview");
     // First in the head, so it is the base target and the rest of the
     // email is left as it was.
@@ -107,16 +109,13 @@ describe("EmailPreview", () => {
       ],
       ["<p>Hi</p>", '<base target="_blank"><p>Hi</p>'],
       // An element whose name starts with `head` is not the head.
-      [
-        "<header>Hi</header>",
-        '<base target="_blank"><header>Hi</header>',
-      ],
+      ["<header>Hi</header>", '<base target="_blank"><header>Hi</header>'],
     ];
     for (const [html, expected] of fragments) {
       rerender(<EmailPreview email={email({ html })} />);
-      expect(
-        screen.getByTitle("Email preview").getAttribute("srcdoc"),
-      ).toBe(expected);
+      expect(screen.getByTitle("Email preview").getAttribute("srcdoc")).toBe(
+        expected,
+      );
     }
   });
 
