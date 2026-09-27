@@ -6,6 +6,7 @@ import logging
 from django.conf import settings
 from django.db import transaction
 
+from apps.authn.models import ContactEmail
 from apps.mail.models import EmailDeliveryJob, EmailDeliveryRequest, EmailMessageLog
 from apps.mail.services import enqueue_email_job
 from apps.scheduling.models import Event, EventInvitation, Participant
@@ -330,6 +331,24 @@ def create_or_reuse_managed_participant_and_send(
     return result
 
 
+def _primary_addresses(member_ids) -> dict:
+    """Each member's primary contact address, keyed by member id, in one query.
+
+    The same address ``Member.get_primary_email`` returns: the oldest primary
+    contact email. Members without one are left out.
+    """
+
+    addresses = {}
+    contacts = (
+        ContactEmail.objects.filter(member_id__in=member_ids, email_type="primary")
+        .order_by("created_at")
+        .values_list("member_id", "email_address")
+    )
+    for member_id, address in contacts:
+        addresses.setdefault(member_id, address)
+    return addresses
+
+
 def _roster_recipients(
     event: Event,
     participants: list[Participant],
@@ -346,20 +365,24 @@ def _roster_recipients(
     an invitation already sent. Failed deliveries never reached the person,
     so a plain send tries them again. ``queued_invitation_ids`` are the
     invitations a replayed request queued itself; they count as its sends.
+
+    ``participants`` are roster rows (``roster_queryset``): each person's
+    latest invitation and where its newest email stands are read from the
+    row's annotations, so the send skips exactly the rows the listing shows
+    as sending. Someone with no invitation is emailed at their primary
+    address, looked up for the whole selection at once rather than one
+    person at a time under the event lock.
     """
 
-    latest_invitations = {}
-    for invitation in EventInvitation.objects.filter(
-        event=event,
-        member_id__in=[participant.member_id for participant in participants],
-    ).order_by("-created_at"):
-        latest_invitations.setdefault(invitation.member_id, invitation)
-    in_flight_invitation_ids = set(
-        EmailDeliveryJob.objects.filter(
-            invitation_id__in=[invitation.pk for invitation in latest_invitations.values()],
-            message_type=EmailMessageLog.MessageType.INVITATION,
-            status__in=EmailDeliveryJob.IN_FLIGHT_STATUSES,
-        ).values_list("invitation_id", flat=True)
+    # Imported lazily: the roster views import this package.
+    from apps.scheduling.views.roster.queries import DELIVERY_QUEUED
+
+    primary_addresses = _primary_addresses(
+        [
+            participant.member_id
+            for participant in participants
+            if participant.roster_invitation_id is None
+        ]
     )
 
     emails = []
@@ -369,19 +392,24 @@ def _roster_recipients(
         if participant.member_id == event.organizer_id:
             skipped["organizer"] += 1
             continue
-        invitation = latest_invitations.get(participant.member_id)
-        if invitation is not None:
-            email = invitation.email
-        else:
-            email = participant.member.get_primary_email().strip().lower()
-        if participant.organizer_managed or not email:
+        # Someone the organizer manages is filed under the organizer's own
+        # address and has none to resolve.
+        if participant.organizer_managed:
             skipped["noEmail"] += 1
             continue
-        if invitation is not None and invitation.pk not in queued_invitation_ids:
-            if invitation.pk in in_flight_invitation_ids:
+        invitation_id = participant.roster_invitation_id
+        if invitation_id is not None:
+            email = participant.roster_invitation_email
+        else:
+            email = primary_addresses.get(participant.member_id, "").strip().lower()
+        if not email:
+            skipped["noEmail"] += 1
+            continue
+        if invitation_id is not None and invitation_id not in queued_invitation_ids:
+            if participant.roster_invitation_delivery == DELIVERY_QUEUED:
                 skipped["inFlight"] += 1
                 continue
-            if invitation.first_sent_at is not None and not resend:
+            if participant.roster_invitation_first_sent is not None and not resend:
                 skipped["alreadyInvited"] += 1
                 continue
         emails.append(email)
