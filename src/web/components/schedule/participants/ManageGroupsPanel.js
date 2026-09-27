@@ -217,6 +217,7 @@ export default function ManageGroupsPanel({
   return (
     <>
       <Drawer
+        size="wide"
         title="Groups"
         subtitle="Groups are labels for filtering and changing many people at once. Results use each person's weight and whether they count."
         onClose={onClose}

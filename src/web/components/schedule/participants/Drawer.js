@@ -23,6 +23,7 @@ export default function Drawer({
   closeLabel = "Close",
   footer = null,
   className = "",
+  size = "narrow",
   bodyClassName = "",
   children,
   ...props
@@ -86,7 +87,7 @@ export default function Drawer({
       />
       <aside
         ref={drawerRef}
-        className={`app-drawer app-drawer--narrow participants-drawer ${className}`.trim()}
+        className={`app-drawer app-drawer--${size} participants-drawer ${className}`.trim()}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}

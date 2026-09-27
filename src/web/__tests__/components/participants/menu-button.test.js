@@ -210,3 +210,116 @@ describe("MenuButton", () => {
     expect(list[0].onSelect).toHaveBeenCalled();
   });
 });
+
+describe("MenuButton placement", () => {
+  function mockTrigger(rect, menuHeight = 120) {
+    const originalRect = HTMLElement.prototype.getBoundingClientRect;
+    const originalHeight = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      "offsetHeight",
+    );
+    HTMLElement.prototype.getBoundingClientRect = function () {
+      if (this.getAttribute("aria-haspopup") === "menu") {
+        return {
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          width: 0,
+          height: 0,
+          ...rect,
+        };
+      }
+      return originalRect.call(this);
+    };
+    Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+      configurable: true,
+      get() {
+        return this.getAttribute("role") === "menu" ? menuHeight : 0;
+      },
+    });
+    return () => {
+      HTMLElement.prototype.getBoundingClientRect = originalRect;
+      if (originalHeight)
+        Object.defineProperty(
+          HTMLElement.prototype,
+          "offsetHeight",
+          originalHeight,
+        );
+      else delete HTMLElement.prototype.offsetHeight;
+    };
+  }
+
+  afterEach(() => {
+    window.innerHeight = 768;
+    window.innerWidth = 1024;
+  });
+
+  test("fixes the menu below the trigger, aligned to its right edge", async () => {
+    const user = userEvent.setup();
+    window.innerHeight = 800;
+    window.innerWidth = 1200;
+    const restore = mockTrigger({
+      top: 100,
+      bottom: 130,
+      left: 900,
+      right: 960,
+    });
+    try {
+      render(<MenuButton label="Open menu" items={items()} />);
+      await user.click(trigger());
+      const menu = screen.getByRole("menu");
+      expect(menu).toHaveStyle({
+        position: "fixed",
+        top: "134px",
+        right: "240px",
+      });
+      expect(menu.style.bottom).toBe("");
+    } finally {
+      restore();
+    }
+  });
+
+  test("opens upward and aligns left when there is no room below", async () => {
+    const user = userEvent.setup();
+    window.innerHeight = 300;
+    window.innerWidth = 500;
+    const restore = mockTrigger({ top: 250, bottom: 280, left: 20, right: 60 });
+    try {
+      render(<MenuButton label="Open menu" align="start" items={items()} />);
+      await user.click(trigger());
+      const menu = screen.getByRole("menu");
+      expect(menu).toHaveStyle({
+        position: "fixed",
+        bottom: "54px",
+        left: "20px",
+      });
+      expect(menu.style.top).toBe("");
+    } finally {
+      restore();
+    }
+  });
+
+  test("follows the trigger on scroll and resize while open", async () => {
+    const user = userEvent.setup();
+    window.innerHeight = 800;
+    window.innerWidth = 1200;
+    const rect = { top: 100, bottom: 130, left: 900, right: 960 };
+    const restore = mockTrigger(rect);
+    try {
+      render(<MenuButton label="Open menu" items={items()} />);
+      await user.click(trigger());
+      rect.top = 40;
+      rect.bottom = 70;
+      fireEvent.scroll(window);
+      expect(screen.getByRole("menu")).toHaveStyle({ top: "74px" });
+      window.innerWidth = 1000;
+      fireEvent(window, new Event("resize"));
+      expect(screen.getByRole("menu")).toHaveStyle({ right: "40px" });
+      await user.click(trigger());
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    } finally {
+      restore();
+    }
+  });
+});

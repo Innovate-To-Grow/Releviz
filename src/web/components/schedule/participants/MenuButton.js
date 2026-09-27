@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import AppButton from "@/components/ui/AppButton";
 import { ChevronDownIcon } from "@/components/ui/icons";
 
@@ -79,7 +86,44 @@ export default function MenuButton({
   const { open, setOpen, close, rootRef, triggerRef, id, handleRootKeyDown } =
     usePopover();
   const focusOnOpenRef = useRef(null);
+  const menuRef = useRef(null);
+  const [menuStyle, setMenuStyle] = useState(null);
   const visibleItems = items.filter((item) => item && !item.hidden);
+
+  // The menu is fixed to the viewport so it can open past the edge of a
+  // scrolling table or drawer body instead of being clipped by it. It opens
+  // upward when there is no room below, and follows the trigger on scroll.
+  useLayoutEffect(() => {
+    if (!open) return undefined;
+    const place = () => {
+      const trigger = triggerRef.current;
+      const menu = menuRef.current;
+      if (!trigger || !menu) return;
+      const rect = trigger.getBoundingClientRect();
+      const menuHeight = menu.offsetHeight;
+      const viewportHeight = window.innerHeight;
+      const viewportWidth = window.innerWidth;
+      const below = rect.bottom + 4;
+      const openUp =
+        below + menuHeight > viewportHeight - 8 &&
+        rect.top - menuHeight - 4 > 8;
+      const style = { position: "fixed", zIndex: 1060 };
+      if (openUp) style.bottom = viewportHeight - rect.top + 4;
+      else style.top = below;
+      if (align === "end")
+        style.right = Math.max(8, viewportWidth - rect.right);
+      else style.left = Math.max(8, rect.left);
+      setMenuStyle(style);
+    };
+    place();
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => {
+      window.removeEventListener("scroll", place, true);
+      window.removeEventListener("resize", place);
+      setMenuStyle(null);
+    };
+  }, [open, align, triggerRef]);
 
   useEffect(() => {
     if (!open || !focusOnOpenRef.current) return;
@@ -157,6 +201,8 @@ export default function MenuButton({
       {open && (
         <div
           id={id}
+          ref={menuRef}
+          style={menuStyle || undefined}
           className={`dropdown-menu${align === "end" ? " dropdown-menu-end" : ""} show ${menuClassName}`.trim()}
           role="menu"
           aria-label={typeof label === "string" ? label : ariaLabel}

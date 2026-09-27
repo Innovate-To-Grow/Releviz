@@ -325,6 +325,10 @@
   width: min(100%, 30rem);
 }
 
+.app-drawer--wide {
+  width: min(100%, 42rem);
+}
+
 .participants-drawer__eyebrow {
   margin-bottom: 0.25rem;
 }

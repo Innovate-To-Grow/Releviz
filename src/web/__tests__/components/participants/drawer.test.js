@@ -132,3 +132,9 @@ describe("Drawer", () => {
       .forEach((button) => expect(button).toBeDisabled());
   });
 });
+
+test("renders the wide size on request", () => {
+  renderDrawer({ size: "wide" });
+  expect(screen.getByRole("dialog")).toHaveClass("app-drawer--wide");
+  expect(screen.getByRole("dialog")).not.toHaveClass("app-drawer--narrow");
+});
