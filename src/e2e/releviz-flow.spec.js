@@ -58,6 +58,110 @@ async function expectToast(page, text) {
   await expect(toast).toHaveCount(0);
 }
 
+// One line of the email preview's envelope (From, To, Subject, Attachments).
+function emailField(dialog, term) {
+  return dialog
+    .locator(".email-preview__field")
+    .filter({
+      has: dialog.page().locator("dt").getByText(term, { exact: true }),
+    })
+    .locator("dd");
+}
+
+// Every email the organizer sends goes through one two-step dialog. Step 1
+// (Review) says who gets it and shows the email the first of them receives:
+// the envelope, the HTML part in a sandboxed frame (no scripts, inert
+// links), and the plain-text part, both with a stand-in for that person's
+// private link. `expected` lists the summary lines, the envelope, the
+// rendered email's heading and call-to-action link, and text in the
+// plain-text part. Nothing has been sent at this point. Returns the envelope
+// as shown, to compare with the email that is delivered later.
+async function reviewEmail(dialog, expected) {
+  await expect(dialog.getByText("Step 1 of 2: Review")).toBeVisible();
+  await expect(
+    dialog.getByText("Check what people will receive before anything is sent."),
+  ).toBeVisible();
+  for (const line of expected.summary || []) {
+    await expect(dialog.getByText(line, { exact: true })).toBeVisible();
+  }
+  await expect(emailField(dialog, "From")).not.toBeEmpty();
+  await expect(emailField(dialog, "To")).toContainText(expected.to);
+  await expect(emailField(dialog, "Subject")).toHaveText(expected.subject);
+  if (expected.attachments) {
+    await expect(emailField(dialog, "Attachments")).toHaveText(
+      expected.attachments,
+    );
+  }
+  const frame = dialog.locator('iframe[title="Email preview"]');
+  await expect(frame).toHaveAttribute("sandbox", "");
+  const rendered = frame.contentFrame();
+  await expect(
+    rendered.getByRole("heading", { name: expected.heading }),
+  ).toBeVisible();
+  if (expected.link) {
+    const link = rendered.getByRole("link", {
+      name: expected.link.name,
+      exact: true,
+    });
+    await expect(link).toHaveAttribute("href", expected.link.href);
+  }
+  await dialog.getByRole("tab", { name: "Plain text" }).click();
+  const plainText = dialog.locator(".email-preview__text");
+  await expect(plainText).toBeVisible();
+  for (const part of expected.text || []) {
+    await expect(plainText).toContainText(part);
+  }
+  await dialog.getByRole("tab", { name: "Email", exact: true }).click();
+  await expect(frame).toBeVisible();
+  return {
+    from: (await emailField(dialog, "From").textContent()).trim(),
+    to: (await emailField(dialog, "To").textContent()).trim(),
+    subject: (await emailField(dialog, "Subject").textContent()).trim(),
+    text: await plainText.textContent(),
+  };
+}
+
+// The line of an email's plain-text part that starts with `label`.
+function textLine(text, label) {
+  return text.split(/\r?\n/).find((line) => line.startsWith(label)) || null;
+}
+
+// Step 2 (Confirm) of the email dialog: Continue moves focus to the
+// confirmation question, so a second Enter can't send by accident. Returns
+// the send button, which the caller clicks once it is ready to see the
+// request.
+async function continueToConfirm(dialog, question, sendLabel) {
+  await dialog.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(dialog.getByText("Step 2 of 2: Confirm")).toBeVisible();
+  await expect(dialog.getByRole("heading", { name: question })).toBeFocused();
+  const send = dialog.getByRole("button", { name: sendLabel, exact: true });
+  await expect(send).toBeEnabled();
+  return send;
+}
+
+// A header of a delivered email, with folded lines joined.
+function emailHeader(message, name) {
+  const prefix = `${name.toLowerCase()}:`;
+  const line = message
+    .replace(/\r?\n[ \t]+/g, " ")
+    .split(/\r?\n/)
+    .find((entry) => entry.toLowerCase().startsWith(prefix));
+  return line ? line.slice(prefix.length).trim() : null;
+}
+
+// The preview showed what the recipient got: the delivered email has the
+// same sender and subject, and goes to the address the preview named (shown
+// as `Name <address>` when the person's name is known).
+function expectDeliveredAsPreviewed(message, envelope, recipient) {
+  expect(emailHeader(message, "From")).toBe(envelope.from);
+  expect(emailHeader(message, "Subject")).toBe(envelope.subject);
+  expect(emailHeader(message, "To")).toBe(recipient);
+  const shownAddress = envelope.to.includes("<")
+    ? envelope.to.slice(envelope.to.indexOf("<") + 1, -1)
+    : envelope.to;
+  expect(shownAddress).toBe(recipient);
+}
+
 async function openAddPanel(page) {
   await participantActions(page)
     .getByRole("button", { name: "+ Add person" })
@@ -476,7 +580,7 @@ async function reviewAttendance(page) {
 }
 
 test.describe("Releviz account and scheduling flow", () => {
-  test("imports and auto-invites a roster, shares one temporary response, and upgrades it in place", async ({
+  test("imports a roster, reviews and sends its invitation, shares one temporary response, and upgrades it in place", async ({
     browser,
     page,
     request,
@@ -565,26 +669,87 @@ test.describe("Releviz account and scheduling flow", () => {
       temporaryEmail,
     );
     await expect(importSheet.getByText("Ready", { exact: true })).toBeVisible();
+    // An import never emails anyone itself: the Done step hands the people
+    // it added to the same review every invitation goes through.
+    await expect(
+      importSheet.getByLabel(
+        "Email invitations to the people this import adds",
+      ),
+    ).toHaveCount(0);
     await importSheet
-      .getByLabel("Email invitations to the people this import adds")
-      .check();
-    const invitationStartedAt = Date.now() - 1000;
-    await importSheet
-      .getByRole("button", { name: "Import 1 person and send invitations" })
+      .getByRole("button", { name: "Import 1 person", exact: true })
       .click();
     await expect(
       importSheet.getByText(
-        "Imported 1 people: 1 added, 0 updated. 1 invitation queued.",
+        "Imported 1 people: 1 added, 0 updated. No invitations were sent.",
       ),
     ).toBeVisible();
+    await expect(
+      importSheet.getByRole("button", { name: "Back to participants" }),
+    ).toBeVisible();
     await importSheet
-      .getByRole("button", { name: "Back to participants" })
+      .getByRole("button", { name: "Review and send invitations (1)…" })
       .click();
     await expect(importSheet).toHaveCount(0);
     await expectToast(
       page,
-      "Imported 1 people: 1 added, 0 updated. 1 invitation queued.",
+      "Imported 1 people: 1 added, 0 updated. No invitations were sent.",
     );
+
+    // The review shows Taylor's invitation as Taylor gets it, with a
+    // stand-in for the private link, and sends nothing on its own.
+    const importInviteDialog = page.getByRole("dialog", {
+      name: "Send invitations",
+    });
+    const previewLink = `${new URL(page.url()).origin}/temp-access?code=${eventCode}&invitation=preview`;
+    const invitationEnvelope = await reviewEmail(importInviteDialog, {
+      summary: ["1 will get an invitation now"],
+      to: `Temporary Taylor <${temporaryEmail}>`,
+      subject: `Share your availability for ${eventName}`,
+      heading: "You're invited",
+      link: { name: "Share your availability", href: previewLink },
+      text: [
+        `Link: ${previewLink}`,
+        "Open the link and enter the six-digit code sent to this email address.",
+      ],
+    });
+    await expect(
+      importInviteDialog.getByText(
+        "Shown for Temporary Taylor. Each person gets their own private link.",
+      ),
+    ).toBeVisible();
+    expect(
+      temporaryAccountState({ code: eventCode, email: temporaryEmail }),
+    ).toEqual(
+      expect.objectContaining({
+        invitationJobCount: 0,
+        invitationFirstSent: false,
+      }),
+    );
+    // Back leaves the confirmation without sending and returns to Continue.
+    await continueToConfirm(
+      importInviteDialog,
+      "Send 1 invitation now?",
+      "Send 1 invitation",
+    );
+    await expect(
+      importInviteDialog.getByText(
+        `Subject: Share your availability for ${eventName} · 1 recipient`,
+      ),
+    ).toBeVisible();
+    await importInviteDialog.getByRole("button", { name: "Back" }).click();
+    await expect(
+      importInviteDialog.getByRole("button", { name: "Continue" }),
+    ).toBeFocused();
+    const sendImportInvitation = await continueToConfirm(
+      importInviteDialog,
+      "Send 1 invitation now?",
+      "Send 1 invitation",
+    );
+    const invitationStartedAt = Date.now() - 1000;
+    await sendImportInvitation.click();
+    await expect(importInviteDialog).toHaveCount(0);
+    await expectToast(page, "Queued 1 invitation.");
     const eventDeliveryProgress = page.getByLabel("Event delivery progress");
     await expect(eventDeliveryProgress).toBeVisible();
 
@@ -642,6 +807,14 @@ test.describe("Releviz account and scheduling flow", () => {
       invitationStartedAt,
       (body) => body.includes(`/temp-access?code=${eventCode}`),
     );
+    // Taylor got the email the review showed, with a real private link in
+    // place of the preview's stand-in.
+    expectDeliveredAsPreviewed(
+      invitationEmail,
+      invitationEnvelope,
+      temporaryEmail,
+    );
+    expect(invitationEmail).not.toContain("invitation=preview");
     await expect(eventDeliveryProgress.getByText("1 sent")).toBeVisible({
       timeout: LIVE_SYNC_TIMEOUT_MS,
     });
@@ -984,9 +1157,35 @@ test.describe("Releviz account and scheduling flow", () => {
       beforeUpgrade.availabilityInperson,
     );
 
+    // Add and send invitation adds the person without emailing them and
+    // opens the invitation review above the panel. Closing the review
+    // leaves them added and uninvited, with Send invitation on the result.
     const addedEmail = `added-${runId}@example.com`;
     const addPanel = await openAddPanel(page);
-    await addPerson(addPanel, "Added Avery", addedEmail);
+    await addPanel
+      .getByRole("textbox", { name: "Full name" })
+      .fill("Added Avery");
+    await addPanel.getByRole("textbox", { name: "Email" }).fill(addedEmail);
+    await addPanel
+      .getByRole("button", { name: "Add and send invitation" })
+      .click();
+    const addInviteDialog = page.getByRole("dialog", {
+      name: "Send invitations",
+    });
+    await reviewEmail(addInviteDialog, {
+      summary: ["1 will get an invitation now"],
+      to: `Added Avery <${addedEmail}>`,
+      subject: `Share your availability for ${eventName}`,
+      heading: "You're invited",
+    });
+    await addInviteDialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(addInviteDialog).toHaveCount(0);
+    await expect(
+      addPanel.getByText("Added Avery was added. No invitation was sent."),
+    ).toBeVisible();
+    await expect(
+      addPanel.getByRole("button", { name: "Send invitation", exact: true }),
+    ).toBeVisible();
     await addPanel.getByRole("button", { name: "Done" }).click();
     await expect(addPanel).toHaveCount(0);
     // Adding someone never selects them, so a later Send invitation cannot
@@ -1023,8 +1222,8 @@ test.describe("Releviz account and scheduling flow", () => {
       }),
     );
 
-    // Selecting the row brings up the selection bar; sending previews who
-    // gets an email before anything goes out.
+    // Selecting the row brings up the selection bar; sending reviews who
+    // gets an email, and the email itself, before a second confirmation.
     await addedCard.getByLabel("Select Added Avery").check();
     const selectionBar = page.getByRole("region", { name: "Selected people" });
     await expect(selectionBar).toContainText("1 selected");
@@ -1032,10 +1231,18 @@ test.describe("Releviz account and scheduling flow", () => {
       .getByRole("button", { name: "Send invitation…" })
       .click();
     const sendDialog = page.getByRole("dialog", { name: "Send invitations" });
-    await expect(
-      sendDialog.getByText("1 will get an invitation now"),
-    ).toBeVisible();
-    await sendDialog.getByRole("button", { name: "Send 1 invitation" }).click();
+    await reviewEmail(sendDialog, {
+      summary: ["1 will get an invitation now"],
+      to: `Added Avery <${addedEmail}>`,
+      subject: `Share your availability for ${eventName}`,
+      heading: "You're invited",
+    });
+    const sendAveryInvitation = await continueToConfirm(
+      sendDialog,
+      "Send 1 invitation now?",
+      "Send 1 invitation",
+    );
+    await sendAveryInvitation.click();
     await expect(sendDialog).toHaveCount(0);
     await expectToast(page, "Queued 1 invitation.");
     await expect(selectionBar).toHaveCount(0);
@@ -1376,14 +1583,40 @@ test.describe("Releviz account and scheduling flow", () => {
     const organizerSession = await readSession(page);
 
     // The add panel stays open between people, so a list is entered in one
-    // go.
+    // go. Add and send invitation reviews the new person's invitation first
+    // and only sends it once that is confirmed.
+    const benEmail = `ben-${runId}@example.com`;
     const addPanel = await openAddPanel(page);
-    for (const [name, email] of [
-      ["Ada Typo", typoEmail],
-      ["Ben Leaving", `ben-${runId}@example.com`],
-    ]) {
-      await addPerson(addPanel, name, email);
-    }
+    await addPerson(addPanel, "Ada Typo", typoEmail);
+    await addPanel
+      .getByRole("textbox", { name: "Full name" })
+      .fill("Ben Leaving");
+    await addPanel.getByRole("textbox", { name: "Email" }).fill(benEmail);
+    await addPanel
+      .getByRole("button", { name: "Add and send invitation" })
+      .click();
+    const benInviteDialog = page.getByRole("dialog", {
+      name: "Send invitations",
+    });
+    await reviewEmail(benInviteDialog, {
+      summary: ["1 will get an invitation now"],
+      to: `Ben Leaving <${benEmail}>`,
+      subject: `Share your availability for Roster corrections ${runId}`,
+      heading: "You're invited",
+    });
+    const sendBenInvitation = await continueToConfirm(
+      benInviteDialog,
+      "Send 1 invitation now?",
+      "Send 1 invitation",
+    );
+    await sendBenInvitation.click();
+    await expect(benInviteDialog).toHaveCount(0);
+    await expect(
+      addPanel.getByText(
+        "Ben Leaving was added and their invitation is queued.",
+      ),
+    ).toBeVisible();
+    await expectToast(page, "Queued 1 invitation.");
 
     // The organizer answers too, under their own account, and is never
     // invited: their row opens straight in the schedule editor.
@@ -2184,8 +2417,8 @@ test.describe("Releviz account and scheduling flow", () => {
     );
 
     // Reminders go out from the Email menu, which says when the next
-    // automatic one is due, counts who would get one now and confirms first.
-    const reminderStartedAt = Date.now() - 1000;
+    // automatic one is due and counts who would get one now. The review
+    // shows the reminder the first of them gets, and a second step confirms.
     await participantActions(page)
       .getByRole("button", { name: "Email", exact: true })
       .click();
@@ -2194,14 +2427,31 @@ test.describe("Releviz account and scheduling flow", () => {
     );
     await page.getByRole("menuitem", { name: "Send reminders (1)…" }).click();
     const reminderDialog = page.getByRole("dialog", {
-      name: "Remind 1 invited people who haven't submitted?",
+      name: "Send reminders",
     });
-    await expect(reminderDialog).toContainText(
-      "People never invited, people without an email, and you are skipped.",
+    const reminderPreviewLink = `${new URL(page.url()).origin}/temp-access?code=${eventCode}&invitation=preview`;
+    const reminderEnvelope = await reviewEmail(reminderDialog, {
+      summary: [
+        "1 invited person who hasn't submitted will get a reminder",
+        "People never invited, people without an email, and you are skipped.",
+      ],
+      to: manualEmail,
+      subject: `Reminder: share your availability for ${eventName}`,
+      attachments: `releviz-${eventCode}-availability.ics`,
+      heading: "Availability reminder",
+      link: { name: "Share your availability", href: reminderPreviewLink },
+      text: ["Reminder:", `Link: ${reminderPreviewLink}`],
+    });
+    const sendReminder = await continueToConfirm(
+      reminderDialog,
+      "Remind 1 invited person who hasn't submitted?",
+      "Send 1 reminder",
     );
-    await reminderDialog
-      .getByRole("button", { name: "Send reminders" })
-      .click();
+    await expect(reminderDialog).toContainText(
+      "Anyone already reminded since the deadline was set isn't emailed again.",
+    );
+    const reminderStartedAt = Date.now() - 1000;
+    await sendReminder.click();
     await expect(reminderDialog).toHaveCount(0);
     await expectToast(page, "Queued 1 reminder.");
     // The background email worker may deliver before the panel renders, so
@@ -2218,6 +2468,8 @@ test.describe("Releviz account and scheduling flow", () => {
       (body) => body.includes("Reminder:") && body.includes("BEGIN:VCALENDAR"),
     );
     expect(reminder).toContain(`/temp-access?code=${eventCode}`);
+    expectDeliveredAsPreviewed(reminder, reminderEnvelope, manualEmail);
+    expect(reminder).not.toContain("invitation=preview");
     invitationState = await apiJson(
       request,
       "GET",
@@ -2628,14 +2880,52 @@ test.describe("Releviz account and scheduling flow", () => {
       await attendanceTable.getByRole("row").count(),
     ).toBeGreaterThanOrEqual(2);
 
+    // Finalizing emails everyone who was invited, so the confirmation is
+    // reviewed first (for the time being finalized, with its calendar
+    // invitation attached) and then confirmed a second time. Until then the
+    // event stays active.
+    await page
+      .locator("#organizer-finalize")
+      .getByRole("button", { name: "Finalize meeting" })
+      .click();
+    const firstFinalizeDialog = page.getByRole("dialog", {
+      name: "Finalize meeting",
+    });
+    const firstConfirmation = await reviewEmail(firstFinalizeDialog, {
+      summary: [
+        "2 invited people will receive the confirmation and a calendar invitation.",
+      ],
+      to: manualEmail,
+      subject: `Confirmed: ${eventName}`,
+      attachments: `releviz-${eventCode}-final.ics`,
+      heading: "Meeting confirmed",
+      text: [
+        `The final meeting time for ${eventName} is confirmed.`,
+        "Timezone: UTC",
+        "A calendar invitation is attached.",
+      ],
+    });
+    const finalizeFirst = await continueToConfirm(
+      firstFinalizeDialog,
+      "Finalize and email 2 people?",
+      "Finalize and send 2 emails",
+    );
+    const beforeFirstFinal = await apiJson(
+      request,
+      "GET",
+      `/events?code=${eventCode}`,
+      organizerSession.access,
+    );
+    expect(beforeFirstFinal.payload.event.status).toBe("active");
     const firstFinalStartedAt = Date.now() - 1000;
     const firstFinalResponsePromise = page.waitForResponse(
       (response) =>
         response.request().method() === "PUT" &&
         response.url().includes(`/events/finalization?code=${eventCode}`),
     );
-    await page.getByRole("button", { name: "Finalize meeting" }).click();
+    await finalizeFirst.click();
     expect((await firstFinalResponsePromise).status()).toBe(202);
+    await expect(firstFinalizeDialog).toHaveCount(0);
     await expect(
       page.getByText(
         "The meeting is finalized and calendar invitations are queued.",
@@ -2681,6 +2971,11 @@ test.describe("Releviz account and scheduling flow", () => {
         body.includes("METHOD:REQUEST"),
     );
     expect(manualFinal).toContain("X-WR-TIMEZONE:UTC");
+    // The confirmation that went out is the one reviewed, for the same time.
+    expectDeliveredAsPreviewed(manualFinal, firstConfirmation, manualEmail);
+    const previewedStart = textLine(firstConfirmation.text, "Starts: ");
+    expect(previewedStart).toBeTruthy();
+    expect(manualFinal).toContain(previewedStart);
 
     const downloadPromise = page.waitForEvent("download");
     await page
@@ -2721,15 +3016,51 @@ test.describe("Releviz account and scheduling flow", () => {
       )
       .toBe(1);
 
+    // Reopening a finalized event cancels its meeting and emails everyone
+    // the confirmation reached, so the cancellation is reviewed and
+    // confirmed first too. Until then the event stays finalized.
+    await page.getByRole("button", { name: "Reactivate event" }).click();
+    const reopenDialog = page.getByRole("dialog", {
+      name: "Reopen scheduling",
+    });
+    const cancellationEnvelope = await reviewEmail(reopenDialog, {
+      summary: [
+        "2 people who received the confirmation will be told the meeting is canceled.",
+      ],
+      to: manualEmail,
+      subject: `Scheduling reopened: ${eventName}`,
+      attachments: `releviz-${eventCode}-final.ics`,
+      heading: "Scheduling reopened",
+      text: [
+        `Scheduling for ${eventName} has reopened.`,
+        "The previously confirmed calendar invitation has been canceled.",
+      ],
+    });
+    const reopenAndSend = await continueToConfirm(
+      reopenDialog,
+      "Reopen and email 2 people?",
+      "Reopen and send 2 emails",
+    );
+    await expect(reopenDialog).toContainText(
+      "The confirmed meeting is canceled and responses open again.",
+    );
+    const beforeReopen = await apiJson(
+      request,
+      "GET",
+      `/events?code=${eventCode}`,
+      organizerSession.access,
+    );
+    expect(beforeReopen.payload.event.status).toBe("finalized");
     const cancellationStartedAt = Date.now() - 1000;
     const cancellationResponsePromise = page.waitForResponse(
       (response) =>
         response.request().method() === "PUT" &&
         response.url().includes(`/events/lifecycle?code=${eventCode}`),
     );
-    await page.getByRole("button", { name: "Reactivate event" }).click();
+    await reopenAndSend.click();
     const cancellationResponse = await cancellationResponsePromise;
     expect(cancellationResponse.status()).toBe(202);
+    await expect(reopenDialog).toHaveCount(0);
     // The suite's email worker dispatches queued jobs within half a second and
     // the progress widget re-reads the server after three, so the "queued"
     // state is too short-lived to assert in the UI on a slow browser (WebKit).
@@ -2771,6 +3102,17 @@ test.describe("Releviz account and scheduling flow", () => {
     );
     expect(cancellation).toContain(`UID:${calendarUid}`);
     expect(cancellation).toContain("SEQUENCE:1");
+    const manualCancellation = await latestEmailFor(
+      manualEmail,
+      cancellationStartedAt,
+      (body) =>
+        body.includes("Scheduling for") && body.includes("METHOD:CANCEL"),
+    );
+    expectDeliveredAsPreviewed(
+      manualCancellation,
+      cancellationEnvelope,
+      manualEmail,
+    );
 
     recomputeEventResults(eventCode);
     await openRankedWindows(page);
@@ -2787,14 +3129,40 @@ test.describe("Releviz account and scheduling flow", () => {
       "Ranked #3",
     );
     await reviewAttendance(page);
+    // The review follows the new pick: its confirmation is for Ranked #3.
+    await page
+      .locator("#organizer-finalize")
+      .getByRole("button", { name: "Finalize meeting" })
+      .click();
+    const secondFinalizeDialog = page.getByRole("dialog", {
+      name: "Finalize meeting",
+    });
+    const secondConfirmation = await reviewEmail(secondFinalizeDialog, {
+      summary: [
+        "2 invited people will receive the confirmation and a calendar invitation.",
+      ],
+      to: manualEmail,
+      subject: `Confirmed: ${eventName}`,
+      attachments: `releviz-${eventCode}-final.ics`,
+      heading: "Meeting confirmed",
+    });
+    const reviewedSecondStart = textLine(secondConfirmation.text, "Starts: ");
+    expect(reviewedSecondStart).toBeTruthy();
+    expect(reviewedSecondStart).not.toBe(previewedStart);
+    const finalizeSecond = await continueToConfirm(
+      secondFinalizeDialog,
+      "Finalize and email 2 people?",
+      "Finalize and send 2 emails",
+    );
     const secondFinalStartedAt = Date.now() - 1000;
     const secondFinalResponsePromise = page.waitForResponse(
       (response) =>
         response.request().method() === "PUT" &&
         response.url().includes(`/events/finalization?code=${eventCode}`),
     );
-    await page.getByRole("button", { name: "Finalize meeting" }).click();
+    await finalizeSecond.click();
     expect((await secondFinalResponsePromise).status()).toBe(202);
+    await expect(secondFinalizeDialog).toHaveCount(0);
     await expect(
       page.getByText(
         "The meeting is finalized and calendar invitations are queued.",
@@ -2823,6 +3191,7 @@ test.describe("Releviz account and scheduling flow", () => {
         body.includes("The final meeting time") && body.includes("SEQUENCE:2"),
     );
     expect(reconfirmation).toContain(`UID:${calendarUid}`);
+    expect(reconfirmation).toContain(reviewedSecondStart);
 
     const finalizedLock = await apiJson(
       request,

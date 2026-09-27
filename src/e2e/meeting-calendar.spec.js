@@ -80,8 +80,10 @@ async function pickCell(page, cell, expectedText) {
     .toContain(expectedText);
 }
 
-// Adds a managed participant and submits the given availability. `inperson`
-// and `virtual` list the slot indices the person is free for.
+// Adds a managed participant, without inviting them, and submits the given
+// availability. `inperson` and `virtual` list the slot indices the person is
+// free for. Nobody is invited, so finalizing never depends on how far the
+// email worker has got.
 async function submitResponse(
   request,
   token,
@@ -93,7 +95,12 @@ async function submitResponse(
     "POST",
     `/events/participants/managed?code=${event.code}`,
     token,
-    { name, email, idempotencyKey: crypto.randomUUID() },
+    {
+      name,
+      email,
+      sendInvitation: false,
+      idempotencyKey: crypto.randomUUID(),
+    },
   );
   expect(created.response.status()).toBe(201);
   const participant = created.payload.participant;
@@ -164,17 +171,39 @@ async function finalizeCurrentSelection(page, eventCode) {
       .locator("#organizer-finalize")
       .getByRole("table", { name: "Attendance by person" }),
   ).toBeVisible();
+  // Finalizing reviews the confirmation email before a second, explicit
+  // step. The people on these events were added without an invitation, so
+  // nobody would be emailed: the review says so and still lets the organizer
+  // finalize.
+  await page
+    .locator("#organizer-finalize")
+    .getByRole("button", { name: "Finalize meeting" })
+    .click();
+  const dialog = page.getByRole("dialog", { name: "Finalize meeting" });
+  await expect(dialog.getByText("Step 1 of 2: Review")).toBeVisible();
+  await expect(
+    dialog.getByText(
+      "Nobody has been invited by email, so no confirmation emails will be sent.",
+    ),
+  ).toBeVisible();
+  await expect(dialog.locator('iframe[title="Email preview"]')).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(
+    dialog.getByRole("heading", { name: "Finalize without emailing anyone?" }),
+  ).toBeFocused();
+  await expect(dialog.getByText("No emails will be sent.")).toBeVisible();
   const finalization = page.waitForResponse(
     (response) =>
       response.request().method() === "PUT" &&
       response.url().includes(`/events/finalization?code=${eventCode}`),
   );
-  await page.getByRole("button", { name: "Finalize meeting" }).click();
+  await dialog
+    .getByRole("button", { name: "Finalize meeting", exact: true })
+    .click();
   expect((await finalization).status()).toBe(202);
+  await expect(dialog).toHaveCount(0);
   await expect(
-    page.getByText(
-      "The meeting is finalized and calendar invitations are queued.",
-    ),
+    page.getByText("The meeting is finalized. Nobody was emailed."),
   ).toBeVisible();
 }
 
