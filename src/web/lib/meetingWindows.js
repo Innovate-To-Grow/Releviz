@@ -271,6 +271,60 @@ export function buildColumns({ groups, view, resolver }) {
     }));
 }
 
+/**
+ * The calendar columns a time can still be picked from without the calendar:
+ * each configured date, or each enabled weekday from yesterday (whose
+ * after-midnight slots can still be ahead) until `weeks` weeks from `today`
+ * (the event-local "YYYY-MM-DD"). Resolving boundaries is the costly part,
+ * and it depends on the day only, not on the minute.
+ */
+export function upcomingColumns({ groups, resolver, today, weeks = 4 }) {
+  if (groupKind(groups) !== "weekday") {
+    const columns = [];
+    for (let page = 0; page < pageCount(groups); page += 1) {
+      columns.push(...buildColumns({ groups, view: { page }, resolver }));
+    }
+    return columns;
+  }
+  if (!today) return [];
+  const from = addDays(today, -1);
+  const end = addDays(today, weeks * 7);
+  const columns = [];
+  for (
+    let weekStart = weekStartOf(from);
+    weekStart < end;
+    weekStart = addDays(weekStart, 7)
+  ) {
+    columns.push(
+      ...buildColumns({ groups, view: { weekStart }, resolver }).filter(
+        (column) => column.date >= from && column.date < end,
+      ),
+    );
+  }
+  return columns;
+}
+
+/** Of `columns`, the days with rows where a `k`-slot window can start. */
+export function startableRows(columns, k, now) {
+  return columns
+    .map((column) => ({
+      column,
+      rows: column.slots
+        .map((_slot, row) => row)
+        .filter((row) => cellState({ column, row, k, now }) === "startable"),
+    }))
+    .filter((day) => day.rows.length > 0);
+}
+
+/** Every day on which a `k`-slot meeting can still start (see above). */
+export function startableDays({ groups, k, now, resolver, today, weeks = 4 }) {
+  return startableRows(
+    upcomingColumns({ groups, resolver, today, weeks }),
+    k,
+    now,
+  );
+}
+
 export function pageCount(groups) {
   const dates = groups.filter((group) => group.kind === "date").length;
   return Math.max(1, Math.ceil(dates / COLUMNS_PER_PAGE));
@@ -399,12 +453,18 @@ function dayOffsetSuffix(offset) {
   return offset ? ` +${offset}d` : "";
 }
 
+/** A window's local times: "09:00–10:00", "23:30–00:30 +1d". */
+export function formatWindowTimes(slots) {
+  if (!slots?.length) return "";
+  const first = slots[0];
+  const last = slots[slots.length - 1];
+  return `${first.localStart}${dayOffsetSuffix(first.startDayOffset)}–${last.localEnd}${dayOffsetSuffix(last.endDayOffset)}`;
+}
+
 /** API-style label: "Mon 09:00–10:00", "Sat 23:30–00:30 +1d". */
 export function formatWindowLabel(column, slots) {
   if (!slots?.length) return column.groupLabel;
-  const first = slots[0];
-  const last = slots[slots.length - 1];
-  return `${column.groupLabel} ${first.localStart}${dayOffsetSuffix(first.startDayOffset)}–${last.localEnd}${dayOffsetSuffix(last.endDayOffset)}`;
+  return `${column.groupLabel} ${formatWindowTimes(slots)}`;
 }
 
 export function formatDateLabel(iso, timeZone) {
@@ -607,6 +667,23 @@ function sameIndices(first, second) {
   );
 }
 
+/**
+ * The listed recommendation that is exactly `window` (same channel, slots
+ * and start instant), or null: a pick of that window is that recommendation.
+ */
+export function recommendationForWindow(recommendations, channel, window) {
+  if (!window?.slotIndices) return null;
+  return (
+    (recommendations || []).find(
+      (candidate) =>
+        candidate.channel === channel &&
+        sameIndices(candidate.slotIndices, window.slotIndices) &&
+        Date.parse(candidate.suggestedStartsAt || candidate.startsAt) ===
+          Date.parse(window.startsAt),
+    ) || null
+  );
+}
+
 export function selectionFromWindow({
   column,
   row,
@@ -620,13 +697,7 @@ export function selectionFromWindow({
   if (window.error) return null;
   const timeZone = event?.timezone || "UTC";
   const slots = column.slots.slice(row, row + k);
-  const match = (recommendations || []).find(
-    (candidate) =>
-      candidate.channel === channel &&
-      sameIndices(candidate.slotIndices, window.slotIndices) &&
-      Date.parse(candidate.suggestedStartsAt || candidate.startsAt) ===
-        Date.parse(window.startsAt),
-  );
+  const match = recommendationForWindow(recommendations, channel, window);
   if (match) {
     return {
       ...selectionFromRecommendation(match, event),
@@ -692,6 +763,26 @@ function rowOfIndex(column, index) {
 }
 
 /** Ranked windows that fall on the visible columns (weekly blocks repeat every week). */
+/**
+ * The ranked windows a results snapshot offers, as the API listed them. A
+ * snapshot ranked before rule version 2 (served while it is recomputed, or
+ * after a failed recompute) padded its list to ten with windows nobody can
+ * attend; those are dropped here so they are never offered or outlined.
+ */
+export function rankedRecommendations(results) {
+  const recommendations = Array.isArray(results?.recommendations)
+    ? results.recommendations
+    : [];
+  if (Number(results?.recommendationBasis?.ruleVersion) >= 2)
+    return recommendations;
+  return recommendations.filter((recommendation) => {
+    const score = Number(
+      recommendation.weightedAvailability ?? recommendation.weightedScore,
+    );
+    return !(Number.isFinite(score) && score <= 0);
+  });
+}
+
 export function recommendationBlocks(recommendations, columns, channel) {
   const blocks = [];
   (recommendations || []).forEach((recommendation) => {

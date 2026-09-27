@@ -906,7 +906,9 @@ code {
   transition: transform 150ms ease;
 }
 
-.disclosure[open] .disclosure__chevron {
+/* Only the disclosure's own chevron: a closed one nested inside an open one
+   keeps pointing down. */
+.disclosure[open] > summary .disclosure__chevron {
   transform: rotate(180deg);
 }
 

@@ -1,6 +1,12 @@
 const { expect, test } = require("@playwright/test");
 const { expectAccessible } = require("./helpers/accessibility");
-const { apiJson, createEvent, readSession, registerAccount } = require("./helpers/releviz");
+const {
+  apiJson,
+  createEvent,
+  openBlockedTimes,
+  readSession,
+  registerAccount,
+} = require("./helpers/releviz");
 
 test.use({ viewport: { width: 320, height: 720 } });
 
@@ -117,6 +123,26 @@ test.describe("automated accessibility baseline", () => {
 
       await expectNoHorizontalScroll(page, "organizer workspace at 375px");
       await expectAccessible(page, "organizer workspace at 375px");
+
+      // Painting blocked times on the calendar at phone width: the step opens
+      // without widening the page, a tap paints, and the page stays clean.
+      await openBlockedTimes(page);
+      await expect(
+        page.getByRole("grid", { name: /marking blocked times$/ })
+      ).toBeVisible();
+      await expectNoHorizontalScroll(page, "organizer workspace at 375px while painting");
+      // Pin the cell by index: once painted it no longer matches an "open"
+      // locator.
+      const firstOpenIndex = await page
+        .locator('[data-blocked-paint="false"]')
+        .first()
+        .getAttribute("data-cell-idx");
+      const tappedCell = page.locator(`[data-cell-idx="${firstOpenIndex}"]`);
+      await tappedCell.scrollIntoViewIfNeeded();
+      const cellBox = await tappedCell.boundingBox();
+      await page.touchscreen.tap(cellBox.x + cellBox.width / 2, cellBox.y + cellBox.height / 2);
+      await expect(tappedCell).toHaveAttribute("data-blocked-paint", "true");
+      await expectAccessible(page, "organizer workspace at 375px, marking blocked times");
     });
 
     // Every organizer email is reviewed in a two-step dialog before it goes

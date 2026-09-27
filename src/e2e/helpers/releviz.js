@@ -326,19 +326,44 @@ function recomputeEventResults(eventCode) {
   runBackendCommand("recompute_event_results", `--event-code=${eventCode}`);
 }
 
-// The ranked list beside the calendar starts collapsed; open it on demand.
-async function openRankedWindows(page) {
-  const details = page
-    .getByRole("complementary", { name: "Ranked windows" })
-    .locator("details");
+// The recommended times are a collapsed list inside the Finalize step; open
+// Finalize first, then the list (the calendar outlines the recommended times
+// only while the list is open).
+async function openRecommendedTimes(page) {
+  const finalize = page.locator("details#organizer-finalize");
+  if ((await finalize.getAttribute("open")) === null) {
+    await finalize.locator("> summary").click();
+  }
+  await expect(finalize).toHaveAttribute("open", "");
+  const details = page.locator("details.organizer-recommended-times");
+  if ((await details.getAttribute("open")) === null) {
+    await details.locator("> summary").click();
+  }
+  await expect(details).toHaveAttribute("open", "");
+}
+
+// The Blocked times step under the calendar starts closed; while it is open
+// the meeting calendar is the paint surface for blocked times.
+async function openBlockedTimes(page) {
+  const details = page.locator("details.organizer-blocked-times");
   if ((await details.getAttribute("open")) === null) {
     await details.locator("summary").click();
   }
   await expect(details).toHaveAttribute("open", "");
 }
 
+async function closeBlockedTimes(page) {
+  const details = page.locator("details.organizer-blocked-times");
+  if ((await details.getAttribute("open")) !== null) {
+    await details.locator("summary").click();
+  }
+  await expect(details).not.toHaveAttribute("open", "");
+}
+
 module.exports = {
-  openRankedWindows,
+  closeBlockedTimes,
+  openBlockedTimes,
+  openRecommendedTimes,
   ADMIN_EMAIL,
   ADMIN_PASSWORD,
   BACKEND_URL,

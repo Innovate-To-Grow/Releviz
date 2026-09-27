@@ -14,7 +14,17 @@ from apps.scheduling.services.slots import (
     valid_localizations,
 )
 
+# A ceiling, not a target: the list is as long as the good options are.
 MAX_RECOMMENDATIONS = 10
+# A window is listed only while it is at least this share of the best score.
+RELATIVE_SCORE_FLOOR = 0.5
+# Absorbs float noise in the floor test, so an exact half is always kept.
+SCORE_EPSILON = 1e-9
+# Scores are sorted at this many decimals, so windows that tie exactly
+# (0.1 + 0.2 against 0.3 of the weight, say) fall through to the tie-breaks.
+SORT_PRECISION = 9
+# Stamped on every basis; a cached snapshot with another stamp is recomputed.
+RECOMMENDATION_RULE_VERSION = 2
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -122,6 +132,37 @@ def _sliding_window_minima(values: list[float], slots, window_size: int) -> list
     return minima
 
 
+def _recommendation(event, candidate) -> dict:
+    """The published dict for one selected window (keys unchanged since v1)."""
+
+    channel, group, slots, (starts_at, ends_at), weighted, unweighted, metric = candidate[1:]
+    first_slot = slots[0]
+    last_slot = slots[-1]
+    return {
+        "channel": channel,
+        "slotIndex": first_slot.index,
+        "endSlotIndex": last_slot.index,
+        "slotIndices": [slot.index for slot in slots],
+        "durationMinutes": _meeting_duration_minutes(event),
+        "groupKey": group.key,
+        "groupLabel": group.label,
+        "weekday": group.weekday,
+        "date": group.date_value,
+        "localStart": first_slot.local_start,
+        "localEnd": last_slot.local_end,
+        "startDayOffset": first_slot.start_day_offset,
+        "endDayOffset": last_slot.end_day_offset,
+        "suggestedStartsAt": starts_at.isoformat(),
+        "suggestedEndsAt": ends_at.isoformat(),
+        "label": _window_label(group, slots),
+        "weightedAvailability": round(weighted, 4),
+        "unweightedAvailability": round(unweighted, 4),
+        "fullyAvailableParticipantTotal": metric["fullyAvailable"],
+        "partiallyAvailableParticipantTotal": metric["partiallyAvailable"],
+        "unavailableParticipantTotal": metric["unavailable"],
+    }
+
+
 def build_ranked_recommendations(
     event,
     *,
@@ -129,6 +170,17 @@ def build_ranked_recommendations(
     channel_results: dict,
     now: datetime | None = None,
 ) -> tuple[list[dict], dict]:
+    """Rank the meeting windows worth offering, best first.
+
+    Every window of the meeting's length is scored per participant by their
+    lowest availability inside it. The list then keeps only windows that
+    (1) someone with a weight above 0 can attend for all of it, (2) score at
+    least ``RELATIVE_SCORE_FLOOR`` of the best window, and (3) share no slot
+    with a better listed window in the same channel, up to
+    ``MAX_RECOMMENDATIONS``. So its length follows the data: one clear winner
+    lists one window, and 0% windows never pad the list.
+    """
+
     counted = classified["counted"]
     duration_minutes = _meeting_duration_minutes(event)
     duration_is_valid = (
@@ -136,6 +188,7 @@ def build_ranked_recommendations(
     )
     window_size = duration_minutes // event.slot_minutes if duration_is_valid else 0
     basis = {
+        "ruleVersion": RECOMMENDATION_RULE_VERSION,
         "candidateDurationMinutes": duration_minutes,
         "candidateSlotTotal": window_size,
         "maximumRecommendations": MAX_RECOMMENDATIONS,
@@ -147,6 +200,21 @@ def build_ranked_recommendations(
             "mostFullyAvailableParticipants",
             "earliestConfiguredTime",
         ],
+        "selection": [
+            "someoneWhoCountsCanAttend",
+            "atLeastHalfOfBest",
+            "noSharedSlotWithinChannel",
+            "maximumRecommendations",
+        ],
+        "relativeScoreFloor": RELATIVE_SCORE_FLOOR,
+        "candidateTotal": 0,
+        "viableWindowTotal": 0,
+        "qualifyingWindowTotal": 0,
+        "bestWeightedAvailability": None,
+        "weightedAvailabilityFloor": None,
+        "nextWeightedAvailability": None,
+        "listEnd": None,
+        "zeroWeightOnlyAvailability": False,
         "status": "waiting_for_submissions" if not counted else "ready",
     }
     if not counted:
@@ -167,7 +235,9 @@ def build_ranked_recommendations(
     }
     counted_total = len(counted)
     total_weight = sum(entry["weight"] for entry in counted if entry["weight"] > 0)
-    candidates = []
+    candidate_total = 0
+    zero_weight_only = False
+    viable = []
 
     for channel in channel_results:
         for group, run in open_runs:
@@ -215,51 +285,95 @@ def build_ranked_recommendations(
             ):
                 if suggestion is None:
                     continue
-                starts_at, ends_at = suggestion
+                candidate_total += 1
                 raw_weighted_score = metric["weightedTotal"] / total_weight if total_weight else 0.0
                 raw_unweighted_score = metric["unweightedTotal"] / counted_total
-                first_slot = slots[0]
-                last_slot = slots[-1]
-                candidates.append(
-                    {
-                        "channel": channel,
-                        "slotIndex": first_slot.index,
-                        "endSlotIndex": last_slot.index,
-                        "slotIndices": [slot.index for slot in slots],
-                        "durationMinutes": duration_minutes,
-                        "groupKey": group.key,
-                        "groupLabel": group.label,
-                        "weekday": group.weekday,
-                        "date": group.date_value,
-                        "localStart": first_slot.local_start,
-                        "localEnd": last_slot.local_end,
-                        "startDayOffset": first_slot.start_day_offset,
-                        "endDayOffset": last_slot.end_day_offset,
-                        "suggestedStartsAt": starts_at.isoformat(),
-                        "suggestedEndsAt": ends_at.isoformat(),
-                        "label": _window_label(group, slots),
-                        "weightedAvailability": round(raw_weighted_score, 4),
-                        "unweightedAvailability": round(raw_unweighted_score, 4),
-                        "fullyAvailableParticipantTotal": metric["fullyAvailable"],
-                        "partiallyAvailableParticipantTotal": metric["partiallyAvailable"],
-                        "unavailableParticipantTotal": metric["unavailable"],
-                        "_sort": (
-                            -raw_weighted_score,
-                            -raw_unweighted_score,
+                # Viable only when someone with a weight above 0 has a value
+                # above 0 in every slot: a sum of non-negative terms is 0 only
+                # when every term is. Weight-0 availability alone never counts.
+                if raw_weighted_score <= 0:
+                    zero_weight_only = zero_weight_only or raw_unweighted_score > 0
+                    continue
+                viable.append(
+                    (
+                        (
+                            -round(raw_weighted_score, SORT_PRECISION),
+                            -round(raw_unweighted_score, SORT_PRECISION),
                             -metric["fullyAvailable"],
-                            first_slot.index,
+                            slots[0].index,
                             channel_positions[channel],
                             position,
                         ),
-                    }
+                        channel,
+                        group,
+                        slots,
+                        suggestion,
+                        raw_weighted_score,
+                        raw_unweighted_score,
+                        metric,
+                    )
                 )
 
-    candidates.sort(key=lambda candidate: candidate["_sort"])
-    recommendations = []
-    for rank, candidate in enumerate(candidates[:MAX_RECOMMENDATIONS], start=1):
-        candidate.pop("_sort")
-        candidate["rank"] = rank
-        recommendations.append(candidate)
-    if not recommendations:
+    basis["candidateTotal"] = candidate_total
+    basis["viableWindowTotal"] = len(viable)
+    if not candidate_total:
         basis["status"] = "no_future_slots"
+        return [], basis
+    if not total_weight:
+        basis["status"] = "no_weighted_responses"
+        return [], basis
+    if not viable:
+        basis["status"] = "no_viable_windows"
+        basis["zeroWeightOnlyAvailability"] = zero_weight_only
+        return [], basis
+
+    # The sort key is a strict total order, so the list is deterministic.
+    viable.sort(key=lambda candidate: candidate[0])
+    best = viable[0][5]
+    floor = RELATIVE_SCORE_FLOOR * best
+    claimed = {channel: set() for channel in channel_results}
+    selected = []
+    qualifying = 0
+    next_score = None
+    for position, candidate in enumerate(viable):
+        channel, slots, weighted = candidate[1], candidate[3], candidate[5]
+        if weighted < floor - SCORE_EPSILON:
+            # Everything from here on scores no higher; note the first one
+            # that shares no slot with a claimed window (a genuinely new time).
+            next_score = next(
+                (
+                    rest[5]
+                    for rest in viable[position:]
+                    if claimed[rest[1]].isdisjoint(slot.index for slot in rest[3])
+                ),
+                None,
+            )
+            break
+        indices = {slot.index for slot in slots}
+        # A window that shares any slot with a better one in its channel is
+        # not listed, so outlines never overlap on the calendar; the same
+        # time in the other channel is a distinct option.
+        if not claimed[channel].isdisjoint(indices):
+            continue
+        claimed[channel].update(indices)
+        qualifying += 1
+        if len(selected) < MAX_RECOMMENDATIONS:
+            selected.append(candidate)
+
+    recommendations = []
+    for rank, candidate in enumerate(selected, start=1):
+        recommendation = _recommendation(event, candidate)
+        recommendation["rank"] = rank
+        recommendations.append(recommendation)
+    basis["qualifyingWindowTotal"] = qualifying
+    basis["bestWeightedAvailability"] = round(best, 4)
+    basis["weightedAvailabilityFloor"] = round(floor, 4)
+    if qualifying > len(selected):
+        basis["listEnd"] = "limit"
+    elif next_score is not None:
+        # Only when the floor ended the list: the best time left out.
+        basis["listEnd"] = "belowFloor"
+        basis["nextWeightedAvailability"] = round(next_score, 4)
+    else:
+        basis["listEnd"] = "noMoreWindows"
     return recommendations, basis

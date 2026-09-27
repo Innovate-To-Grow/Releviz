@@ -13,7 +13,7 @@ import {
 import RosterPanel from "@/components/schedule/RosterPanel";
 import Alert from "@/components/ui/Alert";
 import LoadingState from "@/components/ui/LoadingState";
-import { CalendarIcon, ResultsIcon, RosterIcon } from "@/components/ui/icons";
+import { CalendarIcon, RosterIcon, TimeTableIcon } from "@/components/ui/icons";
 import {
   fetchEvent,
   fetchEventActivity,
@@ -29,11 +29,13 @@ import {
 import { connectLiveStream } from "@/lib/liveStream";
 import { selectionFromRecommendation } from "@/lib/meetingWindows";
 
-// Workspace order: event facts, then the meeting-time calendar with its
-// ranked windows and confirmation step, then the roster that feeds them.
+// Workspace order: event facts, then the time table (the meeting-time
+// calendar with its blocked times and confirmation step, which holds the
+// recommended times, tucked under it), then the roster that feeds them. The anchor keeps its
+// original id so existing links to it still work.
 const SECTION_LINKS = [
   { id: "overview", label: "Overview", Icon: CalendarIcon },
-  { id: "results", label: "Results", Icon: ResultsIcon },
+  { id: "results", label: "Time Table", Icon: TimeTableIcon },
   { id: "roster", label: "Participants", Icon: RosterIcon },
 ];
 const SECTION_IDS = SECTION_LINKS.map((section) => section.id);
@@ -97,16 +99,31 @@ function readStoredDeliveryRequest(eventCode) {
   }
 }
 
-// Brings the Finalize step into view (only as far as needed: it sits beside
-// the calendar, so a pick usually leaves it already visible) and focuses it.
+// Brings the pick into view (only as far as needed: the Finalize step sits
+// right under the calendar and has just opened itself on the pick) and
+// focuses the step's heading. It scrolls to the pick's own content, not the
+// whole step: with the Recommended times open above it, the step is taller
+// than a phone screen and its top would leave the pick below the fold.
 function focusFinalizeStep(headingRef) {
+  // With a picker open the calendar is pinned above the step: the page's
+  // scroll-padding keeps clear of it, so a plain focus scroll lands the
+  // heading in view below it.
+  const pinned = document.querySelector(
+    ".meeting-results--pinned > .meeting-calendar",
+  );
+  if (pinned && window.getComputedStyle(pinned).position === "sticky") {
+    headingRef.current?.focus();
+    return;
+  }
   const reducedMotion =
     typeof window !== "undefined" &&
     window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-  document.getElementById("organizer-finalize")?.scrollIntoView({
-    behavior: reducedMotion ? "auto" : "smooth",
-    block: "nearest",
-  });
+  document
+    .querySelector("#organizer-finalize .finalize-block__body")
+    ?.scrollIntoView({
+      behavior: reducedMotion ? "auto" : "smooth",
+      block: "nearest",
+    });
   headingRef.current?.focus({ preventScroll: true });
 }
 
@@ -200,10 +217,16 @@ export default function OrganizerScaleView() {
     return () => clearTimeout(timer);
   }, [event.code]);
 
-  // Picking a window (from the calendar or the ranked list) hands the
-  // organizer straight to the confirmation step.
+  // A calendar pick hands the organizer straight to the confirmation step,
+  // which opens on the pick. A recommended or other time is chosen from
+  // inside that step already, so focus stays where the organizer chose it.
   useEffect(() => {
-    if (!selection) return;
+    if (
+      !selection ||
+      selection.source === "recommendation" ||
+      selection.source === "picker"
+    )
+      return;
     focusFinalizeStep(finalizeHeadingRef);
   }, [selection]);
 
@@ -518,6 +541,7 @@ export default function OrganizerScaleView() {
             onDeliveryRequest={setDeliveryRequest}
             onChoose={handleChoose}
             onSelect={setSelection}
+            onEventSaved={handleEventSaved}
           />
         </section>
 

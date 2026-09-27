@@ -42,13 +42,8 @@ function cellGlyph(level) {
  * Organizer-blocked slots (`slot.blocked`) keep their grid position and index
  * but render as inert grey-striped cells: no availability colour or glyph
  * (whatever value is stored at that index), no tab stop, no pointer or
- * keyboard handlers, and strokes and arrow keys pass over them.
- *
- * `blockedEditing` turns the grid into the organizer's blocked-times editor:
- * `slot.blocked` is ignored because `schedule` IS the block map being edited
- * (any value > 0 marks the slot blocked), every slot is paintable exactly like
- * availability mode, and cells expose `data-blocked-paint` plus a ✕ glyph
- * instead of `data-availability` and an inline colour.
+ * keyboard handlers, and strokes and arrow keys pass over them. The organizer
+ * edits those blocks on the Time Table's meeting calendar, never here.
  */
 function ScheduleGrid({
   schedule = [],
@@ -61,7 +56,6 @@ function ScheduleGrid({
   virtual = false,
   participantDetails,
   compact = false,
-  blockedEditing = false,
 }) {
   const strokeRef = useRef({
     active: false,
@@ -76,7 +70,7 @@ function ScheduleGrid({
     (largest, group) => Math.max(largest, group?.slots?.length || 0),
     0,
   );
-  const isBlocked = (slot) => !blockedEditing && slot?.blocked === true;
+  const isBlocked = (slot) => slot?.blocked === true;
   // Blocked cells are inert, so they take no part in the roving tab stop or
   // arrow-key movement and strokes never paint them.
   const cellPositions = groups.flatMap((group, column) =>
@@ -331,8 +325,8 @@ function ScheduleGrid({
                         );
                       }
 
-                      // Shared by availability and blocked-times cells: the
-                      // roving tab stop, pointer strokes and keyboard painting.
+                      // The roving tab stop, pointer strokes and keyboard
+                      // painting.
                       const interaction = {
                         ref: (node) => {
                           if (node) cellRefs.current.set(index, node);
@@ -358,37 +352,6 @@ function ScheduleGrid({
                           moveKeyboardFocus(index, event);
                         },
                       };
-
-                      if (blockedEditing) {
-                        const marked = Number(schedule[index]) > 0;
-                        const markLabel = `${group.label}, ${slotLabel(slot)}, ${marked ? "blocked" : "open"}`;
-                        return (
-                          <div
-                            className="schedule-grid-cell"
-                            key={index}
-                            role="gridcell"
-                            {...interaction}
-                            aria-colindex={column + 2}
-                            aria-label={markLabel}
-                            aria-readonly={readOnly ? "true" : undefined}
-                            aria-selected={marked}
-                            data-cell-idx={index}
-                            data-blocked-paint={marked ? "true" : "false"}
-                            data-first-row={row === 0 ? "true" : undefined}
-                            data-first-column={
-                              column === 0 ? "true" : undefined
-                            }
-                            title={markLabel}
-                          >
-                            <span
-                              className="schedule-grid-cell__glyph"
-                              aria-hidden="true"
-                            >
-                              {marked ? "✕" : ""}
-                            </span>
-                          </div>
-                        );
-                      }
 
                       const value = Number(schedule[index] || 0);
                       const level = availabilityKey(value);
