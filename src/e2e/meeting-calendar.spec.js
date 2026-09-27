@@ -677,10 +677,10 @@ test.describe("Organizer meeting-time calendar", () => {
     await expect(
       page.getByRole("group", { name: "Attendance review" }),
     ).toBeVisible();
+    // Nobody on this event was invited by email, so the confirmation went
+    // to nobody (see finalizeCurrentSelection).
     await expect(
-      page.getByText(
-        "The meeting is finalized and calendar invitations are queued.",
-      ),
+      page.getByText("The meeting is finalized. Nobody was emailed."),
     ).toBeVisible();
     await expect(
       grid.getByRole("columnheader", { name: shortDate(customWednesday) }),
