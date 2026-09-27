@@ -932,7 +932,8 @@
 
 /* Blocked-times tools: a bar right under the calendar that stays pinned to
    the bottom of the screen while the calendar above it is taller than the
-   viewport (the same treatment as the roster's unsaved group changes). */
+   viewport (the same treatment as the Participants selection bar,
+   .participants-selection-bar in participants.css). */
 .time-table__paint-bar {
   position: sticky;
   bottom: 0.75rem;

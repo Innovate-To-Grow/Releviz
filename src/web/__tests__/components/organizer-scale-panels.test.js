@@ -2131,7 +2131,7 @@ test("finalize refuses a review reply that does not say who would be emailed", a
   ).toBeDisabled();
 });
 
-test("the finalize dialog is drawn on the page body, outside the sticky results column", async () => {
+test("the finalize dialog is drawn on the page body, outside a sticky ancestor", async () => {
   previewFinalMeeting.mockResolvedValueOnce({
     attendance: { availableParticipantTotal: 1 },
     recipientCount: 1,
@@ -2139,7 +2139,7 @@ test("the finalize dialog is drawn on the page body, outside the sticky results 
     sample: null,
   });
   render(
-    <div className="meeting-results__side">
+    <div data-testid="sticky-ancestor" style={{ position: "sticky" }}>
       <FinalizeScalePanel
         event={baseEvent}
         setEvent={jest.fn()}
@@ -2156,12 +2156,63 @@ test("the finalize dialog is drawn on the page body, outside the sticky results 
     screen.getByRole("button", { name: "Finalize meeting" }),
   );
   const dialog = emailDialog("Finalize meeting");
-  expect(document.querySelector(".meeting-results__side")).not.toContainElement(
-    dialog,
-  );
+  expect(screen.getByTestId("sticky-ancestor")).not.toContainElement(dialog);
   expect(dialog.closest(".app-modal-backdrop").parentElement).toBe(
     document.body,
   );
+});
+
+test("a meeting finalized elsewhere closes an open finalize review and hands focus to Download", async () => {
+  previewFinalMeeting.mockResolvedValueOnce({
+    attendance: { availableParticipantTotal: 1 },
+    recipientCount: 1,
+    email: previewEmail(),
+    sample: null,
+  });
+  const finalMeeting = {
+    startsAt: recommendation.startsAt,
+    endsAt: recommendation.endsAt,
+    channel: "virtual",
+    location: "",
+    active: true,
+  };
+  const { rerender } = render(
+    <FinalizeScalePanel
+      event={baseEvent}
+      setEvent={jest.fn()}
+      getToken={getToken}
+      selection={recommendation}
+    />,
+  );
+  await userEvent.click(
+    screen.getByRole("button", { name: "Review attendance" }),
+  );
+  await screen.findByRole("group", { name: "Attendance review" });
+  await userEvent.click(
+    screen.getByRole("button", { name: "Finalize meeting" }),
+  );
+  const dialog = emailDialog("Finalize meeting");
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Continue" }),
+  );
+  // Another tab finalizes while this review is open.
+  rerender(
+    <FinalizeScalePanel
+      event={{ ...baseEvent, status: "finalized", finalMeeting }}
+      setEvent={jest.fn()}
+      getToken={getToken}
+      selection={recommendation}
+    />,
+  );
+  expect(
+    screen.queryByRole("dialog", { name: "Finalize meeting" }),
+  ).not.toBeInTheDocument();
+  await waitFor(() =>
+    expect(
+      screen.getByRole("button", { name: "Download calendar (.ics)" }),
+    ).toHaveFocus(),
+  );
+  expect(confirmFinalMeeting).not.toHaveBeenCalled();
 });
 
 test("finalized organizers can download ICS and see download errors", async () => {

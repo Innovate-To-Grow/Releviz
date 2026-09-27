@@ -3128,7 +3128,7 @@ test.describe("Releviz account and scheduling flow", () => {
       "Recommended #2",
     );
     await reviewAttendance(page);
-    // The review follows the new pick: its confirmation is for Ranked #3.
+    // The review follows the new pick: its confirmation is for Recommended #2.
     await page
       .locator("#organizer-finalize")
       .getByRole("button", { name: "Finalize meeting" })

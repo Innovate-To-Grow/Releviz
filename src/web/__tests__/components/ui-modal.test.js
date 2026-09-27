@@ -186,12 +186,13 @@ describe("Modal", () => {
   });
 
   test("renders on the page body, clear of a sticky parent's stacking context", () => {
-    // A sticky column (the Results side rail) is its own stacking context:
-    // a dialog drawn inside it sits under the sticky section nav however high
-    // its z-index, so the dialog is drawn on the body instead.
+    // A sticky or pinned ancestor (the pinned Time Table calendar, the
+    // Participants selection bar) is its own stacking context: a dialog drawn
+    // inside it sits under the sticky section nav however high its z-index,
+    // so the dialog is drawn on the body instead.
     const onClose = jest.fn();
     const { container } = render(
-      <div className="meeting-results__side" style={{ position: "sticky" }}>
+      <div style={{ position: "sticky" }}>
         <Modal title="Finalize meeting" onClose={onClose}>
           <button type="button">Inside</button>
         </Modal>

@@ -2853,8 +2853,13 @@ function FinalizeScalePanelContent({
   const [focusWasInside, setFocusWasInside] = useState(false);
   if (finalized !== seenFinalized) {
     setSeenFinalized(finalized);
-    // Read before the swap commits: the focused control is still there.
-    setFocusWasInside(finalized && focusIsInFinalize());
+    // Read before the swap commits: the focused control is still there. The
+    // review dialog is drawn on the page body, so focus in it counts as
+    // focus in Finalize. A meeting finalized elsewhere while the dialog is
+    // open closes it: its Finalize would now be refused.
+    const dialogOpen = finalizeDialog !== null;
+    setFocusWasInside(finalized && (dialogOpen || focusIsInFinalize()));
+    if (finalized && dialogOpen && !confirming) setFinalizeDialog(null);
   }
   useEffect(() => {
     if (!finalized || !(handOffFocus.current || focusWasInside)) return;
