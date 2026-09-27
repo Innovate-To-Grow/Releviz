@@ -11,6 +11,7 @@ export function LeftOutBanner({
   onShow,
   onCountEveryone,
   busy = false,
+  readOnly = false,
 }) {
   if (!count) return null;
   return (
@@ -28,7 +29,7 @@ export function LeftOutBanner({
             size="sm"
             className="p-0"
             busy={busy}
-            disabled={busy}
+            disabled={busy || readOnly}
             onClick={onCountEveryone}
           >
             Count everyone again
