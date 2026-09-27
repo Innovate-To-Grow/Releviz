@@ -490,21 +490,29 @@ describe("scaled organizer workspace", () => {
       matchedCount: 1,
       resultsRevision: 4,
     });
-    fetchRosterSchedule.mockResolvedValue({
-      participant: {
-        id: "roster-1",
-        memberId: "member-1",
-        name: "Ada Faculty",
-        accountAccess: "temporary",
-        version: 1,
-      },
-      schedule: {
-        availabilityInperson: [0, 1],
-        availabilityVirtual: [1, 0],
-        submitted: false,
-        version: 1,
-      },
-    });
+    // Only Ada's schedule is known; asking for anyone else (the add panel
+    // looking up a person the listing does not show) fails.
+    fetchRosterSchedule.mockImplementation((_code, participantId) =>
+      participantId === "roster-1" || participantId === "member-1"
+        ? Promise.resolve({
+            participant: {
+              id: "roster-1",
+              memberId: "member-1",
+              name: "Ada Faculty",
+              accountAccess: "temporary",
+              version: 1,
+            },
+            schedule: {
+              availabilityInperson: [0, 1],
+              availabilityVirtual: [1, 0],
+              submitted: false,
+              version: 1,
+            },
+          })
+        : Promise.reject(
+            Object.assign(new Error("Participant not found"), { status: 404 }),
+          ),
+    );
     createManagedParticipant.mockResolvedValue({
       participant: {
         id: "manual-1",
