@@ -334,6 +334,7 @@ describe("AddPersonPanel", () => {
 
   test("an already-invited existing person only offers Open", async () => {
     const user = userEvent.setup();
+    const onSendInvitation = jest.fn();
     renderPanel({
       onAdd: jest.fn().mockResolvedValue(
         added({
@@ -341,7 +342,7 @@ describe("AddPersonPanel", () => {
           participant: { invitationStatus: "sent" },
         }),
       ),
-      onSendInvitation: jest.fn(),
+      onSendInvitation,
     });
     await user.type(name(), "Grace");
     await user.type(email(), "grace@example.com");
@@ -351,6 +352,17 @@ describe("AddPersonPanel", () => {
       screen.queryByRole("button", { name: "Send invitation" }),
     ).toBeNull();
     expect(screen.getByRole("button", { name: "Open" })).toBeInTheDocument();
+
+    // Asking to send them one reviews nothing: they were invited already.
+    await user.type(name(), "Grace");
+    await user.type(email(), "grace@example.com");
+    await user.click(
+      screen.getByRole("button", { name: "Add and send invitation" }),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Grace Hopper is already on the list, so nothing was added.",
+    );
+    expect(onSendInvitation).not.toHaveBeenCalled();
   });
 
   test("keeps the typed values and the key on failure, and renews the key after an edit", async () => {

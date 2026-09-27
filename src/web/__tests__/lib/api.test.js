@@ -1790,6 +1790,9 @@ describe("business API helpers", () => {
         }),
       )
       .mockResolvedValueOnce(
+        jsonResponse({ cancellation: { recipientCount: 0 } }),
+      )
+      .mockResolvedValueOnce(
         jsonResponse({ preview: true, retryable: 3, obsolete: 1, email }),
       )
       .mockResolvedValueOnce(jsonResponse({ id: "delivery 1" }));
@@ -1812,6 +1815,20 @@ describe("business API helpers", () => {
           Authorization: "Bearer tok",
         },
         body: JSON.stringify({ status: "active" }),
+      }),
+    );
+
+    // Reopening past the old deadline asks with the deadline cleared, the
+    // same way the lifecycle change itself does.
+    await previewEventLifecycle(
+      "ABC",
+      { status: "active", responseDeadline: null },
+      "tok",
+    );
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      "/events/lifecycle/preview?code=ABC",
+      expect.objectContaining({
+        body: JSON.stringify({ status: "active", responseDeadline: null }),
       }),
     );
 

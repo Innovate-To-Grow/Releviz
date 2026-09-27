@@ -76,6 +76,8 @@ jest.mock("@/lib/api/events", () => ({
   fetchEventActivity: jest.fn(),
   fetchEventResults: jest.fn(),
   openEventStream: jest.fn(),
+  previewDeliveryRetry: jest.fn(),
+  previewEventLifecycle: jest.fn(),
   previewFinalMeeting: jest.fn(),
   retryDeliveryRequest: jest.fn(),
   sendReminders: jest.fn(),
@@ -120,6 +122,7 @@ import {
   fetchEventActivity,
   fetchEventResults,
   openEventStream,
+  previewEventLifecycle,
   previewFinalMeeting,
   sendReminders,
   updateEventLifecycle,
@@ -134,6 +137,7 @@ import {
   fetchRosterSchedule,
   patchRosterBulk,
   patchRosterParticipant,
+  sendRosterInvitations,
 } from "@/lib/api/roster";
 
 // The event streams the workspace opened in the current test, oldest
@@ -423,6 +427,21 @@ function calendarCell(index) {
     .querySelector(`[data-cell-idx="${index}"]`);
 }
 
+// Finalizes through the email review: Finalize meeting opens it, Continue
+// reaches the second confirmation, and `sendLabel` confirms.
+async function finalizeThroughReview(sendLabel = "Finalize meeting") {
+  await userEvent.click(
+    screen.getByRole("button", { name: "Finalize meeting" }),
+  );
+  const review = screen.getByRole("dialog", { name: "Finalize meeting" });
+  await userEvent.click(
+    within(review).getByRole("button", { name: "Continue" }),
+  );
+  await userEvent.click(
+    within(review).getByRole("button", { name: sendLabel }),
+  );
+}
+
 // Opens the Add a person side panel from the Participants header.
 async function openAddPersonPanel() {
   await screen.findByText("Ada Faculty");
@@ -526,14 +545,47 @@ describe("scaled organizer workspace", () => {
       },
       created: true,
       memberCreated: true,
-      autoInvitedCount: 1,
-      deliveryRequest: {
-        id: "manual-delivery",
-        operation: "invitation",
-        recipientCount: 1,
-        delivery: { total: 1, pending: 1, sent: 0 },
-      },
+      // Adding never emails: invitations are reviewed and sent afterwards.
+      autoInvitedCount: 0,
+      deliveryRequest: null,
     });
+    // The invitation review for one person, then the send it confirms.
+    sendRosterInvitations.mockImplementation((_code, options) =>
+      Promise.resolve(
+        options.preview
+          ? {
+              preview: true,
+              requestedCount: 1,
+              willSend: 1,
+              skipped: {
+                alreadyInvited: 0,
+                noEmail: 0,
+                organizer: 0,
+                inFlight: 0,
+              },
+              email: {
+                from: "noreply@releviz.local",
+                replyTo: "",
+                to: "Manual Person <manual@example.com>",
+                subject: "You're invited to Big event",
+                html: "<!doctype html><p>Pick your times</p>",
+                text: "Pick your times",
+                attachments: [],
+              },
+              sample: { name: "Manual Person", email: "manual@example.com" },
+            }
+          : {
+              queuedCount: 1,
+              skipped: {},
+              deliveryRequest: {
+                id: "manual-delivery",
+                operation: "invitation",
+                recipientCount: 1,
+                delivery: { total: 1, pending: 1, sent: 0 },
+              },
+            },
+      ),
+    );
     fetchEventResults.mockResolvedValue({
       status: "fresh",
       requestedRevision: 3,
@@ -875,7 +927,7 @@ describe("scaled organizer workspace", () => {
     ).toBeInTheDocument();
   });
 
-  test("adds an active invitee and queues its invitation atomically", async () => {
+  test("adds an active invitee and invites them only after the email is reviewed", async () => {
     renderView();
     const add = await openAddPersonPanel();
     await userEvent.type(add.name, "Manual Person");
@@ -891,10 +943,26 @@ describe("scaled organizer workspace", () => {
           phone: "",
           organizerManaged: false,
           idempotencyKey: "request-key",
-          sendInvitation: true,
+          sendInvitation: false,
         },
         "token",
       ),
+    );
+    const review = await screen.findByRole("dialog", {
+      name: "Send invitations",
+    });
+    expect(
+      await within(review).findByText("1 will get an invitation now"),
+    ).toBeInTheDocument();
+    expect(review).toHaveTextContent("Manual Person <manual@example.com>");
+    expect(within(add.dialog).getByRole("status")).toHaveTextContent(
+      "Manual Person was added. No invitation was sent.",
+    );
+    await userEvent.click(
+      within(review).getByRole("button", { name: "Continue" }),
+    );
+    await userEvent.click(
+      within(review).getByRole("button", { name: "Send 1 invitation" }),
     );
     expect(await within(add.dialog).findByRole("status")).toHaveTextContent(
       "Manual Person was added and their invitation is queued.",
@@ -925,12 +993,17 @@ describe("scaled organizer workspace", () => {
     expect(await within(add.dialog).findByRole("status")).toHaveTextContent(
       "Manual Person is already on the list, so nothing was added.",
     );
+    // They were invited already, so there is nothing to review or send.
+    expect(
+      screen.queryByRole("dialog", { name: "Send invitations" }),
+    ).not.toBeInTheDocument();
+    expect(sendRosterInvitations).not.toHaveBeenCalled();
     expect(
       screen.queryByLabelText("Event delivery progress"),
     ).not.toBeInTheDocument();
   });
 
-  test("confirms the invitation when an archived participant is restored", async () => {
+  test("reviews the invitation of an archived participant brought back", async () => {
     createManagedParticipant.mockResolvedValueOnce({
       participant: {
         id: "manual-1",
@@ -939,13 +1012,8 @@ describe("scaled organizer workspace", () => {
       },
       created: false,
       restored: true,
-      autoInvitedCount: 1,
-      deliveryRequest: {
-        id: "restored-delivery",
-        operation: "invitation",
-        recipientCount: 1,
-        delivery: { total: 1, pending: 1, sent: 0 },
-      },
+      autoInvitedCount: 0,
+      deliveryRequest: null,
     });
     renderView();
     const add = await openAddPersonPanel();
@@ -953,6 +1021,16 @@ describe("scaled organizer workspace", () => {
     await userEvent.type(add.email, "returning@example.com");
     await userEvent.click(add.send);
 
+    const review = await screen.findByRole("dialog", {
+      name: "Send invitations",
+    });
+    await within(review).findByText("1 will get an invitation now");
+    await userEvent.click(
+      within(review).getByRole("button", { name: "Continue" }),
+    );
+    await userEvent.click(
+      within(review).getByRole("button", { name: "Send 1 invitation" }),
+    );
     expect(await within(add.dialog).findByRole("status")).toHaveTextContent(
       "Returning Person was added and their invitation is queued.",
     );
@@ -989,7 +1067,7 @@ describe("scaled organizer workspace", () => {
         email: "manual@example.com",
       },
       created: true,
-      autoInvitedCount: 1,
+      autoInvitedCount: 0,
     });
     await waitFor(() => expect(add.send).toBeEnabled());
   });
@@ -1203,8 +1281,14 @@ describe("scaled organizer workspace", () => {
     await userEvent.click(
       screen.getByRole("menuitem", { name: "Send reminders (1)…" }),
     );
+    const review = await screen.findByRole("dialog", {
+      name: "Send reminders",
+    });
     await userEvent.click(
-      await screen.findByRole("button", { name: "Send reminders" }),
+      within(review).getByRole("button", { name: "Continue" }),
+    );
+    await userEvent.click(
+      within(review).getByRole("button", { name: "Send 1 reminder" }),
     );
     await waitFor(() =>
       expect(sendReminders).toHaveBeenLastCalledWith(
@@ -1923,21 +2007,20 @@ describe("scaled organizer workspace", () => {
     });
   });
 
-  test("pastes, maps, previews, and merges a roster import", async () => {
+  test("pastes, maps, previews, and merges a roster import, then reviews its invitations", async () => {
     mockRosterImportPreview();
     commitRosterImport.mockResolvedValue({
-      autoInvitedCount: 1,
-      deliveryRequest: {
-        id: "import-delivery",
-        recipientCount: 1,
-        delivery: { total: 1, pending: 1 },
-      },
+      autoInvitedCount: 0,
+      deliveryRequest: null,
       receipt: {
+        mode: "merge",
         importedCount: 1,
         createdCount: 1,
         updatedCount: 0,
         resultsRevision: 4,
       },
+      addedParticipantIds: ["roster-9"],
+      importedParticipantIds: ["roster-9"],
     });
     renderView();
     await screen.findByText("Ada Faculty");
@@ -1948,44 +2031,63 @@ describe("scaled organizer workspace", () => {
       expect.objectContaining({ columnMapping: { name: "0", email: "1" } }),
       "token",
     );
-    // Invitations are opt-in: the box is unchecked until the organizer
-    // ticks it, and the commit label follows.
-    const sendBox = screen.getByLabelText(
-      "Email invitations to the people this import adds",
-    );
-    expect(sendBox).not.toBeChecked();
+    // The import itself never emails anyone.
     expect(
-      screen.getByRole("button", { name: "Import 1 person" }),
-    ).toBeInTheDocument();
-    await userEvent.click(sendBox);
+      screen.queryByLabelText(
+        "Email invitations to the people this import adds",
+      ),
+    ).not.toBeInTheDocument();
     await userEvent.click(
-      screen.getByRole("button", {
-        name: "Import 1 person and send invitations",
-      }),
+      screen.getByRole("button", { name: "Import 1 person" }),
     );
 
     await waitFor(() =>
       expect(commitRosterImport).toHaveBeenCalledWith(
         event.code,
         "import-1",
-        { mode: "merge", idempotencyKey: "request-key", sendInvitations: true },
+        {
+          mode: "merge",
+          idempotencyKey: "request-key",
+          sendInvitations: false,
+        },
         "token",
       ),
     );
-    // The sheet stays open on its Done step; closing it reports the outcome.
+    // The sheet stays open on its Done step; its review hands the people
+    // it added to the invitation dialog and reports the import's outcome.
     await userEvent.click(
-      await screen.findByRole("button", { name: "Back to participants" }),
+      await screen.findByRole("button", {
+        name: "Review and send invitations (1)…",
+      }),
+    );
+    expect(
+      screen.queryByRole("dialog", { name: "Import participants" }),
+    ).not.toBeInTheDocument();
+    expect(
+      (
+        await screen.findByText(
+          "Imported 1 people: 1 added, 0 updated. No invitations were sent.",
+        )
+      ).closest("[role]"),
+    ).toHaveAttribute("role", "status");
+    const review = await screen.findByRole("dialog", {
+      name: "Send invitations",
+    });
+    expect(sendRosterInvitations).toHaveBeenCalledWith(
+      event.code,
+      { participantIds: ["roster-9"], preview: true, resend: false },
+      "token",
+    );
+    await within(review).findByText("1 will get an invitation now");
+    await userEvent.click(
+      within(review).getByRole("button", { name: "Continue" }),
+    );
+    await userEvent.click(
+      within(review).getByRole("button", { name: "Send 1 invitation" }),
     );
     expect(
       await screen.findByLabelText("Event delivery progress"),
     ).toHaveTextContent("1 queued");
-    expect(
-      (
-        await screen.findByText(
-          "Imported 1 people: 1 added, 0 updated. 1 invitation queued.",
-        )
-      ).closest("[role]"),
-    ).toHaveAttribute("role", "status");
   });
 
   test("requires the exact event code before a destructive roster rebuild", async () => {
@@ -2016,7 +2118,7 @@ describe("scaled organizer workspace", () => {
       name: "Replace the list with 1 person",
     });
     expect(screen.getByRole("note")).toHaveTextContent(
-      "Rebuilding clears schedules, invitations, and pending delivery. With invitations enabled below it sends a new invitation to every imported participant; otherwise everyone starts as Not sent and gets no reminders until you send invitations.",
+      "Rebuilding clears schedules, invitations, and pending delivery. Everyone starts as Not sent and gets no reminders until you send invitations, which you can review once the import is done.",
     );
     expect(rebuildButton).toBeDisabled();
     await userEvent.type(
@@ -2064,6 +2166,17 @@ describe("scaled organizer workspace", () => {
         unansweredParticipantTotal: 150,
         excludedParticipantTotal: 0,
       },
+      recipientCount: 2,
+      email: {
+        from: "noreply@releviz.local",
+        replyTo: "",
+        to: "Ada Faculty <ada@example.com>",
+        subject: "Big event is confirmed",
+        html: "<!doctype html><p>See you Thursday</p>",
+        text: "See you Thursday",
+        attachments: ["meeting.ics"],
+      },
+      sample: { name: "Ada Faculty", email: "ada@example.com" },
     });
     confirmFinalMeeting.mockResolvedValue({
       event: {
@@ -2102,6 +2215,21 @@ describe("scaled organizer workspace", () => {
     expect(await screen.findByText("700")).toBeInTheDocument();
     await userEvent.click(
       screen.getByRole("button", { name: "Finalize meeting" }),
+    );
+    // The confirmation email is reviewed before anything is finalized.
+    const review = screen.getByRole("dialog", { name: "Finalize meeting" });
+    expect(review).toHaveTextContent(
+      "2 invited people will receive the confirmation and a calendar invitation.",
+    );
+    expect(review).toHaveTextContent("Big event is confirmed");
+    expect(confirmFinalMeeting).not.toHaveBeenCalled();
+    await userEvent.click(
+      within(review).getByRole("button", { name: "Continue" }),
+    );
+    await userEvent.click(
+      within(review).getByRole("button", {
+        name: "Finalize and send 2 emails",
+      }),
     );
 
     await waitFor(() =>
@@ -2315,9 +2443,8 @@ describe("scaled organizer workspace", () => {
         await screen.findByRole("group", { name: "Attendance review" }),
       ).toBeInTheDocument();
 
-      await userEvent.click(
-        screen.getByRole("button", { name: "Finalize meeting" }),
-      );
+      // Nobody was invited by email: finalizing goes ahead without email.
+      await finalizeThroughReview();
       await waitFor(() =>
         expect(confirmFinalMeeting).toHaveBeenCalledWith(
           event.code,
@@ -2341,6 +2468,21 @@ describe("scaled organizer workspace", () => {
 
   test("reactivating a finalized event clears the previously chosen window", async () => {
     mockCalendarWindowFlow();
+    previewEventLifecycle.mockResolvedValue({
+      cancellation: {
+        recipientCount: 2,
+        email: {
+          from: "noreply@releviz.local",
+          replyTo: "",
+          to: "Ada Faculty <ada@example.com>",
+          subject: "Big event was canceled",
+          html: "<!doctype html><p>Canceled</p>",
+          text: "Canceled",
+          attachments: ["meeting.ics"],
+        },
+        sample: { name: "Ada Faculty", email: "ada@example.com" },
+      },
+    });
     updateEventLifecycle.mockResolvedValue({
       event: {
         ...calendarEvent,
@@ -2348,6 +2490,8 @@ describe("scaled organizer workspace", () => {
         version: 4,
         finalMeeting: null,
       },
+      cancellationDeliveryRequestId: "cancel-1",
+      cancellationEnqueued: 2,
     });
     const nowSpy = jest
       .spyOn(Date, "now")
@@ -2367,9 +2511,7 @@ describe("scaled organizer workspace", () => {
         screen.getByRole("button", { name: "Review attendance" }),
       );
       await screen.findByRole("group", { name: "Attendance review" });
-      await userEvent.click(
-        screen.getByRole("button", { name: "Finalize meeting" }),
-      );
+      await finalizeThroughReview();
       await waitFor(() =>
         expect(headerStatus()).toHaveTextContent("finalized"),
       );
@@ -2380,8 +2522,30 @@ describe("scaled organizer workspace", () => {
         ),
       ).toBeInTheDocument();
 
+      // Reopening tells the confirmation's recipients the meeting is
+      // canceled, so their email is reviewed first.
       await userEvent.click(
         screen.getByRole("button", { name: "Reactivate event" }),
+      );
+      const review = await screen.findByRole("dialog", {
+        name: "Reopen scheduling",
+      });
+      expect(previewEventLifecycle).toHaveBeenCalledWith(
+        event.code,
+        { status: "active", responseDeadline: calendarEvent.responseDeadline },
+        "token",
+      );
+      expect(review).toHaveTextContent(
+        "2 people who received the confirmation will be told the meeting is canceled.",
+      );
+      expect(updateEventLifecycle).not.toHaveBeenCalled();
+      await userEvent.click(
+        within(review).getByRole("button", { name: "Continue" }),
+      );
+      await userEvent.click(
+        within(review).getByRole("button", {
+          name: "Reopen and send 2 emails",
+        }),
       );
 
       await waitFor(() =>
@@ -2392,6 +2556,9 @@ describe("scaled organizer workspace", () => {
         ),
       );
       await waitFor(() => expect(headerStatus()).toHaveTextContent("active"));
+      expect(
+        await screen.findByLabelText("Event delivery progress"),
+      ).toHaveTextContent("Final cancellation delivery");
       // The old pick is gone: the step is back to its empty state.
       expect(finalizeSection()).toHaveTextContent("No time selected yet");
       expect(finalizeSection()).toHaveTextContent(

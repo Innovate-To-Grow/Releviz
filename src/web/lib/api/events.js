@@ -269,13 +269,19 @@ export async function updateEventLifecycle(
 // finalized event back to `active` returns `{ cancellation: { recipientCount,
 // email, sample } }` for the people told the meeting is canceled. A refused
 // transition rejects with the server's wording and `status` 409.
-export async function previewEventLifecycle(code, { status }, token) {
+// `responseDeadline` is the one the change itself would carry (null clears
+// a deadline that has passed); left out, the event keeps its own.
+export async function previewEventLifecycle(
+  code,
+  { status, responseDeadline },
+  token,
+) {
   const res = await apiFetch(
     `${API_BASE}/events/lifecycle/preview?code=${encodeURIComponent(code)}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status }),
+      body: JSON.stringify({ status, responseDeadline }),
     },
     token,
   );

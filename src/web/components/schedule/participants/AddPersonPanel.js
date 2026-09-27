@@ -18,6 +18,15 @@ function resultLine(result) {
   return `${name} was added. No invitation was sent.`;
 }
 
+// Whether the person an add reported can be invited now: they have an
+// email of their own, were not just invited by the add itself, and, when
+// they were already on the list, were never invited.
+function invitable(result) {
+  const person = result.participant;
+  if (!person || person.organizerManaged || result.autoInvited) return false;
+  return !result.alreadyExisted || person.invitationStatus === "not_sent";
+}
+
 /**
  * Side drawer for adding people one after another. Each attempt carries one
  * idempotency key that survives a retry of the same values and is replaced
@@ -123,27 +132,24 @@ export default function AddPersonPanel({
     } finally {
       setBusyAction("");
     }
-    if (outcome && sendInvitation) void invite(outcome.participant);
+    if (outcome && sendInvitation && onSendInvitation && invitable(outcome))
+      void invite(outcome.participant);
   };
 
-  // Reviews and sends the added person's invitation through the parent's
-  // send dialog; someone without an email of their own is never invited.
+  // Reviews and sends the person's invitation through the parent's send
+  // dialog; the result line says so once it went out.
   const invite = async (participant) => {
-    if (!participant || participant.organizerManaged || !onSendInvitation)
-      return;
     const sent = await onSendInvitation(participant);
     if (sent) setResult((current) => ({ ...current, invited: true }));
   };
 
   const added = result?.participant;
   const canSendLater =
-    Boolean(added) &&
+    Boolean(result) &&
     Boolean(onSendInvitation) &&
-    !added.organizerManaged &&
+    invitable(result) &&
     !result.invited &&
-    (result.alreadyExisted
-      ? added.invitationStatus === "not_sent"
-      : result.offerInvitation && !result.autoInvited);
+    (result.alreadyExisted || result.offerInvitation);
 
   return (
     <Drawer

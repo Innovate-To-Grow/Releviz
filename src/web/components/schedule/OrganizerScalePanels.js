@@ -33,6 +33,7 @@ import CreateEventClient from "@/components/event/CreateEventClient";
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
 import BlockedSlotsEditor from "@/components/schedule/BlockedSlotsEditor";
 import MeetingCalendar from "@/components/schedule/MeetingCalendar";
+import EmailSendDialog from "@/components/schedule/email/EmailSendDialog";
 import {
   LIVE_REFRESH_ACTIVE_PACE,
   LIVE_REFRESH_BACKSTOP_PACE,
@@ -49,10 +50,21 @@ import {
   downloadFinalCalendar,
   fetchDeliveryRequest,
   fetchEventResults,
+  previewDeliveryRetry,
+  previewEventLifecycle,
   previewFinalMeeting,
   retryDeliveryRequest,
   updateEventLifecycle,
 } from "@/lib/api/events";
+
+const emailCount = (count) => `${count} ${count === 1 ? "email" : "emails"}`;
+const peopleCount = (count) => `${count} ${count === 1 ? "person" : "people"}`;
+
+// Who an email preview was rendered for, as the note under its envelope.
+function shownFor(sample) {
+  const who = sample?.name || sample?.email;
+  return who ? `Shown for ${who}.` : null;
+}
 
 // "final_confirmation" → "Final confirmation"
 function operationLabel(operation) {
@@ -154,7 +166,9 @@ export function DeliveryRequestProgress({
 }) {
   const [request, setRequest] = useState(initialRequest || null);
   const [error, setError] = useState("");
-  const [retrying, setRetrying] = useState(false);
+  // { preview, busy, error } while a retry is reviewed; `preview` is null
+  // until the server has said what a retry would send.
+  const [retryDialog, setRetryDialog] = useState(null);
   const requestId = request?.id;
   const waiting = deliveryWaiting(deliveryFrom(request)) > 0;
   // The run as shown, for a check to compare its read against, and the check
@@ -239,21 +253,51 @@ export function DeliveryRequestProgress({
         ? { status: "warning", label: "Needs attention" }
         : { status: "success", label: "Complete" };
 
+  // A retry re-sends stored emails, so it is reviewed first: which failed
+  // emails would go out again (the first of them shown) and which are no
+  // longer current and would be canceled. A reply for a review that has
+  // since been closed is dropped.
+  const openRetry = async () => {
+    setRetryDialog({ preview: null, busy: false, error: "" });
+    try {
+      const token = await getToken();
+      const preview = await previewDeliveryRetry(request.id, token);
+      setRetryDialog((current) => current && { ...current, preview });
+    } catch (requestError) {
+      setRetryDialog(
+        (current) =>
+          current && {
+            ...current,
+            error:
+              requestError.message ||
+              "Unable to check which emails can be sent again.",
+          },
+      );
+    }
+  };
+
   const retry = async () => {
-    setRetrying(true);
-    setError("");
+    setRetryDialog((current) => ({ ...current, busy: true, error: "" }));
     try {
       const token = await getToken();
       const data = await retryDeliveryRequest(request.id, token);
       const updated = data.deliveryRequest || data.request || data;
       setRequest(updated);
       onChange?.(updated);
+      setRetryDialog(null);
     } catch (requestError) {
-      setError(requestError.message || "Unable to retry failed recipients.");
-    } finally {
-      setRetrying(false);
+      setRetryDialog((current) => ({
+        ...current,
+        busy: false,
+        error: requestError.message || "Unable to retry failed recipients.",
+      }));
     }
   };
+
+  const retryPreview = retryDialog?.preview;
+  const retryable = Number(retryPreview?.retryable || 0);
+  const obsolete = Number(retryPreview?.obsolete || 0);
+  const retryNote = shownFor(retryPreview?.sample);
 
   return (
     <div role="group" aria-label={ariaLabel} className="delivery-progress">
@@ -277,8 +321,8 @@ export function DeliveryRequestProgress({
       {(failed > 0 || (!waiting && onDismiss)) && (
         <div className="delivery-progress__actions">
           {failed > 0 && (
-            <AppButton variant="filled" onClick={retry} disabled={retrying}>
-              {retrying ? "Retrying…" : "Retry failed recipients"}
+            <AppButton variant="filled" onClick={() => void openRetry()}>
+              Retry failed recipients
             </AppButton>
           )}
           {failed > 0 && onShowFailed && (
@@ -297,6 +341,49 @@ export function DeliveryRequestProgress({
         <Alert variant="danger" role="alert">
           {error}
         </Alert>
+      )}
+      {retryDialog && (
+        <EmailSendDialog
+          title="Retry failed recipients"
+          recipientCount={retryable}
+          recipientsSummary={
+            retryable > 0 && (
+              <ul className="list-unstyled d-flex flex-column gap-2 mb-0">
+                <li>
+                  {retryable === 1
+                    ? "1 failed email will be sent again"
+                    : `${retryable} failed emails will be sent again`}
+                </li>
+                {obsolete > 0 && (
+                  <li>
+                    {obsolete === 1
+                      ? "1 is no longer current and will be canceled"
+                      : `${obsolete} are no longer current and will be canceled`}
+                  </li>
+                )}
+              </ul>
+            )
+          }
+          email={retryPreview?.email ?? null}
+          emailNote={
+            retryNote &&
+            `${retryNote} Each email goes out again as it was written.`
+          }
+          loading={!retryPreview}
+          error={retryDialog.error}
+          busy={retryDialog.busy}
+          confirmTitle={`Send ${emailCount(retryable)} again now?`}
+          sendLabel={`Send ${retryable} again`}
+          emptyMessage={
+            obsolete > 0
+              ? "These failed emails are no longer current for the event, so none can be sent again."
+              : "There are no failed emails to send again."
+          }
+          onConfirm={retry}
+          onClose={() => {
+            if (!retryDialog.busy) setRetryDialog(null);
+          }}
+        />
       )}
     </div>
   );
@@ -321,47 +408,107 @@ export function EventControls({
 }) {
   const [changing, setChanging] = useState(false);
   const [error, setError] = useState("");
+  // { cancellation, busy, error } while the cancellation emails reopening a
+  // finalized event sends are reviewed.
+  const [reopen, setReopen] = useState(null);
   const lifecycleSummary = LIFECYCLE_SUMMARIES[event.status] || "";
+
+  // Reactivating past the old deadline clears it, as an active event needs
+  // a deadline ahead of it.
+  const deadlineFor = (nextStatus) =>
+    nextStatus === "active" &&
+    event.responseDeadline &&
+    Date.parse(event.responseDeadline) <= Date.now()
+      ? null
+      : event.responseDeadline || undefined;
+
+  // Makes the change; a failure is the caller's to show.
+  const applyLifecycle = async (nextStatus) => {
+    const token = await getToken();
+    const data = await updateEventLifecycle(
+      event.code,
+      {
+        status: nextStatus,
+        expectedVersion: event.version,
+        responseDeadline: deadlineFor(nextStatus),
+      },
+      token,
+    );
+    setEvent(data.event);
+    if (nextStatus === "active") onReactivated?.();
+    if (data.cancellationDeliveryRequestId) {
+      setDeliveryRequest({
+        id: data.cancellationDeliveryRequestId,
+        operation: "final_cancellation",
+        recipientCount: data.cancellationEnqueued || 0,
+        delivery: {
+          total: data.cancellationEnqueued || 0,
+          pending: data.cancellationEnqueued || 0,
+        },
+      });
+    }
+  };
 
   const changeLifecycle = async (nextStatus) => {
     setChanging(true);
     setError("");
     try {
-      const token = await getToken();
-      const responseDeadline =
-        nextStatus === "active" &&
-        event.responseDeadline &&
-        Date.parse(event.responseDeadline) <= Date.now()
-          ? null
-          : event.responseDeadline || undefined;
-      const data = await updateEventLifecycle(
-        event.code,
-        {
-          status: nextStatus,
-          expectedVersion: event.version,
-          responseDeadline,
-        },
-        token,
-      );
-      setEvent(data.event);
-      if (nextStatus === "active") onReactivated?.();
-      if (data.cancellationDeliveryRequestId) {
-        setDeliveryRequest({
-          id: data.cancellationDeliveryRequestId,
-          operation: "final_cancellation",
-          recipientCount: data.cancellationEnqueued || 0,
-          delivery: {
-            total: data.cancellationEnqueued || 0,
-            pending: data.cancellationEnqueued || 0,
-          },
-        });
-      }
+      await applyLifecycle(nextStatus);
     } catch (requestError) {
       setError(requestError.message || "Unable to change the event status.");
     } finally {
       setChanging(false);
     }
   };
+
+  // Reopening a finalized event cancels its meeting and emails everyone the
+  // confirmation reached, so those emails are reviewed and confirmed first.
+  // With nobody to tell, it reopens at once.
+  const reactivate = async () => {
+    if (event.status === "finalized") {
+      setChanging(true);
+      setError("");
+      try {
+        const token = await getToken();
+        const data = await previewEventLifecycle(
+          event.code,
+          { status: "active", responseDeadline: deadlineFor("active") },
+          token,
+        );
+        const cancellation = data?.cancellation;
+        if (Number(cancellation?.recipientCount || 0) > 0) {
+          setReopen({ cancellation, busy: false, error: "" });
+          return;
+        }
+      } catch (requestError) {
+        setError(
+          requestError.message ||
+            "Unable to check who would be told the meeting is canceled.",
+        );
+        return;
+      } finally {
+        setChanging(false);
+      }
+    }
+    await changeLifecycle("active");
+  };
+
+  // A failed reopening stays on the confirmation with its error.
+  const confirmReopen = async () => {
+    setReopen((current) => ({ ...current, busy: true, error: "" }));
+    try {
+      await applyLifecycle("active");
+      setReopen(null);
+    } catch (requestError) {
+      setReopen((current) => ({
+        ...current,
+        busy: false,
+        error: requestError.message || "Unable to reopen scheduling.",
+      }));
+    }
+  };
+
+  const reopenCount = Number(reopen?.cancellation?.recipientCount || 0);
 
   return (
     <section
@@ -395,7 +542,7 @@ export function EventControls({
       {["closed", "finalized", "archived"].includes(event.status) && (
         <AppButton
           variant="outlined"
-          onClick={() => changeLifecycle("active")}
+          onClick={() => void reactivate()}
           disabled={changing}
         >
           Reactivate event
@@ -427,6 +574,36 @@ export function EventControls({
           </Alert>
         )}
       </div>
+
+      {reopen && (
+        <EmailSendDialog
+          title="Reopen scheduling"
+          recipientCount={reopenCount}
+          recipientsSummary={
+            <p className="mb-0">
+              {reopenCount === 1
+                ? "1 person who received the confirmation will be told the meeting is canceled."
+                : `${reopenCount} people who received the confirmation will be told the meeting is canceled.`}
+            </p>
+          }
+          email={reopen.cancellation.email ?? null}
+          emailNote={shownFor(reopen.cancellation.sample)}
+          error={reopen.error}
+          busy={reopen.busy}
+          confirmTitle={`Reopen and email ${peopleCount(reopenCount)}?`}
+          confirmBody={
+            <p className="mb-0">
+              The confirmed meeting is canceled and responses open again. Emails
+              go out right away and can&apos;t be recalled.
+            </p>
+          }
+          sendLabel={`Reopen and send ${emailCount(reopenCount)}`}
+          onConfirm={confirmReopen}
+          onClose={() => {
+            if (!reopen.busy) setReopen(null);
+          }}
+        />
+      )}
     </section>
   );
 }
@@ -1226,6 +1403,13 @@ function FinalizeScalePanelContent({
 }) {
   const [location, setLocation] = useState(event.location || "");
   const [review, setReview] = useState(null);
+  // The confirmation email the reviewed time would send, from the same
+  // reply as `review`: { recipientCount, email, sample }. A new selection
+  // mounts this step afresh and a location edit clears `review`, so
+  // Finalize is only offered with a preview of the time being finalized.
+  const [confirmationPreview, setConfirmationPreview] = useState(null);
+  // { error } while the confirmation email is reviewed before finalizing.
+  const [finalizeDialog, setFinalizeDialog] = useState(null);
   const [reviewing, setReviewing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [downloading, setDownloading] = useState(false);
@@ -1251,6 +1435,11 @@ function FinalizeScalePanelContent({
       const token = await getToken();
       const data = await previewFinalMeeting(event.code, payload, token);
       setReview(data.attendance || data.finalMeeting?.attendance || null);
+      setConfirmationPreview({
+        recipientCount: Number(data.recipientCount || 0),
+        email: data.email ?? null,
+        sample: data.sample ?? null,
+      });
       setStatus("Attendance review is current for this candidate.");
     } catch (requestError) {
       setError(requestError.message || "Unable to review this meeting time.");
@@ -1259,11 +1448,15 @@ function FinalizeScalePanelContent({
     }
   };
 
+  // Runs once the confirmation email was reviewed and confirmed; a failure
+  // stays on the dialog's confirmation step, and trying again reuses the
+  // same idempotency key.
   const confirm = async () => {
     if (!review || !payload) return;
     if (!confirmationKey.current) confirmationKey.current = crypto.randomUUID();
     setConfirming(true);
     setError("");
+    setFinalizeDialog({ error: "" });
     try {
       const token = await getToken();
       const data = await confirmFinalMeeting(
@@ -1290,15 +1483,24 @@ function FinalizeScalePanelContent({
           : null);
       if (delivery) onDeliveryRequest?.(delivery);
       setStatus(
-        "The meeting is finalized and calendar invitations are queued.",
+        confirmationRecipients > 0
+          ? "The meeting is finalized and calendar invitations are queued."
+          : "The meeting is finalized. Nobody was emailed.",
       );
       confirmationKey.current = "";
+      setFinalizeDialog(null);
     } catch (requestError) {
-      setError(requestError.message || "Unable to finalize this meeting.");
+      setFinalizeDialog({
+        error: requestError.message || "Unable to finalize this meeting.",
+      });
     } finally {
       setConfirming(false);
     }
   };
+
+  const confirmationRecipients = Number(
+    confirmationPreview?.recipientCount || 0,
+  );
 
   const download = async () => {
     setDownloading(true);
@@ -1438,7 +1640,7 @@ function FinalizeScalePanelContent({
             <AppButton
               variant="filled"
               icon={<FinalizeIcon />}
-              onClick={confirm}
+              onClick={() => setFinalizeDialog({ error: "" })}
               disabled={!canFinalize || !review || reviewing || confirming}
             >
               {confirming ? "Finalizing…" : "Finalize meeting"}
@@ -1502,6 +1704,52 @@ function FinalizeScalePanelContent({
             </Alert>
           )}
         </div>
+      )}
+
+      {finalizeDialog && (
+        // Finalizing is allowed with nobody to email (`allowEmpty`): the
+        // review then says so and the confirmation sends nothing.
+        <EmailSendDialog
+          title="Finalize meeting"
+          recipientCount={confirmationRecipients}
+          recipientsSummary={
+            confirmationRecipients > 0 && (
+              <p className="mb-0">
+                {confirmationRecipients === 1
+                  ? "1 invited person will receive the confirmation and a calendar invitation."
+                  : `${confirmationRecipients} invited people will receive the confirmation and a calendar invitation.`}
+              </p>
+            )
+          }
+          email={confirmationPreview?.email ?? null}
+          emailNote={shownFor(confirmationPreview?.sample)}
+          error={finalizeDialog.error}
+          busy={confirming}
+          allowEmpty
+          emptyMessage="Nobody has been invited by email, so no confirmation emails will be sent."
+          confirmTitle={
+            confirmationRecipients > 0
+              ? `Finalize and email ${peopleCount(confirmationRecipients)}?`
+              : "Finalize without emailing anyone?"
+          }
+          confirmBody={
+            confirmationRecipients > 0 ? undefined : (
+              <p className="mb-0">
+                The meeting time is confirmed and responses close. You can
+                download the calendar invitation afterwards.
+              </p>
+            )
+          }
+          sendLabel={
+            confirmationRecipients > 0
+              ? `Finalize and send ${emailCount(confirmationRecipients)}`
+              : "Finalize meeting"
+          }
+          onConfirm={confirm}
+          onClose={() => {
+            if (!confirming) setFinalizeDialog(null);
+          }}
+        />
       )}
     </section>
   );

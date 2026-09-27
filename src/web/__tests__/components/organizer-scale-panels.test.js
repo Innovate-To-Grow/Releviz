@@ -46,6 +46,8 @@ jest.mock("@/lib/api/events", () => ({
   downloadFinalCalendar: jest.fn(),
   fetchDeliveryRequest: jest.fn(),
   fetchEventResults: jest.fn(),
+  previewDeliveryRetry: jest.fn(),
+  previewEventLifecycle: jest.fn(),
   previewFinalMeeting: jest.fn(),
   retryDeliveryRequest: jest.fn(),
   sendReminders: jest.fn(),
@@ -73,6 +75,8 @@ import {
   downloadFinalCalendar,
   fetchDeliveryRequest,
   fetchEventResults,
+  previewDeliveryRetry,
+  previewEventLifecycle,
   previewFinalMeeting,
   retryDeliveryRequest,
   updateEvent,
@@ -160,6 +164,29 @@ function renderDrawer(overrides = {}) {
   return { props, ...render(<ManagedScheduleDrawer {...props} />) };
 }
 
+// An email preview as the API renders it for one recipient.
+function previewEmail(overrides = {}) {
+  return {
+    from: "noreply@releviz.local",
+    replyTo: "",
+    to: "Ada Lovelace <ada@example.com>",
+    subject: "Scale event is confirmed",
+    html: "<!doctype html><p>See you there</p>",
+    text: "See you there",
+    attachments: ["meeting.ics"],
+    ...overrides,
+  };
+}
+
+const emailDialog = (name) => screen.getByRole("dialog", { name });
+
+// The review's Continue, once its preview has arrived and enabled it.
+async function readyToContinue(dialog) {
+  const button = within(dialog).getByRole("button", { name: "Continue" });
+  await waitFor(() => expect(button).toBeEnabled());
+  return button;
+}
+
 beforeEach(() => {
   jest.resetAllMocks();
   getToken.mockResolvedValue("token");
@@ -242,13 +269,30 @@ test(
     await tick(15000);
     expect(fetchDeliveryRequest).not.toHaveBeenCalled();
 
+    previewDeliveryRetry.mockResolvedValue({
+      preview: true,
+      retryable: 2,
+      obsolete: 0,
+      email: previewEmail({ subject: "Reminder: Scale event" }),
+      sample: { name: "Ada Lovelace", email: "ada@example.com" },
+    });
     await user.click(
       screen.getByRole("button", { name: "Retry failed recipients" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Retry failed recipients",
+    });
+    await user.click(await readyToContinue(dialog));
+    await user.click(
+      within(dialog).getByRole("button", { name: "Send 2 again" }),
     );
     await waitFor(() =>
       expect(retryDeliveryRequest).toHaveBeenCalledWith("delivery-1", "token"),
     );
     await waitFor(() => expect(card).toHaveTextContent("2 queued"));
+    expect(
+      screen.queryByRole("dialog", { name: "Retry failed recipients" }),
+    ).not.toBeInTheDocument();
     expect(onChange).toHaveBeenCalledTimes(1);
 
     // Recipients are waiting again: the first read comes 3 s on and finds
@@ -311,7 +355,12 @@ test(
     fetchDeliveryRequest.mockRejectedValueOnce(
       new Error("progress unavailable"),
     );
-    retryDeliveryRequest.mockRejectedValueOnce(new Error("retry unavailable"));
+    previewDeliveryRetry
+      .mockRejectedValueOnce(new Error(""))
+      .mockResolvedValue({ preview: true, retryable: 1, obsolete: 0 });
+    retryDeliveryRequest
+      .mockRejectedValueOnce(new Error("retry unavailable"))
+      .mockRejectedValueOnce(new Error(""));
     render(
       <DeliveryRequestProgress
         initialRequest={{
@@ -325,14 +374,206 @@ test(
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "progress unavailable",
     );
+
+    // A failed preview keeps the review from going on.
     await user.click(
       screen.getByRole("button", { name: "Retry failed recipients" }),
     );
-    expect(await screen.findByRole("alert")).toHaveTextContent(
+    let dialog = await screen.findByRole("dialog", {
+      name: "Retry failed recipients",
+    });
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "Unable to check which emails can be sent again.",
+    );
+    expect(
+      within(dialog).getByRole("button", { name: "Continue" }),
+    ).toBeDisabled();
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    // A failed retry stays on the confirmation with its error.
+    await user.click(
+      screen.getByRole("button", { name: "Retry failed recipients" }),
+    );
+    dialog = await screen.findByRole("dialog", {
+      name: "Retry failed recipients",
+    });
+    await user.click(await readyToContinue(dialog));
+    await user.click(
+      within(dialog).getByRole("button", { name: "Send 1 again" }),
+    );
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
       "retry unavailable",
     );
+    expect(
+      within(dialog).getByRole("heading", { name: "Send 1 email again now?" }),
+    ).toBeInTheDocument();
+    await user.click(
+      within(dialog).getByRole("button", { name: "Send 1 again" }),
+    );
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "Unable to retry failed recipients.",
+    );
+    expect(retryDeliveryRequest).toHaveBeenCalledTimes(2);
   }),
 );
+
+test("the retry review shows the failed email and who is sent it again or canceled", async () => {
+  const user = userEvent.setup();
+  previewDeliveryRetry.mockResolvedValueOnce({
+    preview: true,
+    retryable: 3,
+    obsolete: 1,
+    email: previewEmail({
+      to: "grace@example.com",
+      subject: "You're invited to Scale event",
+      attachments: [],
+    }),
+    sample: { name: "", email: "grace@example.com" },
+  });
+  render(
+    <DeliveryRequestProgress
+      initialRequest={{
+        id: "delivery-3",
+        operation: "invitation",
+        delivery: { total: 4, permanentFailure: 4 },
+      }}
+      getToken={getToken}
+    />,
+  );
+  await user.click(
+    screen.getByRole("button", { name: "Retry failed recipients" }),
+  );
+  const dialog = emailDialog("Retry failed recipients");
+  expect(
+    await within(dialog).findByText("3 failed emails will be sent again"),
+  ).toBeInTheDocument();
+  expect(
+    within(dialog).getByText("1 is no longer current and will be canceled"),
+  ).toBeInTheDocument();
+  expect(previewDeliveryRetry).toHaveBeenCalledWith("delivery-3", "token");
+  expect(within(dialog).getByTitle("Email preview")).toHaveAttribute(
+    "sandbox",
+    "",
+  );
+  expect(dialog).toHaveTextContent("You're invited to Scale event");
+  expect(dialog).toHaveTextContent(
+    "Shown for grace@example.com. Each email goes out again as it was written.",
+  );
+  await user.click(within(dialog).getByRole("button", { name: "Continue" }));
+  expect(
+    within(dialog).getByRole("heading", { name: "Send 3 emails again now?" }),
+  ).toHaveFocus();
+  // Nothing was retried by looking.
+  expect(retryDeliveryRequest).not.toHaveBeenCalled();
+  await user.click(within(dialog).getByRole("button", { name: "Back" }));
+  await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  expect(
+    screen.queryByRole("dialog", { name: "Retry failed recipients" }),
+  ).not.toBeInTheDocument();
+  expect(retryDeliveryRequest).not.toHaveBeenCalled();
+});
+
+test.each([
+  [
+    // Nothing can go out, so nothing is canceled either.
+    { retryable: 0, obsolete: 2 },
+    "These failed emails are no longer current for the event, so none can be sent again.",
+    [],
+  ],
+  [
+    { retryable: 1, obsolete: 1 },
+    null,
+    [
+      "1 failed email will be sent again",
+      "1 is no longer current and will be canceled",
+    ],
+  ],
+  [
+    { retryable: 0, obsolete: 0 },
+    "There are no failed emails to send again.",
+    [],
+  ],
+])("the retry review reads %o", async (counts, emptyMessage, lines) => {
+  const user = userEvent.setup();
+  previewDeliveryRetry.mockResolvedValueOnce({
+    preview: true,
+    ...counts,
+    email: counts.retryable ? previewEmail() : null,
+    sample: null,
+  });
+  render(
+    <DeliveryRequestProgress
+      initialRequest={{ id: "delivery-4", delivery: { permanentFailure: 2 } }}
+      getToken={getToken}
+    />,
+  );
+  await user.click(
+    screen.getByRole("button", { name: "Retry failed recipients" }),
+  );
+  const dialog = emailDialog("Retry failed recipients");
+  await waitFor(() =>
+    expect(dialog).not.toHaveTextContent("Preparing the email preview…"),
+  );
+  expect(
+    within(dialog)
+      .queryAllByRole("listitem")
+      .map((item) => item.textContent),
+  ).toEqual(lines);
+  const cont = within(dialog).getByRole("button", { name: "Continue" });
+  if (emptyMessage) {
+    expect(dialog).toHaveTextContent(emptyMessage);
+    expect(cont).toBeDisabled();
+  } else {
+    expect(cont).toBeEnabled();
+  }
+});
+
+test("a retry preview that answers after the review closed is dropped", async () => {
+  const user = userEvent.setup();
+  let answer;
+  previewDeliveryRetry.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+  );
+  let failure;
+  previewDeliveryRetry.mockImplementationOnce(
+    () =>
+      new Promise((_resolve, reject) => {
+        failure = reject;
+      }),
+  );
+  render(
+    <DeliveryRequestProgress
+      initialRequest={{ id: "delivery-5", delivery: { permanentFailure: 1 } }}
+      getToken={getToken}
+    />,
+  );
+  const retry = screen.getByRole("button", { name: "Retry failed recipients" });
+  await user.click(retry);
+  await user.click(
+    within(emailDialog("Retry failed recipients")).getByRole("button", {
+      name: "Cancel",
+    }),
+  );
+  await act(async () => answer({ retryable: 1, obsolete: 0 }));
+  expect(
+    screen.queryByRole("dialog", { name: "Retry failed recipients" }),
+  ).not.toBeInTheDocument();
+
+  await user.click(retry);
+  await user.click(
+    within(emailDialog("Retry failed recipients")).getByRole("button", {
+      name: "Cancel",
+    }),
+  );
+  await act(async () => failure(new Error("late")));
+  expect(
+    screen.queryByRole("dialog", { name: "Retry failed recipients" }),
+  ).not.toBeInTheDocument();
+  expect(screen.queryByText("late")).not.toBeInTheDocument();
+});
 
 test(
   "delivery progress skips a hidden tab and catches up the moment it is shown",
@@ -1004,6 +1245,13 @@ test("event controls close an active event without a reminders button", async ()
 test("event controls reopen a finalized event, clear an expired deadline, and track cancellation", async () => {
   const setEvent = jest.fn();
   const setDeliveryRequest = jest.fn();
+  previewEventLifecycle.mockResolvedValue({
+    cancellation: {
+      recipientCount: 9,
+      email: previewEmail({ subject: "Scale event was canceled" }),
+      sample: { name: "Ada Lovelace", email: "ada@example.com" },
+    },
+  });
   updateEventLifecycle.mockResolvedValue({
     event: { ...baseEvent, status: "active", version: 5 },
     cancellationDeliveryRequestId: "cancel-1",
@@ -1026,6 +1274,33 @@ test("event controls reopen a finalized event, clear an expired deadline, and tr
   await userEvent.click(
     screen.getByRole("button", { name: "Reactivate event" }),
   );
+  // The cancellations are reviewed before anything changes.
+  const dialog = await screen.findByRole("dialog", {
+    name: "Reopen scheduling",
+  });
+  expect(previewEventLifecycle).toHaveBeenCalledWith(
+    baseEvent.code,
+    { status: "active", responseDeadline: null },
+    "token",
+  );
+  expect(updateEventLifecycle).not.toHaveBeenCalled();
+  expect(dialog).toHaveTextContent(
+    "9 people who received the confirmation will be told the meeting is canceled.",
+  );
+  expect(dialog).toHaveTextContent("Scale event was canceled");
+  expect(dialog).toHaveTextContent("Shown for Ada Lovelace.");
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Continue" }),
+  );
+  expect(
+    within(dialog).getByRole("heading", {
+      name: "Reopen and email 9 people?",
+    }),
+  ).toHaveFocus();
+  expect(updateEventLifecycle).not.toHaveBeenCalled();
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Reopen and send 9 emails" }),
+  );
   await waitFor(() =>
     expect(updateEventLifecycle).toHaveBeenCalledWith(
       baseEvent.code,
@@ -1033,6 +1308,9 @@ test("event controls reopen a finalized event, clear an expired deadline, and tr
       "token",
     ),
   );
+  expect(
+    screen.queryByRole("dialog", { name: "Reopen scheduling" }),
+  ).not.toBeInTheDocument();
   expect(setDeliveryRequest).toHaveBeenCalledWith(
     expect.objectContaining({
       id: "cancel-1",
@@ -1040,6 +1318,116 @@ test("event controls reopen a finalized event, clear an expired deadline, and tr
       delivery: { total: 9, pending: 9 },
     }),
   );
+});
+
+test("event controls keep a finalized event as it is until the reopening is confirmed", async () => {
+  const setEvent = jest.fn();
+  const onReactivated = jest.fn();
+  previewEventLifecycle
+    .mockRejectedValueOnce(new Error("Cannot transition an event."))
+    .mockRejectedValueOnce(new Error(""))
+    .mockResolvedValue({
+      cancellation: {
+        recipientCount: 1,
+        email: previewEmail(),
+        sample: { name: "", email: "ada@example.com" },
+      },
+    });
+  updateEventLifecycle
+    .mockRejectedValueOnce(new Error("The event changed in another session."))
+    .mockRejectedValueOnce(new Error(""));
+  render(
+    <EventControls
+      event={{ ...baseEvent, status: "finalized" }}
+      setEvent={setEvent}
+      getToken={getToken}
+      setDeliveryRequest={jest.fn()}
+      onReactivated={onReactivated}
+    />,
+  );
+  const reactivate = screen.getByRole("button", { name: "Reactivate event" });
+
+  // A refused or failed preview is reported in the controls.
+  await userEvent.click(reactivate);
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Cannot transition an event.",
+  );
+  await userEvent.click(reactivate);
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Unable to check who would be told the meeting is canceled.",
+  );
+  expect(previewEventLifecycle).toHaveBeenLastCalledWith(
+    baseEvent.code,
+    { status: "active", responseDeadline: undefined },
+    "token",
+  );
+
+  // Closing the review changes nothing.
+  await userEvent.click(reactivate);
+  let dialog = await screen.findByRole("dialog", {
+    name: "Reopen scheduling",
+  });
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(dialog).toHaveTextContent(
+    "1 person who received the confirmation will be told the meeting is canceled.",
+  );
+  expect(dialog).toHaveTextContent("Shown for ada@example.com.");
+  fireEvent.keyDown(document, { key: "Escape" });
+  expect(
+    screen.queryByRole("dialog", { name: "Reopen scheduling" }),
+  ).not.toBeInTheDocument();
+  expect(updateEventLifecycle).not.toHaveBeenCalled();
+
+  // A failed reopening stays on the confirmation with its error.
+  await userEvent.click(reactivate);
+  dialog = await screen.findByRole("dialog", { name: "Reopen scheduling" });
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Continue" }),
+  );
+  expect(
+    within(dialog).getByRole("heading", { name: "Reopen and email 1 person?" }),
+  ).toBeInTheDocument();
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Reopen and send 1 email" }),
+  );
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+    "The event changed in another session.",
+  );
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Reopen and send 1 email" }),
+  );
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+    "Unable to reopen scheduling.",
+  );
+  expect(setEvent).not.toHaveBeenCalled();
+  expect(onReactivated).not.toHaveBeenCalled();
+});
+
+test("event controls reopen a finalized event at once when nobody is told of a cancellation", async () => {
+  const setEvent = jest.fn();
+  previewEventLifecycle.mockResolvedValue({
+    cancellation: { recipientCount: 0, email: null, sample: null },
+  });
+  updateEventLifecycle.mockResolvedValue({
+    event: { ...baseEvent, status: "active", version: 5 },
+  });
+  render(
+    <EventControls
+      event={{ ...baseEvent, status: "finalized" }}
+      setEvent={setEvent}
+      getToken={getToken}
+      setDeliveryRequest={jest.fn()}
+    />,
+  );
+  await userEvent.click(
+    screen.getByRole("button", { name: "Reactivate event" }),
+  );
+  await waitFor(() =>
+    expect(setEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "active" }),
+    ),
+  );
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 });
 
 test("event controls surface lifecycle errors", async () => {
@@ -1162,6 +1550,8 @@ test("reactivating swaps the lifecycle summary and states the active sentence on
 test("event controls report a reactivation once the reopened event is stored", async () => {
   const setEvent = jest.fn();
   const onReactivated = jest.fn();
+  // A preview without cancellation details means nobody is told.
+  previewEventLifecycle.mockResolvedValueOnce({});
   updateEventLifecycle.mockResolvedValueOnce({
     event: { ...baseEvent, status: "active", version: 5 },
   });
@@ -1356,7 +1746,32 @@ test("finalize handles nested attendance, delivery progress, and confirmation er
   await userEvent.click(
     screen.getByRole("button", { name: "Finalize meeting" }),
   );
+  // Nobody was invited by email: finalizing is still allowed, and the
+  // review says nobody is emailed.
+  let dialog = emailDialog("Finalize meeting");
+  expect(dialog).toHaveTextContent(
+    "Nobody has been invited by email, so no confirmation emails will be sent.",
+  );
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Continue" }),
+  );
+  expect(
+    within(dialog).getByRole("heading", {
+      name: "Finalize without emailing anyone?",
+    }),
+  ).toHaveFocus();
+  expect(dialog).toHaveTextContent("No emails will be sent.");
+  expect(confirmFinalMeeting).not.toHaveBeenCalled();
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Finalize meeting" }),
+  );
   await waitFor(() => expect(setEvent).toHaveBeenCalled());
+  expect(
+    screen.queryByRole("dialog", { name: "Finalize meeting" }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.getByText("The meeting is finalized. Nobody was emailed."),
+  ).toBeInTheDocument();
   // Delivery progress is handed to the workspace banner, not drawn here.
   expect(onDeliveryRequest).toHaveBeenCalledWith({
     id: "final-1",
@@ -1367,13 +1782,162 @@ test("finalize handles nested attendance, delivery progress, and confirmation er
     screen.queryByLabelText("Finalization delivery progress"),
   ).not.toBeInTheDocument();
 
-  confirmFinalMeeting.mockRejectedValueOnce(new Error("confirmation failed"));
+  // A failed finalization stays on the confirmation with its error.
+  confirmFinalMeeting
+    .mockRejectedValueOnce(new Error("confirmation failed"))
+    .mockRejectedValueOnce(new Error(""));
   await userEvent.click(
     screen.getByRole("button", { name: "Finalize meeting" }),
   );
-  expect(await screen.findByRole("alert")).toHaveTextContent(
+  dialog = emailDialog("Finalize meeting");
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Continue" }),
+  );
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Finalize meeting" }),
+  );
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent(
     "confirmation failed",
   );
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Finalize meeting" }),
+  );
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+    "Unable to finalize this meeting.",
+  );
+  // The same finalization is retried, under the same key.
+  expect(confirmFinalMeeting).toHaveBeenCalledTimes(3);
+  expect(confirmFinalMeeting.mock.calls[2][1].idempotencyKey).toBe(
+    confirmFinalMeeting.mock.calls[1][1].idempotencyKey,
+  );
+  await userEvent.click(within(dialog).getByRole("button", { name: "Back" }));
+  await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  expect(
+    screen.queryByRole("dialog", { name: "Finalize meeting" }),
+  ).not.toBeInTheDocument();
+});
+
+test("finalize reviews the confirmation email the reviewed attendance came with", async () => {
+  previewFinalMeeting.mockResolvedValueOnce({
+    attendance: { availableParticipantTotal: 3 },
+    recipientCount: 3,
+    email: previewEmail(),
+    sample: { name: "Ada Lovelace", email: "ada@example.com" },
+  });
+  confirmFinalMeeting.mockResolvedValueOnce({
+    event: { ...baseEvent, status: "finalized" },
+    deliveryRequest: {
+      id: "final-2",
+      operation: "final_confirmation",
+      delivery: { total: 3, pending: 3 },
+    },
+  });
+  const setEvent = jest.fn();
+  const onDeliveryRequest = jest.fn();
+  render(
+    <FinalizeScalePanel
+      event={baseEvent}
+      setEvent={setEvent}
+      getToken={getToken}
+      selection={recommendation}
+      onDeliveryRequest={onDeliveryRequest}
+    />,
+  );
+  expect(
+    screen.getByRole("button", { name: "Finalize meeting" }),
+  ).toBeDisabled();
+  await userEvent.click(
+    screen.getByRole("button", { name: "Review attendance" }),
+  );
+  expect(await screen.findByText("3")).toBeInTheDocument();
+  await userEvent.click(
+    screen.getByRole("button", { name: "Finalize meeting" }),
+  );
+  // The reply to Review attendance already carries the email: no new ask.
+  expect(previewFinalMeeting).toHaveBeenCalledTimes(1);
+  const dialog = emailDialog("Finalize meeting");
+  expect(dialog).toHaveTextContent(
+    "3 invited people will receive the confirmation and a calendar invitation.",
+  );
+  expect(within(dialog).getByTitle("Email preview")).toHaveAttribute(
+    "sandbox",
+    "",
+  );
+  expect(dialog).toHaveTextContent("meeting.ics");
+  expect(dialog).toHaveTextContent("Shown for Ada Lovelace.");
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Continue" }),
+  );
+  expect(
+    within(dialog).getByRole("heading", {
+      name: "Finalize and email 3 people?",
+    }),
+  ).toHaveFocus();
+  expect(dialog).toHaveTextContent(
+    "Subject: Scale event is confirmed · 3 recipients",
+  );
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Finalize and send 3 emails" }),
+  );
+  await waitFor(() =>
+    expect(confirmFinalMeeting).toHaveBeenCalledWith(
+      baseEvent.code,
+      expect.objectContaining({
+        startsAt: recommendation.startsAt,
+        expectedVersion: 4,
+        idempotencyKey: "request-key",
+      }),
+      "token",
+    ),
+  );
+  expect(onDeliveryRequest).toHaveBeenCalledWith(
+    expect.objectContaining({ id: "final-2" }),
+  );
+  expect(
+    await screen.findByText(
+      "The meeting is finalized and calendar invitations are queued.",
+    ),
+  ).toBeInTheDocument();
+});
+
+test("finalize reads one confirmation recipient in the singular", async () => {
+  previewFinalMeeting.mockResolvedValueOnce({
+    attendance: { availableParticipantTotal: 1 },
+    recipientCount: 1,
+    email: previewEmail(),
+    sample: null,
+  });
+  render(
+    <FinalizeScalePanel
+      event={baseEvent}
+      setEvent={jest.fn()}
+      getToken={getToken}
+      selection={recommendation}
+    />,
+  );
+  await userEvent.click(
+    screen.getByRole("button", { name: "Review attendance" }),
+  );
+  await screen.findByRole("group", { name: "Attendance review" });
+  await userEvent.click(
+    screen.getByRole("button", { name: "Finalize meeting" }),
+  );
+  const dialog = emailDialog("Finalize meeting");
+  expect(dialog).toHaveTextContent(
+    "1 invited person will receive the confirmation and a calendar invitation.",
+  );
+  expect(dialog).not.toHaveTextContent("Shown for");
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Continue" }),
+  );
+  expect(
+    within(dialog).getByRole("heading", {
+      name: "Finalize and email 1 person?",
+    }),
+  ).toBeInTheDocument();
+  expect(
+    within(dialog).getByRole("button", { name: "Finalize and send 1 email" }),
+  ).toBeInTheDocument();
 });
 
 test("finalized organizers can download ICS and see download errors", async () => {
