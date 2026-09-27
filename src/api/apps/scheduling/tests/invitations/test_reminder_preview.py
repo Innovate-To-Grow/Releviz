@@ -8,6 +8,7 @@ from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+from apps.authn.security import consume_request_rate_limit
 from apps.authn.tests.helpers import create_member, token_for
 from apps.mail.models import EmailDeliveryJob, EmailDeliveryRequest, EmailMessageLog
 from apps.mail.services import enqueue_email_job
@@ -152,6 +153,18 @@ class ReminderPreviewApiTests(TestCase):
         closed = self.preview()
         self.assertEqual(closed.status_code, 200, closed.data)
         self.assertIsNone(closed.data["nextAutomaticAt"])
+
+    def test_preview_spends_no_request_budget_while_a_run_does(self):
+        with patch(
+            "apps.authn.security.helpers.consume_request_rate_limit",
+            wraps=consume_request_rate_limit,
+        ) as consume:
+            self.assertEqual(self.preview().status_code, 200)
+            consume.assert_not_called()
+            self.assertEqual(self.send().status_code, 202)
+        # The throttle's own call; the view's recipient charge binds the
+        # helper separately and is covered by the send tests.
+        self.assertEqual([call.args[0] for call in consume.call_args_list], ["reminder_request"])
 
     def test_preview_guards_and_validation(self):
         self.authenticate(self.outsider)

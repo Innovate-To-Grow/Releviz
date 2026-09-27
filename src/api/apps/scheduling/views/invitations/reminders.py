@@ -34,6 +34,12 @@ class EventRemindersView(APIView):
     def get_auth_rate_identity(self, request):
         return str(request.user.pk)
 
+    def get_throttles(self):
+        # A preview spends nothing, the request budget included.
+        if self.request.data.get("preview") is True:
+            return []
+        return super().get_throttles()
+
     def post(self, request):
         code = request.query_params.get("code", "")
         if not code:
