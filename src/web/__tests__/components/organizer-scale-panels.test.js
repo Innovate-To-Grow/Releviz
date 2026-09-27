@@ -75,7 +75,6 @@ import {
   fetchEventResults,
   previewFinalMeeting,
   retryDeliveryRequest,
-  sendReminders,
   updateEvent,
   updateEventLifecycle,
 } from "@/lib/api/events";
@@ -136,8 +135,6 @@ function renderDrawerProps(overrides = {}) {
     event: drawerEvent,
     mode: "inperson",
     participant: { id: "roster-1", name: "Temporary Taylor" },
-    participantName: "Temporary Taylor",
-    setParticipantName: jest.fn(),
     inperson: [0, 1],
     virtual: [0, 0],
     availabilityValue: 1,
@@ -275,6 +272,38 @@ test(
     expect(fetchDeliveryRequest).toHaveBeenCalledTimes(2);
   }),
 );
+
+test("delivery progress offers Show failed while anyone failed and Dismiss once nothing is waiting", () => {
+  const onShowFailed = jest.fn();
+  const onDismiss = jest.fn();
+  const card = (delivery, handlers = { onShowFailed, onDismiss }) => (
+    <DeliveryRequestProgress
+      initialRequest={{ id: "delivery-7", delivery }}
+      getToken={getToken}
+      {...handlers}
+    />
+  );
+  const finished = render(card({ total: 3, sent: 2, permanentFailure: 1 }));
+  fireEvent.click(screen.getByRole("button", { name: "Show failed" }));
+  expect(onShowFailed).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+  expect(onDismiss).toHaveBeenCalledTimes(1);
+  finished.unmount();
+
+  // Still sending: nothing to dismiss yet, and nobody failed.
+  const sending = render(card({ total: 3, sent: 1, pending: 2 }));
+  expect(
+    screen.queryByRole("button", { name: "Show failed" }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "Dismiss" }),
+  ).not.toBeInTheDocument();
+  sending.unmount();
+
+  // Without the callbacks a finished run shows no links at all.
+  render(card({ total: 3, sent: 3 }, {}));
+  expect(document.querySelector(".delivery-progress__actions")).toBeNull();
+});
 
 test(
   "delivery progress exposes refresh and retry errors",
@@ -593,11 +622,13 @@ test("managed schedule drawer is a labelled modal dialog that traps focus and cl
   });
   expect(closeButton).toHaveFocus();
 
-  expect(
-    screen.getByRole("textbox", { name: "Event display name" }),
-  ).toHaveAccessibleDescription(
-    "You and this participant edit the same response. A version conflict will never be silently overwritten.",
+  expect(dialog).toHaveTextContent(
+    "You and this participant edit the same response.",
   );
+  expect(dialog).not.toHaveTextContent("never be silently overwritten");
+  expect(
+    within(dialog).queryByRole("textbox", { name: "Event display name" }),
+  ).not.toBeInTheDocument();
   expect(screen.getByText("Mark times as")).toBeInTheDocument();
   const choices = screen.getByRole("group", { name: "Availability status" });
   expect(
@@ -642,10 +673,8 @@ test("managed schedule drawer explains who can edit each kind of participant", (
   expect(
     screen.getByText("Full account · not responded yet"),
   ).toBeInTheDocument();
-  expect(
-    screen.getByRole("textbox", { name: "Event display name" }),
-  ).toHaveAccessibleDescription(
-    "You can enter this schedule until they join, save, or submit it themselves; after that only they can change it. A version conflict will never be silently overwritten.",
+  expect(screen.getByRole("dialog")).toHaveTextContent(
+    "You can enter this schedule until they join, save, or submit it themselves; after that only they can change it.",
   );
 
   // Organizer-managed people are always shared, whatever their account.
@@ -662,20 +691,24 @@ test("managed schedule drawer explains who can edit each kind of participant", (
     />,
   );
   expect(screen.getByText("Organizer-managed participant")).toBeInTheDocument();
-  expect(
-    screen.getByRole("textbox", { name: "Event display name" }),
-  ).toHaveAccessibleDescription(
-    "You and this participant edit the same response. A version conflict will never be silently overwritten.",
+  expect(screen.getByRole("dialog")).toHaveTextContent(
+    "You and this participant edit the same response.",
   );
 });
 
-test("managed schedule drawer locks editing while saving, closed, or conflicted", () => {
-  const { rerender } = renderDrawer({ participantName: "   " });
+test("managed schedule drawer locks editing while left out, saving, closed, or conflicted", () => {
+  const onCountIn = jest.fn();
+  const { rerender } = renderDrawer({ leftOut: true, onCountIn });
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "Temporary Taylor is left out of the results, so their schedule can't change.",
+  );
   expect(screen.getByRole("button", { name: "Save draft" })).toBeDisabled();
   expect(
     screen.getByRole("button", { name: "Submit on behalf" }),
   ).toBeDisabled();
   expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
+  fireEvent.click(screen.getByRole("button", { name: "Count them again" }));
+  expect(onCountIn).toHaveBeenCalledTimes(1);
 
   rerender(
     <ManagedScheduleDrawer {...renderDrawerProps({ responsesOpen: false })} />,
@@ -684,14 +717,29 @@ test("managed schedule drawer locks editing while saving, closed, or conflicted"
     "Availability can only be edited while this event is active.",
   );
   expect(
-    screen.getByRole("textbox", { name: "Event display name" }),
-  ).toBeDisabled();
-  expect(
     within(
       screen.getByRole("group", { name: "Availability status" }),
     ).getByRole("button", { name: "Busy" }),
   ).toBeDisabled();
   expect(screen.getByRole("button", { name: "Save draft" })).toBeDisabled();
+
+  // A lock reason of the caller's, and Close in place of Cancel once saved.
+  rerender(
+    <ManagedScheduleDrawer
+      {...renderDrawerProps({
+        responsesOpen: false,
+        lockReason: "The deadline has passed.",
+        saved: true,
+      })}
+    />,
+  );
+  expect(screen.getByRole("note")).toHaveTextContent(
+    "The deadline has passed.",
+  );
+  expect(screen.getByRole("button", { name: "Close" })).toBeEnabled();
+  expect(
+    screen.queryByRole("button", { name: "Cancel" }),
+  ).not.toBeInTheDocument();
 
   rerender(
     <ManagedScheduleDrawer
@@ -875,14 +923,9 @@ test.each([
   expect(screen.getByRole("button", { name: "Edit event" })).toBeDisabled();
 });
 
-test("event controls queue reminders and close an active event", async () => {
+test("event controls close an active event without a reminders button", async () => {
   const setEvent = jest.fn();
   const setDeliveryRequest = jest.fn();
-  sendReminders.mockResolvedValue({
-    deliveryRequestId: "reminder-1",
-    recipientCount: 12,
-    delivery: { total: 12, pending: 12 },
-  });
   updateEventLifecycle.mockResolvedValue({
     event: { ...baseEvent, status: "closed", version: 5 },
   });
@@ -907,17 +950,10 @@ test("event controls queue reminders and close an active event", async () => {
     within(controls).getByRole("button", { name: "Archive event" }),
   ).toBeInTheDocument();
 
-  await userEvent.click(
-    within(controls).getByRole("button", { name: "Queue reminders" }),
-  );
-  await waitFor(() =>
-    expect(setDeliveryRequest).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "reminder-1", operation: "reminder" }),
-    ),
-  );
+  // Reminders go out from the Participants section now.
   expect(
-    within(controls).getByText("12 reminder emails were queued."),
-  ).toBeInTheDocument();
+    within(controls).queryByRole("button", { name: "Queue reminders" }),
+  ).not.toBeInTheDocument();
   await userEvent.click(
     within(controls).getByRole("button", { name: "Close responses" }),
   );
@@ -1705,45 +1741,6 @@ test("choosing a stale ranked window reveals its next occurrence and keeps it ma
   expect(document.querySelector('[data-cell-idx="0"]')).toHaveAttribute(
     "aria-selected",
     "true",
-  );
-});
-
-test("event controls report reminder failures and legacy delivery summaries", async () => {
-  sendReminders
-    .mockRejectedValueOnce(new Error("Reminder service unavailable"))
-    .mockResolvedValueOnce({
-      deliveryRequest: {
-        id: "reminder-2",
-        recipientCount: 3,
-        summary: { total: 3, pending: 3 },
-      },
-    });
-  const setDeliveryRequest = jest.fn();
-  render(
-    <EventControls
-      event={baseEvent}
-      setEvent={jest.fn()}
-      getToken={getToken}
-      setDeliveryRequest={setDeliveryRequest}
-    />,
-  );
-  const controls = screen.getByRole("region", { name: "Event controls" });
-  await userEvent.click(
-    within(controls).getByRole("button", { name: "Queue reminders" }),
-  );
-  expect(await within(controls).findByRole("alert")).toHaveTextContent(
-    "Reminder service unavailable",
-  );
-  await userEvent.click(
-    within(controls).getByRole("button", { name: "Queue reminders" }),
-  );
-  await waitFor(() =>
-    expect(
-      within(controls).getByText("3 reminder emails were queued."),
-    ).toBeInTheDocument(),
-  );
-  expect(setDeliveryRequest).toHaveBeenCalledWith(
-    expect.objectContaining({ id: "reminder-2" }),
   );
 });
 

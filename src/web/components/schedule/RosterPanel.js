@@ -1452,10 +1452,10 @@ const RosterPanel = forwardRef(function RosterPanel(
   return (
     <div
       ref={sectionRef}
-      className="roster-panel participants-section d-flex flex-column gap-3"
+      className="participants-section d-flex flex-column gap-3"
     >
       <Panel
-        className="roster-panel__controls"
+        className="participants-panel"
         headingLevel={3}
         titleId="organizer-roster-heading"
         headingRef={headingRef}
@@ -1587,7 +1587,7 @@ const RosterPanel = forwardRef(function RosterPanel(
           >
             {listBody}
             {showPagination && (
-              <div className="pagination-row roster-panel__pagination">
+              <div className="pagination-row participants-pagination">
                 <div className="d-flex align-items-center gap-2">
                   <label
                     className="pagination-row__count mb-0"
