@@ -122,6 +122,12 @@ test.describe("automated accessibility baseline", () => {
     // Every organizer email is reviewed in a two-step dialog before it goes
     // out. Both steps fit a phone and pass the automated checks, and closing
     // the dialog sends nothing.
+    // The preview frame holds the email itself, not page UI, and is sandboxed
+    // with scripts off, so axe cannot be injected into it: descending into it
+    // stalls the scan (WebKit times out). Its title is covered by the unit
+    // tests; everything around it is checked here.
+    const EMAIL_FRAME = { exclude: ['iframe[title="Email preview"]'] };
+
     test("email review and confirmation fit a phone and meet WCAG A/AA checks", async ({
       page,
       request,
@@ -156,19 +162,19 @@ test.describe("automated accessibility baseline", () => {
       await expect(dialog.getByText(`Ivy Invitee <${inviteeEmail}>`)).toBeVisible();
       await expect(dialog.locator('iframe[title="Email preview"]')).toBeVisible();
       await expectNoHorizontalScroll(page, "email review at 375px");
-      await expectAccessible(page, "email review at 375px");
+      await expectAccessible(page, "email review at 375px", EMAIL_FRAME);
 
       await dialog.getByRole("tab", { name: "Plain text" }).click();
       await expect(dialog.getByRole("tab", { name: "Plain text" })).toHaveAttribute(
         "aria-selected",
         "true"
       );
-      await expectAccessible(page, "email plain text at 375px");
+      await expectAccessible(page, "email plain text at 375px", EMAIL_FRAME);
 
       await dialog.getByRole("button", { name: "Continue", exact: true }).click();
       await expect(dialog.getByRole("heading", { name: "Send 1 invitation now?" })).toBeFocused();
       await expectNoHorizontalScroll(page, "email confirmation at 375px");
-      await expectAccessible(page, "email confirmation at 375px");
+      await expectAccessible(page, "email confirmation at 375px", EMAIL_FRAME);
 
       await dialog.getByRole("button", { name: "Close dialog" }).click();
       await expect(dialog).toHaveCount(0);
