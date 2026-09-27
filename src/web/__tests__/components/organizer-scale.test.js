@@ -219,7 +219,8 @@ const rosterImportRecord = {
   selectedWorksheet: "Pasted data",
   headerRow: 1,
   headers: ["name", "email"],
-  columnMapping: {},
+  // The server suggests the mapping from the headers on create.
+  columnMapping: { name: 0, email: 1 },
   defaults: { weight: 1, included: true },
   summary: { total: 1, selected: 1, valid: 1, invalid: 0, conflicts: 0 },
 };
@@ -252,13 +253,13 @@ async function openPastedRosterPreview() {
   await userEvent.click(
     screen.getByRole("button", { name: "Import participants" }),
   );
-  await userEvent.click(screen.getByRole("tab", { name: "Paste spreadsheet" }));
+  await userEvent.click(
+    screen.getByRole("tab", { name: "Paste from a spreadsheet" }),
+  );
   fireEvent.change(screen.getByLabelText("Pasted participant rows"), {
     target: { value: "name\temail\nAda\tada@example.com" },
   });
-  await userEvent.click(
-    screen.getByRole("button", { name: "Continue to mapping" }),
-  );
+  await userEvent.click(screen.getByRole("button", { name: "Continue" }));
   await userEvent.click(
     await screen.findByRole("button", { name: "Preview rows" }),
   );
@@ -1808,16 +1809,16 @@ describe("scaled organizer workspace", () => {
     // Invitations are opt-in: the box is unchecked until the organizer
     // ticks it, and the commit label follows.
     const sendBox = screen.getByLabelText(
-      "Send invitations to newly added people",
+      "Email invitations to the people this import adds",
     );
     expect(sendBox).not.toBeChecked();
     expect(
-      screen.getByRole("button", { name: "Merge participants" }),
+      screen.getByRole("button", { name: "Import 1 person" }),
     ).toBeInTheDocument();
     await userEvent.click(sendBox);
     await userEvent.click(
       screen.getByRole("button", {
-        name: "Merge participants and invite new people",
+        name: "Import 1 person and send invitations",
       }),
     );
 
@@ -1865,11 +1866,11 @@ describe("scaled organizer workspace", () => {
     await screen.findByText("Ada Faculty");
     await openPastedRosterPreview();
     await userEvent.click(
-      screen.getByRole("radio", { name: /Rebuild the participant list/ }),
+      screen.getByRole("radio", { name: /Replace the whole list/ }),
     );
 
     const rebuildButton = screen.getByRole("button", {
-      name: "Rebuild participant list",
+      name: "Replace the list with 1 person",
     });
     expect(screen.getByRole("note")).toHaveTextContent(
       "Rebuilding clears schedules, invitations, and pending delivery. With invitations enabled below it sends a new invitation to every imported participant; otherwise everyone starts as Not sent and gets no reminders until you send invitations.",

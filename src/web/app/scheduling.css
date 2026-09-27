@@ -944,15 +944,6 @@
   margin-top: 0.75rem;
 }
 
-/* Import preview inputs stay readable; the table scrolls horizontally instead. */
-.roster-import__table input.form-control:not([type="number"]) {
-  min-width: 9rem;
-}
-
-.roster-import__table input[type="number"].form-control {
-  min-width: 4.5rem;
-}
-
 /* ---------------------------------------------------------------------------
  * Meeting time calendar (organizer results + picker)
  * ------------------------------------------------------------------------- */
