@@ -321,8 +321,8 @@ class RosterInvitationPreviewTests(TestCase):
             return response.data, [query["sql"] for query in captured.captured_queries]
 
         add_people(range(3))
-        # The first request of a scope also creates its rate-limit buckets.
-        preview_everyone()
+        # A preview spends no request budget, so even the first one touches
+        # no rate-limit bucket and needs no warm-up.
         small, small_queries = preview_everyone()
         self.assertEqual(small["requestedCount"], 9)
         self.assertEqual(small["willSend"], 3)
