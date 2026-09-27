@@ -15,6 +15,13 @@
 
 /* List ------------------------------------------------------------------- */
 
+/* Narrow screens clip the Groups column away with an absolutely positioned
+   box (see the media query below). The scroller is its containing block, so
+   the box stays inside the sideways scroll instead of widening the page. */
+.participants-table-shell .table-responsive {
+  position: relative;
+}
+
 .participants-table > :not(caption) > * > * {
   padding: 0.5rem 0.75rem;
 }
