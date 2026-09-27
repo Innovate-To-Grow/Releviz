@@ -66,6 +66,33 @@ describe("EmailMenu", () => {
     ).toBeEnabled();
   });
 
+  test("does not offer reminders while they are off, even with people to remind", async () => {
+    const user = userEvent.setup();
+    const onSendReminders = jest.fn();
+    render(
+      <EmailMenu
+        notInvitedCount={2}
+        remindCount={3}
+        reminders={{ enabled: false, nextAt: null }}
+        onInviteAll={jest.fn()}
+        onSendReminders={onSendReminders}
+      />,
+    );
+    await openMenu(user);
+    expect(screen.getByRole("menu")).toHaveTextContent("Reminders are off");
+    const remind = screen.getByRole("menuitem", {
+      name: "Send reminders (3)…",
+    });
+    expect(remind).toBeDisabled();
+    await user.click(remind);
+    expect(onSendReminders).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("menuitem", {
+        name: "Invite everyone not invited yet (2)…",
+      }),
+    ).toBeEnabled();
+  });
+
   test("treats missing reminder settings as off and honours disabled", async () => {
     const user = userEvent.setup();
     const { rerender } = render(<EmailMenu />);

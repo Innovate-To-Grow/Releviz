@@ -1184,10 +1184,12 @@ describe("scaled organizer workspace", () => {
   test("clears persisted delivery progress when a reminder run queues no recipients", async () => {
     const key = `releviz.delivery-request.${event.code}`;
     window.sessionStorage.setItem(key, JSON.stringify({ id: "old-request" }));
+    // An older preview reply without the reminders flag: the event's own
+    // setting stands in for it.
     sendReminders
       .mockResolvedValueOnce({ preview: true, wouldEnqueue: 1 })
       .mockResolvedValueOnce({ recipientCount: 0 });
-    renderView();
+    renderView(jest.fn(), { ...event, remindersEnabled: true });
     await screen.findByText("Ada Faculty");
     await userEvent.click(screen.getByRole("button", { name: "Email" }));
     await userEvent.click(
