@@ -1726,7 +1726,11 @@ describe("business API helpers", () => {
 
     await sendRosterInvitations(
       "ABC",
-      { filter: { invitationStatus: "not_sent" }, preview: true, resend: false },
+      {
+        filter: { invitationStatus: "not_sent" },
+        preview: true,
+        resend: false,
+      },
       "tok",
     );
     expect(global.fetch).toHaveBeenLastCalledWith(
