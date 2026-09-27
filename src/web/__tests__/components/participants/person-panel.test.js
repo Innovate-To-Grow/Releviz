@@ -330,6 +330,27 @@ describe("PersonPanel", () => {
     expect(handlers.onClose).toHaveBeenCalledTimes(1);
   });
 
+  test("opening the schedule with unsaved changes asks first", async () => {
+    const user = userEvent.setup();
+    const p = person();
+    const handlers = renderPanel(p);
+    await user.type(field("Phone"), "+1 555 0100");
+    await user.click(screen.getByRole("button", { name: "Edit schedule" }));
+    expect(
+      screen.getByRole("dialog", { name: "Discard your changes?" }),
+    ).toBeInTheDocument();
+    expect(handlers.onEditSchedule).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Keep editing" }));
+    expect(handlers.onEditSchedule).not.toHaveBeenCalled();
+    expect(field("Phone")).toHaveValue("+1 555 0100");
+
+    await user.click(screen.getByRole("button", { name: "Edit schedule" }));
+    await user.click(screen.getByRole("button", { name: "Discard" }));
+    expect(handlers.onEditSchedule).toHaveBeenCalledWith(p);
+    expect(handlers.onClose).not.toHaveBeenCalled();
+    expect(field("Phone")).toHaveValue("");
+  });
+
   test("moving to another person asks when dirty and goes straight there when clean", async () => {
     const user = userEvent.setup();
     const handlers = renderPanel(person(), {

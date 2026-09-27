@@ -23,7 +23,7 @@ function renderDialog(props = {}) {
 
 describe("SendInvitationsDialog", () => {
   test("shows a loading state until the preview arrives", () => {
-    renderDialog({ preview: null });
+    const { onConfirm } = renderDialog({ preview: null });
     expect(
       screen.getByRole("dialog", { name: "Send invitations" }),
     ).toBeInTheDocument();
@@ -34,6 +34,7 @@ describe("SendInvitationsDialog", () => {
       screen.getByRole("button", { name: "Send 0 invitations" }),
     ).toBeDisabled();
     fireEvent.submit(screen.getByRole("dialog"));
+    expect(onConfirm).not.toHaveBeenCalled();
   });
 
   test("lists every non-zero line and confirms with the plain count", async () => {

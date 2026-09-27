@@ -74,10 +74,11 @@ function changesBetween(initial, draft, { canRename, canChangeEmail }) {
 /**
  * Side drawer with everything about one participant: contact details,
  * groups, whether and how much they count, and their invitation. Save sends
- * only the fields that changed; closing or moving to another person with
- * unsaved edits asks first. `dialogOpen` says the parent has a dialog of its
- * own open above the panel (a confirmation, the send dialog), so Escape and
- * Tab are left to it.
+ * only the fields that changed; leaving the panel with unsaved edits (closing
+ * it, moving to another person or opening the schedule, which replaces this
+ * panel) asks first. `dialogOpen` says the parent has a dialog of its own
+ * open above the panel (a confirmation, the send dialog), so Escape and Tab
+ * are left to it.
  */
 export default function PersonPanel(props) {
   if (!props.participant) return null;
@@ -127,20 +128,25 @@ function PersonPanelForm({
     setErrors((current) => ({ ...current, [field]: "" }));
   };
 
+  // Every way out of the panel that would lose the draft. The schedule
+  // drawer replaces this panel, so it counts as leaving too.
+  const leave = {
+    prev: () => onPrev?.(),
+    next: () => onNext?.(),
+    schedule: () => onEditSchedule?.(p),
+    close: () => onClose?.(),
+  };
+
   const guard = (action) => {
     if (dirty) setPending(action);
-    else if (action === "prev") onPrev?.();
-    else if (action === "next") onNext?.();
-    else onClose?.();
+    else leave[action]();
   };
 
   const confirmPending = () => {
     const action = pending;
     setPending(null);
     setDraft(initial);
-    if (action === "prev") onPrev?.();
-    else if (action === "next") onNext?.();
-    else onClose?.();
+    leave[action]();
   };
 
   const save = async (submitEvent) => {
@@ -313,7 +319,7 @@ function PersonPanelForm({
               variant="outlined"
               icon={<EditIcon />}
               disabled={busy}
-              onClick={() => onEditSchedule?.(p)}
+              onClick={() => guard("schedule")}
             >
               {p.isOrganizer ? "Edit my schedule" : "Edit schedule"}
             </AppButton>
