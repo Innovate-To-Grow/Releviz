@@ -1040,6 +1040,12 @@ describe("business API helpers", () => {
       { page: 2, pageSize: 25 },
       "tok",
     );
+    await fetchRosterImportRows(
+      "ABC 123",
+      "import 1",
+      { page: 1, pageSize: 50, show: "needs_fix" },
+      "tok",
+    );
     await commitRosterImport(
       "ABC 123",
       "import 1",
@@ -1213,6 +1219,10 @@ describe("business API helpers", () => {
     expect(urls).toContain("/events/roster-imports/import%201?code=ABC%20123");
     expect(urls).toContain(
       "/events/roster-imports/import%201/rows?code=ABC+123&page=2&pageSize=25",
+    );
+    // `show` is only sent when set, so the default request is unchanged.
+    expect(urls).toContain(
+      "/events/roster-imports/import%201/rows?code=ABC+123&page=1&pageSize=50&show=needs_fix",
     );
     expect(global.fetch).toHaveBeenCalledWith(
       "/events/roster-imports/import%201/commit?code=ABC%20123",

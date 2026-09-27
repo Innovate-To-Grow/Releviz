@@ -70,10 +70,10 @@ export async function configureRosterImport(code, importId, payload, token) {
 export async function fetchRosterImportRows(
   code,
   importId,
-  { page = 1, pageSize = 50 } = {},
+  { page = 1, pageSize = 50, show } = {},
   token,
 ) {
-  const query = queryString({ code, page, pageSize });
+  const query = queryString({ code, page, pageSize, show });
   const res = await apiFetch(
     `${API_BASE}/events/roster-imports/${encodeURIComponent(importId)}/rows?${query}`,
     {},
