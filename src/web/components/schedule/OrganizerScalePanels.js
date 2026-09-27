@@ -26,7 +26,6 @@ import {
   EditIcon,
   FinalizeIcon,
   GroupIcon,
-  ReminderIcon,
   ResultsIcon,
   VirtualIcon,
 } from "@/components/ui/icons";
@@ -52,7 +51,6 @@ import {
   fetchEventResults,
   previewFinalMeeting,
   retryDeliveryRequest,
-  sendReminders,
   updateEventLifecycle,
 } from "@/lib/api/events";
 
@@ -142,7 +140,8 @@ function MetricListItem({ value, label }) {
 // `liveVersion` counts the times it has been told to look again: each
 // change, and each time the stream opens, since the run may have moved while
 // it was down. While pushed, the card re-reads the run on each one instead
-// of polling for it.
+// of polling for it. `onShowFailed` offers a way to the people whose email
+// failed, and `onDismiss` lets a finished run be put away.
 export function DeliveryRequestProgress({
   initialRequest,
   getToken,
@@ -150,6 +149,8 @@ export function DeliveryRequestProgress({
   pushed = false,
   liveVersion = 0,
   ariaLabel = "Delivery progress",
+  onShowFailed = null,
+  onDismiss = null,
 }) {
   const [request, setRequest] = useState(initialRequest || null);
   const [error, setError] = useState("");
@@ -273,11 +274,23 @@ export function DeliveryRequestProgress({
           <MetricListItem value={counts.canceled} label="canceled" />
         )}
       </ul>
-      {failed > 0 && (
+      {(failed > 0 || (!waiting && onDismiss)) && (
         <div className="delivery-progress__actions">
-          <AppButton variant="filled" onClick={retry} disabled={retrying}>
-            {retrying ? "Retrying…" : "Retry failed recipients"}
-          </AppButton>
+          {failed > 0 && (
+            <AppButton variant="filled" onClick={retry} disabled={retrying}>
+              {retrying ? "Retrying…" : "Retry failed recipients"}
+            </AppButton>
+          )}
+          {failed > 0 && onShowFailed && (
+            <AppButton variant="text" onClick={onShowFailed}>
+              Show failed
+            </AppButton>
+          )}
+          {!waiting && onDismiss && (
+            <AppButton variant="text" onClick={onDismiss}>
+              Dismiss
+            </AppButton>
+          )}
         </div>
       )}
       {error && (
@@ -308,14 +321,11 @@ export function EventControls({
 }) {
   const [changing, setChanging] = useState(false);
   const [error, setError] = useState("");
-  const [status, setStatus] = useState("");
-  const reminderKey = useRef("");
   const lifecycleSummary = LIFECYCLE_SUMMARIES[event.status] || "";
 
   const changeLifecycle = async (nextStatus) => {
     setChanging(true);
     setError("");
-    setStatus("");
     try {
       const token = await getToken();
       const responseDeadline =
@@ -353,39 +363,6 @@ export function EventControls({
     }
   };
 
-  const remind = async () => {
-    if (!reminderKey.current) reminderKey.current = crypto.randomUUID();
-    setChanging(true);
-    setError("");
-    try {
-      const token = await getToken();
-      const data = await sendReminders(
-        event.code,
-        { idempotencyKey: reminderKey.current },
-        token,
-      );
-      setDeliveryRequest(
-        data.deliveryRequest ||
-          (data.deliveryRequestId
-            ? {
-                id: data.deliveryRequestId,
-                operation: "reminder",
-                recipientCount: data.recipientCount,
-                delivery: data.delivery,
-              }
-            : null),
-      );
-      setStatus(
-        `${data.recipientCount || data.deliveryRequest?.recipientCount || 0} reminder emails were queued.`,
-      );
-      reminderKey.current = "";
-    } catch (requestError) {
-      setError(requestError.message || "Unable to queue reminders.");
-    } finally {
-      setChanging(false);
-    }
-  };
-
   return (
     <section
       className="organizer-event-controls d-flex flex-wrap align-items-center gap-2 mw-100"
@@ -407,23 +384,13 @@ export function EventControls({
       </div>
 
       {event.status === "active" && (
-        <>
-          <AppButton
-            variant="outlined"
-            icon={<ReminderIcon />}
-            onClick={remind}
-            disabled={changing}
-          >
-            Queue reminders
-          </AppButton>
-          <AppButton
-            variant="outlined"
-            onClick={() => changeLifecycle("closed")}
-            disabled={changing}
-          >
-            Close responses
-          </AppButton>
-        </>
+        <AppButton
+          variant="outlined"
+          onClick={() => changeLifecycle("closed")}
+          disabled={changing}
+        >
+          Close responses
+        </AppButton>
       )}
       {["closed", "finalized", "archived"].includes(event.status) && (
         <AppButton
@@ -453,11 +420,6 @@ export function EventControls({
           >
             {lifecycleSummary}
           </p>
-        )}
-        {status && (
-          <Alert variant="success" role="status" className="py-2">
-            {status}
-          </Alert>
         )}
         {error && (
           <Alert variant="danger" role="alert" className="py-2">

@@ -455,6 +455,8 @@ export default function OrganizerScaleView() {
             pushed={streamConnected}
             liveVersion={liveVersion}
             ariaLabel="Event delivery progress"
+            onShowFailed={() => rosterRef.current?.showFailedInvitations()}
+            onDismiss={() => setDeliveryRequest(null)}
           />
         </div>
       )}
