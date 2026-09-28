@@ -77,10 +77,6 @@ def can_join_event(event, user) -> bool:
     return has_event_invitation(event, user)
 
 
-def weight_for_participant(event, participant):
-    return event.weights.filter(participant=participant).first()
-
-
 def organizer_may_edit_response(participant) -> bool:
     """Whether the event organizer may enter or change this participant's response.
 

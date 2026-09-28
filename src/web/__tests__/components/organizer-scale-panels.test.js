@@ -979,16 +979,22 @@ test("managed schedule drawer explains who can edit each kind of participant", (
   );
 });
 
-test("managed schedule drawer locks editing while left out, saving, closed, or conflicted", () => {
+test("managed schedule drawer locks editing while saving, closed, or conflicted, but not while left out", () => {
   const onCountIn = jest.fn();
   const { rerender } = renderDrawer({ leftOut: true, onCountIn });
   expect(screen.getByRole("status")).toHaveTextContent(
-    "Temporary Taylor is left out of the results, so their schedule can't change.",
+    "Temporary Taylor is left out of the results, so their answers don't count.",
   );
-  expect(screen.getByRole("button", { name: "Save draft" })).toBeDisabled();
+  // Leaving someone out only changes the results; their schedule still saves.
+  expect(
+    within(
+      screen.getByRole("group", { name: "Availability status" }),
+    ).getByRole("button", { name: "Busy" }),
+  ).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Save draft" })).toBeEnabled();
   expect(
     screen.getByRole("button", { name: "Submit on behalf" }),
-  ).toBeDisabled();
+  ).toBeEnabled();
   expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
   fireEvent.click(screen.getByRole("button", { name: "Count them again" }));
   expect(onCountIn).toHaveBeenCalledTimes(1);
@@ -1075,7 +1081,7 @@ test("managed schedule drawer keeps Count them again off while the roster cannot
     onCountIn,
   });
   expect(screen.getByRole("status")).toHaveTextContent(
-    "Temporary Taylor is left out of the results, so their schedule can't change.",
+    "Temporary Taylor is left out of the results, so their answers don't count.",
   );
   expect(countIn()).toBeDisabled();
   fireEvent.click(countIn());
