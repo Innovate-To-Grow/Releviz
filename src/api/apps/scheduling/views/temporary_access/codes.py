@@ -3,7 +3,6 @@
 import logging
 
 from rest_framework.exceptions import Throttled
-from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.permissions import AllowAny
 from rest_framework.views import APIView
 
@@ -13,6 +12,7 @@ from apps.authn.security import (
     enforce_cookie_request_origin,
     security_log_key,
 )
+from apps.authn.services import AuthChallengeError
 from apps.authn.services.email.challenges import RESEND_COOLDOWN, AuthChallengeThrottled
 from apps.scheduling.services.temporary_access import (
     request_temporary_access_code,
@@ -91,7 +91,7 @@ class TemporaryAccessVerifyView(APIView):
                 code=verification_code,
                 request=request,
             )
-        except DRFValidationError:
+        except AuthChallengeError:
             credential = None
         if credential is None:
             security_logger.warning(

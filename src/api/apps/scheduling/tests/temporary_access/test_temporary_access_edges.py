@@ -13,7 +13,7 @@ from rest_framework.test import APIClient
 
 from apps.authn.models import ContactEmail, EmailAuthChallenge
 from apps.authn.security import RateLimitDecision
-from apps.authn.services import start_registration
+from apps.authn.services import AuthChallengeInvalid, start_registration
 from apps.authn.tests.helpers import create_member, token_for
 from apps.mail.services import EmailDeliveryError
 from apps.scheduling.models import (
@@ -501,7 +501,7 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
 
         with patch(
             "apps.scheduling.views.temporary_access.codes.verify_temporary_access_code",
-            side_effect=DRFValidationError("bad code"),
+            side_effect=AuthChallengeInvalid("bad code"),
         ):
             validation_error = client.post("/events/temp-access/verify", payload, format="json")
         self.assertEqual(validation_error.status_code, 400)
@@ -526,6 +526,74 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
             "temp_access_code_verify",
         )
         self.assertIn("ip_address", warning.call_args.kwargs["extra"])
+
+    @patch("apps.authn.services.email.send_email.send_verification_email")
+    @patch("apps.authn.services.email.challenges._random_code", return_value="123456")
+    def test_wrong_codes_return_400_and_preserve_attempts_until_code_expires(
+        self, _mock_code, _mock_send
+    ):
+        client = APIClient()
+        payload = {
+            "code": self.event.code,
+            "invitationToken": str(self.invitation.access_token),
+        }
+        requested = client.post("/events/temp-access/request-code", payload, format="json")
+        self.assertEqual(requested.status_code, 202)
+        challenge = EmailAuthChallenge.objects.get(
+            member=self.temporary,
+            purpose=EmailAuthChallenge.Purpose.TEMP_EVENT_ACCESS,
+        )
+        initial_session_count = TemporaryEventSession.objects.count()
+
+        for expected_attempts in range(1, 6):
+            rejected = client.post(
+                "/events/temp-access/verify",
+                {**payload, "verificationCode": "654321"},
+                format="json",
+            )
+            self.assertEqual(rejected.status_code, 400)
+            self.assertEqual(rejected.data["error"], "Invalid or expired verification code.")
+            self.assertNotIn(settings.TEMP_EVENT_COOKIE_NAME, rejected.cookies)
+            challenge.refresh_from_db()
+            self.assertEqual(challenge.attempts, expected_attempts)
+
+        self.assertEqual(challenge.status, EmailAuthChallenge.Status.EXPIRED)
+        correct_but_expired = client.post(
+            "/events/temp-access/verify",
+            {**payload, "verificationCode": "123456"},
+            format="json",
+        )
+        self.assertEqual(correct_but_expired.status_code, 400)
+        self.assertEqual(correct_but_expired.data, rejected.data)
+        self.assertNotIn(settings.TEMP_EVENT_COOKIE_NAME, correct_but_expired.cookies)
+        self.assertEqual(TemporaryEventSession.objects.count(), initial_session_count)
+
+    @patch("apps.authn.services.email.send_email.send_verification_email")
+    @patch("apps.authn.services.email.challenges._random_code", return_value="123456")
+    def test_time_expired_code_returns_400_and_persists_expiry(self, _mock_code, _mock_send):
+        client = APIClient()
+        payload = {
+            "code": self.event.code,
+            "invitationToken": str(self.invitation.access_token),
+        }
+        requested = client.post("/events/temp-access/request-code", payload, format="json")
+        self.assertEqual(requested.status_code, 202)
+        challenge = EmailAuthChallenge.objects.get(
+            member=self.temporary,
+            purpose=EmailAuthChallenge.Purpose.TEMP_EVENT_ACCESS,
+        )
+        challenge.expires_at = timezone.now() - timedelta(seconds=1)
+        challenge.save(update_fields=["expires_at"])
+        rejected = client.post(
+            "/events/temp-access/verify",
+            {**payload, "verificationCode": "123456"},
+            format="json",
+        )
+        self.assertEqual(rejected.status_code, 400)
+        challenge.refresh_from_db()
+        self.assertEqual(challenge.status, EmailAuthChallenge.Status.EXPIRED)
+        self.assertEqual(challenge.attempts, 0)
+        self.assertNotIn(settings.TEMP_EVENT_COOKIE_NAME, rejected.cookies)
 
     def test_session_endpoint_requires_event_scope_and_hides_results_without_permission(self):
         client = self.temp_client()
