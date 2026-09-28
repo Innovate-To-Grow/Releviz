@@ -1,9 +1,41 @@
+from django.contrib import messages
 from django.core.exceptions import PermissionDenied
+from django.db.models import Q
 from django.http import HttpResponse, HttpResponseRedirect
 from django.shortcuts import render
 from django.urls import reverse
+from django.utils.html import format_html
 
 from .forms import MemberImportForm
+
+
+def may_change_account(user, member) -> bool:
+    """Return whether admin ``user`` may change ``member``'s account.
+
+    Setting another staff or superuser account's password, or giving it an email
+    that signs in to the admin, would hand that account over, so only a superuser
+    may change one. Everyone may change their own account.
+    """
+    return user.is_superuser or member.pk == user.pk or not (member.is_staff or member.is_superuser)
+
+
+def changeable_accounts(user, members):
+    """Narrow the ``members`` queryset to the accounts ``may_change_account`` allows."""
+    if user.is_superuser:
+        return members
+    return members.filter(Q(is_staff=False, is_superuser=False) | Q(pk=user.pk))
+
+
+def readonly_profile_image(contents):
+    """Show a read-only profile image as the image, not as its base64 data."""
+    if not contents.startswith("data:image/"):
+        return contents
+    return format_html(
+        '<img src="{}" alt="Profile image"'
+        ' class="rounded-default border border-base-200 dark:border-base-700 object-cover"'
+        ' style="width:80px;height:80px" />',
+        contents,
+    )
 
 
 def get_primary_email_display(member):
@@ -37,13 +69,25 @@ def normalize_inline_uuid_none_values(request):
 
 
 def activate_members(admin_obj, request, queryset):
-    updated = queryset.update(is_active=True)
+    updated = changeable_accounts(request.user, queryset).update(is_active=True)
     admin_obj.message_user(request, f"{updated} member(s) activated.")
+    _report_skipped_accounts(admin_obj, request, queryset, updated)
 
 
 def deactivate_members(admin_obj, request, queryset):
-    updated = queryset.update(is_active=False)
+    updated = changeable_accounts(request.user, queryset).update(is_active=False)
     admin_obj.message_user(request, f"{updated} member(s) deactivated.")
+    _report_skipped_accounts(admin_obj, request, queryset, updated)
+
+
+def _report_skipped_accounts(admin_obj, request, queryset, updated):
+    skipped = queryset.count() - updated
+    if skipped:
+        admin_obj.message_user(
+            request,
+            f"{skipped} staff or superuser account(s) skipped: only a superuser can change them.",
+            level=messages.WARNING,
+        )
 
 
 def build_excel_response(content, filename):
@@ -110,6 +154,8 @@ def import_excel_view(admin_obj, request):
                 if update_existing
                 else None
             ),
+            # Staff status is superuser-only, as on the member change form.
+            update_staff=request.user.is_superuser,
         )
         context["result"] = result
         if result.success:

@@ -6,7 +6,9 @@ superuser (Releviz Master) sees everything, and a grant-less staff member can st
 the (empty) admin index but is forbidden every model.
 """
 
+from django.contrib import admin
 from django.test import TestCase
+from django.urls import reverse
 
 from apps.core.tests.helpers import make_admin, make_superuser
 
@@ -20,6 +22,29 @@ class PerAppAdminAccessIntegrationTest(TestCase):
         self.client.force_login(user)
         self.assertEqual(self.client.get(CORE_URL).status_code, 200)
         self.assertEqual(self.client.get(AUTHN_URL).status_code, 403)
+
+    def test_staff_granted_scheduling_and_mail_opens_every_page_of_those_apps(self):
+        # These admins subclass Unfold's ModelAdmin directly; the grant must reach
+        # them too, not only BaseModelAdmin subclasses.
+        user = make_admin(apps=["scheduling", "mail"], email="ops-admin@example.com")
+        self.client.force_login(user)
+        urls = [
+            reverse(f"admin:{model._meta.app_label}_{model._meta.model_name}_changelist")
+            for model in admin.site._registry
+            if model._meta.app_label in ("scheduling", "mail")
+        ]
+        self.assertGreater(len(urls), 10)
+        for url in urls:
+            with self.subTest(url=url):
+                self.assertEqual(self.client.get(url).status_code, 200)
+        self.assertEqual(self.client.get("/admin/scheduling/event/add/").status_code, 200)
+        self.assertEqual(self.client.get(AUTHN_URL).status_code, 403)
+
+    def test_staff_without_scheduling_or_mail_is_forbidden_their_pages(self):
+        user = make_admin(apps=["core"], email="core-admin@example.com")
+        self.client.force_login(user)
+        self.assertEqual(self.client.get("/admin/scheduling/event/").status_code, 403)
+        self.assertEqual(self.client.get("/admin/mail/emailproviderconfig/").status_code, 403)
 
     def test_grantless_staff_loads_index_but_is_forbidden_models(self):
         user = make_admin(apps=[], email="empty-admin@example.com")

@@ -10,6 +10,7 @@ from unfold.decorators import action, display
 from unfold.enums import ActionVariant
 from unfold.widgets import UnfoldAdminEmailInputWidget
 
+from apps.core.admin import AppAccessPermissionMixin
 from apps.core.models import AWSCredentialConfig
 from apps.mail.models import (
     EmailDeliveryJob,
@@ -54,7 +55,7 @@ class TestEmailForm(forms.Form):
 
 
 @admin.register(EmailProviderConfig)
-class EmailProviderConfigAdmin(ModelAdmin):
+class EmailProviderConfigAdmin(AppAccessPermissionMixin, ModelAdmin):
     form = EmailProviderConfigForm
     actions_list = ["send_test_email"]
     list_display = (
@@ -197,7 +198,7 @@ class EmailProviderConfigAdmin(ModelAdmin):
 
 
 @admin.register(EmailMessageLog)
-class EmailMessageLogAdmin(ModelAdmin):
+class EmailMessageLogAdmin(AppAccessPermissionMixin, ModelAdmin):
     list_display = ("message_type", "recipient", "status", "subject", "created_at")
     list_filter = ("message_type", "status")
     search_fields = ("recipient", "subject", "provider_message_id", "error")
@@ -217,7 +218,7 @@ class EmailMessageLogAdmin(ModelAdmin):
 
 
 @admin.register(EmailDeliveryJob)
-class EmailDeliveryJobAdmin(ModelAdmin):
+class EmailDeliveryJobAdmin(AppAccessPermissionMixin, ModelAdmin):
     actions = ("retry_uncertain_deliveries",)
     list_display = (
         "message_type",
@@ -288,7 +289,7 @@ class EmailDeliveryJobAdmin(ModelAdmin):
 
 
 @admin.register(EmailDeliveryRequest)
-class EmailDeliveryRequestAdmin(ModelAdmin):
+class EmailDeliveryRequestAdmin(AppAccessPermissionMixin, ModelAdmin):
     list_display = (
         "operation",
         "event",

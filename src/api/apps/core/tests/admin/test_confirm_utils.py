@@ -5,16 +5,18 @@ from datetime import date, datetime
 from unittest.mock import MagicMock, patch
 
 from django.http import QueryDict
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 
 import apps.core.admin.mixins.confirm_on_save_utils as logger_module
 from apps.core.admin.mixins.confirm_on_save_utils import (
+    SECRET_MASK,
     compute_add_diff,
     compute_change_diff,
     compute_delete_diff,
     deserialize_post_data,
     format_field_value,
+    secret_post_keys,
     serialize_post_data,
 )
 from apps.core.models import AWSCredentialConfig
@@ -47,6 +49,20 @@ class SerializePostDataTest(TestCase):
         restored = deserialize_post_data(serialized)
 
         self.assertEqual(len(restored), 0)
+
+    @override_settings(FIELD_ENCRYPTION_KEY="unit-test-encryption-key")
+    def test_secret_keys_are_stored_encrypted(self):
+        qd = QueryDict(mutable=True)
+        qd["name"] = "Hello"
+        qd["secret_access_key"] = "plain-secret"
+
+        serialized = serialize_post_data(qd, ["secret_access_key"])
+        self.assertEqual(serialized["name"], ["Hello"])
+        self.assertNotIn("plain-secret", str(serialized))
+
+        restored = deserialize_post_data(serialized, ["secret_access_key"])
+        self.assertEqual(restored["name"], "Hello")
+        self.assertEqual(restored["secret_access_key"], "plain-secret")
 
 
 class FormatFieldValueTest(TestCase):
@@ -318,3 +334,104 @@ class FormatFieldValueExtraTest(TestCase):
         with patch("json.dumps", side_effect=TypeError("nope")):
             result = format_field_value([Weird()])
         self.assertIn("WEIRD", result)
+
+
+@override_settings(FIELD_ENCRYPTION_KEY="unit-test-encryption-key")
+class SecretMaskingTest(TestCase):
+    """The confirmation page must not print secrets: password-widget values the
+    form never renders back, or stored password hashes and encrypted keys."""
+
+    def _aws_form(self, instance=None, secret="new-secret-value"):
+        from apps.core.admin.service_credentials.aws import AWSCredentialConfigForm
+
+        form = AWSCredentialConfigForm(
+            data={
+                "name": "Shared AWS",
+                "access_key_id": "AKIATEST",
+                "default_region": "us-west-2",
+                "secret_access_key": secret,
+            },
+            instance=instance,
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        return form
+
+    def test_secret_post_keys_lists_password_widget_fields(self):
+        self.assertEqual(secret_post_keys(self._aws_form()), ["secret_access_key"])
+
+    def test_add_diff_masks_password_widget_values(self):
+        diff = {item["field"]: item["new_value"] for item in compute_add_diff(self._aws_form())}
+        self.assertEqual(diff["secret_access_key"], SECRET_MASK)
+        self.assertEqual(diff["access_key_id"], "AKIATEST")
+
+        blank = {
+            item["field"]: item["new_value"] for item in compute_add_diff(self._aws_form(secret=""))
+        }
+        self.assertEqual(blank["secret_access_key"], "")
+
+    def test_change_diff_masks_old_and_new_password_widget_values(self):
+        from apps.core.admin.registrations.maintenance import SiteMaintenanceControlAdminForm
+        from apps.core.models import SiteMaintenanceControl
+
+        config = SiteMaintenanceControl.objects.create(bypass_password="old-bypass")
+        form = SiteMaintenanceControlAdminForm(
+            data={"message": "Down", "bypass_password": "new-bypass"}, instance=config
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+
+        entry = next(
+            item
+            for item in compute_change_diff(SiteMaintenanceControl, config.pk, form)
+            if item["field"] == "bypass_password"
+        )
+        self.assertEqual(entry["old_value"], SECRET_MASK)
+        self.assertEqual(entry["new_value"], SECRET_MASK)
+
+    def test_delete_diff_masks_secret_columns(self):
+        from apps.core.tests.helpers import make_member
+
+        member = make_member(email="hash@example.com")
+        member.set_password("StrongPass123!")
+        member.save()
+        credentials = AWSCredentialConfig.objects.create(name="Keys", access_key_id="AKIATEST")
+        credentials.set_secret_access_key("stored-secret")
+
+        member_diff = {item["field"]: item["value"] for item in compute_delete_diff(member)}
+        self.assertEqual(member_diff["password"], SECRET_MASK)
+        aws_diff = {item["field"]: item["value"] for item in compute_delete_diff(credentials)}
+        self.assertEqual(aws_diff["encrypted_secret_access_key"], SECRET_MASK)
+        self.assertEqual(aws_diff["access_key_id"], "AKIATEST")
+
+
+@override_settings(FIELD_ENCRYPTION_KEY="unit-test-encryption-key")
+class ConfirmationPageSecretTest(TestCase):
+    def test_confirmation_page_does_not_show_a_new_aws_secret(self):
+        from apps.core.tests.helpers import make_superuser
+
+        self.client.force_login(make_superuser())
+        response = self.client.post(
+            "/admin/core/awscredentialconfig/add/",
+            {
+                "name": "Reveal",
+                "access_key_id": "AKIAREVEAL",
+                "default_region": "us-west-2",
+                "secret_access_key": "e2e-reveal-secret",
+                "_save": "Save",
+            },
+            follow=True,
+        )
+        self.assertContains(response, "Confirm Adding AWS Credential")
+        self.assertContains(response, "AKIAREVEAL")
+        self.assertContains(response, SECRET_MASK)
+        self.assertNotContains(response, "e2e-reveal-secret")
+
+        # The pending change in the session keeps the secret encrypted, and the
+        # confirmed save still stores it.
+        pending = self.client.session["_admin_pending_change_core_awscredentialconfig"]
+        self.assertNotIn("e2e-reveal-secret", str(pending))
+        self.client.post(
+            "/admin/core/awscredentialconfig/confirm-change/",
+            {"confirmation_word": "AWS credential", "token": pending["token"]},
+        )
+        saved = AWSCredentialConfig.objects.get(name="Reveal")
+        self.assertEqual(saved.get_secret_access_key(), "e2e-reveal-secret")

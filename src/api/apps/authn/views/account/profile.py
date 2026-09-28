@@ -25,6 +25,10 @@ _ALLOWED_SIGNATURES = {
 
 def _validate_image_bytes(data: bytes) -> bool:
     """Validate that file content starts with a known image magic-byte signature."""
+    # Every RIFF container (WAV, AVI, ...) starts with "RIFF"; a WebP file also
+    # carries the form type "WEBP" after the 4-byte size.
+    if data.startswith(b"RIFF") and data[8:12] != b"WEBP":
+        return False
     return any(data.startswith(sig) for sig in _ALLOWED_SIGNATURES)
 
 

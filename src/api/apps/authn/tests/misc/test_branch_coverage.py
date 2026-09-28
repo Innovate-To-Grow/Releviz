@@ -347,6 +347,7 @@ class AdminFormsAndHelpersBranchTests(TestCase):
                 raise AssertionError("no message expected")
 
         request = RequestFactory().post("/", {})
+        request.user = Member(is_superuser=True)
         with (
             patch.object(helpers, "MemberImportForm") as form_class,
             patch.object(helpers, "render", return_value="rendered"),

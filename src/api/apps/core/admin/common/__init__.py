@@ -1,4 +1,4 @@
-from .base import BaseModelAdmin, ReadOnlyModelAdmin
+from .base import AppAccessPermissionMixin, BaseModelAdmin, ReadOnlyModelAdmin
 from .utils import (
     admin_url,
     format_duration,
@@ -9,6 +9,7 @@ from .utils import (
 )
 
 __all__ = [
+    "AppAccessPermissionMixin",
     "BaseModelAdmin",
     "ReadOnlyModelAdmin",
     "admin_url",

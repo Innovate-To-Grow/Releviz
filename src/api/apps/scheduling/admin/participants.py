@@ -5,6 +5,7 @@ from django.contrib import admin
 from django.core.exceptions import ValidationError
 from unfold.admin import ModelAdmin
 
+from apps.core.admin import AppAccessPermissionMixin
 from apps.scheduling.models import (
     EventInvitation,
     Participant,
@@ -32,7 +33,7 @@ class ParticipantGroupAdminForm(forms.ModelForm):
 
 
 @admin.register(ParticipantGroup)
-class ParticipantGroupAdmin(ModelAdmin):
+class ParticipantGroupAdmin(AppAccessPermissionMixin, ModelAdmin):
     form = ParticipantGroupAdminForm
     list_display = ("name", "event", "member_count", "created_at")
     search_fields = ("name", "event__code", "event__name")
@@ -43,7 +44,7 @@ class ParticipantGroupAdmin(ModelAdmin):
 
 
 @admin.register(Participant)
-class ParticipantAdmin(ModelAdmin):
+class ParticipantAdmin(AppAccessPermissionMixin, ModelAdmin):
     list_display = (
         "participant_name",
         "event",
@@ -90,7 +91,7 @@ class ParticipantAdmin(ModelAdmin):
 
 
 @admin.register(EventInvitation)
-class EventInvitationAdmin(ModelAdmin):
+class EventInvitationAdmin(AppAccessPermissionMixin, ModelAdmin):
     list_display = (
         "email",
         "event",
@@ -115,21 +116,21 @@ class EventInvitationAdmin(ModelAdmin):
 
 
 @admin.register(Weight)
-class WeightAdmin(ModelAdmin):
+class WeightAdmin(AppAccessPermissionMixin, ModelAdmin):
     list_display = ("event", "participant", "weight", "included")
     list_filter = ("included",)
     search_fields = ("event__code", "participant__participant_name")
 
 
 @admin.register(UserEvent)
-class UserEventAdmin(ModelAdmin):
+class UserEventAdmin(AppAccessPermissionMixin, ModelAdmin):
     list_display = ("member", "event", "role", "created_at")
     list_filter = ("role",)
     search_fields = ("member__first_name", "member__last_name", "event__code", "event__name")
 
 
 @admin.register(TemporaryEventSession)
-class TemporaryEventSessionAdmin(ModelAdmin):
+class TemporaryEventSessionAdmin(AppAccessPermissionMixin, ModelAdmin):
     list_display = (
         "member",
         "participant",

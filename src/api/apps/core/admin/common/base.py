@@ -9,25 +9,15 @@ from apps.core.utils.access import user_can_access_app
 from ..mixins import ConfirmOnSaveMixin, DataExportMixin, TimestampedAdminMixin
 
 
-class BaseModelAdmin(ConfirmOnSaveMixin, DataExportMixin, TimestampedAdminMixin, ModelAdmin):
+class AppAccessPermissionMixin:
     """
-    Base admin class with common configuration for all model admins.
+    Per-Django-app access control (see apps.core.utils.access.user_can_access_app):
+    a staff member may manage this model only if their ``admin_apps`` includes
+    this model's app label; superusers (Releviz Master) are always granted.
 
-    Provides:
-    - Unfold theme integration
-    - Common readonly fields for ProjectControlModel
-    - Timestamp readonly fields
-    - Standard list display configuration
-    - Per-Django-app access control (see apps.core.utils.access.user_can_access_app):
-      a staff member may manage this model only if their ``admin_apps`` includes
-      this model's app label; superusers (Releviz Master) are always granted.
+    Every project model admin needs it: Django's default checks per-model
+    permissions, which no member is ever given.
     """
-
-    # Common readonly fields for ProjectControlModel
-    readonly_fields_base = ("id", "created_at", "updated_at")
-
-    # Standard list configuration
-    list_per_page = 50
 
     def _has_app_access(self, request) -> bool:
         return user_can_access_app(request.user, self.opts.app_label)
@@ -46,6 +36,31 @@ class BaseModelAdmin(ConfirmOnSaveMixin, DataExportMixin, TimestampedAdminMixin,
 
     def has_delete_permission(self, request, obj=None):
         return self._has_app_access(request)
+
+
+class BaseModelAdmin(
+    ConfirmOnSaveMixin,
+    DataExportMixin,
+    TimestampedAdminMixin,
+    AppAccessPermissionMixin,
+    ModelAdmin,
+):
+    """
+    Base admin class with common configuration for all model admins.
+
+    Provides:
+    - Unfold theme integration
+    - Common readonly fields for ProjectControlModel
+    - Timestamp readonly fields
+    - Standard list display configuration
+    - Per-Django-app access control (see AppAccessPermissionMixin)
+    """
+
+    # Common readonly fields for ProjectControlModel
+    readonly_fields_base = ("id", "created_at", "updated_at")
+
+    # Standard list configuration
+    list_per_page = 50
 
     def get_readonly_fields(self, request, obj=None):
         """Include base readonly fields with any model-specific ones."""

@@ -3,11 +3,12 @@
 from django.contrib import admin
 from unfold.admin import ModelAdmin
 
+from apps.core.admin import AppAccessPermissionMixin
 from apps.scheduling.models import EventResultSnapshot, ScheduleEditRecord
 
 
 @admin.register(ScheduleEditRecord)
-class ScheduleEditRecordAdmin(ModelAdmin):
+class ScheduleEditRecordAdmin(AppAccessPermissionMixin, ModelAdmin):
     list_display = (
         "event",
         "participant",
@@ -22,7 +23,7 @@ class ScheduleEditRecordAdmin(ModelAdmin):
 
 
 @admin.register(EventResultSnapshot)
-class EventResultSnapshotAdmin(ModelAdmin):
+class EventResultSnapshotAdmin(AppAccessPermissionMixin, ModelAdmin):
     list_display = ("event", "status", "requested_revision", "computed_revision", "completed_at")
     list_filter = ("status",)
     search_fields = ("event__code",)

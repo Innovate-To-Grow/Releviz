@@ -27,8 +27,12 @@ def import_members_from_excel(
     default_password: str | None = None,
     update_existing: bool = False,
     update_member_allowed: Callable[[Member], bool] | None = None,
+    update_staff: bool = True,
 ) -> ImportResult:
-    """Import members from an Excel file using bulk inserts when possible."""
+    """Import members from an Excel file using bulk inserts when possible.
+
+    ``update_staff=False`` ignores the Staff column when updating existing members.
+    """
     if load_workbook is None:
         return ImportResult(
             success=False,
@@ -139,7 +143,13 @@ def import_members_from_excel(
         claimed_contact_emails = {
             e.lower() for e in ContactEmail.objects.values_list("email_address", flat=True)
         }
-        bulk_update_members(rows_to_update, result, claimed_contact_emails, update_member_allowed)
+        bulk_update_members(
+            rows_to_update,
+            result,
+            claimed_contact_emails,
+            update_member_allowed,
+            update_staff=update_staff,
+        )
 
     return result
 

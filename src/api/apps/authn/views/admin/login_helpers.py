@@ -6,7 +6,7 @@ from django.conf import settings
 from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.shortcuts import render
-from django.utils.http import url_has_allowed_host_and_scheme
+from django.utils.http import url_has_allowed_host_and_scheme, urlencode
 
 from apps.authn.security.helpers import consume_request_rate_limit
 
@@ -135,7 +135,8 @@ def set_last_admin_login_cookie(response, member):
 
 def render_admin_login(request, *, form, step: str, email: str = "", **extra):
     next_param = request.GET.get("next", "")
-    next_qs = f"&next={next_param}" if next_param else ""
+    # Encode next: a deep link's own "&" would otherwise end it early.
+    next_qs = f"&{urlencode({'next': next_param})}" if next_param else ""
     use_different_account = request.GET.get("different") == "1"
     hide_email = request.session.get(_SESSION_HIDE_EMAIL, False)
     code_recipient_name = ""

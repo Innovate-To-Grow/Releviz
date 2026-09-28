@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.contrib import admin
 from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
 
@@ -116,7 +117,6 @@ class AdminSidebarNavigationTest(SimpleTestCase):
             [
                 "authn.member",
                 "authn.contactemail",
-                "authn.emailauthchallenge",
             ],
         )
         self.assertEqual(
@@ -124,10 +124,6 @@ class AdminSidebarNavigationTest(SimpleTestCase):
             [
                 {"title": "Members", "link": "/admin/authn/member/"},
                 {"title": "Emails", "link": "/admin/authn/contactemail/"},
-                {
-                    "title": "Login Challenges",
-                    "link": "/admin/authn/emailauthchallenge/",
-                },
             ],
         )
 
@@ -167,6 +163,17 @@ class AdminSidebarNavigationTest(SimpleTestCase):
                 {"title": "Email Logs", "link": "/admin/mail/emailmessagelog/"},
             ],
         )
+
+    def test_every_tab_links_to_a_registered_admin_page(self):
+        registered = {model._meta.label_lower for model in admin.site._registry}
+        for tab in settings.UNFOLD["TABS"]:
+            for model in tab.get("models", []):
+                with self.subTest(model=model):
+                    self.assertIn(model, registered)
+            for item in tab["items"]:
+                with self.subTest(link=item["link"]):
+                    app_label, model_name = item["link"].strip("/").split("/")[1:]
+                    self.assertIn(f"{app_label}.{model_name}", registered)
 
     def test_no_stale_model_references_in_tabs(self):
         """Verify no tabs reference deleted models (gmailaccessaccount, etc.)."""

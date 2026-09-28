@@ -53,6 +53,13 @@ class UpdateSingleMemberTests(TestCase):
         self.assertEqual(self.member.middle_name, "Quincy")
         self.assertTrue(self.member.is_staff)
 
+    def test_staff_column_ignored_without_update_staff(self):
+        parsed = _parsed(is_staff=True)
+        update_single_member(self.member, parsed, claimed_contact_emails=set(), update_staff=False)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.first_name, "New")
+        self.assertFalse(self.member.is_staff)
+
     def test_primary_email_updated_when_not_claimed(self):
         # Empty claimed set -> takes the "update existing primary contact" branch (lines 63-68).
         parsed = _parsed(primary_verified=True, primary_subscribed=False)

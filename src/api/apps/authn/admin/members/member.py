@@ -28,7 +28,9 @@ from .helpers import (
     get_full_name_display,
     get_primary_email_display,
     import_excel_view,
+    may_change_account,
     normalize_inline_uuid_none_values,
+    readonly_profile_image,
 )
 from .inlines import ContactEmailInline
 
@@ -66,6 +68,9 @@ class MemberAdmin(BaseModelAdmin, UserAdmin):
     )
     ordering = ("-date_joined",)
     readonly_fields = ("member_uuid", "date_joined", "last_login")
+    # A read-only page (another privileged account, for a non-superuser) would
+    # otherwise print the image's base64 data.
+    readonly_preprocess_fields = {"profile_image": readonly_profile_image}
     fieldsets = (
         (_("Member Info"), {"fields": ("member_uuid",)}),
         (None, {"fields": ("password",)}),
@@ -163,6 +168,28 @@ class MemberAdmin(BaseModelAdmin, UserAdmin):
         logger.info("Administrator %s began impersonating member %s", request.user.id, member.id)
         frontend_url = (getattr(settings, "FRONTEND_URL", "") or "").strip().rstrip("/")
         return redirect(f"{frontend_url}/impersonate-login#token={token}")
+
+    def has_change_permission(self, request, obj=None):
+        # A non-superuser admin must not take over a privileged account through
+        # its password (UserAdmin's password view), its sign-in emails (the
+        # inline) or the member import, for the reason ``impersonate_view``
+        # refuses it.
+        if obj is not None and not may_change_account(request.user, obj):
+            return False
+        return super().has_change_permission(request, obj)
+
+    def has_delete_permission(self, request, obj=None):
+        # ... nor delete one (the activate/deactivate actions skip them too).
+        if obj is not None and not may_change_account(request.user, obj):
+            return False
+        return super().has_delete_permission(request, obj)
+
+    def get_fieldsets(self, request, obj=None):
+        fieldsets = super().get_fieldsets(request, obj)
+        if obj is None or self.has_change_permission(request, obj):
+            return fieldsets
+        # A read-only page would print the raw password hash.
+        return [fieldset for fieldset in fieldsets if "password" not in fieldset[1]["fields"]]
 
     # Granting admin-app access or staff status is a Releviz Master (superuser)
     # responsibility. A non-superuser admin must not be able to widen their own

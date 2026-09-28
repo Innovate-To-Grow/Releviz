@@ -5,6 +5,7 @@ Provides shared functionality for admin interfaces across all apps.
 """
 
 from .common import (
+    AppAccessPermissionMixin,
     BaseModelAdmin,
     ReadOnlyModelAdmin,
     admin_url,
@@ -29,6 +30,7 @@ from .service_credentials import AWSCredentialConfigAdmin  # noqa: F401 - regist
 
 __all__ = [
     # Base classes
+    "AppAccessPermissionMixin",
     "BaseModelAdmin",
     "ReadOnlyModelAdmin",
     # Mixins

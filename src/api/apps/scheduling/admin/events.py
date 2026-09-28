@@ -3,11 +3,12 @@
 from django.contrib import admin
 from unfold.admin import ModelAdmin
 
+from apps.core.admin import AppAccessPermissionMixin
 from apps.scheduling.models import Event, EventDeletionRecord, EventDuplicationRequest
 
 
 @admin.register(Event)
-class EventAdmin(ModelAdmin):
+class EventAdmin(AppAccessPermissionMixin, ModelAdmin):
     list_display = (
         "code",
         "name",
@@ -39,7 +40,7 @@ class EventAdmin(ModelAdmin):
 
 
 @admin.register(EventDuplicationRequest)
-class EventDuplicationRequestAdmin(ModelAdmin):
+class EventDuplicationRequestAdmin(AppAccessPermissionMixin, ModelAdmin):
     list_display = (
         "source_event",
         "duplicate_event",
@@ -66,7 +67,7 @@ class EventDuplicationRequestAdmin(ModelAdmin):
 
 
 @admin.register(EventDeletionRecord)
-class EventDeletionRecordAdmin(ModelAdmin):
+class EventDeletionRecordAdmin(AppAccessPermissionMixin, ModelAdmin):
     list_display = ("code", "organizer", "deleted_version", "created_at")
     search_fields = ("code", "event_id", "organizer__email", "idempotency_key")
     readonly_fields = (
