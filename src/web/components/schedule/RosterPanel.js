@@ -296,6 +296,12 @@ const RosterPanel = forwardRef(function RosterPanel(
   const inviteRequestInFlight = useRef(false);
   const inviteNameInput = useRef(null);
   const inviteEmailInput = useRef(null);
+  // The Add person fields typed into since the form opened. Leaving a field
+  // still untouched reports nothing: the name is focused on open, so a click
+  // on Add only blurs it on mousedown, and a "required" error inserted then
+  // pushes the buttons down before mouseup and the click is lost. Submitting
+  // still reports every empty required field.
+  const inviteTyped = useRef({});
   const invitePhoneInput = useRef(null);
   const selectedRef = useRef(selected);
   const participantsRef = useRef(participants);
@@ -471,6 +477,7 @@ const RosterPanel = forwardRef(function RosterPanel(
     setInviteNotice("");
     setInviteFormError("");
     setInviteErrors({});
+    inviteTyped.current = {};
     setTimeout(() => inviteNameInput.current?.focus(), 0);
   };
 
@@ -1683,16 +1690,18 @@ const RosterPanel = forwardRef(function RosterPanel(
                     disabled={inviteBusy}
                     onChange={(changeEvent) => {
                       setInviteName(changeEvent.target.value);
+                      inviteTyped.current.name = true;
                       setInviteErrors((current) => ({ ...current, name: "" }));
                       setInviteFormError("");
                       inviteIdempotencyKey.current = "";
                     }}
-                    onBlur={() =>
+                    onBlur={() => {
+                      if (!inviteTyped.current.name) return;
                       setInviteErrors((current) => ({
                         ...current,
                         name: fullNameError(inviteName),
-                      }))
-                    }
+                      }));
+                    }}
                   />
                 </FormField>
 
@@ -1721,6 +1730,7 @@ const RosterPanel = forwardRef(function RosterPanel(
                     disabled={inviteBusy}
                     onChange={(changeEvent) => {
                       setInviteEmail(changeEvent.target.value);
+                      inviteTyped.current.email = true;
                       setInviteErrors((current) => ({
                         ...current,
                         email: "",
@@ -1728,14 +1738,17 @@ const RosterPanel = forwardRef(function RosterPanel(
                       setInviteFormError("");
                       inviteIdempotencyKey.current = "";
                     }}
-                    onBlur={() =>
+                    // Same rule as the name: an untouched email stays quiet
+                    // until submit. The phone needs no guard, as blank is valid.
+                    onBlur={() => {
+                      if (!inviteTyped.current.email) return;
                       setInviteErrors((current) => ({
                         ...current,
                         email: emailAddressError(inviteEmail, {
                           optional: inviteManaged,
                         }),
-                      }))
-                    }
+                      }));
+                    }}
                   />
                 </FormField>
               </div>

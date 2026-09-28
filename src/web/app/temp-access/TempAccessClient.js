@@ -929,8 +929,10 @@ export default function TempAccessClient() {
           }
           actions={
             upgradeHref ? (
+              // The shared outlined style, like Sign out above: Bootstrap's
+              // outline-primary blue is only 4.26:1 on the page background.
               <Link
-                className={`btn btn-outline-primary app-btn${leavingPage ? " disabled" : ""}`}
+                className={`btn btn-outline-secondary app-btn${leavingPage ? " disabled" : ""}`}
                 href={upgradeHref}
                 aria-disabled={leavingPage}
                 onClick={(clickEvent) => void upgradeToFullAccess(clickEvent)}

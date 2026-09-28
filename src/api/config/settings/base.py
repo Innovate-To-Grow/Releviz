@@ -224,6 +224,11 @@ REQUIRE_ENCRYPTED_PASSWORDS = False
 FRONTEND_URL = ""
 BACKEND_URL = ""
 CORS_ALLOW_CREDENTIALS = True
+# The web app calls the API from another origin, where browsers hide every
+# response header outside the CORS safelist unless the API exposes it. The
+# final-meeting calendar download reads Content-Disposition to save the file
+# under the server's name instead of a generic fallback.
+CORS_EXPOSE_HEADERS = ["Content-Disposition"]
 DATA_UPLOAD_MAX_NUMBER_FIELDS = 100000
 DATA_UPLOAD_MAX_MEMORY_SIZE = ROSTER_IMPORT_MAX_UNCOMPRESSED_BYTES + 1024 * 1024
 FIELD_ENCRYPTION_KEY = os.environ.get("DJANGO_FIELD_ENCRYPTION_KEY", "")

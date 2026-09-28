@@ -424,10 +424,35 @@ describe("organizer event management UI", () => {
     useAuth.mockReturnValue({
       user: null,
       loading: false,
+      signingOut: false,
       getToken: jest.fn(),
     });
     render(<DashboardPage />);
     expect(navigateTo).toHaveBeenCalledWith("/login?next=/dashboard");
+  });
+
+  test("dashboard leaves a log out's navigation home to finish", async () => {
+    fetchDashboardEvents.mockResolvedValue({
+      organized: [],
+      participating: [],
+    });
+    const getToken = jest.fn().mockResolvedValue("token");
+    const signedIn = { user: organizer, loading: false, getToken };
+    useAuth.mockReturnValue({ ...signedIn, signingOut: false });
+    const view = render(<DashboardPage />);
+    expect(
+      await screen.findByText("No events organized yet."),
+    ).toBeInTheDocument();
+
+    useAuth.mockReturnValue({ ...signedIn, signingOut: true });
+    view.rerender(<DashboardPage />);
+    useAuth.mockReturnValue({ ...signedIn, user: null, signingOut: true });
+    view.rerender(<DashboardPage />);
+
+    // Starting the log out does not reload the events, and the signed-out
+    // render does not replace the pending navigation home with a login one.
+    expect(fetchDashboardEvents).toHaveBeenCalledTimes(1);
+    expect(navigateTo).not.toHaveBeenCalled();
   });
 
   test("edit form loads values and requires explicit response-reset confirmation", async () => {

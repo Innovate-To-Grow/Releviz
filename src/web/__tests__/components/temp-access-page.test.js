@@ -205,6 +205,11 @@ describe("temporary event access page", () => {
       "href",
       "/signup?upgrade=temporary&code=ABC123&next=%2Fevent%3Fcode%3DABC123",
     );
+    // The shared outlined style keeps the link at WCAG AA contrast on the
+    // page background, which Bootstrap's outline-primary blue does not.
+    expect(
+      screen.getByRole("link", { name: "Upgrade to full access" }),
+    ).toHaveClass("btn", "btn-outline-secondary", "app-btn");
     const upgradeHref = screen
       .getByRole("link", { name: "Upgrade to full access" })
       .getAttribute("href");

@@ -49,6 +49,24 @@ class FullCIWorkflowTests(TestCase):
         self.assertIn('playwright install-deps "$PW_PROJECT"', e2e)
         self.assertNotIn("install-deps chromium firefox webkit", e2e)
 
+    def test_e2e_coverage_is_audited(self):
+        repository_audit = self.job_block("repository-audit")
+        self.assertIn("python scripts/ci/audit_e2e_coverage.py routes", repository_audit)
+
+        e2e = self.job_block("e2e")
+        self.assertIn("E2E_ENDPOINT_LOG: /tmp/releviz-e2e-endpoints.log", e2e)
+        self.assertIn('rm -rf "$EMAIL_FILE_PATH" "$E2E_ENDPOINT_LOG"', e2e)
+        endpoint_step = e2e.split("- name: Audit E2E endpoint coverage", 1)[1]
+        self.assertIn("if: ${{ matrix.project == 'chromium' }}", endpoint_step)
+        self.assertIn(
+            'audit_e2e_coverage.py endpoints --hits "$E2E_ENDPOINT_LOG"',
+            endpoint_step,
+        )
+        self.assertLess(
+            e2e.index("- name: Run Playwright tests"),
+            e2e.index("- name: Audit E2E endpoint coverage"),
+        )
+
     def test_python_security_audit_retries_but_still_fails_closed(self):
         audit = self.job_block("python-security-audit")
         self.assertIn("for attempt in 1 2 3", audit)

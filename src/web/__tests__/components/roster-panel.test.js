@@ -2146,6 +2146,65 @@ describe("RosterPanel adds people and sends invitations", () => {
     expect(globalThis.crypto.randomUUID).toHaveBeenCalledTimes(2);
   });
 
+  // The name is focused when the form opens, so a mouse click on Add only
+  // blurs it first. A "required" error inserted on that blur moved the buttons
+  // before mouseup and the click was lost, so untouched fields stay quiet
+  // until submit.
+  test("leaving an untouched name or email reports nothing until submit", async () => {
+    const { form, name, email } = await openAddPersonForm();
+    await waitFor(() => expect(name).toHaveFocus());
+    fireEvent.blur(name);
+    fireEvent.blur(email);
+    expect(within(form).queryByRole("alert")).toBeNull();
+    expect(name).not.toHaveAttribute("aria-invalid");
+    expect(email).not.toHaveAttribute("aria-invalid");
+  });
+
+  test("a field typed into and cleared still reports the missing value on blur", async () => {
+    const { form, name, email } = await openAddPersonForm();
+    fireEvent.change(name, { target: { value: "Newbie" } });
+    fireEvent.change(name, { target: { value: "" } });
+    fireEvent.blur(name);
+    expect(within(form).getByText("Full name is required.")).toBeVisible();
+    expect(name).toHaveAttribute("aria-invalid", "true");
+    fireEvent.change(email, { target: { value: "newbie@example.com" } });
+    fireEvent.change(email, { target: { value: "" } });
+    fireEvent.blur(email);
+    expect(
+      within(form).getByText(
+        'Email address is required. If they have none, tick "No email of their own".',
+      ),
+    ).toBeVisible();
+
+    // Reopening starts untouched again.
+    fireEvent.click(within(form).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add person" }));
+    const reopened = screen.getByRole("form", { name: "Add a person" });
+    fireEvent.blur(within(reopened).getByLabelText(/Full name/));
+    fireEvent.blur(within(reopened).getByLabelText(/Email/));
+    expect(within(reopened).queryByRole("alert")).toBeNull();
+  });
+
+  test("a click on Add only in the empty form reports both missing fields", async () => {
+    const { form, name, addOnly } = await openAddPersonForm();
+    await waitFor(() => expect(name).toHaveFocus());
+    // A real pointer click: mousedown moves focus off the name first.
+    await userEvent.click(addOnly);
+    expect(
+      await within(form).findByText("Full name is required."),
+    ).toBeVisible();
+    expect(
+      within(form).getByText(
+        'Email address is required. If they have none, tick "No email of their own".',
+      ),
+    ).toBeVisible();
+    expect(name).toHaveFocus();
+    expect(createManagedParticipant).not.toHaveBeenCalled();
+    // Leaving the still-untouched name keeps the error submit reported.
+    fireEvent.blur(name);
+    expect(within(form).getByText("Full name is required.")).toBeVisible();
+  });
+
   test("sends invitations to the selected people from either bar", async () => {
     let resolveSend;
     sendRosterInvitations.mockReturnValueOnce(

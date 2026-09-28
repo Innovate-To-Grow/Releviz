@@ -47,3 +47,11 @@ REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"] = {  # noqa: F405
         "user",
     }
 }
+
+# The CI E2E coverage audit reads which URL routes the browser run reached.
+E2E_ENDPOINT_LOG = os.environ.get("E2E_ENDPOINT_LOG", "")
+if E2E_ENDPOINT_LOG:
+    MIDDLEWARE = [  # noqa: F405
+        *MIDDLEWARE,  # noqa: F405
+        "apps.core.middleware.e2e_coverage.E2EEndpointCoverageMiddleware",
+    ]

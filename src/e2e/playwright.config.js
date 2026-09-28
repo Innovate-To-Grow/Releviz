@@ -31,6 +31,8 @@ const backendEnv = {
     process.env.DJANGO_SUPERUSER_EMAIL || "admin@releviz.local",
   DJANGO_SUPERUSER_PASSWORD: adminPassword,
   PYTHONUNBUFFERED: "1",
+  // A full run records every API route it reaches for the coverage audit.
+  E2E_ENDPOINT_LOG: process.env.E2E_ENDPOINT_LOG || "",
 };
 
 module.exports = defineConfig({

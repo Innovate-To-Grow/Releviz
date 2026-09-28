@@ -52,6 +52,9 @@ class ProductionSettingsTests(SimpleTestCase):
         self.assertTrue(settings.SECURE_SSL_REDIRECT)
         self.assertTrue(settings.SESSION_COOKIE_SECURE)
         self.assertEqual(settings.AUTH_REFRESH_COOKIE_SAMESITE, "None")
+        # Production overrides the CORS origins but must keep the header the
+        # cross-origin web app reads for the calendar download's file name.
+        self.assertIn("Content-Disposition", settings.CORS_EXPOSE_HEADERS)
 
     def test_current_environment_overrides_are_parsed(self):
         env = {
