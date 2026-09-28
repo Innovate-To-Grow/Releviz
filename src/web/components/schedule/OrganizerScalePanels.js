@@ -736,15 +736,16 @@ export function OverviewPanel({ event, onEventSaved }) {
   const editorHeadingRef = useRef(null);
   const { locked: editLocked, reason: editLockReason } = editLockOf(event);
 
-  const focusEditButton = () => {
-    window.setTimeout(
-      () =>
-        panelRef.current
-          ?.querySelector(".organizer-overview-edit-link")
-          ?.focus(),
-      0,
-    );
-  };
+  // Focus goes back to Edit event once the editor has closed. The button is
+  // disabled while the editor is open, so this waits for the render that
+  // enables it: after a save that render is scheduled, and a timer could fire
+  // first (it does in Safari), leaving focus nowhere.
+  const returnFocusRef = useRef(false);
+  useEffect(() => {
+    if (editing || !returnFocusRef.current) return;
+    returnFocusRef.current = false;
+    panelRef.current?.querySelector(".organizer-overview-edit-link")?.focus();
+  }, [editing]);
 
   const openEditor = () => {
     setSaveStatus("");
@@ -754,9 +755,9 @@ export function OverviewPanel({ event, onEventSaved }) {
   };
 
   const closeEditor = () => {
+    returnFocusRef.current = true;
     setEditing(false);
     setEditingEvent(null);
-    focusEditButton();
   };
 
   const handleSaved = async (result) => {

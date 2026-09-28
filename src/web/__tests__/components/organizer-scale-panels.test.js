@@ -1213,6 +1213,29 @@ test("overview reports the complete inline save result and closes the form", asy
   expect(screen.getByRole("button", { name: "Edit event" })).toBeEnabled();
 });
 
+test("overview returns focus to Edit event after a save without waiting on a timer", async () => {
+  // The save closes the editor after an await, so its render is scheduled
+  // rather than immediate. Frozen timers show focus does not depend on one.
+  jest.useFakeTimers();
+  try {
+    const user = userEvent.setup({ delay: null });
+    render(<OverviewPanel event={baseEvent} onEventSaved={jest.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Edit event" }));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Edit event" })).toHaveFocus(),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Edit event" }));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("button", { name: "Edit event" })).toHaveFocus();
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
 test("overview keeps a confirmed meeting summary visible while details are collapsed", () => {
   render(
     <OverviewPanel
