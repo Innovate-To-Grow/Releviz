@@ -191,6 +191,13 @@ function loginInfo(page, text) {
   return page.locator(".login-message--info").filter({ hasText: text });
 }
 
+// An option of the changelist's action select. Unfold shows the select only
+// once a row is selected, and role locators skip hidden elements, so a
+// getByRole count would be 0 whether or not the action exists.
+function actionOption(page, value) {
+  return page.locator(`select[name="action"] option[value="${value}"]`);
+}
+
 // Selects changelist rows by primary key and runs a bulk action.
 async function runAdminAction(page, ids, action) {
   for (const id of ids) {
@@ -1131,6 +1138,39 @@ async function startMemberImport(page, file, { updateExisting = false } = {}) {
   await page.getByRole("button", { name: /Start Import/ }).click();
 }
 
+// What deleting the account `memberId` removes, as deleting it in Settings
+// does: the member and its emails, the event it organizes with the members
+// behind the people it manages there, and its row in another organizer's
+// event, whose results are then recomputed.
+function deletionTraces({ memberId, ownCode, otherCode, managedIds = [] }) {
+  return runDjangoJson(
+    `
+from apps.authn.models import ContactEmail, Member
+from apps.scheduling.models import Event, EventResultInvalidation, Participant
+
+print(json.dumps({
+    "member": Member.objects.filter(pk=data["memberId"]).exists(),
+    "emails": ContactEmail.objects.filter(member_id=data["memberId"]).count(),
+    "ownEvent": Event.objects.filter(code__iexact=data["ownCode"]).exists(),
+    "managedIds": [
+        str(pk)
+        for pk in Participant.objects.filter(
+            event__code__iexact=data["ownCode"], organizer_managed=True
+        ).values_list("member_id", flat=True)
+    ],
+    "managedMembers": Member.objects.filter(pk__in=data["managedIds"]).count(),
+    "answered": Participant.objects.filter(
+        event__code__iexact=data["otherCode"], member_id=data["memberId"]
+    ).count(),
+    "invalidations": EventResultInvalidation.objects.filter(
+        event__code__iexact=data["otherCode"]
+    ).count(),
+}))
+`,
+    { memberId, ownCode, otherCode, managedIds },
+  );
+}
+
 test.describe("Admin typed confirmation", () => {
   test("a change waits for the typed model name, shows the diff, and a wrong word, cancel or stale token saves nothing", async ({
     page,
@@ -1470,6 +1510,117 @@ test.describe("Admin member tools", () => {
     await expect(adminMessage(page, "1 member(s) activated.")).toBeVisible();
     expect(memberState(email).is_active).toBe(true);
   });
+
+  test("a member with a primary email is deleted one by one or in bulk, and takes their events and managed people along", async ({
+    page,
+    request,
+  }) => {
+    const runId = newRunId();
+    const target = `delete-target-${runId}@example.com`;
+    const bulk = [
+      `delete-bulk-a-${runId}@example.com`,
+      `delete-bulk-b-${runId}@example.com`,
+    ];
+    // The target organizes an event with a person they manage and answers
+    // another organizer's event.
+    const { access, user } = await registerAccountViaApi(
+      request,
+      target,
+      "Tara",
+      `Target${runId}`,
+    );
+    const ownEvent = await createEvent(request, access, {
+      name: `Deleted organizer ${runId}`,
+    });
+    await addPersonApi(request, ownEvent.code, access, {
+      name: "Mo Managed",
+      organizerManaged: true,
+    });
+    const organizer = await registerAccountViaApi(
+      request,
+      `delete-organizer-${runId}@example.com`,
+      "Otto",
+      "Organizer",
+    );
+    const otherEvent = await createEvent(request, organizer.access, {
+      name: `Answered ${runId}`,
+    });
+    await addPersonApi(request, otherEvent.code, organizer.access, {
+      name: "Tara Target",
+      email: target,
+    });
+    const traces = {
+      memberId: user.id,
+      ownCode: ownEvent.code,
+      otherCode: otherEvent.code,
+    };
+    const before = deletionTraces(traces);
+    expect(before).toMatchObject({
+      member: true,
+      emails: 1,
+      ownEvent: true,
+      answered: 1,
+    });
+    expect(before.managedIds).toHaveLength(1);
+    await adminPasswordLogin(page);
+
+    // The primary email goes with the member instead of blocking the delete.
+    await page.goto(`${BACKEND_URL}/admin/authn/member/${user.id}/delete/`);
+    await expect(page).not.toHaveTitle(/Cannot delete/);
+    await expect(
+      page.getByRole("link", { name: `${target} - Primary` }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: /Yes, I.m sure/ }).click();
+    await expect(page).toHaveTitle(/Confirm Deleting user/);
+    await confirmTyped(page, "user");
+    await expect(page).toHaveURL(`${BACKEND_URL}/admin/authn/member/`);
+    await expect(page.locator("#main")).toContainText(
+      "was deleted successfully",
+    );
+    const after = deletionTraces({
+      ...traces,
+      managedIds: before.managedIds,
+    });
+    expect(after).toMatchObject({
+      member: false,
+      emails: 0,
+      ownEvent: false,
+      managedIds: [],
+      managedMembers: 0,
+      answered: 0,
+    });
+    expect(after.invalidations).toBeGreaterThan(before.invalidations);
+
+    const ids = seedMembers(
+      bulk.map((email, index) => ({
+        email,
+        first: "Bea",
+        last: `Bulk${index}${runId}`,
+      })),
+    );
+    await page.goto(
+      `${BACKEND_URL}/admin/authn/member/?q=${encodeURIComponent(runId)}`,
+    );
+    await runAdminAction(page, Object.values(ids), "delete_selected");
+    await expect(page).toHaveTitle(/Confirm Action: Delete selected users/);
+    await confirmTyped(page, "user");
+    await expect(
+      adminMessage(page, "Successfully deleted 2 users."),
+    ).toBeVisible();
+    expect(
+      runDjangoJson(
+        `
+from apps.authn.models import ContactEmail, Member
+
+print(json.dumps({
+    "members": Member.objects.filter(pk__in=data["ids"]).count(),
+    "emails": ContactEmail.objects.filter(email_address__in=data["emails"]).count(),
+}))
+`,
+        { ids: Object.values(ids), emails: bulk },
+      ),
+    ).toEqual({ members: 0, emails: 0 });
+  });
 });
 
 function sidebarSection(page, title) {
@@ -1798,6 +1949,26 @@ async function expectNoFieldInputs(page, names) {
   }
 }
 
+// On an email audit or outbox record's page: nothing saves it or links to its
+// delete page, its add and delete pages are refused, and `changelist` (its
+// list) offers neither Add nor the bulk delete. Leaves the page on the list.
+async function expectReadOnlyMailRecord(page, model, changelist) {
+  const deletePath = new URL(page.url()).pathname.replace(
+    /change\/$/,
+    "delete/",
+  );
+  await expect(page.locator('button[name="_save"]')).toHaveCount(0);
+  await expect(page.locator(`a[href*="${deletePath}"]`)).toHaveCount(0);
+  expect(await adminStatus(page, `/admin/mail/${model}/add/`)).toBe(403);
+  expect(await adminStatus(page, deletePath)).toBe(403);
+  await page.goto(changelist);
+  await expect(page.locator("#result_list tbody tr")).toHaveCount(1);
+  await expect(
+    page.locator(`a[href*="/admin/mail/${model}/add/"]`),
+  ).toHaveCount(0);
+  await expect(actionOption(page, "delete_selected")).toHaveCount(0);
+}
+
 test.describe("Admin theme", () => {
   test("the theme switcher persists light, dark and system choices across reloads", async ({
     page,
@@ -1991,11 +2162,8 @@ print(json.dumps(EmailDeliveryJob.objects.get(pk=data["id"]).status))
     await expect(
       page.locator('a[href*="/admin/admin/logentry/add/"]'),
     ).toHaveCount(0);
-    await expect(
-      page
-        .getByRole("combobox", { name: "Select action to run" })
-        .locator('option[value="delete_selected"]'),
-    ).toHaveCount(0);
+    await expect(page.locator('select[name="action"]')).toHaveCount(1);
+    await expect(actionOption(page, "delete_selected")).toHaveCount(0);
     await logRows.getByRole("link").first().click();
     await expect(page).toHaveURL(
       /\/admin\/admin\/logentry\/\d+\/change\/(\?|$)/,
@@ -2059,11 +2227,8 @@ print(json.dumps({
       const changelist = `${BACKEND_URL}/admin/core/backgroundjob/?q=${runId}`;
       await page.goto(changelist);
       await expect(page.locator("#result_list tbody tr")).toHaveCount(3);
-      await expect(
-        page
-          .getByRole("combobox", { name: "Select action to run" })
-          .locator('option[value="delete_selected"]'),
-      ).toHaveCount(0);
+      await expect(page.locator('select[name="action"]')).toHaveCount(1);
+      await expect(actionOption(page, "delete_selected")).toHaveCount(0);
       await runAdminAction(
         page,
         [jobs.failed, jobs.uncertain, jobs.succeeded],
@@ -2126,7 +2291,7 @@ print(json.dumps(BackgroundJob.objects.filter(pk__in=data["ids"]).delete()[0]))
     }
   });
 
-  test("an event's delivery request, job and message log are listed by search and shown read-only", async ({
+  test("an event's delivery request, job and message log are listed by search, and nobody can add, edit or delete one", async ({
     page,
     request,
   }) => {
@@ -2150,9 +2315,8 @@ print(json.dumps(BackgroundJob.objects.filter(pk__in=data["ids"]).delete()[0]))
     expect(added.deliveryRequest).toBeTruthy();
     await adminPasswordLogin(page);
 
-    await page.goto(
-      `${BACKEND_URL}/admin/mail/emaildeliveryrequest/?q=${event.code}`,
-    );
+    const requestList = `${BACKEND_URL}/admin/mail/emaildeliveryrequest/?q=${event.code}`;
+    await page.goto(requestList);
     const requestRows = page.locator("#result_list tbody tr");
     await expect(requestRows).toHaveCount(1);
     await expect(requestRows).toContainText("Invitation");
@@ -2169,10 +2333,11 @@ print(json.dumps(BackgroundJob.objects.filter(pk__in=data["ids"]).delete()[0]))
       "created_job_count",
       "event",
     ]);
+    // The seeded superuser signed in: not even they add, edit or delete one.
+    await expectReadOnlyMailRecord(page, "emaildeliveryrequest", requestList);
 
-    await page.goto(
-      `${BACKEND_URL}/admin/mail/emaildeliveryjob/?q=${encodeURIComponent(invitee)}`,
-    );
+    const jobList = `${BACKEND_URL}/admin/mail/emaildeliveryjob/?q=${encodeURIComponent(invitee)}`;
+    await page.goto(jobList);
     const jobRows = page.locator("#result_list tbody tr");
     await expect(jobRows).toHaveCount(1);
     await jobRows.getByRole("link").first().click();
@@ -2187,6 +2352,11 @@ print(json.dumps(BackgroundJob.objects.filter(pk__in=data["ids"]).delete()[0]))
       "status",
       "attempt_count",
     ]);
+    await expectReadOnlyMailRecord(page, "emaildeliveryjob", jobList);
+    // Requeueing an uncertain job stays available.
+    await expect(actionOption(page, "retry_uncertain_deliveries")).toHaveCount(
+      1,
+    );
 
     // The worker logs the delivery once it has sent the invitation.
     const logList = `${BACKEND_URL}/admin/mail/emailmessagelog/?q=${encodeURIComponent(invitee)}`;
@@ -2216,6 +2386,7 @@ print(json.dumps(BackgroundJob.objects.filter(pk__in=data["ids"]).delete()[0]))
       "error",
       "message_type",
     ]);
+    await expectReadOnlyMailRecord(page, "emailmessagelog", logList);
   });
 });
 
@@ -2466,11 +2637,8 @@ print(json.dumps(list(AWSCredentialConfig.objects.filter(is_active=True).values_
         await expect(row).toContainText(`...${accessKey.slice(-4)}`);
         await expect(row).not.toContainText(accessKey);
         await expect(row).toContainText("Inactive");
-        await expect(
-          page
-            .getByRole("combobox", { name: "Select action to run" })
-            .locator('option[value="delete_selected"]'),
-        ).toHaveCount(0);
+        await expect(page.locator('select[name="action"]')).toHaveCount(1);
+        await expect(actionOption(page, "delete_selected")).toHaveCount(0);
 
         await page.goto(changeUrl);
         await expect(

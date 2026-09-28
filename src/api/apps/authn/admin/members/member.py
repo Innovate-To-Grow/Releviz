@@ -9,14 +9,16 @@ from django.conf import settings
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 from django.core.exceptions import PermissionDenied
+from django.db import transaction
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import path
 from django.utils.translation import gettext_lazy as _
 from unfold.forms import AdminPasswordChangeForm
 
+from apps.authn.services.account import delete_member_account
 from apps.core.admin import BaseModelAdmin
 
-from ...models import ImpersonationToken, Member
+from ...models import ContactEmail, ImpersonationToken, Member
 from .forms import MemberChangeForm, MemberCreationForm
 from .helpers import (
     activate_members,
@@ -183,6 +185,29 @@ class MemberAdmin(BaseModelAdmin, UserAdmin):
         if obj is not None and not may_change_account(request.user, obj):
             return False
         return super().has_delete_permission(request, obj)
+
+    def get_deleted_objects(self, objs, request):
+        deleted_objects, model_count, perms_needed, protected = super().get_deleted_objects(
+            objs, request
+        )
+        # The contact emails go with the member. The Contact Email admin refuses
+        # to delete a primary email on its own, which must not stop an admin who
+        # may delete every one of these members (their other emails follow the
+        # same rule) from deleting them.
+        if all(self.has_delete_permission(request, member) for member in objs):
+            perms_needed.discard(ContactEmail._meta.verbose_name)
+        return deleted_objects, model_count, perms_needed, protected
+
+    # Deleting a member here leaves what deleting the account in Settings leaves:
+    # the organizer-managed people behind their events go too, and the events
+    # they took part in recompute their results.
+    def delete_model(self, request, obj):
+        delete_member_account(member=obj)
+
+    def delete_queryset(self, request, queryset):
+        with transaction.atomic():
+            for member in queryset:
+                delete_member_account(member=member)
 
     def get_fieldsets(self, request, obj=None):
         fieldsets = super().get_fieldsets(request, obj)

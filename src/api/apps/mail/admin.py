@@ -1,5 +1,6 @@
 from django import forms
 from django.contrib import admin, messages
+from django.core.exceptions import PermissionDenied
 from django.http import HttpResponseRedirect
 from django.template.response import TemplateResponse
 from django.urls import reverse
@@ -197,8 +198,38 @@ class EmailProviderConfigAdmin(AppAccessPermissionMixin, ModelAdmin):
         )
 
 
+class ReadOnlyRecordAdminMixin:
+    """Audit and outbox records: nobody adds, edits or deletes one here.
+
+    ``has_delete_permission`` keeps the per-app check, because Django also asks
+    it when the event or member a record belongs to is deleted, and the record
+    goes with it. Deleting a record on its own is refused below instead.
+    """
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def get_actions(self, request, action_location=None):
+        if action_location is None:
+            actions = super().get_actions(request)
+        else:
+            actions = super().get_actions(request, action_location=action_location)
+        actions.pop("delete_selected", None)
+        return actions
+
+    def delete_view(self, request, object_id, extra_context=None):
+        raise PermissionDenied
+
+    def change_view(self, request, object_id, form_url="", extra_context=None):
+        extra_context = {**(extra_context or {}), "show_delete": False}
+        return super().change_view(request, object_id, form_url, extra_context)
+
+
 @admin.register(EmailMessageLog)
-class EmailMessageLogAdmin(AppAccessPermissionMixin, ModelAdmin):
+class EmailMessageLogAdmin(ReadOnlyRecordAdminMixin, AppAccessPermissionMixin, ModelAdmin):
     list_display = ("message_type", "recipient", "status", "subject", "created_at")
     list_filter = ("message_type", "status")
     search_fields = ("recipient", "subject", "provider_message_id", "error")
@@ -218,7 +249,7 @@ class EmailMessageLogAdmin(AppAccessPermissionMixin, ModelAdmin):
 
 
 @admin.register(EmailDeliveryJob)
-class EmailDeliveryJobAdmin(AppAccessPermissionMixin, ModelAdmin):
+class EmailDeliveryJobAdmin(ReadOnlyRecordAdminMixin, AppAccessPermissionMixin, ModelAdmin):
     actions = ("retry_uncertain_deliveries",)
     list_display = (
         "message_type",
@@ -289,7 +320,7 @@ class EmailDeliveryJobAdmin(AppAccessPermissionMixin, ModelAdmin):
 
 
 @admin.register(EmailDeliveryRequest)
-class EmailDeliveryRequestAdmin(AppAccessPermissionMixin, ModelAdmin):
+class EmailDeliveryRequestAdmin(ReadOnlyRecordAdminMixin, AppAccessPermissionMixin, ModelAdmin):
     list_display = (
         "operation",
         "event",
