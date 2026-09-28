@@ -143,11 +143,13 @@ AUTH_RATE_LIMITS = {
         "identity": {"limit": 5, "window": 3600, "block": 3600},
     },
     "code_request": {
-        "ip": {"limit": 20, "window": 3600, "block": 3600},
+        # A 1000-person event can share a campus NAT: one code and one resend
+        # per participant must not lock everyone out. Identity caps stay strict.
+        "ip": {"limit": 2000, "window": 3600, "block": 3600},
         "identity": {"limit": 5, "window": 3600, "block": 3600},
     },
     "code_verify": {
-        "ip": {"limit": 30, "window": 600, "block": 900},
+        "ip": {"limit": 3000, "window": 600, "block": 900},
         "identity": {"limit": 10, "window": 600, "block": 900},
     },
     "contact_email_create": {
@@ -155,11 +157,11 @@ AUTH_RATE_LIMITS = {
         "identity": {"limit": 5, "window": 3600, "block": 3600},
     },
     "temp_access_code_request": {
-        "ip": {"limit": 20, "window": 3600, "block": 3600},
+        "ip": {"limit": 2000, "window": 3600, "block": 3600},
         "identity": {"limit": 5, "window": 3600, "block": 3600},
     },
     "temp_access_code_verify": {
-        "ip": {"limit": 30, "window": 600, "block": 900},
+        "ip": {"limit": 3000, "window": 600, "block": 900},
         "identity": {"limit": 10, "window": 600, "block": 900},
     },
     "password_login": {

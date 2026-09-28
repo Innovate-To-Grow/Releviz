@@ -116,9 +116,12 @@ def auth_success_response(
 
 def challenge_error_response(exc: Exception) -> Response:
     if isinstance(exc, AuthChallengeThrottled):
-        return Response(
-            {"detail": VERIFICATION_THROTTLED}, status=status.HTTP_429_TOO_MANY_REQUESTS
-        )
+        payload = {"detail": VERIFICATION_THROTTLED}
+        headers = {}
+        if exc.retry_after:
+            payload["retry_after"] = exc.retry_after
+            headers["Retry-After"] = str(exc.retry_after)
+        return Response(payload, status=status.HTTP_429_TOO_MANY_REQUESTS, headers=headers)
     if isinstance(exc, AuthChallengeDeliveryError):
         return Response(
             {"detail": "Failed to send verification email."},

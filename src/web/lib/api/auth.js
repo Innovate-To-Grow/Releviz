@@ -7,6 +7,28 @@ import {
   writeAuthSession,
 } from "@/lib/api/config";
 import { normalizeAuthUser } from "@/lib/authUser";
+import { retryAfterSeconds } from "@/lib/api/retryAfter";
+
+async function codeRequestResponse(res) {
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    const error = new Error(`HTTP ${res.status}`);
+    error.status = res.status;
+    error.retryAfterSeconds = retryAfterSeconds(res);
+    throw error;
+  }
+  if (!res.ok) {
+    const error = new Error(
+      await extractError({ json: async () => data, status: res.status }),
+    );
+    error.status = res.status;
+    error.retryAfterSeconds = retryAfterSeconds(res, data);
+    throw error;
+  }
+  return data;
+}
 
 function writeProfileSession(session, user) {
   if (!session) return;
@@ -110,8 +132,7 @@ export async function requestLoginCode({ email }) {
     body: JSON.stringify({ email }),
     credentials: "include",
   });
-  if (!res.ok) throw new Error(await extractError(res));
-  return res.json();
+  return codeRequestResponse(res);
 }
 
 export async function verifyLoginCode({ email, code }) {
@@ -141,8 +162,7 @@ export async function requestUnifiedEmailAuthCode({
     }),
     credentials: "include",
   });
-  if (!res.ok) throw new Error(await extractError(res));
-  return res.json();
+  return codeRequestResponse(res);
 }
 
 export async function verifyUnifiedEmailAuthCode({ email, code }) {

@@ -167,7 +167,10 @@ describe("temporary event access page", () => {
     window.history.replaceState({}, "", "/temp-access");
     searchParams = new URLSearchParams("code=ABC123");
     fetchTempAccessSession.mockResolvedValue(session());
-    requestTempAccessCode.mockResolvedValue({ accepted: true });
+    requestTempAccessCode.mockResolvedValue({
+      accepted: true,
+      resend_after: 0,
+    });
     verifyTempAccess.mockResolvedValue(session());
     logoutTempAccess.mockResolvedValue({});
     updateTempAccessParticipant.mockImplementation(async (_code, payload) => ({
@@ -182,6 +185,197 @@ describe("temporary event access page", () => {
 
   afterEach(() => {
     jest.useRealTimers();
+  });
+
+  test("honors the request wait while allowing an existing code to be verified", async () => {
+    jest.useFakeTimers();
+    searchParams = new URLSearchParams("code=ABC123&invitation=tok");
+    requestTempAccessCode.mockRejectedValueOnce(
+      Object.assign(new Error("throttled"), {
+        status: 429,
+        retryAfterSeconds: 90,
+      }),
+    );
+    await act(async () => render(<TempAccessClient />));
+    expect(
+      screen.getByRole("button", { name: "Send a new code in 90s" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByText(/Check your spam or junk folder too/),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Verification code"), {
+      target: { value: "123456" },
+    });
+    expect(
+      screen.getByRole("button", { name: "Verify and open schedule" }),
+    ).toBeEnabled();
+    act(() => jest.advanceTimersByTime(89000));
+    expect(
+      screen.getByRole("button", { name: "Send a new code in 1s" }),
+    ).toBeDisabled();
+    act(() => jest.advanceTimersByTime(1000));
+    requestTempAccessCode.mockResolvedValueOnce({
+      accepted: true,
+      resend_after: 60,
+    });
+    await act(async () =>
+      fireEvent.click(screen.getByRole("button", { name: "Send a new code" })),
+    );
+    expect(
+      screen.getByRole("button", { name: "Send a new code in 60s" }),
+    ).toBeDisabled();
+    await act(async () =>
+      fireEvent.click(
+        screen.getByRole("button", { name: "Verify and open schedule" }),
+      ),
+    );
+    expect(verifyTempAccess).toHaveBeenCalledWith({
+      code: "ABC123",
+      invitationToken: "tok",
+      verificationCode: "123456",
+    });
+  });
+
+  test.each(["success", "failure"])(
+    "resets the code and ignores late request %s when changing invitations",
+    async (outcome) => {
+      jest.useFakeTimers();
+      searchParams = new URLSearchParams("code=ABC123&invitation=first");
+      let rejectFirst;
+      let resolveFirst;
+      requestTempAccessCode.mockImplementationOnce(
+        () =>
+          new Promise((resolve, reject) => {
+            rejectFirst = reject;
+            resolveFirst = resolve;
+          }),
+      );
+      const view = render(<TempAccessClient />);
+      fireEvent.change(screen.getByLabelText("Verification code"), {
+        target: { value: "123456" },
+      });
+      searchParams = new URLSearchParams("code=ABC123&invitation=second");
+      requestTempAccessCode.mockResolvedValueOnce({
+        accepted: true,
+        resend_after: 15,
+      });
+      await act(async () => view.rerender(<TempAccessClient />));
+      expect(screen.getByLabelText("Verification code")).toHaveValue("");
+      expect(
+        screen.getByRole("button", { name: "Send a new code in 15s" }),
+      ).toBeDisabled();
+      await act(async () =>
+        outcome === "success"
+          ? resolveFirst({ accepted: true, resend_after: 300 })
+          : rejectFirst(
+              Object.assign(new Error("old wait"), {
+                status: 429,
+                retryAfterSeconds: 300,
+              }),
+            ),
+      );
+      expect(
+        screen.getByRole("button", { name: "Send a new code in 15s" }),
+      ).toBeDisabled();
+      expect(screen.queryByText("old wait")).not.toBeInTheDocument();
+      act(() => jest.advanceTimersByTime(15000));
+      expect(
+        screen.getByRole("button", { name: "Send a new code" }),
+      ).toBeEnabled();
+      searchParams = new URLSearchParams("code=ABC123&invitation=first");
+      await act(async () => view.rerender(<TempAccessClient />));
+      act(() => jest.advanceTimersByTime(0));
+      expect(requestTempAccessCode).toHaveBeenCalledTimes(2);
+      expect(
+        screen.getByRole("button", { name: "Send a new code in 285s" }),
+      ).toBeDisabled();
+    },
+  );
+
+  test("returning to an invitation honors its original wait without another automatic request", async () => {
+    jest.useFakeTimers();
+    searchParams = new URLSearchParams("code=ABC123&invitation=first");
+    requestTempAccessCode.mockResolvedValueOnce({
+      accepted: true,
+      resend_after: 60,
+    });
+    let view;
+    await act(async () => {
+      view = render(<TempAccessClient />);
+    });
+    expect(
+      screen.getByRole("button", { name: "Send a new code in 60s" }),
+    ).toBeDisabled();
+    searchParams = new URLSearchParams("code=ABC123&invitation=second");
+    requestTempAccessCode.mockResolvedValueOnce({
+      accepted: true,
+      resend_after: 15,
+    });
+    await act(async () => view.rerender(<TempAccessClient />));
+    act(() => jest.advanceTimersByTime(20000));
+    searchParams = new URLSearchParams("code=ABC123&invitation=first");
+    await act(async () => view.rerender(<TempAccessClient />));
+    act(() => jest.advanceTimersByTime(0));
+    expect(requestTempAccessCode).toHaveBeenCalledTimes(2);
+    expect(
+      screen.getByRole("button", { name: "Send a new code in 40s" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Verify and open schedule" }),
+    ).toBeEnabled();
+    act(() => jest.advanceTimersByTime(40000));
+    await act(async () =>
+      fireEvent.click(screen.getByRole("button", { name: "Send a new code" })),
+    );
+    expect(requestTempAccessCode).toHaveBeenCalledTimes(3);
+    expect(requestTempAccessCode).toHaveBeenLastCalledWith({
+      code: "ABC123",
+      invitationToken: "first",
+    });
+  });
+
+  test("keeps verification throttling separate and displays invalid-code details", async () => {
+    jest.useFakeTimers();
+    searchParams = new URLSearchParams("code=ABC123&invitation=tok");
+    await act(async () => render(<TempAccessClient />));
+    fireEvent.change(screen.getByLabelText("Verification code"), {
+      target: { value: "123456" },
+    });
+    verifyTempAccess.mockRejectedValueOnce(
+      Object.assign(new Error("throttled"), {
+        status: 429,
+        retryAfterSeconds: 10,
+      }),
+    );
+    await act(async () =>
+      fireEvent.click(
+        screen.getByRole("button", { name: "Verify and open schedule" }),
+      ),
+    );
+    expect(
+      screen.getByRole("button", { name: "Try verification in 10s" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Send a new code" }),
+    ).toBeEnabled();
+    fireEvent.submit(
+      screen.getByLabelText("Verification code").closest("form"),
+    );
+    expect(verifyTempAccess).toHaveBeenCalledTimes(1);
+    act(() => jest.advanceTimersByTime(10000));
+    verifyTempAccess.mockRejectedValueOnce(
+      Object.assign(new Error("The verification code has expired."), {
+        status: 400,
+      }),
+    );
+    await act(async () =>
+      fireEvent.click(
+        screen.getByRole("button", { name: "Verify and open schedule" }),
+      ),
+    );
+    expect(
+      screen.getByText("The verification code has expired."),
+    ).toBeInTheDocument();
   });
 
   test("restores a restricted session and builds an email-free server-bound upgrade link", async () => {
@@ -664,7 +858,7 @@ describe("temporary event access page", () => {
     await userEvent.click(verify);
     expect(
       await screen.findByText(
-        "Too many attempts. Request a new code after waiting a moment.",
+        "Too many verification attempts. Please wait before trying the code from your latest email again.",
       ),
     ).toBeInTheDocument();
 

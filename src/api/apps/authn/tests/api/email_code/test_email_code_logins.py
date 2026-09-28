@@ -102,6 +102,49 @@ class EmailCodeAuthLoginTests(APITestCase):
         self.assertEqual(verify_response.data["next_step"], "complete_profile")
         self.assertTrue(verify_response.data["requires_profile_completion"])
 
+    def test_resend_reports_remaining_wait_and_succeeds_when_cooldown_ends(
+        self, _mock_code, mock_send
+    ):
+        now = timezone.now()
+        with patch("django.utils.timezone.now", return_value=now):
+            sent = self.client.post(
+                "/authn/email-auth/request-code/",
+                {"email": self.primary_email.email_address},
+                format="json",
+            )
+        self.assertEqual(sent.status_code, 202)
+        self.assertEqual(sent.data["resend_after"], 60)
+
+        with patch("django.utils.timezone.now", return_value=now + timedelta(seconds=20.25)):
+            early = self.client.post(
+                "/authn/email-auth/request-code/",
+                {"email": self.primary_email.email_address},
+                format="json",
+            )
+        self.assertEqual(early.status_code, 429)
+        self.assertEqual(early["Retry-After"], "40")
+        self.assertEqual(early.data["retry_after"], 40)
+        self.assertEqual(mock_send.call_count, 1)
+
+        with patch("django.utils.timezone.now", return_value=now + timedelta(seconds=60)):
+            resent = self.client.post(
+                "/authn/email-auth/request-code/",
+                {"email": self.primary_email.email_address},
+                format="json",
+            )
+        self.assertEqual(resent.status_code, 202)
+        self.assertEqual(mock_send.call_count, 2)
+
+    def test_unknown_email_gets_same_resend_metadata(self, _mock_code, mock_send):
+        response = self.client.post(
+            "/authn/login/request-code/",
+            {"email": "unknown@example.com"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.data["resend_after"], 60)
+        mock_send.assert_not_called()
+
     def test_password_login_routes_incomplete_profile_to_complete_profile(
         self, _mock_code, _mock_send
     ):

@@ -102,6 +102,27 @@ class TemporaryAccessEdgeFixture(TestCase):
 
 
 class TemporaryAccessServiceEdgeTests(TemporaryAccessEdgeFixture):
+    @patch("apps.authn.services.email.send_email.send_verification_email")
+    def test_request_cooldown_is_generic_and_does_not_log_an_operational_error(self, mock_send):
+        client = APIClient()
+        payload = {"code": self.event.code, "invitationToken": str(self.invitation.access_token)}
+        first = client.post("/events/temp-access/request-code", payload, format="json")
+        with self.assertLogs("apps.scheduling.views.temporary_access.codes", level="INFO") as logs:
+            early = client.post("/events/temp-access/request-code", payload, format="json")
+        unknown = client.post(
+            "/events/temp-access/request-code",
+            {"code": "UNKNOWN", "invitationToken": str(uuid.uuid4())},
+            format="json",
+        )
+        self.assertEqual(first.status_code, 202)
+        self.assertEqual(early.status_code, 202)
+        self.assertEqual(unknown.status_code, 202)
+        self.assertEqual(first.data, early.data)
+        self.assertEqual(first.data, unknown.data)
+        self.assertEqual(first.data["resend_after"], 60)
+        self.assertEqual(mock_send.call_count, 1)
+        self.assertEqual([record.levelname for record in logs.records], ["INFO"])
+
     def test_rate_limit_identity_canonicalizes_equivalent_event_link_tokens(self):
         token = self.invitation.access_token
         canonical = temporary_access_rate_identity(self.event.code, token)
