@@ -37,6 +37,9 @@ const backendEnv = {
 
 module.exports = defineConfig({
   testDir: ".",
+  // Every test is independent (its own runId-suffixed accounts and
+  // events), so workers split the tests within a file too.
+  fullyParallel: true,
   timeout: 120_000,
   expect: { timeout: 10_000 },
   reporter: [
