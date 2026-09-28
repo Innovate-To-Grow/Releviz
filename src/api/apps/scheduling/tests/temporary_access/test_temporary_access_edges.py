@@ -25,6 +25,7 @@ from apps.scheduling.models import (
     Weight,
 )
 from apps.scheduling.services.invitations import ManagedParticipantError
+from apps.scheduling.services.results import build_event_results
 from apps.scheduling.services.temporary_access import (
     _invitation_and_participant,
     temporary_access_rate_identity,
@@ -793,20 +794,16 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
         origin = {"HTTP_ORIGIN": "http://testserver"}
         client = self.temp_client()
 
-        Weight.objects.create(
-            event=self.event,
-            participant=self.participant,
-            included=False,
-        )
-        excluded = client.put(
+        Participant.objects.filter(pk=self.participant.pk).update(hidden=True)
+        removed = client.put(
             endpoint,
             {"availabilityInperson": [1, 0], "expectedVersion": 1},
             format="json",
             **origin,
         )
-        self.assertEqual(excluded.status_code, 403)
-        self.assertEqual(excluded.data["errorCode"], "participant_excluded")
-        Weight.objects.all().delete()
+        self.assertEqual(removed.status_code, 403)
+        self.assertEqual(removed.data["errorCode"], "participant_excluded")
+        Participant.objects.filter(pk=self.participant.pk).update(hidden=False)
 
         invalid_availability = client.put(
             endpoint,
@@ -868,6 +865,36 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
         )
         self.assertEqual(locked.status_code, 409)
         self.assertEqual(locked.data["errorCode"], "event_responses_locked")
+
+    def test_participant_left_out_of_the_results_still_saves_and_submits(self):
+        endpoint = f"/events/temp-access/participant?code={self.event.code}"
+        origin = {"HTTP_ORIGIN": "http://testserver"}
+        client = self.temp_client()
+        Weight.objects.create(event=self.event, participant=self.participant, included=False)
+
+        draft = client.put(
+            endpoint,
+            {"availabilityInperson": [1, 0], "expectedVersion": 1},
+            format="json",
+            **origin,
+        )
+        self.assertEqual(draft.status_code, 200, draft.data)
+        submitted = client.put(
+            endpoint,
+            {"submitted": 1, "expectedVersion": draft.data["participant"]["version"]},
+            format="json",
+            **origin,
+        )
+        self.assertEqual(submitted.status_code, 200, submitted.data)
+        self.participant.refresh_from_db()
+        self.assertTrue(self.participant.submitted)
+        self.assertEqual(self.participant.availability_inperson, [1, 0])
+        self.invitation.refresh_from_db()
+        self.assertEqual(self.invitation.status, EventInvitation.Status.SUBMITTED)
+        # Still out of the results until the organizer counts them again.
+        results = build_event_results(self.event)
+        self.assertEqual(results["countedResponseTotal"], 0)
+        self.assertEqual(results["exclusionReasons"]["organizerExcluded"], 1)
 
     def test_participant_endpoint_records_submit_withdraw_and_first_draft_transitions(self):
         endpoint = f"/events/temp-access/participant?code={self.event.code}"

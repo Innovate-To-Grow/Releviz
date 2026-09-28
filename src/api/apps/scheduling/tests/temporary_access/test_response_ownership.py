@@ -26,6 +26,7 @@ from apps.scheduling.models import (
 from apps.scheduling.permissions import organizer_may_edit_response
 from apps.scheduling.services.availability import default_availability
 from apps.scheduling.services.invitations import mark_invitation_for_member
+from apps.scheduling.services.results import build_event_results
 
 OWNED_CODE = "organizer_edit_participant_owned"
 OWNED_MESSAGE = (
@@ -275,11 +276,11 @@ class ResponseOwnershipTests(TestCase):
         def reopen_deadline(member):
             Event.objects.filter(pk=self.event.pk).update(response_deadline=None)
 
-        def exclude(member):
-            Weight.objects.create(event=self.event, participant=self.row(member), included=False)
+        def remove(member):
+            Participant.objects.filter(pk=self.row(member).pk).update(hidden=True)
 
-        def include(member):
-            Weight.objects.filter(participant=self.row(member)).delete()
+        def restore(member):
+            Participant.objects.filter(pk=self.row(member).pk).update(hidden=False)
 
         def noop(member):
             return None
@@ -287,7 +288,7 @@ class ResponseOwnershipTests(TestCase):
         cases = [
             ("428", {"availabilityInperson": [1, 0]}, noop, noop, 428),
             ("deadline", {"availabilityInperson": [1, 0]}, pass_deadline, reopen_deadline, 409),
-            ("excluded", {"availabilityInperson": [1, 0]}, exclude, include, 403),
+            ("removed", {"availabilityInperson": [1, 0]}, remove, restore, 403),
             ("invalid", {"availabilityInperson": [7, 0]}, noop, noop, 400),
             ("rename", {"name": "Self label"}, noop, noop, 403),
             ("empty", {}, noop, noop, 200),
@@ -303,6 +304,42 @@ class ResponseOwnershipTests(TestCase):
                 after(member)
                 self.assertIsNone(self.row(member).response_claimed_at)
                 self.assertEqual(self.organizer_write(member).status_code, 200)
+
+    def test_leaving_someone_out_of_the_results_never_locks_their_response(self):
+        member = self.fresh_full_account("left-out")
+        entry = self.roster_row(member)
+        left_out = self.organizer_client.patch(
+            f"/events/roster/{entry['id']}?code={self.event.code}",
+            {"included": False, "expectedVersion": entry["version"]},
+            format="json",
+        )
+        self.assertEqual(left_out.status_code, 200, left_out.data)
+        self.assertFalse(self.roster_row(member)["included"])
+
+        # The organizer can still enter it for them, and they can still answer.
+        self.assertEqual(self.organizer_write(member, (1, 0)).status_code, 200)
+        own_client = client_for(member)
+        draft = self.put(
+            own_client,
+            member,
+            {"availabilityInperson": [0, 1], "expectedVersion": self.version(member)},
+        )
+        self.assertEqual(draft.status_code, 200, draft.data)
+        submitted = self.put(
+            own_client, member, {"submitted": 1, "expectedVersion": self.version(member)}
+        )
+        self.assertEqual(submitted.status_code, 200, submitted.data)
+        row = self.row(member)
+        self.assertTrue(row.submitted)
+        self.assertEqual(row.availability_inperson, [0, 1])
+        self.assertIsNotNone(row.response_claimed_at)
+
+        # The results skip them until they count again.
+        results = build_event_results(self.event)
+        self.assertEqual(results["countedResponseTotal"], 0)
+        self.assertEqual(results["exclusionReasons"]["organizerExcluded"], 1)
+        Weight.objects.filter(participant=row).update(included=True)
+        self.assertEqual(build_event_results(self.event)["countedResponseTotal"], 1)
 
     def test_join_claims_new_and_existing_rows(self):
         self.assertEqual(self.add_only().status_code, 201)

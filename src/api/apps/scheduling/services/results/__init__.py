@@ -6,7 +6,6 @@ from .aggregation import (
     parse_availability,
     participant_availability,
     participant_has_valid_submission,
-    participant_is_excluded,
     result_channels,
 )
 from .recommendations import (
@@ -37,7 +36,6 @@ __all__ = [
     "parse_availability",
     "participant_availability",
     "participant_has_valid_submission",
-    "participant_is_excluded",
     "recompute_due_event_results",
     "recompute_event_results",
     "request_event_results_recompute",

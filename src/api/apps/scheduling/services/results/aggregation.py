@@ -45,10 +45,6 @@ def participant_has_valid_submission(participant, event) -> bool:
     return bool(participant.submitted and participant_availability(participant, event) is not None)
 
 
-def participant_is_excluded(participant, weight=None) -> bool:
-    return bool(participant.hidden or (weight is not None and not weight.included))
-
-
 def classify_event_responses(event) -> dict:
     participants = list(event.participants.select_related("member").all())
     weights = {
