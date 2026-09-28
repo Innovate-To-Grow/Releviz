@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.auth.hashers import make_password
 from django.test import RequestFactory, TestCase
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError as DRFValidationError
@@ -13,7 +14,7 @@ from rest_framework.test import APIClient
 
 from apps.authn.models import ContactEmail, EmailAuthChallenge
 from apps.authn.security import RateLimitDecision
-from apps.authn.services import start_registration
+from apps.authn.services import AuthChallengeInvalid, start_registration
 from apps.authn.tests.helpers import create_member, token_for
 from apps.mail.services import EmailDeliveryError
 from apps.scheduling.models import (
@@ -480,7 +481,7 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
 
         with patch(
             "apps.scheduling.views.temporary_access.codes.verify_temporary_access_code",
-            side_effect=DRFValidationError("bad code"),
+            side_effect=AuthChallengeInvalid("bad code"),
         ):
             validation_error = client.post("/events/temp-access/verify", payload, format="json")
         self.assertEqual(validation_error.status_code, 400)
@@ -505,6 +506,43 @@ class TemporaryAccessViewEdgeTests(TemporaryAccessEdgeFixture):
             "temp_access_code_verify",
         )
         self.assertIn("ip_address", warning.call_args.kwargs["extra"])
+
+    def test_wrong_codes_on_a_valid_link_are_counted_until_the_code_is_used_up(self):
+        client = APIClient()
+        challenge = EmailAuthChallenge.objects.create(
+            member=self.temporary,
+            purpose=EmailAuthChallenge.Purpose.TEMP_EVENT_ACCESS,
+            target_email=self.invitation.email,
+            code_hash=make_password("123456"),
+            expires_at=timezone.now() + timedelta(minutes=10),
+            max_attempts=5,
+            last_sent_at=timezone.now(),
+        )
+
+        def verify(code):
+            return client.post(
+                "/events/temp-access/verify",
+                {
+                    "code": self.event.code,
+                    "invitationToken": str(self.invitation.access_token),
+                    "verificationCode": code,
+                },
+                format="json",
+            )
+
+        for attempt in range(1, 6):
+            with self.assertLogs("releviz.security", level="WARNING") as logs:
+                wrong = verify(f"00000{attempt}")
+            self.assertEqual(wrong.status_code, 400, wrong.data)
+            self.assertEqual(wrong.data, {"error": "Invalid or expired verification code."})
+            self.assertIn("temporary_access_code_verification_failed", logs.output[-1])
+            challenge.refresh_from_db()
+            self.assertEqual(challenge.attempts, attempt)
+        self.assertEqual(challenge.status, EmailAuthChallenge.Status.EXPIRED)
+
+        used_up = verify("123456")
+        self.assertEqual(used_up.status_code, 400, used_up.data)
+        self.assertEqual(TemporaryEventSession.objects.count(), 1)
 
     def test_session_endpoint_requires_event_scope_and_hides_results_without_permission(self):
         client = self.temp_client()

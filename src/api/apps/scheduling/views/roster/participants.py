@@ -4,6 +4,7 @@ from django.db import transaction
 from rest_framework.response import Response
 
 from apps.scheduling.models import Weight
+from apps.scheduling.permissions import organizer_may_edit_response
 from apps.scheduling.services.invitations import ManagedParticipantError, normalize_phone
 from apps.scheduling.services.roster_groups import (
     MAX_GROUPS_PER_CELL,
@@ -28,6 +29,8 @@ from .queries import boolean_query, group_stats, participant_summary, roster_que
 # Any of these keys in the body rewrites the person's memberships.
 GROUP_KEYS = ("group", "groupName", "groups", "allGroups", "addGroupIds", "removeGroupIds")
 DELETED_GROUP_MESSAGE = "This group was deleted in another session."
+NAME_LOCKED_MESSAGE = "This person set their own name in their Releviz account."
+OWN_ROW_NAME_MESSAGE = "Your own name comes from your account settings."
 
 
 def _group_name_list(value) -> list[str]:
@@ -130,6 +133,15 @@ class RosterParticipantView(PrivateAPIView):
                     if len(name) > 100:
                         raise RosterImportError("name is too long (max 100).")
                     if participant.participant_name != name:
+                        # Someone who answers under their own account, the
+                        # organizer included, keeps the account's name.
+                        if not organizer_may_edit_response(participant):
+                            raise RosterImportError(
+                                OWN_ROW_NAME_MESSAGE
+                                if participant.member_id == event.organizer_id
+                                else NAME_LOCKED_MESSAGE,
+                                status_code=409,
+                            )
                         participant.participant_name = name
                         changed = True
                 groups_supplied = any(key in request.data for key in GROUP_KEYS)

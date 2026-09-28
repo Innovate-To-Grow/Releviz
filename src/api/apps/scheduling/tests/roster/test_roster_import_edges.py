@@ -747,6 +747,44 @@ class RosterImportDatabaseEdgeTests(TestCase):
                 data={"rowUpdates": [{"id": str(one_row.pk), "name": "Still valid"}]},
             )
 
+    def test_row_update_keeps_a_refused_cell_error_until_that_field_is_set(self):
+        # The sheet's formula phone and group, weight 2 and included "maybe"
+        # leave fallbacks in the row that an edit elsewhere must not import.
+        batch = self.preview(
+            "name,email,phone,group,weight,included\n"
+            "Wes,wes-refused@example.com,=PHONE(),=GROUP(),2,maybe"
+        )
+        row = batch.rows.get(row_number=2)
+        refused = [
+            "phone cannot contain a formula.",
+            "group cannot contain a formula.",
+            "weight must be between 0 and 1.",
+            "included must be true or false.",
+        ]
+        self.assertEqual(row.validation_errors, refused)
+        self.assertEqual((row.phone, row.group_name, row.weight, row.included), ("", "", 1, True))
+
+        def update(**fields):
+            roster_imports.update_roster_import(
+                batch=batch, data={"rowUpdates": [{"id": str(row.pk), **fields}]}
+            )
+            row.refresh_from_db()
+
+        # Other edits keep them, next to what checking the row again finds.
+        update(name="", selected=True)
+        self.assertEqual(row.validation_errors, [*refused, "name is required."])
+        update(name="Wes Renamed")
+        self.assertEqual(row.validation_errors, refused)
+        # Setting a field, even to the fallback shown, settles its cell.
+        update(weight=1)
+        self.assertEqual(row.validation_errors, [*refused[:2], refused[3]])
+        update(included=True, phone="")
+        self.assertEqual(row.validation_errors, ["group cannot contain a formula."])
+        update(groupName="")
+        self.assertEqual(row.validation_errors, [])
+        batch.refresh_from_db()
+        self.assertEqual(batch.summary["valid"], 1)
+
     def test_expired_committed_and_repeated_cancel_contracts(self):
         expired = self.preview()
         expired.expires_at = timezone.now() - timedelta(seconds=1)
@@ -757,6 +795,9 @@ class RosterImportDatabaseEdgeTests(TestCase):
         expired.status = RosterImportBatch.Status.EXPIRED
         expired.save(update_fields=["status", "updated_at"])
         self.assertTrue(roster_imports.expire_roster_import_preview(expired))
+        with self.assertRaisesMessage(roster_imports.RosterImportError, "expired") as raised:
+            roster_imports.update_roster_import(batch=expired, data={})
+        self.assertEqual(raised.exception.status_code, 410)
 
         canceled = self.preview("name,email\nCancel,cancel-edge@example.com")
         roster_imports.cancel_roster_import(canceled)
@@ -769,6 +810,48 @@ class RosterImportDatabaseEdgeTests(TestCase):
             roster_imports.cancel_roster_import(committed)
         with self.assertRaisesMessage(roster_imports.RosterImportError, "can no longer be changed"):
             roster_imports.update_roster_import(batch=committed, data={})
+
+    def test_column_and_commit_requests_expire_a_stale_preview_and_keep_the_scrub(self):
+        def make_stale(batch):
+            RosterImportBatch.objects.filter(pk=batch.pk).update(
+                expires_at=timezone.now() - timedelta(seconds=1)
+            )
+
+        def configure(batch):
+            return self.client.put(
+                f"/events/roster-imports/{batch.pk}?code={self.event.code}",
+                {"headerRow": 1},
+                format="json",
+            )
+
+        for label, send in (("columns", configure), ("commit", self.commit)):
+            with self.subTest(label):
+                batch = self.preview(f"name,email\nStale,stale-{label}@example.com")
+                make_stale(batch)
+                response = send(batch)
+                self.assertEqual(response.status_code, 410, response.data)
+                self.assertEqual(response.data["error"], "This import preview has expired.")
+                batch.refresh_from_db()
+                self.assertEqual(batch.status, RosterImportBatch.Status.EXPIRED)
+                self.assertFalse(batch.rows.exists())
+                # Already marked expired, as cleanup_roster_imports leaves it,
+                # both requests still say it expired.
+                for again in (configure(batch), self.commit(batch)):
+                    self.assertEqual(again.status_code, 410, again.data)
+        self.assertFalse(self.event.participants.exists())
+
+        missing = self.client.post(
+            f"/events/roster-imports/9999999/commit?code={self.event.code}",
+            {"mode": "merge", "idempotencyKey": str(uuid.uuid4())},
+            format="json",
+        )
+        self.assertEqual(missing.status_code, 404, missing.data)
+        # A committed import is not expired, so its replay is still answered.
+        committed = self.preview("name,email\nKept,kept-edge@example.com")
+        key = str(uuid.uuid4())
+        self.assertEqual(self.commit(committed, idempotencyKey=key).status_code, 201)
+        make_stale(committed)
+        self.assertEqual(self.commit(committed, idempotencyKey=key).status_code, 200)
 
     def test_expiry_cleanup_tolerates_a_concurrent_preview_removal(self):
         batch = self.preview("name,email\nRace,race-expiry-edge@example.com")

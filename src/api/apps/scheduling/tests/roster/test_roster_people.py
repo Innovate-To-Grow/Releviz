@@ -28,6 +28,7 @@ from apps.scheduling.services.roster_people import (
     OWN_ADDRESS_MESSAGE,
     OWN_ROW_EMAIL_MESSAGE,
 )
+from apps.scheduling.views.roster.participants import NAME_LOCKED_MESSAGE, OWN_ROW_NAME_MESSAGE
 
 ORGANIZER_EMAIL = "organizer@example.com"
 
@@ -439,6 +440,50 @@ class ChangeParticipantEmailTests(RosterPeopleTestCase):
         self.assertEqual(response.status_code, 200, response.data)
         self.assertEqual(response.data["participant"]["name"], "Ada Lovelace")
         self.assertEqual(response.data["participant"]["email"], "ada@example.com")
+
+
+class RenameParticipantTests(RosterPeopleTestCase):
+    def test_people_the_organizer_answers_for_can_be_renamed(self):
+        invited = self.add_person("Ada", "ada@example.com")
+        managed = self.add_person("Grandma", managed=True)
+
+        for participant in (invited, managed):
+            with self.subTest(name=participant.participant_name):
+                response = self.patch(participant, {"name": f"{participant.participant_name} B"})
+                self.assertEqual(response.status_code, 200, response.data)
+                participant.refresh_from_db()
+                self.assertTrue(participant.participant_name.endswith(" B"))
+
+    def test_someone_answering_under_their_own_account_keeps_its_name(self):
+        create_member("sid@example.com", "Sid", "Self")
+        claimed = self.add_person("Sid Self", "sid@example.com")
+        Participant.objects.filter(pk=claimed.pk).update(response_claimed_at=timezone.now())
+        self.assertFalse(self.row(claimed)["canOrganizerEditAvailability"])
+        version = Participant.objects.get(pk=claimed.pk).version
+
+        response = self.patch(claimed, {"name": "Sid Renamed", "phone": "+1 555 0100"})
+
+        self.assertEqual(response.status_code, 409, response.data)
+        self.assertEqual(response.data["error"], NAME_LOCKED_MESSAGE)
+        claimed.refresh_from_db()
+        self.assertEqual(claimed.participant_name, "Sid Self")
+        self.assertEqual(claimed.contact_phone, "")
+        self.assertEqual(claimed.version, version)
+        # Their unchanged name may still ride along with other edits.
+        same_name = self.patch(claimed, {"name": "Sid Self", "phone": "+1 555 0100"})
+        self.assertEqual(same_name.status_code, 200, same_name.data)
+        self.assertEqual(same_name.data["participant"]["phone"], "+1 555 0100")
+
+    def test_the_organizer_row_keeps_the_account_name(self):
+        self.client.post(f"/events/participants?code={self.event.code}", {}, format="json")
+        own = Participant.objects.get(event=self.event, member=self.organizer)
+
+        response = self.patch(own, {"name": "Someone Else"})
+
+        self.assertEqual(response.status_code, 409, response.data)
+        self.assertEqual(response.data["error"], OWN_ROW_NAME_MESSAGE)
+        own.refresh_from_db()
+        self.assertEqual(own.participant_name, "Olive Organizer")
 
 
 class OrganizerOwnRowTests(RosterPeopleTestCase):

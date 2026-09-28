@@ -223,6 +223,10 @@ class ScaleOperationEdgeTests(TestCase):
             ({"accessMode": "private"}, "accessMode"),
             ({"meetingDurationMinutes": True}, "must be an integer"),
             ({"meetingDurationMinutes": "bad"}, "must be an integer"),
+            # A fraction is refused, not truncated to a whole number.
+            ({"meetingDurationMinutes": 60.5}, "meetingDurationMinutes must be an integer"),
+            ({"reminderHoursBefore": 1.5}, "reminderHoursBefore must be an integer"),
+            ({"reminderHoursBefore": float("nan")}, "reminderHoursBefore must be an integer"),
             ({"meetingDurationMinutes": 14}, "between 15 and 480"),
             ({"meetingDurationMinutes": 500}, "between 15 and 480"),
             ({"meetingDurationMinutes": 45}, "multiple of slotMinutes"),
@@ -234,6 +238,14 @@ class ScaleOperationEdgeTests(TestCase):
                 self.assertRaisesMessage(EventManagementError, message),
             ):
                 parse_event_configuration({**base, **extra})
+
+        # A whole number sent as a float is still accepted.
+        whole = parse_event_configuration(
+            {**base, "meetingDurationMinutes": 60.0, "reminderHoursBefore": 2.0}
+        )
+        self.assertEqual(whole["meeting_duration_minutes"], 60)
+        self.assertEqual(whole["reminder_hours_before"], 2)
+        self.assertIs(type(whole["reminder_hours_before"]), int)
 
         invalid_slot_event = Event(start_minutes=0, end_minutes=60, slot_minutes=10)
         with self.assertRaisesMessage(SlotConfigurationError, "15 or 30"):
