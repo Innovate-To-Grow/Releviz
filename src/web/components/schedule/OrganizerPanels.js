@@ -89,9 +89,10 @@ const CLOSED_NOTE =
 /**
  * The organizer's schedule editor for one participant (or for their own
  * row). `responsesOpen` false locks the grid with `lockReason` as the note;
- * `leftOut` locks it because the person is not counted in the results, with
- * `onCountIn` to bring them back while `countInAllowed` (the roster can
- * change) holds; `saved` turns Cancel into Close once a save has landed.
+ * `leftOut` notes that the person is not counted in the results (their
+ * schedule still saves), with `onCountIn` to bring them back while
+ * `countInAllowed` (the roster can change) holds; `saved` turns Cancel into
+ * Close once a save has landed.
  */
 export function ManagedScheduleDrawer({
   event,
@@ -176,7 +177,7 @@ export function ManagedScheduleDrawer({
   // their account, so there is nobody to act for.
   const ownResponse = Boolean(participant.isOrganizer);
   const editingLocked =
-    !responsesOpen || leftOut || saving || Boolean(conflictParticipant);
+    !responsesOpen || saving || Boolean(conflictParticipant);
   const actionsLocked = editingLocked;
   // A full account stays organizer-editable only until the person responds
   // themselves; organizer-managed and temporary rows are always shared.
@@ -254,8 +255,8 @@ export function ManagedScheduleDrawer({
                 </AppButton>
               }
             >
-              {participant.name} is left out of the results, so their schedule
-              can&apos;t change.
+              {participant.name} is left out of the results, so their answers
+              don&apos;t count.
             </Alert>
           )}
 

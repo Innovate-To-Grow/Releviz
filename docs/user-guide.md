@@ -297,8 +297,8 @@ Table.
   after that the row shows **Answers themselves** and only they can change their answers.
   Conflicting edits are never silently overwritten: the editor asks you to reload the latest
   response. Saving a submitted response as a draft asks first, since it leaves the results until
-  it is submitted again, and someone who is left out of the results has a read-only schedule
-  until you **Count them again**.
+  it is submitted again. Someone who is left out of the results keeps an editable schedule, which
+  counts once you **Count them again**.
 
 ### Groups
 
@@ -321,7 +321,8 @@ group picker, or in the **Groups** panel (**Manage groups…**), even before any
 Each person has a weight between 0 and 1 and either counts in the results or is left out. Rows
 show **Weight w** when the weight is not 1 and **Left out of results** when the person is not
 counted, and a banner above the list counts everyone left out, with **Show them** and **Count
-everyone again**.
+everyone again**. Leaving someone out changes only the results: they can still save and submit
+their schedule, and it counts as soon as they are counted again.
 
 - One person: **Leave out of results** or **Count in results** in the **⋯** menu, or the **In the
   results** section of their panel.

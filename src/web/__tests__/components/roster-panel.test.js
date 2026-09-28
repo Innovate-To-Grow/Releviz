@@ -560,7 +560,7 @@ describe("RosterPanel states", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
 
     // Counting a left-out person in again is a roster change, so it waits
-    // for the deadline to move.
+    // for the deadline to move; their schedule stays editable.
     fireEvent.click(
       within(rowFor("Left Out")).getByRole("button", { name: "Edit schedule" }),
     );
@@ -568,11 +568,14 @@ describe("RosterPanel states", () => {
       name: "Edit Left Out's schedule",
     });
     expect(within(dialog).getByRole("status")).toHaveTextContent(
-      "Left Out is left out of the results, so their schedule can't change.",
+      "Left Out is left out of the results, so their answers don't count.",
     );
     expect(
       within(dialog).getByRole("button", { name: "Count them again" }),
     ).toBeDisabled();
+    expect(
+      within(dialog).getByRole("button", { name: "Submit on behalf" }),
+    ).toBeEnabled();
   });
 
   test("reports a failed load with a retry and clears it after a silent reload", async () => {
@@ -2907,25 +2910,34 @@ describe("RosterPanel schedule drawer", () => {
     );
   });
 
-  test("locks a left-out person's schedule until they count again", async () => {
+  test("submits a left-out person's schedule and counts them again", async () => {
     fetchRoster.mockResolvedValue(
       rosterResponse([participant({ included: false })]),
     );
     patchRosterParticipant.mockResolvedValue({
       participant: participant({ included: true, version: 5 }),
     });
+    updateParticipant.mockResolvedValue({
+      participant: { submitted: 1, version: 5 },
+    });
     await renderPanel();
     const dialog = await openEditor();
     expect(within(dialog).getByRole("status")).toHaveTextContent(
-      "Temp Person is left out of the results, so their schedule can't change.",
+      "Temp Person is left out of the results, so their answers don't count.",
     );
     expect(within(dialog).getByTestId("channel-editor")).toHaveAttribute(
       "data-readonly",
-      "true",
+      "false",
+    );
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Submit on behalf" }),
     );
     expect(
-      within(dialog).getByRole("button", { name: "Save draft" }),
-    ).toBeDisabled();
+      await within(dialog).findByText("Schedule submitted."),
+    ).toBeInTheDocument();
+    expect(updateParticipant.mock.calls[0][2]).toEqual(
+      expect.objectContaining({ submitted: 1, expectedVersion: 4 }),
+    );
     fireEvent.click(
       within(dialog).getByRole("button", { name: "Count them again" }),
     );

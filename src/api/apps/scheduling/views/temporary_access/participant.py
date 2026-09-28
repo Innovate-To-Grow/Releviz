@@ -10,17 +10,13 @@ from rest_framework.views import APIView
 from apps.authn.security import enforce_cookie_request_origin
 from apps.scheduling.models import Event, Participant, ScheduleEditRecord
 from apps.scheduling.payloads import api_participant
-from apps.scheduling.permissions import weight_for_participant
 from apps.scheduling.services.availability import validate_availability
 from apps.scheduling.services.events import response_write_error
 from apps.scheduling.services.invitations import (
     mark_invitation_for_member,
     mark_invitation_response_withdrawn,
 )
-from apps.scheduling.services.results import (
-    participant_is_excluded,
-    request_event_results_recompute,
-)
+from apps.scheduling.services.results import request_event_results_recompute
 from apps.scheduling.services.temporary_access import (
     clear_temporary_session_cookie,
     temporary_session_from_request,
@@ -83,8 +79,9 @@ class TemporaryAccessParticipantView(APIView):
                 },
                 status=409,
             )
-        weight = weight_for_participant(event, participant)
-        if participant_is_excluded(participant, weight):
+        # Only removal from the event locks a response. Someone left out of the
+        # results still saves and submits; the results simply do not count them.
+        if participant.hidden:
             return temp_private_response(
                 {
                     "error": "Excluded participants cannot change availability",

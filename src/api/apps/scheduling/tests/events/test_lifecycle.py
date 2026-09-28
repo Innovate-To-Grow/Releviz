@@ -497,12 +497,30 @@ class LifecycleApiTests(TestCase):
         self.assertEqual(invalid_sort.status_code, 400)
 
         self.authenticate(self.participant)
+        # Left out of the results, the participant still saves and submits.
         weight = Weight.objects.create(
             event=self.event,
             participant=Participant.objects.get(event=self.event, member=self.participant),
             included=False,
         )
-        excluded = self.client.put(
+        left_out = self.client.put(
+            base_url,
+            {
+                "availabilityInperson": schedule_one,
+                "submitted": 1,
+                "expectedVersion": current_version,
+            },
+            format="json",
+        )
+        self.assertEqual(left_out.status_code, 200, left_out.data)
+        self.assertEqual(left_out.data["participant"]["submitted"], 1)
+        current_version = left_out.data["participant"]["version"]
+        weight.included = True
+        weight.save(update_fields=["included"])
+
+        # Removed from the event, they cannot.
+        Participant.objects.filter(event=self.event, member=self.participant).update(hidden=True)
+        removed = self.client.put(
             base_url,
             {
                 "availabilityInperson": schedule_zero,
@@ -510,9 +528,9 @@ class LifecycleApiTests(TestCase):
             },
             format="json",
         )
-        self.assertEqual(excluded.status_code, 403)
-        weight.included = True
-        weight.save(update_fields=["included"])
+        self.assertEqual(removed.status_code, 403)
+        self.assertEqual(removed.data["errorCode"], "participant_excluded")
+        Participant.objects.filter(event=self.event, member=self.participant).update(hidden=False)
 
         for status in [
             Event.Status.FINALIZED,
