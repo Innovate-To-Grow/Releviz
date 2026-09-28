@@ -19,16 +19,25 @@ const {
   runDjangoJson,
   setAccountPassword,
 } = require("./helpers/releviz");
-const { addPersonApi, rosterByEmail } = require("./helpers/participants");
+const {
+  LIVE_SYNC_TIMEOUT_MS,
+  addPersonApi,
+  gotoParticipants,
+  openPersonPanel,
+  participantRow,
+  rosterByEmail,
+} = require("./helpers/participants");
+const { wakeLiveSync } = require("./helpers/workspace");
 
 // The sign-in edges the happy-path helpers skip: the email-code panel's
 // controls, refused and throttled codes, the emailed one-click links on
 // another device and their error states, the sign-in redirects of protected
 // pages and the open-redirect guards on next, password mode and its lockout,
 // recovery and the settings password, deletion and profile forms, deleting an
-// account that organizes and answers events, the refresh endpoint's 401s, the
-// API client's refresh-and-retry, session revalidation on focus, and the
-// legacy sign-in routes. Every test works on its own accounts and events.
+// account that organizes and answers events, a renamed account's name on the
+// participant lists it answers, the refresh endpoint's 401s, the API client's
+// refresh-and-retry, session revalidation on focus, and the legacy sign-in
+// routes. Every test works on its own accounts and events.
 
 const INVALID_CODE = "Verification code is invalid or has expired.";
 const TOO_MANY_CODES =
@@ -1554,6 +1563,122 @@ print(json.dumps({
       expect.objectContaining({ first_name: "Paula", last_name: "Renamed" }),
     );
     expect(session.requires_profile_completion).toBe(false);
+  });
+
+  test("a renamed account shows its new name on the participant list of an event it already answers", async ({
+    browser,
+    page,
+    request,
+  }) => {
+    const runId = newRunId();
+    const email = `rene-${runId}@example.com`;
+    const rene = await registerAccountViaApi(
+      page.request,
+      email,
+      "Rene",
+      "Before",
+    );
+    const organizerDevice = await browser.newContext();
+    try {
+      const organizer = await registerAccountViaApi(
+        organizerDevice.request,
+        `rename-organizer-${runId}@example.com`,
+        "Oona",
+        "Organizer",
+      );
+      const answered = await createEvent(request, organizer.access, {
+        name: `Answered ${runId}`,
+        accessMode: "open_link",
+      });
+      const joined = await apiJson(
+        request,
+        "POST",
+        `/events/participants?code=${answered.code}`,
+        rene.access,
+        {},
+      );
+      expect(joined.response.status(), JSON.stringify(joined.payload)).toBe(
+        201,
+      );
+      // In another event the organizer added Rene under a name of their own
+      // and still answers for him.
+      const invited = await createEvent(request, organizer.access, {
+        name: `Invited ${runId}`,
+      });
+      await addPersonApi(request, invited.code, organizer.access, {
+        name: "Rene From Team B",
+        email,
+      });
+      const before = (
+        await rosterByEmail(request, answered.code, organizer.access)
+      ).get(email);
+      expect(before).toEqual(
+        expect.objectContaining({
+          name: "Rene Before",
+          canOrganizerEditAvailability: false,
+        }),
+      );
+
+      const workspace = await organizerDevice.newPage();
+      await gotoParticipants(workspace, answered);
+      await expect(participantRow(workspace, "Rene Before")).toBeVisible();
+
+      await page.goto("/settings");
+      await expect(heading(page, "Account settings")).toBeVisible();
+      const profileForm = page.locator("form#profile");
+      await profileForm
+        .getByRole("textbox", { name: "Last name" })
+        .fill("After");
+      const saved = apiResponse(page, "/authn/profile/", "PATCH");
+      await profileForm.getByRole("button", { name: "Save profile" }).click();
+      expect((await saved).status()).toBe(200);
+      await expect(profileForm.getByRole("status")).toHaveText("Saved");
+
+      // The organizer's open list picks the new name up without a reload, and
+      // the name is still Rene's alone to change.
+      await wakeLiveSync(workspace);
+      await expect(participantRow(workspace, "Rene After")).toBeVisible({
+        timeout: LIVE_SYNC_TIMEOUT_MS,
+      });
+      await expect(participantRow(workspace, "Rene Before")).toHaveCount(0);
+      const panel = await openPersonPanel(workspace, "Rene After");
+      const fullName = panel.getByRole("textbox", { name: "Full name" });
+      await expect(fullName).toHaveValue("Rene After");
+      await expect(fullName).toBeDisabled();
+      await expect(fullName).toHaveAccessibleDescription(
+        "They set their own name in their Releviz account.",
+      );
+      expect(
+        (await rosterByEmail(request, answered.code, organizer.access)).get(
+          email,
+        ),
+      ).toEqual(
+        expect.objectContaining({
+          name: "Rene After",
+          version: before.version + 1,
+        }),
+      );
+
+      // Rene sees the new name on the event too.
+      await page.goto(`/event?code=${answered.code}`);
+      await expect(
+        page.getByRole("heading", { level: 2, name: /Welcome, Rene After/ }),
+      ).toBeVisible();
+
+      // Where the organizer still answers for Rene, the name they gave stays.
+      expect(
+        (await rosterByEmail(request, invited.code, organizer.access)).get(
+          email,
+        ),
+      ).toEqual(
+        expect.objectContaining({
+          name: "Rene From Team B",
+          canOrganizerEditAvailability: true,
+        }),
+      );
+    } finally {
+      await organizerDevice.close();
+    }
   });
 });
 

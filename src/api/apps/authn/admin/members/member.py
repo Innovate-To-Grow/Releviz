@@ -264,6 +264,11 @@ class MemberAdmin(BaseModelAdmin, UserAdmin):
     def save_model(self, request, obj, form, change):
         self._ensure_new_member_uuid(obj, change)
         super().save_model(request, obj, form, change)
+        # The events this person answers show the account's new name.
+        if change and {"first_name", "middle_name", "last_name"} & set(form.changed_data):
+            from apps.scheduling.services.account_names import sync_account_participant_names
+
+            sync_account_participant_names(obj)
 
     @staticmethod
     def _ensure_new_member_uuid(obj, change):

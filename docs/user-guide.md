@@ -110,7 +110,8 @@ or your own row), offers **Edit schedule**, and groups everything about the pers
 
 - **Contact**: **Full name**, **Email**, and **Phone**. A name can be changed for anyone whose
   schedule you still enter; a person who answers under their own account keeps their account's
-  name. An email can be changed only until the person has signed in with their link, joined, or
+  name, and their row follows when they change it in their account settings (so does your own
+  row). An email can be changed only until the person has signed in with their link, joined, or
   answered. The row then moves to the account behind the new address (or a new temporary
   identity) and keeps its name, groups, weight, and any schedule you entered; it gets a fresh
   invitation marked **Not sent**, the old link stops working, and any queued email to the old

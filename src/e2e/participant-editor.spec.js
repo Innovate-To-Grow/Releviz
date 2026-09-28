@@ -379,14 +379,12 @@ test.describe("Joining an event", () => {
         token,
       );
 
-    // A first join creates the row (201); a re-join after renaming the
-    // account returns the same row (200) under the new name.
-    const ann = await registerAccountViaApi(
-      request,
-      `cap-ann-${runId}@example.com`,
-      "Ann",
-      "Able",
-    );
+    // A first join creates the row (201). Renaming the account renames the
+    // row straight away, and a re-join returns the same row (200) with any
+    // name that drifted from the account's (a row first claimed by saving
+    // keeps the organizer's name) refreshed.
+    const annEmail = `cap-ann-${runId}@example.com`;
+    const ann = await registerAccountViaApi(request, annEmail, "Ann", "Able");
     let joined = await join(ann.access);
     expect(joined.response.status()).toBe(201);
     expect(joined.payload.participant.name).toBe("Ann Able");
@@ -400,6 +398,22 @@ test.describe("Joining an event", () => {
       },
     );
     expect(renamed.response.status()).toBe(200);
+    const annRow = async () =>
+      (
+        await rosterEntries(request, event.code, organizer.access)
+      ).participants.find((entry) => entry.email === annEmail);
+    expect((await annRow()).name).toBe("Annie Able");
+    runDjangoScript(
+      `
+from apps.scheduling.models import Participant
+
+Participant.objects.filter(event__code=data["code"], member_id=data["id"]).update(
+    participant_name="Ann From Sales"
+)
+`,
+      { code: event.code, id: ann.user.id },
+    );
+    expect((await annRow()).name).toBe("Ann From Sales");
     joined = await join(ann.access);
     expect(joined.response.status()).toBe(200);
     expect(joined.payload.participant).toMatchObject({

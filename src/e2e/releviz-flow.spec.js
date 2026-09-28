@@ -2288,6 +2288,9 @@ test.describe("Releviz account and scheduling flow", () => {
     const registeredParticipantCard = participantRow(page, participantEmail);
     const manualParticipantCard = participantRow(page, manualEmail);
     await expect(registeredParticipantCard).toContainText(participantEmail);
+    // Pat answers with their own account, so the row follows the name they
+    // just saved in Settings.
+    await expect(registeredParticipantCard).toContainText("Pat Availability");
     await expect(
       registeredParticipantCard.locator(".participants-table__response"),
     ).toHaveText("Submitted");
@@ -2320,7 +2323,7 @@ test.describe("Releviz account and scheduling flow", () => {
 
     // One person's weight is set in their panel.
     const setPatWeight = async (weight) => {
-      const patPanel = await openPersonPanel(page, "Pat Participant");
+      const patPanel = await openPersonPanel(page, "Pat Availability");
       await patPanel.getByRole("spinbutton", { name: "Weight" }).fill(weight);
       await patPanel.getByRole("button", { name: "Save", exact: true }).click();
       await expectToast(page, "Saved.");
@@ -2420,7 +2423,7 @@ test.describe("Releviz account and scheduling flow", () => {
     // One person's groups are edited in their panel: the picker stages the
     // change and nothing is saved until Save. Every group puts the person in
     // every group, including groups created later.
-    const patPanel = await openPersonPanel(page, "Pat Participant");
+    const patPanel = await openPersonPanel(page, "Pat Availability");
     const patGroups = patPanel.getByRole("list", { name: "Groups" });
     const patGroupsCell = registeredParticipantCard.locator(
       ".participants-table__groups",
@@ -2429,7 +2432,7 @@ test.describe("Releviz account and scheduling flow", () => {
     const pickPatGroups = async (change) => {
       await patPanel.getByRole("button", { name: "+ Add to group" }).click();
       const picker = page.getByRole("dialog", {
-        name: "Groups for Pat Participant",
+        name: "Groups for Pat Availability",
       });
       await change(picker);
       await picker.getByRole("button", { name: "Apply" }).click();
