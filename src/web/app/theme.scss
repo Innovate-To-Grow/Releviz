@@ -33,6 +33,10 @@ $success: #157347;
 $info: $cyan;
 $warning: $yellow;
 $danger: #b02a37;
+// Dark mode keeps Bootstrap's stock danger emphasis ($red-300, the 40% tint of
+// $red): the same tint of the deeper $danger above is only 4.48:1 on the dark
+// raised surface, while this one is 5.27:1.
+$danger-text-emphasis-dark: #ea868f;
 
 $body-bg: #f8f9fa;
 $body-color: #212529;
@@ -181,4 +185,19 @@ $list-group-item-padding-x: 1rem;
 
 @include color-mode(dark, true) {
   --rv-surface-raised: #2b3035;
+}
+
+// Bootstrap compiles outline buttons from the light palette only, so in dark
+// mode #0d6efd and #b02a37 fall below WCAG AA on the dark surfaces (2.96:1 and
+// 2.05:1 on the raised one). There they use the dark text-emphasis tints
+// instead (5.51:1 and 5.27:1), and the hover/focus fill switches its label to
+// black (8.70:1 and 8.31:1).
+@include color-mode(dark) {
+  .btn-outline-primary {
+    @include button-outline-variant($primary-text-emphasis-dark);
+  }
+
+  .btn-outline-danger {
+    @include button-outline-variant($danger-text-emphasis-dark);
+  }
 }

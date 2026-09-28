@@ -7,7 +7,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.authn.tests.helpers import create_member, token_for
-from apps.mail.models import EmailDeliveryJob, EmailMessageLog
+from apps.mail.models import EmailDeliveryJob, EmailDeliveryRequest, EmailMessageLog
 from apps.mail.services import dispatch_email_job
 from apps.scheduling.models import Event, EventInvitation, FinalMeeting, Participant, Weight
 from apps.scheduling.services.events.lifecycle import (
@@ -366,7 +366,7 @@ class LifecycleApiTests(TestCase):
         )
         self.assertEqual(finalization.status_code, 400)
 
-    def test_archived_finalized_event_keeps_its_meeting_until_reactivated(self):
+    def finalize_with_one_invitee(self):
         self.event.timezone = "UTC"
         self.event.day_selection_type = "specific_dates"
         self.event.specific_dates = ["2026-07-20"]
@@ -402,6 +402,10 @@ class LifecycleApiTests(TestCase):
             format="json",
         )
         self.assertEqual(finalized.status_code, 202)
+        return finalized
+
+    def test_archived_finalized_event_keeps_its_meeting_until_reactivated(self):
+        finalized = self.finalize_with_one_invitee()
         confirmation = EmailDeliveryJob.objects.get(
             message_type=EmailMessageLog.MessageType.FINAL_CONFIRMATION
         )
@@ -442,6 +446,44 @@ class LifecycleApiTests(TestCase):
         )
         self.assertEqual(cancellation.recipient, self.participant.email)
         self.assertEqual(cancellation.status, EmailDeliveryJob.Status.PENDING)
+
+    def test_later_reactivation_does_not_report_an_earlier_cancellation(self):
+        finalized = self.finalize_with_one_invitee()
+        confirmation = EmailDeliveryJob.objects.get(
+            message_type=EmailMessageLog.MessageType.FINAL_CONFIRMATION
+        )
+        dispatch_email_job(confirmation.pk)
+
+        reactivated = self.transition(Event.Status.ACTIVE, finalized.data["event"]["version"])
+        self.assertEqual(reactivated.status_code, 202)
+        self.assertEqual(reactivated.data["cancellationEnqueued"], 1)
+        cancellation_request = EmailDeliveryRequest.objects.get(
+            pk=reactivated.data["cancellationDeliveryRequestId"]
+        )
+        self.assertEqual(
+            cancellation_request.operation,
+            EmailDeliveryRequest.Operation.FINAL_CANCELLATION,
+        )
+
+        closed = self.transition(Event.Status.CLOSED, reactivated.data["event"]["version"])
+        self.assertEqual(closed.status_code, 200)
+        self.assertEqual(closed.data["cancellationEnqueued"], 0)
+        self.assertIsNone(closed.data["cancellationDeliveryRequestId"])
+
+        # No meeting is active any more, so this reactivation cancels nothing and
+        # must not hand the earlier request back as its own delivery.
+        reopened = self.transition(Event.Status.ACTIVE, closed.data["event"]["version"])
+        self.assertEqual(reopened.status_code, 200)
+        self.assertEqual(reopened.data["event"]["status"], "active")
+        self.assertEqual(reopened.data["cancellationEnqueued"], 0)
+        self.assertIsNone(reopened.data["cancellationDeliveryRequestId"])
+        self.assertEqual(
+            EmailDeliveryRequest.objects.filter(
+                event=self.event,
+                operation=EmailDeliveryRequest.Operation.FINAL_CANCELLATION,
+            ).count(),
+            1,
+        )
 
     def test_deadline_status_and_concurrent_response_writes(self):
         participant = self.join()

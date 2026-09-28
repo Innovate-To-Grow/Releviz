@@ -249,10 +249,12 @@ REQUIRE_ENCRYPTED_PASSWORDS = False
 FRONTEND_URL = ""
 BACKEND_URL = ""
 CORS_ALLOW_CREDENTIALS = True
-# The browser calls the API cross-origin, and neither header is on the CORS
-# safelist, so without this the workspace could not read when a declined event
-# stream (a 204) may be tried again or why it was declined.
-CORS_EXPOSE_HEADERS = ["Retry-After", "X-Live-Stream-Unavailable"]
+# The browser calls the API cross-origin, where it hides every response header
+# outside the CORS safelist unless the API exposes it. The workspace reads when
+# a declined event stream (a 204) may be tried again and why it was declined,
+# and the final-meeting calendar download reads Content-Disposition to save the
+# file under the server's name instead of a generic fallback.
+CORS_EXPOSE_HEADERS = ["Retry-After", "X-Live-Stream-Unavailable", "Content-Disposition"]
 DATA_UPLOAD_MAX_NUMBER_FIELDS = 100000
 DATA_UPLOAD_MAX_MEMORY_SIZE = ROSTER_IMPORT_MAX_UNCOMPRESSED_BYTES + 1024 * 1024
 FIELD_ENCRYPTION_KEY = os.environ.get("DJANGO_FIELD_ENCRYPTION_KEY", "")

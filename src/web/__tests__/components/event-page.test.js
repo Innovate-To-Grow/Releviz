@@ -192,7 +192,7 @@ describe("event page routing", () => {
   });
 
   test("redirects unauthenticated users without retaining invitation credentials", async () => {
-    auth({ user: null });
+    auth({ user: null, signingOut: false });
 
     render(<EventPage />);
 
@@ -202,6 +202,25 @@ describe("event page routing", () => {
       ),
     );
     expect(fetchEvent).not.toHaveBeenCalled();
+  });
+
+  test("leaves a log out's navigation home to finish", async () => {
+    fetchEvent.mockResolvedValue({ event });
+    const getToken = jest.fn().mockResolvedValue("token");
+    auth({ getToken, signingOut: false });
+    const view = render(<EventPage />);
+    expect(await screen.findByText("Participant workflow")).toBeInTheDocument();
+
+    auth({ getToken, signingOut: true });
+    view.rerender(<EventPage />);
+    auth({ getToken, user: null, signingOut: true });
+    view.rerender(<EventPage />);
+
+    // Starting the log out does not reload the event, and the signed-out
+    // render does not replace the pending navigation home with a login one.
+    expect(screen.getByText("Participant workflow")).toBeInTheDocument();
+    expect(fetchEvent).toHaveBeenCalledTimes(1);
+    expect(navigateTo).not.toHaveBeenCalled();
   });
 
   test("requires profile completion before loading a direct event link", async () => {

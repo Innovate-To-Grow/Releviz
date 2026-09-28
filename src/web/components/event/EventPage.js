@@ -33,6 +33,7 @@ function EventPage() {
   const {
     user,
     loading: authLoading,
+    signingOut,
     getToken,
     requiresProfileCompletion,
   } = useAuth();
@@ -63,15 +64,19 @@ function EventPage() {
     replaceUrl(`${url.pathname}${url.search}${url.hash}`);
   }, [eventCode, invitationToken]);
 
+  // A log out signs the page out before it navigates home, and redirecting to
+  // the login page then would replace that navigation. This is its own effect
+  // so the log out starting does not reload the event.
   useEffect(() => {
-    if (authLoading) return undefined;
-    if (!user) {
-      const next = eventCode
-        ? `/event?code=${encodeURIComponent(eventCode)}`
-        : "/event";
-      navigateTo(`/login?next=${encodeURIComponent(next)}`);
-      return undefined;
-    }
+    if (authLoading || user || signingOut) return;
+    const next = eventCode
+      ? `/event?code=${encodeURIComponent(eventCode)}`
+      : "/event";
+    navigateTo(`/login?next=${encodeURIComponent(next)}`);
+  }, [eventCode, user, authLoading, signingOut]);
+
+  useEffect(() => {
+    if (authLoading || !user) return undefined;
     if (requiresProfileCompletion) {
       const next = eventCode
         ? `/event?code=${encodeURIComponent(eventCode)}`
