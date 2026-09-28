@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import useCodeResendCooldown from "@/components/auth/useCodeResendCooldown";
 import EventDetailsGrid from "@/components/event/EventDetailsGrid";
 import ScheduleChannelEditor from "@/components/schedule/ScheduleChannelEditor";
 import useAutosaveNavigationGuard from "@/components/schedule/useAutosaveNavigationGuard";
@@ -102,6 +103,8 @@ function normalizedSchedule(values, length) {
 
 const BLOCKED_SLOTS_NOTE =
   "Grey striped times are blocked by the organizer and do not apply to this event.";
+const CODE_DELIVERY_MESSAGE =
+  "If this invitation is valid, check its email address for a six-digit code. Email can take a few minutes; check your spam or junk folder too.";
 
 // Organizer-blocked slots keep their index but never take availability: the
 // grid refuses to paint them, and bulk fills leave them at 0.
@@ -136,6 +139,13 @@ export default function TempAccessClient() {
   const [verificationError, setVerificationError] = useState("");
   const [requestState, setRequestState] = useState("idle");
   const [requestMessage, setRequestMessage] = useState("");
+  const requestIdentity = `${eventCode}:${urlInvitation || invitationToken}`;
+  const { secondsRemaining, startCooldown, getRemaining } =
+    useCodeResendCooldown(requestIdentity);
+  const {
+    secondsRemaining: verificationWait,
+    startCooldown: startVerificationCooldown,
+  } = useCodeResendCooldown(requestIdentity);
   const [access, setAccess] = useState(null);
   // The brush starts opposite to the event's starting level so people paint
   // over the times that differ from the default.
@@ -172,6 +182,7 @@ export default function TempAccessClient() {
   const autosaveRunnerRef = useRef(null);
   const draftSaveStateRef = useRef("idle");
   const requestStartedRef = useRef("");
+  const codeRequestsPendingRef = useRef(new Set());
 
   const applyParticipant = useCallback(
     (participant, event = access?.event) => {
@@ -302,30 +313,47 @@ export default function TempAccessClient() {
   const sendCode = useCallback(
     async (token, { automatic = false } = {}) => {
       if (!eventCode || !token) return false;
+      const requestKey = `${eventCode}:${token}`;
+      if (codeRequestsPendingRef.current.has(requestKey)) return false;
+      if (getRemaining(requestKey) > 0) {
+        setRequestState("sent");
+        setRequestMessage(CODE_DELIVERY_MESSAGE);
+        setVerificationError("");
+        return false;
+      }
+      codeRequestsPendingRef.current.add(requestKey);
       setRequestState("sending");
       setRequestMessage("");
       setVerificationError("");
       try {
-        await requestTempAccessCode({
+        const response = await requestTempAccessCode({
           code: eventCode,
           invitationToken: token,
         });
+        startCooldown(requestKey, response?.resend_after ?? 60);
+        if (requestStartedRef.current !== requestKey) return false;
         setRequestState("sent");
-        setRequestMessage(
-          "If this access link is valid, a six-digit code has been sent to its email address.",
-        );
+        setRequestMessage(CODE_DELIVERY_MESSAGE);
         return true;
-      } catch {
+      } catch (error) {
+        if (error.status === 429) {
+          startCooldown(requestKey, error.retryAfterSeconds ?? 60);
+        }
+        if (requestStartedRef.current !== requestKey) return false;
         setRequestState("error");
         setRequestMessage(
-          automatic
-            ? "We could not start verification. Try sending the code again."
-            : "We could not send a new code. Wait a moment and try again.",
+          error.status === 429
+            ? "Please wait before requesting another code. You can still try the code in your latest email. Check your spam or junk folder too."
+            : automatic
+              ? "We could not start verification. Try sending the code again."
+              : "We could not send a new code. Wait a moment and try again.",
         );
         return false;
+      } finally {
+        codeRequestsPendingRef.current.delete(requestKey);
       }
     },
-    [eventCode],
+    [eventCode, getRemaining, startCooldown],
   );
 
   useEffect(() => {
@@ -350,11 +378,13 @@ export default function TempAccessClient() {
         const requestKey = `${eventCode}:${token}`;
         if (requestStartedRef.current !== requestKey) {
           requestStartedRef.current = requestKey;
+          setVerificationCode("");
           await sendCode(token, { automatic: true });
         }
         return;
       }
 
+      requestStartedRef.current = "";
       try {
         const payload = await fetchTempAccessSession(eventCode);
         if (!active) return;
@@ -565,6 +595,12 @@ export default function TempAccessClient() {
 
   const verifyCode = async (event) => {
     event.preventDefault();
+    if (
+      verificationWait > 0 ||
+      requestState === "sending" ||
+      requestState === "verifying"
+    )
+      return;
     if (!invitationToken || !/^\d{6}$/.test(verificationCode)) {
       setVerificationError("Enter the six-digit code from your email.");
       return;
@@ -583,10 +619,18 @@ export default function TempAccessClient() {
       applyAccessPayload(payload);
     } catch (error) {
       setRequestState("sent");
+      if (error.status === 429) {
+        startVerificationCooldown(
+          `${eventCode}:${invitationToken}`,
+          error.retryAfterSeconds,
+        );
+      }
       setVerificationError(
         error.status === 429
-          ? "Too many attempts. Request a new code after waiting a moment."
-          : "That code could not be verified. Check the code or request a new one.",
+          ? "Too many verification attempts. Please wait before trying the code from your latest email again."
+          : error.status === 400 && error.message
+            ? error.message
+            : "That code could not be verified. Check the code or request a new one.",
       );
     }
   };
@@ -838,12 +882,16 @@ export default function TempAccessClient() {
               fullWidth
               busy={requestState === "verifying"}
               disabled={
-                requestState === "sending" || requestState === "verifying"
+                requestState === "sending" ||
+                requestState === "verifying" ||
+                verificationWait > 0
               }
             >
               {requestState === "verifying"
                 ? "Verifying…"
-                : "Verify and open schedule"}
+                : verificationWait > 0
+                  ? `Try verification in ${verificationWait}s`
+                  : "Verify and open schedule"}
             </AppButton>
           </form>
           <AppButton
@@ -851,11 +899,19 @@ export default function TempAccessClient() {
             fullWidth
             busy={requestState === "sending"}
             disabled={
-              requestState === "sending" || requestState === "verifying"
+              requestState === "sending" ||
+              requestState === "verifying" ||
+              secondsRemaining > 0
             }
-            onClick={() => void sendCode(invitationToken)}
+            onClick={() => {
+              if (secondsRemaining === 0) void sendCode(invitationToken);
+            }}
           >
-            {requestState === "sending" ? "Sending…" : "Send a new code"}
+            {requestState === "sending"
+              ? "Sending…"
+              : secondsRemaining > 0
+                ? `Send a new code in ${secondsRemaining}s`
+                : "Send a new code"}
           </AppButton>
           <p className="small text-secondary mb-0">
             This verification only grants access to this event. It does not sign

@@ -1,4 +1,5 @@
 import { API_BASE, extractError } from "@/lib/api/config";
+import { retryAfterSeconds } from "@/lib/api/retryAfter";
 
 async function tempAccessFetch(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -24,6 +25,7 @@ async function tempAccessFetch(path, options = {}) {
         "Request failed",
     );
     error.status = response.status;
+    error.retryAfterSeconds = retryAfterSeconds(response, payload);
     error.participant = payload?.participant || null;
     error.errorCode = payload?.errorCode ?? payload?.code ?? null;
     throw error;

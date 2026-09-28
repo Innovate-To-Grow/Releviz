@@ -15,6 +15,7 @@ function jsonResponse(payload, init = {}) {
   const response = {
     ok: status >= 200 && status < 300,
     status,
+    headers: { get: (name) => init.headers?.[name] ?? null },
     json: jest.fn().mockResolvedValue(payload),
   };
   response.clone = jest.fn(() => jsonResponse(payload, init));
@@ -115,6 +116,22 @@ describe("temporary access API", () => {
       errorCode: "participant_version_conflict",
       participant: latest,
       message: "Version conflict",
+    });
+  });
+
+  test("keeps retry timing from a throttled request", async () => {
+    fetch.mockResolvedValueOnce(
+      jsonResponse(
+        { detail: "Please wait.", retry_after: 60 },
+        { status: 429, headers: { "Retry-After": "120" } },
+      ),
+    );
+    await expect(
+      requestTempAccessCode({ code: "ABC123", invitationToken: "tok" }),
+    ).rejects.toMatchObject({
+      status: 429,
+      retryAfterSeconds: 120,
+      message: "Please wait.",
     });
   });
 });

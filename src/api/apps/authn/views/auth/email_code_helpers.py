@@ -5,6 +5,7 @@ from rest_framework.response import Response
 
 from apps.authn.constants import VERIFICATION_INVALID
 from apps.authn.services import AuthChallengeInvalid
+from apps.authn.services.email.challenges import RESEND_COOLDOWN
 
 from ..helpers import challenge_error_response
 
@@ -19,7 +20,10 @@ def request_code_response(request, serializer_class):
         return Response(exc.detail, status=status.HTTP_400_BAD_REQUEST)
     except Exception as exc:  # noqa: BLE001
         return challenge_error_response(exc)
-    return Response(payload, status=status.HTTP_202_ACCEPTED)
+    return Response(
+        {**payload, "resend_after": int(RESEND_COOLDOWN.total_seconds())},
+        status=status.HTTP_202_ACCEPTED,
+    )
 
 
 def auth_challenge_response(request, serializer_class):

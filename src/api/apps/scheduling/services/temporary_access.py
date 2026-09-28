@@ -15,7 +15,11 @@ from django.utils import timezone
 
 from apps.authn.models import EmailAuthChallenge
 from apps.authn.security import client_ip, request_user_agent, security_log_key
-from apps.authn.services import issue_email_challenge, verify_email_challenge
+from apps.authn.services import (
+    AuthChallengeInvalid,
+    issue_email_challenge,
+    verify_email_challenge,
+)
 from apps.scheduling.models import EventInvitation, Participant, TemporaryEventSession
 from apps.scheduling.services.invitations.status import (
     mark_invitation_for_member,
@@ -122,12 +126,17 @@ def verify_temporary_access_code(
     )
     if invitation is None:
         return None
-    challenge = verify_email_challenge(
-        email=invitation.email,
-        code=code,
-        purpose=EmailAuthChallenge.Purpose.TEMP_EVENT_ACCESS,
-        scope_key=invitation_challenge_scope(invitation),
-    )
+    try:
+        challenge = verify_email_challenge(
+            email=invitation.email,
+            code=code,
+            purpose=EmailAuthChallenge.Purpose.TEMP_EVENT_ACCESS,
+            scope_key=invitation_challenge_scope(invitation),
+        )
+    except AuthChallengeInvalid:
+        # Returning keeps the counted attempt (or the expiry) this transaction
+        # holds; raising would roll it back and lift the per-code attempt limit.
+        return None
     if challenge.member_id != invitation.member_id:
         security_logger.warning(
             "temporary_access_challenge_scope_mismatch",

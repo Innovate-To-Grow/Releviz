@@ -91,6 +91,7 @@ function jsonResponse(body, init = {}) {
   return {
     ok: status >= 200 && status < 300,
     status,
+    headers: { get: (name) => init.headers?.[name] ?? null },
     json: jest.fn().mockResolvedValue(body),
   };
 }
@@ -440,6 +441,62 @@ describe("auth API helpers", () => {
         }),
       }),
     );
+  });
+
+  test.each([
+    [{ "Retry-After": "125" }, { retry_after: 60 }, 125],
+    [{}, { retry_after: 75 }, 75],
+    [{ "Retry-After": "not a delay" }, { retry_after: 75 }, 75],
+    [{ "Retry-After": "-10" }, { retry_after: -1 }, undefined],
+    [{}, {}, undefined],
+    [{}, { retry_after: null }, undefined],
+    [{}, { retry_after: "" }, undefined],
+  ])(
+    "preserves request status and validated retry timing (%j)",
+    async (headers, payload, delay) => {
+      fetch.mockResolvedValueOnce(
+        jsonResponse(
+          { detail: "Please wait.", ...payload },
+          { status: 429, headers },
+        ),
+      );
+      await expect(
+        requestUnifiedEmailAuthCode({ email: "a@b.com" }),
+      ).rejects.toMatchObject({
+        status: 429,
+        message: "Please wait.",
+        retryAfterSeconds: delay,
+      });
+    },
+  );
+
+  test("reads Retry-After dates and retains status when the response is not JSON", async () => {
+    jest.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-28T12:00:00Z"));
+    fetch.mockResolvedValueOnce(
+      jsonResponse(
+        { error: "Please wait." },
+        {
+          status: 429,
+          headers: { "Retry-After": "Mon, 28 Sep 2026 12:02:00 GMT" },
+        },
+      ),
+    );
+    await expect(requestLoginCode({ email: "a@b.com" })).rejects.toMatchObject({
+      status: 429,
+      retryAfterSeconds: 120,
+    });
+    fetch.mockResolvedValueOnce({
+      ...textResponse("proxy unavailable", { status: 503 }),
+      headers: { get: () => "30" },
+    });
+    await expect(
+      requestUnifiedEmailAuthCode({ email: "a@b.com" }),
+    ).rejects.toMatchObject({
+      status: 503,
+      message: "HTTP 503",
+      retryAfterSeconds: 30,
+    });
+    jest.restoreAllMocks();
   });
 
   test("impersonateLogin exchanges the admin token for a session", async () => {

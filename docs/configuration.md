@@ -73,6 +73,16 @@ from the ALB. Django admin is at `https://api.releviz.com/admin/`, not on the fr
 short-lived in-memory JWT access tokens, an `HttpOnly` refresh cookie tied to a revocable server
 session, optional browser-side password encryption, account recovery, and session management.
 
+Email-code requests allow 2,000 attempts per shared IP per hour, and verification allows
+3,000 attempts per shared IP per ten minutes. This accommodates a 1,000-participant event
+behind one campus network, including one resend and up to three verification attempts each.
+The per-identity limits remain five requests per hour and ten verification attempts per ten
+minutes; temporary invitation access uses the same limits. Successful code-request responses
+include `resend_after` (60 seconds). A rejected authentication resend includes its remaining
+wait in `Retry-After` and `retry_after`; durable request-limit rejections use `Retry-After`.
+Temporary invitation responses remain generic to avoid revealing whether an invitation exists.
+Request attempts, including rejected premature resends, count toward the durable limits.
+
 **Response ownership.** The organizer may enter a full account's response only until that person
 claims it by joining, saving or submitting their own response, or upgrading from a temporary
 identity (`Participant.response_claimed_at`, never cleared while the row exists). Organizer-managed
@@ -80,8 +90,7 @@ people are backed by a temporary member with no contact email; phone numbers are
 SMS and no phone login).
 
 **Email delivery.** Configure providers in Django admin under **Email Delivery**: add an active AWS
-SES provider with its region, sender address, and IAM access key. Authentication email, invitations,
-reminders, and final notifications are stored as retryable jobs. Requests return once the jobs are
-queued, and the email worker makes the provider calls. Provider secrets and queued authentication
-content are encrypted in the database, not stored in Terraform or GitHub. SES identities and IAM
-permissions must already exist in AWS.
+SES provider with its region, sender address, and IAM access key. Verification codes send through
+SES during the request; invitations, reminders, and final notifications are stored as retryable
+jobs and sent by the email worker. Provider secrets are encrypted in the database, not stored in
+Terraform or GitHub. SES identities and IAM permissions must already exist in AWS.

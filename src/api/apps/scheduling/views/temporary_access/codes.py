@@ -3,7 +3,6 @@
 import logging
 
 from rest_framework.exceptions import Throttled
-from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.permissions import AllowAny
 from rest_framework.views import APIView
 
@@ -13,6 +12,8 @@ from apps.authn.security import (
     enforce_cookie_request_origin,
     security_log_key,
 )
+from apps.authn.services import AuthChallengeError
+from apps.authn.services.email.challenges import RESEND_COOLDOWN, AuthChallengeThrottled
 from apps.scheduling.services.temporary_access import (
     request_temporary_access_code,
     set_temporary_session_cookie,
@@ -47,12 +48,19 @@ class TemporaryAccessRequestCodeView(APIView):
                 event_code=event_code,
                 access_token=invitation_token,
             )
+        except AuthChallengeThrottled:
+            # A premature resend is expected. Keep the response identical for
+            # valid and unknown invitations, including its resend countdown.
+            logger.info("temporary_access_code_request_cooldown")
         except Exception:
             # Do not reveal whether the event, invitation, or temporary account
             # exists. Operational failures remain visible in server logs.
             logger.exception("temporary_access_code_request_failed")
         return temp_private_response(
-            {"message": ("If this access link is valid, a verification code has been sent.")},
+            {
+                "message": "If this access link is valid, a verification code has been sent.",
+                "resend_after": int(RESEND_COOLDOWN.total_seconds()),
+            },
             status=202,
         )
 
@@ -83,7 +91,7 @@ class TemporaryAccessVerifyView(APIView):
                 code=verification_code,
                 request=request,
             )
-        except DRFValidationError:
+        except AuthChallengeError:
             credential = None
         if credential is None:
             security_logger.warning(
