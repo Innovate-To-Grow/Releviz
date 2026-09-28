@@ -12,6 +12,7 @@ const RESOURCE_AUDIT_MANIFEST = [
   ".github/workflows/release-frontend.yml",
   ".github/actions/release-preflight/action.yml",
   ".github/actions/release-scope/action.yml",
+  ".github/actions/setup-postgres/action.yml",
   ".gitignore",
   ".pre-commit-config.yaml",
   "README.md",

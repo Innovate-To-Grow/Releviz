@@ -209,20 +209,6 @@ jobs:
     timeout-minutes: 15
     needs: [backend-lint, changes]
     if: ${{ needs.changes.outputs.backend == 'true' }}
-    services:
-      postgres:
-        image: public.ecr.aws/docker/library/postgres:16
-        env:
-          POSTGRES_DB: releviz_test
-          POSTGRES_USER: releviz
-          POSTGRES_PASSWORD: releviz
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U releviz -d releviz_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
     defaults:
       run:
         working-directory: src/api
@@ -236,6 +222,13 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+
+      - name: Start PostgreSQL
+        uses: ./.github/actions/setup-postgres
+        with:
+          database: ${{ env.DB_NAME }}
+          user: ${{ env.DB_USER }}
+          password: ${{ env.DB_PASSWORD }}
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -337,20 +330,6 @@ jobs:
       fail-fast: false
       matrix:
         app: ${{ fromJson(needs.django-test-plan.outputs.apps) }}
-    services:
-      postgres:
-        image: public.ecr.aws/docker/library/postgres:16
-        env:
-          POSTGRES_DB: releviz_test
-          POSTGRES_USER: releviz
-          POSTGRES_PASSWORD: releviz
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U releviz -d releviz_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
     defaults:
       run:
         working-directory: src/api
@@ -364,6 +343,13 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+
+      - name: Start PostgreSQL
+        uses: ./.github/actions/setup-postgres
+        with:
+          database: ${{ env.DB_NAME }}
+          user: ${{ env.DB_USER }}
+          password: ${{ env.DB_PASSWORD }}
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -1232,20 +1218,6 @@ jobs:
       fail-fast: false
       matrix:
         include: ${{ fromJson(needs.e2e-plan.outputs.matrix) }}
-    services:
-      postgres:
-        image: public.ecr.aws/docker/library/postgres:16
-        env:
-          POSTGRES_DB: releviz_test
-          POSTGRES_USER: releviz
-          POSTGRES_PASSWORD: releviz
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U releviz -d releviz_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
     env:
       DB_HOST: 127.0.0.1
       DB_PORT: 5432
@@ -1262,6 +1234,13 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+
+      - name: Start PostgreSQL
+        uses: ./.github/actions/setup-postgres
+        with:
+          database: ${{ env.DB_NAME }}
+          user: ${{ env.DB_USER }}
+          password: ${{ env.DB_PASSWORD }}
 
       - name: Set up Python
         uses: actions/setup-python@v7

@@ -1,0 +1,60 @@
+name: Set up PostgreSQL
+description: >-
+  Start the PostgreSQL server that ships with the GitHub-hosted Ubuntu runner
+  image and create the CI role and database, instead of pulling a postgres
+  service container. Anonymous pulls from public.ecr.aws share a per-IP data
+  allowance with every other job on the same runner address, so service
+  containers failed at random with "toomanyrequests: Data limit exceeded"
+  before any test ran. The server listens on 127.0.0.1:5432.
+
+inputs:
+  postgres-version:
+    description: Major version to run; keep it on production's RDS engine_version (infra/prod/main.tf)
+    default: "16"
+  database:
+    description: Database to create, owned by the CI role
+    required: true
+  user:
+    description: Login role to create (superuser, like the postgres image's POSTGRES_USER)
+    required: true
+  password:
+    description: Password for the CI role
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Start PostgreSQL and create the CI role and database
+      shell: bash
+      working-directory: /tmp
+      env:
+        PG_MAJOR: ${{ inputs.postgres-version }}
+        PG_DATABASE: ${{ inputs.database }}
+        PG_USER: ${{ inputs.user }}
+        PG_PASSWORD: ${{ inputs.password }}
+      run: |
+        set -euo pipefail
+        if [ ! -x "/usr/lib/postgresql/${PG_MAJOR}/bin/postgres" ]; then
+          installed="$(find /usr/lib/postgresql -mindepth 1 -maxdepth 1 -printf '%f ' 2>/dev/null || true)"
+          echo "::error::PostgreSQL ${PG_MAJOR} is not on this runner image (installed: ${installed:-none}). Pin runs-on to an image that ships it."
+          exit 1
+        fi
+        sudo systemctl start postgresql.service
+        for _ in $(seq 1 30); do
+          pg_isready --host=127.0.0.1 --port=5432 --quiet && break
+          sleep 1
+        done
+        pg_isready --host=127.0.0.1 --port=5432
+        sudo -u postgres psql --no-psqlrc --quiet -v ON_ERROR_STOP=1 \
+          -v db_name="$PG_DATABASE" -v db_user="$PG_USER" -v db_password="$PG_PASSWORD" <<'SQL'
+        CREATE ROLE :"db_user" LOGIN SUPERUSER PASSWORD :'db_password';
+        CREATE DATABASE :"db_name" OWNER :"db_user";
+        SQL
+        running="$(PGPASSWORD="$PG_PASSWORD" psql --no-psqlrc --host=127.0.0.1 --port=5432 \
+          --username="$PG_USER" --dbname="$PG_DATABASE" --tuples-only --no-align \
+          --command="SELECT current_setting('server_version_num')::int / 10000")"
+        if [ "$running" != "$PG_MAJOR" ]; then
+          echo "::error::The server on 127.0.0.1:5432 is PostgreSQL ${running}, expected ${PG_MAJOR}."
+          exit 1
+        fi
+        echo "PostgreSQL ${PG_MAJOR} is ready on 127.0.0.1:5432 (database ${PG_DATABASE}, role ${PG_USER})."
