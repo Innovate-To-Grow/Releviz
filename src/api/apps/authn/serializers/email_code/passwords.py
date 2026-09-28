@@ -67,7 +67,9 @@ class PasswordResetRequestSerializer(serializers.Serializer):
             except AuthChallengeThrottled:
                 # Unknown addresses are never throttled, so a 429 here would reveal
                 # that the account exists. The code already sent stays valid.
-                logger.info("Password reset code for member %s throttled", resolved.member.pk)
+                logger.info(
+                    "Reset request for member %s inside the resend cooldown", resolved.member.pk
+                )
         return {
             "message": "If an eligible account exists, a verification code has been sent.",
             "challenge_id": challenge_id,
