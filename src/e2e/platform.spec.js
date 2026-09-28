@@ -1557,25 +1557,22 @@ test.describe("Frontend security headers in the browser", () => {
     });
 
     const framedUrl = `${FRONTEND_URL}/privacy`;
-    let framedRequests = 0;
-    page.on("request", (request) => {
-      if (request.url() === framedUrl) framedRequests += 1;
-    });
-    // The load event waits for both frames to finish, loaded or refused.
-    await page.goto(`${FOREIGN_SITE}/`, { waitUntil: "load" });
-    expect(framedRequests).toBeGreaterThan(0);
-    // Frames render on this page, but the app's server-rendered heading
-    // never appears in its frame.
+    // Every browser ends a refused frame's load in a failed request. Firefox
+    // never finishes that frame, so the page's load event may not come.
+    const framedRefused = page.waitForEvent(
+      "requestfailed",
+      (request) => request.url() === framedUrl,
+    );
+    await page.goto(`${FOREIGN_SITE}/`, { waitUntil: "commit" });
+    await framedRefused;
+    // Frames render on this page; only the app's was refused. (Nothing is
+    // looked up inside the refused frame: in Firefox it never gets a document,
+    // and a locator there waits past its own timeout.)
     await expect(
       page
         .frameLocator('iframe[title="Framed control"]')
         .getByRole("heading", { name: "Framed control" }),
     ).toBeVisible();
-    await expect(
-      page
-        .frameLocator('iframe[title="Framed Releviz"]')
-        .getByRole("heading", { name: "Privacy notice" }),
-    ).toHaveCount(0);
 
     // Credentialed calls from this site get no readable answer: the API does
     // not name this origin (and the refresh cookie is SameSite=Lax anyway).

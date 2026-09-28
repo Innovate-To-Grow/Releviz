@@ -671,13 +671,15 @@ test.describe("Temporary access link and code", () => {
       await verify.click();
       expect(await field.evaluate((input) => input.validity.valid)).toBe(false);
       await expect(page.getByText(SIX_DIGITS)).toHaveCount(0);
+      // Submitted from script: after a refused click, Firefox spends the next
+      // click on its validation message instead of the button.
       await page
         .getByRole("main")
         .locator("form")
         .evaluate((form) => {
           form.noValidate = true;
+          form.requestSubmit();
         });
-      await verify.click();
       await expect(field).toHaveAccessibleDescription(SIX_DIGITS);
       await expect(field).toHaveAttribute("aria-invalid", "true");
       expect(verifyRequests.entries).toEqual([]);

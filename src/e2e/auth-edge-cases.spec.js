@@ -802,7 +802,11 @@ test.describe("Sign-in redirects", () => {
       "/settings?complete_profile=1&next=%2F%2Fevil.example",
       "/settings?complete_profile=1&next=%2Frecover",
     ]) {
-      await page.goto(`/login?next=${encodeURIComponent(next)}`);
+      // A signed-in visit to /login leaves at once, which in Firefox aborts
+      // the navigation goto is waiting on; the URL assertion waits instead.
+      await page.goto(`/login?next=${encodeURIComponent(next)}`, {
+        waitUntil: "commit",
+      });
       await expect(page, next).toHaveURL(`${frontendOrigin}/dashboard`);
       await expect(
         page.getByRole("heading", { name: "My Dashboard" }),
@@ -815,10 +819,18 @@ test.describe("Sign-in redirects", () => {
       ["/login", "/settings?complete_profile=1&next=%2Fcreate", "/create"],
       ["/signup", "/settings", "/settings"],
     ]) {
-      await page.goto(`${entry}?next=${encodeURIComponent(next)}`);
+      await page.goto(`${entry}?next=${encodeURIComponent(next)}`, {
+        waitUntil: "commit",
+      });
       await expect(page, `${entry} ${next}`).toHaveURL(
         `${frontendOrigin}${expected}`,
       );
+      // The account menu appears once the page has restored the session. A
+      // goto before then aborts that restore (in Firefox), and the page, left
+      // signed out, would redirect to the login page over the next goto.
+      await expect(
+        page.getByRole("button", { name: "Nia Next", exact: true }),
+      ).toBeVisible();
     }
     await expect(heading(page, "Account settings")).toBeVisible();
 
