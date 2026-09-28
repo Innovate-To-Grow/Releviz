@@ -921,3 +921,106 @@ module.exports = {
   temporaryAccessPathFromEmail,
   updateEventViaApi,
 };
+
+// Blocks (or, with `blocked: false`, clears) the per-account bucket of one
+// durable rate-limit scope ("invitation_request", "invitation_recipient",
+// "reminder_request", ...) for the account that owns `email`, so a throttled
+// request can be exercised without spending the per-IP budget every test
+// shares. Only that account's own bucket is written. Returns whether a bucket
+// was blocked or removed.
+function setRateLimitBlock(email, scope, { blocked = true } = {}) {
+  return runDjangoJson(
+    `
+from datetime import timedelta
+from django.utils import timezone
+from apps.authn.models import AuthRateLimitBucket, ContactEmail
+from apps.authn.security.helpers import _key_hash, normalize_security_identity
+member_id = ContactEmail.objects.get(email_address__iexact=data["email"]).member_id
+scope = data["scope"]
+key_hash = _key_hash(scope, "identity", normalize_security_identity(str(member_id)))
+buckets = AuthRateLimitBucket.objects.filter(scope=f"{scope}:identity", key_hash=key_hash)
+if data["blocked"]:
+    now = timezone.now()
+    AuthRateLimitBucket.objects.update_or_create(
+        scope=f"{scope}:identity",
+        key_hash=key_hash,
+        defaults={"window_started_at": now, "blocked_until": now + timedelta(minutes=30)},
+    )
+    print(json.dumps(True))
+else:
+    print(json.dumps(buckets.delete()[0] > 0))
+`,
+    { email, scope, blocked },
+  );
+}
+
+module.exports.setRateLimitBlock = setRateLimitBlock;
+
+// Encrypts the named password fields of an API payload the way the web app
+// does (RSA-OAEP with SHA-256 under the published key) and adds the key id.
+// The E2E settings require encrypted passwords, so a plaintext password is
+// refused before it is ever checked.
+async function encryptPasswordFields(request, payload, fields) {
+  const nodeCrypto = require("node:crypto");
+  const keyResponse = await request.get(`${BACKEND_URL}/authn/public-key/`);
+  expect(keyResponse.status()).toBe(200);
+  const key = await keyResponse.json();
+  const secured = { ...payload, key_id: key.key_id };
+  for (const field of fields) {
+    secured[field] = nodeCrypto
+      .publicEncrypt(
+        {
+          key: key.public_key,
+          padding: nodeCrypto.constants.RSA_PKCS1_OAEP_PADDING,
+          oaepHash: "sha256",
+        },
+        Buffer.from(String(secured[field])),
+      )
+      .toString("base64");
+  }
+  return secured;
+}
+
+// Posts a password sign-in to the API, encrypted like the web app's unless
+// `encrypt` is false. Returns `{ response, payload }` without asserting the
+// status. A successful sign-in leaves a refresh cookie in `request`.
+async function passwordLoginViaApi(
+  request,
+  email,
+  password,
+  { encrypt = true } = {},
+) {
+  const data = encrypt
+    ? await encryptPasswordFields(request, { email, password }, ["password"])
+    : { email, password };
+  const response = await request.post(`${BACKEND_URL}/authn/login/`, { data });
+  const text = await response.text();
+  let payload = null;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    payload = text;
+  }
+  return { response, payload };
+}
+
+// Gives the account that owns `email` a password (accounts made by email
+// code have none), writing only that account's own row. Access tokens issued
+// before carry the old password hash and stop working, so sign a browser in
+// afterwards (e.g. passwordLoginViaApi(page.request, ...)).
+function setAccountPassword(email, password) {
+  runDjangoScript(
+    `
+from apps.authn.models import ContactEmail
+
+member = ContactEmail.objects.get(email_address__iexact=data["email"]).member
+member.set_password(data["password"])
+member.save(update_fields=["password"])
+`,
+    { email, password },
+  );
+}
+
+module.exports.encryptPasswordFields = encryptPasswordFields;
+module.exports.passwordLoginViaApi = passwordLoginViaApi;
+module.exports.setAccountPassword = setAccountPassword;

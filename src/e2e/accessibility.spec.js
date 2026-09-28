@@ -1,5 +1,8 @@
 const { expect, test } = require("@playwright/test");
-const { expectAccessible } = require("./helpers/accessibility");
+const {
+  expectAccessible,
+  expectNoHorizontalScroll,
+} = require("./helpers/accessibility");
 const {
   apiJson,
   createEvent,
@@ -9,40 +12,6 @@ const {
 } = require("./helpers/releviz");
 
 test.use({ viewport: { width: 320, height: 720 } });
-
-// Fails when the page scrolls sideways or anything reaches past the viewport
-// edge. Content inside a horizontally scrolling box (the calendar canvas, a
-// responsive table) may extend past the edge; anything else that reaches past
-// it widens the page instead.
-async function expectNoHorizontalScroll(page, label) {
-  const layout = await page.evaluate(() => {
-    const insideScroller = (element) => {
-      for (let node = element.parentElement; node; node = node.parentElement) {
-        const overflowX = window.getComputedStyle(node).overflowX;
-        if (overflowX === "auto" || overflowX === "scroll") return true;
-      }
-      return false;
-    };
-    const limit = window.innerWidth + 1;
-    const offenders = [];
-    for (const element of document.querySelectorAll("body *")) {
-      if (element.getBoundingClientRect().right <= limit) continue;
-      if (insideScroller(element)) continue;
-      const tag = element.tagName.toLowerCase();
-      const className = (element.getAttribute("class") || "").trim();
-      offenders.push(className ? `${tag}.${className.split(/\s+/).join(".")}` : tag);
-    }
-    return {
-      scrollWidth: document.documentElement.scrollWidth,
-      clientWidth: document.documentElement.clientWidth,
-      offenders,
-    };
-  });
-  expect(layout.scrollWidth, `${label} must not scroll horizontally`).toBeLessThanOrEqual(
-    layout.clientWidth
-  );
-  expect(layout.offenders, `elements reaching past the viewport in ${label}`).toEqual([]);
-}
 
 test.describe("automated accessibility baseline", () => {
   test("public entry pages meet WCAG A/AA checks at 320px", async ({ page }) => {
