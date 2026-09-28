@@ -1786,8 +1786,12 @@ test.describe("Other times", () => {
     );
     // The time still ahead is accepted.
     await times.first().click();
+    // The event's date is the first start's, so a time past midnight UTC
+    // (the window follows the real clock) reads "+1d".
+    const windowTime = (ms) =>
+      `${clockTime(ms)}${isoDate(ms) === isoDate(start) ? "" : " +1d"}`;
     await expect(announcement).toContainText(
-      `${clockTime(start + 3 * QUARTER)}–${clockTime(start + 4 * QUARTER)}`,
+      `${windowTime(start + 3 * QUARTER)}–${windowTime(start + 4 * QUARTER)}`,
     );
     await expect(page.locator(".final-candidate")).toContainText(
       "Custom window",
