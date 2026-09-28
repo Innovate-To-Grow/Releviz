@@ -7,11 +7,13 @@ const ROOT = path.resolve(__dirname, "../..");
 const RESOURCE_AUDIT_MANIFEST = [
   ".github/dependabot.yml",
   ".github/workflows/ci.yml",
+  ".github/workflows/ci-retry.yml",
   ".github/workflows/release.yml",
   ".github/workflows/release-backend.yml",
   ".github/workflows/release-frontend.yml",
   ".github/actions/release-preflight/action.yml",
   ".github/actions/release-scope/action.yml",
+  ".github/actions/setup-postgres/action.yml",
   ".gitignore",
   ".pre-commit-config.yaml",
   "README.md",
