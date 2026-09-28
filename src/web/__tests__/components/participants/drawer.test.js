@@ -104,6 +104,22 @@ describe("Drawer", () => {
     fireEvent.keyDown(document, { key: "a" });
   });
 
+  test("leaves an Escape a control inside already handled to that control", () => {
+    const { onClose } = renderDrawer(
+      {},
+      <input
+        aria-label="Inline name"
+        onKeyDown={(event) => {
+          if (event.key === "Escape") event.preventDefault();
+        }}
+      />,
+    );
+    fireEvent.keyDown(screen.getByLabelText("Inline name"), { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   test("the backdrop and the x close the drawer, and focus goes back on unmount", async () => {
     const user = userEvent.setup();
     render(<button type="button">Opener</button>);

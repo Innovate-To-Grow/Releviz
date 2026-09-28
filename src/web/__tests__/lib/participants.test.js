@@ -4,6 +4,7 @@ import {
   activeRosterFilter,
   buildGroupUpdates,
   contactLine,
+  countedInMessage,
   countsLine,
   describeSelection,
   detailsEditable,
@@ -259,6 +260,12 @@ describe("sentences", () => {
     expect(peopleCount(1)).toBe("1 person");
     expect(peopleCount(0)).toBe("0 people");
     expect(peopleCount(4)).toBe("4 people");
+  });
+
+  test("countedInMessage agrees with the count", () => {
+    expect(countedInMessage(1)).toBe("1 person now counts in the results.");
+    expect(countedInMessage(0)).toBe("0 people now count in the results.");
+    expect(countedInMessage(3)).toBe("3 people now count in the results.");
   });
 });
 

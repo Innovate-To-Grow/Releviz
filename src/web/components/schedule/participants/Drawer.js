@@ -10,7 +10,8 @@ const FOCUSABLE =
  * `.app-drawer` markup from the schedule editor with the same focus trap
  * (Tab cycles inside, Escape closes, focus goes back to the opener on
  * close). While a nested dialog is open (`dialogOpen`) the drawer leaves the
- * keyboard to that dialog.
+ * keyboard to that dialog, and an Escape a control inside already handled
+ * (by preventing its default) is left to that control.
  */
 export default function Drawer({
   title,
@@ -50,7 +51,10 @@ export default function Drawer({
       const current = stateRef.current;
       if (current.dialogOpen) return;
       if (keyboardEvent.key === "Escape") {
-        if (!current.busy) current.onClose();
+        // React handles the page's events on the document too (Next hydrates
+        // it there), so a control's stopPropagation doesn't keep its Escape
+        // from this listener; its preventDefault does.
+        if (!current.busy && !keyboardEvent.defaultPrevented) current.onClose();
         return;
       }
       if (keyboardEvent.key !== "Tab") return;

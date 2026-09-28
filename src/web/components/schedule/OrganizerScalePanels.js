@@ -580,11 +580,12 @@ export function EventControls({
     }
   };
 
-  // Reopening a finalized event cancels its meeting and emails everyone the
+  // Reopening a finalized event, or an archived one that still holds its
+  // confirmed meeting, cancels that meeting and emails everyone the
   // confirmation reached, so those emails are reviewed and confirmed first.
   // With nobody to tell, it reopens at once.
   const reactivate = async () => {
-    if (event.status === "finalized") {
+    if (event.status === "finalized" || isFinalized(event)) {
       setChanging(true);
       setError("");
       try {

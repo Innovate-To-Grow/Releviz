@@ -76,9 +76,10 @@ jest.mock("@/components/auth/AuthContext", () => ({
 }));
 
 jest.mock("@/lib/api/auth", () => ({
-  confirmPasswordReset: jest.fn(),
   requestPasswordResetCode: jest.fn(),
   requestAccountDeletionCode: jest.fn(),
+  resetPasswordWithToken: jest.fn(),
+  verifyPasswordResetCode: jest.fn(),
 }));
 
 jest.mock("@/lib/navigation", () => ({
@@ -146,9 +147,10 @@ import SignUpPage, {
   generateStaticParams as generateSignUpStaticParams,
 } from "@/app/sign-up/[[...sign-up]]/page";
 import {
-  confirmPasswordReset,
   requestAccountDeletionCode,
   requestPasswordResetCode,
+  resetPasswordWithToken,
+  verifyPasswordResetCode,
 } from "@/lib/api/auth";
 import { navigateTo } from "@/lib/navigation";
 
@@ -1410,6 +1412,35 @@ describe("role-aware headers", () => {
     window.history.replaceState({}, "", "/");
   });
 
+  test("lets a link that saves pending work itself handle its own click", async () => {
+    const flush = jest.fn().mockResolvedValue(false);
+    const ownClick = jest.fn((event) => event.preventDefault());
+    const plainClick = jest.fn((event) => event.preventDefault());
+    const view = render(
+      <>
+        <PendingDraftGuard flush={flush} />
+        <a href="/signup" data-autosave-guard="self" onClick={ownClick}>
+          Upgrade
+        </a>
+        <a href="/elsewhere" onClick={plainClick}>
+          Elsewhere
+        </a>
+      </>,
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: "Upgrade" }));
+    expect(ownClick).toHaveBeenCalledTimes(1);
+    expect(flush).not.toHaveBeenCalled();
+
+    // Any other link is held until the pending work is saved.
+    fireEvent.click(screen.getByRole("link", { name: "Elsewhere" }));
+    await waitFor(() => expect(flush).toHaveBeenCalledTimes(1));
+    expect(plainClick).not.toHaveBeenCalled();
+
+    view.unmount();
+    window.history.replaceState({}, "", "/");
+  });
+
   test("account logout waits for pending schedule work and stays signed in on save failure", async () => {
     const logout = jest.fn();
     const flush = jest.fn().mockResolvedValue(false);
@@ -1716,7 +1747,8 @@ describe("app pages", () => {
 
   test("Account recovery requests a code, validates passwords, and resets", async () => {
     requestPasswordResetCode.mockResolvedValue({ message: "sent" });
-    confirmPasswordReset.mockResolvedValue({ message: "reset" });
+    verifyPasswordResetCode.mockResolvedValue("reset-token");
+    resetPasswordWithToken.mockResolvedValue({ message: "reset" });
     const recovery = render(<RecoverAccountPage />);
     const email = screen.getByLabelText("Email");
     const sendResetCode = screen.getByRole("button", {
@@ -1758,7 +1790,8 @@ describe("app pages", () => {
       screen.getByRole("button", { name: "Reset password" }),
     );
     expect(screen.getByText("Passwords do not match.")).toBeInTheDocument();
-    expect(confirmPasswordReset).not.toHaveBeenCalled();
+    expect(verifyPasswordResetCode).not.toHaveBeenCalled();
+    expect(resetPasswordWithToken).not.toHaveBeenCalled();
 
     fireEvent.change(screen.getByLabelText("Confirm new password"), {
       target: { value: "password456" },
@@ -1767,13 +1800,17 @@ describe("app pages", () => {
       screen.getByRole("button", { name: "Reset password" }),
     );
     await waitFor(() =>
-      expect(confirmPasswordReset).toHaveBeenCalledWith({
+      expect(resetPasswordWithToken).toHaveBeenCalledWith({
         email: "ada@example.com",
-        code: "123456",
+        verificationToken: "reset-token",
         password: "password456",
         passwordConfirm: "password456",
       }),
     );
+    expect(verifyPasswordResetCode).toHaveBeenCalledWith({
+      email: "ada@example.com",
+      code: "123456",
+    });
     expect(navigateTo).toHaveBeenCalledWith("/login?status=password-reset");
 
     await userEvent.click(
@@ -1804,7 +1841,7 @@ describe("app pages", () => {
     genericRequestFailure.unmount();
 
     requestPasswordResetCode.mockResolvedValueOnce({ message: "sent" });
-    confirmPasswordReset.mockRejectedValueOnce(new Error("Bad reset"));
+    verifyPasswordResetCode.mockRejectedValueOnce(new Error("Bad reset"));
     const resetFailure = render(<RecoverAccountPage />);
     await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
     await userEvent.click(
@@ -1823,7 +1860,7 @@ describe("app pages", () => {
     resetFailure.unmount();
 
     requestPasswordResetCode.mockResolvedValueOnce({ message: "sent" });
-    confirmPasswordReset.mockRejectedValueOnce(new Error());
+    resetPasswordWithToken.mockRejectedValueOnce(new Error());
     render(<RecoverAccountPage />);
     await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
     await userEvent.click(
@@ -1845,7 +1882,8 @@ describe("app pages", () => {
 
   test("Account recovery returns to login with only a safe next destination", async () => {
     requestPasswordResetCode.mockResolvedValue({ message: "sent" });
-    confirmPasswordReset.mockResolvedValue({ message: "reset" });
+    verifyPasswordResetCode.mockResolvedValue("reset-token");
+    resetPasswordWithToken.mockResolvedValue({ message: "reset" });
     const resetFrom = async (url) => {
       window.history.replaceState({}, "", url);
       navigateTo.mockClear();
@@ -1887,6 +1925,77 @@ describe("app pages", () => {
       "/login?status=password-reset",
     );
     window.history.replaceState({}, "", "/");
+  });
+
+  test("Account recovery keeps a verified code for another try after a refused password", async () => {
+    requestPasswordResetCode.mockResolvedValue({ message: "sent" });
+    verifyPasswordResetCode
+      .mockResolvedValueOnce("token-1")
+      .mockResolvedValueOnce("token-2")
+      .mockResolvedValueOnce("token-3");
+    resetPasswordWithToken
+      .mockRejectedValueOnce(new Error("This password is too common."))
+      .mockRejectedValueOnce(new Error("Still too common."))
+      .mockRejectedValueOnce(new Error("Too common again."))
+      .mockResolvedValue({ message: "reset" });
+    render(<RecoverAccountPage />);
+    const requestCodeFor = async (code) => {
+      await userEvent.type(screen.getByLabelText("Email"), "ada@example.com");
+      await userEvent.click(
+        screen.getByRole("button", { name: "Send reset code" }),
+      );
+      await userEvent.type(await screen.findByLabelText("Reset code"), code);
+    };
+    const submitPassword = async (password) => {
+      fireEvent.change(screen.getByLabelText("New password"), {
+        target: { value: password },
+      });
+      fireEvent.change(screen.getByLabelText("Confirm new password"), {
+        target: { value: password },
+      });
+      await userEvent.click(
+        screen.getByRole("button", { name: "Reset password" }),
+      );
+    };
+    const lastToken = () =>
+      resetPasswordWithToken.mock.lastCall[0].verificationToken;
+
+    await requestCodeFor("123456");
+    await submitPassword("password123");
+    expect(
+      await screen.findByText("This password is too common."),
+    ).toBeInTheDocument();
+
+    // The spent code is not exchanged again: its token is reused.
+    await submitPassword("Stronger-Pass-42!");
+    expect(await screen.findByText("Still too common.")).toBeInTheDocument();
+    expect(verifyPasswordResetCode).toHaveBeenCalledTimes(1);
+    expect(lastToken()).toBe("token-1");
+
+    // Another code is exchanged for its own token.
+    fireEvent.change(screen.getByLabelText("Reset code"), {
+      target: { value: "654321" },
+    });
+    await submitPassword("Stronger-Pass-43!");
+    expect(await screen.findByText("Too common again.")).toBeInTheDocument();
+    expect(verifyPasswordResetCode).toHaveBeenLastCalledWith({
+      email: "ada@example.com",
+      code: "654321",
+    });
+    expect(lastToken()).toBe("token-2");
+
+    // Starting over forgets the token, even for the same code.
+    await userEvent.click(
+      screen.getByRole("button", { name: "Use a different email" }),
+    );
+    await userEvent.clear(screen.getByLabelText("Email"));
+    await requestCodeFor("654321");
+    await submitPassword("Stronger-Pass-44!");
+    await waitFor(() =>
+      expect(navigateTo).toHaveBeenCalledWith("/login?status=password-reset"),
+    );
+    expect(verifyPasswordResetCode).toHaveBeenCalledTimes(3);
+    expect(lastToken()).toBe("token-3");
   });
 
   test("Signup route uses the same passwordless email flow", async () => {
@@ -2242,6 +2351,29 @@ describe("app pages", () => {
     expect(
       await screen.findByText("Unable to load active sessions."),
     ).toBeInTheDocument();
+  });
+
+  test("Settings leaves a log out's navigation home to finish", async () => {
+    const signedIn = {
+      loading: false,
+      updateProfile: jest.fn(),
+      listSessions: jest.fn().mockResolvedValue([]),
+      user: { id: "u1", email: "ada@example.com" },
+    };
+    useAuth.mockReturnValue({ ...signedIn, signingOut: false });
+    const view = render(<SettingsPage />);
+    expect(
+      await screen.findByText("No active sessions were found."),
+    ).toBeInTheDocument();
+
+    useAuth.mockReturnValue({ ...signedIn, signingOut: true });
+    view.rerender(<SettingsPage />);
+    useAuth.mockReturnValue({ ...signedIn, user: null, signingOut: true });
+    view.rerender(<SettingsPage />);
+
+    // The signed-out render does not replace the pending navigation home
+    // with a login one.
+    expect(navigateTo).not.toHaveBeenCalled();
   });
 
   test("profile completion stays focused and continues directly into an event response", async () => {

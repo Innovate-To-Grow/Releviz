@@ -203,6 +203,12 @@ export function peopleCount(count) {
   return `${count} ${count === 1 ? "person" : "people"}`;
 }
 
+// The toast after counting people in: "1 person now counts", "3 people now
+// count".
+export function countedInMessage(count) {
+  return `${peopleCount(count)} now ${count === 1 ? "counts" : "count"} in the results.`;
+}
+
 // The API selector for "everyone matching the current filters": the active
 // filter values, or an explicit `all` when nothing is filtered.
 export function activeRosterFilter({

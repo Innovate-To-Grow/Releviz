@@ -1218,7 +1218,7 @@ describe("scaled organizer workspace", () => {
     createManagedParticipant.mockRejectedValueOnce(
       Object.assign(
         new Error(
-          'That is one of your own addresses. Check "No email of their own" to add a person you manage.',
+          'That is one of your own addresses. Use Add myself to add yourself as a participant, or tick "They have no email. I\'ll enter their schedule." to add a person you manage.',
         ),
         { status: 409, errorCode: "organizer_own_email" },
       ),
@@ -1230,13 +1230,19 @@ describe("scaled organizer workspace", () => {
     await userEvent.click(add.send);
 
     expect(await within(add.dialog).findByRole("alert")).toHaveTextContent(
-      'That is one of your own addresses. Check "No email of their own" to add a person you manage.',
+      'That is one of your own addresses. Use Add myself to add yourself as a participant, or tick "They have no email. I\'ll enter their schedule." to add a person you manage.',
     );
     expect(createManagedParticipant).toHaveBeenCalledWith(
       event.code,
       expect.objectContaining({ organizerManaged: false, phone: "" }),
       "token",
     );
+    // The hint names the checkbox the panel shows.
+    expect(
+      within(add.dialog).getByRole("checkbox", {
+        name: "They have no email. I'll enter their schedule.",
+      }),
+    ).toBeInTheDocument();
     // The typed values stay for a corrected retry.
     expect(add.name).toHaveValue("Managed Person");
     expect(add.email).toHaveValue("organizer@example.com");

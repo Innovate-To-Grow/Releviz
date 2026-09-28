@@ -459,7 +459,10 @@ export default function TempAccessClient() {
         ]);
         draftDirtyRef.current = currentFingerprint !== fingerprint;
         autosavePendingRef.current = draftDirtyRef.current;
-        setDraftSaveState(draftDirtyRef.current ? "saving" : "saved");
+        // Updated at once, not after the render: the upgrade navigates as
+        // soon as this save is answered, and the leave-page warning reads it.
+        draftSaveStateRef.current = draftDirtyRef.current ? "saving" : "saved";
+        setDraftSaveState(draftSaveStateRef.current);
         return true;
       } catch (error) {
         draftDirtyRef.current = true;
@@ -931,10 +934,13 @@ export default function TempAccessClient() {
             upgradeHref ? (
               // The shared outlined style, like Sign out above: Bootstrap's
               // outline-primary blue is only 4.26:1 on the page background.
+              // It saves pending changes itself, with its own saving state and
+              // failure message, so the autosave guard lets its click through.
               <Link
                 className={`btn btn-outline-secondary app-btn${leavingPage ? " disabled" : ""}`}
                 href={upgradeHref}
                 aria-disabled={leavingPage}
+                data-autosave-guard="self"
                 onClick={(clickEvent) => void upgradeToFullAccess(clickEvent)}
               >
                 <span className="app-btn-icon" aria-hidden="true">

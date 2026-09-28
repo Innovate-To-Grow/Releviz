@@ -1479,6 +1479,72 @@ test("event controls reopen a finalized event at once when nobody is told of a c
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 });
 
+test("event controls review the cancellation before reopening an archived event that keeps its meeting", async () => {
+  previewEventLifecycle.mockResolvedValue({
+    cancellation: {
+      recipientCount: 1,
+      email: previewEmail(),
+      sample: { name: "Pat Person", email: "pat@example.com" },
+    },
+  });
+  render(
+    <EventControls
+      event={{
+        ...baseEvent,
+        status: "archived",
+        finalMeeting: { id: "final-1", active: true },
+      }}
+      setEvent={jest.fn()}
+      getToken={getToken}
+      setDeliveryRequest={jest.fn()}
+    />,
+  );
+
+  await userEvent.click(
+    screen.getByRole("button", { name: "Reactivate event" }),
+  );
+
+  const dialog = await screen.findByRole("dialog", {
+    name: "Reopen scheduling",
+  });
+  expect(dialog).toHaveTextContent(
+    "1 person who received the confirmation will be told the meeting is canceled.",
+  );
+  expect(updateEventLifecycle).not.toHaveBeenCalled();
+});
+
+test.each([
+  ["no meeting", {}],
+  ["a canceled meeting", { finalMeeting: { id: "final-1", active: false } }],
+])(
+  "event controls reopen an archived event with %s at once",
+  async (_label, eventOverrides) => {
+    const setEvent = jest.fn();
+    updateEventLifecycle.mockResolvedValue({
+      event: { ...baseEvent, status: "active", version: 5 },
+    });
+    render(
+      <EventControls
+        event={{ ...baseEvent, status: "archived", ...eventOverrides }}
+        setEvent={setEvent}
+        getToken={getToken}
+        setDeliveryRequest={jest.fn()}
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Reactivate event" }),
+    );
+
+    await waitFor(() =>
+      expect(setEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "active" }),
+      ),
+    );
+    expect(previewEventLifecycle).not.toHaveBeenCalled();
+  },
+);
+
 test("event controls surface lifecycle errors", async () => {
   const setEvent = jest.fn();
   updateEventLifecycle.mockRejectedValueOnce(new Error("cannot archive"));

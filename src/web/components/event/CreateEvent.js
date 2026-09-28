@@ -399,14 +399,15 @@ function CreateEvent({
     if (!eventTimezone.trim()) {
       addFieldError("eventTimezone", "Event timezone is required");
     }
+    // Whole hours only: the API refuses a fraction rather than rounding it.
     if (
-      !Number.isFinite(reminderHoursBefore) ||
+      !Number.isInteger(reminderHoursBefore) ||
       reminderHoursBefore < 0 ||
       reminderHoursBefore > 720
     ) {
       addFieldError(
         "reminderHours",
-        "Reminder timing must be between 0 and 720 hours",
+        "Reminder timing must be a whole number of hours between 0 and 720",
       );
     }
 
@@ -1052,6 +1053,7 @@ function CreateEvent({
                         type="number"
                         min="0"
                         max="720"
+                        step="1"
                         value={reminderHoursBefore}
                         aria-invalid={
                           fieldErrors.reminderHours ? "true" : undefined

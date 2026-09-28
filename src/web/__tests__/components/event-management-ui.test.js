@@ -876,7 +876,7 @@ describe("organizer event management UI", () => {
 
     expect(advancedOptions).toHaveAttribute("open");
     const reminderError = await screen.findByText(
-      "Reminder timing must be between 0 and 720 hours",
+      "Reminder timing must be a whole number of hours between 0 and 720",
     );
     expect(
       reminderError.closest('[data-error-field="reminderHours"]'),
@@ -885,5 +885,28 @@ describe("organizer event management UI", () => {
     expect(
       document.querySelector(".create-event-feedback .create-event-error"),
     ).not.toBeInTheDocument();
+  });
+
+  test("refuses fractional reminder hours instead of sending them", async () => {
+    render(<CreateEvent />);
+    const reminderHours = screen.getByLabelText(
+      "Reminder Hours Before Deadline",
+    );
+    expect(reminderHours).toHaveAttribute("step", "1");
+    fireEvent.change(screen.getByRole("textbox", { name: "Event Name" }), {
+      target: { value: "Fractional reminder" },
+    });
+    fireEvent.change(reminderHours, { target: { value: "1.5" } });
+    fireEvent.submit(
+      screen.getByRole("button", { name: "Create Event" }).closest("form"),
+    );
+
+    expect(
+      await screen.findByText(
+        "Reminder timing must be a whole number of hours between 0 and 720",
+      ),
+    ).toBeInTheDocument();
+    expect(reminderHours).toHaveAttribute("aria-invalid", "true");
+    expect(createEvent).not.toHaveBeenCalled();
   });
 });

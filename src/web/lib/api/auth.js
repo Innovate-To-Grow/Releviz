@@ -202,26 +202,28 @@ export async function requestPasswordResetCode({ email }) {
   return res.json();
 }
 
-export async function confirmPasswordReset({
+// Resetting takes two calls: the code is exchanged for a short-lived
+// verification token, which then authorizes the new password. The exchange
+// spends the code, while a refused password leaves the token unused, so the
+// caller keeps the token for another try.
+export async function verifyPasswordResetCode({ email, code }) {
+  const res = await fetch(`${API_BASE}/authn/password-reset/verify-code/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, code }),
+    credentials: "include",
+  });
+  if (!res.ok) throw new Error(await extractError(res));
+  const { verification_token: verificationToken } = await res.json();
+  return verificationToken;
+}
+
+export async function resetPasswordWithToken({
   email,
-  code,
+  verificationToken,
   password,
   passwordConfirm,
 }) {
-  // Resetting takes two calls: the code is exchanged for a short-lived
-  // verification token, which then authorizes the new password.
-  const verifyRes = await fetch(
-    `${API_BASE}/authn/password-reset/verify-code/`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, code }),
-      credentials: "include",
-    },
-  );
-  if (!verifyRes.ok) throw new Error(await extractError(verifyRes));
-  const { verification_token: verificationToken } = await verifyRes.json();
-
   const payload = await securePasswordPayload(
     {
       email,

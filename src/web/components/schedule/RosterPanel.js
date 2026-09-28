@@ -71,6 +71,7 @@ import {
 } from "@/lib/api/roster";
 import {
   activeRosterFilter,
+  countedInMessage,
   countsLine,
   filterChips,
   formatWeight,
@@ -590,7 +591,13 @@ const RosterPanel = forwardRef(function RosterPanel(
           // The server recounts the groups so their shared weights stay true
           // without reloading the whole page of people.
           if (Array.isArray(data.groups)) applyGroupStats(data.groups);
-          return { status: "saved", data, name: latest.name };
+          return {
+            status: "saved",
+            data,
+            name: latest.name,
+            sentVersion: latest.version,
+            row: updated,
+          };
         } catch (requestError) {
           if (requestError.status === 409 && requestError.participant) {
             replaceRow(participant.id, requestError.participant);
@@ -1393,9 +1400,21 @@ const RosterPanel = forwardRef(function RosterPanel(
       version: editor.rowVersion,
     };
     const result = await patchRow(row, { included: true });
-    reportRowResult(result, ({ name }) => {
+    reportRowResult(result, ({ name, sentVersion, row: updated }) => {
+      // Counting them in moves on the version the schedule save checks. A
+      // drawer that held the version this change ran against takes the new
+      // one; an older drawer keeps its own, so its save still meets the
+      // change it hasn't seen.
       setEditor((current) =>
-        current ? { ...current, included: true } : current,
+        current
+          ? {
+              ...current,
+              included: true,
+              ...(current.version === sentVersion
+                ? { version: updated.version, rowVersion: updated.version }
+                : {}),
+            }
+          : current,
       );
       toastSuccess(`${name} now counts in the results.`);
     });
@@ -1501,9 +1520,11 @@ const RosterPanel = forwardRef(function RosterPanel(
   };
   const pageSizeId = `${controlIds}-page-size`;
 
+  // The search chip empties the box at once, past the debounce that resets
+  // the page and the selection, so it resets them like any other chip.
   const removeChip = (key) => {
     if (key === "search") clearSearch();
-    else applyFilters({ [key]: "" });
+    applyFilters(key === "search" ? {} : { [key]: "" });
   };
 
   const listBody = !loaded ? (
@@ -1813,10 +1834,7 @@ const RosterPanel = forwardRef(function RosterPanel(
                 )
               }
               onCountIn={() =>
-                runSelectionBulk(
-                  { included: true },
-                  (count) => `${peopleCount(count)} now count in the results.`,
-                )
+                runSelectionBulk({ included: true }, countedInMessage)
               }
               onLeaveOut={() =>
                 runSelectionBulk(
@@ -1902,7 +1920,7 @@ const RosterPanel = forwardRef(function RosterPanel(
             runGroupAction(groupBusyKeyFor("included", entry), () =>
               groupBulk(entry, { included: nextIncluded }, (count) =>
                 nextIncluded
-                  ? `${peopleCount(count)} now count in the results.`
+                  ? countedInMessage(count)
                   : `Left ${peopleCount(count)} out of the results.`,
               ),
             )

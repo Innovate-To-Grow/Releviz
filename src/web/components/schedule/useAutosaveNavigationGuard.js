@@ -132,10 +132,13 @@ export default function useAutosaveNavigationGuard({
         event.target instanceof Element
           ? event.target.closest("a[href]")
           : null;
+      // A link marked data-autosave-guard="self" saves before it leaves and
+      // reports that itself, so its own click handler must run.
       if (
         !anchor ||
         anchor.hasAttribute("download") ||
-        (anchor.target && anchor.target !== "_self")
+        (anchor.target && anchor.target !== "_self") ||
+        anchor.dataset.autosaveGuard === "self"
       ) {
         return;
       }
