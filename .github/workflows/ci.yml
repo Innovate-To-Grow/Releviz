@@ -992,6 +992,9 @@ jobs:
       - name: Audit tracked resources
         run: python scripts/ci/audit-test-surface.py
 
+      - name: Audit E2E page coverage
+        run: python scripts/ci/audit_e2e_coverage.py routes
+
   backend-docker-build:
     name: Backend Docker Build and Scan
     runs-on: ubuntu-latest
@@ -1256,6 +1259,7 @@ jobs:
       BACKEND_URL: http://127.0.0.1:4100
       FRONTEND_URL: http://127.0.0.1:3100
       EMAIL_FILE_PATH: /tmp/releviz-e2e-mail
+      E2E_ENDPOINT_LOG: /tmp/releviz-e2e-endpoints.log
       DJANGO_SUPERUSER_EMAIL: admin@releviz.local
       NEXT_E2E_SERVER: "1"
       PW_PROJECT: ${{ matrix.project }}
@@ -1322,7 +1326,7 @@ jobs:
 
       - name: Prepare backend database and email sink
         run: |
-          rm -rf "$EMAIL_FILE_PATH"
+          rm -rf "$EMAIL_FILE_PATH" "$E2E_ENDPOINT_LOG"
           mkdir -p "$EMAIL_FILE_PATH"
           python src/api/manage.py migrate --noinput --settings=config.settings.e2e
           python src/api/manage.py seed_admin_e2e \
@@ -1345,6 +1349,12 @@ jobs:
             "${args[@]}" \
             --project="$PW_PROJECT" \
             --reporter=blob
+
+      # Chromium runs every spec, including the Chromium-only ones, so its
+      # log is the complete record of the API routes the suite reaches.
+      - name: Audit E2E endpoint coverage
+        if: ${{ matrix.project == 'chromium' }}
+        run: python scripts/ci/audit_e2e_coverage.py endpoints --hits "$E2E_ENDPOINT_LOG"
 
       - name: Upload Playwright blob report
         if: ${{ always() }}
